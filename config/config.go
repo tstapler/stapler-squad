@@ -27,6 +27,8 @@ type Config struct {
 	AutoYes bool `json:"auto_yes"`
 	// DaemonPollInterval is the interval (ms) at which the daemon polls sessions for autoyes mode.
 	DaemonPollInterval int `json:"daemon_poll_interval"`
+	// BranchPrefix is the prefix used for git branches created by the application.
+	BranchPrefix string `json:"branch_prefix"`
 }
 
 // DefaultConfig returns the default configuration
@@ -35,6 +37,7 @@ func DefaultConfig() *Config {
 		DefaultProgram:     "claude",
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
+		BranchPrefix:       "session/",
 	}
 }
 
