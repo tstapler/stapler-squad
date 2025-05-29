@@ -136,6 +136,12 @@ extract_and_install() {
         mkdir -p "$bin_dir"
     fi
 
+    # Remove existing binary if upgrading
+    if [ "$UPGRADE_MODE" = true ] && [ -f "$bin_dir/$INSTALL_NAME${extension}" ]; then
+        echo "Removing previous installation from $bin_dir/$INSTALL_NAME${extension}"
+        rm -f "$bin_dir/$INSTALL_NAME${extension}"
+    fi
+
     # Install binary with desired name
     mv "${tmp_dir}/claude-squad${extension}" "$bin_dir/$INSTALL_NAME${extension}"
     rm -rf "$tmp_dir"
@@ -146,14 +152,24 @@ extract_and_install() {
     fi
 
     chmod +x "$bin_dir/$INSTALL_NAME${extension}"
-    echo "installed as '$INSTALL_NAME':"
-    echo " $("$bin_dir/$INSTALL_NAME${extension}" version)"
+    
+    echo ""
+    if [ "$UPGRADE_MODE" = true ]; then
+        echo "Successfully upgraded '$INSTALL_NAME' to:"
+    else
+        echo "Installed as '$INSTALL_NAME':"
+    fi
+    echo "$("$bin_dir/$INSTALL_NAME${extension}" version)"
 }
 
 check_command_exists() {
     if command -v "$INSTALL_NAME" &> /dev/null; then
-        echo "Error: Command '$INSTALL_NAME' already exists in PATH"
-        exit 1
+        EXISTING_PATH=$(which "$INSTALL_NAME")
+        echo "Found existing installation of '$INSTALL_NAME' at $EXISTING_PATH"
+        echo "Will upgrade to the latest version"
+        UPGRADE_MODE=true
+    else
+        UPGRADE_MODE=false
     fi
 }
 
@@ -252,6 +268,8 @@ check_and_install_dependencies() {
 main() {
     # Parse command line arguments
     INSTALL_NAME="cs"
+    UPGRADE_MODE=false
+    
     while [[ $# -gt 0 ]]; do
         case $1 in
             --name)
