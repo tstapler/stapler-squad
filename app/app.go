@@ -40,21 +40,17 @@ const (
 	statePrompt
 	// stateHelp is the state when a help screen is displayed.
 	stateHelp
+	// stateConfirm is the state when a confirmation modal is displayed.
+	stateConfirm
 )
 
 type home struct {
 	ctx context.Context
 
+	// -- Storage and Configuration --
+
 	program string
 	autoYes bool
-
-	// ui components
-	list         *ui.List
-	menu         *ui.Menu
-	tabbedWindow *ui.TabbedWindow
-	errBox       *ui.ErrBox
-	// global spinner instance. we plumb this down to where it's needed
-	spinner spinner.Model
 
 	// storage is the interface for saving/loading data to/from the app's state
 	storage *session.Storage
@@ -63,7 +59,9 @@ type home struct {
 	// appState stores persistent application state like seen help screens
 	appState config.AppState
 
-	// state
+	// -- State --
+
+	// state is the current discrete state of the application
 	state state
 	// newInstanceFinalizer is called when the state is stateNew and then you press enter.
 	// It registers the new instance in the list after the instance has been started.
@@ -72,14 +70,27 @@ type home struct {
 	// promptAfterName tracks if we should enter prompt mode after naming
 	promptAfterName bool
 
-	// textInputOverlay is the component for handling text input with state
-	textInputOverlay *overlay.TextInputOverlay
-
-	// textOverlay is the component for displaying text information
-	textOverlay *overlay.TextOverlay
-
 	// keySent is used to manage underlining menu items
 	keySent bool
+
+	// -- UI Components --
+
+	// list displays the list of instances
+	list *ui.List
+	// menu displays the bottom menu
+	menu *ui.Menu
+	// tabbedWindow displays the tabbed window with preview and diff panes
+	tabbedWindow *ui.TabbedWindow
+	// errBox displays error messages
+	errBox *ui.ErrBox
+	// global spinner instance. we plumb this down to where it's needed
+	spinner spinner.Model
+	// textInputOverlay handles text input with state
+	textInputOverlay *overlay.TextInputOverlay
+	// textOverlay displays text information
+	textOverlay *overlay.TextOverlay
+	// confirmationOverlay displays confirmation modals
+	confirmationOverlay *overlay.ConfirmationOverlay
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -228,6 +239,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.updateHandleWindowSizeEvent(msg)
 		return m, nil
+	case error:
+		// Handle errors from confirmation actions
+		return m, m.handleError(msg)
+	case instanceChangedMsg:
+		// Handle instance changed after confirmation action
+		return m, m.instanceChanged()
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -250,7 +267,7 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp {
+	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
 		return nil, false
 	}
 	// If it's in the global keymap, we should try to highlight it.
@@ -405,6 +422,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m, nil
 	}
 
+	// Handle confirmation state
+	if m.state == stateConfirm {
+		shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
+		if shouldClose {
+			m.state = stateDefault
+			m.confirmationOverlay = nil
+			return m, nil
+		}
+		return m, nil
+	}
+
 	// Handle quit commands first
 	if msg.String() == "ctrl+c" || msg.String() == "q" {
 		return m.handleQuit()
@@ -485,45 +513,59 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			return m, nil
 		}
 
-		worktree, err := selected.GetGitWorktree()
-		if err != nil {
-			return m, m.handleError(err)
+		// Create the kill action as a tea.Cmd
+		killAction := func() tea.Msg {
+			// Get worktree and check if branch is checked out
+			worktree, err := selected.GetGitWorktree()
+			if err != nil {
+				return err
+			}
+
+			checkedOut, err := worktree.IsBranchCheckedOut()
+			if err != nil {
+				return err
+			}
+
+			if checkedOut {
+				return fmt.Errorf("instance %s is currently checked out", selected.Title)
+			}
+
+			// Delete from storage first
+			if err := m.storage.DeleteInstance(selected.Title); err != nil {
+				return err
+			}
+
+			// Then kill the instance
+			m.list.Kill()
+			return instanceChangedMsg{}
 		}
 
-		checkedOut, err := worktree.IsBranchCheckedOut()
-		if err != nil {
-			return m, m.handleError(err)
-		}
-
-		if checkedOut {
-			return m, m.handleError(fmt.Errorf("instance %s is currently checked out", selected.Title))
-		}
-
-		// Delete from storage first
-		if err := m.storage.DeleteInstance(selected.Title); err != nil {
-			return m, m.handleError(err)
-		}
-
-		// Then kill the instance
-		m.list.Kill()
-		return m, m.instanceChanged()
+		// Show confirmation modal
+		message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
+		return m, m.confirmAction(message, killAction)
 	case keys.KeySubmit:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil {
 			return m, nil
 		}
 
-		// Default commit message with timestamp
-		commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
-		worktree, err := selected.GetGitWorktree()
-		if err != nil {
-			return m, m.handleError(err)
-		}
-		if err = worktree.PushChanges(commitMsg, true); err != nil {
-			return m, m.handleError(err)
+		// Create the push action as a tea.Cmd
+		pushAction := func() tea.Msg {
+			// Default commit message with timestamp
+			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
+			worktree, err := selected.GetGitWorktree()
+			if err != nil {
+				return err
+			}
+			if err = worktree.PushChanges(commitMsg, true); err != nil {
+				return err
+			}
+			return nil
 		}
 
-		return m, nil
+		// Show confirmation modal
+		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title)
+		return m, m.confirmAction(message, pushAction)
 	case keys.KeyCheckout:
 		selected := m.list.GetSelectedInstance()
 		if selected == nil {
@@ -611,6 +653,8 @@ type previewTickMsg struct{}
 
 type tickUpdateMetadataMessage struct{}
 
+type instanceChangedMsg struct{}
+
 // tickUpdateMetadataCmd is the callback to update the metadata of the instances every 500ms. Note that we iterate
 // overall the instances and capture their output. It's a pretty expensive operation. Let's do it 2x a second only.
 var tickUpdateMetadataCmd = func() tea.Msg {
@@ -631,6 +675,31 @@ func (m *home) handleError(err error) tea.Cmd {
 
 		return hideErrMsg{}
 	}
+}
+
+// confirmAction shows a confirmation modal and stores the action to execute on confirm
+func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
+	m.state = stateConfirm
+
+	// Create and show the confirmation overlay using ConfirmationOverlay
+	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
+	// Set a fixed width for consistent appearance
+	m.confirmationOverlay.SetWidth(50)
+
+	// Set callbacks for confirmation and cancellation
+	m.confirmationOverlay.OnConfirm = func() {
+		m.state = stateDefault
+		// Execute the action if it exists
+		if action != nil {
+			_ = action()
+		}
+	}
+
+	m.confirmationOverlay.OnCancel = func() {
+		m.state = stateDefault
+	}
+
+	return nil
 }
 
 func (m *home) View() string {
@@ -655,6 +724,11 @@ func (m *home) View() string {
 			log.ErrorLog.Printf("text overlay is nil")
 		}
 		return overlay.PlaceOverlay(0, 0, m.textOverlay.Render(), mainView, true, true)
+	} else if m.state == stateConfirm {
+		if m.confirmationOverlay == nil {
+			log.ErrorLog.Printf("confirmation overlay is nil")
+		}
+		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
 	}
 
 	return mainView
