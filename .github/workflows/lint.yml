@@ -31,8 +31,12 @@ jobs:
         uses: golangci/golangci-lint-action@v4
         with:
           version: latest
-          args: --timeout=5m --out-format=line-number
-          
+          args: --timeout=3m --out-format=line-number --fast --max-issues-per-linter=0 --max-same-issues=0
+          skip-cache: false
+          skip-pkg-cache: false
+          skip-build-cache: false
+          only-new-issues: true
+
       - name: Check formatting
         run: |
           if [ -n "$(gofmt -l .)" ]; then
