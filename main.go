@@ -24,7 +24,7 @@ var (
 	daemonFlag  bool
 	rootCmd     = &cobra.Command{
 		Use:   "claude-squad",
-		Short: "Claude Squad - A terminal-based session manager",
+		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			log.Initialize(daemonFlag)
