@@ -19,19 +19,30 @@ https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
 
 ### Installation
 
-The easiest way to install `claude-squad` is by running the following command:
+Both Homebrew and manual installation will install the `cs` on your system.
+
+#### Homebrew
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stmg-ai/claude-squad/main/install.sh | bash
+brew install claude-squad
+ln -s "$(brew --prefix)/bin/claude-squad" "$(brew --prefix)/bin/cs"
 ```
 
-This will install the `cs` binary to `~/.local/bin` and add it to your PATH. To install with a different name, use the `--name` flag:
+#### Manual
+
+Claude Squad can also be installed by running the following command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/stmg-ai/claude-squad/main/install.sh | bash -s -- --name <n>
+curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash
 ```
 
-Alternatively, you can also install `claude-squad` by building from source or installing a [pre-built binary](https://github.com/smtg-ai/claude-squad/releases).
+This puts the `cs` binary in `~/.local/bin`.
+
+To use a custom name for the binary:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash -s -- --name <your-binary-name>
+```
 
 ### Prerequisites
 
