@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strings"
 )
 
 const ConfigFileName = "config.json"
@@ -37,7 +39,14 @@ func DefaultConfig() *Config {
 		DefaultProgram:     "claude",
 		AutoYes:            false,
 		DaemonPollInterval: 1000,
-		BranchPrefix:       "session/",
+		BranchPrefix: func() string {
+			user, err := user.Current()
+			if err != nil || user == nil || user.Username == "" {
+				log.ErrorLog.Printf("failed to get current user: %v", err)
+				return "session/"
+			}
+			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
+		}(),
 	}
 }
 
