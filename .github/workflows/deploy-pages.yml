@@ -6,11 +6,13 @@ on:
       - main
     paths:
       - 'web/**'
+      - '.github/workflows/deploy-pages.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'web/**'
+      - '.github/workflows/deploy-pages.yml'
 
 permissions:
   contents: read
