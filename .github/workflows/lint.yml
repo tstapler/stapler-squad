@@ -28,9 +28,9 @@ jobs:
           cache: false
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v1.60.0
           args: --timeout=3m --out-format=line-number --fast --max-issues-per-linter=0 --max-same-issues=0
           skip-cache: false
           skip-pkg-cache: false
