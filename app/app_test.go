@@ -2,11 +2,13 @@ package app
 
 import (
 	"claude-squad/config"
+	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -14,6 +16,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestMain runs before all tests to set up the test environment
+func TestMain(m *testing.M) {
+	// Initialize the logger before any tests run
+	log.Initialize(false)
+	defer log.Close()
+
+	// Run all tests
+	exitCode := m.Run()
+
+	// Exit with the same code as the tests
+	os.Exit(exitCode)
+}
 
 // TestConfirmationModalStateTransitions tests state transitions without full instance setup
 func TestConfirmationModalStateTransitions(t *testing.T) {
