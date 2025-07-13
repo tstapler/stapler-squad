@@ -546,7 +546,7 @@ func (i *Instance) Resume() error {
 	// Check if tmux session still exists from pause, otherwise create new one
 	worktreePath := i.gitWorktree.GetWorktreePath()
 	if i.tmuxSession.DoesSessionExist() {
-		// Session exists, just restore PTY connection to it
+		// Session exists, just restore PTY connection to it (retains stdout from before pause)
 		if err := i.tmuxSession.RestoreWithWorkDir(worktreePath); err != nil {
 			log.ErrorLog.Print(err)
 			// If restore fails, fall back to creating new session
