@@ -140,27 +140,41 @@ func (t *TmuxSession) Start(workDir string) error {
 		return fmt.Errorf("error restoring tmux session: %w", err)
 	}
 
-	if t.program == ProgramClaude || strings.HasPrefix(t.program, ProgramAider) || strings.HasPrefix(t.program, ProgramGemini) {
+	if strings.HasSuffix(t.program, ProgramClaude) || strings.HasSuffix(t.program, ProgramAider) || strings.HasSuffix(t.program, ProgramGemini) {
 		searchString := "Do you trust the files in this folder?"
 		tapFunc := t.TapEnter
-		iterations := 5
-		if t.program != ProgramClaude {
+		maxWaitTime := 30 * time.Second // Much longer timeout for slower systems
+		if !strings.HasSuffix(t.program, ProgramClaude) {
 			searchString = "Open documentation url for more info"
 			tapFunc = t.TapDAndEnter
-			iterations = 10 // Aider takes longer to start :/
+			maxWaitTime = 45 * time.Second // Aider/Gemini take longer to start
 		}
+
 		// Deal with "do you trust the files" screen by sending an enter keystroke.
-		for i := 0; i < iterations; i++ {
-			time.Sleep(200 * time.Millisecond)
+		// Use exponential backoff with longer timeout for reliability on slow systems
+		startTime := time.Now()
+		sleepDuration := 100 * time.Millisecond
+		attempt := 0
+
+		for time.Since(startTime) < maxWaitTime {
+			attempt++
+			time.Sleep(sleepDuration)
 			content, err := t.CapturePaneContent()
 			if err != nil {
-				log.ErrorLog.Printf("could not check 'do you trust the files screen': %v", err)
-			}
-			if strings.Contains(content, searchString) {
-				if err := tapFunc(); err != nil {
-					log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
+				// Session might not be ready yet, continue waiting
+			} else {
+				if strings.Contains(content, searchString) {
+					if err := tapFunc(); err != nil {
+						log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
+					}
+					break
 				}
-				break
+			}
+
+			// Exponential backoff with cap at 1 second
+			sleepDuration = time.Duration(float64(sleepDuration) * 1.2)
+			if sleepDuration > time.Second {
+				sleepDuration = time.Second
 			}
 		}
 	}
