@@ -109,19 +109,22 @@ func (t *TmuxSession) Start(workDir string) error {
 		return fmt.Errorf("error starting tmux session: %w", err)
 	}
 
-	// We need to close the ptmx, but we shouldn't close it before the command above finishes.
-	// So, we poll for completion before closing.
+	// Poll for session existence with exponential backoff
 	timeout := time.After(2 * time.Second)
+	sleepDuration := 5 * time.Millisecond
 	for !t.DoesSessionExist() {
 		select {
 		case <-timeout:
-			// Cleanup on window size update failure
 			if cleanupErr := t.Close(); cleanupErr != nil {
 				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 			}
 			return fmt.Errorf("timed out waiting for tmux session %s: %v", t.sanitizedName, err)
 		default:
-			time.Sleep(time.Millisecond * 10)
+			time.Sleep(sleepDuration)
+			// Exponential backoff up to 50ms max
+			if sleepDuration < 50*time.Millisecond {
+				sleepDuration *= 2
+			}
 		}
 	}
 	ptmx.Close()
