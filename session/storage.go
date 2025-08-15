@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/config"
+	"claude-squad/log"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -53,13 +54,55 @@ func NewStorage(state config.InstanceStorage) (*Storage, error) {
 }
 
 // SaveInstances saves the list of instances to disk
+// with built-in merging of any existing instances from other windows
 func (s *Storage) SaveInstances(instances []*Instance) error {
-	// Convert instances to InstanceData
-	data := make([]InstanceData, 0)
+	// First load existing instances from disk
+	existingInstances, err := s.LoadInstances()
+	if err != nil {
+		// If we can't load existing instances, just use what we have
+		log.WarningLog.Printf("failed to load existing instances for merging: %v", err)
+		existingInstances = []*Instance{}
+	}
+	
+	// Create a map of our instances by title for quick lookup
+	instancesByTitle := make(map[string]*Instance)
 	for _, instance := range instances {
 		if instance.Started() {
-			data = append(data, instance.ToInstanceData())
+			instancesByTitle[instance.Title] = instance
 		}
+	}
+	
+	// Create a map of existing instances by title for quick lookup
+	existingByTitle := make(map[string]*Instance)
+	for _, instance := range existingInstances {
+		// Skip any instances we're already tracking (our version is newer)
+		if _, exists := instancesByTitle[instance.Title]; !exists {
+			existingByTitle[instance.Title] = instance
+		}
+	}
+	
+	// Create a merged list with our instances taking precedence
+	mergedInstances := make([]*Instance, 0, len(instancesByTitle) + len(existingByTitle))
+	
+	// Add our instances first (we know they're valid)
+	for _, instance := range instances {
+		if instance.Started() {
+			mergedInstances = append(mergedInstances, instance)
+		}
+	}
+	
+	// Then add instances from disk that we're not tracking
+	for title, instance := range existingByTitle {
+		if instance.Started() {
+			log.InfoLog.Printf("merging instance from disk: %s", title)
+			mergedInstances = append(mergedInstances, instance)
+		}
+	}
+	
+	// Convert merged instances to InstanceData
+	data := make([]InstanceData, 0, len(mergedInstances))
+	for _, instance := range mergedInstances {
+		data = append(data, instance.ToInstanceData())
 	}
 
 	// Marshal to JSON
@@ -145,4 +188,9 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 // DeleteAllInstances removes all stored instances
 func (s *Storage) DeleteAllInstances() error {
 	return s.state.DeleteAllInstances()
+}
+
+// GetStateManager returns the underlying state manager
+func (s *Storage) GetStateManager() interface{} {
+	return s.state
 }
