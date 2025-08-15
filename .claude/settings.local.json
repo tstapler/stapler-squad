@@ -13,10 +13,19 @@
       "mcp__github__list_pull_requests",
       "Bash(mkdir:*)",
       "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(rm:*)",
       "Bash(cat:*)",
       "Bash(git rm:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "mcp__github__create_pull_request",
+      "Bash(git fetch:*)",
+      "Bash(git merge:*)",
+      "Bash(cat:*)",
+      "Bash(mv:*)",
+      "mcp__github__get_pull_request"
     ],
     "deny": [],
     "ask": []

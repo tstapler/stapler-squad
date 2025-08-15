@@ -25,6 +25,8 @@ const (
 	Loading
 	// Paused is if the instance is paused (worktree removed but branch preserved).
 	Paused
+	// NeedsApproval is if the instance is waiting for user approval on a prompt.
+	NeedsApproval
 )
 
 // Instance is a running instance of claude code.
@@ -583,6 +585,13 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 // SetTmuxSession sets the tmux session for testing purposes
 func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 	i.tmuxSession = session
+	i.started = session != nil
+}
+
+// SetGitWorktree sets the git worktree for testing purposes
+func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
+	i.gitWorktree = worktree
+	i.started = worktree != nil
 }
 
 // SendKeys sends keys to the tmux session

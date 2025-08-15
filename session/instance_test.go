@@ -98,3 +98,24 @@ func checkInstanceStatus(t *testing.T, instance *Instance, worktreePath string, 
 	}
 }
 
+func TestStatusEnumValues(t *testing.T) {
+	// Test that all status values are defined correctly
+	tests := []struct {
+		status Status
+		name   string
+	}{
+		{Running, "Running"},
+		{Ready, "Ready"},
+		{Loading, "Loading"},
+		{Paused, "Paused"},
+		{NeedsApproval, "NeedsApproval"},
+	}
+
+	// Verify that status values are sequential starting from 0
+	for i, test := range tests {
+		if int(test.status) != i {
+			t.Errorf("Expected %s status to have value %d, got %d", test.name, i, test.status)
+		}
+	}
+}
+

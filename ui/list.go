@@ -13,6 +13,7 @@ import (
 
 const readyIcon = "● "
 const pausedIcon = "⏸ "
+const needsApprovalIcon = "❗ "
 
 var readyStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#51bd73", Dark: "#51bd73"})
@@ -25,6 +26,9 @@ var removedLinesStyle = lipgloss.NewStyle().
 
 var pausedStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
+
+var needsApprovalStyle = lipgloss.NewStyle().
+	Foreground(lipgloss.Color("#ffaa00"))
 
 var titleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
@@ -134,6 +138,8 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 		join = readyStyle.Render(readyIcon)
 	case session.Paused:
 		join = pausedStyle.Render(pausedIcon)
+	case session.NeedsApproval:
+		join = needsApprovalStyle.Render(needsApprovalIcon)
 	default:
 	}
 
@@ -183,7 +189,7 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	remainingWidth -= diffWidth
 
 	branch := i.Branch
-	if i.Started() && hasMultipleRepos {
+	if i.Started() {
 		// Skip repo name retrieval for paused instances
 		if !i.Paused() {
 			repoName, err := i.RepoName()
@@ -255,7 +261,7 @@ func (l *List) String() string {
 
 	// Render the list.
 	for i, item := range l.items {
-		b.WriteString(l.renderer.Render(item, i+1, i == l.selectedIdx, len(l.repos) > 1))
+		b.WriteString(l.renderer.Render(item, i+1, i == l.selectedIdx, true))
 		if i != len(l.items)-1 {
 			b.WriteString("\n\n")
 		}
