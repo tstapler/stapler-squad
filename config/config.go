@@ -36,6 +36,12 @@ type Config struct {
 	DaemonPollInterval int `json:"daemon_poll_interval"`
 	// BranchPrefix is the prefix used for git branches created by the application.
 	BranchPrefix string `json:"branch_prefix"`
+	// DetectNewSessions is a flag to enable detection of new sessions from other windows
+	DetectNewSessions bool `json:"detect_new_sessions"`
+	// SessionDetectionInterval is the interval (ms) at which the daemon checks for new sessions
+	SessionDetectionInterval int `json:"session_detection_interval"`
+	// StateRefreshInterval is the interval (ms) at which the state is refreshed from disk
+	StateRefreshInterval int `json:"state_refresh_interval"`
 }
 
 // DefaultConfig returns the default configuration
@@ -47,9 +53,9 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
-		DefaultProgram:     program,
-		AutoYes:            false,
-		DaemonPollInterval: 1000,
+		DefaultProgram:          program,
+		AutoYes:                 false,
+		DaemonPollInterval:      1000,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {
@@ -58,6 +64,9 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
+		DetectNewSessions:       true,
+		SessionDetectionInterval: 5000,
+		StateRefreshInterval:     3000,
 	}
 }
 

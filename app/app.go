@@ -97,10 +97,10 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	// Load application config
 	appConfig := config.LoadConfig()
 
-	// Load application state
+	// Load application state with built-in locking
 	appState := config.LoadState()
 
-	// Initialize storage
+	// Initialize storage with the state
 	storage, err := session.NewStorage(appState)
 	if err != nil {
 		fmt.Printf("Failed to initialize storage: %v\n", err)
@@ -257,9 +257,19 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
+	// Save instances before quitting
 	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
 		return m, m.handleError(err)
 	}
+	
+	// Release any locks held by the state manager
+	if stateManager, ok := m.storage.GetStateManager().(config.StateManager); ok {
+		if err := stateManager.Close(); err != nil {
+			log.WarningLog.Printf("Failed to close state manager: %v", err)
+			// Continue with quit anyway
+		}
+	}
+	
 	return m, tea.Quit
 }
 
