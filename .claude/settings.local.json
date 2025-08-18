@@ -31,6 +31,10 @@
       "Bash(go get:*)",
       "Bash(./claude-squad --help)",
       "Bash(./claude-squad:*)"
+      "mcp__atlassian__getAccessibleAtlassianResources",
+      "mcp__atlassian__getVisibleJiraProjects",
+      "mcp__atlassian__getJiraProjectIssueTypesMetadata",
+      "mcp__atlassian__createJiraIssue"
     ],
     "deny": [],
     "ask": [],
