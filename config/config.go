@@ -42,6 +42,20 @@ type Config struct {
 	SessionDetectionInterval int `json:"session_detection_interval"`
 	// StateRefreshInterval is the interval (ms) at which the state is refreshed from disk
 	StateRefreshInterval int `json:"state_refresh_interval"`
+	// LogsEnabled is a flag to enable logging to files
+	LogsEnabled bool `json:"logs_enabled"`
+	// LogsDir is the directory where logs are stored (defaults to ~/.claude-squad/logs)
+	LogsDir string `json:"logs_dir"`
+	// LogMaxSize is the maximum size of a log file in megabytes before it gets rotated
+	LogMaxSize int `json:"log_max_size"`
+	// LogMaxFiles is the maximum number of rotated log files to keep (not including the current log file)
+	LogMaxFiles int `json:"log_max_files"`
+	// LogMaxAge is the maximum number of days to keep rotated log files
+	LogMaxAge int `json:"log_max_age"`
+	// LogCompress is a flag to enable compression of rotated log files
+	LogCompress bool `json:"log_compress"`
+	// UseSessionLogs is a flag to enable per-session log files
+	UseSessionLogs bool `json:"use_session_logs"`
 }
 
 // DefaultConfig returns the default configuration
@@ -67,6 +81,13 @@ func DefaultConfig() *Config {
 		DetectNewSessions:       true,
 		SessionDetectionInterval: 5000,
 		StateRefreshInterval:     3000,
+		LogsEnabled:             true,
+		LogsDir:                 "", // Empty string means use default location
+		LogMaxSize:              10,  // 10MB
+		LogMaxFiles:             5,   // Keep 5 rotated files
+		LogMaxAge:               30,  // 30 days
+		LogCompress:             true,
+		UseSessionLogs:          true,
 	}
 }
 

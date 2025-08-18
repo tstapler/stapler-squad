@@ -19,6 +19,7 @@ import (
 // RunDaemon runs the daemon process which iterates over all sessions and runs AutoYes mode on them.
 // It's expected that the main process kills the daemon when the main process starts.
 func RunDaemon(cfg *config.Config) error {
+	// Log initialization is done by the caller
 	log.InfoLog.Printf("starting daemon")
 	
 	// Load state with built-in locking

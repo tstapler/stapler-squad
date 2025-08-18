@@ -49,6 +49,26 @@ curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.s
 - [tmux](https://github.com/tmux/tmux/wiki/Installing)
 - [gh](https://cli.github.com/)
 
+### Configuration
+
+Configuration is stored in `~/.claude-squad/config.json`. You can view the location with `cs debug`.
+
+#### Logging Configuration
+
+Logs are stored in `~/.claude-squad/logs/` by default and include log rotation features. Configure logging with these options:
+
+```json
+{
+  "logs_enabled": true,
+  "logs_dir": "",  // Empty for default location (~/.claude-squad/logs/)
+  "log_max_size": 10,  // Max log file size in MB before rotation
+  "log_max_files": 5,  // Max number of rotated files to keep
+  "log_max_age": 30,  // Max age in days for rotated files
+  "log_compress": true,  // Whether to compress rotated files
+  "use_session_logs": true  // Whether to create separate log files for each session
+}
+```
+
 ### Usage
 
 ```

@@ -129,13 +129,16 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			Content: data.DiffStats.Content,
 		},
 	}
+	
+	// Initialize session-specific logging
+	_ = log.GetSessionLoggers
 
 	// Check if the worktree still exists on disk if the instance is not paused
 	if !instance.Paused() && instance.gitWorktree != nil {
 		worktreePath := instance.gitWorktree.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted, mark instance as paused
-			log.WarningLog.Printf("Worktree directory for '%s' doesn't exist at '%s', marking as paused", instance.Title, worktreePath)
+			log.LogForSession(instance.Title, "warning", "Worktree directory doesn't exist at '%s', marking as paused", worktreePath)
 			instance.Status = Paused
 		}
 	}

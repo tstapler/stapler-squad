@@ -27,11 +27,22 @@ var (
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
-			log.Initialize(daemonFlag)
+			// Load config first so we can configure logging properly
+			cfg := config.LoadConfig()
+			// Convert config to log config
+			logCfg := &log.LogConfig{
+				LogsEnabled:    true,
+				LogsDir:        "", // Use default location
+				LogMaxSize:     cfg.LogMaxSize,
+				LogMaxFiles:    cfg.LogMaxFiles,
+				LogMaxAge:      cfg.LogMaxAge,
+				LogCompress:    cfg.LogCompress,
+				UseSessionLogs: cfg.UseSessionLogs,
+			}
+			log.InitializeWithConfig(daemonFlag, logCfg)
 			defer log.Close()
 
 			if daemonFlag {
-				cfg := config.LoadConfig()
 				err := daemon.RunDaemon(cfg)
 				log.ErrorLog.Printf("failed to start daemon %v", err)
 				return err
@@ -46,8 +57,6 @@ var (
 			if !git.IsGitRepo(currentDir) {
 				return fmt.Errorf("error: claude-squad must be run from within a git repository")
 			}
-
-			cfg := config.LoadConfig()
 
 			// Program flag overrides config
 			program := cfg.DefaultProgram
@@ -79,7 +88,19 @@ var (
 		Use:   "reset",
 		Short: "Reset all stored instances",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
+			// Load config first so we can configure logging properly
+			cfg := config.LoadConfig()
+			// Convert config to log config
+			logCfg := &log.LogConfig{
+				LogsEnabled:    true,
+				LogsDir:        "", // Use default location
+				LogMaxSize:     cfg.LogMaxSize,
+				LogMaxFiles:    cfg.LogMaxFiles,
+				LogMaxAge:      cfg.LogMaxAge,
+				LogCompress:    cfg.LogCompress,
+				UseSessionLogs: cfg.UseSessionLogs,
+			}
+			log.InitializeWithConfig(false, logCfg)
 			defer log.Close()
 
 			state := config.LoadState()
@@ -116,10 +137,20 @@ var (
 		Use:   "debug",
 		Short: "Print debug information like config paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			log.Initialize(false)
-			defer log.Close()
-
+			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
+			// Convert config to log config
+			logCfg := &log.LogConfig{
+				LogsEnabled:    true,
+				LogsDir:        "", // Use default location
+				LogMaxSize:     cfg.LogMaxSize,
+				LogMaxFiles:    cfg.LogMaxFiles,
+				LogMaxAge:      cfg.LogMaxAge,
+				LogCompress:    cfg.LogCompress,
+				UseSessionLogs: cfg.UseSessionLogs,
+			}
+			log.InitializeWithConfig(false, logCfg)
+			defer log.Close()
 
 			configDir, err := config.GetConfigDir()
 			if err != nil {
