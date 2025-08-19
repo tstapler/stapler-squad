@@ -44,6 +44,8 @@ const (
 	stateConfirm
 	// stateCreatingSession is the state when a session is being created asynchronously.
 	stateCreatingSession
+	// stateAdvancedNew is the state when the user is using the advanced session setup.
+	stateAdvancedNew
 )
 
 type home struct {
@@ -96,6 +98,8 @@ type home struct {
 	textOverlay *overlay.TextOverlay
 	// confirmationOverlay displays confirmation modals
 	confirmationOverlay *overlay.ConfirmationOverlay
+	// sessionSetupOverlay handles advanced session creation
+	sessionSetupOverlay *overlay.SessionSetupOverlay
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -166,6 +170,9 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	}
 	if m.textOverlay != nil {
 		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
+	}
+	if m.sessionSetupOverlay != nil {
+		m.sessionSetupOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
 	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
@@ -393,6 +400,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	if m.state == stateHelp {
 		return m.handleHelpState(msg)
 	}
+	
+	if m.state == stateAdvancedNew {
+		return m.handleAdvancedSessionSetupUpdate(msg)
+	}
 
 	if m.state == stateNew {
 		// Handle quit commands first. Don't handle q because the user might want to type that.
@@ -550,26 +561,8 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
 	case keys.KeyPrompt:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
-			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
-		}
-		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    ".",
-			Program: m.program,
-		})
-		if err != nil {
-			return m, m.handleError(err)
-		}
-
-		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
-		m.state = stateNew
-		m.menu.SetState(ui.StateNewInstance)
-		m.promptAfterName = true
-
-		return m, nil
+		// Use the advanced session setup overlay
+		return m.handleAdvancedSessionSetup()
 	case keys.KeyNew:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
@@ -841,6 +834,12 @@ func (m *home) View() string {
 		// Show spinner or progress indicator when creating session
 		creatingMsg := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(m.spinner.View() + " Creating session...")
 		return overlay.PlaceOverlay(0, 0, creatingMsg, mainView, true, false)
+	} else if m.state == stateAdvancedNew {
+		if m.sessionSetupOverlay == nil {
+			log.ErrorLog.Printf("session setup overlay is nil")
+			return mainView
+		}
+		return overlay.PlaceOverlay(0, 0, m.sessionSetupOverlay.View(), mainView, true, true)
 	}
 
 	return mainView

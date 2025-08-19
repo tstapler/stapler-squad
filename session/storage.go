@@ -10,19 +10,22 @@ import (
 
 // InstanceData represents the serializable data of an Instance
 type InstanceData struct {
-	Title     string    `json:"title"`
-	Path      string    `json:"path"`
-	Branch    string    `json:"branch"`
-	Status    Status    `json:"status"`
-	Height    int       `json:"height"`
-	Width     int       `json:"width"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	AutoYes   bool      `json:"auto_yes"`
+	Title      string    `json:"title"`
+	Path       string    `json:"path"`
+	WorkingDir string    `json:"working_dir"`
+	Branch     string    `json:"branch"`
+	Status     Status    `json:"status"`
+	Height     int       `json:"height"`
+	Width      int       `json:"width"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	AutoYes    bool      `json:"auto_yes"`
+	Prompt     string    `json:"prompt"`
 
-	Program   string          `json:"program"`
-	Worktree  GitWorktreeData `json:"worktree"`
-	DiffStats DiffStatsData   `json:"diff_stats"`
+	Program          string          `json:"program"`
+	ExistingWorktree string          `json:"existing_worktree,omitempty"`
+	Worktree         GitWorktreeData `json:"worktree"`
+	DiffStats        DiffStatsData   `json:"diff_stats"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

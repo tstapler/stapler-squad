@@ -41,6 +41,7 @@ const (
 	StateNewInstance
 	StatePrompt
 	StateCreatingInstance
+	StateAdvancedNew
 )
 
 type Menu struct {
@@ -84,8 +85,8 @@ func (m *Menu) SetState(state MenuState) {
 // SetInstance updates the current instance and refreshes menu options
 func (m *Menu) SetInstance(instance *session.Instance) {
 	m.instance = instance
-	// Only change the state if we're not in a special state (NewInstance or Prompt)
-	if m.state != StateNewInstance && m.state != StatePrompt {
+	// Only change the state if we're not in a special state
+	if m.state != StateNewInstance && m.state != StatePrompt && m.state != StateAdvancedNew {
 		if m.instance != nil {
 			m.state = StateDefault
 		} else {
@@ -120,6 +121,9 @@ func (m *Menu) updateOptions() {
 		m.options = promptMenuOptions
 	case StateCreatingInstance:
 		// No menu options during session creation
+		m.options = []keys.KeyName{}
+	case StateAdvancedNew:
+		// No menu options during advanced session setup
 		m.options = []keys.KeyName{}
 	}
 }

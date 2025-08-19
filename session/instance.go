@@ -33,8 +33,10 @@ const (
 type Instance struct {
 	// Title is the title of the instance.
 	Title string
-	// Path is the path to the workspace.
+	// Path is the path to the workspace repository root.
 	Path string
+	// WorkingDir is the directory within the repository to start in.
+	WorkingDir string
 	// Branch is the branch of the instance.
 	Branch string
 	// Status is the status of the instance.
@@ -53,6 +55,8 @@ type Instance struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
+	// ExistingWorktree is an optional path to an existing worktree to reuse
+	ExistingWorktree string
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -69,16 +73,18 @@ type Instance struct {
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
 	data := InstanceData{
-		Title:     i.Title,
-		Path:      i.Path,
-		Branch:    i.Branch,
-		Status:    i.Status,
-		Height:    i.Height,
-		Width:     i.Width,
-		CreatedAt: i.CreatedAt,
-		UpdatedAt: time.Now(),
-		Program:   i.Program,
-		AutoYes:   i.AutoYes,
+		Title:      i.Title,
+		Path:       i.Path,
+		WorkingDir: i.WorkingDir,
+		Branch:     i.Branch,
+		Status:     i.Status,
+		Height:     i.Height,
+		Width:      i.Width,
+		CreatedAt:  i.CreatedAt,
+		UpdatedAt:  time.Now(),
+		Program:    i.Program,
+		AutoYes:    i.AutoYes,
+		Prompt:     i.Prompt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -107,15 +113,17 @@ func (i *Instance) ToInstanceData() InstanceData {
 // FromInstanceData creates a new Instance from serialized data
 func FromInstanceData(data InstanceData) (*Instance, error) {
 	instance := &Instance{
-		Title:     data.Title,
-		Path:      data.Path,
-		Branch:    data.Branch,
-		Status:    data.Status,
-		Height:    data.Height,
-		Width:     data.Width,
-		CreatedAt: data.CreatedAt,
-		UpdatedAt: data.UpdatedAt,
-		Program:   data.Program,
+		Title:      data.Title,
+		Path:       data.Path,
+		WorkingDir: data.WorkingDir,
+		Branch:     data.Branch,
+		Status:     data.Status,
+		Height:     data.Height,
+		Width:      data.Width,
+		CreatedAt:  data.CreatedAt,
+		UpdatedAt:  data.UpdatedAt,
+		Program:    data.Program,
+		Prompt:     data.Prompt,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -159,12 +167,19 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 type InstanceOptions struct {
 	// Title is the title of the instance.
 	Title string
-	// Path is the path to the workspace.
+	// Path is the path to the workspace repository root.
 	Path string
+	// WorkingDir is the directory within the repository to start in.
+	// If empty, defaults to repository root.
+	WorkingDir string
 	// Program is the program to run in the instance (e.g. "claude", "aider --model ollama_chat/gemma3:1b")
 	Program string
-	// If AutoYes is true, then
+	// If AutoYes is true, automatically accept prompts
 	AutoYes bool
+	// Prompt is the initial prompt to pass to the instance on startup
+	Prompt string
+	// ExistingWorktree is an optional path to an existing worktree to reuse
+	ExistingWorktree string
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -185,7 +200,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		Width:     0,
 		CreatedAt: t,
 		UpdatedAt: t,
-		AutoYes:   false,
+		AutoYes:   opts.AutoYes,
+		Prompt:    opts.Prompt,
 	}, nil
 }
 
@@ -257,7 +273,27 @@ func (i *Instance) Start(firstTimeSetup bool) error {
 		}
 
 		// Create new session
-		if err := i.tmuxSession.Start(i.gitWorktree.GetWorktreePath()); err != nil {
+		worktreePath := i.gitWorktree.GetWorktreePath()
+		startPath := worktreePath
+
+		// Use the working directory if specified
+		if i.WorkingDir != "" {
+			// Calculate the full path combining worktree path with working dir
+			if !filepath.IsAbs(i.WorkingDir) {
+				startPath = filepath.Join(worktreePath, i.WorkingDir)
+			} else {
+				startPath = i.WorkingDir
+			}
+
+			// Verify the path exists
+			if _, err := os.Stat(startPath); os.IsNotExist(err) {
+				log.WarningLog.Printf("Working directory '%s' doesn't exist, using worktree root '%s' instead", startPath, worktreePath)
+				startPath = worktreePath
+			}
+		}
+
+		// Start the session in the specified directory
+		if err := i.tmuxSession.Start(startPath); err != nil {
 			// Cleanup git worktree if tmux session creation fails
 			if cleanupErr := i.gitWorktree.Cleanup(); cleanupErr != nil {
 				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
