@@ -385,3 +385,46 @@ func (l *List) SetSelectedInstance(idx int) {
 func (l *List) GetInstances() []*session.Instance {
 	return l.items
 }
+
+// Search functionality methods - basic implementations for compatibility
+
+// SearchByTitle filters instances by title (basic implementation)
+func (l *List) SearchByTitle(query string) {
+	// For the simple version, just log the search - could be enhanced later
+	if query == "" {
+		return
+	}
+	// In a full implementation, this would filter the visible items
+	// For now, this is a no-op to prevent crashes
+}
+
+// ExitSearchMode exits search mode
+func (l *List) ExitSearchMode() {
+	// For the simple version, this is a no-op
+	// In a full implementation, this would reset search state
+}
+
+// GetSearchState returns the current search state
+func (l *List) GetSearchState() (bool, string) {
+	// For the simple version, always return false and empty
+	// In a full implementation, this would return actual search state
+	return false, ""
+}
+
+// ClearAllFilters clears all active filters
+func (l *List) ClearAllFilters() {
+	// For the simple version, this is a no-op
+	// In a full implementation, this would reset all filters
+}
+
+// TogglePausedFilter toggles the paused session filter
+func (l *List) TogglePausedFilter() {
+	// For the simple version, this is a no-op
+	// In a full implementation, this would toggle paused session visibility
+}
+
+// ToggleCategory toggles a category (for compatibility)
+func (l *List) ToggleCategory(category string) {
+	// For the simple version, this is a no-op
+	// In a full implementation, this would toggle category expansion
+}
