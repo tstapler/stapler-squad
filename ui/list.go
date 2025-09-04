@@ -844,35 +844,6 @@ func (l *List) SearchByTitle(query string) {
 
 // ExitSearchMode exits search mode
 func (l *List) ExitSearchMode() {
-<<<<<<< HEAD
-	// For the simple version, this is a no-op
-	// In a full implementation, this would reset search state
-}
-
-// GetSearchState returns the current search state
-func (l *List) GetSearchState() (bool, string) {
-	// For the simple version, always return false and empty
-	// In a full implementation, this would return actual search state
-	return false, ""
-}
-
-// ClearAllFilters clears all active filters
-func (l *List) ClearAllFilters() {
-	// For the simple version, this is a no-op
-	// In a full implementation, this would reset all filters
-}
-
-// TogglePausedFilter toggles the paused session filter
-func (l *List) TogglePausedFilter() {
-	// For the simple version, this is a no-op
-	// In a full implementation, this would toggle paused session visibility
-}
-
-// ToggleCategory toggles a category (for compatibility)
-func (l *List) ToggleCategory(category string) {
-	// For the simple version, this is a no-op
-	// In a full implementation, this would toggle category expansion
-=======
 	l.searchMode = false
 	l.searchQuery = ""
 	l.searchResults = nil
@@ -1227,5 +1198,4 @@ func (l *List) ClearAllFilters() {
 // GetSearchState returns the current search mode and query
 func (l *List) GetSearchState() (bool, string) {
 	return l.searchMode, l.searchQuery
->>>>>>> origin/main
 }

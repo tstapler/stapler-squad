@@ -216,6 +216,18 @@ type SessionLoggers struct {
 
 func init() {
 	sessionLoggers = make(map[string]*SessionLoggers)
+	
+	// Initialize default loggers for testing environments
+	// This ensures that log calls don't panic when tests are run
+	if InfoLog == nil {
+		InfoLog = log.New(os.Stderr, "INFO: ", log.Ldate|log.Ltime)
+	}
+	if WarningLog == nil {
+		WarningLog = log.New(os.Stderr, "WARNING: ", log.Ldate|log.Ltime)
+	}
+	if ErrorLog == nil {
+		ErrorLog = log.New(os.Stderr, "ERROR: ", log.Ldate|log.Ltime)
+	}
 }
 
 // Initialize should be called once at the beginning of the program to set up logging.

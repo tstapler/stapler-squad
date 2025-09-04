@@ -24,6 +24,7 @@ const (
 	KeyResume
 	KeyPrompt // New key for entering a prompt
 	KeyHelp   // Key for showing help screen
+	KeyEsc    // Escape key for cancelling operations
 
 	// Diff keybindings
 	KeyShiftUp
@@ -34,6 +35,9 @@ const (
 	KeyRight       // Expand category
 	KeyLeft        // Collapse category
 	KeyToggleGroup // Toggle expand/collapse category
+	KeyFilterPaused // Toggle visibility of paused sessions
+	KeyClearFilters // Clear all filters and search
+	KeyGit          // Enter git mode (:G command)
 )
 
 // GlobalKeyStringsMap is a global, immutable map string to keybinding.
@@ -44,21 +48,30 @@ var GlobalKeyStringsMap = map[string]KeyName{
 	"j":          KeyDown,
 	"shift+up":   KeyShiftUp,
 	"shift+down": KeyShiftDown,
+	"ctrl+u":     KeyShiftUp,
+	"ctrl+d":     KeyShiftDown,
 	"N":          KeyPrompt,
+	":":          KeyPrompt,
 	"enter":      KeyEnter,
-	"o":          KeyEnter,
 	"n":          KeyNew,
 	"D":          KeyKill,
 	"q":          KeyQuit,
 	"tab":        KeyTab,
 	"c":          KeyCheckout,
 	"r":          KeyResume,
-	"p":          KeySubmit,
+	"P":          KeySubmit,
 	"?":          KeyHelp,
 	"right":      KeyRight,
+	"l":          KeyRight,
 	"left":       KeyLeft,
+	"h":          KeyLeft,
 	"s":          KeySearch,
+	"/":          KeySearch,
 	"space":      KeyToggleGroup,
+	"f":          KeyFilterPaused,
+	"C":          KeyClearFilters,
+	"g":          KeyGit,
+	"esc":        KeyEsc,
 }
 
 // GlobalkeyBindings is a global, immutable map of KeyName tot keybinding.
@@ -72,16 +85,16 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithHelp("↓/j", "down"),
 	),
 	KeyShiftUp: key.NewBinding(
-		key.WithKeys("shift+up"),
-		key.WithHelp("shift+↑", "scroll"),
+		key.WithKeys("shift+up", "ctrl+u"),
+		key.WithHelp("shift+↑/^u", "scroll up"),
 	),
 	KeyShiftDown: key.NewBinding(
-		key.WithKeys("shift+down"),
-		key.WithHelp("shift+↓", "scroll"),
+		key.WithKeys("shift+down", "ctrl+d"),
+		key.WithHelp("shift+↓/^d", "scroll down"),
 	),
 	KeyEnter: key.NewBinding(
-		key.WithKeys("enter", "o"),
-		key.WithHelp("↵/o", "open"),
+		key.WithKeys("enter"),
+		key.WithHelp("↵", "attach"),
 	),
 	KeyNew: key.NewBinding(
 		key.WithKeys("n"),
@@ -100,12 +113,12 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 		key.WithHelp("q", "quit"),
 	),
 	KeySubmit: key.NewBinding(
-		key.WithKeys("p"),
-		key.WithHelp("p", "push branch"),
+		key.WithKeys("P"),
+		key.WithHelp("P", "push branch"),
 	),
 	KeyPrompt: key.NewBinding(
-		key.WithKeys("N"),
-		key.WithHelp("N", "new with prompt"),
+		key.WithKeys("N", ":"),
+		key.WithHelp("N/:", "new with prompt"),
 	),
 	KeyCheckout: key.NewBinding(
 		key.WithKeys("c"),
@@ -122,20 +135,38 @@ var GlobalkeyBindings = map[KeyName]key.Binding{
 	
 	// Session organization bindings
 	KeySearch: key.NewBinding(
-		key.WithKeys("s"),
-		key.WithHelp("s", "search sessions"),
+		key.WithKeys("s", "/"),
+		key.WithHelp("s/", "search sessions"),
 	),
 	KeyRight: key.NewBinding(
-		key.WithKeys("right"),
-		key.WithHelp("→", "expand category"),
+		key.WithKeys("right", "l"),
+		key.WithHelp("→/l", "expand category"),
 	),
 	KeyLeft: key.NewBinding(
-		key.WithKeys("left"),
-		key.WithHelp("←", "collapse category"),
+		key.WithKeys("left", "h"),
+		key.WithHelp("←/h", "collapse category"),
 	),
 	KeyToggleGroup: key.NewBinding(
 		key.WithKeys("space"),
 		key.WithHelp("space", "toggle category"),
+	),
+	KeyFilterPaused: key.NewBinding(
+		key.WithKeys("f"),
+		key.WithHelp("f", "filter paused"),
+	),
+	KeyClearFilters: key.NewBinding(
+		key.WithKeys("C"),
+		key.WithHelp("C", "clear all filters"),
+	),
+	KeyGit: key.NewBinding(
+		key.WithKeys("g"),
+		key.WithHelp("g", "git status"),
+	),
+
+	// General keybinding
+	KeyEsc: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "cancel"),
 	),
 
 	// -- Special keybindings --

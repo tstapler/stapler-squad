@@ -1,11 +1,13 @@
 package app
 
 import (
+	"claude-squad/keys"
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"fmt"
+	"sort"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,6 +22,7 @@ type helpText interface {
 }
 
 type helpTypeGeneral struct{}
+type helpTypeSessionOrganization struct{}
 
 type helpTypeInstanceStart struct {
 	instance *session.Instance
@@ -34,29 +37,76 @@ func helpStart(instance *session.Instance) helpText {
 }
 
 func (h helpTypeGeneral) toContent() string {
+	// Get all categories except special
+	allCategories := keys.GetAllCategories()
+	
+	// Sort categories in a specific order
+	sort.Slice(allCategories, func(i, j int) bool {
+		// Define category order for display
+		order := map[keys.HelpCategory]int{
+			keys.HelpCategoryManaging:    1,
+			keys.HelpCategoryHandoff:     2,
+			keys.HelpCategoryOrganize:    3,
+			keys.HelpCategoryNavigation:  4,
+			keys.HelpCategoryOther:       5,
+			keys.HelpCategoryUncategory:  6, // Always last if present
+		}
+		return order[allCategories[i]] < order[allCategories[j]]
+	})
+	
+	// Start with title and description
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("Claude Squad"),
 		"",
 		"A terminal UI that manages multiple Claude Code (and other local agents) in separate workspaces.",
 		"",
-		headerStyle.Render("Managing:"),
-		keyStyle.Render("n")+descStyle.Render("         - Create a new session"),
-		keyStyle.Render("N")+descStyle.Render("         - Create a new session with a prompt"),
-		keyStyle.Render("D")+descStyle.Render("         - Kill (delete) the selected session"),
-		keyStyle.Render("↑/j, ↓/k")+descStyle.Render("  - Navigate between sessions"),
-		keyStyle.Render("↵/o")+descStyle.Render("       - Attach to the selected session"),
-		keyStyle.Render("ctrl-q")+descStyle.Render("    - Detach from session"),
-		"",
-		headerStyle.Render("Handoff:"),
-		keyStyle.Render("p")+descStyle.Render("         - Commit and push branch to github"),
-		keyStyle.Render("c")+descStyle.Render("         - Checkout: commit changes and pause session"),
-		keyStyle.Render("r")+descStyle.Render("         - Resume a paused session"),
-		"",
-		headerStyle.Render("Other:"),
-		keyStyle.Render("tab")+descStyle.Render("       - Switch between preview and diff tabs"),
-		keyStyle.Render("shift-↓/↑")+descStyle.Render(" - Scroll in diff view"),
-		keyStyle.Render("q")+descStyle.Render("         - Quit the application"),
 	)
+	
+	// Add sections for each category
+	for _, category := range allCategories {
+		// Get keys in this category
+		categoryKeys := keys.GetKeysInCategory(category)
+		
+		// Skip empty categories
+		if len(categoryKeys) == 0 {
+			continue
+		}
+		
+		// Add category header
+		content = lipgloss.JoinVertical(lipgloss.Left, 
+			content, 
+			headerStyle.Render(string(category)+":"),
+		)
+		
+		// Add each key binding in this category
+		for _, keyName := range categoryKeys {
+			// Get the key binding
+			keyBinding := keys.GlobalkeyBindings[keyName]
+			
+			// Get help info
+			helpInfo := keys.GetKeyHelp(keyName)
+			
+			// Format and add the key help
+			keyText := keyBinding.Help().Key
+			descText := helpInfo.Description
+			
+			// Calculate padding (to align descriptions)
+			padding := ""
+			padLen := 12 - len(keyText) // Assuming max key length of 12
+			if padLen > 0 {
+				for i := 0; i < padLen; i++ {
+					padding += " "
+				}
+			}
+			
+			keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- " + descText)
+			content = lipgloss.JoinVertical(lipgloss.Left, content, keyLine)
+		}
+		
+		// Add spacing between categories
+		content = lipgloss.JoinVertical(lipgloss.Left, content, "")
+	}
+	
 	return content
 }
 
@@ -71,13 +121,13 @@ func (h helpTypeInstanceStart) toContent() string {
 			lipgloss.NewStyle().Bold(true).Render(h.instance.Program))),
 		"",
 		headerStyle.Render("Managing:"),
-		keyStyle.Render("↵/o")+descStyle.Render("   - Attach to the session to interact with it directly"),
+		keyStyle.Render("↵")+descStyle.Render("   - Attach to the session to interact with it directly"),
 		keyStyle.Render("tab")+descStyle.Render("   - Switch preview panes to view session diff"),
 		keyStyle.Render("D")+descStyle.Render("     - Kill (delete) the selected session"),
 		"",
-		headerStyle.Render("Handoff:"),
+		headerStyle.Render("Git Integration:"),
+		keyStyle.Render("g")+descStyle.Render("     - Open git status (fugitive-style)"),
 		keyStyle.Render("c")+descStyle.Render("     - Checkout this instance's branch"),
-		keyStyle.Render("p")+descStyle.Render("     - Push branch to GitHub to create a PR"),
 	)
 	return content
 }
@@ -101,6 +151,7 @@ func (h helpTypeInstanceCheckout) toContent() string {
 		"",
 		headerStyle.Render("Commands:"),
 		keyStyle.Render("c")+descStyle.Render(" - Checkout: commit changes locally and pause session"),
+		keyStyle.Render("g")+descStyle.Render(" - Git status: manage staging and commits (fugitive-style)"),
 		keyStyle.Render("r")+descStyle.Render(" - Resume a paused session"),
 	)
 	return content
@@ -117,6 +168,96 @@ func (h helpTypeInstanceAttach) mask() uint32 {
 }
 func (h helpTypeInstanceCheckout) mask() uint32 {
 	return 1 << 3
+}
+
+func (h helpTypeSessionOrganization) mask() uint32 {
+	return 1 << 4
+}
+
+func (h helpTypeSessionOrganization) toContent() string {
+	// Get organization category keys
+	organizationKeys := keys.GetKeysInCategory(keys.HelpCategoryOrganize)
+	// Get navigation keys related to organization
+	navigationKeys := keys.GetKeysInCategory(keys.HelpCategoryNavigation)
+	
+	// Start with title and introduction
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		titleStyle.Render("Session Organization"),
+		"",
+		descStyle.Render("Claude Squad organizes your sessions by category for easier management."),
+		"",
+		headerStyle.Render("Categories:"),
+		descStyle.Render("Sessions are organized by category, with uncategorized sessions in their own group."),
+		"",
+	)
+	
+	// Add Organization section
+	content = lipgloss.JoinVertical(lipgloss.Left,
+		content,
+		headerStyle.Render("Organization:"),
+	)
+	
+	// Add each organization key
+	for _, keyName := range organizationKeys {
+		keyBinding := keys.GlobalkeyBindings[keyName]
+		helpInfo := keys.GetKeyHelp(keyName)
+		
+		// Format key and description
+		keyText := keyBinding.Help().Key
+		descText := helpInfo.Description
+		
+		// Add padding for alignment
+		padding := ""
+		padLen := 10 - len(keyText) // Assume max key text length of 10
+		if padLen > 0 {
+			for i := 0; i < padLen; i++ {
+				padding += " "
+			}
+		}
+		
+		keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- " + descText)
+		content = lipgloss.JoinVertical(lipgloss.Left, content, keyLine)
+	}
+	
+	// Add Navigation section
+	content = lipgloss.JoinVertical(lipgloss.Left,
+		content,
+		"",
+		headerStyle.Render("Navigation:"),
+	)
+	
+	// Add each navigation key
+	for _, keyName := range navigationKeys {
+		keyBinding := keys.GlobalkeyBindings[keyName]
+		helpInfo := keys.GetKeyHelp(keyName)
+		
+		// Format key and description
+		keyText := keyBinding.Help().Key
+		descText := helpInfo.Description
+		
+		// Add padding for alignment
+		padding := ""
+		padLen := 10 - len(keyText) // Assume max key text length of 10
+		if padLen > 0 {
+			for i := 0; i < padLen; i++ {
+				padding += " "
+			}
+		}
+		
+		keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- " + descText)
+		content = lipgloss.JoinVertical(lipgloss.Left, content, keyLine)
+	}
+	
+	// Add Search section
+	content = lipgloss.JoinVertical(lipgloss.Left,
+		content,
+		"",
+		headerStyle.Render("Search:"),
+		descStyle.Render("Type your search query and press Enter to find matching sessions."),
+		descStyle.Render("Press Escape to cancel search mode."),
+	)
+	
+	return content
 }
 
 var (

@@ -114,7 +114,9 @@ func PlaceOverlay(
 
 		// Place shadow on background at an offset (e.g., +1, +1)
 		const shadowOffsetX, shadowOffsetY = 1, 1
-		_ = PlaceOverlay(placeX+shadowOffsetX, placeY+shadowOffsetY, shadowStr, bg, false, false, opts...)
+		// Important: Place shadow first, then place foreground on top in the normal flow
+		// but don't recursively add shadows to avoid infinite recursion or multiple shadows
+		bg = PlaceOverlay(placeX+shadowOffsetX, placeY+shadowOffsetY, shadowStr, bg, false, false, opts...)
 	}
 
 	// Check if foreground exceeds background size

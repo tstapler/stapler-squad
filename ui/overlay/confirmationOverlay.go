@@ -77,6 +77,12 @@ func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
 	return style.Render(content)
 }
 
+// View satisfies the tea.Model interface and renders the confirmation overlay
+// This is needed for the TestRenderer to render the component
+func (c *ConfirmationOverlay) View() string {
+	return c.Render()
+}
+
 // SetWidth sets the width of the confirmation overlay
 func (c *ConfirmationOverlay) SetWidth(width int) {
 	c.width = width

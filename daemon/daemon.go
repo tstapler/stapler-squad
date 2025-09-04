@@ -305,7 +305,7 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 	newInstances := []*session.Instance{}
 	for _, instance := range newlyLoadedInstances {
 		if !existingTitles[instance.Title] {
-			log.InfoLog.Printf("detected new session: %s (status: %s)", instance.Title, instance.Status)
+			log.InfoLog.Printf("detected new session: %s (status: %d)", instance.Title, instance.Status)
 			
 			// Only add the instance if it's been properly started
 			if instance.Started() {
@@ -313,7 +313,7 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 				instance.AutoYes = true
 				newInstances = append(newInstances, instance)
 			} else {
-				log.InfoLog.Printf("skipping new session %s because it's not started (status: %s)", instance.Title, instance.Status)
+				log.InfoLog.Printf("skipping new session %s because it's not started (status: %d)", instance.Title, instance.Status)
 			}
 		}
 	}
@@ -326,7 +326,7 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 		// Log all current sessions for debugging
 		log.InfoLog.Printf("current sessions (%d total):", len(*currentInstances))
 		for i, instance := range *currentInstances {
-			log.InfoLog.Printf("  [%d] %s (status: %s)", i, instance.Title, instance.Status)
+			log.InfoLog.Printf("  [%d] %s (status: %d)", i, instance.Title, instance.Status)
 		}
 	}
 	

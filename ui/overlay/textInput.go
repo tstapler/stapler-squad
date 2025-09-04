@@ -14,6 +14,7 @@ type TextInputOverlay struct {
 	Submitted     bool
 	Canceled      bool
 	OnSubmit      func()
+	OnCancel      func()
 	width, height int
 }
 
@@ -79,11 +80,15 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 		}
 		return false
 	case tea.KeyEsc:
+		// Mark as canceled and call the cancel callback
 		t.Canceled = true
+		if t.OnCancel != nil {
+			t.OnCancel()
+		}
 		return true
 	case tea.KeyEnter:
-		if t.FocusIndex == 1 {
-			// Enter button is focused, so submit.
+		if t.FocusIndex == 1 || msg.Type == tea.KeyEnter {
+			// Enter button is focused or Enter key is pressed, so submit.
 			t.Submitted = true
 			if t.OnSubmit != nil {
 				t.OnSubmit()
@@ -117,6 +122,21 @@ func (t *TextInputOverlay) IsCanceled() bool {
 // SetOnSubmit sets a callback function for form submission.
 func (t *TextInputOverlay) SetOnSubmit(onSubmit func()) {
 	t.OnSubmit = onSubmit
+}
+
+// SetOnSubmit sets a callback function that receives the input value.
+func (t *TextInputOverlay) SetOnSubmitWithValue(onSubmit func(string)) {
+	t.OnSubmit = func() {
+		if onSubmit != nil {
+			onSubmit(t.GetValue())
+		}
+	}
+}
+
+// SetOnCancel sets a callback function for when the input is cancelled.
+func (t *TextInputOverlay) SetOnCancel(onCancel func()) {
+	// Store the onCancel function to be called when Esc is pressed
+	t.OnCancel = onCancel
 }
 
 // Render renders the text input overlay.

@@ -42,6 +42,7 @@ const (
 	StatePrompt
 	StateCreatingInstance
 	StateAdvancedNew
+	StateSearch
 )
 
 type Menu struct {
@@ -55,9 +56,10 @@ type Menu struct {
 	keyDown keys.KeyName
 }
 
-var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeyHelp, keys.KeyQuit}
+var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeySearch, keys.KeyFilterPaused, keys.KeyHelp, keys.KeyQuit}
 var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
 var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
+var searchMenuOptions = []keys.KeyName{keys.KeySubmitName}
 
 func NewMenu() *Menu {
 	return &Menu{
@@ -80,6 +82,11 @@ func (m *Menu) ClearKeydown() {
 func (m *Menu) SetState(state MenuState) {
 	m.state = state
 	m.updateOptions()
+}
+
+// GetState returns the current menu state
+func (m *Menu) GetState() MenuState {
+	return m.state
 }
 
 // SetInstance updates the current instance and refreshes menu options
@@ -109,7 +116,7 @@ func (m *Menu) updateOptions() {
 		m.options = defaultMenuOptions
 	case StateDefault:
 		if m.instance != nil {
-			// When there is an instance, show that instance's options
+			// When there is an instance, show that instance's options plus organization options
 			m.addInstanceOptions()
 		} else {
 			// When there is no instance, show the empty state
@@ -125,6 +132,9 @@ func (m *Menu) updateOptions() {
 	case StateAdvancedNew:
 		// No menu options during advanced session setup
 		m.options = []keys.KeyName{}
+	case StateSearch:
+		// Show submit option for search
+		m.options = searchMenuOptions
 	}
 }
 
@@ -133,7 +143,7 @@ func (m *Menu) addInstanceOptions() {
 	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
 
 	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit}
+	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit, keys.KeyGit}
 	if m.instance.Status == session.Paused {
 		actionGroup = append(actionGroup, keys.KeyResume)
 	} else {
@@ -145,11 +155,15 @@ func (m *Menu) addInstanceOptions() {
 		actionGroup = append(actionGroup, keys.KeyShiftUp)
 	}
 
+	// Organization group - always available
+	orgGroup := []keys.KeyName{keys.KeySearch, keys.KeyFilterPaused}
+
 	// System group
 	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
 
 	// Combine all groups
 	options = append(options, actionGroup...)
+	options = append(options, orgGroup...)
 	options = append(options, systemGroup...)
 
 	m.options = options
@@ -164,14 +178,16 @@ func (m *Menu) SetSize(width, height int) {
 func (m *Menu) String() string {
 	var s strings.Builder
 
-	// Define group boundaries
+	// Define group boundaries - these need to be updated based on actual menu structure
+	// Since menu options vary by state, we'll use a more flexible approach
 	groups := []struct {
 		start int
 		end   int
 	}{
-		{0, 2}, // Instance management group (n, d)
+		{0, 2}, // Instance management group (n, d) or (n, prompt)
 		{2, 5}, // Action group (enter, submit, pause/resume)
-		{6, 8}, // System group (tab, help, q)
+		{5, 7}, // Organization group (search, filter)
+		{7, 10}, // System group (tab, help, q)
 	}
 
 	for i, k := range m.options {

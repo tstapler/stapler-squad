@@ -57,6 +57,12 @@ type Instance struct {
 	Prompt string
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
+	// Category is used for organizing sessions into groups
+	Category string
+	// Tags are additional metadata for filtering sessions
+	Tags []string
+	// IsExpanded indicates whether this session's category is expanded in the UI
+	IsExpanded bool
 
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
@@ -85,6 +91,9 @@ func (i *Instance) ToInstanceData() InstanceData {
 		Program:    i.Program,
 		AutoYes:    i.AutoYes,
 		Prompt:     i.Prompt,
+		Category:   i.Category,
+		Tags:       i.Tags,
+		IsExpanded: i.IsExpanded,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -124,6 +133,9 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		UpdatedAt:  data.UpdatedAt,
 		Program:    data.Program,
 		Prompt:     data.Prompt,
+		Category:   data.Category,
+		Tags:       data.Tags,
+		IsExpanded: data.IsExpanded,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -180,6 +192,10 @@ type InstanceOptions struct {
 	Prompt string
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
+	// Category is used for organizing sessions into groups
+	Category string
+	// Tags are additional metadata for filtering sessions
+	Tags []string
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -202,6 +218,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		UpdatedAt: t,
 		AutoYes:   opts.AutoYes,
 		Prompt:    opts.Prompt,
+		ExistingWorktree: opts.ExistingWorktree,
+		Category:   opts.Category,
+		Tags:       opts.Tags,
+		IsExpanded: true, // Default to expanded for newly created instances
 	}, nil
 }
 

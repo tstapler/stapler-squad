@@ -17,7 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-const GlobalInstanceLimit = 10
+const GlobalInstanceLimit = 100
 
 // Run is the main entrypoint into the application.
 func Run(ctx context.Context, program string, autoYes bool) error {
@@ -46,6 +46,8 @@ const (
 	stateCreatingSession
 	// stateAdvancedNew is the state when the user is using the advanced session setup.
 	stateAdvancedNew
+	// stateGit is the state when the git status overlay is displayed.
+	stateGit
 )
 
 type home struct {
@@ -100,6 +102,8 @@ type home struct {
 	confirmationOverlay *overlay.ConfirmationOverlay
 	// sessionSetupOverlay handles advanced session creation
 	sessionSetupOverlay *overlay.SessionSetupOverlay
+	// gitStatusOverlay provides fugitive-style git interface
+	gitStatusOverlay *overlay.GitStatusOverlay
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
@@ -129,7 +133,7 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		state:        stateDefault,
 		appState:     appState,
 	}
-	h.list = ui.NewList(&h.spinner, autoYes)
+	h.list = ui.NewList(&h.spinner, autoYes, appState)
 
 	// Load saved instances
 	instances, err := storage.LoadInstances()
@@ -145,6 +149,12 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 		if autoYes {
 			instance.AutoYes = true
 		}
+	}
+	
+	// Restore the last selected index if it's still valid
+	lastSelectedIdx := appState.GetSelectedIndex()
+	if lastSelectedIdx >= 0 && lastSelectedIdx < h.list.NumInstances() {
+		h.list.SetSelectedIdx(lastSelectedIdx)
 	}
 
 	return h
@@ -174,6 +184,9 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 	if m.sessionSetupOverlay != nil {
 		m.sessionSetupOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
 	}
+	if m.gitStatusOverlay != nil {
+		m.gitStatusOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
+	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
@@ -185,17 +198,27 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 func (m *home) Init() tea.Cmd {
 	// Upon starting, we want to start the spinner. Whenever we get a spinner.TickMsg, we
 	// update the spinner, which sends a new spinner.TickMsg. I think this lasts forever lol.
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.spinner.Tick,
 		func() tea.Msg {
 			time.Sleep(100 * time.Millisecond)
 			return previewTickMsg{}
 		},
 		tickUpdateMetadataCmd,
-	)
+	}
+	
+	// Add session detection ticker if enabled
+	if m.appConfig.DetectNewSessions {
+		cmds = append(cmds, tickSessionDetectionCmd(m.appConfig.SessionDetectionInterval))
+	}
+	
+	return tea.Batch(cmds...)
 }
 
 func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	// Ensure categories are organized whenever the model updates
+	m.list.OrganizeByCategory()
+	
 	switch msg := msg.(type) {
 	case sessionCreationResultMsg:
 		m.asyncSessionCreationActive = false
@@ -303,6 +326,14 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, tickUpdateMetadataCmd
+	case tickSessionDetectionMessage:
+		// Check for new sessions created by other instances
+		if m.appConfig.DetectNewSessions {
+			if err := m.detectAndLoadNewSessions(); err != nil {
+				log.WarningLog.Printf("failed to detect new sessions: %v", err)
+			}
+		}
+		return m, tea.Batch(tickSessionDetectionCmd(m.appConfig.SessionDetectionInterval), tea.WindowSize())
 	case tea.MouseMsg:
 		// Handle mouse wheel events for scrolling the diff/preview pane
 		if msg.Action == tea.MouseActionPress {
@@ -325,6 +356,12 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKeyPress(msg)
 	case tea.WindowSizeMsg:
 		m.updateHandleWindowSizeEvent(msg)
+		return m, nil
+	case gitStatusLoadedMsg:
+		// Handle git status data loaded
+		if m.gitStatusOverlay != nil {
+			m.gitStatusOverlay.SetFiles(msg.files, msg.branchName)
+		}
 		return m, nil
 	case error:
 		// Handle errors from confirmation actions
@@ -405,6 +442,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		return m.handleAdvancedSessionSetupUpdate(msg)
 	}
 
+	if m.state == stateGit {
+		return m.handleGitState(msg)
+	}
+
 	if m.state == stateNew {
 		// Handle quit commands first. Don't handle q because the user might want to type that.
 		if msg.String() == "ctrl+c" {
@@ -451,8 +492,6 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 					autoYes:         autoYes,
 				}
 			}
-			
-			return m, nil
 		case tea.KeyRunes:
 			if len(instance.Title) >= 32 {
 				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
@@ -492,6 +531,17 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 
 		// Check if the form was submitted or canceled
 		if shouldClose {
+			// Get the current menu state
+			// Handle search mode differently than prompt mode
+			if m.menu.GetState() == ui.StateSearch {
+				// Close the overlay and reset state
+				m.textInputOverlay = nil
+				m.state = stateDefault
+				m.menu.SetState(ui.StateDefault)
+				return m, tea.WindowSize()
+			}
+			
+			// Regular prompt handling
 			selected := m.list.GetSelectedInstance()
 			// TODO: this should never happen since we set the instance in the previous state.
 			if selected == nil {
@@ -560,9 +610,88 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 	switch name {
 	case keys.KeyHelp:
 		return m.showHelpScreen(helpTypeGeneral{}, nil)
+	case keys.KeyEsc:
+		// Handle escape key for search mode
+		if m.state == statePrompt && m.menu.GetState() == ui.StateSearch {
+			m.list.ExitSearchMode()
+			m.state = stateDefault
+			m.menu.SetState(ui.StateDefault)
+			m.textInputOverlay = nil
+			return m, tea.WindowSize()
+		}
+		return m, nil
 	case keys.KeyPrompt:
 		// Use the advanced session setup overlay
 		return m.handleAdvancedSessionSetup()
+	case keys.KeyRight:
+		// Expand the selected category
+		selected := m.list.GetSelectedInstance()
+		if selected != nil {
+			category := selected.Category
+			if category == "" {
+				category = "Uncategorized"
+			}
+			m.list.ExpandCategory(category)
+		}
+		return m, nil
+	case keys.KeyLeft:
+		// Collapse the selected category
+		selected := m.list.GetSelectedInstance()
+		if selected != nil {
+			category := selected.Category
+			if category == "" {
+				category = "Uncategorized"
+			}
+			m.list.CollapseCategory(category)
+		}
+		return m, nil
+	case keys.KeyToggleGroup:
+		// Toggle expand/collapse of the selected category
+		selected := m.list.GetSelectedInstance()
+		if selected != nil {
+			category := selected.Category
+			if category == "" {
+				category = "Uncategorized"
+			}
+			m.list.ToggleCategory(category)
+		}
+		return m, nil
+	case keys.KeySearch:
+		// Create the text input overlay for search with previous query pre-populated
+		_, previousQuery := m.list.GetSearchState()
+		m.textInputOverlay = overlay.NewTextInputOverlay("Search Sessions", previousQuery)
+		
+		// Set callback for when search is submitted
+		m.textInputOverlay.SetOnSubmitWithValue(func(query string) {
+			if query == "" {
+				// Exit search mode if query is empty
+				m.list.ExitSearchMode()
+			} else {
+				// Search by title
+				m.list.SearchByTitle(query)
+			}
+		})
+		
+		// Set callback for when search is canceled
+		m.textInputOverlay.SetOnCancel(func() {
+			m.list.ExitSearchMode()
+		})
+		
+		// Set search mode state
+		m.state = statePrompt
+		m.menu.SetState(ui.StateSearch)
+		return m, nil
+	case keys.KeyFilterPaused:
+		// Toggle paused session filter
+		m.list.TogglePausedFilter()
+		return m, nil
+	case keys.KeyClearFilters:
+		// Clear all filters and search
+		m.list.ClearAllFilters()
+		return m, tea.WindowSize()
+	case keys.KeyGit:
+		// Open git status interface
+		return m.handleGitStatus()
 	case keys.KeyNew:
 		if m.list.NumInstances() >= GlobalInstanceLimit {
 			return m, m.handleError(
@@ -711,6 +840,9 @@ func (m *home) instanceChanged() tea.Cmd {
 	// selected may be nil
 	selected := m.list.GetSelectedInstance()
 
+	// Ensure categories are organized
+	m.list.OrganizeByCategory()
+
 	m.tabbedWindow.UpdateDiff(selected)
 	m.tabbedWindow.SetInstance(selected)
 	// Update menu with current instance
@@ -746,6 +878,8 @@ type previewTickMsg struct{}
 
 type tickUpdateMetadataMessage struct{}
 
+type tickSessionDetectionMessage struct{}
+
 type instanceChangedMsg struct{}
 
 // sessionCreationResultMsg is sent when async session creation completes
@@ -761,6 +895,54 @@ type sessionCreationResultMsg struct {
 var tickUpdateMetadataCmd = func() tea.Msg {
 	time.Sleep(500 * time.Millisecond)
 	return tickUpdateMetadataMessage{}
+}
+
+// tickSessionDetectionCmd creates a ticker for detecting new sessions created by other instances
+func tickSessionDetectionCmd(intervalMs int) tea.Cmd {
+	return func() tea.Msg {
+		time.Sleep(time.Duration(intervalMs) * time.Millisecond)
+		return tickSessionDetectionMessage{}
+	}
+}
+
+// detectAndLoadNewSessions checks for new sessions created by other instances and adds them to the current list
+func (m *home) detectAndLoadNewSessions() error {
+	// Load all instances from storage (this will get the latest state including new sessions)
+	allStorageInstances, err := m.storage.LoadInstances()
+	if err != nil {
+		return fmt.Errorf("failed to load instances from storage: %w", err)
+	}
+
+	// Create a map of current instances by title for quick lookup
+	currentInstances := make(map[string]*session.Instance)
+	for _, instance := range m.list.GetInstances() {
+		currentInstances[instance.Title] = instance
+	}
+
+	// Check for new instances that aren't in our current list
+	newInstancesFound := false
+	for _, storageInstance := range allStorageInstances {
+		if _, exists := currentInstances[storageInstance.Title]; !exists {
+			// This is a new instance we don't have yet
+			log.InfoLog.Printf("Detected new session created by another instance: %s", storageInstance.Title)
+			
+			// Add the new instance to our list
+			finalizer := m.list.AddInstance(storageInstance)
+			finalizer() // Call finalizer to complete setup
+			
+			newInstancesFound = true
+		}
+	}
+
+	// If we found new instances, save our updated list and trigger UI refresh
+	if newInstancesFound {
+		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+			log.WarningLog.Printf("failed to save instances after detecting new sessions: %v", err)
+		}
+		log.InfoLog.Printf("Successfully loaded new sessions from other instances")
+	}
+
+	return nil
 }
 
 // handleError handles all errors which get bubbled up to the app. sets the error message. We return a callback tea.Cmd that returns a hideErrMsg message
@@ -803,6 +985,106 @@ func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
 	return nil
 }
 
+// handleGitStatus opens the git status overlay interface
+func (m *home) handleGitStatus() (tea.Model, tea.Cmd) {
+	selected := m.list.GetSelectedInstance()
+	if selected == nil {
+		return m, m.handleError(fmt.Errorf("no session selected for git operations"))
+	}
+
+	// Check if session has git integration
+	if !selected.Started() || selected.Paused() {
+		return m, m.handleError(fmt.Errorf("session must be started and active for git operations"))
+	}
+
+	// Create and configure git status overlay
+	m.gitStatusOverlay = overlay.NewGitStatusOverlay()
+	m.gitStatusOverlay.SetSize(int(float32(m.list.NumInstances())*0.8), int(float32(m.list.NumInstances())*0.8))
+	
+	// Set up git operation callbacks
+	m.setupGitCallbacks(selected)
+	
+	// Change to git state
+	m.state = stateGit
+	
+	// Load git status data
+	return m, m.loadGitStatus(selected)
+}
+
+// setupGitCallbacks configures the git operation callbacks for the overlay
+func (m *home) setupGitCallbacks(instance *session.Instance) {
+	m.gitStatusOverlay.OnCancel = func() {
+		m.state = stateDefault
+		m.gitStatusOverlay = nil
+	}
+	
+	// TODO: Implement these callbacks with actual git operations
+	m.gitStatusOverlay.OnStageFile = func(path string) error {
+		// Placeholder - will implement in next task
+		return fmt.Errorf("staging not yet implemented")
+	}
+	
+	m.gitStatusOverlay.OnUnstageFile = func(path string) error {
+		// Placeholder - will implement in next task
+		return fmt.Errorf("unstaging not yet implemented")
+	}
+	
+	m.gitStatusOverlay.OnCommit = func() error {
+		// Placeholder - will implement in next task
+		return fmt.Errorf("commit not yet implemented")
+	}
+	
+	m.gitStatusOverlay.OnPush = func() error {
+		// Use existing push functionality
+		worktree, err := instance.GetGitWorktree()
+		if err != nil {
+			return err
+		}
+		commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", instance.Title, time.Now().Format(time.RFC822))
+		return worktree.PushChanges(commitMsg, true)
+	}
+}
+
+// handleGitState processes key events when in git status mode
+func (m *home) handleGitState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.gitStatusOverlay == nil {
+		m.state = stateDefault
+		return m, nil
+	}
+
+	shouldClose := m.gitStatusOverlay.HandleKeyPress(msg)
+	if shouldClose {
+		m.state = stateDefault
+		m.gitStatusOverlay = nil
+	}
+	
+	return m, nil
+}
+
+// loadGitStatus loads git status information for the overlay
+func (m *home) loadGitStatus(instance *session.Instance) tea.Cmd {
+	return func() tea.Msg {
+		// TODO: Implement actual git status loading
+		// For now, return some mock data to test the interface
+		files := []overlay.GitFileStatus{
+			{Path: "app/app.go", Staged: false, Modified: true, StatusChar: "M"},
+			{Path: "keys/keys.go", Staged: true, Modified: false, StatusChar: "A"},
+			{Path: "ui/overlay/gitStatusOverlay.go", Staged: false, Modified: false, Untracked: true, StatusChar: "??"},
+		}
+		
+		return gitStatusLoadedMsg{
+			files:      files,
+			branchName: "feature/fugitive-git-integration",
+		}
+	}
+}
+
+// gitStatusLoadedMsg carries git status data
+type gitStatusLoadedMsg struct {
+	files      []overlay.GitFileStatus
+	branchName string
+}
+
 func (m *home) View() string {
 	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
 	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
@@ -840,6 +1122,12 @@ func (m *home) View() string {
 			return mainView
 		}
 		return overlay.PlaceOverlay(0, 0, m.sessionSetupOverlay.View(), mainView, true, true)
+	} else if m.state == stateGit {
+		if m.gitStatusOverlay == nil {
+			log.ErrorLog.Printf("git status overlay is nil")
+			return mainView
+		}
+		return overlay.PlaceOverlay(0, 0, m.gitStatusOverlay.View(), mainView, true, true)
 	}
 
 	return mainView

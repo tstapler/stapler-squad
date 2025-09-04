@@ -47,12 +47,28 @@ type StateManager interface {
 	Close() error
 }
 
+// UIState represents UI preferences that persist between sessions
+type UIState struct {
+	// HidePaused controls whether paused sessions are filtered out
+	HidePaused bool `json:"hide_paused"`
+	// CategoryExpanded maps category names to their expanded state
+	CategoryExpanded map[string]bool `json:"category_expanded"`
+	// SearchMode tracks if search mode was active
+	SearchMode bool `json:"search_mode"`
+	// SearchQuery holds the last search query
+	SearchQuery string `json:"search_query"`
+	// SelectedIdx tracks the last selected session index
+	SelectedIdx int `json:"selected_idx"`
+}
+
 // State represents the application state that persists between sessions
 type State struct {
 	// HelpScreensSeen is a bitmask tracking which help screens have been shown
 	HelpScreensSeen uint32 `json:"help_screens_seen"`
 	// Instances stores the serialized instance data as raw JSON
 	InstancesData json.RawMessage `json:"instances"`
+	// UI stores the UI preferences and state
+	UI UIState `json:"ui"`
 	
 	// Lock file for coordinating state access across processes
 	lockFile    *flock.Flock `json:"-"` // Not serialized
@@ -75,6 +91,13 @@ func DefaultState() *State {
 		return &State{
 			HelpScreensSeen: 0,
 			InstancesData:   json.RawMessage("[]"),
+			UI: UIState{
+				HidePaused:       false,
+				CategoryExpanded: make(map[string]bool),
+				SearchMode:       false,
+				SearchQuery:      "",
+				SelectedIdx:      0,
+			},
 		}
 	}
 	
@@ -85,6 +108,13 @@ func DefaultState() *State {
 	return &State{
 		HelpScreensSeen: 0,
 		InstancesData:   json.RawMessage("[]"),
+		UI: UIState{
+			HidePaused:       false,
+			CategoryExpanded: make(map[string]bool),
+			SearchMode:       false,
+			SearchQuery:      "",
+			SelectedIdx:      0,
+		},
 		lockFile:        fileLock,
 		lockTimeout:     DefaultLockTimeout,
 	}
@@ -156,6 +186,12 @@ func (s *State) loadFromDiskWithoutLocking() error {
 	// Update our fields but keep the lock file and timeout
 	s.HelpScreensSeen = newState.HelpScreensSeen
 	s.InstancesData = newState.InstancesData
+	
+	// Update UI state, ensuring CategoryExpanded map is initialized
+	s.UI = newState.UI
+	if s.UI.CategoryExpanded == nil {
+		s.UI.CategoryExpanded = make(map[string]bool)
+	}
 	
 	return nil
 }
@@ -394,4 +430,65 @@ func (s *State) Close() error {
 		return s.lockFile.Unlock()
 	}
 	return nil
+}
+
+// UI State Management Methods
+
+// GetUIState returns a copy of the current UI state
+func (s *State) GetUIState() UIState {
+	// Refresh from disk first to get latest changes
+	if err := s.RefreshState(); err != nil {
+		log.WarningLog.Printf("failed to refresh UI state: %v", err)
+	}
+	return s.UI
+}
+
+// SetHidePaused updates the hide paused filter state
+func (s *State) SetHidePaused(hidePaused bool) error {
+	s.UI.HidePaused = hidePaused
+	return SaveState(s)
+}
+
+// SetCategoryExpanded updates the expanded state for a category
+func (s *State) SetCategoryExpanded(category string, expanded bool) error {
+	if s.UI.CategoryExpanded == nil {
+		s.UI.CategoryExpanded = make(map[string]bool)
+	}
+	s.UI.CategoryExpanded[category] = expanded
+	return SaveState(s)
+}
+
+// GetCategoryExpanded returns whether a category is expanded (defaults to true for new categories)
+func (s *State) GetCategoryExpanded(category string) bool {
+	if s.UI.CategoryExpanded == nil {
+		return true // Default to expanded for new categories
+	}
+	expanded, exists := s.UI.CategoryExpanded[category]
+	if !exists {
+		return true // Default to expanded for new categories
+	}
+	return expanded
+}
+
+// SetSearchMode updates the search mode state
+func (s *State) SetSearchMode(searchMode bool, query string) error {
+	s.UI.SearchMode = searchMode
+	s.UI.SearchQuery = query
+	return SaveState(s)
+}
+
+// GetSearchState returns the current search mode and query
+func (s *State) GetSearchState() (bool, string) {
+	return s.UI.SearchMode, s.UI.SearchQuery
+}
+
+// SetSelectedIndex updates the selected session index
+func (s *State) SetSelectedIndex(index int) error {
+	s.UI.SelectedIdx = index
+	return SaveState(s)
+}
+
+// GetSelectedIndex returns the last selected session index
+func (s *State) GetSelectedIndex() int {
+	return s.UI.SelectedIdx
 }

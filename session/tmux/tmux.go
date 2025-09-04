@@ -2,7 +2,7 @@ package tmux
 
 import (
 	"bytes"
-	"claude-squad/cmd"
+	"claude-squad/executor"
 	"claude-squad/log"
 	"context"
 	"crypto/sha256"
@@ -34,7 +34,7 @@ type TmuxSession struct {
 	// ptyFactory is used to create a PTY for the tmux session.
 	ptyFactory PtyFactory
 	// cmdExec is used to execute commands in the tmux session.
-	cmdExec cmd.Executor
+	cmdExec executor.Executor
 
 	// Initialized by Start or Restore
 	//
@@ -69,15 +69,15 @@ func toClaudeSquadTmuxName(str string) string {
 
 // NewTmuxSession creates a new TmuxSession with the given name and program.
 func NewTmuxSession(name string, program string) *TmuxSession {
-	return newTmuxSession(name, program, MakePtyFactory(), cmd.MakeExecutor())
+	return newTmuxSession(name, program, MakePtyFactory(), executor.MakeExecutor())
 }
 
 // NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.
-func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
+func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor) *TmuxSession {
 	return newTmuxSession(name, program, ptyFactory, cmdExec)
 }
 
-func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec cmd.Executor) *TmuxSession {
+func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor) *TmuxSession {
 	return &TmuxSession{
 		sanitizedName: toClaudeSquadTmuxName(name),
 		program:       program,
@@ -508,7 +508,7 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 }
 
 // CleanupSessions kills all tmux sessions that start with "session-"
-func CleanupSessions(cmdExec cmd.Executor) error {
+func CleanupSessions(cmdExec executor.Executor) error {
 	// First try to list sessions
 	cmd := exec.Command("tmux", "ls")
 	output, err := cmdExec.Output(cmd)
