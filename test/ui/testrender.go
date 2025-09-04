@@ -69,20 +69,20 @@ func (r *TestRenderer) RenderToString(model tea.Model) (string, error) {
 	// Create a program with a custom output buffer
 	var buf bytes.Buffer
 	p := tea.NewProgram(model, tea.WithOutput(&buf), tea.WithAltScreen())
-	
+
 	// Run the program once to render the initial view
 	err := p.Start()
 	if err != nil {
 		return "", fmt.Errorf("error rendering model: %w", err)
 	}
-	
+
 	output := buf.String()
-	
+
 	// Strip ANSI color codes if requested
 	if r.StripColors {
 		output = removeANSIEscapeCodes(output)
 	}
-	
+
 	return output, nil
 }
 
@@ -92,13 +92,13 @@ func (r *TestRenderer) RenderAndSave(model tea.Model, filename string) error {
 	if err := os.MkdirAll(r.SnapshotPath, 0755); err != nil {
 		return fmt.Errorf("failed to create snapshot directory: %w", err)
 	}
-	
+
 	// Render the model to string
 	output, err := r.RenderToString(model)
 	if err != nil {
 		return err
 	}
-	
+
 	// Write to file
 	path := filepath.Join(r.SnapshotPath, filename)
 	return os.WriteFile(path, []byte(output), 0644)
@@ -107,29 +107,29 @@ func (r *TestRenderer) RenderAndSave(model tea.Model, filename string) error {
 // CompareWithSnapshot compares a rendered model with a saved snapshot
 func (r *TestRenderer) CompareWithSnapshot(t *testing.T, model tea.Model, filename string) {
 	t.Helper()
-	
+
 	// Render the model
 	output, err := r.RenderToString(model)
 	if err != nil {
 		t.Fatalf("Failed to render model: %v", err)
 	}
-	
+
 	snapshotPath := filepath.Join(r.SnapshotPath, filename)
-	
+
 	// Check if we need to update the snapshot
 	if r.UpdateSnapshots {
 		if err := os.MkdirAll(r.SnapshotPath, 0755); err != nil {
 			t.Fatalf("Failed to create snapshot directory: %v", err)
 		}
-		
+
 		if err := os.WriteFile(snapshotPath, []byte(output), 0644); err != nil {
 			t.Fatalf("Failed to update snapshot: %v", err)
 		}
-		
+
 		t.Logf("Updated snapshot: %s", filename)
 		return
 	}
-	
+
 	// Read the existing snapshot
 	expected, err := os.ReadFile(snapshotPath)
 	if err != nil {
@@ -138,7 +138,7 @@ func (r *TestRenderer) CompareWithSnapshot(t *testing.T, model tea.Model, filena
 		}
 		t.Fatalf("Failed to read snapshot: %v", err)
 	}
-	
+
 	// Compare the output with the snapshot
 	if output != string(expected) {
 		t.Errorf("Rendered output does not match snapshot %s", filename)
@@ -149,7 +149,7 @@ func (r *TestRenderer) CompareWithSnapshot(t *testing.T, model tea.Model, filena
 // RenderComponent renders any UI component that has a View() or Render() method
 func (r *TestRenderer) RenderComponent(component interface{}) (string, error) {
 	var output string
-	
+
 	// Check if the component has a View() method (BubbleTea style)
 	if viewer, ok := component.(interface{ View() string }); ok {
 		output = viewer.View()
@@ -162,12 +162,12 @@ func (r *TestRenderer) RenderComponent(component interface{}) (string, error) {
 	} else {
 		return "", fmt.Errorf("component does not implement View(), Render(), or String()")
 	}
-	
+
 	// Strip ANSI color codes if requested
 	if r.StripColors {
 		output = removeANSIEscapeCodes(output)
 	}
-	
+
 	return output, nil
 }
 
@@ -178,12 +178,12 @@ func (r *TestRenderer) SaveComponentOutput(component interface{}, filename strin
 	if err != nil {
 		return err
 	}
-	
+
 	// Ensure the snapshot directory exists
 	if err := os.MkdirAll(r.SnapshotPath, 0755); err != nil {
 		return fmt.Errorf("failed to create snapshot directory: %w", err)
 	}
-	
+
 	// Write to file
 	path := filepath.Join(r.SnapshotPath, filename)
 	return os.WriteFile(path, []byte(output), 0644)
@@ -192,29 +192,29 @@ func (r *TestRenderer) SaveComponentOutput(component interface{}, filename strin
 // CompareComponentWithSnapshot compares a rendered component with a saved snapshot
 func (r *TestRenderer) CompareComponentWithSnapshot(t *testing.T, component interface{}, filename string) {
 	t.Helper()
-	
+
 	// Render the component
 	output, err := r.RenderComponent(component)
 	if err != nil {
 		t.Fatalf("Failed to render component: %v", err)
 	}
-	
+
 	snapshotPath := filepath.Join(r.SnapshotPath, filename)
-	
+
 	// Check if we need to update the snapshot
 	if r.UpdateSnapshots {
 		if err := os.MkdirAll(r.SnapshotPath, 0755); err != nil {
 			t.Fatalf("Failed to create snapshot directory: %v", err)
 		}
-		
+
 		if err := os.WriteFile(snapshotPath, []byte(output), 0644); err != nil {
 			t.Fatalf("Failed to update snapshot: %v", err)
 		}
-		
+
 		t.Logf("Updated snapshot: %s", filename)
 		return
 	}
-	
+
 	// Read the existing snapshot
 	expected, err := os.ReadFile(snapshotPath)
 	if err != nil {
@@ -223,7 +223,7 @@ func (r *TestRenderer) CompareComponentWithSnapshot(t *testing.T, component inte
 		}
 		t.Fatalf("Failed to read snapshot: %v", err)
 	}
-	
+
 	// Compare the output with the snapshot
 	if output != string(expected) {
 		t.Errorf("Rendered output does not match snapshot %s", filename)
@@ -235,27 +235,27 @@ func (r *TestRenderer) CompareComponentWithSnapshot(t *testing.T, component inte
 func diffStrings(expected, actual string) string {
 	expectedLines := strings.Split(expected, "\n")
 	actualLines := strings.Split(actual, "\n")
-	
+
 	var builder strings.Builder
-	
+
 	for i := 0; i < max(len(expectedLines), len(actualLines)); i++ {
 		var expectedLine, actualLine string
-		
+
 		if i < len(expectedLines) {
 			expectedLine = expectedLines[i]
 		}
-		
+
 		if i < len(actualLines) {
 			actualLine = actualLines[i]
 		}
-		
+
 		if expectedLine != actualLine {
 			builder.WriteString(fmt.Sprintf("Line %d:\n", i+1))
 			builder.WriteString(fmt.Sprintf("  Expected: %q\n", expectedLine))
 			builder.WriteString(fmt.Sprintf("  Actual:   %q\n", actualLine))
 		}
 	}
-	
+
 	return builder.String()
 }
 
@@ -272,7 +272,7 @@ func removeANSIEscapeCodes(str string) string {
 	// This is a simple approach that handles most common ANSI escape codes
 	var result strings.Builder
 	inEscapeSeq := false
-	
+
 	for _, r := range str {
 		if inEscapeSeq {
 			// End of escape sequence
@@ -281,34 +281,34 @@ func removeANSIEscapeCodes(str string) string {
 			}
 			continue
 		}
-		
+
 		// Start of escape sequence
 		if r == '\x1b' {
 			inEscapeSeq = true
 			continue
 		}
-		
+
 		// Normal character
 		result.WriteRune(r)
 	}
-	
+
 	return result.String()
 }
 
 // MockProgram is a simpler way to execute Bubble Tea programs in tests
 type MockProgram struct {
-	model    tea.Model
-	output   io.Writer
-	initMsg  tea.Msg
+	model     tea.Model
+	output    io.Writer
+	initMsg   tea.Msg
 	altScreen bool
-	program  *tea.Program
+	program   *tea.Program
 }
 
 // NewMockProgram creates a new MockProgram
 func NewMockProgram(model tea.Model) *MockProgram {
 	return &MockProgram{
-		model:    model,
-		output:   &bytes.Buffer{},
+		model:     model,
+		output:    &bytes.Buffer{},
 		altScreen: false,
 	}
 }
@@ -334,30 +334,30 @@ func (m *MockProgram) WithAltScreen() *MockProgram {
 // Start runs the program once and returns the output
 func (m *MockProgram) Start() (string, error) {
 	var opts []tea.ProgramOption
-	
+
 	opts = append(opts, tea.WithOutput(m.output))
-	
+
 	if m.altScreen {
 		opts = append(opts, tea.WithAltScreen())
 	}
-	
+
 	m.program = tea.NewProgram(m.model, opts...)
-	
+
 	if m.initMsg != nil {
 		go func() {
 			// Send the init message after the program has started
 			m.program.Send(m.initMsg)
 		}()
 	}
-	
+
 	if _, err := m.program.Run(); err != nil {
 		return "", err
 	}
-	
+
 	if buf, ok := m.output.(*bytes.Buffer); ok {
 		return buf.String(), nil
 	}
-	
+
 	return "", fmt.Errorf("output is not a bytes.Buffer")
 }
 
@@ -366,7 +366,7 @@ func (m *MockProgram) SendMessage(msg tea.Msg) error {
 	if m.program == nil {
 		return fmt.Errorf("program not started")
 	}
-	
+
 	m.program.Send(msg)
 	return nil
 }
@@ -376,7 +376,7 @@ func (m *MockProgram) GetOutputBuffer() (*bytes.Buffer, error) {
 	if buf, ok := m.output.(*bytes.Buffer); ok {
 		return buf, nil
 	}
-	
+
 	return nil, fmt.Errorf("output is not a bytes.Buffer")
 }
 
@@ -404,7 +404,7 @@ func (m *MockTerminal) SetSize(width, height int) *MockTerminal {
 // SimulateKeyPress simulates a key press on a model
 func (m *MockTerminal) SimulateKeyPress(model tea.Model, key string) (tea.Model, tea.Cmd) {
 	var keyMsg tea.KeyMsg
-	
+
 	// Handle special keys
 	switch key {
 	case "enter":
@@ -431,7 +431,7 @@ func (m *MockTerminal) SimulateKeyPress(model tea.Model, key string) (tea.Model,
 		// Regular character key
 		keyMsg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
-	
+
 	return model.Update(keyMsg)
 }
 

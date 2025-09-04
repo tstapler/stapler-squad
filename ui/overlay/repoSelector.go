@@ -17,13 +17,13 @@ import (
 type RepoInfo struct {
 	// Path to the repository
 	Path string
-	
+
 	// Name of the repository (directory name)
 	Name string
-	
+
 	// Last access time
 	LastAccessed time.Time
-	
+
 	// If the repo is a favorite
 	Favorite bool
 }
@@ -71,7 +71,7 @@ func NewRepoCache() *RepoCache {
 func (c *RepoCache) GetRepo(path string) (RepoInfo, bool) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	
+
 	repo, ok := c.repos[path]
 	return repo, ok
 }
@@ -80,9 +80,9 @@ func (c *RepoCache) GetRepo(path string) (RepoInfo, bool) {
 func (c *RepoCache) AddRepo(repo RepoInfo) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	c.repos[repo.Path] = repo
-	
+
 	// Update last accessed time
 	if !repo.LastAccessed.IsZero() {
 		// Check if it's already in recents
@@ -98,7 +98,7 @@ func (c *RepoCache) AddRepo(repo RepoInfo) {
 				break
 			}
 		}
-		
+
 		// Add to recents if not found
 		if !found {
 			c.recents = append([]string{repo.Path}, c.recents...)
@@ -114,15 +114,15 @@ func (c *RepoCache) AddRepo(repo RepoInfo) {
 func (c *RepoCache) ToggleFavorite(path string) bool {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	repo, ok := c.repos[path]
 	if !ok {
 		return false
 	}
-	
+
 	repo.Favorite = !repo.Favorite
 	c.repos[path] = repo
-	
+
 	// Update favorites list
 	if repo.Favorite {
 		c.favorites = append(c.favorites, path)
@@ -134,7 +134,7 @@ func (c *RepoCache) ToggleFavorite(path string) bool {
 			}
 		}
 	}
-	
+
 	return repo.Favorite
 }
 
@@ -142,7 +142,7 @@ func (c *RepoCache) ToggleFavorite(path string) bool {
 func (c *RepoCache) ListRecentRepos() []RepoInfo {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	
+
 	repos := make([]RepoInfo, 0, len(c.recents))
 	for _, path := range c.recents {
 		if repo, ok := c.repos[path]; ok {
@@ -156,7 +156,7 @@ func (c *RepoCache) ListRecentRepos() []RepoInfo {
 func (c *RepoCache) ListFavoriteRepos() []RepoInfo {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	
+
 	repos := make([]RepoInfo, 0, len(c.favorites))
 	for _, path := range c.favorites {
 		if repo, ok := c.repos[path]; ok {
@@ -170,12 +170,12 @@ func (c *RepoCache) ListFavoriteRepos() []RepoInfo {
 func (c *RepoCache) GetAllRepos() []RepoInfo {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	
+
 	repos := make([]RepoInfo, 0, len(c.repos))
 	for _, repo := range c.repos {
 		repos = append(repos, repo)
 	}
-	
+
 	// Sort by favorite status and then name
 	sort.Slice(repos, func(i, j int) bool {
 		if repos[i].Favorite != repos[j].Favorite {
@@ -183,7 +183,7 @@ func (c *RepoCache) GetAllRepos() []RepoInfo {
 		}
 		return repos[i].Name < repos[j].Name
 	})
-	
+
 	return repos
 }
 
@@ -195,7 +195,7 @@ func (c *RepoCache) ScanForRepos(searchPaths []string) error {
 		if err != nil {
 			return err
 		}
-		
+
 		// Default search paths
 		searchPaths = []string{
 			home + "/projects",
@@ -205,12 +205,12 @@ func (c *RepoCache) ScanForRepos(searchPaths []string) error {
 			home + "/go/src",
 		}
 	}
-	
+
 	// Start a goroutine for each search path
 	var wg sync.WaitGroup
 	reposChan := make(chan RepoInfo)
 	errChan := make(chan error, len(searchPaths))
-	
+
 	for _, path := range searchPaths {
 		wg.Add(1)
 		go func(path string) {
@@ -221,27 +221,27 @@ func (c *RepoCache) ScanForRepos(searchPaths []string) error {
 			}
 		}(path)
 	}
-	
+
 	// Collect results in a separate goroutine
 	go func() {
 		wg.Wait()
 		close(reposChan)
 		close(errChan)
 	}()
-	
+
 	// Process found repositories
 	for repo := range reposChan {
 		c.AddRepo(repo)
 	}
-	
+
 	// Check for errors
 	var errs []error
 	for err := range errChan {
 		errs = append(errs, err)
 	}
-	
+
 	c.lastUpdate = time.Now()
-	
+
 	if len(errs) > 0 {
 		return errs[0] // Return first error
 	}
@@ -258,7 +258,7 @@ func scanPath(root string, repos chan<- RepoInfo) error {
 			return nil
 		}
 	}
-	
+
 	// Start recursive search
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		// Skip errors
@@ -266,24 +266,24 @@ func scanPath(root string, repos chan<- RepoInfo) error {
 			log.WarningLog.Printf("Error scanning %s: %v", path, err)
 			return filepath.SkipDir
 		}
-		
+
 		// Skip non-directories
 		if !info.IsDir() {
 			return nil
 		}
-		
+
 		// Skip hidden directories
 		if strings.HasPrefix(filepath.Base(path), ".") {
 			return filepath.SkipDir
 		}
-		
+
 		// Check if this directory is a Git repository
 		if isGitRepo(path) {
 			repos <- newRepoInfo(path)
 			// Skip further recursion into this directory
 			return filepath.SkipDir
 		}
-		
+
 		return nil
 	})
 }
@@ -295,7 +295,7 @@ func isGitRepo(path string) bool {
 	if info, err := os.Stat(gitDir); err == nil && info.IsDir() {
 		return true
 	}
-	
+
 	// Try to open as Git repo
 	_, err := git.PlainOpen(path)
 	return err == nil
@@ -304,19 +304,19 @@ func isGitRepo(path string) bool {
 // newRepoInfo creates a new RepoInfo for a repository
 func newRepoInfo(path string) RepoInfo {
 	name := filepath.Base(path)
-	
+
 	// Try to get last access time
 	var lastAccessed time.Time
 	info, err := os.Stat(path)
 	if err == nil {
 		lastAccessed = info.ModTime()
 	}
-	
+
 	return RepoInfo{
-		Path:        path,
-		Name:        name,
+		Path:         path,
+		Name:         name,
 		LastAccessed: lastAccessed,
-		Favorite:    false,
+		Favorite:     false,
 	}
 }
 
@@ -328,14 +328,14 @@ type RepositoryLoader struct {
 // NewRepositoryLoader creates a new repository loader
 func NewRepositoryLoader() *RepositoryLoader {
 	cache := NewRepoCache()
-	
+
 	// Start a background scan for repositories
 	go func() {
 		if err := cache.ScanForRepos(nil); err != nil {
 			log.WarningLog.Printf("Error scanning for repositories: %v", err)
 		}
 	}()
-	
+
 	return &RepositoryLoader{cache: cache}
 }
 
@@ -343,12 +343,12 @@ func NewRepositoryLoader() *RepositoryLoader {
 func (l *RepositoryLoader) AsyncLoad(query string) ([]fuzzy.SearchItem, error) {
 	// Convert RepoInfo list to SearchItems
 	repos := l.cache.GetAllRepos()
-	
+
 	items := make([]fuzzy.SearchItem, len(repos))
 	for i, repo := range repos {
 		items[i] = repo
 	}
-	
+
 	return items, nil
 }
 
@@ -364,7 +364,7 @@ func (l *RepositoryLoader) AddRepoToRecents(path string) {
 			return // Not a valid repo
 		}
 	}
-	
+
 	// Update access time
 	repo.LastAccessed = time.Now()
 	l.cache.AddRepo(repo)
@@ -378,23 +378,23 @@ func (l *RepositoryLoader) ToggleFavorite(path string) bool {
 // GetRecentRepos returns recent repositories as search items
 func (l *RepositoryLoader) GetRecentRepos() []fuzzy.SearchItem {
 	repos := l.cache.ListRecentRepos()
-	
+
 	items := make([]fuzzy.SearchItem, len(repos))
 	for i, repo := range repos {
 		items[i] = repo
 	}
-	
+
 	return items
 }
 
 // GetFavoriteRepos returns favorite repositories as search items
 func (l *RepositoryLoader) GetFavoriteRepos() []fuzzy.SearchItem {
 	repos := l.cache.ListFavoriteRepos()
-	
+
 	items := make([]fuzzy.SearchItem, len(repos))
 	for i, repo := range repos {
 		items[i] = repo
 	}
-	
+
 	return items
 }

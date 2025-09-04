@@ -40,9 +40,9 @@ func DefaultLogConfig() *LogConfig {
 	return &LogConfig{
 		LogsEnabled:    true,
 		LogsDir:        "",
-		LogMaxSize:     10,  // 10MB
-		LogMaxFiles:    5,   // 5 backups
-		LogMaxAge:      30,  // 30 days
+		LogMaxSize:     10, // 10MB
+		LogMaxFiles:    5,  // 5 backups
+		LogMaxAge:      30, // 30 days
 		LogCompress:    true,
 		UseSessionLogs: true,
 	}
@@ -216,7 +216,7 @@ type SessionLoggers struct {
 
 func init() {
 	sessionLoggers = make(map[string]*SessionLoggers)
-	
+
 	// Initialize default loggers for testing environments
 	// This ensures that log calls don't panic when tests are run
 	if InfoLog == nil {
@@ -279,11 +279,11 @@ func createRotatingWriter(logFilePath string, cfg *LogConfig) io.Writer {
 	// Use lumberjack for log rotation
 	return &lumberjack.Logger{
 		Filename:   logFilePath,
-		MaxSize:    cfg.LogMaxSize,    // megabytes
-		MaxBackups: cfg.LogMaxFiles,   // number of backups
-		MaxAge:     cfg.LogMaxAge,     // days
-		Compress:   cfg.LogCompress,   // compress rotated files
-		LocalTime:  true,             // use local time in backup filenames
+		MaxSize:    cfg.LogMaxSize,  // megabytes
+		MaxBackups: cfg.LogMaxFiles, // number of backups
+		MaxAge:     cfg.LogMaxAge,   // days
+		Compress:   cfg.LogCompress, // compress rotated files
+		LocalTime:  true,            // use local time in backup filenames
 	}
 }
 

@@ -53,19 +53,19 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 			},
 			snapshot: "basics/filled_out.txt",
 		},
-		
+
 		// ===== LOCATION STEP =====
 		{
 			name: "location_current_selected",
 			setup: func() *overlay.SessionSetupOverlay {
 				sessionSetup := overlay.NewSessionSetupOverlay()
 				sessionSetup.SetSize(80, 30)
-				
+
 				// Fill basics and move to location step
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Move to location step
 				// Default is "current" already selected
-				
+
 				return sessionSetup
 			},
 			snapshot: "location/current_selected.txt",
@@ -75,12 +75,12 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 			setup: func() *overlay.SessionSetupOverlay {
 				sessionSetup := overlay.NewSessionSetupOverlay()
 				sessionSetup.SetSize(80, 30)
-				
+
 				// Fill basics and move to location step
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Move to location step
-				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})    // Switch to "different"
-				
+				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})   // Switch to "different"
+
 				return sessionSetup
 			},
 			snapshot: "location/different_selected.txt",
@@ -90,30 +90,30 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 			setup: func() *overlay.SessionSetupOverlay {
 				sessionSetup := overlay.NewSessionSetupOverlay()
 				sessionSetup.SetSize(80, 30)
-				
+
 				// Fill basics and move to location step
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Move to location step
-				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})    // Switch to "different"
-				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})    // Switch to "existing"
-				
+				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})   // Switch to "different"
+				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})   // Switch to "existing"
+
 				return sessionSetup
 			},
 			snapshot: "location/existing_selected.txt",
 		},
-		
+
 		// ===== CONFIRM STEP =====
 		{
 			name: "confirm_current_location",
 			setup: func() *overlay.SessionSetupOverlay {
 				sessionSetup := overlay.NewSessionSetupOverlay()
 				sessionSetup.SetSize(80, 30)
-				
+
 				// Complete flow to confirm step (current location)
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("awesome-project")})
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Go to location
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Confirm current location -> go to confirm
-				
+
 				return sessionSetup
 			},
 			snapshot: "confirm/current_location.txt",
@@ -123,33 +123,33 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 			setup: func() *overlay.SessionSetupOverlay {
 				sessionSetup := overlay.NewSessionSetupOverlay()
 				sessionSetup.SetSize(80, 30)
-				
+
 				// Navigate to confirm step with category filled
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-with-category")})
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Go to location
 				// Note: In the new flow, we may need to add category support through advanced step
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Confirm current location
-				
+
 				return sessionSetup
 			},
 			snapshot: "confirm/with_category.txt",
 		},
-		
+
 		// ===== ERROR CONDITIONS =====
 		{
 			name: "error_empty_name",
 			setup: func() *overlay.SessionSetupOverlay {
 				sessionSetup := overlay.NewSessionSetupOverlay()
 				sessionSetup.SetSize(80, 30)
-				
+
 				// Try to advance without entering a name (should show error)
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter})
-				
+
 				return sessionSetup
 			},
 			snapshot: "flows/error_empty_name.txt",
 		},
-		
+
 		// ===== TERMINAL SIZES =====
 		{
 			name: "responsive_small_terminal",
@@ -201,7 +201,7 @@ func TestSessionSetupOverlay_Navigation(t *testing.T) {
 			snapshot: "navigation/tab_basics_cycle.txt",
 		},
 		{
-			name: "tab_navigation_location_step", 
+			name: "tab_navigation_location_step",
 			keys: []tea.KeyMsg{
 				// Navigate to location step
 				{Type: tea.KeyRunes, Runes: []rune("test-session")},
@@ -218,7 +218,7 @@ func TestSessionSetupOverlay_Navigation(t *testing.T) {
 			keys: []tea.KeyMsg{
 				// Navigate partway through and then escape
 				{Type: tea.KeyRunes, Runes: []rune("test-session")},
-				{Type: tea.KeyEnter}, // Go to location
+				{Type: tea.KeyEnter},  // Go to location
 				{Type: tea.KeyEscape}, // Should trigger cancel
 			},
 			snapshot: "navigation/escape_cancel.txt",
@@ -286,7 +286,7 @@ func TestSessionSetupOverlay_StateTransitions(t *testing.T) {
 				// Navigate through basics, then select different location
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Go to location
-				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})    // Select different
+				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})   // Select different
 				// Note: This would normally trigger repository selection
 
 				return sessionSetup
@@ -320,19 +320,19 @@ func TestSessionSetupOverlay_StateTransitions(t *testing.T) {
 
 func TestSessionSetupOverlay_Callbacks(t *testing.T) {
 	// Test callback functionality (this won't generate snapshots but validates callback behavior)
-	
+
 	t.Run("on_complete_callback", func(t *testing.T) {
 		sessionSetup := overlay.NewSessionSetupOverlay()
 		sessionSetup.SetSize(80, 30)
-		
+
 		var callbackTriggered bool
 		var receivedOptions session.InstanceOptions
-		
+
 		sessionSetup.SetOnComplete(func(options session.InstanceOptions) {
 			callbackTriggered = true
 			receivedOptions = options
 		})
-		
+
 		// Navigate through streamlined flow
 		sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
 		sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Complete basics -> go to location
@@ -360,16 +360,16 @@ func TestSessionSetupOverlay_Callbacks(t *testing.T) {
 	t.Run("on_cancel_callback", func(t *testing.T) {
 		sessionSetup := overlay.NewSessionSetupOverlay()
 		sessionSetup.SetSize(80, 30)
-		
+
 		var cancelCallbackTriggered bool
-		
+
 		sessionSetup.SetOnCancel(func() {
 			cancelCallbackTriggered = true
 		})
-		
+
 		// Trigger cancel with Escape
 		sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEscape})
-		
+
 		// Note: Similar to above, callback behavior may vary in test environment
 		// but this validates the API structure
 		_ = cancelCallbackTriggered // avoid unused variable warning

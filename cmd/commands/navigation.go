@@ -7,13 +7,13 @@ import (
 
 // NavigationHandlers contains handlers for navigation commands
 type NavigationHandlers struct {
-	OnUp         func() (tea.Model, tea.Cmd)
-	OnDown       func() (tea.Model, tea.Cmd)
-	OnLeft       func() (tea.Model, tea.Cmd)
-	OnRight      func() (tea.Model, tea.Cmd)
-	OnPageUp     func() (tea.Model, tea.Cmd)
-	OnPageDown   func() (tea.Model, tea.Cmd)
-	OnSearch     func() (tea.Model, tea.Cmd)
+	OnUp       func() (tea.Model, tea.Cmd)
+	OnDown     func() (tea.Model, tea.Cmd)
+	OnLeft     func() (tea.Model, tea.Cmd)
+	OnRight    func() (tea.Model, tea.Cmd)
+	OnPageUp   func() (tea.Model, tea.Cmd)
+	OnPageDown func() (tea.Model, tea.Cmd)
+	OnSearch   func() (tea.Model, tea.Cmd)
 }
 
 var navigationHandlers = &NavigationHandlers{}

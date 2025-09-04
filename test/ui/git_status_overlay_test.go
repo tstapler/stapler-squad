@@ -154,7 +154,7 @@ func TestGitStatusOverlay_Navigation(t *testing.T) {
 			snapshot: "selection_first.txt",
 		},
 		{
-			name:     "second_item_selected", 
+			name:     "second_item_selected",
 			keys:     []string{"j"}, // Move down once
 			snapshot: "selection_second.txt",
 		},
@@ -169,7 +169,7 @@ func TestGitStatusOverlay_Navigation(t *testing.T) {
 			snapshot: "selection_wrap_first.txt",
 		},
 		{
-			name:     "up_navigation", 
+			name:     "up_navigation",
 			keys:     []string{"k"}, // Move up from first, should wrap to last
 			snapshot: "selection_wrap_last.txt",
 		},
@@ -186,7 +186,7 @@ func TestGitStatusOverlay_Navigation(t *testing.T) {
 			testOverlay := overlay.NewGitStatusOverlay()
 			testOverlay.SetSize(80, 25)
 			testOverlay.SetFiles(files, "main")
-			
+
 			// Simulate key presses
 			for _, key := range tt.keys {
 				msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{rune(key[0])}}
@@ -197,7 +197,7 @@ func TestGitStatusOverlay_Navigation(t *testing.T) {
 				}
 				testOverlay.HandleKeyPress(msg)
 			}
-			
+
 			renderer.CompareComponentWithSnapshot(t, testOverlay, tt.snapshot)
 		})
 	}
@@ -247,14 +247,14 @@ func TestGitStatusOverlay_StatusMessages(t *testing.T) {
 			gitOverlay := overlay.NewGitStatusOverlay()
 			gitOverlay.SetSize(80, 25)
 			gitOverlay.SetStatusMessage(tt.statusMessage)
-			
+
 			// Add some sample files
 			files := []overlay.GitFileStatus{
 				{Path: "app.go", Modified: true, StatusChar: "M"},
 				{Path: "test.go", Staged: true, StatusChar: "A"},
 			}
 			gitOverlay.SetFiles(files, "main")
-			
+
 			renderer.CompareComponentWithSnapshot(t, gitOverlay, tt.snapshot)
 		})
 	}

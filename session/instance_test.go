@@ -26,15 +26,15 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 	// Test our fix function directly instead of trying to mock everything
 	// Create a test instance with a gitWorktree that points to a real path
 	instance := &Instance{
-		Title:       "Test Instance",
-		Path:        "/path/to/repo",
-		Branch:      "test-branch",
-		Status:      Ready,
-		Height:      100,
-		Width:       200,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-		Program:     "claude",
+		Title:     "Test Instance",
+		Path:      "/path/to/repo",
+		Branch:    "test-branch",
+		Status:    Ready,
+		Height:    100,
+		Width:     200,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Program:   "claude",
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			"/path/to/repo",
 			worktreePath,
@@ -42,7 +42,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 			"test-branch",
 			"abcdef1234567890",
 		),
-		started:     true,
+		started: true,
 	}
 
 	// Test 1: Worktree exists - instance should not be paused
@@ -58,15 +58,15 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 	// We need to use a modified approach since we can't call the actual FromInstanceData
 	// which would try to start a real session
 	instance = &Instance{
-		Title:       "Test Instance",
-		Path:        "/path/to/repo",
-		Branch:      "test-branch",
-		Status:      Ready,
-		Height:      100,
-		Width:       200,
-		CreatedAt:   time.Now(),
-		UpdatedAt:   time.Now(),
-		Program:     "claude",
+		Title:     "Test Instance",
+		Path:      "/path/to/repo",
+		Branch:    "test-branch",
+		Status:    Ready,
+		Height:    100,
+		Width:     200,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+		Program:   "claude",
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			"/path/to/repo",
 			worktreePath,
@@ -74,7 +74,7 @@ func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 			"test-branch",
 			"abcdef1234567890",
 		),
-		started:     true,
+		started: true,
 	}
 
 	// Test 2: Apply our fix - check if worktree exists and update status
@@ -118,4 +118,3 @@ func TestStatusEnumValues(t *testing.T) {
 		}
 	}
 }
-

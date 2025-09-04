@@ -15,28 +15,28 @@ import (
 type BranchInfo struct {
 	// Name of the branch
 	Name string
-	
+
 	// Full ref name (refs/heads/...)
 	RefName string
-	
+
 	// Whether the branch is the current branch
 	Current bool
-	
+
 	// Whether the branch is remote
 	Remote bool
-	
+
 	// Remote name (if applicable)
 	RemoteName string
-	
+
 	// Last commit hash on the branch
 	CommitSHA string
-	
+
 	// Last commit message
 	CommitMessage string
-	
+
 	// Last commit author
 	CommitAuthor string
-	
+
 	// Last commit date
 	CommitDate time.Time
 }
@@ -52,12 +52,12 @@ func (b BranchInfo) GetDisplayText() string {
 	if b.Current {
 		prefix = "* "
 	}
-	
+
 	branchName := b.Name
 	if b.Remote {
 		branchName = fmt.Sprintf("remotes/%s/%s", b.RemoteName, b.Name)
 	}
-	
+
 	// Format commit date
 	age := time.Since(b.CommitDate)
 	ageStr := ""
@@ -72,13 +72,13 @@ func (b BranchInfo) GetDisplayText() string {
 	} else {
 		ageStr = fmt.Sprintf("%d months ago", int(age.Hours()/(24*30)))
 	}
-	
+
 	// Trim commit message if too long
 	commitMsg := b.CommitMessage
 	if len(commitMsg) > 30 {
 		commitMsg = commitMsg[:27] + "..."
 	}
-	
+
 	return fmt.Sprintf("%s%s - %s (%s)", prefix, branchName, commitMsg, ageStr)
 }
 
@@ -107,7 +107,7 @@ func NewBranchCache() *BranchCache {
 func (c *BranchCache) GetBranch(name string) (BranchInfo, bool) {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	
+
 	branch, ok := c.branches[name]
 	return branch, ok
 }
@@ -116,7 +116,7 @@ func (c *BranchCache) GetBranch(name string) (BranchInfo, bool) {
 func (c *BranchCache) AddBranch(branch BranchInfo) {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	
+
 	c.branches[branch.Name] = branch
 }
 
@@ -124,12 +124,12 @@ func (c *BranchCache) AddBranch(branch BranchInfo) {
 func (c *BranchCache) GetAllBranches() []BranchInfo {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	
+
 	branches := make([]BranchInfo, 0, len(c.branches))
 	for _, branch := range c.branches {
 		branches = append(branches, branch)
 	}
-	
+
 	// Sort branches: current branch first, then local branches, then remote branches
 	sort.Slice(branches, func(i, j int) bool {
 		// Current branch comes first
@@ -139,7 +139,7 @@ func (c *BranchCache) GetAllBranches() []BranchInfo {
 		if !branches[i].Current && branches[j].Current {
 			return false
 		}
-		
+
 		// Local branches before remote branches
 		if !branches[i].Remote && branches[j].Remote {
 			return true
@@ -147,11 +147,11 @@ func (c *BranchCache) GetAllBranches() []BranchInfo {
 		if branches[i].Remote && !branches[j].Remote {
 			return false
 		}
-		
+
 		// Alphabetical order within same type
 		return branches[i].Name < branches[j].Name
 	})
-	
+
 	return branches
 }
 
@@ -159,14 +159,14 @@ func (c *BranchCache) GetAllBranches() []BranchInfo {
 func (c *BranchCache) GetLocalBranches() []BranchInfo {
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
-	
+
 	branches := make([]BranchInfo, 0)
 	for _, branch := range c.branches {
 		if !branch.Remote {
 			branches = append(branches, branch)
 		}
 	}
-	
+
 	// Sort branches: current branch first, then alphabetical
 	sort.Slice(branches, func(i, j int) bool {
 		// Current branch comes first
@@ -176,11 +176,11 @@ func (c *BranchCache) GetLocalBranches() []BranchInfo {
 		if !branches[i].Current && branches[j].Current {
 			return false
 		}
-		
+
 		// Alphabetical order
 		return branches[i].Name < branches[j].Name
 	})
-	
+
 	return branches
 }
 
@@ -190,7 +190,7 @@ func (c *BranchCache) ScanForBranches(repoPath string, includeRemotes bool) erro
 	if err := c.scanLocalBranches(repoPath); err != nil {
 		return err
 	}
-	
+
 	// Get remote branches if requested
 	if includeRemotes {
 		if err := c.scanRemoteBranches(repoPath); err != nil {
@@ -198,9 +198,9 @@ func (c *BranchCache) ScanForBranches(repoPath string, includeRemotes bool) erro
 			log.WarningLog.Printf("Error scanning remote branches: %v", err)
 		}
 	}
-	
+
 	c.lastUpdate = time.Now()
-	
+
 	return nil
 }
 
@@ -208,50 +208,50 @@ func (c *BranchCache) ScanForBranches(repoPath string, includeRemotes bool) erro
 func (c *BranchCache) scanLocalBranches(repoPath string) error {
 	// Run git command to list all local branches with verbose info
 	cmd := exec.Command(
-		"git", 
-		"branch", 
-		"--list", 
-		"--verbose", 
+		"git",
+		"branch",
+		"--list",
+		"--verbose",
 		"--no-color",
 		"--format=%(refname:short) %(objectname:short) %(authordate:iso) %(authorname) %(subject)")
 	cmd.Dir = repoPath
-	
+
 	output, err := cmd.Output()
 	if err != nil {
 		return err
 	}
-	
+
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		
+
 		// Parse branch info
 		parts := strings.SplitN(line, " ", 5)
 		if len(parts) < 5 {
 			continue
 		}
-		
+
 		name := parts[0]
 		sha := parts[1]
-		
+
 		// Parse date
 		dateStr := parts[2] + " " + parts[3] // Format: 2023-01-01 12:00:00 +0000
 		date, err := time.Parse("2006-01-02 15:04:05 -0700", dateStr)
 		if err != nil {
 			date = time.Now() // Fallback
 		}
-		
+
 		author := parts[4]
 		message := ""
 		if len(parts) > 5 {
 			message = parts[5]
 		}
-		
+
 		// Check if current branch
 		current := strings.HasPrefix(line, "* ")
-		
+
 		c.mutex.Lock()
 		c.branches[name] = BranchInfo{
 			Name:          name,
@@ -265,7 +265,7 @@ func (c *BranchCache) scanLocalBranches(repoPath string) error {
 		}
 		c.mutex.Unlock()
 	}
-	
+
 	return nil
 }
 
@@ -273,64 +273,64 @@ func (c *BranchCache) scanLocalBranches(repoPath string) error {
 func (c *BranchCache) scanRemoteBranches(repoPath string) error {
 	// Run git command to list all remote branches with verbose info
 	cmd := exec.Command(
-		"git", 
-		"branch", 
-		"--remote", 
-		"--verbose", 
+		"git",
+		"branch",
+		"--remote",
+		"--verbose",
 		"--no-color",
 		"--format=%(refname:short) %(objectname:short) %(authordate:iso) %(authorname) %(subject)")
 	cmd.Dir = repoPath
-	
+
 	output, err := cmd.Output()
 	if err != nil {
 		return err
 	}
-	
+
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		
+
 		// Parse branch info
 		parts := strings.SplitN(line, " ", 5)
 		if len(parts) < 5 {
 			continue
 		}
-		
+
 		// Parse remote and branch name
 		fullName := parts[0]
 		remoteParts := strings.SplitN(fullName, "/", 2)
 		if len(remoteParts) < 2 {
 			continue
 		}
-		
+
 		remoteName := remoteParts[0]
 		name := remoteParts[1]
-		
+
 		// Skip HEAD references
 		if name == "HEAD" {
 			continue
 		}
-		
+
 		sha := parts[1]
-		
+
 		// Parse date
 		dateStr := parts[2] + " " + parts[3]
 		date, err := time.Parse("2006-01-02 15:04:05 -0700", dateStr)
 		if err != nil {
 			date = time.Now() // Fallback
 		}
-		
+
 		author := parts[4]
 		message := ""
 		if len(parts) > 5 {
 			message = parts[5]
 		}
-		
+
 		// Create a unique key for the remote branch
 		key := "remote/" + remoteName + "/" + name
-		
+
 		c.mutex.Lock()
 		c.branches[key] = BranchInfo{
 			Name:          name,
@@ -345,31 +345,31 @@ func (c *BranchCache) scanRemoteBranches(repoPath string) error {
 		}
 		c.mutex.Unlock()
 	}
-	
+
 	return nil
 }
 
 // BranchLoader provides an async loader for the fuzzy search component
 type BranchLoader struct {
-	cache *BranchCache
-	repoPath string
+	cache          *BranchCache
+	repoPath       string
 	includeRemotes bool
 }
 
 // NewBranchLoader creates a new branch loader
 func NewBranchLoader(repoPath string, includeRemotes bool) *BranchLoader {
 	cache := NewBranchCache()
-	
+
 	// Start a background scan for branches
 	go func() {
 		if err := cache.ScanForBranches(repoPath, includeRemotes); err != nil {
 			log.WarningLog.Printf("Error scanning for branches: %v", err)
 		}
 	}()
-	
+
 	return &BranchLoader{
-		cache: cache,
-		repoPath: repoPath,
+		cache:          cache,
+		repoPath:       repoPath,
 		includeRemotes: includeRemotes,
 	}
 }
@@ -382,7 +382,7 @@ func (l *BranchLoader) AsyncLoad(query string) ([]fuzzy.SearchItem, error) {
 			return nil, err
 		}
 	}
-	
+
 	// Get branches from cache
 	var branches []BranchInfo
 	if l.includeRemotes {
@@ -390,13 +390,13 @@ func (l *BranchLoader) AsyncLoad(query string) ([]fuzzy.SearchItem, error) {
 	} else {
 		branches = l.cache.GetLocalBranches()
 	}
-	
+
 	// Convert to search items
 	items := make([]fuzzy.SearchItem, len(branches))
 	for i, branch := range branches {
 		items[i] = branch
 	}
-	
+
 	return items, nil
 }
 

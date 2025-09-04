@@ -39,21 +39,21 @@ func helpStart(instance *session.Instance) helpText {
 func (h helpTypeGeneral) toContent() string {
 	// Get all categories except special
 	allCategories := keys.GetAllCategories()
-	
+
 	// Sort categories in a specific order
 	sort.Slice(allCategories, func(i, j int) bool {
 		// Define category order for display
 		order := map[keys.HelpCategory]int{
-			keys.HelpCategoryManaging:    1,
-			keys.HelpCategoryHandoff:     2,
-			keys.HelpCategoryOrganize:    3,
-			keys.HelpCategoryNavigation:  4,
-			keys.HelpCategoryOther:       5,
-			keys.HelpCategoryUncategory:  6, // Always last if present
+			keys.HelpCategoryManaging:   1,
+			keys.HelpCategoryHandoff:    2,
+			keys.HelpCategoryOrganize:   3,
+			keys.HelpCategoryNavigation: 4,
+			keys.HelpCategoryOther:      5,
+			keys.HelpCategoryUncategory: 6, // Always last if present
 		}
 		return order[allCategories[i]] < order[allCategories[j]]
 	})
-	
+
 	// Start with title and description
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("Claude Squad"),
@@ -61,35 +61,35 @@ func (h helpTypeGeneral) toContent() string {
 		"A terminal UI that manages multiple Claude Code (and other local agents) in separate workspaces.",
 		"",
 	)
-	
+
 	// Add sections for each category
 	for _, category := range allCategories {
 		// Get keys in this category
 		categoryKeys := keys.GetKeysInCategory(category)
-		
+
 		// Skip empty categories
 		if len(categoryKeys) == 0 {
 			continue
 		}
-		
+
 		// Add category header
-		content = lipgloss.JoinVertical(lipgloss.Left, 
-			content, 
+		content = lipgloss.JoinVertical(lipgloss.Left,
+			content,
 			headerStyle.Render(string(category)+":"),
 		)
-		
+
 		// Add each key binding in this category
 		for _, keyName := range categoryKeys {
 			// Get the key binding
 			keyBinding := keys.GlobalkeyBindings[keyName]
-			
+
 			// Get help info
 			helpInfo := keys.GetKeyHelp(keyName)
-			
+
 			// Format and add the key help
 			keyText := keyBinding.Help().Key
 			descText := helpInfo.Description
-			
+
 			// Calculate padding (to align descriptions)
 			padding := ""
 			padLen := 12 - len(keyText) // Assuming max key length of 12
@@ -98,15 +98,15 @@ func (h helpTypeGeneral) toContent() string {
 					padding += " "
 				}
 			}
-			
-			keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- " + descText)
+
+			keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- "+descText)
 			content = lipgloss.JoinVertical(lipgloss.Left, content, keyLine)
 		}
-		
+
 		// Add spacing between categories
 		content = lipgloss.JoinVertical(lipgloss.Left, content, "")
 	}
-	
+
 	return content
 }
 
@@ -179,7 +179,7 @@ func (h helpTypeSessionOrganization) toContent() string {
 	organizationKeys := keys.GetKeysInCategory(keys.HelpCategoryOrganize)
 	// Get navigation keys related to organization
 	navigationKeys := keys.GetKeysInCategory(keys.HelpCategoryNavigation)
-	
+
 	// Start with title and introduction
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		titleStyle.Render("Session Organization"),
@@ -190,22 +190,22 @@ func (h helpTypeSessionOrganization) toContent() string {
 		descStyle.Render("Sessions are organized by category, with uncategorized sessions in their own group."),
 		"",
 	)
-	
+
 	// Add Organization section
 	content = lipgloss.JoinVertical(lipgloss.Left,
 		content,
 		headerStyle.Render("Organization:"),
 	)
-	
+
 	// Add each organization key
 	for _, keyName := range organizationKeys {
 		keyBinding := keys.GlobalkeyBindings[keyName]
 		helpInfo := keys.GetKeyHelp(keyName)
-		
+
 		// Format key and description
 		keyText := keyBinding.Help().Key
 		descText := helpInfo.Description
-		
+
 		// Add padding for alignment
 		padding := ""
 		padLen := 10 - len(keyText) // Assume max key text length of 10
@@ -214,27 +214,27 @@ func (h helpTypeSessionOrganization) toContent() string {
 				padding += " "
 			}
 		}
-		
-		keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- " + descText)
+
+		keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- "+descText)
 		content = lipgloss.JoinVertical(lipgloss.Left, content, keyLine)
 	}
-	
+
 	// Add Navigation section
 	content = lipgloss.JoinVertical(lipgloss.Left,
 		content,
 		"",
 		headerStyle.Render("Navigation:"),
 	)
-	
+
 	// Add each navigation key
 	for _, keyName := range navigationKeys {
 		keyBinding := keys.GlobalkeyBindings[keyName]
 		helpInfo := keys.GetKeyHelp(keyName)
-		
+
 		// Format key and description
 		keyText := keyBinding.Help().Key
 		descText := helpInfo.Description
-		
+
 		// Add padding for alignment
 		padding := ""
 		padLen := 10 - len(keyText) // Assume max key text length of 10
@@ -243,11 +243,11 @@ func (h helpTypeSessionOrganization) toContent() string {
 				padding += " "
 			}
 		}
-		
-		keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- " + descText)
+
+		keyLine := keyStyle.Render(keyText) + padding + descStyle.Render("- "+descText)
 		content = lipgloss.JoinVertical(lipgloss.Left, content, keyLine)
 	}
-	
+
 	// Add Search section
 	content = lipgloss.JoinVertical(lipgloss.Left,
 		content,
@@ -256,7 +256,7 @@ func (h helpTypeSessionOrganization) toContent() string {
 		descStyle.Render("Type your search query and press Enter to find matching sessions."),
 		descStyle.Render("Press Escape to cancel search mode."),
 	)
-	
+
 	return content
 }
 

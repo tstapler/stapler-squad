@@ -106,7 +106,7 @@ func TestInstanceRendererWithDifferentStatuses(t *testing.T) {
 			if test.status == session.NeedsApproval {
 				expectedStyledIcon := needsApprovalStyle.Render(needsApprovalIcon)
 				if !strings.Contains(result, expectedStyledIcon) {
-					t.Errorf("Expected NeedsApproval status to be rendered with needsApprovalStyle, but styled icon '%s' not found in: %s", 
+					t.Errorf("Expected NeedsApproval status to be rendered with needsApprovalStyle, but styled icon '%s' not found in: %s",
 						expectedStyledIcon, result)
 				}
 			}
@@ -117,7 +117,7 @@ func TestInstanceRendererWithDifferentStatuses(t *testing.T) {
 func TestOrganizeByCategory(t *testing.T) {
 	// Create test spinner for list
 	s := spinner.New()
-	
+
 	// Create list with test spinner
 	list := NewList(&s, false, nil)
 
@@ -128,21 +128,21 @@ func TestOrganizeByCategory(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	instance2 := &session.Instance{
 		Title:     "Test2",
 		Category:  "Personal",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	instance3 := &session.Instance{
 		Title:     "Test3",
 		Category:  "", // No category, should go to "Uncategorized"
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	instance4 := &session.Instance{
 		Title:     "Test4",
 		Category:  "Work", // Same category as instance1
@@ -187,7 +187,7 @@ func TestOrganizeByCategory(t *testing.T) {
 func TestCategoryExpansionCollapse(t *testing.T) {
 	// Create test spinner for list
 	s := spinner.New()
-	
+
 	// Create list with test spinner
 	list := NewList(&s, false, nil)
 
@@ -198,7 +198,7 @@ func TestCategoryExpansionCollapse(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	instance2 := &session.Instance{
 		Title:     "Test2",
 		Category:  "Personal",
@@ -224,19 +224,19 @@ func TestCategoryExpansionCollapse(t *testing.T) {
 	if list.groupExpanded["Work"] {
 		t.Errorf("Expected Work category to be collapsed after CollapseCategory")
 	}
-	
+
 	// Test expand functionality
 	list.ExpandCategory("Work")
 	if !list.groupExpanded["Work"] {
 		t.Errorf("Expected Work category to be expanded after ExpandCategory")
 	}
-	
+
 	// Test toggle functionality
 	list.ToggleCategory("Work")
 	if list.groupExpanded["Work"] {
 		t.Errorf("Expected Work category to be collapsed after first ToggleCategory")
 	}
-	
+
 	list.ToggleCategory("Work")
 	if !list.groupExpanded["Work"] {
 		t.Errorf("Expected Work category to be expanded after second ToggleCategory")
@@ -246,7 +246,7 @@ func TestCategoryExpansionCollapse(t *testing.T) {
 func TestSearchByTitle(t *testing.T) {
 	// Create test spinner for list
 	s := spinner.New()
-	
+
 	// Create list with test spinner
 	list := NewList(&s, false, nil)
 
@@ -256,13 +256,13 @@ func TestSearchByTitle(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	instance2 := &session.Instance{
 		Title:     "Bug fix task",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	
+
 	instance3 := &session.Instance{
 		Title:     "Another feature",
 		CreatedAt: time.Now(),
@@ -281,12 +281,12 @@ func TestSearchByTitle(t *testing.T) {
 
 	// Test search by title - should find both instances with "feature"
 	list.SearchByTitle("feature")
-	
+
 	// Verify list is now in search mode
 	if !list.searchMode {
 		t.Errorf("Expected list to be in search mode after search")
 	}
-	
+
 	// Verify correct search results
 	expectedResultsCount := 2
 	if len(list.searchResults) != expectedResultsCount {
@@ -297,7 +297,7 @@ func TestSearchByTitle(t *testing.T) {
 	list.ExitSearchMode()
 	list.SearchByTitle("FEATURE")
 	if len(list.searchResults) != expectedResultsCount {
-		t.Errorf("Expected %d search results for case-insensitive search, got %d", 
+		t.Errorf("Expected %d search results for case-insensitive search, got %d",
 			expectedResultsCount, len(list.searchResults))
 	}
 
@@ -314,7 +314,7 @@ func TestSearchByTitle(t *testing.T) {
 		t.Errorf("Expected list to not be in search mode after ExitSearchMode")
 	}
 	if len(list.searchResults) != 0 {
-		t.Errorf("Expected empty search results after ExitSearchMode, got %d results", 
+		t.Errorf("Expected empty search results after ExitSearchMode, got %d results",
 			len(list.searchResults))
 	}
 

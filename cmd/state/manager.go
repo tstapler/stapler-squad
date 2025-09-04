@@ -13,7 +13,7 @@ type Manager struct {
 	contextStack []cmd.ContextID
 	registry     *cmd.CommandRegistry
 	helpGen      *help.Generator
-	
+
 	// State that commands can access
 	appState interface{}
 	uiState  interface{}
@@ -33,7 +33,7 @@ func (sm *Manager) SetAppState(state interface{}) {
 	sm.appState = state
 }
 
-// SetUIState sets the UI state that commands can access  
+// SetUIState sets the UI state that commands can access
 func (sm *Manager) SetUIState(state interface{}) {
 	sm.uiState = state
 }
@@ -49,7 +49,7 @@ func (sm *Manager) PopContext() cmd.ContextID {
 		// Always keep at least the global context
 		return cmd.ContextGlobal
 	}
-	
+
 	ctx := sm.contextStack[len(sm.contextStack)-1]
 	sm.contextStack = sm.contextStack[:len(sm.contextStack)-1]
 	return ctx
@@ -74,7 +74,7 @@ func (sm *Manager) GetContextStack() []cmd.ContextID {
 func (sm *Manager) HandleKey(key string) (tea.Model, tea.Cmd, error) {
 	currentCtx := sm.GetCurrentContext()
 	command := sm.registry.ResolveCommand(currentCtx, key)
-	
+
 	if command == nil {
 		return nil, nil, fmt.Errorf("unknown key: '%s' in context %s", key, currentCtx)
 	}
@@ -97,13 +97,13 @@ func (sm *Manager) HandleKey(key string) (tea.Model, tea.Cmd, error) {
 	// Commands can return tea.Model and tea.Cmd through the context
 	var model tea.Model
 	var teaCmd tea.Cmd
-	
+
 	if m, ok := cmdCtx.Args["model"]; ok {
 		if teaModel, ok := m.(tea.Model); ok {
 			model = teaModel
 		}
 	}
-	
+
 	if c, ok := cmdCtx.Args["cmd"]; ok {
 		if tCmd, ok := c.(tea.Cmd); ok {
 			teaCmd = tCmd
@@ -164,12 +164,12 @@ type ContextInfo struct {
 func (sm *Manager) GetCurrentContextInfo() *ContextInfo {
 	currentCtx := sm.GetCurrentContext()
 	context, exists := sm.registry.GetContext(currentCtx)
-	
+
 	info := &ContextInfo{
 		ID:       currentCtx,
 		Commands: sm.registry.GetCommandsForContext(currentCtx),
 	}
-	
+
 	if exists {
 		info.Name = context.Name
 		info.Description = context.Description
@@ -177,6 +177,6 @@ func (sm *Manager) GetCurrentContextInfo() *ContextInfo {
 	} else {
 		info.Name = string(currentCtx)
 	}
-	
+
 	return info
 }

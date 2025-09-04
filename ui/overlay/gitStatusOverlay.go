@@ -10,10 +10,10 @@ import (
 
 // GitFileStatus represents the status of a file in git
 type GitFileStatus struct {
-	Path      string
-	Staged    bool   // File is staged for commit
-	Modified  bool   // File has unstaged changes
-	Untracked bool   // File is untracked
+	Path       string
+	Staged     bool   // File is staged for commit
+	Modified   bool   // File has unstaged changes
+	Untracked  bool   // File is untracked
 	StatusChar string // Git status character (M, A, D, ??, etc.)
 }
 
@@ -22,31 +22,31 @@ type GitStatusOverlay struct {
 	// Git status data
 	Files      []GitFileStatus
 	BranchName string
-	
-	// Navigation state  
-	selectedIdx int
+
+	// Navigation state
+	selectedIdx  int
 	scrollOffset int
-	
+
 	// Overlay state
 	width, height int
 	Dismissed     bool
-	
+
 	// Callbacks for git operations
-	OnStageFile     func(path string) error
-	OnUnstageFile   func(path string) error
-	OnToggleFile    func(path string) error
-	OnUnstageAll    func() error
-	OnCommit        func() error
-	OnCommitAmend   func() error
-	OnShowDiff      func(path string) error
-	OnPush          func() error
-	OnPull          func() error
-	OnCancel        func()
-	OnOpenFile      func(path string) error
-	
+	OnStageFile   func(path string) error
+	OnUnstageFile func(path string) error
+	OnToggleFile  func(path string) error
+	OnUnstageAll  func() error
+	OnCommit      func() error
+	OnCommitAmend func() error
+	OnShowDiff    func(path string) error
+	OnPush        func() error
+	OnPull        func() error
+	OnCancel      func()
+	OnOpenFile    func(path string) error
+
 	// Status message for feedback
 	statusMessage string
-	
+
 	// Help visibility
 	showHelp bool
 }
@@ -54,11 +54,11 @@ type GitStatusOverlay struct {
 // NewGitStatusOverlay creates a new git status overlay
 func NewGitStatusOverlay() *GitStatusOverlay {
 	return &GitStatusOverlay{
-		Files:        []GitFileStatus{},
-		selectedIdx:  0,
-		scrollOffset: 0,
-		Dismissed:    false,
-		showHelp:     true,
+		Files:         []GitFileStatus{},
+		selectedIdx:   0,
+		scrollOffset:  0,
+		Dismissed:     false,
+		showHelp:      true,
 		statusMessage: "Git Status - Press ? for help",
 	}
 }
@@ -73,7 +73,7 @@ func (g *GitStatusOverlay) SetSize(width, height int) {
 func (g *GitStatusOverlay) SetFiles(files []GitFileStatus, branchName string) {
 	g.Files = files
 	g.BranchName = branchName
-	
+
 	// Reset selection if it's out of bounds
 	if g.selectedIdx >= len(g.Files) {
 		g.selectedIdx = 0
@@ -99,12 +99,12 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			g.OnCancel()
 		}
 		return true
-		
+
 	case "?":
 		// Toggle help
 		g.showHelp = !g.showHelp
 		return false
-		
+
 	case "j", "down":
 		// Navigate down
 		if len(g.Files) > 0 {
@@ -112,15 +112,15 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			g.ensureSelectedVisible()
 		}
 		return false
-		
+
 	case "k", "up":
-		// Navigate up  
+		// Navigate up
 		if len(g.Files) > 0 {
 			g.selectedIdx = (g.selectedIdx - 1 + len(g.Files)) % len(g.Files)
 			g.ensureSelectedVisible()
 		}
 		return false
-		
+
 	case "s":
 		// Stage file
 		if file := g.GetSelectedFile(); file != nil {
@@ -133,7 +133,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "u":
 		// Unstage file
 		if file := g.GetSelectedFile(); file != nil {
@@ -146,7 +146,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "-":
 		// Toggle staging for file
 		if file := g.GetSelectedFile(); file != nil {
@@ -163,7 +163,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "U":
 		// Unstage all
 		if g.OnUnstageAll != nil {
@@ -174,7 +174,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "cc":
 		// Create commit
 		if g.OnCommit != nil {
@@ -186,7 +186,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "ca":
 		// Amend commit
 		if g.OnCommitAmend != nil {
@@ -198,7 +198,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "dd":
 		// Show diff for file
 		if file := g.GetSelectedFile(); file != nil {
@@ -212,7 +212,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "p":
 		// Push
 		if g.OnPush != nil {
@@ -223,7 +223,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "P":
 		// Pull
 		if g.OnPull != nil {
@@ -234,7 +234,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	case "enter":
 		// Open file for editing
 		if file := g.GetSelectedFile(); file != nil {
@@ -248,7 +248,7 @@ func (g *GitStatusOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			}
 		}
 		return false
-		
+
 	default:
 		return false
 	}
@@ -259,14 +259,14 @@ func (g *GitStatusOverlay) ensureSelectedVisible() {
 	if len(g.Files) == 0 {
 		return
 	}
-	
+
 	maxVisible := g.getMaxVisibleItems()
-	
+
 	// If selected is above visible area, scroll up
 	if g.selectedIdx < g.scrollOffset {
 		g.scrollOffset = g.selectedIdx
 	}
-	
+
 	// If selected is below visible area, scroll down
 	if g.selectedIdx >= g.scrollOffset+maxVisible {
 		g.scrollOffset = g.selectedIdx - maxVisible + 1
@@ -283,7 +283,7 @@ func (g *GitStatusOverlay) getMaxVisibleItems() int {
 	if g.showHelp {
 		availableHeight -= 10 // Extra space for help
 	}
-	
+
 	if availableHeight < 1 {
 		return 1
 	}
@@ -297,29 +297,29 @@ func (g *GitStatusOverlay) Render() string {
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
 		Padding(1, 2).
-		Width(g.width-4)
-		
+		Width(g.width - 4)
+
 	titleStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("62")).
 		Bold(true)
-		
+
 	branchStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("205")).
 		Bold(true)
-		
+
 	stagedStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("40")) // Green
-		
+
 	modifiedStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("208")) // Orange
-		
+
 	untrackedStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("196")) // Red
-		
+
 	selectedStyle := lipgloss.NewStyle().
 		Background(lipgloss.Color("62")).
 		Foreground(lipgloss.Color("230"))
-		
+
 	// Build header
 	var content strings.Builder
 	content.WriteString(titleStyle.Render("Git Status"))
@@ -328,7 +328,7 @@ func (g *GitStatusOverlay) Render() string {
 		content.WriteString(branchStyle.Render(g.BranchName))
 	}
 	content.WriteString("\n\n")
-	
+
 	// Show files with scrolling
 	if len(g.Files) == 0 {
 		content.WriteString("No changes to display\n")
@@ -338,14 +338,14 @@ func (g *GitStatusOverlay) Render() string {
 		if end > len(g.Files) {
 			end = len(g.Files)
 		}
-		
+
 		for i := g.scrollOffset; i < end; i++ {
 			file := g.Files[i]
-			
+
 			// Determine file status and styling
 			var statusStr string
 			var fileStyle lipgloss.Style
-			
+
 			if file.Staged {
 				statusStr = "●" // Staged
 				fileStyle = stagedStyle
@@ -359,31 +359,31 @@ func (g *GitStatusOverlay) Render() string {
 				statusStr = " "
 				fileStyle = lipgloss.NewStyle()
 			}
-			
+
 			line := fmt.Sprintf(" %s %s", statusStr, file.Path)
-			
+
 			// Apply selection highlighting
 			if i == g.selectedIdx {
 				line = selectedStyle.Render(line)
 			} else {
 				line = fileStyle.Render(line)
 			}
-			
+
 			content.WriteString(line)
 			content.WriteString("\n")
 		}
-		
+
 		// Show scroll indicator
 		if len(g.Files) > maxVisible {
-			content.WriteString(fmt.Sprintf("\\n[%d-%d/%d]", 
+			content.WriteString(fmt.Sprintf("\\n[%d-%d/%d]",
 				g.scrollOffset+1, end, len(g.Files)))
 		}
 	}
-	
+
 	// Status message
 	content.WriteString("\n")
 	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(g.statusMessage))
-	
+
 	// Help section
 	if g.showHelp {
 		content.WriteString("\n\n")
@@ -391,7 +391,7 @@ func (g *GitStatusOverlay) Render() string {
 		content.WriteString("\n")
 		helpItems := []string{
 			"s - stage file",
-			"u - unstage file", 
+			"u - unstage file",
 			"- - toggle staging",
 			"U - unstage all",
 			"cc - commit",
@@ -403,12 +403,12 @@ func (g *GitStatusOverlay) Render() string {
 			"? - toggle help",
 			"esc - exit",
 		}
-		
+
 		for _, item := range helpItems {
 			content.WriteString(fmt.Sprintf("  %s\n", item))
 		}
 	}
-	
+
 	return style.Render(content.String())
 }
 

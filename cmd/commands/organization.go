@@ -7,9 +7,9 @@ import (
 
 // OrganizationHandlers contains handlers for organization/filtering commands
 type OrganizationHandlers struct {
-	OnFilterPaused  func() (tea.Model, tea.Cmd)
-	OnClearFilters  func() (tea.Model, tea.Cmd)
-	OnToggleGroup   func() (tea.Model, tea.Cmd)
+	OnFilterPaused func() (tea.Model, tea.Cmd)
+	OnClearFilters func() (tea.Model, tea.Cmd)
+	OnToggleGroup  func() (tea.Model, tea.Cmd)
 }
 
 var organizationHandlers = &OrganizationHandlers{}

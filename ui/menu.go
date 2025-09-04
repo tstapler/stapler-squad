@@ -184,9 +184,9 @@ func (m *Menu) String() string {
 		start int
 		end   int
 	}{
-		{0, 2}, // Instance management group (n, d) or (n, prompt)
-		{2, 5}, // Action group (enter, submit, pause/resume)
-		{5, 7}, // Organization group (search, filter)
+		{0, 2},  // Instance management group (n, d) or (n, prompt)
+		{2, 5},  // Action group (enter, submit, pause/resume)
+		{5, 7},  // Organization group (search, filter)
 		{7, 10}, // System group (tab, help, q)
 	}
 

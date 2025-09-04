@@ -7,16 +7,16 @@ import (
 
 // GitHandlers contains handlers for git-related commands
 type GitHandlers struct {
-	OnGitStatus   func() (tea.Model, tea.Cmd)
-	OnStageFile   func(filePath string) (tea.Model, tea.Cmd)
-	OnUnstageFile func(filePath string) (tea.Model, tea.Cmd)
-	OnToggleFile  func(filePath string) (tea.Model, tea.Cmd)
-	OnUnstageAll  func() (tea.Model, tea.Cmd)
-	OnCommit      func() (tea.Model, tea.Cmd)
-	OnCommitAmend func() (tea.Model, tea.Cmd)
-	OnShowDiff    func(filePath string) (tea.Model, tea.Cmd)
-	OnPush        func() (tea.Model, tea.Cmd)
-	OnPull        func() (tea.Model, tea.Cmd)
+	OnGitStatus    func() (tea.Model, tea.Cmd)
+	OnStageFile    func(filePath string) (tea.Model, tea.Cmd)
+	OnUnstageFile  func(filePath string) (tea.Model, tea.Cmd)
+	OnToggleFile   func(filePath string) (tea.Model, tea.Cmd)
+	OnUnstageAll   func() (tea.Model, tea.Cmd)
+	OnCommit       func() (tea.Model, tea.Cmd)
+	OnCommitAmend  func() (tea.Model, tea.Cmd)
+	OnShowDiff     func(filePath string) (tea.Model, tea.Cmd)
+	OnPush         func() (tea.Model, tea.Cmd)
+	OnPull         func() (tea.Model, tea.Cmd)
 	OnLegacySubmit func() (tea.Model, tea.Cmd) // For backwards compatibility
 }
 

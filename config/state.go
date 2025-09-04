@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-	
+
 	"github.com/gofrs/flock"
 )
 
@@ -39,10 +39,10 @@ type AppState interface {
 type StateManager interface {
 	InstanceStorage
 	AppState
-	
+
 	// RefreshState reloads state from disk to detect changes made by other processes
 	RefreshState() error
-	
+
 	// Close releases any resources held by the state manager
 	Close() error
 }
@@ -69,9 +69,9 @@ type State struct {
 	InstancesData json.RawMessage `json:"instances"`
 	// UI stores the UI preferences and state
 	UI UIState `json:"ui"`
-	
+
 	// Lock file for coordinating state access across processes
-	lockFile    *flock.Flock `json:"-"` // Not serialized
+	lockFile    *flock.Flock  `json:"-"` // Not serialized
 	lockTimeout time.Duration `json:"-"` // Not serialized
 }
 
@@ -100,11 +100,11 @@ func DefaultState() *State {
 			},
 		}
 	}
-	
+
 	// Initialize the lock file
 	lockPath := filepath.Join(configDir, LockFileName)
 	fileLock := flock.New(lockPath)
-	
+
 	return &State{
 		HelpScreensSeen: 0,
 		InstancesData:   json.RawMessage("[]"),
@@ -115,8 +115,8 @@ func DefaultState() *State {
 			SearchQuery:      "",
 			SelectedIdx:      0,
 		},
-		lockFile:        fileLock,
-		lockTimeout:     DefaultLockTimeout,
+		lockFile:    fileLock,
+		lockTimeout: DefaultLockTimeout,
 	}
 }
 
@@ -124,13 +124,13 @@ func DefaultState() *State {
 func LoadState() *State {
 	// Get the default state which includes locking capabilities
 	state := DefaultState()
-	
+
 	// Attempt to load from disk with a shared read lock
 	if err := state.loadFromDisk(); err != nil {
 		log.WarningLog.Printf("failed to load state from disk: %v", err)
 		// We already have the default state, so just continue
 	}
-	
+
 	return state
 }
 
@@ -141,10 +141,10 @@ func (s *State) loadFromDisk() error {
 		log.WarningLog.Printf("lock file not initialized, loading state without locking")
 		return s.loadFromDiskWithoutLocking()
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.lockTimeout)
 	defer cancel()
-	
+
 	// Try to acquire a shared read lock with retries
 	locked, err := s.lockFile.TryRLockContext(ctx, 100*time.Millisecond)
 	if err != nil {
@@ -154,7 +154,7 @@ func (s *State) loadFromDisk() error {
 		return fmt.Errorf("could not acquire read lock within timeout")
 	}
 	defer s.lockFile.Unlock()
-	
+
 	// Now that we have a lock, load the state
 	return s.loadFromDiskWithoutLocking()
 }
@@ -166,7 +166,7 @@ func (s *State) loadFromDiskWithoutLocking() error {
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
-	
+
 	statePath := filepath.Join(configDir, StateFileName)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -176,23 +176,23 @@ func (s *State) loadFromDiskWithoutLocking() error {
 		}
 		return fmt.Errorf("failed to read state file: %w", err)
 	}
-	
+
 	// Parse the state file
 	var newState State
 	if err := json.Unmarshal(data, &newState); err != nil {
 		return fmt.Errorf("failed to parse state file: %w", err)
 	}
-	
+
 	// Update our fields but keep the lock file and timeout
 	s.HelpScreensSeen = newState.HelpScreensSeen
 	s.InstancesData = newState.InstancesData
-	
+
 	// Update UI state, ensuring CategoryExpanded map is initialized
 	s.UI = newState.UI
 	if s.UI.CategoryExpanded == nil {
 		s.UI.CategoryExpanded = make(map[string]bool)
 	}
-	
+
 	return nil
 }
 
@@ -205,7 +205,7 @@ func SaveState(state *State) error {
 		log.WarningLog.Printf("failed to merge with existing state: %v", err)
 		// Continue with save anyway
 	}
-	
+
 	return state.saveToDisk()
 }
 
@@ -214,45 +214,45 @@ func SaveState(state *State) error {
 func (s *State) mergeWithExistingState() error {
 	// Create a new state to load from disk
 	diskState := DefaultState()
-	
+
 	// Try to load existing state from disk
 	if err := diskState.loadFromDisk(); err != nil {
 		return fmt.Errorf("failed to load existing state for merging: %w", err)
 	}
-	
+
 	// Merge instances by deserializing both sets
 	var ourInstances []json.RawMessage
 	var diskInstances []json.RawMessage
-	
+
 	// Deserialize our instances
 	if len(s.InstancesData) > 0 {
 		if err := json.Unmarshal(s.InstancesData, &ourInstances); err != nil {
 			return fmt.Errorf("failed to unmarshal our instances: %w", err)
 		}
 	}
-	
+
 	// Deserialize disk instances
 	if len(diskState.InstancesData) > 0 {
 		if err := json.Unmarshal(diskState.InstancesData, &diskInstances); err != nil {
 			return fmt.Errorf("failed to unmarshal disk instances: %w", err)
 		}
 	}
-	
+
 	// If we don't have any instances, just use the disk instances
 	if len(ourInstances) == 0 {
 		s.InstancesData = diskState.InstancesData
 		return nil
 	}
-	
+
 	// If there are no disk instances, we don't need to merge
 	if len(diskInstances) == 0 {
 		return nil
 	}
-	
+
 	// For merging, create maps to identify instances by "title" field
 	ourInstanceMap := make(map[string]json.RawMessage)
 	diskInstanceMap := make(map[string]json.RawMessage)
-	
+
 	// Build map of our instances by title
 	for _, instance := range ourInstances {
 		// Parse instance to get title
@@ -267,7 +267,7 @@ func (s *State) mergeWithExistingState() error {
 			ourInstanceMap[parsed.Title] = instance
 		}
 	}
-	
+
 	// Build map of disk instances by title
 	for _, instance := range diskInstances {
 		// Parse instance to get title
@@ -283,10 +283,10 @@ func (s *State) mergeWithExistingState() error {
 			diskInstanceMap[parsed.Title] = instance
 		}
 	}
-	
+
 	// Now create a merged list with both sets of instances
 	mergedInstances := ourInstances // Start with our instances
-	
+
 	// Add disk instances that aren't in our instances
 	for title, instance := range diskInstanceMap {
 		if _, exists := ourInstanceMap[title]; !exists {
@@ -294,16 +294,16 @@ func (s *State) mergeWithExistingState() error {
 			mergedInstances = append(mergedInstances, instance)
 		}
 	}
-	
+
 	// Re-serialize the merged instances
 	mergedData, err := json.Marshal(mergedInstances)
 	if err != nil {
 		return fmt.Errorf("failed to marshal merged instances: %w", err)
 	}
-	
+
 	// Update our instances
 	s.InstancesData = mergedData
-	
+
 	return nil
 }
 
@@ -330,10 +330,10 @@ func (s *State) saveToDisk() error {
 		log.WarningLog.Printf("lock file not initialized, saving state without locking")
 		return s.saveToDiskWithoutLocking()
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), s.lockTimeout)
 	defer cancel()
-	
+
 	// Try to acquire an exclusive write lock with retries
 	locked, err := s.lockFile.TryLockContext(ctx, 100*time.Millisecond)
 	if err != nil {
@@ -343,7 +343,7 @@ func (s *State) saveToDisk() error {
 		return fmt.Errorf("could not acquire write lock within timeout")
 	}
 	defer s.lockFile.Unlock()
-	
+
 	// Now that we have a lock, save the state
 	return s.saveToDiskWithoutLocking()
 }
@@ -355,30 +355,30 @@ func (s *State) saveToDiskWithoutLocking() error {
 	if err != nil {
 		return fmt.Errorf("failed to get config directory: %w", err)
 	}
-	
+
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
-	
+
 	statePath := filepath.Join(configDir, StateFileName)
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
-	
+
 	// Write to a temporary file first to ensure atomicity
 	tmpPath := statePath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write temporary state file: %w", err)
 	}
-	
+
 	// Atomically rename the temporary file to the actual file
 	if err := os.Rename(tmpPath, statePath); err != nil {
 		// Try to clean up the temporary file
 		os.Remove(tmpPath)
 		return fmt.Errorf("failed to atomically update state file: %w", err)
 	}
-	
+
 	return nil
 }
 

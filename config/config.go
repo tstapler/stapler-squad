@@ -67,9 +67,9 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
-		DefaultProgram:          program,
-		AutoYes:                 false,
-		DaemonPollInterval:      1000,
+		DefaultProgram:     program,
+		AutoYes:            false,
+		DaemonPollInterval: 1000,
 		BranchPrefix: func() string {
 			user, err := user.Current()
 			if err != nil || user == nil || user.Username == "" {
@@ -78,16 +78,16 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
-		DetectNewSessions:       true,
+		DetectNewSessions:        true,
 		SessionDetectionInterval: 5000,
 		StateRefreshInterval:     3000,
-		LogsEnabled:             true,
-		LogsDir:                 "", // Empty string means use default location
-		LogMaxSize:              10,  // 10MB
-		LogMaxFiles:             5,   // Keep 5 rotated files
-		LogMaxAge:               30,  // 30 days
-		LogCompress:             true,
-		UseSessionLogs:          true,
+		LogsEnabled:              true,
+		LogsDir:                  "", // Empty string means use default location
+		LogMaxSize:               10, // 10MB
+		LogMaxFiles:              5,  // Keep 5 rotated files
+		LogMaxAge:                30, // 30 days
+		LogCompress:              true,
+		UseSessionLogs:           true,
 	}
 }
 

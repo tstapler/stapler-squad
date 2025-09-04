@@ -133,7 +133,7 @@ func (g *GitWorktree) Cleanup() error {
 		if strings.Contains(err.Error(), "No such file or directory") {
 			// The directory is already gone, try to manually clean up git references
 			log.ErrorLog.Printf("Worktree directory missing during cleanup, attempting manual cleanup for %s", g.worktreePath)
-			
+
 			// Try multiple cleanup strategies
 			if err := g.forceCleanupWorktree(); err != nil {
 				log.ErrorLog.Printf("Manual cleanup failed during cleanup: %v", err)
@@ -190,7 +190,7 @@ func (g *GitWorktree) Remove() error {
 		if strings.Contains(err.Error(), "No such file or directory") {
 			// The directory is already gone, try to manually clean up git references
 			log.ErrorLog.Printf("Worktree directory missing, attempting manual cleanup for %s", g.worktreePath)
-			
+
 			// Try multiple cleanup strategies
 			if err := g.forceCleanupWorktree(); err != nil {
 				log.ErrorLog.Printf("Manual cleanup failed: %v", err)
@@ -212,9 +212,9 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 	worktreesDir := filepath.Join(g.repoPath, ".git", "worktrees")
 	worktreeName := filepath.Base(g.worktreePath)
 	worktreeAdminDir := filepath.Join(worktreesDir, worktreeName)
-	
+
 	log.ErrorLog.Printf("Attempting manual cleanup of worktree admin directory: %s", worktreeAdminDir)
-	
+
 	if _, err := os.Stat(worktreeAdminDir); err == nil {
 		// Remove the administrative directory
 		if err := os.RemoveAll(worktreeAdminDir); err != nil {
@@ -225,7 +225,7 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 	} else {
 		log.ErrorLog.Printf("Worktree admin directory does not exist: %s", worktreeAdminDir)
 	}
-	
+
 	// Strategy 2: Try to find and remove any matching worktree admin directories
 	if entries, err := os.ReadDir(worktreesDir); err == nil {
 		for _, entry := range entries {
@@ -238,14 +238,14 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 			}
 		}
 	}
-	
+
 	// Strategy 3: Try git commands only after manual cleanup
 	log.ErrorLog.Printf("Attempting git worktree prune after manual cleanup")
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune", "--verbose"); err != nil {
 		// Prune failed, but we've done manual cleanup, so this is not critical
 		log.ErrorLog.Printf("Git worktree prune failed after manual cleanup (not critical): %v", err)
 	}
-	
+
 	// Strategy 4: Try to list and remove specific worktrees
 	if output, err := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain"); err == nil {
 		// Parse the output to find our worktree
@@ -263,7 +263,7 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 	} else {
 		log.ErrorLog.Printf("Failed to list worktrees (not critical): %v", err)
 	}
-	
+
 	// Always return success - we've done our best with manual cleanup
 	log.ErrorLog.Printf("Worktree cleanup completed. Manual cleanup was performed.")
 	return nil

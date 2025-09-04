@@ -24,13 +24,13 @@ func ExpandPath(path string) (string, error) {
 		}
 		path = usr.HomeDir
 	}
-	
+
 	// Convert to absolute path
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return path, err
 	}
-	
+
 	return absPath, nil
 }
 
@@ -41,7 +41,7 @@ func PathExists(path string) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	// Check if path exists
 	_, err = os.Stat(expandedPath)
 	return err == nil
@@ -54,12 +54,12 @@ func IsDirectory(path string) bool {
 	if err != nil {
 		return false
 	}
-	
+
 	// Check if path is a directory
 	info, err := os.Stat(expandedPath)
 	if err != nil {
 		return false
 	}
-	
+
 	return info.IsDir()
 }

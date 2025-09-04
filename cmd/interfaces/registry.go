@@ -7,11 +7,11 @@ type RegistryInterface interface {
 	GetAllCommands() map[CommandID]CommandInterface
 	GetKeysForCommand(cmdID CommandID) []string
 	ResolveCommand(contextID ContextID, key string) CommandInterface
-	
+
 	// Context management
 	GetContext(id ContextID) (ContextInterface, bool)
 	GetCommandsForContext(contextID ContextID) []CommandInterface
-	
+
 	// Validation
 	DetectConflicts() []KeyConflict
 }
@@ -46,7 +46,7 @@ type DeprecationInfo struct {
 
 // KeyConflict represents a keybinding conflict within a context
 type KeyConflict struct {
-	Key       string
-	Context   ContextID
-	Commands  []CommandID
+	Key      string
+	Context  ContextID
+	Commands []CommandID
 }

@@ -12,21 +12,21 @@ import (
 
 // TagFilter handles filtering sessions by tags
 type TagFilter struct {
-	width        int
-	height       int
-	activeTag    string
+	width         int
+	height        int
+	activeTag     string
 	availableTags map[string]int // Map of tag to count of sessions with that tag
-	focused      bool
+	focused       bool
 }
 
 // NewTagFilter creates a new tag filter component
 func NewTagFilter() *TagFilter {
 	return &TagFilter{
-		width:        0,
-		height:       0,
-		activeTag:    "",
+		width:         0,
+		height:        0,
+		activeTag:     "",
 		availableTags: make(map[string]int),
-		focused:      false,
+		focused:       false,
 	}
 }
 
@@ -85,7 +85,7 @@ func (t *TagFilter) ClearTagFilter() {
 func (t *TagFilter) UpdateAvailableTags(instances []*session.Instance) {
 	// Clear existing tags
 	t.availableTags = make(map[string]int)
-	
+
 	// Count tags across all sessions
 	for _, instance := range instances {
 		if instance.Tags != nil {
@@ -102,7 +102,7 @@ func (t *TagFilter) ApplyFilter(instances []*session.Instance) []*session.Instan
 	if t.activeTag == "" {
 		return instances
 	}
-	
+
 	// Filter instances by the active tag
 	filtered := make([]*session.Instance, 0)
 	for _, instance := range instances {
@@ -115,7 +115,7 @@ func (t *TagFilter) ApplyFilter(instances []*session.Instance) []*session.Instan
 			}
 		}
 	}
-	
+
 	return filtered
 }
 
@@ -124,46 +124,46 @@ func (t *TagFilter) View() string {
 	if len(t.availableTags) == 0 {
 		return ""
 	}
-	
+
 	var sb strings.Builder
-	
+
 	// Title
 	titleStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#FFFFFF"))
 	sb.WriteString(titleStyle.Render("Filter by Tags"))
 	sb.WriteString("\n")
-	
+
 	// Tag list
 	tags := make([]string, 0, len(t.availableTags))
 	for tag := range t.availableTags {
 		tags = append(tags, tag)
 	}
-	
+
 	// Sort tags by name alphabetically
 	sort.Strings(tags)
-	
+
 	// Render available tags
 	activeStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#FFFFFF")).
 		Background(lipgloss.Color("#0000FF")).
 		Padding(0, 1)
-	
+
 	inactiveStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#DDDDDD")).
 		Padding(0, 1)
-	
+
 	for _, tag := range tags {
 		count := t.availableTags[tag]
-		
+
 		// Truncate tag if too long (max 15 chars)
 		displayTag := tag
 		if len(tag) > 15 {
 			displayTag = tag[:12] + "..."
 		}
-		
+
 		tagText := fmt.Sprintf("%s (%d)", displayTag, count)
-		
+
 		if tag == t.activeTag {
 			sb.WriteString(activeStyle.Render(tagText))
 		} else {
@@ -171,6 +171,6 @@ func (t *TagFilter) View() string {
 		}
 		sb.WriteString(" ")
 	}
-	
+
 	return sb.String()
 }

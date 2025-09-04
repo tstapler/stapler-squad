@@ -26,7 +26,7 @@ type InstanceData struct {
 	ExistingWorktree string          `json:"existing_worktree,omitempty"`
 	Worktree         GitWorktreeData `json:"worktree"`
 	DiffStats        DiffStatsData   `json:"diff_stats"`
-	
+
 	// New fields for session organization and grouping
 	Category   string   `json:"category,omitempty"`
 	Tags       []string `json:"tags,omitempty"`
@@ -71,7 +71,7 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 		log.WarningLog.Printf("failed to load existing instances for merging: %v", err)
 		existingInstances = []*Instance{}
 	}
-	
+
 	// Create a map of our instances by title for quick lookup
 	instancesByTitle := make(map[string]*Instance)
 	for _, instance := range instances {
@@ -79,7 +79,7 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 			instancesByTitle[instance.Title] = instance
 		}
 	}
-	
+
 	// Create a map of existing instances by title for quick lookup
 	existingByTitle := make(map[string]*Instance)
 	for _, instance := range existingInstances {
@@ -88,17 +88,17 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 			existingByTitle[instance.Title] = instance
 		}
 	}
-	
+
 	// Create a merged list with our instances taking precedence
-	mergedInstances := make([]*Instance, 0, len(instancesByTitle) + len(existingByTitle))
-	
+	mergedInstances := make([]*Instance, 0, len(instancesByTitle)+len(existingByTitle))
+
 	// Add our instances first (we know they're valid)
 	for _, instance := range instances {
 		if instance.Started() {
 			mergedInstances = append(mergedInstances, instance)
 		}
 	}
-	
+
 	// Then add instances from disk that we're not tracking
 	for title, instance := range existingByTitle {
 		if instance.Started() {
@@ -106,7 +106,7 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 			mergedInstances = append(mergedInstances, instance)
 		}
 	}
-	
+
 	// Convert merged instances to InstanceData
 	data := make([]InstanceData, 0, len(mergedInstances))
 	for _, instance := range mergedInstances {

@@ -21,12 +21,12 @@ import (
 func RunDaemon(cfg *config.Config) error {
 	// Log initialization is done by the caller
 	log.InfoLog.Printf("starting daemon")
-	
+
 	// Load state with built-in locking
 	state := config.LoadState()
 	// Ensure we release locks when done
 	defer state.Close()
-	
+
 	storage, err := session.NewStorage(state)
 	if err != nil {
 		return fmt.Errorf("failed to initialize storage: %w", err)
@@ -42,7 +42,7 @@ func RunDaemon(cfg *config.Config) error {
 	}
 
 	pollInterval := time.Duration(cfg.DaemonPollInterval) * time.Millisecond
-	
+
 	// Setup file watcher for state.json if enabled
 	var watcher *fsnotify.Watcher
 	if cfg.DetectNewSessions {
@@ -61,7 +61,7 @@ func RunDaemon(cfg *config.Config) error {
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	stopCh := make(chan struct{})
-	
+
 	// AutoYes mode goroutine
 	go func() {
 		defer wg.Done()
@@ -92,13 +92,13 @@ func RunDaemon(cfg *config.Config) error {
 			ticker.Reset(pollInterval)
 		}
 	}()
-	
+
 	// Session detection goroutine if enabled
 	if watcher != nil && cfg.DetectNewSessions {
 		wg.Add(1)
 		go watchForNewSessions(watcher, &instances, storage, cfg, stopCh, wg)
 	}
-	
+
 	// Periodic state refresh goroutine
 	if cfg.StateRefreshInterval > 0 {
 		wg.Add(1)
@@ -106,9 +106,9 @@ func RunDaemon(cfg *config.Config) error {
 			defer wg.Done()
 			ticker := time.NewTicker(time.Duration(cfg.StateRefreshInterval) * time.Millisecond)
 			defer ticker.Stop()
-			
+
 			log.InfoLog.Printf("starting state refresh with interval %d ms", cfg.StateRefreshInterval)
-			
+
 			for {
 				select {
 				case <-ticker.C:
@@ -146,24 +146,24 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to create watcher: %w", err)
 	}
-	
+
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get config directory: %w", err)
 	}
-	
+
 	// Make sure the config directory exists before watching it
 	if _, err := os.Stat(configDir); os.IsNotExist(err) {
 		if err := os.MkdirAll(configDir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create config directory: %w", err)
 		}
 	}
-	
+
 	// First, watch the directory itself to catch file creation/deletion
 	if err := watcher.Add(configDir); err != nil {
 		return nil, fmt.Errorf("failed to add config directory to watcher: %w", err)
 	}
-	
+
 	// Add individual files to watch
 	statePath := filepath.Join(configDir, config.StateFileName)
 	if _, err := os.Stat(statePath); err == nil {
@@ -173,7 +173,7 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 			log.InfoLog.Printf("watching state file: %s", statePath)
 		}
 	}
-	
+
 	// Also watch instances.json if it exists (legacy or alternate storage)
 	instancesPath := filepath.Join(configDir, config.InstancesFileName)
 	if _, err := os.Stat(instancesPath); err == nil {
@@ -183,7 +183,7 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 			log.InfoLog.Printf("watching instances file: %s", instancesPath)
 		}
 	}
-	
+
 	log.InfoLog.Printf("watching config directory for changes: %s", configDir)
 	return watcher, nil
 }
@@ -198,11 +198,11 @@ func watchForNewSessions(
 	wg *sync.WaitGroup,
 ) {
 	defer wg.Done()
-	
+
 	// We add a small debounce to avoid processing the same change multiple times
 	var lastProcessTime time.Time
 	debounceTime := 500 * time.Millisecond
-	
+
 	// Keep track of state.json file status
 	configDir, _ := config.GetConfigDir()
 	stateFilePath := filepath.Join(configDir, config.StateFileName)
@@ -210,30 +210,30 @@ func watchForNewSessions(
 	// Setup polling ticker for regular checks
 	pollTicker := time.NewTicker(time.Duration(cfg.SessionDetectionInterval) * time.Millisecond)
 	defer pollTicker.Stop()
-	
+
 	log.InfoLog.Printf("starting new session detection with interval %d ms", cfg.SessionDetectionInterval)
-	
+
 	// Perform an initial detection to get any existing sessions
 	if err := detectAndAddNewSessions(instances, storage); err != nil {
 		log.ErrorLog.Printf("failed to detect initial sessions: %v", err)
 	}
-	
+
 	for {
 		select {
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return
 			}
-			
+
 			// Check if the event is for a relevant file
 			isStateFile := strings.Contains(event.Name, config.StateFileName)
 			isInstancesFile := strings.Contains(event.Name, config.InstancesFileName)
-			
+
 			// Skip non-relevant files (but process all files in the config dir)
 			if !isStateFile && !isInstancesFile && !strings.Contains(event.Name, configDir) {
 				continue
 			}
-			
+
 			// Handle any event that might indicate configuration has changed
 			if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
 				// Skip if we processed a change very recently (debounce)
@@ -241,12 +241,12 @@ func watchForNewSessions(
 					continue
 				}
 				lastProcessTime = time.Now()
-				
+
 				log.InfoLog.Printf("detected change in file %s, checking for new sessions", event.Name)
 				if err := detectAndAddNewSessions(instances, storage); err != nil {
 					log.ErrorLog.Printf("failed to detect new sessions: %v", err)
 				}
-				
+
 				// Make sure we're watching the files if they were created or recreated
 				if event.Has(fsnotify.Create) {
 					// Re-add state file watcher if needed
@@ -255,7 +255,7 @@ func watchForNewSessions(
 							log.WarningLog.Printf("failed to add state file to watcher after creation: %v", err)
 						}
 					}
-					
+
 					// Re-add instances file watcher if needed
 					instancesPath := filepath.Join(configDir, config.InstancesFileName)
 					if strings.Contains(event.Name, config.InstancesFileName) {
@@ -265,19 +265,19 @@ func watchForNewSessions(
 					}
 				}
 			}
-			
+
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
 			log.ErrorLog.Printf("watcher error: %v", err)
-			
+
 		case <-pollTicker.C:
 			// Periodically poll for new sessions as a fallback mechanism
 			if err := detectAndAddNewSessions(instances, storage); err != nil {
 				log.ErrorLog.Printf("failed to detect new sessions during polling: %v", err)
 			}
-			
+
 		case <-stopCh:
 			log.InfoLog.Printf("stopping session detection")
 			return
@@ -288,25 +288,25 @@ func watchForNewSessions(
 // detectAndAddNewSessions checks for new sessions and adds them to the current instances
 func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *session.Storage) error {
 	// State refreshing is now handled automatically in GetInstances()
-	
+
 	// Load the latest instances from the refreshed state
 	newlyLoadedInstances, err := storage.LoadInstances()
 	if err != nil {
 		return fmt.Errorf("failed to load instances from state: %w", err)
 	}
-	
+
 	// Create a map of existing instance titles for quick lookup
 	existingTitles := make(map[string]bool)
 	for _, instance := range *currentInstances {
 		existingTitles[instance.Title] = true
 	}
-	
+
 	// Find any new instances not in our current list
 	newInstances := []*session.Instance{}
 	for _, instance := range newlyLoadedInstances {
 		if !existingTitles[instance.Title] {
 			log.InfoLog.Printf("detected new session: %s (status: %d)", instance.Title, instance.Status)
-			
+
 			// Only add the instance if it's been properly started
 			if instance.Started() {
 				// Assume AutoYes is true if the daemon is running
@@ -317,19 +317,19 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 			}
 		}
 	}
-	
+
 	// Add new instances to our current list if any found
 	if len(newInstances) > 0 {
 		*currentInstances = append(*currentInstances, newInstances...)
 		log.InfoLog.Printf("added %d new session(s) to daemon", len(newInstances))
-		
+
 		// Log all current sessions for debugging
 		log.InfoLog.Printf("current sessions (%d total):", len(*currentInstances))
 		for i, instance := range *currentInstances {
 			log.InfoLog.Printf("  [%d] %s (status: %d)", i, instance.Title, instance.Status)
 		}
 	}
-	
+
 	return nil
 }
 

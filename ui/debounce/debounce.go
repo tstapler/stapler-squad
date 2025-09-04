@@ -26,21 +26,21 @@ func New(delay time.Duration) *Debouncer {
 func (d *Debouncer) Trigger(callback func()) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	
+
 	// Cancel any existing timer
 	if d.timer != nil {
 		d.timer.Stop()
 	}
-	
+
 	// Store the callback
 	d.callback = callback
-	
+
 	// Start a new timer
 	d.timer = time.AfterFunc(d.delay, func() {
 		d.mutex.Lock()
 		callback := d.callback
 		d.mutex.Unlock()
-		
+
 		if callback != nil {
 			callback()
 		}
@@ -51,7 +51,7 @@ func (d *Debouncer) Trigger(callback func()) {
 func (d *Debouncer) Cancel() {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	
+
 	if d.timer != nil {
 		d.timer.Stop()
 		d.timer = nil
@@ -62,13 +62,13 @@ func (d *Debouncer) Cancel() {
 func (d *Debouncer) Execute(callback func()) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	
+
 	// Cancel any existing timer
 	if d.timer != nil {
 		d.timer.Stop()
 		d.timer = nil
 	}
-	
+
 	// Execute the callback directly
 	if callback != nil {
 		callback()
@@ -79,7 +79,7 @@ func (d *Debouncer) Execute(callback func()) {
 func (d *Debouncer) SetDelay(delay time.Duration) {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	
+
 	d.delay = delay
 }
 
@@ -87,6 +87,6 @@ func (d *Debouncer) SetDelay(delay time.Duration) {
 func (d *Debouncer) IsActive() bool {
 	d.mutex.Lock()
 	defer d.mutex.Unlock()
-	
+
 	return d.timer != nil
 }

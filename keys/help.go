@@ -4,13 +4,13 @@ package keys
 type HelpCategory string
 
 const (
-	HelpCategoryManaging    HelpCategory = "Managing"
-	HelpCategoryHandoff     HelpCategory = "Handoff"
-	HelpCategoryNavigation  HelpCategory = "Navigation"
-	HelpCategoryOrganize    HelpCategory = "Organization"
-	HelpCategoryOther       HelpCategory = "Other"
-	HelpCategoryUncategory  HelpCategory = "Uncategorized" // For keys without categories
-	HelpCategorySpecial     HelpCategory = "Special"       // For special keys that shouldn't show in main help
+	HelpCategoryManaging   HelpCategory = "Managing"
+	HelpCategoryHandoff    HelpCategory = "Handoff"
+	HelpCategoryNavigation HelpCategory = "Navigation"
+	HelpCategoryOrganize   HelpCategory = "Organization"
+	HelpCategoryOther      HelpCategory = "Other"
+	HelpCategoryUncategory HelpCategory = "Uncategorized" // For keys without categories
+	HelpCategorySpecial    HelpCategory = "Special"       // For special keys that shouldn't show in main help
 )
 
 // KeyHelpInfo adds extended help information to key bindings
@@ -26,12 +26,12 @@ var KeyHelpMap = map[KeyName]KeyHelpInfo{
 	KeyPrompt: {Description: "Create a new session with a prompt (Vim-like command mode)", Category: HelpCategoryManaging},
 	KeyKill:   {Description: "Kill (delete) the selected session", Category: HelpCategoryManaging},
 	KeyEnter:  {Description: "Attach to the selected session", Category: HelpCategoryManaging},
-	
+
 	// Handoff category
 	KeySubmit:   {Description: "Push branch (legacy - use 'g' for git workflow)", Category: HelpCategoryHandoff},
 	KeyCheckout: {Description: "Checkout: commit changes and pause session", Category: HelpCategoryHandoff},
 	KeyResume:   {Description: "Resume a paused session", Category: HelpCategoryHandoff},
-	
+
 	// Organization category
 	KeySearch:       {Description: "Search sessions by title (Vim-style search)", Category: HelpCategoryOrganize},
 	KeyRight:        {Description: "Expand selected category (Vim h/j/k/l navigation)", Category: HelpCategoryOrganize},
@@ -40,19 +40,19 @@ var KeyHelpMap = map[KeyName]KeyHelpInfo{
 	KeyFilterPaused: {Description: "Toggle visibility of paused sessions", Category: HelpCategoryOrganize},
 	KeyClearFilters: {Description: "Clear all filters and search", Category: HelpCategoryOrganize},
 	KeyGit:          {Description: "Open git status interface (fugitive-style)", Category: HelpCategoryHandoff},
-	
+
 	// Navigation category
-	KeyUp:       {Description: "Navigate up (Vim j/k keys supported)", Category: HelpCategoryNavigation},
-	KeyDown:     {Description: "Navigate down (Vim j/k keys supported)", Category: HelpCategoryNavigation},
+	KeyUp:        {Description: "Navigate up (Vim j/k keys supported)", Category: HelpCategoryNavigation},
+	KeyDown:      {Description: "Navigate down (Vim j/k keys supported)", Category: HelpCategoryNavigation},
 	KeyShiftUp:   {Description: "Scroll up (Vim Ctrl+u supported)", Category: HelpCategoryNavigation},
 	KeyShiftDown: {Description: "Scroll down (Vim Ctrl+d supported)", Category: HelpCategoryNavigation},
-	
+
 	// Other category
 	KeyTab:  {Description: "Switch between preview and diff tabs", Category: HelpCategoryOther},
 	KeyEsc:  {Description: "Cancel/exit current mode", Category: HelpCategoryOther},
 	KeyQuit: {Description: "Quit the application", Category: HelpCategoryOther},
 	KeyHelp: {Description: "Show help screen", Category: HelpCategoryOther},
-	
+
 	// Special category (not shown in main help)
 	KeySubmitName: {Description: "Submit name for new instance", Category: HelpCategorySpecial},
 	KeyReview:     {Description: "Review code", Category: HelpCategorySpecial},
@@ -89,7 +89,7 @@ func GetAllCategories() []HelpCategory {
 	for _, info := range KeyHelpMap {
 		categoryMap[info.Category] = true
 	}
-	
+
 	// Convert map to slice
 	categories := make([]HelpCategory, 0, len(categoryMap))
 	for category := range categoryMap {
@@ -98,6 +98,6 @@ func GetAllCategories() []HelpCategory {
 			categories = append(categories, category)
 		}
 	}
-	
+
 	return categories
 }
