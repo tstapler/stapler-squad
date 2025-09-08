@@ -56,6 +56,8 @@ type Config struct {
 	LogCompress bool `json:"log_compress"`
 	// UseSessionLogs is a flag to enable per-session log files
 	UseSessionLogs bool `json:"use_session_logs"`
+	// TmuxSessionPrefix allows customizing the tmux session prefix for process isolation
+	TmuxSessionPrefix string `json:"tmux_session_prefix"`
 }
 
 // DefaultConfig returns the default configuration
@@ -88,6 +90,7 @@ func DefaultConfig() *Config {
 		LogMaxAge:                30, // 30 days
 		LogCompress:              true,
 		UseSessionLogs:           true,
+		TmuxSessionPrefix:        "claudesquad_", // Default prefix for backward compatibility
 	}
 }
 

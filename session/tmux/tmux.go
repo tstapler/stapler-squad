@@ -62,24 +62,33 @@ const TmuxPrefix = "claudesquad_"
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
 func toClaudeSquadTmuxName(str string) string {
+	return toClaudeSquadTmuxNameWithPrefix(str, TmuxPrefix)
+}
+
+func toClaudeSquadTmuxNameWithPrefix(str string, prefix string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
 	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
-	return fmt.Sprintf("%s%s", TmuxPrefix, str)
+	return fmt.Sprintf("%s%s", prefix, str)
 }
 
 // NewTmuxSession creates a new TmuxSession with the given name and program.
 func NewTmuxSession(name string, program string) *TmuxSession {
-	return newTmuxSession(name, program, MakePtyFactory(), executor.MakeExecutor())
+	return newTmuxSession(name, program, MakePtyFactory(), executor.MakeExecutor(), TmuxPrefix)
+}
+
+// NewTmuxSessionWithPrefix creates a new TmuxSession with a custom prefix for process isolation.
+func NewTmuxSessionWithPrefix(name string, program string, prefix string) *TmuxSession {
+	return newTmuxSession(name, program, MakePtyFactory(), executor.MakeExecutor(), prefix)
 }
 
 // NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.
 func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor) *TmuxSession {
-	return newTmuxSession(name, program, ptyFactory, cmdExec)
+	return newTmuxSession(name, program, ptyFactory, cmdExec, TmuxPrefix)
 }
 
-func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor) *TmuxSession {
+func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string) *TmuxSession {
 	return &TmuxSession{
-		sanitizedName: toClaudeSquadTmuxName(name),
+		sanitizedName: toClaudeSquadTmuxNameWithPrefix(name, prefix),
 		program:       program,
 		ptyFactory:    ptyFactory,
 		cmdExec:       cmdExec,
