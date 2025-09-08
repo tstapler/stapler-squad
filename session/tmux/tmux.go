@@ -315,8 +315,13 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 			// Normal detach, do nothing
 		default:
 			// If context is not done, it was likely an abnormal termination (Ctrl-D)
-			// Print warning message
-			fmt.Fprintf(os.Stderr, "\n\033[31mError: Session terminated without detaching. Use Ctrl-Q to properly detach from tmux sessions.\033[0m\n")
+			// Gracefully handle the unexpected termination by calling DetachSafely
+			// This will properly close the attachCh and clean up resources
+			go func() {
+				if err := t.DetachSafely(); err != nil {
+					log.ErrorLog.Printf("Error during safe detach after session termination: %v", err)
+				}
+			}()
 		}
 	}()
 

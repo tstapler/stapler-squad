@@ -45,7 +45,7 @@ func testRegularRepoSessionRestoration(t *testing.T) {
 	cmdExec := createMockExecutorForMissingSession()
 
 	// Create session for main repo (not a worktree)
-	session := newTmuxSession("main-project-session", "pwd", ptyFactory, cmdExec)
+	session := newTmuxSession("main-project-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test: When restoring a regular repo session, it should start in the repo directory
 	_ = session.RestoreWithWorkDir(repoDir)
@@ -111,7 +111,7 @@ func testWorktreeSessionRestorationDetailed(t *testing.T) {
 	cmdExec := createMockExecutorForMissingSession()
 
 	// Create session for worktree (feature branch)
-	session := newTmuxSession("feature-branch-session", "pwd", ptyFactory, cmdExec)
+	session := newTmuxSession("feature-branch-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test: When restoring a worktree session, it should start in the worktree directory
 	_ = session.RestoreWithWorkDir(worktreeDir)
@@ -175,7 +175,7 @@ func testMixedScenarioValidation(t *testing.T) {
 			ptyFactory := NewMockPtyFactory(t)
 			cmdExec := createMockExecutorForMissingSession()
 
-			session := newTmuxSession(scenario.sessionName, "pwd", ptyFactory, cmdExec)
+			session := newTmuxSession(scenario.sessionName, "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 			// Restore in the target directory
 			_ = session.RestoreWithWorkDir(scenario.targetDir)
@@ -257,7 +257,7 @@ func TestSessionTypeClassification(t *testing.T) {
 			ptyFactory := NewMockPtyFactory(t)
 			cmdExec := createMockExecutorForMissingSession()
 
-			session := newTmuxSession(scenario.sessionName, "pwd", ptyFactory, cmdExec)
+			session := newTmuxSession(scenario.sessionName, "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 			// Test restoration
 			_ = session.RestoreWithWorkDir(targetDir)
@@ -291,7 +291,7 @@ func TestDirectoryPathEdgeCases(t *testing.T) {
 
 		// Test absolute path
 		ptyFactory1 := NewMockPtyFactory(t)
-		session1 := newTmuxSession("absolute-test", "pwd", ptyFactory1, createMockExecutorForMissingSession())
+		session1 := newTmuxSession("absolute-test", "pwd", ptyFactory1, createMockExecutorForMissingSession(), TmuxPrefix)
 		_ = session1.RestoreWithWorkDir(absoluteDir)
 
 		// Find command
@@ -316,7 +316,7 @@ func TestDirectoryPathEdgeCases(t *testing.T) {
 		os.MkdirAll(relativeDir, 0755)
 
 		ptyFactory2 := NewMockPtyFactory(t)
-		session2 := newTmuxSession("relative-test", "pwd", ptyFactory2, createMockExecutorForMissingSession())
+		session2 := newTmuxSession("relative-test", "pwd", ptyFactory2, createMockExecutorForMissingSession(), TmuxPrefix)
 		_ = session2.RestoreWithWorkDir(relativeDir)
 
 		var cmd2 string
@@ -339,7 +339,7 @@ func TestDirectoryPathEdgeCases(t *testing.T) {
 		require.NoError(t, err)
 
 		ptyFactory := NewMockPtyFactory(t)
-		session := newTmuxSession("space-test", "pwd", ptyFactory, createMockExecutorForMissingSession())
+		session := newTmuxSession("space-test", "pwd", ptyFactory, createMockExecutorForMissingSession(), TmuxPrefix)
 		_ = session.RestoreWithWorkDir(spaceDir)
 
 		var newSessionCmd string

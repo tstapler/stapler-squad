@@ -66,7 +66,7 @@ func testKilledSessionRestoresInCorrectWorktree(t *testing.T) {
 		},
 	}
 
-	session := newTmuxSession("test-recovery", "pwd", ptyFactory, cmdExec)
+	session := newTmuxSession("test-recovery", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Restore after session was killed - this is where the bug would occur
 	// OLD behavior: would use os.Getwd()
@@ -123,7 +123,7 @@ func testCompareOldVsNewRestoreBehavior(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("old-behavior-test", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("old-behavior-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Use the old Restore() method - should fallback to current directory
 		_ = session.Restore()
@@ -156,7 +156,7 @@ func testCompareOldVsNewRestoreBehavior(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("new-behavior-test", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("new-behavior-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Use the new RestoreWithWorkDir() method - should use specified worktree
 		_ = session.RestoreWithWorkDir(worktreeDir)
@@ -269,7 +269,7 @@ func TestSessionRecoveryPerformance(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession(fmt.Sprintf("perf-test-%d", i), "echo test", ptyFactory, cmdExec)
+		session := newTmuxSession(fmt.Sprintf("perf-test-%d", i), "echo test", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Test RestoreWithWorkDir performance
 		_ = session.RestoreWithWorkDir(worktreeDir)
