@@ -43,7 +43,7 @@ func testWorktreeSessionRestoration(t *testing.T) {
 	// Mock executor for missing session scenario
 	cmdExec := createMockExecutorForMissingSession()
 
-	session := newTmuxSession("feature-session", "pwd", ptyFactory, cmdExec)
+	session := newTmuxSession("feature-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test: RestoreWithWorkDir should use the provided worktree directory
 	_ = session.RestoreWithWorkDir(worktreeDir)
@@ -79,7 +79,7 @@ func testRepoSessionRestoration(t *testing.T) {
 	// Mock executor for missing session scenario
 	cmdExec := createMockExecutorForMissingSession()
 
-	session := newTmuxSession("main-repo-session", "pwd", ptyFactory, cmdExec)
+	session := newTmuxSession("main-repo-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test: RestoreWithWorkDir should use the provided repo directory
 	_ = session.RestoreWithWorkDir(repoDir)
@@ -119,7 +119,7 @@ func testCompareWorktreeVsRepoRestoration(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("repo-main", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("repo-main", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Restore in repo directory
 		err := session.RestoreWithWorkDir(repoDir)
@@ -148,7 +148,7 @@ func testCompareWorktreeVsRepoRestoration(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("worktree-feature", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("worktree-feature", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Restore in worktree directory
 		err := session.RestoreWithWorkDir(worktreeDir)
@@ -187,7 +187,7 @@ func testRestoreWithWorkDirFallback(t *testing.T) {
 	require.NoError(t, err)
 
 	cmdExec := createMockExecutorForMissingSession()
-	session := newTmuxSession("fallback-test", "pwd", ptyFactory, cmdExec)
+	session := newTmuxSession("fallback-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test: RestoreWithWorkDir with empty path should fallback to current directory
 	_ = session.RestoreWithWorkDir("")
@@ -243,7 +243,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("old-behavior", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("old-behavior", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Simulate OLD behavior: use Restore() which falls back to current directory
 		_ = session.Restore()
@@ -278,7 +278,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("new-behavior", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("new-behavior", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// NEW behavior: use RestoreWithWorkDir() with correct directory
 		_ = session.RestoreWithWorkDir(correctDir)
@@ -312,7 +312,7 @@ func TestDirectoryResolutionEdgeCases(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("nonexistent-test", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("nonexistent-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		nonExistentDir := "/path/that/does/not/exist"
 
@@ -339,7 +339,7 @@ func TestDirectoryResolutionEdgeCases(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
 		cmdExec := createMockExecutorForMissingSession()
 
-		session := newTmuxSession("relative-test", "pwd", ptyFactory, cmdExec)
+		session := newTmuxSession("relative-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		relativeDir := "./some/relative/path"
 

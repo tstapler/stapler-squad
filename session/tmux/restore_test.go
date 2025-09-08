@@ -33,7 +33,7 @@ func TestRestoreWithExistingSession(t *testing.T) {
 		},
 	}
 
-	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec, TmuxPrefix)
 
 	err := session.Restore()
 	require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestRestoreWithWorkDirParameter(t *testing.T) {
 		},
 	}
 
-	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test the NEW RestoreWithWorkDir method with explicit worktree path
 	err = session.RestoreWithWorkDir(worktreePath)
@@ -139,7 +139,7 @@ func TestRestoreFallbackToWorkingDirectory(t *testing.T) {
 		},
 	}
 
-	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec)
+	session := newTmuxSession("test-session", "claude", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test the original Restore() method - should use current working directory
 	err = session.Restore()
