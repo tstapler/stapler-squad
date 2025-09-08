@@ -32,6 +32,18 @@ go test -cover ./...
 
 # Run specific test
 go test ./ui -run TestSpecificFunction
+
+# Run benchmarks (performance tests)
+go test -bench=. -benchmem ./app
+
+# Run specific benchmarks
+go test -bench=BenchmarkNavigation -benchmem ./app
+go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app
+go test -bench=BenchmarkListRendering -benchmem ./app
+
+# Profile benchmarks for detailed performance analysis
+go test -bench=BenchmarkNavigation -benchmem -cpuprofile=cpu.prof ./app
+go tool pprof cpu.prof
 ```
 
 ### Code Quality
@@ -158,3 +170,41 @@ Sessions run in isolated tmux sessions for:
 **Error Handling**: Use `handleError()` method in app for consistent error display.
 
 **State Validation**: Always validate selection indices after filter changes to prevent out-of-bounds access.
+
+## Performance Optimization
+
+### Navigation Performance
+The application implements several performance optimizations for smooth navigation:
+
+**Debounced Updates**: Navigation operations use a 150ms debounce delay to batch rapid key presses and avoid expensive operations during fast scrolling.
+
+**Smart Category Organization**: Category grouping only triggers when sessions are added/removed or filters change, not on every navigation.
+
+**Repository Name Caching**: Git repository names are cached in the UI renderer to avoid repeated expensive git operations.
+
+**Tab-Aware Updates**: Preview and diff panes skip expensive updates when not visible.
+
+### Performance Benchmarks
+Run benchmarks to measure navigation performance:
+
+```bash
+# Benchmark navigation with multiple sessions
+go test -bench=BenchmarkNavigationPerformance -benchmem ./app
+
+# Benchmark individual components
+go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app
+
+# Benchmark list rendering
+go test -bench=BenchmarkListRendering -benchmem ./app
+```
+
+### Tmux Session Isolation
+Configure tmux session prefixes for process isolation:
+
+```json
+{
+  "tmux_session_prefix": "myapp_"
+}
+```
+
+This allows multiple claude-squad processes to run simultaneously without session conflicts.

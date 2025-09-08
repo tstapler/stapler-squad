@@ -65,7 +65,18 @@ Logs are stored in `~/.claude-squad/logs/` by default and include log rotation f
   "log_max_files": 5,  // Max number of rotated files to keep
   "log_max_age": 30,  // Max age in days for rotated files
   "log_compress": true,  // Whether to compress rotated files
-  "use_session_logs": true  // Whether to create separate log files for each session
+  "use_session_logs": true,  // Whether to create separate log files for each session
+  "tmux_session_prefix": "claudesquad_"  // Custom prefix for tmux session isolation
+}
+```
+
+#### Performance Configuration
+
+For process isolation when running multiple claude-squad instances, configure a unique tmux session prefix:
+
+```json
+{
+  "tmux_session_prefix": "myproject_"
 }
 ```
 
@@ -129,6 +140,45 @@ The menu at the bottom of the screen shows available commands:
 - `tab` - Switch between preview tab and diff tab
 - `q` - Quit the application
 - `shift-↓/↑` - scroll in diff view
+
+### Development
+
+#### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/smtg-ai/claude-squad.git
+cd claude-squad
+
+# Build the application
+go build .
+
+# Run tests
+go test ./...
+
+# Run benchmarks (performance tests)
+go test -bench=. -benchmem ./app
+```
+
+#### Testing
+
+```bash
+# Run all tests
+go test ./...
+
+# Run tests with coverage
+go test -cover ./...
+
+# Run specific package tests
+go test ./ui
+go test ./app
+go test ./session
+
+# Run performance benchmarks
+go test -bench=BenchmarkNavigation -benchmem ./app
+go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app
+go test -bench=BenchmarkListRendering -benchmem ./app
+```
 
 ### FAQs
 
