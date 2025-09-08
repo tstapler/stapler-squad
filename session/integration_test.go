@@ -63,13 +63,13 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 	// Capture initial session content to verify it starts in worktree
 	initialContent, err := instance.Preview()
 	require.NoError(t, err)
-	require.Contains(t, initialContent, expectedWorktreePath, 
+	require.Contains(t, initialContent, expectedWorktreePath,
 		"Session should initially start in worktree directory")
 
 	// Kill the tmux session to simulate the bug scenario by using tmux kill-session
 	// We'll create a new tmux session to test with
 	testSessionName := "claudesquad_" + instance.Title
-	
+
 	// Force kill the tmux session
 	killCmd := exec.Command("tmux", "kill-session", "-t", testSessionName)
 	_ = killCmd.Run() // Ignore error if session doesn't exist
@@ -79,7 +79,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 	instance.SetTmuxSession(tmuxSession)
 
 	// Verify session doesn't exist initially (killed scenario)
-	require.False(t, tmuxSession.DoesSessionExist(), 
+	require.False(t, tmuxSession.DoesSessionExist(),
 		"Tmux session should not exist after kill")
 
 	// Now restore the session - this is where the bug would manifest
@@ -115,7 +115,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 	require.NoError(t, err)
 
 	instance2, err := NewInstance(InstanceOptions{
-		Title:   "test-session-2", 
+		Title:   "test-session-2",
 		Path:    tempRepo,
 		Program: "pwd",
 	})
@@ -124,7 +124,7 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 	// Start both instances
 	err = instance1.Start(true)
 	require.NoError(t, err)
-	
+
 	err = instance2.Start(true)
 	require.NoError(t, err)
 
@@ -140,13 +140,13 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 	// Kill both sessions
 	sessionName1 := "claudesquad_" + instance1.Title
 	sessionName2 := "claudesquad_" + instance2.Title
-	
+
 	killCmd1 := exec.Command("tmux", "kill-session", "-t", sessionName1)
 	_ = killCmd1.Run()
-	
+
 	killCmd2 := exec.Command("tmux", "kill-session", "-t", sessionName2)
 	_ = killCmd2.Run()
-	
+
 	// Create new tmux sessions to test restoration
 	tmux1 := tmux.NewTmuxSession(instance1.Title, "pwd")
 	tmux2 := tmux.NewTmuxSession(instance2.Title, "pwd")
@@ -156,9 +156,9 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 	// Restore session 1
 	err = tmux1.RestoreWithWorkDir(path1)
 	require.NoError(t, err)
-	
+
 	time.Sleep(200 * time.Millisecond)
-	
+
 	// Verify session 1 restored in correct path
 	content1, err := tmux1.CapturePaneContent()
 	require.NoError(t, err)
@@ -167,9 +167,9 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 	// Restore session 2
 	err = tmux2.RestoreWithWorkDir(path2)
 	require.NoError(t, err)
-	
+
 	time.Sleep(200 * time.Millisecond)
-	
+
 	// Verify session 2 restored in correct path
 	content2, err := tmux2.CapturePaneContent()
 	require.NoError(t, err)
@@ -198,7 +198,7 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 	// Get worktree and create some changes
 	gitWorktree, _ := instance.GetGitWorktree()
 	worktreePath := gitWorktree.GetWorktreePath()
-	
+
 	// Create a file with changes
 	testFile := filepath.Join(worktreePath, "test-change.txt")
 	err = os.WriteFile(testFile, []byte("test changes"), 0644)
@@ -215,13 +215,13 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 
 	err = tmuxSession.RestoreWithWorkDir(worktreePath)
 	require.NoError(t, err)
-	
+
 	time.Sleep(200 * time.Millisecond)
 
 	// Verify session restored in worktree with changes
 	content, err := tmuxSession.CapturePaneContent()
 	require.NoError(t, err)
-	require.Contains(t, content, worktreePath, 
+	require.Contains(t, content, worktreePath,
 		"Session should restore in worktree even with uncommitted changes")
 
 	// Verify the test file exists in the correct location
@@ -242,7 +242,7 @@ func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
 
 	// Test fallback behavior - should use current directory
 	originalDir, _ := os.Getwd()
-	
+
 	// Change to temp directory
 	err := os.Chdir(tempRepo)
 	require.NoError(t, err)
@@ -251,12 +251,12 @@ func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
 	// Use RestoreWithWorkDir with empty path (should fallback to current dir)
 	err = session.RestoreWithWorkDir("")
 	require.NoError(t, err)
-	
+
 	time.Sleep(200 * time.Millisecond)
 
 	content, err := session.CapturePaneContent()
 	require.NoError(t, err)
-	require.Contains(t, content, tempRepo, 
+	require.Contains(t, content, tempRepo,
 		"Empty worktree path should fallback to current directory")
 
 	// Clean up
@@ -266,7 +266,7 @@ func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
 // setupTestRepository creates a temporary git repository for testing
 func setupTestRepository(t *testing.T) string {
 	tempDir := t.TempDir()
-	
+
 	// Initialize git repo
 	cmd := exec.Command("git", "init")
 	cmd.Dir = tempDir
@@ -277,7 +277,7 @@ func setupTestRepository(t *testing.T) string {
 	configCmd := exec.Command("git", "config", "user.email", "test@example.com")
 	configCmd.Dir = tempDir
 	_ = configCmd.Run()
-	
+
 	configCmd2 := exec.Command("git", "config", "user.name", "Test User")
 	configCmd2.Dir = tempDir
 	_ = configCmd2.Run()
@@ -306,10 +306,10 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 	defer os.RemoveAll(tempRepo)
 
 	b.ResetTimer()
-	
+
 	for i := 0; i < b.N; i++ {
 		sessionTitle := fmt.Sprintf("bench-session-%d", i)
-		
+
 		instance, err := NewInstance(InstanceOptions{
 			Title:   sessionTitle,
 			Path:    tempRepo,
@@ -327,7 +327,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 		// Simulate kill and restore
 		gitWorktree, _ := instance.GetGitWorktree()
 		worktreePath := gitWorktree.GetWorktreePath()
-		
+
 		sessionName := "claudesquad_" + sessionTitle
 		killCmd := exec.Command("tmux", "kill-session", "-t", sessionName)
 		_ = killCmd.Run()
@@ -347,7 +347,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 
 func setupTestRepositoryBench(b *testing.B) string {
 	tempDir := b.TempDir()
-	
+
 	cmd := exec.Command("git", "init")
 	cmd.Dir = tempDir
 	_ = cmd.Run()
@@ -355,7 +355,7 @@ func setupTestRepositoryBench(b *testing.B) string {
 	configCmd := exec.Command("git", "config", "user.email", "test@example.com")
 	configCmd.Dir = tempDir
 	_ = configCmd.Run()
-	
+
 	configCmd2 := exec.Command("git", "config", "user.name", "Test User")
 	configCmd2.Dir = tempDir
 	_ = configCmd2.Run()

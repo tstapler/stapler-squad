@@ -30,26 +30,26 @@ func TestRepoVsWorktreeDirectoryHandling(t *testing.T) {
 // (regular repository sessions) restore in the correct repository directory
 func testRegularRepoSessionRestoration(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// Simulate a regular repository directory structure
 	repoDir := filepath.Join(tempDir, "my-main-project")
 	err := os.MkdirAll(repoDir, 0755)
 	require.NoError(t, err)
-	
+
 	// Create some typical repo files
 	readmeFile := filepath.Join(repoDir, "README.md")
 	err = os.WriteFile(readmeFile, []byte("# Main Project"), 0644)
 	require.NoError(t, err)
-	
+
 	ptyFactory := NewMockPtyFactory(t)
 	cmdExec := createMockExecutorForMissingSession()
-	
+
 	// Create session for main repo (not a worktree)
 	session := newTmuxSession("main-project-session", "pwd", ptyFactory, cmdExec)
-	
+
 	// Test: When restoring a regular repo session, it should start in the repo directory
 	_ = session.RestoreWithWorkDir(repoDir)
-	
+
 	// Verify the session would be created with the correct working directory
 	var newSessionCmd string
 	for _, cmd := range ptyFactory.cmds {
@@ -59,28 +59,28 @@ func testRegularRepoSessionRestoration(t *testing.T) {
 			break
 		}
 	}
-	
+
 	require.NotEmpty(t, newSessionCmd, "Should have attempted to create a new session")
-	require.Contains(t, newSessionCmd, repoDir, 
+	require.Contains(t, newSessionCmd, repoDir,
 		"Regular repo session should start in repo directory: %s", repoDir)
-	
+
 	// Verify it contains the expected tmux command structure
 	expectedParts := []string{
 		"tmux",
-		"new-session", 
-		"-d", 
-		"-s", 
+		"new-session",
+		"-d",
+		"-s",
 		"claudesquad_main-project-session",
-		"-c", 
+		"-c",
 		repoDir,
 		"pwd",
 	}
-	
+
 	for _, part := range expectedParts {
-		require.Contains(t, newSessionCmd, part, 
+		require.Contains(t, newSessionCmd, part,
 			"Command should contain: %s", part)
 	}
-	
+
 	t.Logf("✓ Regular repo session command: %s", newSessionCmd)
 }
 
@@ -88,34 +88,34 @@ func testRegularRepoSessionRestoration(t *testing.T) {
 // restore in the correct worktree directory (not main repo)
 func testWorktreeSessionRestorationDetailed(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// Simulate main repo and worktree directory structure
 	mainRepoDir := filepath.Join(tempDir, "main-repo")
 	worktreeDir := filepath.Join(tempDir, "feature-branch-worktree")
-	
+
 	err := os.MkdirAll(mainRepoDir, 0755)
 	require.NoError(t, err)
 	err = os.MkdirAll(worktreeDir, 0755)
 	require.NoError(t, err)
-	
+
 	// Create files to distinguish the directories
 	mainReadme := filepath.Join(mainRepoDir, "README.md")
 	err = os.WriteFile(mainReadme, []byte("# Main Repo"), 0644)
 	require.NoError(t, err)
-	
+
 	featureFile := filepath.Join(worktreeDir, "feature.go")
 	err = os.WriteFile(featureFile, []byte("// Feature implementation"), 0644)
 	require.NoError(t, err)
-	
+
 	ptyFactory := NewMockPtyFactory(t)
 	cmdExec := createMockExecutorForMissingSession()
-	
+
 	// Create session for worktree (feature branch)
 	session := newTmuxSession("feature-branch-session", "pwd", ptyFactory, cmdExec)
-	
+
 	// Test: When restoring a worktree session, it should start in the worktree directory
 	_ = session.RestoreWithWorkDir(worktreeDir)
-	
+
 	// Verify the session would be created with the correct working directory
 	var newSessionCmd string
 	for _, cmd := range ptyFactory.cmds {
@@ -125,61 +125,61 @@ func testWorktreeSessionRestorationDetailed(t *testing.T) {
 			break
 		}
 	}
-	
+
 	require.NotEmpty(t, newSessionCmd, "Should have attempted to create a new session")
-	require.Contains(t, newSessionCmd, worktreeDir, 
+	require.Contains(t, newSessionCmd, worktreeDir,
 		"Worktree session should start in worktree directory: %s", worktreeDir)
 	require.NotContains(t, newSessionCmd, mainRepoDir,
 		"Worktree session should NOT start in main repo directory: %s", mainRepoDir)
-	
+
 	t.Logf("✓ Worktree session command: %s", newSessionCmd)
 }
 
-// testMixedScenarioValidation tests both scenarios in the same test to ensure 
+// testMixedScenarioValidation tests both scenarios in the same test to ensure
 // they work correctly and independently
 func testMixedScenarioValidation(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	// Set up directories
 	mainRepoDir := filepath.Join(tempDir, "project-main")
 	worktreeDir := filepath.Join(tempDir, "project-feature-x")
-	
+
 	err := os.MkdirAll(mainRepoDir, 0755)
 	require.NoError(t, err)
 	err = os.MkdirAll(worktreeDir, 0755)
 	require.NoError(t, err)
-	
+
 	// Test both scenarios
 	scenarios := []struct {
-		name        string
-		sessionName string
-		targetDir   string
+		name             string
+		sessionName      string
+		targetDir        string
 		shouldNotContain string
 	}{
 		{
-			name:        "MainRepoSession",
-			sessionName: "main-development",
-			targetDir:   mainRepoDir,
+			name:             "MainRepoSession",
+			sessionName:      "main-development",
+			targetDir:        mainRepoDir,
 			shouldNotContain: worktreeDir,
 		},
 		{
-			name:        "FeatureWorktreeSession", 
-			sessionName: "feature-x-development",
-			targetDir:   worktreeDir,
+			name:             "FeatureWorktreeSession",
+			sessionName:      "feature-x-development",
+			targetDir:        worktreeDir,
 			shouldNotContain: mainRepoDir,
 		},
 	}
-	
+
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			ptyFactory := NewMockPtyFactory(t)
 			cmdExec := createMockExecutorForMissingSession()
-			
+
 			session := newTmuxSession(scenario.sessionName, "pwd", ptyFactory, cmdExec)
-			
+
 			// Restore in the target directory
 			_ = session.RestoreWithWorkDir(scenario.targetDir)
-			
+
 			// Find and verify the command
 			var newSessionCmd string
 			for _, cmd := range ptyFactory.cmds {
@@ -189,13 +189,13 @@ func testMixedScenarioValidation(t *testing.T) {
 					break
 				}
 			}
-			
+
 			require.NotEmpty(t, newSessionCmd, "Should create new session command")
-			require.Contains(t, newSessionCmd, scenario.targetDir, 
+			require.Contains(t, newSessionCmd, scenario.targetDir,
 				"Session should use target directory: %s", scenario.targetDir)
 			require.NotContains(t, newSessionCmd, scenario.shouldNotContain,
 				"Session should NOT use incorrect directory: %s", scenario.shouldNotContain)
-			
+
 			t.Logf("✓ %s: %s", scenario.name, newSessionCmd)
 		})
 	}
@@ -205,13 +205,13 @@ func testMixedScenarioValidation(t *testing.T) {
 // different types of session restoration scenarios
 func TestSessionTypeClassification(t *testing.T) {
 	tempDir := t.TempDir()
-	
+
 	scenarios := []struct {
-		name         string
-		description  string
-		sessionName  string
-		targetDir    string
-		dirSetup     func() string
+		name        string
+		description string
+		sessionName string
+		targetDir   string
+		dirSetup    func() string
 	}{
 		{
 			name:        "MainRepository",
@@ -228,7 +228,7 @@ func TestSessionTypeClassification(t *testing.T) {
 		{
 			name:        "FeatureWorktree",
 			description: "Session for feature branch worktree",
-			sessionName: "feature-auth-system", 
+			sessionName: "feature-auth-system",
 			dirSetup: func() string {
 				dir := filepath.Join(tempDir, "auth-feature-worktree")
 				os.MkdirAll(dir, 0755)
@@ -249,19 +249,19 @@ func TestSessionTypeClassification(t *testing.T) {
 			},
 		},
 	}
-	
+
 	for _, scenario := range scenarios {
 		t.Run(scenario.name, func(t *testing.T) {
 			targetDir := scenario.dirSetup()
-			
+
 			ptyFactory := NewMockPtyFactory(t)
 			cmdExec := createMockExecutorForMissingSession()
-			
+
 			session := newTmuxSession(scenario.sessionName, "pwd", ptyFactory, cmdExec)
-			
+
 			// Test restoration
 			_ = session.RestoreWithWorkDir(targetDir)
-			
+
 			// Verify correct directory usage
 			var newSessionCmd string
 			for _, cmd := range ptyFactory.cmds {
@@ -271,11 +271,11 @@ func TestSessionTypeClassification(t *testing.T) {
 					break
 				}
 			}
-			
+
 			require.NotEmpty(t, newSessionCmd, "Should create session command")
 			require.Contains(t, newSessionCmd, targetDir,
 				"%s should use correct directory: %s", scenario.description, targetDir)
-			
+
 			t.Logf("✓ %s (%s): %s", scenario.name, scenario.description, newSessionCmd)
 		})
 	}
@@ -288,12 +288,12 @@ func TestDirectoryPathEdgeCases(t *testing.T) {
 		absoluteDir := filepath.Join(tempDir, "absolute-path-test")
 		err := os.MkdirAll(absoluteDir, 0755)
 		require.NoError(t, err)
-		
+
 		// Test absolute path
 		ptyFactory1 := NewMockPtyFactory(t)
 		session1 := newTmuxSession("absolute-test", "pwd", ptyFactory1, createMockExecutorForMissingSession())
 		_ = session1.RestoreWithWorkDir(absoluteDir)
-		
+
 		// Find command
 		var cmd1 string
 		for _, cmd := range ptyFactory1.cmds {
@@ -303,22 +303,22 @@ func TestDirectoryPathEdgeCases(t *testing.T) {
 				break
 			}
 		}
-		
+
 		require.Contains(t, cmd1, absoluteDir, "Should handle absolute paths")
 		t.Logf("Absolute path: %s", cmd1)
-		
+
 		// Test relative path
 		originalDir, _ := os.Getwd()
 		defer os.Chdir(originalDir)
 		os.Chdir(tempDir)
-		
-		relativeDir := "./relative-test" 
+
+		relativeDir := "./relative-test"
 		os.MkdirAll(relativeDir, 0755)
-		
+
 		ptyFactory2 := NewMockPtyFactory(t)
 		session2 := newTmuxSession("relative-test", "pwd", ptyFactory2, createMockExecutorForMissingSession())
 		_ = session2.RestoreWithWorkDir(relativeDir)
-		
+
 		var cmd2 string
 		for _, cmd := range ptyFactory2.cmds {
 			cmdStr := executor.ToString(cmd)
@@ -327,21 +327,21 @@ func TestDirectoryPathEdgeCases(t *testing.T) {
 				break
 			}
 		}
-		
+
 		require.Contains(t, cmd2, relativeDir, "Should handle relative paths")
 		t.Logf("Relative path: %s", cmd2)
 	})
-	
+
 	t.Run("PathsWithSpaces", func(t *testing.T) {
 		tempDir := t.TempDir()
 		spaceDir := filepath.Join(tempDir, "directory with spaces")
 		err := os.MkdirAll(spaceDir, 0755)
 		require.NoError(t, err)
-		
+
 		ptyFactory := NewMockPtyFactory(t)
 		session := newTmuxSession("space-test", "pwd", ptyFactory, createMockExecutorForMissingSession())
 		_ = session.RestoreWithWorkDir(spaceDir)
-		
+
 		var newSessionCmd string
 		for _, cmd := range ptyFactory.cmds {
 			cmdStr := executor.ToString(cmd)
@@ -350,7 +350,7 @@ func TestDirectoryPathEdgeCases(t *testing.T) {
 				break
 			}
 		}
-		
+
 		require.Contains(t, newSessionCmd, spaceDir, "Should handle paths with spaces")
 		t.Logf("Path with spaces: %s", newSessionCmd)
 	})
