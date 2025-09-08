@@ -82,6 +82,10 @@ type home struct {
 	// asyncSessionCreation is used for tracking async session creation
 	asyncSessionCreationActive bool
 
+	// Performance optimization: debounce selection updates
+	selectionUpdateTimer *time.Timer
+	selectionUpdateDelay time.Duration
+
 	// -- UI Components --
 
 	// list displays the list of instances
@@ -121,17 +125,18 @@ func newHome(ctx context.Context, program string, autoYes bool) *home {
 	}
 
 	h := &home{
-		ctx:          ctx,
-		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		menu:         ui.NewMenu(),
-		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane()),
-		errBox:       ui.NewErrBox(),
-		storage:      storage,
-		appConfig:    appConfig,
-		program:      program,
-		autoYes:      autoYes,
-		state:        stateDefault,
-		appState:     appState,
+		ctx:                  ctx,
+		spinner:              spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		menu:                 ui.NewMenu(),
+		tabbedWindow:         ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane()),
+		errBox:               ui.NewErrBox(),
+		storage:              storage,
+		appConfig:            appConfig,
+		program:              program,
+		autoYes:              autoYes,
+		state:                stateDefault,
+		appState:             appState,
+		selectionUpdateDelay: 150 * time.Millisecond, // Debounce navigation updates
 	}
 	h.list = ui.NewList(&h.spinner, autoYes, appState)
 
@@ -397,6 +402,9 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
+	case instanceExpensiveUpdateMsg:
+		// Handle debounced expensive updates
+		return m, m.instanceExpensiveUpdate()
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
@@ -868,18 +876,55 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 // instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. It returns an error
 // Cmd if there was any error.
 func (m *home) instanceChanged() tea.Cmd {
-	// selected may be nil
+	// Debounce expensive operations during rapid navigation
+	return m.debouncedInstanceChanged()
+}
+
+// debouncedInstanceChanged debounces expensive operations to improve navigation performance
+func (m *home) debouncedInstanceChanged() tea.Cmd {
+	// Cancel any existing timer
+	if m.selectionUpdateTimer != nil {
+		m.selectionUpdateTimer.Stop()
+	}
+
+	// Start a new timer
+	m.selectionUpdateTimer = time.AfterFunc(m.selectionUpdateDelay, func() {
+		// This runs in a goroutine, so we need to send a message back to the main loop
+		// We can't directly update UI components from here
+	})
+
+	// Immediately update lightweight operations
+	return m.fastInstanceChanged()
+}
+
+// fastInstanceChanged performs only lightweight operations that can run on every navigation
+func (m *home) fastInstanceChanged() tea.Cmd {
 	selected := m.list.GetSelectedInstance()
 
-	// Ensure categories are organized
-	m.list.OrganizeByCategory()
-
-	m.tabbedWindow.UpdateDiff(selected)
-	m.tabbedWindow.SetInstance(selected)
-	// Update menu with current instance
+	// Only update menu (lightweight operation)
 	m.menu.SetInstance(selected)
 
-	// If there's no selected instance, we don't need to update the preview.
+	// Set instance reference (no expensive operations)
+	m.tabbedWindow.SetInstance(selected)
+
+	// Schedule expensive operations to run after debounce delay
+	return func() tea.Msg {
+		time.Sleep(m.selectionUpdateDelay)
+		return instanceExpensiveUpdateMsg{}
+	}
+}
+
+// instanceExpensiveUpdate performs the expensive operations after debounce delay
+func (m *home) instanceExpensiveUpdate() tea.Cmd {
+	selected := m.list.GetSelectedInstance()
+
+	// Ensure categories are organized (can be expensive with many sessions)
+	m.list.OrganizeByCategory()
+
+	// Update diff (expensive: git operations)
+	m.tabbedWindow.UpdateDiff(selected)
+
+	// Update preview (expensive: tmux capture-pane)
 	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
 		return m.handleError(err)
 	}
@@ -912,6 +957,8 @@ type tickUpdateMetadataMessage struct{}
 type tickSessionDetectionMessage struct{}
 
 type instanceChangedMsg struct{}
+
+type instanceExpensiveUpdateMsg struct{}
 
 // sessionCreationResultMsg is sent when async session creation completes
 type sessionCreationResultMsg struct {

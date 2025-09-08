@@ -110,9 +110,16 @@ func (w *TabbedWindow) ToggleWithReset(instance *session.Instance) error {
 
 // UpdatePreview updates the content of the preview pane. instance may be nil.
 func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
+	// Skip expensive preview updates if not on preview tab
 	if w.activeTab != PreviewTab {
 		return nil
 	}
+
+	// Skip if instance is paused to avoid expensive tmux operations
+	if instance != nil && instance.Status == session.Paused {
+		return nil
+	}
+
 	return w.preview.UpdateContent(instance)
 }
 

@@ -17,8 +17,9 @@ func TestInstanceRendererWithDifferentStatuses(t *testing.T) {
 
 	// Create renderer
 	renderer := &InstanceRenderer{
-		spinner: &s,
-		width:   100,
+		spinner:       &s,
+		width:         100,
+		repoNameCache: make(map[string]string),
 	}
 
 	// Setup a mock instance with minimal required fields

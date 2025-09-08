@@ -82,20 +82,24 @@ type List struct {
 
 	// Scrolling support
 	scrollOffset int // Index of the first visible item
+
+	// Performance optimization: track if categories need reorganization
+	categoriesNeedUpdate bool
 }
 
 func NewList(spinner *spinner.Model, autoYes bool, stateManager *config.State) *List {
 	l := &List{
-		items:          []*session.Instance{},
-		renderer:       &InstanceRenderer{spinner: spinner},
-		repos:          make(map[string]int),
-		autoyes:        autoYes,
-		categoryGroups: make(map[string][]*session.Instance),
-		groupExpanded:  make(map[string]bool),
-		searchMode:     false,
-		searchResults:  []*session.Instance{},
-		hidePaused:     false,
-		stateManager:   stateManager,
+		items:                []*session.Instance{},
+		renderer:             &InstanceRenderer{spinner: spinner, repoNameCache: make(map[string]string)},
+		repos:                make(map[string]int),
+		autoyes:              autoYes,
+		categoryGroups:       make(map[string][]*session.Instance),
+		groupExpanded:        make(map[string]bool),
+		searchMode:           false,
+		searchResults:        []*session.Instance{},
+		hidePaused:           false,
+		stateManager:         stateManager,
+		categoriesNeedUpdate: true, // Initialize as needing update
 	}
 
 	// Load persisted UI state if available
@@ -135,6 +139,8 @@ func (l *List) NumInstances() int {
 type InstanceRenderer struct {
 	spinner *spinner.Model
 	width   int
+	// Performance optimization: cache repository names to avoid repeated git operations
+	repoNameCache map[string]string // Map of instance title to repo name
 }
 
 func (r *InstanceRenderer) setWidth(width int) {
@@ -219,11 +225,34 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 	if i.Started() {
 		// Skip repo name retrieval for paused instances
 		if !i.Paused() {
-			repoName, err := i.RepoName()
-			if err != nil {
-				// Log at warning level but don't break rendering
-				log.WarningLog.Printf("could not get repo name in instance renderer: %v", err)
+			// Check cache first to avoid expensive git operations
+			var repoName string
+			if r.repoNameCache != nil {
+				if cachedName, exists := r.repoNameCache[i.Title]; exists {
+					repoName = cachedName
+				} else {
+					// Only call expensive git operation if not cached
+					name, err := i.RepoName()
+					if err != nil {
+						// Log at warning level but don't break rendering
+						log.WarningLog.Printf("could not get repo name in instance renderer: %v", err)
+					} else {
+						repoName = name
+						// Cache the result for future renders
+						r.repoNameCache[i.Title] = repoName
+					}
+				}
 			} else {
+				// Fallback to direct call if cache not initialized
+				name, err := i.RepoName()
+				if err != nil {
+					log.WarningLog.Printf("could not get repo name in instance renderer: %v", err)
+				} else {
+					repoName = name
+				}
+			}
+
+			if repoName != "" {
 				branch += fmt.Sprintf(" (%s)", repoName)
 			}
 		}
@@ -404,6 +433,9 @@ func (l *List) Kill() {
 
 	// Since there's items after this, the selectedIdx can stay the same.
 	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
+
+	// Mark categories as needing update after item removal
+	l.categoriesNeedUpdate = true
 }
 
 func (l *List) Attach() (chan struct{}, error) {
@@ -483,6 +515,9 @@ func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
 	// Add instance to its category group
 	l.categoryGroups[category] = append(l.categoryGroups[category], instance)
 
+	// Mark categories as needing update
+	l.categoriesNeedUpdate = true
+
 	// The finalizer registers the repo name once the instance is started.
 	return func() {
 		// Skip repo registration for paused instances or not started instances
@@ -560,6 +595,11 @@ func (l *List) GetInstances() []*session.Instance {
 
 // OrganizeByCategory organizes sessions into category groups
 func (l *List) OrganizeByCategory() {
+	// Only reorganize if needed (performance optimization)
+	if !l.categoriesNeedUpdate {
+		return
+	}
+
 	// Reset category groups
 	l.categoryGroups = make(map[string][]*session.Instance)
 
@@ -589,11 +629,16 @@ func (l *List) OrganizeByCategory() {
 		// Add instance to its category group
 		l.categoryGroups[category] = append(l.categoryGroups[category], instance)
 	}
+
+	// Mark categories as updated
+	l.categoriesNeedUpdate = false
 }
 
 // TogglePausedFilter toggles whether paused sessions are hidden
 func (l *List) TogglePausedFilter() {
 	l.hidePaused = !l.hidePaused
+	// Mark categories as needing update when filter changes
+	l.categoriesNeedUpdate = true
 	// Re-organize to apply the filter
 	l.OrganizeByCategory()
 
