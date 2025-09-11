@@ -391,9 +391,16 @@ func (t *TmuxSession) DetachSafely() error {
 		t.ptmx = nil
 	}
 
-	// Clean up attach state
+	// Clean up attach state safely
 	if t.attachCh != nil {
-		close(t.attachCh)
+		// Use a select with default to avoid blocking on an already-closed channel
+		select {
+		case <-t.attachCh:
+			// Channel is already closed, nothing to do
+		default:
+			// Channel is open, safe to close
+			close(t.attachCh)
+		}
 		t.attachCh = nil
 	}
 
@@ -421,13 +428,27 @@ func (t *TmuxSession) Detach() {
 	// TODO: control flow is a bit messy here. If there's an error,
 	// I'm not sure if we get into a bad state. Needs testing.
 	defer func() {
+		// Safely close attachCh only if it exists and isn't already closed
 		if t.attachCh != nil {
-			close(t.attachCh)
+			// Use a select with default to avoid blocking on an already-closed channel
+			select {
+			case <-t.attachCh:
+				// Channel is already closed, nothing to do
+			default:
+				// Channel is open, safe to close
+				close(t.attachCh)
+			}
 			t.attachCh = nil
 		}
-		t.cancel = nil
+		if t.cancel != nil {
+			t.cancel()
+			t.cancel = nil
+		}
+		if t.wg != nil {
+			t.wg.Wait()
+			t.wg = nil
+		}
 		t.ctx = nil
-		t.wg = nil
 	}()
 
 	// Close the attached pty session.

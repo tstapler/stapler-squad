@@ -88,6 +88,7 @@ type home struct {
 	
 	// Responsive navigation for instant feedback
 	lastSelectedInstance *session.Instance
+	responsiveNav        *ResponsiveNavigationManager
 
 	// -- UI Components --
 
