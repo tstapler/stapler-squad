@@ -1,85 +1,71 @@
-# Testing Plan for Status Indicators Feature
+# Claude Squad - Current Priority Tasks
 
-This document outlines a comprehensive testing strategy for the new status indicators feature, focusing on the "NeedsApproval" state addition and UI changes.
+## EMERGENCY: Critical Build Failures 🚨
 
-## 1. Unit Tests
+**Status**: BLOCKING - Project cannot compile
+**Priority**: P0 - Must fix immediately before any other work
 
-### Status Enum Tests
-- [ ] Test that the new `NeedsApproval` status value is correctly defined in the Status enum
-- [ ] Test string representation and marshaling of the new status value (if applicable)
+### Immediate Actions Required:
+- [ ] **CRITICAL**: Fix missing `pendingInstanceOptions` field compilation error
+- [ ] **URGENT**: Verify all import dependencies resolve correctly
+- [ ] **VALIDATION**: Ensure clean build with `go build .`
 
-### UI Rendering Tests
-- [ ] Test `InstanceRenderer.Render` function with instance status set to `NeedsApproval`
-- [ ] Verify that the correct icon and style are applied when status is `NeedsApproval`
-- [ ] Test that the `needsApprovalStyle` renders with the correct color
+**See**: [Critical Build Failures Task](docs/tasks/critical-build-failures.md)
 
-### Status Determination Logic Tests
-- [ ] Test status determination in app.go when a prompt is detected with AutoYes disabled
-- [ ] Test status determination in app.go when a prompt is detected with AutoYes enabled
-- [ ] Test that `TapEnter` is called only when AutoYes is enabled
+---
 
-## 2. Integration Tests
+## Next Priority: Test Stabilization
 
-### Status Transition Tests
-- [ ] Test that status correctly transitions from `Running` to `NeedsApproval` when a prompt is detected and AutoYes is disabled
-- [ ] Test that status correctly transitions from `NeedsApproval` to `Running` when the user attaches and responds to a prompt
-- [ ] Test that status transitions directly from `Running` to `Ready` when a process completes without requiring approval
+**Status**: Ready after build fixes complete
+**Priority**: P1 - Required for production deployment
 
-### UI Rendering Integration Tests
-- [ ] Test that the UI correctly renders all status types in the instance list
-- [ ] Verify that status indicators are properly updated when status changes
+### Test Infrastructure Tasks:
+- [ ] Fix UI search index nil pointer issues (`TestFuzzySearchIntegration`)
+- [ ] Resolve layout calculation mismatches (`TestLayoutDebug`)
+- [ ] Stabilize session package test timeouts
+- [ ] Integrate teatest framework for TUI testing
 
-## 3. End-to-End Tests
+**See**: [Test Stabilization Epic](docs/tasks/test-stabilization-and-teatest-integration.md)
 
-### User Interaction Tests
-- [ ] Test end-to-end scenario: Claude asks for approval, status changes to `NeedsApproval`, user attaches and responds
-- [ ] Test end-to-end scenario with multiple instances with different statuses
-- [ ] Test that clicking on an instance with `NeedsApproval` status properly attaches to the session
+---
 
-### Visual Verification
-- [ ] Manually verify that the `NeedsApproval` icon is visually distinct and attention-grabbing
-- [ ] Test with different terminal color schemes to ensure visibility
+## Documentation Maintenance
 
-## 4. Property-Based Tests
+### Completed and Updated:
+- [x] ✅ **Contextual Git Repository Discovery** - All implementation complete
+- [x] ✅ **Unit Testing & Validation** - Comprehensive test coverage
+- [x] ✅ **Path Validation & UX** - Enhanced error handling and shortcuts
+- [x] ✅ **Edge Case Handling** - Network paths, permissions, empty queries
 
-### Status Transition Properties
-- [ ] Property: An instance with a prompt and AutoYes disabled should always have `NeedsApproval` status
-- [ ] Property: An instance with a prompt and AutoYes enabled should never have `NeedsApproval` status
-- [ ] Property: Status transitions should be deterministic based on instance state
+### Architecture Implementation Status:
+- [x] ✅ **SessionSetupOverlay** - Contextual discovery fully implemented
+- [x] ✅ **FuzzyInputOverlay** - Raw path entry support added
+- [x] ✅ **Git Integration** - Repository, branch, worktree discovery working
+- [x] ✅ **Performance** - Benchmarked at 0.47ms per operation
 
-## 5. Mutation Testing
+---
 
-- [ ] Apply mutation testing to status determination logic to verify test robustness
-- [ ] Possible mutations:
-  - Change condition from `if instance.AutoYes` to `if !instance.AutoYes`
-  - Remove setting status to `NeedsApproval`
-  - Change status assignment to another status type
+## Future Priorities (After Emergency Resolution)
 
-## Test Implementation Approach
+### Medium Term (Next 3-5 Sessions):
+- [ ] **Session Health Check Integration** - Evaluate health check system
+- [ ] **Filtering System Enhancement** - Tag vs Category analysis
+- [ ] **Help System Consolidation** - Compare current vs unused help generator
 
-### For Unit Tests
-1. Add tests to `ui/list_test.go` for UI rendering with the new status
-2. Add tests to `session/instance_test.go` for the status enum
-3. Add tests to `app/app_test.go` for status determination logic
+### Long Term (Future Sessions):
+- [ ] **Dead Code Removal** - Clean up unused constructors and test mocks
+- [ ] **Performance Optimization** - Large directory tree handling improvements
+- [ ] **Advanced Features** - Network path support, fuzzy path matching
 
-### For Integration Tests
-1. Create new integration test cases in `session/integration_test.go` (if exists)
-2. Focus on status transitions based on prompt detection and AutoYes setting
+---
 
-### For End-to-End Tests
-1. Manual testing scenarios documented in a test plan
-2. Consider adding automated UI tests if the framework supports it
+## Context Notes
 
-## Test Prioritization
+**Last Updated**: 2025-01-17
+**Current Phase**: Emergency Build Stabilization
+**Next Milestone**: Restore compilation and test execution capability
 
-1. **High Priority**: Unit tests for status determination logic (ensures core functionality)
-2. **High Priority**: Integration tests for status transitions
-3. **Medium Priority**: UI rendering unit tests
-4. **Medium Priority**: End-to-end tests
-5. **Low Priority**: Property-based and mutation tests
-
-## Coverage Goals
-
-- Aim for 90%+ branch coverage of the status determination logic
-- Ensure all status transition paths are covered
-- Cover edge cases like rapid status transitions
+**Critical Dependencies**:
+- Build failures must be resolved before any other development work
+- Test stabilization required for production deployment confidence
+- All major feature work is complete and functional (when builds work)
