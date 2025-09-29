@@ -2,17 +2,22 @@ package main
 
 import (
 	"claude-squad/app"
+	cmdbridge "claude-squad/cmd"
 	"claude-squad/config"
 	"claude-squad/daemon"
 	"claude-squad/executor"
 	"claude-squad/log"
+	"claude-squad/server"
 	"claude-squad/session"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 
 	"github.com/spf13/cobra"
 )
@@ -22,6 +27,7 @@ var (
 	programFlag string
 	autoYesFlag bool
 	daemonFlag  bool
+	webFlag     bool
 	rootCmd     = &cobra.Command{
 		Use:   "claude-squad",
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
@@ -40,7 +46,10 @@ var (
 				UseSessionLogs: cfg.UseSessionLogs,
 			}
 			log.InitializeWithConfig(daemonFlag, logCfg)
-			defer log.Close()
+			defer func() {
+				log.LogSessionPathsToStderr()
+				log.Close()
+			}()
 
 			if daemonFlag {
 				err := daemon.RunDaemon(cfg)
@@ -48,15 +57,14 @@ var (
 				return err
 			}
 
-			// Check if we're in a git repository
-			currentDir, err := filepath.Abs(".")
-			if err != nil {
-				return fmt.Errorf("failed to get current directory: %w", err)
+			// Web server mode
+			if webFlag {
+				srv := server.NewServer(":8543")
+				log.InfoLog.Printf("Starting web server mode on :8543")
+				return srv.Start(ctx)
 			}
 
-			if !git.IsGitRepo(currentDir) {
-				return fmt.Errorf("error: claude-squad must be run from within a git repository")
-			}
+			// Note: No longer requiring git repository - contextual discovery allows running from anywhere
 
 			// Program flag overrides config
 			program := cfg.DefaultProgram
@@ -101,7 +109,10 @@ var (
 				UseSessionLogs: cfg.UseSessionLogs,
 			}
 			log.InitializeWithConfig(false, logCfg)
-			defer log.Close()
+			defer func() {
+				log.LogSessionPathsToStderr()
+				log.Close()
+			}()
 
 			state := config.LoadState()
 			storage, err := session.NewStorage(state)
@@ -137,10 +148,6 @@ var (
 		Use:   "debug",
 		Short: "Print debug information like config paths",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Initialize logging early to prevent nil pointer panic
-			log.Initialize(false)
-			defer log.Close()
-			
 			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
 			// Convert config to log config
@@ -154,7 +161,10 @@ var (
 				UseSessionLogs: cfg.UseSessionLogs,
 			}
 			log.InitializeWithConfig(false, logCfg)
-			defer log.Close()
+			defer func() {
+				log.LogSessionPathsToStderr()
+				log.Close()
+			}()
 
 			configDir, err := config.GetConfigDir()
 			if err != nil {
@@ -163,6 +173,68 @@ var (
 			configJson, _ := json.MarshalIndent(cfg, "", "  ")
 
 			fmt.Printf("Config: %s\n%s\n", filepath.Join(configDir, config.ConfigFileName), configJson)
+
+			// Check for key binding conflicts
+			fmt.Println("\n=== Key Binding Validation ===")
+			bridge := cmdbridge.GetGlobalBridge()
+			issues := bridge.ValidateSetup()
+
+			if len(issues) > 0 {
+				fmt.Printf("❌ Found %d validation issues:\n", len(issues))
+				for _, issue := range issues {
+					fmt.Printf("  - %s\n", issue)
+				}
+			} else {
+				fmt.Println("✅ No key binding conflicts detected")
+			}
+
+			// Terminal size detection
+			fmt.Println("\n=== Terminal Size Detection ===")
+			sizeInfo := app.DetectTerminalSize()
+
+			fmt.Printf("PTY Size:        %dx%d\n", sizeInfo.PTYWidth, sizeInfo.PTYHeight)
+			fmt.Printf("Environment:     %dx%d", sizeInfo.EnvWidth, sizeInfo.EnvHeight)
+			if sizeInfo.EnvWidth == 0 && sizeInfo.EnvHeight == 0 {
+				fmt.Printf(" (not set)")
+			}
+			fmt.Printf("\n")
+
+			width, height, method := app.GetReliableTerminalSize()
+			fmt.Printf("Chosen Size:     %dx%d (method: %s)\n", width, height, method)
+			fmt.Printf("Reliability:     %v\n", sizeInfo.IsReliable)
+
+			if len(sizeInfo.Issues) > 0 {
+				fmt.Printf("\n⚠️  Detected Issues:\n")
+				for _, issue := range sizeInfo.Issues {
+					fmt.Printf("  - %s\n", issue)
+				}
+			} else {
+				fmt.Printf("✅ No terminal size issues detected\n")
+			}
+
+			// Show environment information that might affect terminal detection
+			fmt.Println("\n=== Environment Information ===")
+			env_vars := []string{"TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "DESKTOP_SESSION", "XDG_SESSION_TYPE",
+				"COLUMNS", "LINES"}
+			for _, env := range env_vars {
+				if value := os.Getenv(env); value != "" {
+					fmt.Printf("%-30s %s\n", env+":", value)
+				}
+			}
+
+			// Show tiling window manager compatibility info
+			fmt.Println("\n=== Tiling Window Manager Compatibility ===")
+			fmt.Printf("Detected size: %dx%d (method: %s)\n", width, height, method)
+			fmt.Println("")
+			fmt.Println("For tiling window managers (like Amethyst):")
+			fmt.Println("- Alt screen buffer positions at PTY (0,0) not visible area (0,0)")
+			fmt.Println("- Working on automatic detection of actual visible area vs PTY size")
+			fmt.Println("- Currently investigating ANSI escape sequences for accurate detection")
+			fmt.Println("")
+			if width > 100 || height > 50 {
+				fmt.Printf("⚠️  Large PTY size detected (%dx%d) - likely indicates PTY/visible area mismatch in tiling WM\n", width, height)
+				fmt.Println("   Automatic detection of actual visible area is needed")
+			}
 
 			return nil
 		},
@@ -185,6 +257,7 @@ func init() {
 		"[experimental] If enabled, all instances will automatically accept prompts")
 	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
 		" and runs autoyes mode on them.")
+	rootCmd.Flags().BoolVar(&webFlag, "web", false, "Run HTTP server with ConnectRPC API on :8543")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
@@ -198,6 +271,19 @@ func init() {
 }
 
 func main() {
+	// Set up signal handling for SIGTERM only (not SIGINT/Ctrl+C)
+	// BubbleTea handles Ctrl+C (SIGINT) internally for graceful shutdown
+	// We only intercept SIGTERM for forced termination (e.g., systemd, docker)
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGTERM) // Only SIGTERM, not os.Interrupt
+
+	go func() {
+		<-c
+		log.InfoLog.Printf("Received SIGTERM, forcing exit")
+		log.LogSessionPathsToStderr()
+		os.Exit(1)
+	}()
+
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
 	}
