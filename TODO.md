@@ -2,7 +2,7 @@
 
 ## IN PROGRESS: Web Server Implementation with ConnectRPC 🚀
 
-**Status**: Task 1.1 COMPLETE - Protocol Buffer definitions created
+**Status**: Tasks 1.1 & 1.2 COMPLETE - Code generation pipeline ready
 **Priority**: P1 - New feature development
 
 ### Progress:
@@ -13,12 +13,21 @@
   - Configured `buf.gen.yaml` for Go + TypeScript code generation
   - All proto files validated with `buf lint` and `buf build`
 
+- [x] ✅ **Task 1.2**: Go Code Generation Setup (1h)
+  - Created `tools.go` for buf and protoc plugin dependencies
+  - Added ConnectRPC v1.19.0 and protobuf v1.36.9 to go.mod
+  - Added Makefile targets: `proto-gen`, `proto-lint`, `proto-build`
+  - Generated Go code with ConnectRPC server stubs
+  - Generated TypeScript client code for Next.js
+  - All generated code compiles successfully
+
 ### Next Atomic Task:
-- [ ] **Task 1.2**: Go Code Generation Setup (1h)
-  - Configure `make proto-gen` target in Makefile
-  - Add `tools.go` for buf dependencies
-  - Generate Go code into `gen/proto/go/`
-  - Verify generated ConnectRPC server stubs
+- [ ] **Task 1.4**: HTTP Server Foundation (2h)
+  - Create `server/server.go` with ConnectRPC handler registration
+  - Create `server/middleware/cors.go` and `logging.go`
+  - Add `--web` flag to `main.go`
+  - HTTP server starts on `:8080`
+  - Graceful shutdown on SIGTERM/SIGINT
 
 **See**: [Web Server ConnectRPC Implementation](docs/tasks/web-server-connectrpc-implementation.md)
 
