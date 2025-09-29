@@ -1,8 +1,10 @@
 package server
 
 import (
+	"claude-squad/gen/proto/go/session/v1/sessionv1connect"
 	"claude-squad/log"
 	"claude-squad/server/middleware"
+	"claude-squad/server/services"
 	"context"
 	"errors"
 	"net/http"
@@ -18,12 +20,11 @@ type Server struct {
 	mux        *http.ServeMux
 }
 
-// NewServer creates a new HTTP server instance.
-// Handlers can be registered before calling Start().
+// NewServer creates a new HTTP server instance with SessionService registered.
 func NewServer(addr string) *Server {
 	mux := http.NewServeMux()
 
-	return &Server{
+	srv := &Server{
 		addr: addr,
 		mux:  mux,
 		httpServer: &http.Server{
@@ -34,6 +35,18 @@ func NewServer(addr string) *Server {
 			IdleTimeout:  60 * time.Second,
 		},
 	}
+
+	// Initialize SessionService and register ConnectRPC handlers
+	sessionService, err := services.NewSessionServiceFromConfig()
+	if err != nil {
+		log.ErrorLog.Printf("Failed to initialize SessionService: %v", err)
+		// Continue without SessionService - will return errors on RPC calls
+	} else {
+		path, handler := sessionv1connect.NewSessionServiceHandler(sessionService, ConnectOptions()...)
+		srv.RegisterConnectHandler(path, handler)
+	}
+
+	return srv
 }
 
 // RegisterConnectHandler registers a ConnectRPC service handler.
