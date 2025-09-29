@@ -1,0 +1,167 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Session represents a running AI agent instance with its associated state.
+// Maps to session.Instance in the Go codebase.
+message Session {
+  // Unique identifier (uses title as ID for now).
+  string id = 1;
+
+  // Human-readable session title.
+  string title = 2;
+
+  // Path to workspace repository root.
+  string path = 3;
+
+  // Directory within repository to start in.
+  string working_dir = 4;
+
+  // Git branch name for this session.
+  string branch = 5;
+
+  // Current session status.
+  SessionStatus status = 6;
+
+  // Program running in session (e.g., "claude", "aider").
+  string program = 7;
+
+  // Terminal dimensions.
+  int32 height = 8;
+  int32 width = 9;
+
+  // Timestamps.
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+
+  // Auto-approve prompts without user interaction.
+  bool auto_yes = 12;
+
+  // Initial prompt passed on startup.
+  string prompt = 13;
+
+  // Path to existing worktree (if reusing).
+  string existing_worktree = 14;
+
+  // Category for organization.
+  string category = 15;
+
+  // Whether category is expanded in UI.
+  bool is_expanded = 16;
+
+  // Session type (directory, new_worktree, existing_worktree).
+  SessionType session_type = 17;
+
+  // Tmux session prefix for isolation.
+  string tmux_prefix = 18;
+
+  // Git diff statistics.
+  DiffStats diff_stats = 19;
+
+  // Git worktree information.
+  GitWorktree git_worktree = 20;
+
+  // Claude Code session persistence data.
+  ClaudeSession claude_session = 21;
+}
+
+// SessionStatus represents the current state of a session.
+// Maps to session.Status enum in Go.
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  // Session is running and agent is working.
+  SESSION_STATUS_RUNNING = 1;
+  // Agent is ready for user input (waiting).
+  SESSION_STATUS_READY = 2;
+  // Session is loading/starting up.
+  SESSION_STATUS_LOADING = 3;
+  // Session is paused (worktree removed but branch preserved).
+  SESSION_STATUS_PAUSED = 4;
+  // Session needs user approval on a prompt.
+  SESSION_STATUS_NEEDS_APPROVAL = 5;
+}
+
+// SessionType determines the session workflow.
+enum SessionType {
+  SESSION_TYPE_UNSPECIFIED = 0;
+  // Work in existing directory without worktree.
+  SESSION_TYPE_DIRECTORY = 1;
+  // Create new git worktree with new branch.
+  SESSION_TYPE_NEW_WORKTREE = 2;
+  // Reuse existing git worktree.
+  SESSION_TYPE_EXISTING_WORKTREE = 3;
+}
+
+// DiffStats contains git diff statistics for a session.
+// Maps to git.DiffStats in Go.
+message DiffStats {
+  // Number of lines added.
+  int32 added = 1;
+
+  // Number of lines removed.
+  int32 removed = 2;
+
+  // Full unified diff content.
+  string content = 3;
+}
+
+// GitWorktree contains git worktree information for a session.
+// Maps to git.GitWorktree in Go.
+message GitWorktree {
+  // Path to original repository.
+  string repo_path = 1;
+
+  // Path to worktree directory.
+  string worktree_path = 2;
+
+  // Session name associated with worktree.
+  string session_name = 3;
+
+  // Branch name in worktree.
+  string branch_name = 4;
+
+  // Base commit SHA when worktree was created.
+  string base_commit_sha = 5;
+}
+
+// ClaudeSession contains Claude Code session persistence information.
+// Allows resuming/reattaching to existing Claude Code sessions.
+message ClaudeSession {
+  // Claude Code session identifier.
+  string session_id = 1;
+
+  // Conversation thread ID.
+  string conversation_id = 2;
+
+  // Project name in Claude Code.
+  string project_name = 3;
+
+  // Last time session was attached/used.
+  google.protobuf.Timestamp last_attached = 4;
+
+  // User preferences for Claude Code integration.
+  ClaudeSettings settings = 5;
+
+  // Additional session metadata.
+  map<string, string> metadata = 6;
+}
+
+// ClaudeSettings contains user preferences for Claude Code integration.
+message ClaudeSettings {
+  // Automatically reattach to last session on resume.
+  bool auto_reattach = 1;
+
+  // Preferred session naming pattern.
+  string preferred_session_name = 2;
+
+  // Create new session if previous one is missing.
+  bool create_new_on_missing = 3;
+
+  // Show session selection menu on resume.
+  bool show_session_selector = 4;
+
+  // Consider sessions stale after this time (minutes).
+  int32 session_timeout_minutes = 5;
+}

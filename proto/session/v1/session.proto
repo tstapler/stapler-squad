@@ -1,0 +1,226 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+import "session/v1/types.proto";
+
+// SessionService manages AI agent session lifecycle operations.
+// Provides CRUD operations and real-time streaming for session management.
+service SessionService {
+  // ListSessions returns all sessions with optional filtering.
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse) {}
+
+  // GetSession retrieves a specific session by ID.
+  rpc GetSession(GetSessionRequest) returns (GetSessionResponse) {}
+
+  // CreateSession initializes a new AI agent session with tmux and git worktree.
+  rpc CreateSession(CreateSessionRequest) returns (CreateSessionResponse) {}
+
+  // UpdateSession modifies session properties (pause/resume, category, etc).
+  rpc UpdateSession(UpdateSessionRequest) returns (UpdateSessionResponse) {}
+
+  // DeleteSession stops and removes a session, cleaning up resources.
+  rpc DeleteSession(DeleteSessionRequest) returns (DeleteSessionResponse) {}
+
+  // WatchSessions streams real-time session events (created/updated/deleted).
+  // Server-streaming RPC for live updates without polling.
+  rpc WatchSessions(WatchSessionsRequest) returns (stream WatchSessionsResponse) {}
+
+  // StreamTerminal provides bidirectional streaming for terminal I/O.
+  // Clients can send input and receive output from the tmux PTY.
+  rpc StreamTerminal(stream StreamTerminalRequest) returns (stream StreamTerminalResponse) {}
+
+  // GetSessionDiff retrieves the current git diff for a session.
+  rpc GetSessionDiff(GetSessionDiffRequest) returns (GetSessionDiffResponse) {}
+}
+
+// ListSessionsRequest allows filtering sessions by various criteria.
+message ListSessionsRequest {
+  // Filter by session status (e.g., RUNNING, PAUSED).
+  optional SessionStatus status = 1;
+
+  // Filter by category name.
+  optional string category = 2;
+
+  // Hide paused sessions from results.
+  bool hide_paused = 3;
+
+  // Search query for fuzzy matching across title, path, branch.
+  optional string search_query = 4;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+}
+
+message GetSessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+}
+
+message GetSessionResponse {
+  Session session = 1;
+}
+
+message CreateSessionRequest {
+  // Required: Human-readable session title.
+  string title = 1;
+
+  // Required: Path to workspace repository root.
+  string path = 2;
+
+  // Optional: Directory within repository to start in.
+  string working_dir = 3;
+
+  // Optional: Git branch name (creates new branch if doesn't exist).
+  string branch = 4;
+
+  // Optional: Program to run (default: "claude").
+  string program = 5;
+
+  // Optional: Category for organization.
+  string category = 6;
+
+  // Optional: Initial prompt to pass on startup.
+  string prompt = 7;
+
+  // Optional: Auto-approve prompts without user interaction.
+  bool auto_yes = 8;
+
+  // Optional: Reuse existing worktree at this path.
+  string existing_worktree = 9;
+}
+
+message CreateSessionResponse {
+  Session session = 1;
+}
+
+message UpdateSessionRequest {
+  // Session identifier.
+  string id = 1;
+
+  // Update session status (pause/resume).
+  optional SessionStatus status = 2;
+
+  // Update category.
+  optional string category = 3;
+
+  // Update title.
+  optional string title = 4;
+}
+
+message UpdateSessionResponse {
+  Session session = 1;
+}
+
+message DeleteSessionRequest {
+  // Session identifier.
+  string id = 1;
+
+  // Force deletion even if session is running.
+  bool force = 2;
+}
+
+message DeleteSessionResponse {
+  // Whether deletion was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
+}
+
+message WatchSessionsRequest {
+  // Optional: Only watch sessions matching this category.
+  optional string category_filter = 1;
+
+  // Optional: Only watch sessions with this status.
+  optional SessionStatus status_filter = 2;
+}
+
+// WatchSessionsResponse is streamed for each session event.
+message WatchSessionsResponse {
+  // The session event that occurred.
+  SessionEvent event = 1;
+}
+
+// SessionEvent represents a real-time session state change.
+message SessionEvent {
+  // Timestamp when event occurred.
+  google.protobuf.Timestamp timestamp = 1;
+
+  oneof event {
+    SessionCreated session_created = 2;
+    SessionUpdated session_updated = 3;
+    SessionDeleted session_deleted = 4;
+    SessionStatusChanged status_changed = 5;
+  }
+}
+
+message SessionCreated {
+  Session session = 1;
+}
+
+message SessionUpdated {
+  Session session = 1;
+  // Fields that were updated.
+  repeated string updated_fields = 2;
+}
+
+message SessionDeleted {
+  string session_id = 1;
+}
+
+message SessionStatusChanged {
+  string session_id = 1;
+  SessionStatus old_status = 2;
+  SessionStatus new_status = 3;
+}
+
+// StreamTerminalRequest is sent by client for terminal input and control.
+message StreamTerminalRequest {
+  // Session identifier for terminal stream.
+  string session_id = 1;
+
+  oneof message {
+    TerminalInput input = 2;
+    TerminalResize resize = 3;
+  }
+}
+
+// StreamTerminalResponse is sent by server for terminal output.
+message StreamTerminalResponse {
+  // Session identifier for terminal stream.
+  string session_id = 1;
+
+  oneof message {
+    TerminalOutput output = 2;
+  }
+}
+
+message TerminalOutput {
+  // Raw terminal output bytes (ANSI escape sequences included).
+  bytes data = 1;
+}
+
+message TerminalInput {
+  // Raw keyboard input bytes.
+  bytes data = 1;
+}
+
+message TerminalResize {
+  // Terminal columns.
+  int32 cols = 1;
+  // Terminal rows.
+  int32 rows = 2;
+}
+
+message GetSessionDiffRequest {
+  // Session identifier.
+  string id = 1;
+}
+
+message GetSessionDiffResponse {
+  // Git diff statistics.
+  DiffStats diff_stats = 1;
+}

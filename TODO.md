@@ -1,14 +1,38 @@
 # Claude Squad - Current Priority Tasks
 
-## EMERGENCY: Critical Test Timeouts 🚨
+## IN PROGRESS: Web Server Implementation with ConnectRPC 🚀
 
-**Status**: BLOCKING - Test suite hangs indefinitely
-**Priority**: P0 - Must fix immediately before any other work
+**Status**: Task 1.1 COMPLETE - Protocol Buffer definitions created
+**Priority**: P1 - New feature development
+
+### Progress:
+- [x] ✅ **Task 1.1**: Protocol Buffer Definitions (2h)
+  - Created `proto/session/v1/session.proto` with SessionService
+  - Created `proto/session/v1/types.proto` with message types
+  - Configured `buf.yaml` for linting and validation
+  - Configured `buf.gen.yaml` for Go + TypeScript code generation
+  - All proto files validated with `buf lint` and `buf build`
+
+### Next Atomic Task:
+- [ ] **Task 1.2**: Go Code Generation Setup (1h)
+  - Configure `make proto-gen` target in Makefile
+  - Add `tools.go` for buf dependencies
+  - Generate Go code into `gen/proto/go/`
+  - Verify generated ConnectRPC server stubs
+
+**See**: [Web Server ConnectRPC Implementation](docs/tasks/web-server-connectrpc-implementation.md)
+
+---
+
+## DEFERRED: Critical Test Timeouts
+
+**Status**: Tests compile successfully, deferred while building new features
+**Priority**: P2 - Resume after web server MVP
 
 ### Root Cause: External Command Dependencies in Tests
 Tests hang in `config.GetClaudeCommand()` which executes shell commands during setup.
 
-### Immediate Actions Required:
+### Deferred Actions:
 - [ ] **CRITICAL**: Mock external command dependencies in test environment
 - [ ] **URGENT**: Fix UI test snapshot mismatches
 - [ ] **VALIDATION**: Ensure clean test execution with `go test ./... -timeout=30s`
@@ -17,10 +41,10 @@ Tests hang in `config.GetClaudeCommand()` which executes shell commands during s
 
 ---
 
-## Next Priority: Test Stabilization
+## DEFERRED: Test Stabilization
 
-**Status**: Ready after build fixes complete
-**Priority**: P1 - Required for production deployment
+**Status**: Deferred while building new features
+**Priority**: P2 - Resume after web server MVP
 
 ### Test Infrastructure Tasks:
 - [ ] Fix UI search index nil pointer issues (`TestFuzzySearchIntegration`)

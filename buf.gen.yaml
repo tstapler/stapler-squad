@@ -1,0 +1,26 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: claude-squad/gen/proto/go
+plugins:
+  # Go protobuf generation
+  - remote: buf.build/protocolbuffers/go
+    out: gen/proto/go
+    opt:
+      - paths=source_relative
+
+  # Go ConnectRPC generation
+  - remote: buf.build/connectrpc/go
+    out: gen/proto/go
+    opt:
+      - paths=source_relative
+
+  # TypeScript protobuf generation (for Next.js frontend)
+  - remote: buf.build/connectrpc/es:v2.3.0
+    out: web/src/gen
+    opt:
+      - target=ts
+      - ts_nocheck=false
+      - keep_empty_files=true
