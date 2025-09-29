@@ -93,12 +93,83 @@ func (s *SessionService) GetSession(
 }
 
 // CreateSession initializes a new AI agent session with tmux and git worktree.
-// TODO: Implement in next task (Task 1.6)
 func (s *SessionService) CreateSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateSessionRequest],
 ) (*connect.Response[sessionv1.CreateSessionResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("CreateSession not yet implemented"))
+	// Validate required fields
+	if req.Msg.Title == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
+	}
+	if req.Msg.Path == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
+	}
+
+	// Check if session with this title already exists
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Title {
+			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("session with title '%s' already exists", req.Msg.Title))
+		}
+	}
+
+	// Set default program if not specified
+	program := req.Msg.Program
+	if program == "" {
+		cfg := config.LoadConfig()
+		program = cfg.DefaultProgram
+	}
+
+	// Determine session type based on ExistingWorktree field
+	sessionType := session.SessionTypeDirectory
+	if req.Msg.ExistingWorktree != "" {
+		sessionType = session.SessionTypeExistingWorktree
+	} else if req.Msg.Branch != "" {
+		// If branch is specified, create a new worktree
+		sessionType = session.SessionTypeNewWorktree
+	}
+
+	// Create instance using NewInstance constructor
+	instance, err := session.NewInstance(session.InstanceOptions{
+		Title:            req.Msg.Title,
+		Path:             req.Msg.Path,
+		WorkingDir:       req.Msg.WorkingDir,
+		Program:          program,
+		AutoYes:          req.Msg.AutoYes,
+		Prompt:           req.Msg.Prompt,
+		ExistingWorktree: req.Msg.ExistingWorktree,
+		Category:         req.Msg.Category,
+		SessionType:      sessionType,
+		TmuxPrefix:       "", // Use default from config
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to create instance: %w", err))
+	}
+
+	// Start the session (initializes tmux + git worktree)
+	// Use Start(true) to indicate this is a first-time setup
+	if err := instance.Start(true); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to start session: %w", err))
+	}
+
+	// Save instance to storage
+	// Note: Storage uses SaveInstances (plural) which saves all instances
+	// We need to load, append, and save all instances
+	if err := s.storage.SaveInstances(append(instances, instance)); err != nil {
+		// Cleanup on save failure
+		if destroyErr := instance.Destroy(); destroyErr != nil {
+			// Log cleanup error but return original save error
+			fmt.Printf("Failed to cleanup after save error: %v\n", destroyErr)
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.CreateSessionResponse{
+		Session: adapters.InstanceToProto(instance),
+	}), nil
 }
 
 // UpdateSession modifies session properties (pause/resume, category, etc).
