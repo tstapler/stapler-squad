@@ -31,6 +31,10 @@ type TmuxSession struct {
 	// The name of the tmux session and the sanitized name used for tmux commands.
 	sanitizedName string
 	program       string
+	// serverSocket is the tmux server socket name for isolation (used with -L flag)
+	// If empty, uses the default tmux server. For complete isolation (e.g., testing),
+	// set to a unique value like "test" or "teatest_123" to create separate tmux servers.
+	serverSocket string
 	// ptyFactory is used to create a PTY for the tmux session.
 	ptyFactory PtyFactory
 	// cmdExec is used to execute commands in the tmux session.
@@ -55,6 +59,24 @@ type TmuxSession struct {
 	ctx    context.Context
 	cancel func()
 	wg     *sync.WaitGroup
+	// External window size channel for IntelliJ terminal compatibility
+	externalResizeCh chan windowSize
+
+	// Detach synchronization to prevent race conditions
+	detachMutex sync.Mutex
+	detaching   bool
+
+	// Session existence caching to avoid repeated list-sessions calls
+	existsCacheMutex sync.RWMutex
+	existsCache      bool
+	existsCacheTime  time.Time
+	existsCacheTTL   time.Duration
+}
+
+// windowSize represents terminal dimensions from external sources (like BubbleTea)
+type windowSize struct {
+	cols int
+	rows int
 }
 
 const TmuxPrefix = "claudesquad_"
@@ -71,6 +93,9 @@ func toClaudeSquadTmuxNameWithPrefix(str string, prefix string) string {
 	return fmt.Sprintf("%s%s", prefix, str)
 }
 
+// CleanupFunc represents a cleanup function that should be deferred
+type CleanupFunc func() error
+
 // NewTmuxSession creates a new TmuxSession with the given name and program.
 func NewTmuxSession(name string, program string) *TmuxSession {
 	return newTmuxSession(name, program, MakePtyFactory(), executor.MakeExecutor(), TmuxPrefix)
@@ -81,39 +106,139 @@ func NewTmuxSessionWithPrefix(name string, program string, prefix string) *TmuxS
 	return newTmuxSession(name, program, MakePtyFactory(), executor.MakeExecutor(), prefix)
 }
 
+// NewTmuxSessionWithCleanup creates a new TmuxSession and returns it along with a cleanup function.
+// Usage: session, cleanup := NewTmuxSessionWithCleanup(name, program); defer cleanup()
+func NewTmuxSessionWithCleanup(name string, program string) (*TmuxSession, CleanupFunc) {
+	session := NewTmuxSession(name, program)
+	cleanup := CleanupFunc(func() error {
+		return session.Close()
+	})
+	return session, cleanup
+}
+
+// NewTmuxSessionWithPrefixAndCleanup creates a new TmuxSession with custom prefix and cleanup function.
+// Usage: session, cleanup := NewTmuxSessionWithPrefixAndCleanup(name, program, prefix); defer cleanup()
+func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix string) (*TmuxSession, CleanupFunc) {
+	session := NewTmuxSessionWithPrefix(name, program, prefix)
+	cleanup := CleanupFunc(func() error {
+		return session.Close()
+	})
+	return session, cleanup
+}
+
+// NewTmuxSessionWithServerSocket creates a new TmuxSession with complete server isolation.
+// This uses the tmux -L flag to create a completely separate tmux server, providing
+// true isolation from other tmux sessions. Use this for testing or when you need
+// complete separation from production tmux sessions.
+//
+// serverSocket: unique socket name (e.g., "test", "teatest_123", "isolated")
+// prefix: session name prefix (e.g., "claudesquad_test_")
+func NewTmuxSessionWithServerSocket(name string, program string, prefix string, serverSocket string) *TmuxSession {
+	return newTmuxSessionWithSocket(name, program, MakePtyFactory(), executor.MakeExecutor(), prefix, serverSocket)
+}
+
+// NewTmuxSessionWithServerSocketAndCleanup creates a TmuxSession with server isolation and cleanup.
+// Usage: session, cleanup := NewTmuxSessionWithServerSocketAndCleanup(name, program, prefix, socket); defer cleanup()
+func NewTmuxSessionWithServerSocketAndCleanup(name string, program string, prefix string, serverSocket string) (*TmuxSession, CleanupFunc) {
+	session := NewTmuxSessionWithServerSocket(name, program, prefix, serverSocket)
+	cleanup := CleanupFunc(func() error {
+		return session.Close()
+	})
+	return session, cleanup
+}
+
 // NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.
 func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor) *TmuxSession {
 	return newTmuxSession(name, program, ptyFactory, cmdExec, TmuxPrefix)
 }
 
 func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string) *TmuxSession {
+	return newTmuxSessionWithSocket(name, program, ptyFactory, cmdExec, prefix, "")
+}
+
+// newTmuxSessionWithSocket creates a TmuxSession with both prefix and server socket isolation
+func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string, serverSocket string) *TmuxSession {
 	return &TmuxSession{
-		sanitizedName: toClaudeSquadTmuxNameWithPrefix(name, prefix),
-		program:       program,
-		ptyFactory:    ptyFactory,
-		cmdExec:       cmdExec,
+		sanitizedName:    toClaudeSquadTmuxNameWithPrefix(name, prefix),
+		program:          program,
+		serverSocket:     serverSocket,
+		ptyFactory:       ptyFactory,
+		cmdExec:          cmdExec,
+		externalResizeCh: make(chan windowSize, 10), // Buffered channel for resize events
+		existsCacheTTL:   500 * time.Millisecond,    // Cache session existence for 500ms
 	}
+}
+
+// buildTmuxCommand creates a tmux command with proper server isolation.
+// If serverSocket is set, adds -L flag for complete server isolation.
+func (t *TmuxSession) buildTmuxCommand(args ...string) *exec.Cmd {
+	var cmdArgs []string
+
+	// Add server socket isolation if specified
+	if t.serverSocket != "" {
+		cmdArgs = append(cmdArgs, "-L", t.serverSocket)
+	}
+
+	// Add the actual tmux command arguments
+	cmdArgs = append(cmdArgs, args...)
+
+	return exec.Command("tmux", cmdArgs...)
 }
 
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
 // the session (ex. claude). workdir is the git worktree directory.
 func (t *TmuxSession) Start(workDir string) error {
+	return t.start(workDir, false, nil)
+}
+
+// StartWithCleanup creates and starts a new tmux session and returns a cleanup function.
+// Usage: cleanup, err := session.StartWithCleanup(workDir); if err == nil { defer cleanup() }
+func (t *TmuxSession) StartWithCleanup(workDir string) (CleanupFunc, error) {
+	cleanup := CleanupFunc(func() error {
+		return t.Close()
+	})
+	err := t.start(workDir, true, &cleanup)
+	if err != nil {
+		return nil, err
+	}
+	return cleanup, nil
+}
+
+// start is the internal implementation for Start and StartWithCleanup
+func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
 	// Check if the session already exists
 	if t.DoesSessionExist() {
-		return fmt.Errorf("tmux session already exists: %s", t.sanitizedName)
+		// Session already exists - we can reuse it
+		log.InfoLog.Printf("Tmux session '%s' already exists, reusing existing session", t.sanitizedName)
+
+		// Set up cleanup if requested
+		if setupCleanup && cleanup != nil {
+			*cleanup = func() error {
+				return t.Close()
+			}
+		}
+
+		return nil
 	}
 
-	// Create a new detached tmux session and start claude in it
-	cmd := exec.Command("tmux", "new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	// Create a new detached tmux session and start the program in it
+	cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
 
-	ptmx, err := t.ptyFactory.Start(cmd)
+	// Use cmdExec.Run() instead of pty.Start() for detached session creation
+	// since detached sessions don't need PTY attachment during creation
+	err := t.cmdExec.Run(cmd)
 	if err != nil {
 		// Cleanup any partially created session if any exists.
 		if t.DoesSessionExist() {
-			cleanupCmd := exec.Command("tmux", "kill-session", "-t", t.sanitizedName)
+			cleanupCmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
 			if cleanupErr := t.cmdExec.Run(cleanupCmd); cleanupErr != nil {
 				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
 			}
+			t.invalidateExistsCache() // Session was killed, invalidate cache
+		}
+		// If we have a cleanup function pointer, set it to nil since startup failed
+		if setupCleanup && cleanup != nil {
+			*cleanup = func() error { return nil }
 		}
 		return fmt.Errorf("error starting tmux session: %w", err)
 	}
@@ -136,60 +261,28 @@ func (t *TmuxSession) Start(workDir string) error {
 			}
 		}
 	}
-	ptmx.Close()
+
+	// Session exists now, invalidate cache to ensure fresh state
+	t.invalidateExistsCache()
 
 	// Set history limit to enable scrollback (default is 2000, we'll use 10000 for more history)
-	historyCmd := exec.Command("tmux", "set-option", "-t", t.sanitizedName, "history-limit", "10000")
+	historyCmd := t.buildTmuxCommand("set-option", "-t", t.sanitizedName, "history-limit", "10000")
 	if err := t.cmdExec.Run(historyCmd); err != nil {
 		log.InfoLog.Printf("Warning: failed to set history-limit for session %s: %v", t.sanitizedName, err)
 	}
 
-	err = t.RestoreWithWorkDir(workDir)
-	if err != nil {
-		if cleanupErr := t.Close(); cleanupErr != nil {
-			err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-		}
-		return fmt.Errorf("error restoring tmux session: %w", err)
-	}
+	// Set up monitoring for session status tracking
+	t.monitor = newStatusMonitor()
 
-	if strings.HasSuffix(t.program, ProgramClaude) || strings.HasSuffix(t.program, ProgramAider) || strings.HasSuffix(t.program, ProgramGemini) {
-		searchString := "Do you trust the files in this folder?"
-		tapFunc := t.TapEnter
-		maxWaitTime := 30 * time.Second // Much longer timeout for slower systems
-		if !strings.HasSuffix(t.program, ProgramClaude) {
-			searchString = "Open documentation url for more info"
-			tapFunc = t.TapDAndEnter
-			maxWaitTime = 45 * time.Second // Aider/Gemini take longer to start
-		}
-
-		// Deal with "do you trust the files" screen by sending an enter keystroke.
-		// Use exponential backoff with longer timeout for reliability on slow systems
-		startTime := time.Now()
-		sleepDuration := 100 * time.Millisecond
-		attempt := 0
-
-		for time.Since(startTime) < maxWaitTime {
-			attempt++
-			time.Sleep(sleepDuration)
-			content, err := t.CapturePaneContent()
-			if err != nil {
-				// Session might not be ready yet, continue waiting
-			} else {
-				if strings.Contains(content, searchString) {
-					if err := tapFunc(); err != nil {
-						log.ErrorLog.Printf("could not tap enter on trust screen: %v", err)
-					}
-					break
-				}
-			}
-
-			// Exponential backoff with cap at 1 second
-			sleepDuration = time.Duration(float64(sleepDuration) * 1.2)
-			if sleepDuration > time.Second {
-				sleepDuration = time.Second
-			}
+	// Set up cleanup if requested
+	if setupCleanup && cleanup != nil {
+		*cleanup = func() error {
+			return t.Close()
 		}
 	}
+
+	// Session is created and ready - let the user handle any program-specific interactions
+	log.InfoLog.Printf("Tmux session '%s' created successfully, program '%s' starting", t.sanitizedName, t.program)
 	return nil
 }
 
@@ -214,16 +307,22 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			}
 		}
 
-		return t.Start(workDir)
+		// Create a new detached tmux session directly (avoid recursive call to Start)
+		cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+		err := t.cmdExec.Run(cmd)
+		if err != nil {
+			return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
+		}
+		log.InfoLog.Printf("Created new tmux session '%s' in directory '%s'", t.sanitizedName, workDir)
+		t.invalidateExistsCache() // Session was created, invalidate cache
+		return nil
 	}
 
-	// Session exists, try to attach
-	ptmx, err := t.ptyFactory.Start(exec.Command("tmux", "attach-session", "-t", t.sanitizedName))
-	if err != nil {
-		return fmt.Errorf("error opening PTY for existing session '%s': %w", t.sanitizedName, err)
-	}
-	t.ptmx = ptmx
+	// Session exists, we just need to set up monitoring for restore operations
+	// The PTY will be created later when actually needed for attachment
+	// No need to create PTY during restore
 	t.monitor = newStatusMonitor()
+	log.InfoLog.Printf("Successfully verified tmux session '%s' exists and is ready", t.sanitizedName)
 	return nil
 }
 
@@ -262,9 +361,18 @@ func (t *TmuxSession) TapDAndEnter() error {
 	return nil
 }
 
-func (t *TmuxSession) SendKeys(keys string) error {
-	_, err := t.ptmx.Write([]byte(keys))
-	return err
+func (t *TmuxSession) SendKeys(keys string) (int, error) {
+	return t.ptmx.Write([]byte(keys))
+}
+
+// GetPTY returns the PTY file descriptor for reading terminal output.
+// This provides direct access to the PTY master for terminal streaming.
+// Returns an error if the PTY is not initialized.
+func (t *TmuxSession) GetPTY() (*os.File, error) {
+	if t.ptmx == nil {
+		return nil, fmt.Errorf("PTY not initialized - session may not be started")
+	}
+	return t.ptmx, nil
 }
 
 // HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
@@ -277,19 +385,30 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 	}
 
 	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
-	if t.program == ProgramClaude {
-		hasPrompt = strings.Contains(content, "No, and tell Claude what to do differently")
-	} else if strings.HasPrefix(t.program, ProgramAider) {
-		hasPrompt = strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
-	} else if strings.HasPrefix(t.program, ProgramGemini) {
-		hasPrompt = strings.Contains(content, "Yes, allow once")
-	}
+	hasPrompt = t.detectPromptInContent(content)
 
 	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {
 		t.monitor.prevOutputHash = t.monitor.hash(content)
 		return true, hasPrompt
 	}
 	return false, hasPrompt
+}
+
+// detectPromptInContent checks if the given content contains a prompt from the configured program
+func (t *TmuxSession) detectPromptInContent(content string) bool {
+	if t.program == ProgramClaude {
+		// Claude Code prompts can have various patterns, check for multiple signatures
+		return strings.Contains(content, "No, and tell Claude what to do differently") ||
+			strings.Contains(content, "Do you want to proceed?") ||
+			strings.Contains(content, "Yes, allow reading") ||
+			strings.Contains(content, "Yes, allow writing") ||
+			strings.Contains(content, "Yes, allow once")
+	} else if strings.HasPrefix(t.program, ProgramAider) {
+		return strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
+	} else if strings.HasPrefix(t.program, ProgramGemini) {
+		return strings.Contains(content, "Yes, allow once")
+	}
+	return false
 }
 
 func (t *TmuxSession) Attach() (chan struct{}, error) {
@@ -376,17 +495,31 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 
 // DetachSafely disconnects from the current tmux session without panicking
 func (t *TmuxSession) DetachSafely() error {
-	// Only detach if we're actually attached
-	if t.attachCh == nil {
-		return nil // Already detached
+	// Use mutex to prevent concurrent detach operations
+	t.detachMutex.Lock()
+	defer t.detachMutex.Unlock()
+
+	// Check if we're already detaching or detached
+	if t.detaching || t.attachCh == nil {
+		return nil // Already detaching or detached
 	}
+
+	// Mark as detaching to prevent concurrent operations
+	t.detaching = true
+	defer func() {
+		t.detaching = false
+	}()
 
 	var errs []error
 
-	// Close the attached pty session.
+	// Close the attached pty session only if it's not already closed.
 	if t.ptmx != nil {
+		// Attempt to close PTY, but ignore "file already closed" errors
 		if err := t.ptmx.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("error closing attach pty session: %w", err))
+			// Only log error if it's not "file already closed"
+			if !strings.Contains(err.Error(), "file already closed") {
+				errs = append(errs, fmt.Errorf("error closing attach pty session: %w", err))
+			}
 		}
 		t.ptmx = nil
 	}
@@ -425,6 +558,18 @@ func (t *TmuxSession) DetachSafely() error {
 // Detach disconnects from the current tmux session. It panics if detaching fails. At the moment, there's no
 // way to recover from a failed detach.
 func (t *TmuxSession) Detach() {
+	// Use mutex to prevent concurrent detach operations
+	t.detachMutex.Lock()
+	defer t.detachMutex.Unlock()
+
+	// Check if we're already detaching or detached
+	if t.detaching || t.attachCh == nil {
+		return // Already detaching or detached
+	}
+
+	// Mark as detaching to prevent concurrent operations
+	t.detaching = true
+
 	// TODO: control flow is a bit messy here. If there's an error,
 	// I'm not sure if we get into a bad state. Needs testing.
 	defer func() {
@@ -449,22 +594,31 @@ func (t *TmuxSession) Detach() {
 			t.wg = nil
 		}
 		t.ctx = nil
+		t.detaching = false
 	}()
 
 	// Close the attached pty session.
 	err := t.ptmx.Close()
 	if err != nil {
-		// This is a fatal error. We can't detach if we can't close the PTY. It's better to just panic and have the
-		// user re-invoke the program than to ruin their terminal pane.
-		msg := fmt.Sprintf("error closing attach pty session: %v", err)
-		log.ErrorLog.Println(msg)
-		panic(msg)
+		// Check if this is a "file already closed" error, which can happen due to race conditions
+		if strings.Contains(err.Error(), "file already closed") {
+			// This is expected in race conditions, just log and continue with restore
+			log.InfoLog.Printf("PTY already closed during detach (expected in concurrent scenarios)")
+		} else {
+			// This is a fatal error. We can't detach if we can't close the PTY. It's better to just panic and have the
+			// user re-invoke the program than to ruin their terminal pane.
+			msg := fmt.Sprintf("error closing attach pty session: %v", err)
+			log.ErrorLog.Println(msg)
+			panic(msg)
+		}
 	}
+	t.ptmx = nil
+
 	// Attach goroutines should die on EOF due to the ptmx closing. Call
 	// t.Restore to set a new t.ptmx.
 	if err = t.Restore(); err != nil {
 		// This is a fatal error. Our invariant that a started TmuxSession always has a valid ptmx is violated.
-		msg := fmt.Sprintf("error closing attach pty session: %v", err)
+		msg := fmt.Sprintf("error restoring session after detach: %v", err)
 		log.ErrorLog.Println(msg)
 		panic(msg)
 	}
@@ -484,14 +638,31 @@ func (t *TmuxSession) Close() error {
 
 	if t.ptmx != nil {
 		if err := t.ptmx.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("error closing PTY: %w", err))
+			// Only log error if it's not "file already closed" (common in concurrent scenarios)
+			if !strings.Contains(err.Error(), "file already closed") {
+				errs = append(errs, fmt.Errorf("error closing PTY: %w", err))
+			}
 		}
 		t.ptmx = nil
 	}
 
-	cmd := exec.Command("tmux", "kill-session", "-t", t.sanitizedName)
-	if err := t.cmdExec.Run(cmd); err != nil {
-		errs = append(errs, fmt.Errorf("error killing tmux session: %w", err))
+	// Check if session exists before trying to kill it
+	if t.DoesSessionExist() {
+		cmd := t.buildTmuxCommand("kill-session", "-t", t.sanitizedName)
+		if err := t.cmdExec.Run(cmd); err != nil {
+			// Check if this is the common "session not found" error
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+				// Exit code 1 usually means session doesn't exist or was already killed
+				log.InfoLog.Printf("Tmux session '%s' was already killed or doesn't exist", t.sanitizedName)
+			} else {
+				errs = append(errs, fmt.Errorf("error killing tmux session: %w", err))
+			}
+		} else {
+			log.InfoLog.Printf("Successfully killed tmux session: %s", t.sanitizedName)
+		}
+		t.invalidateExistsCache() // Session was killed, invalidate cache
+	} else {
+		log.InfoLog.Printf("Tmux session '%s' doesn't exist, no need to kill", t.sanitizedName)
 	}
 
 	if len(errs) == 0 {
@@ -516,6 +687,26 @@ func (t *TmuxSession) SetDetachedSize(width, height int) error {
 
 // updateWindowSize updates the window size of the PTY.
 func (t *TmuxSession) updateWindowSize(cols, rows int) error {
+	// Check if PTY is valid before attempting to resize
+	if t.ptmx == nil {
+		return fmt.Errorf("PTY is not initialized")
+	}
+
+	// Get the file descriptor value
+	fd := int(t.ptmx.Fd())
+
+	// Check if file descriptor is valid (not closed)
+	if fd < 0 {
+		return fmt.Errorf("PTY file descriptor is invalid")
+	}
+
+	// Additional check: try a simple stat on the file descriptor to verify it's still valid
+	// This is more portable than platform-specific ioctl calls
+	if _, err := os.Stat(fmt.Sprintf("/dev/fd/%d", fd)); err != nil {
+		// If we can't stat the FD, it's likely closed or invalid
+		return fmt.Errorf("PTY file descriptor is closed or invalid: %v", err)
+	}
+
 	return pty.Setsize(t.ptmx, &pty.Winsize{
 		Rows: uint16(rows),
 		Cols: uint16(cols),
@@ -524,34 +715,104 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	})
 }
 
+// SetWindowSize allows external callers (like BubbleTea) to set terminal dimensions
+// This is particularly useful for IntelliJ terminal integration where SIGWINCH doesn't work properly
+func (t *TmuxSession) SetWindowSize(cols, rows int) {
+	if t.externalResizeCh != nil {
+		select {
+		case t.externalResizeCh <- windowSize{cols: cols, rows: rows}:
+		default:
+			// Channel is full, drop the oldest resize event and try again
+			select {
+			case <-t.externalResizeCh:
+			default:
+			}
+			select {
+			case t.externalResizeCh <- windowSize{cols: cols, rows: rows}:
+			default:
+			}
+		}
+	}
+}
+
 func (t *TmuxSession) DoesSessionExist() bool {
 	if t == nil {
 		return false
 	}
 
-	// Using "-t name" does a prefix match, which is wrong. `-t=` does an exact match.
-	existsCmd := exec.Command("tmux", "has-session", fmt.Sprintf("-t=%s", t.sanitizedName))
+	// Check cache first (read lock)
+	t.existsCacheMutex.RLock()
+	if time.Since(t.existsCacheTime) < t.existsCacheTTL {
+		cached := t.existsCache
+		t.existsCacheMutex.RUnlock()
+		return cached
+	}
+	t.existsCacheMutex.RUnlock()
 
-	// Add a timeout to the command execution to prevent hanging
+	// Cache expired or not set, get fresh data (write lock)
+	t.existsCacheMutex.Lock()
+	defer t.existsCacheMutex.Unlock()
+
+	// Double-check cache hasn't been updated by another goroutine
+	if time.Since(t.existsCacheTime) < t.existsCacheTTL {
+		return t.existsCache
+	}
+
+	// Use list-sessions to get actual running sessions for reliable checking
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	existsCmd = exec.CommandContext(ctx, "tmux", "has-session", fmt.Sprintf("-t=%s", t.sanitizedName))
-	err := t.cmdExec.Run(existsCmd)
+	cmd := exec.CommandContext(ctx, "tmux")
+	// Add server socket isolation if specified
+	if t.serverSocket != "" {
+		cmd = exec.CommandContext(ctx, "tmux", "-L", t.serverSocket, "list-sessions", "-F", "#{session_name}")
+	} else {
+		cmd = exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+	}
+	output, err := t.cmdExec.Output(cmd)
 
 	// Check if error is due to timeout
 	if ctx.Err() == context.DeadlineExceeded {
 		log.WarningLog.Printf("Timeout checking if tmux session exists: %s", t.sanitizedName)
+		t.existsCache = false
+		t.existsCacheTime = time.Now()
 		return false
 	}
 
-	return err == nil
+	if err != nil {
+		// If tmux list-sessions fails, there are no sessions
+		t.existsCache = false
+		t.existsCacheTime = time.Now()
+		return false
+	}
+
+	// Parse the output to check if our session exists
+	sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
+	exists := false
+	for _, session := range sessions {
+		if session == t.sanitizedName {
+			exists = true
+			break
+		}
+	}
+
+	// Update cache
+	t.existsCache = exists
+	t.existsCacheTime = time.Now()
+	return exists
+}
+
+// invalidateExistsCache clears the session existence cache to force a fresh check
+func (t *TmuxSession) invalidateExistsCache() {
+	t.existsCacheMutex.Lock()
+	defer t.existsCacheMutex.Unlock()
+	t.existsCacheTime = time.Time{} // Zero time forces cache miss
 }
 
 // CapturePaneContent captures the content of the tmux pane
 func (t *TmuxSession) CapturePaneContent() (string, error) {
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
+	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		// Log detailed error information for debugging
@@ -568,7 +829,7 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 // start and end specify the starting and ending line numbers (use "-" for the start/end of history)
 func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, error) {
 	// Add -e flag to preserve escape sequences (ANSI color codes)
-	cmd := exec.Command("tmux", "capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
+	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
 	output, err := t.cmdExec.Output(cmd)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
@@ -576,10 +837,21 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 	return string(output), nil
 }
 
-// CleanupSessions kills all tmux sessions that start with "session-"
+// CleanupSessions kills all tmux sessions that start with "session-" on the default server
 func CleanupSessions(cmdExec executor.Executor) error {
+	return CleanupSessionsOnServer(cmdExec, "")
+}
+
+// CleanupSessionsOnServer kills all tmux sessions that start with "session-" on a specific server
+// serverSocket: socket name for server isolation, empty string for default server
+func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) error {
 	// First try to list sessions
-	cmd := exec.Command("tmux", "ls")
+	var cmd *exec.Cmd
+	if serverSocket != "" {
+		cmd = exec.Command("tmux", "-L", serverSocket, "ls")
+	} else {
+		cmd = exec.Command("tmux", "ls")
+	}
 	output, err := cmdExec.Output(cmd)
 
 	// If there's an error and it's because no server is running, that's fine
@@ -599,7 +871,13 @@ func CleanupSessions(cmdExec executor.Executor) error {
 
 	for _, match := range matches {
 		log.InfoLog.Printf("cleaning up session: %s", match)
-		if err := cmdExec.Run(exec.Command("tmux", "kill-session", "-t", match)); err != nil {
+		var killCmd *exec.Cmd
+		if serverSocket != "" {
+			killCmd = exec.Command("tmux", "-L", serverSocket, "kill-session", "-t", match)
+		} else {
+			killCmd = exec.Command("tmux", "kill-session", "-t", match)
+		}
+		if err := cmdExec.Run(killCmd); err != nil {
 			return fmt.Errorf("failed to kill tmux session %s: %v", match, err)
 		}
 	}

@@ -29,8 +29,15 @@ type InstanceData struct {
 
 	// New fields for session organization and grouping
 	Category   string   `json:"category,omitempty"`
-	Tags       []string `json:"tags,omitempty"`
 	IsExpanded bool     `json:"is_expanded,omitempty"`
+
+	// Session type determines the workflow (directory, new_worktree, existing_worktree)
+	SessionType SessionType `json:"session_type,omitempty"`
+
+	// Claude Code session persistence
+	ClaudeSession ClaudeSessionData `json:"claude_session,omitempty"`
+	// Tmux session prefix for isolation
+	TmuxPrefix string `json:"tmux_prefix,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree
@@ -49,15 +56,45 @@ type DiffStatsData struct {
 	Content string `json:"content"`
 }
 
-// Storage handles saving and loading instances using the state interface
-type Storage struct {
-	state config.InstanceStorage
+// ClaudeSessionData represents Claude Code session information
+type ClaudeSessionData struct {
+	SessionID      string            `json:"session_id,omitempty"`       // Claude Code session identifier
+	ConversationID string            `json:"conversation_id,omitempty"`  // Conversation thread ID
+	ProjectName    string            `json:"project_name,omitempty"`     // Project name in Claude Code
+	LastAttached   time.Time         `json:"last_attached,omitempty"`    // When this session was last used
+	Settings       ClaudeSettings    `json:"settings,omitempty"`         // User preferences for Claude Code
+	Metadata       map[string]string `json:"metadata,omitempty"`         // Additional session metadata
 }
 
-// NewStorage creates a new storage instance
+// ClaudeSettings contains user preferences for Claude Code integration
+type ClaudeSettings struct {
+	AutoReattach          bool   `json:"auto_reattach"`           // Automatically reattach to last session on resume
+	PreferredSessionName  string `json:"preferred_session_name"`  // Preferred session naming pattern
+	CreateNewOnMissing    bool   `json:"create_new_on_missing"`   // Create new session if previous one is missing
+	ShowSessionSelector   bool   `json:"show_session_selector"`   // Show session selection menu on resume
+	SessionTimeoutMinutes int    `json:"session_timeout_minutes"` // Consider sessions stale after this time
+}
+
+// Storage handles saving and loading instances using the state interface
+// It manages async saves through a StateService to prevent UI blocking
+type Storage struct {
+	state        config.InstanceStorage
+	stateService *config.StateService
+}
+
+// NewStorage creates a new storage instance with async save capabilities
 func NewStorage(state config.InstanceStorage) (*Storage, error) {
+	// Create and start the state service for async saves
+	// Only if the state is actually a *config.State (not a mock in tests)
+	var stateService *config.StateService
+	if concreteState, ok := state.(*config.State); ok {
+		stateService = config.NewStateService(concreteState)
+		stateService.Start()
+	}
+
 	return &Storage{
-		state: state,
+		state:        state,
+		stateService: stateService,
 	}, nil
 }
 
@@ -119,7 +156,89 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 		return fmt.Errorf("failed to marshal instances: %w", err)
 	}
 
+	// Use async save if available, otherwise fall back to synchronous
+	if s.stateService != nil {
+		s.stateService.SaveAsync(jsonData)
+		return nil
+	}
+
+	// Fallback for tests or when state service not available
 	return s.state.SaveInstances(jsonData)
+}
+
+// SaveInstancesSync saves instances synchronously (blocks until complete)
+// Use this for critical operations like shutdown or CLI commands
+func (s *Storage) SaveInstancesSync(instances []*Instance) error {
+	// Perform the same merging logic as SaveInstances
+	existingInstances, err := s.LoadInstances()
+	if err != nil {
+		log.WarningLog.Printf("failed to load existing instances for merging: %v", err)
+		existingInstances = []*Instance{}
+	}
+
+	instancesByTitle := make(map[string]*Instance)
+	for _, instance := range instances {
+		if instance.Started() {
+			instancesByTitle[instance.Title] = instance
+		}
+	}
+
+	existingByTitle := make(map[string]*Instance)
+	for _, instance := range existingInstances {
+		if _, exists := instancesByTitle[instance.Title]; !exists {
+			existingByTitle[instance.Title] = instance
+		}
+	}
+
+	mergedInstances := make([]*Instance, 0, len(instancesByTitle)+len(existingByTitle))
+	for _, instance := range instances {
+		if instance.Started() {
+			mergedInstances = append(mergedInstances, instance)
+		}
+	}
+
+	for title, instance := range existingByTitle {
+		if instance.Started() {
+			log.InfoLog.Printf("merging instance from disk: %s", title)
+			mergedInstances = append(mergedInstances, instance)
+		}
+	}
+
+	data := make([]InstanceData, 0, len(mergedInstances))
+	for _, instance := range mergedInstances {
+		data = append(data, instance.ToInstanceData())
+	}
+
+	jsonData, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+
+	// Use sync save if available, otherwise fall back to direct save
+	if s.stateService != nil {
+		return s.stateService.SaveSync(jsonData)
+	}
+
+	return s.state.SaveInstances(jsonData)
+}
+
+// Close performs graceful shutdown of storage
+// This flushes any pending async saves and releases locks
+func (s *Storage) Close() error {
+	// Shutdown state service if available
+	if s.stateService != nil {
+		if err := s.stateService.Shutdown(); err != nil {
+			log.WarningLog.Printf("Failed to shutdown state service: %v", err)
+			// Continue with cleanup anyway
+		}
+	}
+
+	// Close the underlying state manager if it supports it
+	if stateManager, ok := s.state.(config.StateManager); ok {
+		return stateManager.Close()
+	}
+
+	return nil
 }
 
 // LoadInstances loads the list of instances from disk

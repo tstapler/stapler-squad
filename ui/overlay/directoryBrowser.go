@@ -2,7 +2,6 @@ package overlay
 
 import (
 	"claude-squad/log"
-	"claude-squad/ui/fuzzy"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sahilm/fuzzy"
 )
 
 // DirectoryInfo represents a directory in the file system
@@ -35,7 +36,20 @@ type DirectoryInfo struct {
 
 // GetSearchText returns text used for fuzzy matching
 func (d DirectoryInfo) GetSearchText() string {
-	return d.Name
+	// Enhanced search text includes directory name and path components for better matching
+	pathParts := strings.Split(d.Path, string(filepath.Separator))
+	searchParts := []string{d.Name}
+
+	// Add parent directory names for context-aware searching
+	if len(pathParts) > 1 {
+		// Add immediate parent directory
+		parent := pathParts[len(pathParts)-2]
+		if parent != "" && parent != d.Name {
+			searchParts = append(searchParts, parent)
+		}
+	}
+
+	return strings.Join(searchParts, " ")
 }
 
 // GetDisplayText returns text to display in UI
@@ -50,6 +64,28 @@ func (d DirectoryInfo) GetDisplayText() string {
 // GetID returns unique identifier
 func (d DirectoryInfo) GetID() string {
 	return d.Path
+}
+
+// DirectorySearchSource implements the fuzzy.Source interface for directory fuzzy search
+// This enables high-quality fuzzy search across directory names and path components
+type DirectorySearchSource struct {
+	directories []DirectoryInfo
+}
+
+// String returns the searchable text for the directory at index i
+// Combines directory name with parent directory context for better matching
+func (d DirectorySearchSource) String(i int) string {
+	if i < 0 || i >= len(d.directories) {
+		return ""
+	}
+
+	dir := d.directories[i]
+	return dir.GetSearchText()
+}
+
+// Len returns the number of directories in the source
+func (d DirectorySearchSource) Len() int {
+	return len(d.directories)
 }
 
 // DirectoryCache caches directory listings for faster browsing
@@ -204,8 +240,8 @@ func NewDirectoryLoader(repoRoot string) *DirectoryLoader {
 	}
 }
 
-// AsyncLoad implements fuzzy.AsyncLoader interface
-func (l *DirectoryLoader) AsyncLoad(query string) ([]fuzzy.SearchItem, error) {
+// AsyncLoad provides directory loading functionality for fuzzy search
+func (l *DirectoryLoader) AsyncLoad(query string) ([]DirectoryInfo, error) {
 	// Special case for query starting with "/" - treat as path
 	if strings.HasPrefix(query, "/") || strings.HasPrefix(query, "~") {
 		path := query
@@ -230,8 +266,8 @@ func (l *DirectoryLoader) AsyncLoad(query string) ([]fuzzy.SearchItem, error) {
 		// Update breadcrumbs
 		l.updateBreadcrumbs()
 
-		// Convert to search items
-		items := make([]fuzzy.SearchItem, len(entries))
+		// Convert to directory entries
+		items := make([]DirectoryInfo, len(entries))
 		for i, entry := range entries {
 			// Update depth based on repo root
 			entry.Depth = l.calculateDepth(entry.Path)
@@ -247,8 +283,8 @@ func (l *DirectoryLoader) AsyncLoad(query string) ([]fuzzy.SearchItem, error) {
 		return nil, err
 	}
 
-	// Convert to search items
-	items := make([]fuzzy.SearchItem, 0, len(entries)+1)
+	// Convert to directory entries
+	items := make([]DirectoryInfo, 0, len(entries)+1)
 
 	// Add special ".." entry if not at repo root
 	if l.currentPath != l.repoRoot {
@@ -367,6 +403,68 @@ func (l *DirectoryLoader) GetRelativePath() string {
 // GetBreadcrumbs returns the path components for navigation
 func (l *DirectoryLoader) GetBreadcrumbs() []string {
 	return l.breadcrumbs
+}
+
+// FuzzySearchDirectories performs fuzzy search on directories using sahilm/fuzzy
+func (l *DirectoryLoader) FuzzySearchDirectories(query string) ([]DirectoryInfo, error) {
+	// Get all directories in current path
+	entries, err := l.cache.GetEntries(l.currentPath)
+	if err != nil {
+		return nil, err
+	}
+
+	// If no query, return all entries
+	if query == "" {
+		// Add special entries
+		items := make([]DirectoryInfo, 0, len(entries)+2)
+
+		// Add ".." entry if not at repo root
+		if l.currentPath != l.repoRoot {
+			parentPath := filepath.Dir(l.currentPath)
+			items = append(items, DirectoryInfo{
+				Path:       parentPath,
+				Name:       "..",
+				IsDir:      true,
+				ParentPath: filepath.Dir(parentPath),
+				Depth:      0,
+			})
+		}
+
+		// Add repository root entry
+		items = append(items, DirectoryInfo{
+			Path:       l.repoRoot,
+			Name:       "<Repository Root>",
+			IsDir:      true,
+			ParentPath: filepath.Dir(l.repoRoot),
+			Depth:      0,
+		})
+
+		// Add regular directories
+		for _, entry := range entries {
+			entry.Depth = l.calculateDepth(entry.Path)
+			items = append(items, entry)
+		}
+
+		return items, nil
+	}
+
+	// Create search source for fuzzy matching
+	searchSource := DirectorySearchSource{directories: entries}
+
+	// Perform fuzzy search
+	matches := fuzzy.FindFrom(query, searchSource)
+
+	// Convert matches back to DirectoryInfo instances, maintaining fuzzy search ranking
+	results := make([]DirectoryInfo, 0, len(matches))
+	for _, match := range matches {
+		if match.Index >= 0 && match.Index < len(entries) {
+			dir := entries[match.Index]
+			dir.Depth = l.calculateDepth(dir.Path)
+			results = append(results, dir)
+		}
+	}
+
+	return results, nil
 }
 
 // updateBreadcrumbs updates the breadcrumb path components

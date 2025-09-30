@@ -1,9 +1,11 @@
 package app
 
 import (
+	"claude-squad/app/state"
+	appui "claude-squad/app/ui"
+	"claude-squad/config"
 	"claude-squad/session"
 	"claude-squad/ui"
-	"claude-squad/ui/overlay"
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,70 +19,65 @@ func (m *home) handleAdvancedSessionSetup() (tea.Model, tea.Cmd) {
 			fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
 	}
 
-	// Create the session setup overlay if it doesn't exist
-	if m.sessionSetupOverlay == nil {
-		m.sessionSetupOverlay = overlay.NewSessionSetupOverlay()
+	// Create the session setup overlay using coordinator
+	if err := m.uiCoordinator.CreateSessionSetupOverlay(); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create session setup overlay: %w", err))
+	}
 
-		// Set callbacks
-		m.sessionSetupOverlay.SetOnComplete(func(opts session.InstanceOptions) {
+	// Set up the callbacks for the session setup overlay
+	sessionSetupOverlay := m.uiCoordinator.GetSessionSetupOverlay()
+	if sessionSetupOverlay != nil {
+		// Set up the cancel callback for escape key handling
+		sessionSetupOverlay.SetOnCancel(func() {
+			m.transitionToDefault()
+			m.uiCoordinator.HideOverlay(appui.ComponentSessionSetupOverlay)
+		})
+
+		// Set up the completion callback for enter key handling
+		sessionSetupOverlay.SetOnComplete(func(options session.InstanceOptions) {
+			// Set the tmux prefix from configuration
+			cfg := config.LoadConfig()
+			options.TmuxPrefix = cfg.TmuxSessionPrefix
+
 			// Create the instance with the configured options
-			instance, err := session.NewInstance(opts)
+			instance, err := session.NewInstance(options)
 			if err != nil {
-				m.errBox.SetError(err)
-				m.state = stateDefault
-				m.menu.SetState(ui.StateDefault)
+				// Handle error - show error and stay in overlay state
+				m.handleError(err)
 				return
 			}
 
-			// Add the instance to the list
-			m.newInstanceFinalizer = m.list.AddInstance(instance)
-			m.list.SetSelectedInstance(m.list.NumInstances() - 1)
+			// Set pending session for async creation using existing pattern
+			m.pendingSessionInstance = instance
+			m.pendingAutoYes = false
 
-			// Switch to creating session state
-			m.state = stateCreatingSession
-			m.asyncSessionCreationActive = true
-			m.menu.SetState(ui.StateCreatingInstance)
-
-			// Start session creation in a background goroutine
-			go func() {
-				// Start the instance
-				err := instance.Start(true)
-
-				// Store the error and let the status update mechanism handle it
-				// Set an error message if there was a problem
-				if err != nil {
-					m.errBox.SetError(err)
-				}
-			}()
+			// Hide the overlay and transition to creating session state to show spinner
+			m.uiCoordinator.HideOverlay(appui.ComponentSessionSetupOverlay)
+			m.transitionToCreatingSession()
 		})
 
-		m.sessionSetupOverlay.SetOnCancel(func() {
-			// Cancel the advanced setup and go back to default state
-			m.state = stateDefault
-			m.menu.SetState(ui.StateDefault)
-		})
+		// Ensure the overlay is focused so it can receive key events
+		sessionSetupOverlay.Focus()
 	}
 
-	// Use a reasonable default size for the overlay
-	// We can't access the internal width/height directly
-	// The app.go already handles window resize events and updates the overlay size
-	m.sessionSetupOverlay.SetSize(
-		80,
-		24)
-
-	// Focus the overlay
-	m.sessionSetupOverlay.Focus()
-
-	// Set the state
-	m.state = stateAdvancedNew
-	m.menu.SetState(ui.StateAdvancedNew)
+	// Transition to advanced new state
+	m.transitionToState(state.AdvancedNew)
+	m.menu.SetState(ui.StateNewInstance)
 
 	return m, nil
 }
 
-// handleAdvancedSessionSetupUpdate handles updates to the advanced session setup overlay
-func (m *home) handleAdvancedSessionSetupUpdate(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// Forward the message to the session setup overlay
-	cmd := m.sessionSetupOverlay.Update(msg)
+// handleAdvancedSessionSetupUpdate handles updates when in advanced session setup state
+func (m *home) handleAdvancedSessionSetupUpdate(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Delegate to the session setup overlay
+	sessionSetupOverlay := m.uiCoordinator.GetSessionSetupOverlay()
+	if sessionSetupOverlay == nil {
+		m.transitionToDefault()
+		return m, nil
+	}
+
+	// Let the overlay handle the key press
+	// Note: SessionSetupOverlay uses callback pattern, not return values
+	cmd := sessionSetupOverlay.Update(msg)
 	return m, cmd
 }

@@ -1,0 +1,7 @@
+╭─────────────────────────────────────────────────────────╮
+│                                                         │
+│  Are you sure you want to proceed with this operation?  │
+│                                                         │
+│  Press y to confirm, n or esc to cancel                 │
+│                                                         │
+╰─────────────────────────────────────────────────────────╯

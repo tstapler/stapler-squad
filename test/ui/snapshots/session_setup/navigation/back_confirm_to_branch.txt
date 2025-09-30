@@ -1,0 +1,18 @@
+🚀 Create New Session
+                     
+● ● ● ◐
+
+✨ Ready to Create
+                  
+╭──────────────────────────────────────────────────╮
+│                                                  │
+│ 📛 Name: test                                    │
+│ 🤖 Program: claude                               │
+│ 📍 Location: Current (ui)                        │
+│                                                  │
+╰──────────────────────────────────────────────────╯
+                                                    
+🚀 Press Enter to create • Esc to cancel
+
+                          
+Esc: Cancel, ↑/↓: Navigate

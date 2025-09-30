@@ -1,18 +1,25 @@
 🚀 Create New Session
                      
-● ● ● ◐
+● ● ● ●
 
-✨ Ready to Create
+🌿 Branch Strategy
                   
-╭──────────────────────────────────────────────────╮
-│                                                  │
-│ 📛 Name: test-with-category                      │
-│ 🤖 Program: claude                               │
-│ 📍 Location: Current (ui)                        │
-│                                                  │
-╰──────────────────────────────────────────────────╯
-                                                    
-🚀 Press Enter to create • Esc to cancel
+╭─────────────────────────────────────────────────────────╮
+│ 🌱 Create New Branch                                    │
+│ A new branch will be created based on your session name │
+╰─────────────────────────────────────────────────────────╯
+                                                           
+┌─────────────────────────────────────────┐
+│ 🔀 Use Current Branch                   │
+│ Work on the repository's current branch │
+└─────────────────────────────────────────┘
+                                           
+┌───────────────────────────────┐
+│ 🌿 Choose Another Branch      │
+│ Select from existing branches │
+└───────────────────────────────┘
+                                 
+💡 ↑/↓ or j/k to navigate • Tab to cycle • Enter to select
 
                           
 Esc: Cancel, ↑/↓: Navigate

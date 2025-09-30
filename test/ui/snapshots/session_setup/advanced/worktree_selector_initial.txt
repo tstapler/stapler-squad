@@ -1,0 +1,16 @@
+🚀 Create New Session
+                     
+● ● ● ●
+
+Select Worktree
+               
+╭────────────────────────────────────────────────────────────╮
+│ > Search worktrees                                         │
+╰────────────────────────────────────────────────────────────╯
+
+⣾  Searching...
+
+ 💡 ↑↓ navigate • Enter select/use path • Tab autocomplete • Esc cancel 
+
+                          
+Esc: Cancel, ↑/↓: Navigate

@@ -57,6 +57,15 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Contexts:    []ContextID{ContextList},
 	}).BindKey("r")
 
+	registry.Register(&Command{
+		ID:          "session.claude_settings",
+		Name:        "Claude Settings",
+		Description: "Configure Claude Code session settings",
+		Category:    CategorySession,
+		Handler:     commands.ClaudeSettingsCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("C")
+
 	// Register git integration commands
 	registry.Register(&Command{
 		ID:          "git.status",
@@ -271,7 +280,7 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Category:    CategorySystem,
 		Handler:     commands.QuitCommand,
 		Contexts:    []ContextID{ContextList, ContextGitStatus, ContextHelp},
-	}).BindKey("q")
+	}).BindKeys("q", "ctrl+c")
 
 	registry.Register(&Command{
 		ID:          "sys.escape",
@@ -279,7 +288,7 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Description: "Cancel/exit current mode",
 		Category:    CategorySystem,
 		Handler:     commands.EscapeCommand,
-		Contexts:    []ContextID{ContextGitStatus, ContextHelp, ContextPrompt, ContextSearch},
+		Contexts:    []ContextID{ContextList, ContextGitStatus, ContextHelp, ContextPrompt, ContextSearch, ContextConfirm},
 	}).BindKey("esc")
 
 	registry.Register(&Command{
@@ -291,19 +300,38 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Contexts:    []ContextID{ContextList},
 	}).BindKey("tab")
 
+	registry.Register(&Command{
+		ID:          "sys.command_mode",
+		Name:        "Command Mode",
+		Description: "Enter vim-style command mode",
+		Category:    CategorySystem,
+		Handler:     commands.CommandModeCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey(":")
+
+	// Confirmation dialog specific commands
+	registry.Register(&Command{
+		ID:          "sys.confirm",
+		Name:        "Confirm/Accept",
+		Description: "Accept/confirm the current action",
+		Category:    CategorySystem,
+		Handler:     commands.ConfirmCommand,
+		Contexts:    []ContextID{ContextConfirm},
+	}).BindKeys("enter", "y")
+
 	return nil
 }
 
 // GetGlobalRegistry returns the initialized global registry
 func GetGlobalRegistry() *CommandRegistry {
 	registry := GetCommandRegistry()
-	
+
 	// Initialize once
 	if len(registry.GetAllCommands()) == 0 {
 		if err := InitializeCommands(registry); err != nil {
 			panic("Failed to initialize commands: " + err.Error())
 		}
 	}
-	
+
 	return registry
 }

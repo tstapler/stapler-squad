@@ -120,6 +120,45 @@ func DefaultState() *State {
 	}
 }
 
+// NewTestState creates a test state with isolated storage in the given directory
+// This prevents tests from loading or interfering with production data
+func NewTestState(testDir string) *State {
+	// Create the test directory if it doesn't exist
+	if err := os.MkdirAll(testDir, 0755); err != nil {
+		log.WarningLog.Printf("failed to create test directory: %v", err)
+		// Return a minimal state without locking if we can't create the test dir
+		return &State{
+			HelpScreensSeen: 0,
+			InstancesData:   json.RawMessage("[]"),
+			UI: UIState{
+				HidePaused:       false,
+				CategoryExpanded: make(map[string]bool),
+				SearchMode:       false,
+				SearchQuery:      "",
+				SelectedIdx:      0,
+			},
+		}
+	}
+
+	// Initialize the lock file in the test directory
+	lockPath := filepath.Join(testDir, LockFileName)
+	fileLock := flock.New(lockPath)
+
+	return &State{
+		HelpScreensSeen: 0,
+		InstancesData:   json.RawMessage("[]"),
+		UI: UIState{
+			HidePaused:       false,
+			CategoryExpanded: make(map[string]bool),
+			SearchMode:       false,
+			SearchQuery:      "",
+			SelectedIdx:      0,
+		},
+		lockFile:    fileLock,
+		lockTimeout: DefaultLockTimeout,
+	}
+}
+
 // LoadState loads the state from disk with locking. If it cannot be done, we return the default state.
 func LoadState() *State {
 	// Get the default state which includes locking capabilities
@@ -198,25 +237,91 @@ func (s *State) loadFromDiskWithoutLocking() error {
 
 // No longer needed as LoadState now includes locking
 
-// SaveState saves the state to disk with locking
+// SaveState saves the state to disk with locking and timeout protection
 func SaveState(state *State) error {
-	// Try to merge with any existing state on disk before saving
-	if err := state.mergeWithExistingState(); err != nil {
-		log.WarningLog.Printf("failed to merge with existing state: %v", err)
-		// Continue with save anyway
+	// Try to merge with any existing state on disk before saving, with timeout protection
+	done := make(chan error, 1)
+	go func() {
+		done <- state.mergeWithExistingState()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			log.WarningLog.Printf("failed to merge with existing state: %v", err)
+			// Continue with save anyway
+		}
+	case <-time.After(5 * time.Second):
+		log.WarningLog.Printf("state merge timed out after 5 seconds - skipping merge and proceeding with save")
+		// Continue with save anyway to prevent blocking the UI
 	}
 
 	return state.saveToDisk()
 }
 
+// loadInstancesDataFromDisk loads just the instances data from disk with a read lock
+// This is used by mergeWithExistingState to avoid creating a new State object
+func (s *State) loadInstancesDataFromDisk() (json.RawMessage, error) {
+	// Skip locking if we don't have a lock file initialized
+	if s.lockFile == nil {
+		log.WarningLog.Printf("lock file not initialized, loading instances without locking")
+		return s.loadInstancesDataWithoutLocking()
+	}
+
+	// Use a shorter timeout for merge operations to fail fast
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	// Try to acquire a shared read lock with retries
+	locked, err := s.lockFile.TryRLockContext(ctx, 100*time.Millisecond)
+	if err != nil {
+		return nil, fmt.Errorf("failed to acquire read lock for merge: %w", err)
+	}
+	if !locked {
+		return nil, fmt.Errorf("could not acquire read lock for merge within timeout")
+	}
+	defer s.lockFile.Unlock()
+
+	// Now that we have a lock, load the data
+	return s.loadInstancesDataWithoutLocking()
+}
+
+// loadInstancesDataWithoutLocking loads just the instances data from disk without locking
+func (s *State) loadInstancesDataWithoutLocking() (json.RawMessage, error) {
+	configDir, err := GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get config directory: %w", err)
+	}
+
+	statePath := filepath.Join(configDir, StateFileName)
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// File doesn't exist yet - return empty JSON array
+			return json.RawMessage("[]"), nil
+		}
+		return nil, fmt.Errorf("failed to read state file: %w", err)
+	}
+
+	// Parse just to extract instances field
+	var diskState struct {
+		InstancesData json.RawMessage `json:"instances"`
+	}
+	if err := json.Unmarshal(data, &diskState); err != nil {
+		return nil, fmt.Errorf("failed to parse state file: %w", err)
+	}
+
+	return diskState.InstancesData, nil
+}
+
 // mergeWithExistingState loads existing state from disk and merges it with current state
 // This ensures we don't overwrite changes made by other processes
+// IMPORTANT: Uses existing lock instead of creating new State to avoid same-process lock contention
 func (s *State) mergeWithExistingState() error {
-	// Create a new state to load from disk
-	diskState := DefaultState()
-
-	// Try to load existing state from disk
-	if err := diskState.loadFromDisk(); err != nil {
+	// Load disk data directly without creating a new State object
+	// This avoids same-process lock contention from multiple flock instances
+	diskInstancesData, err := s.loadInstancesDataFromDisk()
+	if err != nil {
 		return fmt.Errorf("failed to load existing state for merging: %w", err)
 	}
 
@@ -232,15 +337,15 @@ func (s *State) mergeWithExistingState() error {
 	}
 
 	// Deserialize disk instances
-	if len(diskState.InstancesData) > 0 {
-		if err := json.Unmarshal(diskState.InstancesData, &diskInstances); err != nil {
+	if len(diskInstancesData) > 0 {
+		if err := json.Unmarshal(diskInstancesData, &diskInstances); err != nil {
 			return fmt.Errorf("failed to unmarshal disk instances: %w", err)
 		}
 	}
 
 	// If we don't have any instances, just use the disk instances
 	if len(ourInstances) == 0 {
-		s.InstancesData = diskState.InstancesData
+		s.InstancesData = diskInstancesData
 		return nil
 	}
 
@@ -295,16 +400,29 @@ func (s *State) mergeWithExistingState() error {
 		}
 	}
 
-	// Re-serialize the merged instances
-	mergedData, err := json.Marshal(mergedInstances)
-	if err != nil {
+	// Re-serialize the merged instances with timeout protection
+	marshalDone := make(chan []byte, 1)
+	marshalErr := make(chan error, 1)
+
+	go func() {
+		data, err := json.Marshal(mergedInstances)
+		if err != nil {
+			marshalErr <- err
+			return
+		}
+		marshalDone <- data
+	}()
+
+	select {
+	case mergedData := <-marshalDone:
+		// Update our instances
+		s.InstancesData = mergedData
+		return nil
+	case err := <-marshalErr:
 		return fmt.Errorf("failed to marshal merged instances: %w", err)
+	case <-time.After(1 * time.Second):
+		return fmt.Errorf("JSON marshaling timed out after 1 second - data may be too large or contain circular references")
 	}
-
-	// Update our instances
-	s.InstancesData = mergedData
-
-	return nil
 }
 
 // containsInstance checks if instances contains an instance with the given title

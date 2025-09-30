@@ -6,6 +6,7 @@ import (
 	"claude-squad/ui/fuzzy"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -29,14 +30,23 @@ const (
 	StepBranch
 )
 
+// BranchChoice represents the branch selection strategy
+type BranchChoice string
+
+const (
+	BranchChoiceNew      BranchChoice = "new"
+	BranchChoiceCurrent  BranchChoice = "current"
+	BranchChoiceExisting BranchChoice = "existing"
+)
+
 // SessionSetupOverlay is a multi-step modal for configuring a new session
 type SessionSetupOverlay struct {
+	BaseOverlay // Embed base for common overlay functionality
+
 	// Core state
 	step    SessionSetupStep
-	width   int
-	height  int
-	focused bool
 	error   string
+	warning string
 
 	// Session configuration being built
 	sessionName      string
@@ -46,25 +56,28 @@ type SessionSetupOverlay struct {
 	branch           string
 	existingWorktree string
 	category         string
-	tags             []string
 
 	// Step-specific states
-	locationChoice string // "current", "different", "existing"
-	branchChoice   string // "new", "existing"
-	showAdvanced   bool   // Whether to show advanced options
+	locationChoice    string // "current", "different", "existing"
+	branchChoice      BranchChoice
+	showAdvanced      bool // Whether to show advanced options
+	locationNavigator *NavigationHandler
+	branchNavigator   *NavigationHandler
 
 	// Combined input state for basics step
 	basicsFocused string // "name" or "program"
+	basicsNavigator *NavigationHandler
 
 	// UI components for different steps
-	nameInput        *TextInputOverlay
-	programInput     *TextInputOverlay
-	categoryInput    *TextInputOverlay
-	categorySelector *FuzzyInputOverlay
-	repoSelector     *FuzzyInputOverlay
-	dirBrowser       *FuzzyInputOverlay
-	worktreeSelector *FuzzyInputOverlay
-	branchSelector   *FuzzyInputOverlay
+	nameInput           *TextInputOverlay
+	programInput        *TextInputOverlay
+	categoryInput       *TextInputOverlay
+	categorySelector    *FuzzyInputOverlay
+	repoSelector        *FuzzyInputOverlay
+	dirBrowser          *FuzzyInputOverlay
+	fuzzyDirBrowser     *FuzzyDirectoryBrowser // New FZF-style directory browser
+	worktreeSelector    *FuzzyInputOverlay
+	branchSelector      *FuzzyInputOverlay
 
 	// UI Styles
 	titleStyle    lipgloss.Style
@@ -77,7 +90,6 @@ type SessionSetupOverlay struct {
 
 	// Callback when complete
 	onComplete func(session.InstanceOptions)
-	onCancel   func()
 }
 
 // NewSessionSetupOverlay creates a new session setup wizard overlay
@@ -126,13 +138,15 @@ func NewSessionSetupOverlay() *SessionSetupOverlay {
 	programInput := NewTextInputOverlay("Program", defaultProgram)
 	categoryInput := NewTextInputOverlay("Category", "")
 
+	// Create navigation handlers for steps with multiple options
+	basicsNav := NewNavigationHandler(2, true)   // 2 fields: name and program
+	locationNav := NewNavigationHandler(3, true) // 3 choices: current, different, existing
+	branchNav := NewNavigationHandler(3, true)   // 3 choices: new, current, existing
+
 	// Create an empty session setup overlay
-	return &SessionSetupOverlay{
-		step:    StepBasics,
-		width:   60,
-		height:  20,
-		focused: true,
-		error:   "",
+	overlay := &SessionSetupOverlay{
+		step:  StepBasics,
+		error: "",
 
 		sessionName: "",
 		repoPath:    ".", // Default to current directory
@@ -140,12 +154,14 @@ func NewSessionSetupOverlay() *SessionSetupOverlay {
 		program:     defaultProgram,
 		branch:      "", // Will be generated based on session name
 		category:    "", // Default to no category
-		tags:        []string{},
 
-		locationChoice: "current",
-		branchChoice:   "new",
-		showAdvanced:   false,
-		basicsFocused:  "name",
+		locationChoice:    "current",
+		branchChoice:      BranchChoiceNew,
+		showAdvanced:      false,
+		basicsFocused:     "name",
+		basicsNavigator:   basicsNav,
+		locationNavigator: locationNav,
+		branchNavigator:   branchNav,
 
 		nameInput:     nameInput,
 		programInput:  programInput,
@@ -159,24 +175,33 @@ func NewSessionSetupOverlay() *SessionSetupOverlay {
 		selectedStyle: selectedStyle,
 		infoStyle:     infoStyle,
 	}
+
+	// Initialize BaseOverlay
+	overlay.BaseOverlay.SetSize(60, 20)
+	overlay.BaseOverlay.Focus()
+
+	return overlay
 }
 
 // SetSize sets the size of the overlay
 func (s *SessionSetupOverlay) SetSize(width, height int) {
-	s.width = width
-	s.height = height
+	// Update BaseOverlay size
+	s.BaseOverlay.SetSize(width, height)
+
+	// Calculate responsive sizes for components
+	responsiveWidth := s.GetResponsiveWidth()
 
 	// Update component sizes
 	if s.nameInput != nil {
-		s.nameInput.SetSize(width-20, 5)
+		s.nameInput.SetSize(responsiveWidth-10, 5)
 	}
 
 	if s.programInput != nil {
-		s.programInput.SetSize(width-20, 5)
+		s.programInput.SetSize(responsiveWidth-10, 5)
 	}
 
 	if s.categoryInput != nil {
-		s.categoryInput.SetSize(width-20, 5)
+		s.categoryInput.SetSize(responsiveWidth-10, 5)
 	}
 
 	if s.categorySelector != nil {
@@ -187,8 +212,8 @@ func (s *SessionSetupOverlay) SetSize(width, height int) {
 		s.repoSelector.SetSize(width-10, height-10)
 	}
 
-	if s.dirBrowser != nil {
-		s.dirBrowser.SetSize(width-10, height-10)
+	if s.fuzzyDirBrowser != nil {
+		s.fuzzyDirBrowser.SetSize(width-10, height-10)
 	}
 
 	if s.worktreeSelector != nil {
@@ -207,12 +232,12 @@ func (s *SessionSetupOverlay) SetOnComplete(callback func(session.InstanceOption
 
 // SetOnCancel sets the callback function when setup is cancelled
 func (s *SessionSetupOverlay) SetOnCancel(callback func()) {
-	s.onCancel = callback
+	s.BaseOverlay.SetOnCancel(callback)
 }
 
 // Focus gives focus to the overlay
 func (s *SessionSetupOverlay) Focus() {
-	s.focused = true
+	s.BaseOverlay.Focus()
 
 	// Focus the appropriate input for the current step
 	switch s.step {
@@ -229,9 +254,8 @@ func (s *SessionSetupOverlay) Focus() {
 			s.repoSelector.Focus()
 		}
 	case StepDirectory:
-		if s.dirBrowser != nil {
-			s.dirBrowser.Focus()
-		}
+		// FuzzyDirectoryBrowser manages its own focus state
+		// No explicit focus call needed
 	case StepWorktree:
 		if s.worktreeSelector != nil {
 			s.worktreeSelector.Focus()
@@ -245,7 +269,7 @@ func (s *SessionSetupOverlay) Focus() {
 
 // Blur removes focus from the overlay
 func (s *SessionSetupOverlay) Blur() {
-	s.focused = false
+	s.BaseOverlay.Blur()
 
 	// Blur all inputs
 	// TextInputOverlay handles focus internally
@@ -258,9 +282,8 @@ func (s *SessionSetupOverlay) Blur() {
 		s.repoSelector.Blur()
 	}
 
-	if s.dirBrowser != nil {
-		s.dirBrowser.Blur()
-	}
+	// FuzzyDirectoryBrowser manages its own focus state
+	// No explicit blur call needed
 
 	if s.worktreeSelector != nil {
 		s.worktreeSelector.Blur()
@@ -303,8 +326,8 @@ func (s *SessionSetupOverlay) nextStep() {
 				return
 			}
 			s.repoPath = currentDir
-			// Skip advanced step if not needed, go directly to confirm
-			s.step = StepConfirm
+			// Go to branch selection step
+			s.step = StepBranch
 		} else if s.locationChoice == "different" {
 			// Need to select a different repository
 			s.step = StepRepository
@@ -321,13 +344,24 @@ func (s *SessionSetupOverlay) nextStep() {
 		s.step = StepConfirm
 
 	case StepRepository:
-		// After selecting a repository, select directory within it
+		// After selecting a repository, determine next step
 		if s.repoPath == "" {
 			s.error = "Please select a repository"
 			return
 		}
-		s.step = StepDirectory
-		s.initDirectoryBrowser()
+
+		// Skip directory selection if we're going to create a new branch (worktree)
+		// since worktrees create their own separate directory
+		if s.branchChoice == BranchChoiceNew {
+			// When creating a new branch, we use a worktree which creates its own directory
+			// so we don't need to ask the user to select a directory within the repo
+			s.workingDir = "" // Use repository root as working directory
+			s.step = StepBranch
+		} else {
+			// For existing branches, we might want to work in a specific directory
+			s.step = StepDirectory
+			s.initDirectoryBrowser()
+		}
 
 	case StepDirectory:
 		// After selecting a directory, select branch strategy
@@ -342,8 +376,8 @@ func (s *SessionSetupOverlay) nextStep() {
 		s.step = StepConfirm
 
 	case StepBranch:
-		if s.branchChoice == "new" {
-			// Using new branch, go to confirm
+		if s.branchChoice == BranchChoiceNew || s.branchChoice == BranchChoiceCurrent {
+			// Using new branch or current branch, go to confirm
 			s.step = StepConfirm
 		} else {
 			// Need to select an existing branch
@@ -368,6 +402,23 @@ func (s *SessionSetupOverlay) nextStep() {
 				}
 			}
 
+			// Determine session type based on location choice
+			var sessionType session.SessionType
+			switch s.locationChoice {
+			case "current", "different":
+				// For current directory or different directory, check if we're creating a new branch
+				if s.branchChoice == BranchChoiceNew {
+					sessionType = session.SessionTypeNewWorktree
+				} else {
+					sessionType = session.SessionTypeDirectory
+				}
+			case "existing":
+				sessionType = session.SessionTypeExistingWorktree
+			default:
+				// Default to directory session for backward compatibility
+				sessionType = session.SessionTypeDirectory
+			}
+
 			instance := session.InstanceOptions{
 				Title:            s.sessionName,
 				Path:             repoPath,
@@ -375,7 +426,7 @@ func (s *SessionSetupOverlay) nextStep() {
 				Program:          s.program,
 				ExistingWorktree: existingWorktree,
 				Category:         s.category,
-				Tags:             s.tags,
+				SessionType:      sessionType,
 			}
 
 			s.onComplete(instance)
@@ -414,11 +465,19 @@ func (s *SessionSetupOverlay) prevStep() {
 		s.step = StepLocation
 
 	case StepBranch:
-		// Branch selection depends on the location choice
+		// Branch selection depends on the location choice and branch choice
 		if s.locationChoice == "different" {
-			s.step = StepDirectory
-			if s.dirBrowser != nil {
-				s.dirBrowser.Focus()
+			// If we're creating a new branch, we skipped StepDirectory, so go back to StepRepository
+			if s.branchChoice == BranchChoiceNew {
+				s.step = StepRepository
+				if s.repoSelector != nil {
+					s.repoSelector.Focus()
+				}
+			} else {
+				// For existing branches, we went through StepDirectory
+				s.step = StepDirectory
+				// FuzzyDirectoryBrowser manages its own focus state
+				// No explicit focus call needed
 			}
 		} else {
 			s.step = StepLocation
@@ -452,44 +511,41 @@ func (s *SessionSetupOverlay) prevStep() {
 // initRepositorySelector initializes the repository selector component
 func (s *SessionSetupOverlay) initRepositorySelector() {
 	if s.repoSelector == nil {
-		s.repoSelector = NewFuzzyInputOverlay("Select Repository", "Search repositories")
+		s.repoSelector = NewFuzzyInputOverlay("Select Repository", "Type path or search repositories (~, /path, relative)")
 
-		// TODO: Load recent repositories from config
-		// For now, use a placeholder example
-		home, _ := os.UserHomeDir()
-		homeDisplayText := "Home Directory (~)"
+		// Set up async loader for contextual repository discovery
+		s.repoSelector.SetAsyncLoader(func(query string) ([]fuzzy.SearchItem, error) {
+			return s.discoverGitRepositoriesContextual(query), nil
+		})
 
-		items := []fuzzy.SearchItem{
-			fuzzy.BasicStringItem{ID: ".", Text: "Current Repository"},
-			fuzzy.BasicStringItem{ID: home, Text: homeDisplayText},
-			fuzzy.BasicStringItem{ID: filepath.Join(home, "projects"), Text: "~/projects"},
-			fuzzy.BasicStringItem{ID: filepath.Join(home, "Documents"), Text: "~/Documents"},
-		}
+		// Discover Git repositories from common locations initially
+		items := s.discoverGitRepositories()
 		s.repoSelector.SetItems(items)
 
 		// Set up selection callback
 		s.repoSelector.SetOnSelect(func(item fuzzy.SearchItem) {
 			path := item.GetID()
 
-			// Expand the path (~ to home directory)
-			expandedPath, err := ExpandPath(path)
-			if err == nil {
-				path = expandedPath
-			}
+			// Use enhanced path validation for better error messages
+			validation := ValidatePathEnhanced(path)
 
-			// Check if path exists
-			if !PathExists(path) {
-				s.error = "Path does not exist: " + path
+			if !validation.Valid {
+				s.error = validation.ErrorMessage
 				return
 			}
 
-			// Check if path is a directory
-			if !IsDirectory(path) {
-				s.error = "Not a directory: " + path
-				return
+			// Set the validated expanded path
+			s.repoPath = validation.ExpandedPath
+
+			// Display any warnings to the user (non-blocking)
+			if len(validation.Warnings) > 0 {
+				// For now, we'll show the first warning as a non-error message
+				// Could be enhanced with a warning display system later
+				s.warning = validation.Warnings[0]
+			} else {
+				s.warning = ""
 			}
 
-			s.repoPath = path
 			s.error = ""
 			s.nextStep()
 		})
@@ -503,11 +559,9 @@ func (s *SessionSetupOverlay) initRepositorySelector() {
 	}
 }
 
-// initDirectoryBrowser initializes the directory browser component
+// initDirectoryBrowser initializes the FZF-style directory browser component
 func (s *SessionSetupOverlay) initDirectoryBrowser() {
-	if s.dirBrowser == nil {
-		s.dirBrowser = NewFuzzyInputOverlay("Select Directory", "Search directories")
-
+	if s.fuzzyDirBrowser == nil {
 		// Expand the repository path first
 		expandedRepoPath, err := ExpandPath(s.repoPath)
 		if err != nil {
@@ -515,106 +569,56 @@ func (s *SessionSetupOverlay) initDirectoryBrowser() {
 			return
 		}
 
-		// List subdirectories in the repository
-		items := []fuzzy.SearchItem{
-			fuzzy.BasicStringItem{ID: "", Text: "<Repository Root>"},
-		}
+		// Create new FZF-style directory browser
+		s.fuzzyDirBrowser = NewFuzzyDirectoryBrowser("Select Directory", expandedRepoPath)
 
-		// Check if the path exists
-		if !PathExists(expandedRepoPath) {
-			s.error = "Repository path does not exist: " + expandedRepoPath
-			// Still include the repository root as an option
-		} else {
-			// Add subdirectories
-			dirs, err := getSubdirectories(expandedRepoPath)
-			if err == nil {
-				for _, dir := range dirs {
-					// Use relative path as ID and display text
-					relPath, err := filepath.Rel(expandedRepoPath, dir)
-					if err == nil {
-						items = append(items, fuzzy.BasicStringItem{
-							ID:   relPath,
-							Text: relPath + "/",
-						})
+		// Set up selection and cancellation callbacks
+		s.fuzzyDirBrowser.SetCallbacks(
+			func(directoryPath string) {
+				// Convert absolute path to relative path for working directory
+				relPath, err := filepath.Rel(expandedRepoPath, directoryPath)
+				if err != nil {
+					// If we can't get relative path, use the directory path as-is
+					relPath = directoryPath
+				}
+
+				// Handle special case for repository root
+				if directoryPath == expandedRepoPath || relPath == "." {
+					s.workingDir = ""
+				} else {
+					s.workingDir = relPath
+				}
+
+				// Validate the working directory exists within the repository
+				if s.workingDir != "" {
+					fullPath := filepath.Join(expandedRepoPath, s.workingDir)
+					if !PathExists(fullPath) || !IsDirectory(fullPath) {
+						s.error = "Invalid directory: " + fullPath
+						return
 					}
 				}
-			}
-		}
 
-		s.dirBrowser.SetItems(items)
+				s.error = ""
+				s.nextStep()
+			},
+			func() {
+				s.prevStep()
+			},
+		)
 
-		// Set up selection callback
-		s.dirBrowser.SetOnSelect(func(item fuzzy.SearchItem) {
-			s.workingDir = item.GetID()
-
-			// Validate the working directory exists within the repository
-			if s.workingDir != "" {
-				fullPath := filepath.Join(expandedRepoPath, s.workingDir)
-				if !PathExists(fullPath) || !IsDirectory(fullPath) {
-					s.error = "Invalid directory: " + fullPath
-					return
-				}
-			}
-
-			s.error = ""
-			s.nextStep()
-		})
-
-		s.dirBrowser.SetOnCancel(func() {
-			s.prevStep()
-		})
-
-		s.dirBrowser.SetSize(s.width-10, s.height-10)
-		s.dirBrowser.Focus()
+		s.fuzzyDirBrowser.SetSize(s.width-10, s.height-10)
 	}
 }
 
-// getSubdirectories returns a list of subdirectories in the given path
-func getSubdirectories(path string) ([]string, error) {
-	var dirs []string
-	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
-		// Skip the root directory itself
-		if p == path {
-			return nil
-		}
-
-		// Skip hidden directories (starting with .)
-		if info.IsDir() && strings.HasPrefix(filepath.Base(p), ".") {
-			return filepath.SkipDir
-		}
-
-		// Add directory to the list
-		if info.IsDir() {
-			dirs = append(dirs, p)
-
-			// Limit depth to avoid excessive recursion
-			// If we're already 2 levels deep, skip deeper directories
-			relPath, err := filepath.Rel(path, p)
-			if err == nil && strings.Count(relPath, string(os.PathSeparator)) >= 2 {
-				return filepath.SkipDir
-			}
-		}
-
-		return nil
-	})
-
-	return dirs, err
-}
+// getSubdirectories function removed - FuzzyDirectoryBrowser handles directory traversal internally
 
 // initWorktreeSelector initializes the worktree selector component
 func (s *SessionSetupOverlay) initWorktreeSelector() {
 	if s.worktreeSelector == nil {
 		s.worktreeSelector = NewFuzzyInputOverlay("Select Worktree", "Search worktrees")
 
-		// TODO: Implement actual worktree loading from git
-		// For now, create some example worktrees in the user's home directory
-		home, _ := os.UserHomeDir()
-
-		items := []fuzzy.SearchItem{
-			fuzzy.BasicStringItem{ID: filepath.Join(home, "worktrees", "feature-branch"), Text: "feature-branch (~/worktrees/feature-branch)"},
-			fuzzy.BasicStringItem{ID: filepath.Join(home, "worktrees", "bugfix-branch"), Text: "bugfix-branch (~/worktrees/bugfix-branch)"},
-			fuzzy.BasicStringItem{ID: "~/git/project/worktree1", Text: "Custom Worktree Path (~/git/project/worktree1)"},
-		}
+		// Load actual Git worktrees from the system
+		items := s.loadGitWorktrees()
 		s.worktreeSelector.SetItems(items)
 
 		// Set up selection callback
@@ -662,13 +666,8 @@ func (s *SessionSetupOverlay) initBranchSelector() {
 			// Continue with unexpanded path
 		}
 
-		// TODO: Implement actual branch loading from git based on the repository path
-		// For now, use placeholder example branches
-		items := []fuzzy.SearchItem{
-			fuzzy.BasicStringItem{ID: "main", Text: "main (default branch)"},
-			fuzzy.BasicStringItem{ID: "develop", Text: "develop"},
-			fuzzy.BasicStringItem{ID: "feature/login", Text: "feature/login"},
-		}
+		// Load actual branches from the selected repository
+		items := s.loadGitBranches(s.repoPath)
 		s.branchSelector.SetItems(items)
 
 		// Set up selection callback
@@ -698,105 +697,85 @@ func (s *SessionSetupOverlay) Update(msg tea.Msg) tea.Cmd {
 
 	// Handle key presses for navigation
 	if msg, ok := msg.(tea.KeyMsg); ok {
-		switch msg.Type {
-		case tea.KeyEsc:
-			// Cancel the setup
-			if s.onCancel != nil {
-				s.onCancel()
+		// Use BaseOverlay for common keys (Esc)
+		if handled, shouldClose := s.HandleCommonKeys(msg); handled {
+			if shouldClose {
+				return nil
 			}
-			return nil
+		}
+
+		switch msg.Type {
 
 		case tea.KeyEnter:
 			// Handle Enter for different steps
-			if s.step == StepBasics || s.step == StepAdvanced {
+			switch s.step {
+			case StepBasics, StepAdvanced, StepLocation, StepConfirm:
 				s.nextStep()
 				return nil
-			} else if s.step == StepLocation {
-				s.nextStep()
-				return nil
-			} else if s.step == StepBranch && s.branchChoice == "new" {
-				s.nextStep()
-				return nil
-			} else if s.step == StepConfirm {
-				s.nextStep()
-				return nil
+			case StepBranch:
+				if s.branchChoice == BranchChoiceNew || s.branchChoice == BranchChoiceCurrent {
+					s.nextStep()
+					return nil
+				}
 			}
 
 		case tea.KeyTab:
-			// Tab has special meaning in some steps
+			// Tab has special meaning in some steps - use navigation handlers
 			if s.step == StepBasics {
-				// Toggle between name and program input
-				if s.basicsFocused == "name" {
-					s.basicsFocused = "program"
-				} else {
-					s.basicsFocused = "name"
+				if s.basicsNavigator.HandleTabNavigation(msg) {
+					s.basicsFocused = []string{"name", "program"}[s.basicsNavigator.GetCurrentIndex()]
 				}
 				return nil
 			} else if s.step == StepLocation {
-				// Cycle through location choices
-				switch s.locationChoice {
-				case "current":
-					s.locationChoice = "different"
-				case "different":
-					s.locationChoice = "existing"
-				case "existing":
-					s.locationChoice = "current"
+				if s.locationNavigator.HandleTabNavigation(msg) {
+					s.locationChoice = []string{"current", "different", "existing"}[s.locationNavigator.GetCurrentIndex()]
 				}
 				return nil
 			} else if s.step == StepBranch {
-				// Toggle branch choice
-				if s.branchChoice == "new" {
-					s.branchChoice = "existing"
-				} else {
-					s.branchChoice = "new"
+				if s.branchNavigator.HandleTabNavigation(msg) {
+					s.branchChoice = []BranchChoice{BranchChoiceNew, BranchChoiceCurrent, BranchChoiceExisting}[s.branchNavigator.GetCurrentIndex()]
 				}
 				return nil
 			}
 
-		case tea.KeyUp:
-			// Up arrow navigation
+		case tea.KeyUp, tea.KeyDown:
+			// Arrow key navigation - use navigation handlers (includes vim j/k via HandleNavigation)
 			if s.step == StepBasics {
-				// Toggle between name and program input (up goes to name)
-				s.basicsFocused = "name"
+				if s.basicsNavigator.HandleNavigation(msg) {
+					s.basicsFocused = []string{"name", "program"}[s.basicsNavigator.GetCurrentIndex()]
+				}
 				return nil
 			} else if s.step == StepLocation {
-				// Cycle backward through location choices
-				switch s.locationChoice {
-				case "current":
-					s.locationChoice = "existing"
-				case "different":
-					s.locationChoice = "current"
-				case "existing":
-					s.locationChoice = "different"
+				if s.locationNavigator.HandleNavigation(msg) {
+					s.locationChoice = []string{"current", "different", "existing"}[s.locationNavigator.GetCurrentIndex()]
 				}
 				return nil
 			} else if s.step == StepBranch {
-				// Toggle to new branch
-				s.branchChoice = "new"
+				if s.branchNavigator.HandleNavigation(msg) {
+					s.branchChoice = []BranchChoice{BranchChoiceNew, BranchChoiceCurrent, BranchChoiceExisting}[s.branchNavigator.GetCurrentIndex()]
+				}
 				return nil
 			}
 
-		case tea.KeyDown:
-			// Down arrow navigation
-			if s.step == StepBasics {
-				// Toggle between name and program input (down goes to program)
-				s.basicsFocused = "program"
-				return nil
-			} else if s.step == StepLocation {
-				// Cycle forward through location choices
-				switch s.locationChoice {
-				case "current":
-					s.locationChoice = "different"
-				case "different":
-					s.locationChoice = "existing"
-				case "existing":
-					s.locationChoice = "current"
+		case tea.KeyRunes:
+			// Vim-style navigation with j/k - ONLY handle these specific keys
+			// Don't interfere with text input in text fields
+			if len(msg.Runes) == 1 {
+				char := string(msg.Runes)
+				if char == "j" || char == "k" {
+					// Only handle j/k on steps that don't have text input
+					if s.step == StepLocation {
+						if s.locationNavigator.HandleNavigation(msg) {
+							s.locationChoice = []string{"current", "different", "existing"}[s.locationNavigator.GetCurrentIndex()]
+						}
+						return nil
+					} else if s.step == StepBranch {
+						if s.branchNavigator.HandleNavigation(msg) {
+							s.branchChoice = []BranchChoice{BranchChoiceNew, BranchChoiceCurrent, BranchChoiceExisting}[s.branchNavigator.GetCurrentIndex()]
+						}
+						return nil
+					}
 				}
-				return nil
-			} else if s.step == StepBranch {
-				// Toggle to existing branch
-				s.branchChoice = "existing"
-				return nil
 			}
 		}
 	}
@@ -825,8 +804,8 @@ func (s *SessionSetupOverlay) Update(msg tea.Msg) tea.Cmd {
 		}
 
 	case StepDirectory:
-		if s.dirBrowser != nil {
-			_ = s.dirBrowser.Update(msg)
+		if s.fuzzyDirBrowser != nil {
+			_, _ = s.fuzzyDirBrowser.Update(msg)
 		}
 
 	case StepWorktree:
@@ -835,7 +814,7 @@ func (s *SessionSetupOverlay) Update(msg tea.Msg) tea.Cmd {
 		}
 
 	case StepBranch:
-		if s.branchSelector != nil && s.branchChoice == "existing" {
+		if s.branchSelector != nil && s.branchChoice == BranchChoiceExisting {
 			_ = s.branchSelector.Update(msg)
 		}
 	}
@@ -886,8 +865,8 @@ func (s *SessionSetupOverlay) View() string {
 		}
 
 	case StepDirectory:
-		if s.dirBrowser != nil {
-			sb.WriteString(s.dirBrowser.View())
+		if s.fuzzyDirBrowser != nil {
+			sb.WriteString(s.fuzzyDirBrowser.View())
 		} else {
 			sb.WriteString("Loading directories...")
 		}
@@ -900,33 +879,71 @@ func (s *SessionSetupOverlay) View() string {
 		}
 
 	case StepBranch:
-		sb.WriteString("Branch strategy:\n\n")
+		// Section title
+		sectionStyle := lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#FFCC00")).
+			MarginBottom(1)
+		sb.WriteString(sectionStyle.Render("🌿 Branch Strategy"))
+		sb.WriteString("\n")
 
-		newStyle := s.buttonStyle
-		existingStyle := s.buttonStyle
-
-		// Highlight selected choice
-		if s.branchChoice == "new" {
-			newStyle = s.selectedStyle
-		} else {
-			existingStyle = s.selectedStyle
+		// Branch options with descriptions
+		options := []struct {
+			choice BranchChoice
+			icon   string
+			title  string
+			desc   string
+		}{
+			{BranchChoiceNew, "🌱", "Create New Branch", "A new branch will be created based on your session name"},
+			{BranchChoiceCurrent, "🔀", "Use Current Branch", "Work on the repository's current branch"},
+			{BranchChoiceExisting, "🌿", "Choose Another Branch", "Select from existing branches"},
 		}
 
-		// Render the choices
-		sb.WriteString(newStyle.Render("Create New Branch"))
-		sb.WriteString(existingStyle.Render("Use Existing Branch"))
-		sb.WriteString("\n\n")
+		// Calculate responsive width for options
+		contentWidth := s.GetResponsiveWidth()
+
+		for _, opt := range options {
+			isSelected := s.branchChoice == opt.choice
+
+			var style lipgloss.Style
+			if isSelected {
+				style = lipgloss.NewStyle().
+					Border(lipgloss.RoundedBorder()).
+					BorderForeground(lipgloss.Color("#00FFFF")).
+					Padding(0, 1).
+					MarginBottom(1).
+					Background(lipgloss.Color("#1a1a2e")).
+					MaxWidth(contentWidth)
+			} else {
+				style = lipgloss.NewStyle().
+					Border(lipgloss.NormalBorder()).
+					BorderForeground(lipgloss.Color("#555555")).
+					Padding(0, 1).
+					MarginBottom(1).
+					MaxWidth(contentWidth)
+			}
+
+			// Shorten description for narrow terminals
+			desc := ShortenDescriptionForWidth(opt.desc, s.GetWidth())
+			content := fmt.Sprintf("%s %s\n%s", opt.icon, opt.title, desc)
+			sb.WriteString(style.Render(content))
+			sb.WriteString("\n")
+		}
 
 		// Show branch selector if existing branch is selected
-		if s.branchChoice == "existing" {
+		if s.branchChoice == BranchChoiceExisting {
 			if s.branchSelector != nil {
 				sb.WriteString(s.branchSelector.View())
 			} else {
 				sb.WriteString("Loading branches...")
 			}
-		} else {
-			sb.WriteString(s.infoStyle.Render("A new branch will be created based on your session name"))
 		}
+
+		// Help text
+		helpStyle := lipgloss.NewStyle().
+			Italic(true).
+			Foreground(lipgloss.Color("#AAAAAA"))
+		sb.WriteString(helpStyle.Render("💡 ↑/↓ or j/k to navigate • Tab to cycle • Enter to select"))
 
 	case StepConfirm:
 		sb.WriteString(s.renderConfirmStep())
@@ -1032,6 +1049,9 @@ func (s *SessionSetupOverlay) renderLocationStep() string {
 		{"existing", "🌿", "Existing Worktree", "Use git worktree"},
 	}
 
+	// Calculate responsive width for options
+	contentWidth := s.GetResponsiveWidth()
+
 	for _, opt := range options {
 		isSelected := s.locationChoice == opt.key
 
@@ -1042,16 +1062,20 @@ func (s *SessionSetupOverlay) renderLocationStep() string {
 				BorderForeground(lipgloss.Color("#00FFFF")).
 				Padding(0, 1).
 				MarginBottom(1).
-				Background(lipgloss.Color("#1a1a2e"))
+				Background(lipgloss.Color("#1a1a2e")).
+				MaxWidth(contentWidth)
 		} else {
 			style = lipgloss.NewStyle().
 				Border(lipgloss.NormalBorder()).
 				BorderForeground(lipgloss.Color("#555555")).
 				Padding(0, 1).
-				MarginBottom(1)
+				MarginBottom(1).
+				MaxWidth(contentWidth)
 		}
 
-		content := fmt.Sprintf("%s %s\n%s", opt.icon, opt.title, opt.desc)
+		// Shorten description for narrow terminals
+		desc := ShortenDescriptionForWidth(opt.desc, s.GetWidth())
+		content := fmt.Sprintf("%s %s\n%s", opt.icon, opt.title, desc)
 		sb.WriteString(style.Render(content))
 		sb.WriteString("\n")
 	}
@@ -1122,4 +1146,510 @@ func (s *SessionSetupOverlay) renderConfirmStep() string {
 	sb.WriteString(helpStyle.Render("🚀 Press Enter to create • Esc to cancel"))
 
 	return sb.String()
+}
+
+// Git Integration Functions
+
+// discoverGitRepositories finds Git repositories in common locations
+func (s *SessionSetupOverlay) discoverGitRepositories() []fuzzy.SearchItem {
+	items := []fuzzy.SearchItem{
+		fuzzy.BasicStringItem{ID: ".", Text: "Current Directory"},
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return items
+	}
+
+	// Add home directory if it's a Git repository
+	if s.isGitRepository(home) {
+		items = append(items, fuzzy.BasicStringItem{
+			ID:   home,
+			Text: "Home Directory (~)",
+		})
+	}
+
+	// Common development directories to scan
+	commonDirs := []string{
+		filepath.Join(home, "projects"),
+		filepath.Join(home, "dev"),
+		filepath.Join(home, "code"),
+		filepath.Join(home, "workspace"),
+		filepath.Join(home, "git"),
+		filepath.Join(home, "repos"),
+		filepath.Join(home, "Documents"),
+		filepath.Join(home, "Desktop"),
+	}
+
+	for _, dir := range commonDirs {
+		repos := s.findGitRepositoriesInDirectory(dir, 2) // Max depth 2
+		items = append(items, repos...)
+	}
+
+	return items
+}
+
+// discoverGitRepositoriesContextual discovers repositories based on user input
+func (s *SessionSetupOverlay) discoverGitRepositoriesContextual(query string) []fuzzy.SearchItem {
+	query = strings.TrimSpace(query)
+
+	// Enhanced empty query handling - provide contextual defaults
+	if query == "" {
+		// Start with current directory context
+		items := []fuzzy.SearchItem{}
+		if cwd, err := os.Getwd(); err == nil {
+			validation := ValidatePathEnhanced(cwd)
+			icon := "📍"
+			description := "current directory"
+			if validation.IsGitRepo {
+				icon = "✅"
+				description = "current Git repository"
+			}
+			items = append(items, fuzzy.BasicStringItem{
+				ID:   cwd,
+				Text: icon + " " + s.getDisplayPath(cwd) + " (" + description + ")",
+			})
+		}
+
+		// Add common suggestions
+		home, err := os.UserHomeDir()
+		if err == nil {
+			items = append(items, fuzzy.BasicStringItem{
+				ID:   home,
+				Text: "🏠 " + s.getDisplayPath(home) + " (home directory)",
+			})
+		}
+
+		// Merge with default discovered repositories but prioritize contextual ones
+		defaultRepos := s.discoverGitRepositories()
+		items = append(items, defaultRepos...)
+		return items
+	}
+
+	items := []fuzzy.SearchItem{}
+
+	// Add literal path with enhanced validation preview
+	literalValidation := ValidatePathEnhanced(query)
+	literalIcon := "📁"
+	literalDesc := "use as typed"
+
+	if literalValidation.Valid {
+		if literalValidation.IsGitRepo {
+			literalIcon = "✅"
+			literalDesc = "Git repository"
+		} else {
+			literalIcon = "📂"
+			literalDesc = "directory"
+		}
+		if len(literalValidation.Warnings) > 0 {
+			literalDesc += " ⚠️"
+		}
+	} else if literalValidation.Error != nil {
+		literalIcon = "❌"
+		literalDesc = "invalid path"
+	}
+
+	items = append(items, fuzzy.SearchItem(fuzzy.BasicStringItem{
+		ID:   query,
+		Text: literalIcon + " " + query + " (" + literalDesc + ")",
+	}))
+
+	// Try to expand and resolve the path for contextual discovery
+	expandedQuery, err := ExpandPath(query)
+	if err != nil {
+		// If expansion fails, still allow the original query
+		expandedQuery = query
+	}
+
+	// Use quick validation for performance in contextual discovery
+	if err := ValidatePathQuick(expandedQuery); err == nil {
+		// Path is valid, determine how to display it
+		validation := ValidatePathEnhanced(expandedQuery)
+
+		var icon, description string
+		if validation.IsGitRepo {
+			icon = "✅"
+			description = "Git repository"
+		} else {
+			icon = "📂"
+			description = "directory"
+		}
+
+		// Add warnings to description if present
+		if len(validation.Warnings) > 0 {
+			description += " ⚠️"
+		}
+
+		items = append(items, fuzzy.BasicStringItem{
+			ID:   expandedQuery,
+			Text: icon + " " + s.getDisplayPath(expandedQuery) + " (" + description + ")",
+		})
+
+		// Scan for Git repositories within this directory
+		repos := s.findGitRepositoriesInDirectory(expandedQuery, 2)
+		items = append(items, repos...)
+
+		// If it looks like a path prefix, scan parent directories
+		parentDir := filepath.Dir(expandedQuery)
+		if parentDir != expandedQuery && parentDir != "." && PathExists(parentDir) {
+			parentRepos := s.findGitRepositoriesInDirectory(parentDir, 1)
+			items = append(items, parentRepos...)
+		}
+	} else {
+		// Path doesn't exist - try to find similar paths or parent directories
+
+		// Try parent directory if the full path doesn't exist
+		parentDir := filepath.Dir(expandedQuery)
+		if parentDir != expandedQuery && parentDir != "." && PathExists(parentDir) && IsDirectory(parentDir) {
+			items = append(items, fuzzy.BasicStringItem{
+				ID:   parentDir,
+				Text: "📁 " + s.getDisplayPath(parentDir) + " (parent directory)",
+			})
+
+			// Scan parent for repositories
+			repos := s.findGitRepositoriesInDirectory(parentDir, 2)
+			items = append(items, repos...)
+		}
+	}
+
+	// Limit results to prevent overwhelming the UI
+	if len(items) > 20 {
+		items = items[:20]
+	}
+
+	return items
+}
+
+// findGitRepositoriesInDirectory recursively finds Git repositories up to maxDepth with graceful error handling
+func (s *SessionSetupOverlay) findGitRepositoriesInDirectory(dir string, maxDepth int) []fuzzy.SearchItem {
+	var items []fuzzy.SearchItem
+
+	if maxDepth <= 0 {
+		return items
+	}
+
+	// Check if directory exists and is accessible
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return items // Directory doesn't exist
+		} else if os.IsPermission(err) {
+			// Permission denied - add a notice but continue
+			items = append(items, fuzzy.BasicStringItem{
+				ID:   dir,
+				Text: fmt.Sprintf("🔒 %s (permission denied)", s.getDisplayPath(dir)),
+			})
+			return items
+		}
+		// Other errors (network timeout, etc.) - skip silently
+		return items
+	}
+
+	// Check if this directory is a Git repository with enhanced error handling
+	if s.isGitRepositoryEnhanced(dir) {
+		displayPath := s.getDisplayPath(dir)
+		icon := "✅"
+
+		// Add network warning if detected
+		if isNetworkPath(dir) {
+			icon = "🌐"
+		}
+
+		items = append(items, fuzzy.BasicStringItem{
+			ID:   dir,
+			Text: fmt.Sprintf("%s %s (%s)", icon, filepath.Base(dir), displayPath),
+		})
+	}
+
+	// Scan subdirectories with graceful error handling
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsPermission(err) {
+			// Add a notice about inaccessible directory
+			items = append(items, fuzzy.BasicStringItem{
+				ID:   dir,
+				Text: fmt.Sprintf("🔒 %s (cannot list contents)", s.getDisplayPath(dir)),
+			})
+		}
+		// For other errors (network timeout, temporary issues), fail silently
+		return items
+	}
+
+	for _, entry := range entries {
+		// Skip non-directories and hidden directories
+		if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		subDir := filepath.Join(dir, entry.Name())
+
+		// Skip known problematic directories to avoid hanging
+		if s.shouldSkipDirectory(entry.Name()) {
+			continue
+		}
+
+		subItems := s.findGitRepositoriesInDirectory(subDir, maxDepth-1)
+		items = append(items, subItems...)
+
+		// Limit total results to avoid UI overwhelm and improve performance
+		if len(items) > 20 {
+			break
+		}
+	}
+
+	return items
+}
+
+// isGitRepositoryEnhanced checks if a directory is a Git repository with better error handling
+func (s *SessionSetupOverlay) isGitRepositoryEnhanced(path string) bool {
+	gitDir := filepath.Join(path, ".git")
+
+	// Use Lstat instead of Stat to avoid following symlinks that might cause issues
+	if stat, err := os.Lstat(gitDir); err == nil {
+		// .git can be a directory or file (for worktrees)
+		return stat.IsDir() || stat.Mode().IsRegular()
+	}
+
+	// If we can't access .git, it's not a Git repository we can work with
+	return false
+}
+
+// shouldSkipDirectory determines if a directory should be skipped during scanning
+func (s *SessionSetupOverlay) shouldSkipDirectory(dirName string) bool {
+	// Skip directories that are likely to cause performance issues or hangs
+	problematicDirs := []string{
+		// System directories that might be slow or restricted
+		"proc", "sys", "dev", "run", "tmp",
+		// macOS-specific directories
+		"System", "Library", "Applications", "Network",
+		// Virtual filesystems and mount points
+		"snap", "flatpak", "AppImage",
+		// Package managers and caches
+		"node_modules", ".npm", ".yarn", ".cargo", ".go",
+		// IDE and editor directories
+		".vscode", ".idea", ".eclipse",
+		// Version control directories (other than .git)
+		".svn", ".hg", ".bzr",
+		// Build and cache directories
+		"build", "dist", "target", "out", "__pycache__",
+	}
+
+	dirLower := strings.ToLower(dirName)
+	for _, problematic := range problematicDirs {
+		if dirLower == strings.ToLower(problematic) {
+			return true
+		}
+	}
+
+	// Skip directories with certain patterns that indicate they're problematic
+	if strings.HasPrefix(dirName, "Backup of ") ||
+		strings.HasPrefix(dirName, "RECYCLER") ||
+		strings.HasPrefix(dirName, "$RECYCLE.BIN") {
+		return true
+	}
+
+	return false
+}
+
+// isGitRepository checks if a directory contains a .git folder
+func (s *SessionSetupOverlay) isGitRepository(path string) bool {
+	gitDir := filepath.Join(path, ".git")
+	if stat, err := os.Stat(gitDir); err == nil {
+		return stat.IsDir() || stat.Mode().IsRegular() // .git can be a directory or file (for worktrees)
+	}
+	return false
+}
+
+// getDisplayPath converts absolute path to a display-friendly format
+func (s *SessionSetupOverlay) getDisplayPath(path string) string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+
+	if strings.HasPrefix(path, home) {
+		return "~" + path[len(home):]
+	}
+
+	return path
+}
+
+// loadGitWorktrees discovers existing Git worktrees on the system
+func (s *SessionSetupOverlay) loadGitWorktrees() []fuzzy.SearchItem {
+	var items []fuzzy.SearchItem
+
+	// First, try to find worktrees from the current working directory
+	if cwd, err := os.Getwd(); err == nil {
+		if s.isGitRepository(cwd) {
+			worktrees := s.getWorktreesForRepository(cwd)
+			items = append(items, worktrees...)
+		}
+	}
+
+	// Try to find worktrees from common Git repositories
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return items
+	}
+
+	// Scan common directories for repositories with worktrees
+	commonDirs := []string{
+		filepath.Join(home, "projects"),
+		filepath.Join(home, "dev"),
+		filepath.Join(home, "code"),
+	}
+
+	for _, dir := range commonDirs {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+
+			repoPath := filepath.Join(dir, entry.Name())
+			if s.isGitRepository(repoPath) {
+				worktrees := s.getWorktreesForRepository(repoPath)
+				items = append(items, worktrees...)
+			}
+
+			// Limit results
+			if len(items) > 15 {
+				break
+			}
+		}
+
+		if len(items) > 15 {
+			break
+		}
+	}
+
+	// Add option to specify custom worktree path
+	items = append(items, fuzzy.BasicStringItem{
+		ID:   "",
+		Text: "📝 Enter custom worktree path...",
+	})
+
+	return items
+}
+
+// getWorktreesForRepository lists worktrees for a specific Git repository
+func (s *SessionSetupOverlay) getWorktreesForRepository(repoPath string) []fuzzy.SearchItem {
+	var items []fuzzy.SearchItem
+
+	cmd := exec.Command("git", "-C", repoPath, "worktree", "list", "--porcelain")
+	output, err := cmd.Output()
+	if err != nil {
+		return items
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if strings.HasPrefix(line, "worktree ") {
+			worktreePath := strings.TrimPrefix(line, "worktree ")
+
+			// Skip if it's the main repository (not a separate worktree)
+			if worktreePath == repoPath {
+				continue
+			}
+
+			// Look for the branch name in the next lines
+			branchName := "unknown"
+			for j := i + 1; j < len(lines) && j < i+5; j++ {
+				nextLine := strings.TrimSpace(lines[j])
+				if strings.HasPrefix(nextLine, "branch ") {
+					branchName = strings.TrimPrefix(nextLine, "branch refs/heads/")
+					break
+				}
+			}
+
+			displayPath := s.getDisplayPath(worktreePath)
+			items = append(items, fuzzy.SearchItem(fuzzy.BasicStringItem{
+				ID:   worktreePath,
+				Text: fmt.Sprintf("%s (%s)", branchName, displayPath),
+			}))
+		}
+	}
+
+	return items
+}
+
+// loadGitBranches loads branches from the specified Git repository
+func (s *SessionSetupOverlay) loadGitBranches(repoPath string) []fuzzy.SearchItem {
+	var items []fuzzy.SearchItem
+
+	// Add debugging
+	if repoPath == "" {
+		return []fuzzy.SearchItem{
+			fuzzy.BasicStringItem{ID: "main", Text: "main (no repository path provided)"},
+		}
+	}
+
+	// Expand the repository path
+	expandedPath, err := ExpandPath(repoPath)
+	if err != nil {
+		expandedPath = repoPath
+	}
+
+	// Check if it's a Git repository
+	if !s.isGitRepository(expandedPath) {
+		return []fuzzy.SearchItem{
+			fuzzy.BasicStringItem{ID: "main", Text: fmt.Sprintf("main (not a Git repository: %s)", expandedPath)},
+		}
+	}
+
+	// Get local branches
+	cmd := exec.Command("git", "-C", expandedPath, "branch", "--format=%(refname:short)")
+	output, err := cmd.Output()
+	if err == nil {
+		branches := strings.Split(strings.TrimSpace(string(output)), "\n")
+		for _, branch := range branches {
+			branch = strings.TrimSpace(branch)
+			if branch != "" {
+				items = append(items, fuzzy.BasicStringItem{
+					ID:   branch,
+					Text: fmt.Sprintf("%s (local)", branch),
+				})
+			}
+		}
+	}
+
+	// Get remote branches
+	cmd = exec.Command("git", "-C", expandedPath, "branch", "-r", "--format=%(refname:short)")
+	output, err = cmd.Output()
+	if err == nil {
+		branches := strings.Split(strings.TrimSpace(string(output)), "\n")
+		for _, branch := range branches {
+			branch = strings.TrimSpace(branch)
+			if branch != "" && !strings.Contains(branch, "HEAD") {
+				// Remove origin/ prefix for display
+				displayBranch := branch
+				if strings.HasPrefix(branch, "origin/") {
+					displayBranch = strings.TrimPrefix(branch, "origin/")
+				}
+
+				items = append(items, fuzzy.BasicStringItem{
+					ID:   displayBranch,
+					Text: fmt.Sprintf("%s (remote)", displayBranch),
+				})
+			}
+		}
+	}
+
+	// If no branches found, provide a default
+	if len(items) == 0 {
+		items = append(items, fuzzy.BasicStringItem{
+			ID:   "main",
+			Text: "main (default branch)",
+		})
+	}
+
+	return items
 }

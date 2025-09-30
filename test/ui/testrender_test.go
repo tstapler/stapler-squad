@@ -63,8 +63,8 @@ func TestComponentDimensions(t *testing.T) {
 	// Create a confirmation overlay
 	confirmOverlay := overlay.NewConfirmationOverlay("Test with different width")
 
-	// Set custom width
-	confirmOverlay.SetWidth(30)
+	// Set custom dimensions using BaseOverlay's SetSize
+	confirmOverlay.SetSize(30, 10)
 
 	// Create test renderer
 	renderer := NewTestRenderer().

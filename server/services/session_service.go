@@ -392,12 +392,186 @@ func (s *SessionService) WatchSessions(
 }
 
 // StreamTerminal provides bidirectional streaming for terminal I/O.
-// TODO: Implement in Task 2.3
+// Implements bidirectional streaming where:
+// - Client sends: terminal input and resize events
+// - Server sends: terminal output from PTY
 func (s *SessionService) StreamTerminal(
 	ctx context.Context,
 	stream *connect.BidiStream[sessionv1.TerminalData, sessionv1.TerminalData],
 ) error {
-	return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("StreamTerminal not yet implemented"))
+	// Get the first message to determine which session to attach to
+	initialMsg, err := stream.Receive()
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to receive initial message: %w", err))
+	}
+
+	if initialMsg == nil {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no initial message received"))
+	}
+
+	if initialMsg.SessionId == "" {
+		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+
+	// Load the session instance
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == initialMsg.SessionId {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", initialMsg.SessionId))
+	}
+
+	// Verify session is started and not paused
+	if !instance.Started() {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session not started"))
+	}
+
+	if instance.Paused() {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session is paused"))
+	}
+
+	// Get PTY for reading terminal output
+	ptyFile, err := instance.GetPTYReader()
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PTY reader: %w", err))
+	}
+
+	// Create context for managing goroutines
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// Channel for errors from goroutines
+	errCh := make(chan error, 2)
+
+	// Goroutine 1: Read from PTY and send to client (terminal output)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errCh <- fmt.Errorf("panic in output goroutine: %v", r)
+			}
+		}()
+
+		buf := make([]byte, 1024) // 1KB chunks as per task requirements
+		for {
+			select {
+			case <-streamCtx.Done():
+				return
+			default:
+				n, readErr := ptyFile.Read(buf)
+				if n > 0 {
+					// Send terminal output to client
+					outputMsg := &sessionv1.TerminalData{
+						SessionId: initialMsg.SessionId,
+						Data: &sessionv1.TerminalData_Output{
+							Output: &sessionv1.TerminalOutput{
+								Data: buf[:n],
+							},
+						},
+					}
+
+					if sendErr := stream.Send(outputMsg); sendErr != nil {
+						errCh <- fmt.Errorf("failed to send output: %w", sendErr)
+						return
+					}
+				}
+
+				if readErr != nil {
+					// EOF or other read error
+					if readErr.Error() != "EOF" {
+						errCh <- fmt.Errorf("PTY read error: %w", readErr)
+					}
+					return
+				}
+			}
+		}
+	}()
+
+	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				errCh <- fmt.Errorf("panic in input goroutine: %v", r)
+			}
+		}()
+
+		for {
+			select {
+			case <-streamCtx.Done():
+				return
+			default:
+				msg, receiveErr := stream.Receive()
+				if receiveErr != nil {
+					// Stream closed or error
+					errCh <- fmt.Errorf("stream receive error: %w", receiveErr)
+					return
+				}
+
+				if msg == nil {
+					// Stream ended cleanly
+					return
+				}
+
+				switch data := msg.Data.(type) {
+				case *sessionv1.TerminalData_Input:
+					// Forward input to PTY
+					if _, writeErr := instance.WriteToPTY(data.Input.Data); writeErr != nil {
+						// Send error back to client
+						errorMsg := &sessionv1.TerminalData{
+							SessionId: msg.SessionId,
+							Data: &sessionv1.TerminalData_Error{
+								Error: &sessionv1.TerminalError{
+									Message: fmt.Sprintf("Failed to write to PTY: %v", writeErr),
+									Code:    "WRITE_ERROR",
+								},
+							},
+						}
+						_ = stream.Send(errorMsg) // Best effort
+						errCh <- writeErr
+						return
+					}
+
+				case *sessionv1.TerminalData_Resize:
+					// Handle terminal resize
+					if resizeErr := instance.ResizePTY(int(data.Resize.Cols), int(data.Resize.Rows)); resizeErr != nil {
+						// Send error back to client
+						errorMsg := &sessionv1.TerminalData{
+							SessionId: msg.SessionId,
+							Data: &sessionv1.TerminalData_Error{
+								Error: &sessionv1.TerminalError{
+									Message: fmt.Sprintf("Failed to resize terminal: %v", resizeErr),
+									Code:    "RESIZE_ERROR",
+								},
+							},
+						}
+						_ = stream.Send(errorMsg) // Best effort
+						// Don't return on resize errors, they're not fatal
+					}
+
+				case *sessionv1.TerminalData_Error:
+					// Client sent an error, log it
+					fmt.Printf("Client error: %s (%s)\n", data.Error.Message, data.Error.Code)
+				}
+			}
+		}
+	}()
+
+	// Wait for either context cancellation or error
+	select {
+	case <-streamCtx.Done():
+		return nil // Clean shutdown
+	case err := <-errCh:
+		return connect.NewError(connect.CodeInternal, err)
+	}
 }
 
 // GetSessionDiff retrieves the current git diff for a session.

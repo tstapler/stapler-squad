@@ -1,13 +1,13 @@
 package app
 
 import (
+	"claude-squad/app/state"
 	"claude-squad/config"
 	"claude-squad/session"
 	"claude-squad/ui"
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 )
@@ -37,9 +37,8 @@ func BenchmarkNavigationPerformance(b *testing.B) {
 		appConfig:            appConfig,
 		program:              "echo",
 		autoYes:              true,
-		state:                stateDefault,
+		stateManager: state.NewManager(),
 		appState:             appState,
-		selectionUpdateDelay: 150 * time.Millisecond,
 	}
 	h.list = ui.NewList(&h.spinner, true, appState)
 
@@ -107,9 +106,8 @@ func BenchmarkInstanceChangedComponents(b *testing.B) {
 		appConfig:            appConfig,
 		program:              "echo",
 		autoYes:              true,
-		state:                stateDefault,
+		stateManager: state.NewManager(),
 		appState:             appState,
-		selectionUpdateDelay: 150 * time.Millisecond,
 	}
 	h.list = ui.NewList(&h.spinner, true, appState)
 

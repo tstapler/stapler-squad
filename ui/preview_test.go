@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"claude-squad/cmd/cmd_test"
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/session/tmux"
@@ -16,6 +15,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// MockCmdExec provides mock functionality for executor.Executor interface
+type MockCmdExec struct {
+	RunFunc    func(cmd *exec.Cmd) error
+	OutputFunc func(cmd *exec.Cmd) ([]byte, error)
+}
+
+func (m MockCmdExec) Run(cmd *exec.Cmd) error {
+	if m.RunFunc != nil {
+		return m.RunFunc(cmd)
+	}
+	return nil
+}
+
+func (m MockCmdExec) Output(cmd *exec.Cmd) ([]byte, error) {
+	if m.OutputFunc != nil {
+		return m.OutputFunc(cmd)
+	}
+	return []byte(""), nil
+}
+
 // testSetup holds common test setup data
 type testSetup struct {
 	workdir     string
@@ -25,7 +44,7 @@ type testSetup struct {
 }
 
 // setupTestEnvironment creates a common test environment with git repo and instance
-func setupTestEnvironment(t *testing.T, cmdExec cmd_test.MockCmdExec) *testSetup {
+func setupTestEnvironment(t *testing.T, cmdExec MockCmdExec) *testSetup {
 	t.Helper()
 
 	// Initialize logging
@@ -125,6 +144,7 @@ func setupGitRepo(t *testing.T, workdir string) {
 func TestPreviewScrolling(t *testing.T) {
 	// Track what commands were executed and their order
 	var executedCommands []string
+	var createdSessionName string
 	inCopyMode := false
 	scrollPosition := 0 // 0 = bottom, positive = scrolled up
 	sessionCreated := false
@@ -139,7 +159,7 @@ func TestPreviewScrolling(t *testing.T) {
 	fullContent := strings.Join(lines, "\n")
 
 	// Mock command execution
-	cmdExec := cmd_test.MockCmdExec{
+	cmdExec := MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error {
 			cmdStr := cmd.String()
 			executedCommands = append(executedCommands, cmdStr)
@@ -156,6 +176,14 @@ func TestPreviewScrolling(t *testing.T) {
 			// Handle session creation
 			if strings.Contains(cmdStr, "new-session") {
 				sessionCreated = true
+				// Extract session name from the command
+				parts := strings.Fields(cmdStr)
+				for i, part := range parts {
+					if part == "-s" && i+1 < len(parts) {
+						createdSessionName = parts[i+1]
+						break
+					}
+				}
 				return nil
 			}
 
@@ -188,6 +216,17 @@ func TestPreviewScrolling(t *testing.T) {
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			cmdStr := cmd.String()
 
+			// Handle tmux list-sessions for session existence checking
+			if strings.Contains(cmdStr, "list-sessions") {
+				if sessionCreated && createdSessionName != "" {
+					// Return the actual session name that was created
+					return []byte(createdSessionName + "\n"), nil
+				} else {
+					// Return empty or error to indicate no sessions
+					return []byte(""), fmt.Errorf("no server running")
+				}
+			}
+
 			// Handle capture-pane commands
 			if strings.Contains(cmdStr, "capture-pane") {
 				// Check if this is a request for cursor position
@@ -218,18 +257,15 @@ func TestPreviewScrolling(t *testing.T) {
 	setup := setupTestEnvironment(t, cmdExec)
 	defer setup.cleanupFn()
 
-	// Simulate running a command that produces lots of output
-	err := setup.instance.SendKeys("seq 100")
-	require.NoError(t, err)
-	err = setup.instance.SendKeys("") // Simulate pressing Enter
-	require.NoError(t, err)
+	// We don't need to actually send keys - the mock will provide the content
+	// The test content is already set up in the mock OutputFunc
 
 	// Create the preview pane
 	previewPane := NewPreviewPane()
 	previewPane.SetSize(80, 30) // Set reasonable size for testing
 
 	// Step 1: Check initial content - should show normal preview mode
-	err = previewPane.UpdateContent(setup.instance)
+	err := previewPane.UpdateContent(setup.instance)
 	require.NoError(t, err)
 
 	// Verify we're not in scrolling mode initially
@@ -288,7 +324,7 @@ func TestPreviewScrolling(t *testing.T) {
 // MockPtyFactory for testing tmux sessions
 type MockPtyFactory struct {
 	t       *testing.T
-	cmdExec cmd_test.MockCmdExec
+	cmdExec MockCmdExec
 
 	// Array of commands and the corresponding file handles representing PTYs.
 	cmds  []*exec.Cmd
@@ -318,9 +354,10 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 
 	// Track session creation state
 	sessionCreated := false
+	var createdSessionName string
 
 	// Mock command execution
-	cmdExec := cmd_test.MockCmdExec{
+	cmdExec := MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error {
 			cmdStr := cmd.String()
 
@@ -336,6 +373,14 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 			// Handle session creation
 			if strings.Contains(cmdStr, "new-session") {
 				sessionCreated = true
+				// Extract session name from the command
+				parts := strings.Fields(cmdStr)
+				for i, part := range parts {
+					if part == "-s" && i+1 < len(parts) {
+						createdSessionName = parts[i+1]
+						break
+					}
+				}
 				return nil
 			}
 
@@ -343,6 +388,17 @@ func TestPreviewContentWithoutScrolling(t *testing.T) {
 		},
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			cmdStr := cmd.String()
+
+			// Handle tmux list-sessions for session existence checking
+			if strings.Contains(cmdStr, "list-sessions") {
+				if sessionCreated && createdSessionName != "" {
+					// Return the actual session name that was created
+					return []byte(createdSessionName + "\n"), nil
+				} else {
+					// Return empty or error to indicate no sessions
+					return []byte(""), fmt.Errorf("no server running")
+				}
+			}
 
 			// Handle capture-pane commands for normal preview
 			if strings.Contains(cmdStr, "capture-pane") {

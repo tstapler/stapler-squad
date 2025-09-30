@@ -65,6 +65,16 @@ func NewTabbedWindow(preview *PreviewPane, diff *DiffPane) *TabbedWindow {
 	}
 }
 
+// Cleanup stops background workers and cleans up resources
+func (w *TabbedWindow) Cleanup() {
+	if w.preview != nil {
+		w.preview.Cleanup()
+	}
+	if w.diff != nil {
+		w.diff.Cleanup()
+	}
+}
+
 func (w *TabbedWindow) SetInstance(instance *session.Instance) {
 	w.instance = instance
 }
@@ -108,26 +118,50 @@ func (w *TabbedWindow) ToggleWithReset(instance *session.Instance) error {
 	return nil
 }
 
-// UpdatePreview updates the content of the preview pane. instance may be nil.
+// UpdatePreview updates the content of the preview pane asynchronously. instance may be nil.
 func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
-	// Skip expensive preview updates if not on preview tab
-	if w.activeTab != PreviewTab {
-		return nil
-	}
-
 	// Skip if instance is paused to avoid expensive tmux operations
 	if instance != nil && instance.Status == session.Paused {
 		return nil
 	}
 
-	return w.preview.UpdateContent(instance)
+	// Use async update instead of blocking update - returns immediately
+	w.preview.UpdateContentAsync(instance)
+	log.InfoLog.Printf("UpdatePreview called for instance: %s", getInstanceName(instance))
+
+	// Don't call ProcessResults() here - let the main UI loop handle it
+	// This ensures we're truly non-blocking
+	return nil
 }
 
+// ProcessPreviewResults processes pending async preview results
+func (w *TabbedWindow) ProcessPreviewResults() error {
+	return w.preview.ProcessResults()
+}
+
+// ProcessDiffResults processes pending async diff results
+func (w *TabbedWindow) ProcessDiffResults() error {
+	return w.diff.ProcessResults()
+}
+
+// ProcessAllResults processes both preview and diff results
+func (w *TabbedWindow) ProcessAllResults() error {
+	if err := w.ProcessPreviewResults(); err != nil {
+		return err
+	}
+	return w.ProcessDiffResults()
+}
+
+// UpdateDiff updates the content of the diff pane asynchronously
 func (w *TabbedWindow) UpdateDiff(instance *session.Instance) {
-	if w.activeTab != DiffTab {
+	// Skip if instance is paused to avoid expensive git operations
+	if instance != nil && instance.Status == session.Paused {
 		return
 	}
-	w.diff.SetDiff(instance)
+
+	// Use async update instead of blocking update
+	w.diff.UpdateDiffAsync(instance)
+	log.InfoLog.Printf("UpdateDiff called for instance: %s", getInstanceName(instance))
 }
 
 // ResetPreviewToNormalMode resets the preview pane to normal mode
@@ -220,4 +254,12 @@ func (w *TabbedWindow) String() string {
 			lipgloss.Left, lipgloss.Top, content))
 
 	return lipgloss.JoinVertical(lipgloss.Left, "\n", row, window)
+}
+
+// getInstanceName safely gets the name of an instance for logging
+func getInstanceName(instance *session.Instance) string {
+	if instance == nil {
+		return "nil"
+	}
+	return instance.Title
 }

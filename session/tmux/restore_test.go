@@ -9,26 +9,25 @@ import (
 	"strings"
 	"testing"
 
-	"claude-squad/cmd/cmd_test"
-
 	"github.com/stretchr/testify/require"
 )
 
-// TestRestoreWithExistingSession tests that Restore() properly attaches to existing sessions
+// TestRestoreWithExistingSession tests that Restore() properly verifies existing sessions
 func TestRestoreWithExistingSession(t *testing.T) {
 	ptyFactory := NewMockPtyFactory(t)
 
 	// Mock executor that simulates an existing session
-	cmdExec := cmd_test.MockCmdExec{
+	cmdExec := MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error {
-			cmdStr := cmd.String()
-			if strings.Contains(cmdStr, "has-session") {
-				// Session exists
-				return nil
-			}
 			return nil
 		},
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			cmdStr := cmd.String()
+			// Handle DoesSessionExist() which uses list-sessions
+			if strings.Contains(cmdStr, "list-sessions") && strings.Contains(cmdStr, "#{session_name}") {
+				// Session exists - return session name
+				return []byte("claudesquad_test-session"), nil
+			}
 			return []byte("output"), nil
 		},
 	}
@@ -38,10 +37,10 @@ func TestRestoreWithExistingSession(t *testing.T) {
 	err := session.Restore()
 	require.NoError(t, err)
 
-	// Should only run attach command, not create new session
-	require.Equal(t, 1, len(ptyFactory.cmds))
-	require.Equal(t, "tmux attach-session -t claudesquad_test-session",
-		executor.ToString(ptyFactory.cmds[0]))
+	// Current behavior: Restore() only verifies the session exists and sets up monitoring
+	// It doesn't create PTY or attach commands - those happen later when needed
+	// So we just verify that Restore() succeeded without error
+	require.Equal(t, 0, len(ptyFactory.cmds), "Restore() should not create any PTY commands when session already exists")
 }
 
 // TestRestoreWithWorkDirParameter tests the new RestoreWithWorkDir method
@@ -55,7 +54,7 @@ func TestRestoreWithWorkDirParameter(t *testing.T) {
 
 	// Mock executor that captures commands
 	var capturedCommands []string
-	cmdExec := cmd_test.MockCmdExec{
+	cmdExec := MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error {
 			cmdStr := cmd.String()
 			capturedCommands = append(capturedCommands, cmdStr)
@@ -124,7 +123,7 @@ func TestRestoreFallbackToWorkingDirectory(t *testing.T) {
 	require.NoError(t, err)
 
 	var capturedCommands []string
-	cmdExec := cmd_test.MockCmdExec{
+	cmdExec := MockCmdExec{
 		RunFunc: func(cmd *exec.Cmd) error {
 			cmdStr := cmd.String()
 			capturedCommands = append(capturedCommands, cmdStr)

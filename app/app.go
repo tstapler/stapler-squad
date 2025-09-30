@@ -1,11 +1,17 @@
 package app
 
 import (
+	appsession "claude-squad/app/session"
+	"claude-squad/app/state"
+	appui "claude-squad/app/ui"
+	"claude-squad/cmd"
+	"claude-squad/cmd/commands"
 	"claude-squad/config"
-	"claude-squad/keys"
 	"claude-squad/log"
 	"claude-squad/session"
+	"claude-squad/terminal"
 	"claude-squad/ui"
+	"claude-squad/ui/fuzzy"
 	"claude-squad/ui/overlay"
 	"context"
 	"fmt"
@@ -21,6 +27,7 @@ const GlobalInstanceLimit = 100
 
 // Run is the main entrypoint into the application.
 func Run(ctx context.Context, program string, autoYes bool) error {
+	// Use alt screen for proper rendering, but with corrected size detection
 	p := tea.NewProgram(
 		newHome(ctx, program, autoYes),
 		tea.WithAltScreen(),
@@ -30,25 +37,6 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 	return err
 }
 
-type state int
-
-const (
-	stateDefault state = iota
-	// stateNew is the state when the user is creating a new instance.
-	stateNew
-	// statePrompt is the state when the user is entering a prompt.
-	statePrompt
-	// stateHelp is the state when a help screen is displayed.
-	stateHelp
-	// stateConfirm is the state when a confirmation modal is displayed.
-	stateConfirm
-	// stateCreatingSession is the state when a session is being created asynchronously.
-	stateCreatingSession
-	// stateAdvancedNew is the state when the user is using the advanced session setup.
-	stateAdvancedNew
-	// stateGit is the state when the git status overlay is displayed.
-	stateGit
-)
 
 type home struct {
 	ctx context.Context
@@ -63,12 +51,16 @@ type home struct {
 	// appConfig stores persistent application configuration
 	appConfig *config.Config
 	// appState stores persistent application state like seen help screens
-	appState config.AppState
+	appState *config.State
+	// bridge provides centralized command and key management
+	bridge *cmd.Bridge
 
 	// -- State --
 
-	// state is the current discrete state of the application
-	state state
+	// stateManager provides centralized state management
+	stateManager state.Manager
+	// sessionController handles session operations
+	sessionController appsession.Controller
 	// newInstanceFinalizer is called when the state is stateNew and then you press enter.
 	// It registers the new instance in the list after the instance has been started.
 	newInstanceFinalizer func()
@@ -81,17 +73,25 @@ type home struct {
 
 	// asyncSessionCreation is used for tracking async session creation
 	asyncSessionCreationActive bool
+	sessionCreationCancel      context.CancelFunc // Cancel function for ongoing session creation
 
-	// Performance optimization: debounce selection updates
-	selectionUpdateTimer *time.Timer
-	selectionUpdateDelay time.Duration
-	
+	// Pending session creation for advanced setup
+	pendingSessionInstance *session.Instance
+	pendingAutoYes         bool
+
 	// Responsive navigation for instant feedback
-	lastSelectedInstance *session.Instance
-	responsiveNav        *ResponsiveNavigationManager
+	responsiveNav *ResponsiveNavigationManager
+
+	// Terminal management for size detection and signal handling
+	terminalManager *terminal.Manager
+	signalManager   *terminal.SignalManager
 
 	// -- UI Components --
 
+	// uiCoordinator manages all UI components and their orchestration
+	uiCoordinator appui.Coordinator
+
+	// Legacy direct component access (will be removed after migration)
 	// list displays the list of instances
 	list *ui.List
 	// menu displays the bottom menu
@@ -102,134 +102,767 @@ type home struct {
 	errBox *ui.ErrBox
 	// global spinner instance. we plumb this down to where it's needed
 	spinner spinner.Model
-	// textInputOverlay handles text input with state
-	textInputOverlay *overlay.TextInputOverlay
-	// textOverlay displays text information
+	// Legacy overlays still used by help system (will be migrated in future tasks)
+	// textOverlay displays text information for help system
 	textOverlay *overlay.TextOverlay
-	// confirmationOverlay displays confirmation modals
-	confirmationOverlay *overlay.ConfirmationOverlay
-	// sessionSetupOverlay handles advanced session creation
-	sessionSetupOverlay *overlay.SessionSetupOverlay
-	// gitStatusOverlay provides fugitive-style git interface
-	gitStatusOverlay *overlay.GitStatusOverlay
+	// messagesOverlay displays scrollable message history with vim-like navigation
+	messagesOverlay *overlay.MessagesOverlay
+	// Note: All other overlays now managed by UI coordinator
+	// statusBar provides vim-style status bar with :messages command
+	statusBar *ui.StatusBar
+}
+
+// newHomeWithDependencies creates a home instance using dependency injection
+// This constructor follows clean architecture principles and makes testing easier
+func newHomeWithDependencies(deps Dependencies) *home {
+	// Create home instance with injected dependencies
+	h := &home{
+		ctx:                  deps.GetContext(),
+		program:              deps.GetProgram(),
+		autoYes:              deps.GetAutoYes(),
+		storage:              deps.GetStorage(),
+		appConfig:            deps.GetAppConfig(),
+		appState:             deps.GetAppState(),
+		stateManager:         deps.GetStateManager(),
+		terminalManager:      deps.GetTerminalManager(),
+		signalManager:        deps.GetSignalManager(),
+		list:                 deps.GetList(),
+		menu:                 deps.GetMenu(),
+		tabbedWindow:         deps.GetTabbedWindow(),
+		errBox:               deps.GetErrBox(),
+		spinner:              deps.GetSpinner(),
+		statusBar:            deps.GetStatusBar(),
+		uiCoordinator:        deps.GetUICoordinator(),
+		bridge:               deps.GetBridge(),
+	}
+
+	// Initialize coordinator with components
+	if err := h.uiCoordinator.InitializeComponents(h.autoYes, h.appState); err != nil {
+		panic(err) // In production, this is a fatal error
+	}
+
+	// Populate coordinator registry with existing components for gradual migration
+	h.populateCoordinatorRegistry()
+
+	// Initialize session controller with dependencies - only in production mode
+	h.sessionController = appsession.NewController(appsession.Dependencies{
+		List:                h.list,
+		Storage:             h.storage,
+		AutoYes:             h.autoYes,
+		GlobalInstanceLimit: GlobalInstanceLimit,
+		ErrorHandler:        h.handleError,
+		StateTransition: func(to string) error {
+			// Map string states to enum and transition
+			switch to {
+			case "Default":
+				return h.transitionToDefault()
+			case "AdvancedNew":
+				return h.transitionToOverlay(state.AdvancedNew, "Default", "sessionSetup")
+			case "CreatingSession":
+				return h.transitionToCreatingSession()
+			default:
+				return fmt.Errorf("unknown state transition: %s", to)
+			}
+		},
+		InstanceChanged: h.instanceChanged,
+		ConfirmAction:   h.confirmAction,
+		ShowHelpScreen: func(helpType interface{}, onComplete func()) {
+			// Convert interface{} to helpText and call the actual method
+			if helpText, ok := helpType.(helpText); ok {
+				h.showHelpScreen(helpText, onComplete)
+			}
+		},
+		SetSessionSetupOverlay: func(overlay *overlay.SessionSetupOverlay) {
+			// Update: Use coordinator's CreateSessionSetupOverlay method for proper initialization
+			// This follows the same pattern as other overlays (CreateConfirmationOverlay, etc.)
+			if overlay != nil {
+				// Create and show the session setup overlay using coordinator's method
+				if err := h.uiCoordinator.CreateSessionSetupOverlay(); err != nil {
+					log.ErrorLog.Printf("Failed to create session setup overlay: %v", err)
+				}
+			} else {
+				// Clear the overlay
+				h.uiCoordinator.HideOverlay(appui.ComponentSessionSetupOverlay)
+			}
+		},
+		GetSessionSetupOverlay: func() *overlay.SessionSetupOverlay {
+			return h.uiCoordinator.GetSessionSetupOverlay()
+		},
+		SetPendingSession: func(inst *session.Instance, autoYes bool) {
+			h.pendingSessionInstance = inst
+			h.pendingAutoYes = autoYes
+		},
+		GetNewInstanceFinalizer: func() func() {
+			return h.newInstanceFinalizer
+		},
+		SetNewInstanceFinalizer: func(f func()) {
+			h.newInstanceFinalizer = f
+		},
+	})
+
+	// Load saved instances and perform initialization
+	h.initializeWithSavedData()
+
+	// Old command registry removed - now using bridge system exclusively
+
+	// Initialize the command bridge and setup handlers
+	h.initializeCommandBridge()
+
+	return h
 }
 
 func newHome(ctx context.Context, program string, autoYes bool) *home {
-	// Load application config
-	appConfig := config.LoadConfig()
+	// Use dependency injection pattern
+	deps := NewProductionDependencies(ctx, program, autoYes)
+	return newHomeWithDependencies(deps)
+}
 
-	// Load application state with built-in locking
-	appState := config.LoadState()
+// initializeWithSavedData handles loading and initializing saved session data
+func (h *home) initializeWithSavedData() {
+	// Add startup info message
+	h.statusBar.SetInfo(fmt.Sprintf("Claude Squad started - program: %s, autoYes: %v", h.program, h.autoYes))
 
-	// Initialize storage with the state
-	storage, err := session.NewStorage(appState)
+	// Load saved instances - no synchronous health checking to avoid startup bottleneck
+	instances, err := h.storage.LoadInstances()
 	if err != nil {
-		fmt.Printf("Failed to initialize storage: %v\n", err)
+		// Fatal error before TUI starts - log and exit
+		log.ErrorLog.Printf("Failed to load instances: %v", err)
+		fmt.Fprintf(os.Stderr, "Fatal error: Failed to load instances: %v\n", err)
 		os.Exit(1)
 	}
 
-	h := &home{
-		ctx:                  ctx,
-		spinner:              spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		menu:                 ui.NewMenu(),
-		tabbedWindow:         ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane()),
-		errBox:               ui.NewErrBox(),
-		storage:              storage,
-		appConfig:            appConfig,
-		program:              program,
-		autoYes:              autoYes,
-		state:                stateDefault,
-		appState:             appState,
-		selectionUpdateDelay: 150 * time.Millisecond, // Debounce navigation updates
-	}
-	h.list = ui.NewList(&h.spinner, autoYes, appState)
-
-	// Load saved instances
-	instances, err := storage.LoadInstances()
-	if err != nil {
-		fmt.Printf("Failed to load instances: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Perform health check on loaded instances to ensure tmux sessions are running
-	healthChecker := session.NewSessionHealthChecker(storage)
+	// Fast startup: Add instances without expensive health checks
+	// Health checking is now performed lazily when sessions are accessed
 	if len(instances) > 0 {
-		log.InfoLog.Printf("Performing health check on %d loaded instances...", len(instances))
-		healthResults, err := healthChecker.CheckAllSessions()
-		if err != nil {
-			log.WarningLog.Printf("Health check failed: %v", err)
-		} else {
-			healthyCount := 0
-			recoveredCount := 0
-			for _, result := range healthResults {
-				if result.IsHealthy {
-					healthyCount++
-				}
-				if result.RecoverySuccess {
-					recoveredCount++
-				}
-			}
-			log.InfoLog.Printf("Health check completed: %d healthy, %d recovered", healthyCount, recoveredCount)
-		}
-
-		// Reload instances after potential recovery
-		instances, err = storage.LoadInstances()
-		if err != nil {
-			log.WarningLog.Printf("Failed to reload instances after health check: %v", err)
-		}
+		log.DebugLog.Printf("Loaded %d sessions - health checks will be performed lazily", len(instances))
 	}
 
-	// Add loaded instances to the list
+	// Add loaded instances using facade method
 	for _, instance := range instances {
-		// Call the finalizer immediately.
-		h.list.AddInstance(instance)()
-		if autoYes {
+		h.addInstanceToList(instance)
+		if h.autoYes {
 			instance.AutoYes = true
 		}
 	}
 
-	// Restore the last selected index if it's still valid
-	lastSelectedIdx := appState.GetSelectedIndex()
-	if lastSelectedIdx >= 0 && lastSelectedIdx < h.list.NumInstances() {
-		h.list.SetSelectedIdx(lastSelectedIdx)
+	// Restore selection using facade method
+	h.restoreLastSelection()
+
+	// Start optional background health checker for maintenance (non-blocking)
+	if h.appConfig.PerformBackgroundHealthChecks {
+		go h.startBackgroundHealthChecker()
+	}
+}
+
+// startBackgroundHealthChecker runs health checks in background without blocking UI
+func (h *home) startBackgroundHealthChecker() {
+	healthChecker := session.NewSessionHealthChecker(h.storage)
+
+	// Wait 30 seconds after startup before first check to avoid startup contention
+	time.Sleep(30 * time.Second)
+
+	// Create stop channel tied to app context
+	stopChan := make(chan struct{})
+	go func() {
+		<-h.ctx.Done()
+		close(stopChan)
+	}()
+
+	// Run health checks every 5 minutes in background
+	log.DebugLog.Printf("Starting background health checker")
+	healthChecker.ScheduledHealthCheck(5*time.Minute, stopChan)
+}
+
+// ensureSessionHealthy performs lazy health checking on a specific session when accessed
+func (h *home) ensureSessionHealthy(instance *session.Instance) error {
+	if instance == nil {
+		return fmt.Errorf("instance is nil")
 	}
 
-	return h
+	// Skip health check for paused sessions
+	if instance.Paused() {
+		return nil
+	}
+
+	// Skip if session hasn't been started yet
+	if !instance.Started() {
+		return nil
+	}
+
+	// Quick check if tmux session is alive - this is the most common issue
+	if !instance.TmuxAlive() {
+		log.DebugLog.Printf("Session '%s' tmux died, attempting recovery", instance.Title)
+
+		// Attempt recovery
+		if err := instance.Start(false); err != nil {
+			return fmt.Errorf("failed to recover session '%s': %w", instance.Title, err)
+		}
+
+		// Verify recovery worked
+		if !instance.TmuxAlive() {
+			return fmt.Errorf("session '%s' recovery failed - tmux still not alive", instance.Title)
+		}
+
+		log.DebugLog.Printf("Session '%s' recovered successfully", instance.Title)
+	}
+
+	return nil
+}
+
+// initializeCommandBridge sets up the centralized command system
+func (m *home) initializeCommandBridge() {
+	log.InfoLog.Printf("initializeCommandBridge: starting bridge initialization")
+	// Get the global bridge instance
+	m.bridge = cmd.GetGlobalBridge()
+	log.InfoLog.Printf("initializeCommandBridge: got global bridge, current context: %s", m.bridge.GetCurrentContext())
+
+	// Set up session handlers
+	sessionHandlers := &commands.SessionHandlers{
+		OnNewSession: func() (tea.Model, tea.Cmd) {
+			return m.handleNewSession()
+		},
+		OnKillSession: func() (tea.Model, tea.Cmd) {
+			return m.handleKillSession()
+		},
+		OnAttachSession: func() (tea.Model, tea.Cmd) {
+			return m.handleAttachSession()
+		},
+		OnCheckout: func() (tea.Model, tea.Cmd) {
+			return m.handleCheckoutSession()
+		},
+		OnResume: func() (tea.Model, tea.Cmd) {
+			return m.handleResumeSession()
+		},
+		OnClaudeSettings: func() (tea.Model, tea.Cmd) {
+			return m.handleClaudeSettings()
+		},
+	}
+
+	// Set up git handlers
+	gitHandlers := &commands.GitHandlers{
+		OnGitStatus: func() (tea.Model, tea.Cmd) {
+			return m.handleGitStatus()
+		},
+	}
+
+	// Set up navigation handlers
+	navigationHandlers := &commands.NavigationHandlers{
+		OnUp: func() (tea.Model, tea.Cmd) {
+			return m.handleNavigationUp()
+		},
+		OnDown: func() (tea.Model, tea.Cmd) {
+			return m.handleNavigationDown()
+		},
+		OnLeft: func() (tea.Model, tea.Cmd) {
+			// Left arrow collapses categories - TODO: implement category navigation
+			return m, nil
+		},
+		OnRight: func() (tea.Model, tea.Cmd) {
+			// Right arrow expands categories - TODO: implement category navigation
+			return m, nil
+		},
+		OnPageUp: func() (tea.Model, tea.Cmd) {
+			// Page up - use facade methods
+			for i := 0; i < 10; i++ {
+				if m.isAtNavigationStart() {
+					break
+				}
+				m.navigateUp()
+			}
+			return m, m.instanceChanged()
+		},
+		OnPageDown: func() (tea.Model, tea.Cmd) {
+			// Page down - use facade methods
+			for i := 0; i < 10; i++ {
+				if m.isAtNavigationEnd() {
+					break
+				}
+				m.navigateDown()
+			}
+			return m, m.instanceChanged()
+		},
+		OnSearch: func() (tea.Model, tea.Cmd) {
+			return m.handleSearch()
+		},
+	}
+
+	// Set up organization handlers
+	organizationHandlers := &commands.OrganizationHandlers{
+		OnFilterPaused: func() (tea.Model, tea.Cmd) {
+			return m.handleFilterPaused()
+		},
+		OnClearFilters: func() (tea.Model, tea.Cmd) {
+			return m.handleClearFilters()
+		},
+		OnToggleGroup: func() (tea.Model, tea.Cmd) {
+			return m.handleToggleGroup()
+		},
+	}
+
+	// Set up system handlers
+	systemHandlers := &commands.SystemHandlers{
+		OnHelp: func() (tea.Model, tea.Cmd) {
+			return m.handleHelp()
+		},
+		OnQuit: func() (tea.Model, tea.Cmd) {
+			return m.handleQuit()
+		},
+		OnEscape: func() (tea.Model, tea.Cmd) {
+			return m.handleEscape()
+		},
+		OnTab: func() (tea.Model, tea.Cmd) {
+			return m.handleTab()
+		},
+		OnConfirm: func() (tea.Model, tea.Cmd) {
+			return m.handleConfirm()
+		},
+		OnCommandMode: func() (tea.Model, tea.Cmd) {
+			return m.handleCommandMode()
+		},
+	}
+
+	// Initialize the bridge with all handlers
+	m.bridge.Initialize(sessionHandlers, gitHandlers, navigationHandlers, organizationHandlers, systemHandlers)
+
+	// Validate bridge setup and log any key conflicts
+	if issues := m.bridge.ValidateSetup(); len(issues) > 0 {
+		log.InfoLog.Println("Bridge validation issues detected:")
+		for _, issue := range issues {
+			log.InfoLog.Printf("  - %s", issue)
+		}
+	} else {
+		log.InfoLog.Println("Bridge validation passed - no key conflicts detected")
+	}
+
+	// Set initial context to list view
+	m.bridge.SetContext(cmd.ContextList)
+
+	// Update menu with available commands for the current context
+	m.updateMenuFromContext()
+}
+
+// updateMenuFromContext updates the menu with commands available in the current context
+func (m *home) updateMenuFromContext() {
+	if m.bridge != nil && m.menu != nil {
+		m.menu.SetAvailableCommands(m.bridge.GetAvailableKeys())
+	}
+}
+
+// Command handler methods for the centralized command bridge
+
+func (m *home) handleNewSession() (tea.Model, tea.Cmd) {
+	result := m.sessionController.NewSession()
+	if result.Error != nil {
+		return m, result.Cmd
+	}
+	return m, result.Cmd
+}
+
+func (m *home) handleKillSession() (tea.Model, tea.Cmd) {
+	result := m.sessionController.KillSession()
+	return m, result.Cmd
+}
+
+func (m *home) handleAttachSession() (tea.Model, tea.Cmd) {
+	// Get selected instance for lazy health checking
+	selected := m.getSelectedInstance()
+	if selected != nil {
+		// Perform lazy health check before attachment
+		if err := m.ensureSessionHealthy(selected); err != nil {
+			return m, m.handleError(fmt.Errorf("session health check failed: %w", err))
+		}
+	}
+
+	result := m.sessionController.AttachSession()
+	return m, result.Cmd
+}
+
+func (m *home) handleCheckoutSession() (tea.Model, tea.Cmd) {
+	result := m.sessionController.CheckoutSession()
+	return m, result.Cmd
+}
+
+func (m *home) handleResumeSession() (tea.Model, tea.Cmd) {
+	result := m.sessionController.ResumeSession()
+	return m, result.Cmd
+}
+
+func (m *home) handleClaudeSettings() (tea.Model, tea.Cmd) {
+	selected := m.getSelectedInstance()
+	if selected == nil {
+		return m, m.handleError(fmt.Errorf("no session selected for Claude settings"))
+	}
+
+	// Get current Claude settings or create defaults
+	currentSettings := session.ClaudeSettings{
+		AutoReattach:          true,
+		PreferredSessionName:  "",
+		CreateNewOnMissing:    true,
+		ShowSessionSelector:   false,
+		SessionTimeoutMinutes: 60, // Default 1 hour timeout
+	}
+
+	// If the session already has Claude session data, use its settings
+	if claudeSession := selected.GetClaudeSession(); claudeSession != nil {
+		currentSettings = claudeSession.Settings
+	}
+
+	// Detect available Claude sessions
+	sessionManager := session.NewClaudeSessionManager()
+	availableSessions, err := sessionManager.DetectAvailableSessions()
+	if err != nil {
+		log.WarningLog.Printf("Failed to detect Claude sessions: %v", err)
+		availableSessions = []session.ClaudeSession{} // Use empty list if detection fails
+	}
+
+	// Create the Claude settings overlay using coordinator
+	if err := m.uiCoordinator.CreateClaudeSettingsOverlay(currentSettings, availableSessions); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create Claude settings overlay: %w", err))
+	}
+
+	// Get the overlay and set up callbacks
+	claudeSettingsOverlay := m.uiCoordinator.GetClaudeSettingsOverlay()
+	if claudeSettingsOverlay != nil {
+		claudeSettingsOverlay.OnComplete = func(settings session.ClaudeSettings, selectedSessionID string) {
+			// Update the selected instance's Claude session settings
+			if claudeSession := selected.GetClaudeSession(); claudeSession != nil {
+				// Update existing session data
+				claudeSession.Settings = settings
+			} else {
+				// Create new Claude session data
+				sessionData := &session.ClaudeSessionData{
+					SessionID:      selectedSessionID,
+					ConversationID: "",
+					ProjectName:    selected.Title,
+					LastAttached:   time.Now(),
+					Settings:       settings,
+					Metadata:       make(map[string]string),
+				}
+				selected.SetClaudeSession(sessionData)
+			}
+
+			// Save the updated settings
+			if err := m.saveAllInstances(); err != nil {
+				m.handleError(fmt.Errorf("failed to save Claude settings: %w", err))
+			} else {
+				log.InfoLog.Printf("Claude settings updated for session '%s'", selected.Title)
+			}
+
+			// Close the overlay using coordinator
+			m.uiCoordinator.HideOverlay(appui.ComponentClaudeSettingsOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+
+		claudeSettingsOverlay.OnCancel = func() {
+			// Close the overlay without saving using coordinator
+			m.uiCoordinator.HideOverlay(appui.ComponentClaudeSettingsOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+	}
+
+	// Change state
+	m.transitionToState(state.ClaudeSettings)
+
+	return m, tea.WindowSize()
+}
+
+func (m *home) handleNavigationUp() (tea.Model, tea.Cmd) {
+	if m.isAtNavigationStart() {
+		return m, nil
+	}
+	m.navigateUp()
+	return m, m.instanceChanged()
+}
+
+func (m *home) handleNavigationDown() (tea.Model, tea.Cmd) {
+	log.DebugLog.Printf("handleNavigationDown called")
+	// Use facade method for navigation
+	m.navigateDown()
+	log.DebugLog.Printf("Called navigateDown(), triggering instance change")
+	return m, m.instanceChanged()
+}
+
+func (m *home) handlePageUp() (tea.Model, tea.Cmd) {
+	// Page up - implement with multiple Up calls using facade
+	for i := 0; i < 10; i++ {
+		if m.isAtNavigationStart() {
+			break
+		}
+		m.navigateUp()
+	}
+	return m, m.instanceChanged()
+}
+
+func (m *home) handlePageDown() (tea.Model, tea.Cmd) {
+	// Page down - implement with multiple Down calls using facade
+	for i := 0; i < 10; i++ {
+		if m.isAtNavigationEnd() {
+			break
+		}
+		m.navigateDown()
+	}
+	return m, m.instanceChanged()
+}
+
+func (m *home) handleToggleFilter() (tea.Model, tea.Cmd) {
+	return m.handleFilterPaused()
+}
+
+func (m *home) handleNavigationLeft() (tea.Model, tea.Cmd) {
+	// Handle left navigation - collapse category
+	// Use existing category toggle logic
+	return m.handleToggleGroup()
+}
+
+func (m *home) handleNavigationRight() (tea.Model, tea.Cmd) {
+	// Handle right navigation - expand category
+	// Use existing category toggle logic
+	return m.handleToggleGroup()
+}
+
+// Note: Navigation boundary checking now handled by facade methods isAtNavigationStart() and isAtNavigationEnd()
+
+func (m *home) handleSearch() (tea.Model, tea.Cmd) {
+	// Collect all working directories from active instances for indexing
+	var directories []string
+	for _, instance := range m.getAllInstances() {
+		if instance != nil && !instance.Paused() {
+			if workDir := instance.GetWorkingDirectory(); workDir != "" {
+				directories = append(directories, workDir)
+			}
+		}
+	}
+
+	// If no active instances, fall back to session search
+	if len(directories) == 0 {
+		_, previousQuery := m.list.GetSearchState()
+
+		// Create live search overlay using coordinator
+		if err := m.uiCoordinator.CreateLiveSearchOverlay("Search Sessions", previousQuery); err != nil {
+			return m, m.handleError(fmt.Errorf("failed to create live search overlay: %w", err))
+		}
+
+		// Get the overlay and set up callbacks
+		liveSearchOverlay := m.uiCoordinator.GetLiveSearchOverlay()
+		if liveSearchOverlay != nil {
+			// Set up live search callback for instant results
+			liveSearchOverlay.SetOnSearchLive(func(query string) {
+				m.list.SearchByTitleLive(query)
+			})
+
+			// Set up submit callback for when user presses Enter
+			liveSearchOverlay.SetOnSubmit(func(query string) {
+				if query == "" {
+					m.list.ExitSearchMode()
+				} else {
+					m.list.SearchByTitle(query)
+				}
+			})
+
+			// Set up cancel callback for when user presses Esc
+			liveSearchOverlay.SetOnCancel(func() {
+				m.list.ExitSearchMode()
+			})
+		}
+
+		m.transitionToState(state.Prompt)
+		m.menu.SetState(ui.StateSearch)
+		return m, nil
+	}
+
+	// Create ZF search overlay for file search using coordinator
+	if err := m.uiCoordinator.CreateZFSearchOverlay("Search Files", "Enter filename or path...", directories); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create file search overlay: %w", err))
+	}
+
+	// Get the overlay and configure callbacks
+	zfOverlay := m.uiCoordinator.GetZFSearchOverlay()
+	if zfOverlay != nil {
+		zfOverlay.SetOnSelect(func(item fuzzy.SearchItem) {
+			// Open the selected file (this could be extended to integrate with external editor)
+			filePath := item.GetID()
+			log.InfoLog.Printf("Selected file: %s", filePath)
+
+			// For now, just show the path in status bar
+			m.statusBar.SetInfo(fmt.Sprintf("Selected: %s", filePath))
+
+			// Close overlay using coordinator
+			m.uiCoordinator.HideOverlay(appui.ComponentZFSearchOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		})
+
+		zfOverlay.SetOnCancel(func() {
+			// Close overlay without action using coordinator
+			m.uiCoordinator.HideOverlay(appui.ComponentZFSearchOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		})
+	}
+
+	m.transitionToState(state.ZFSearch)
+	m.menu.SetState(ui.StateSearch)
+	return m, tea.WindowSize()
+}
+
+func (m *home) handleFilterPaused() (tea.Model, tea.Cmd) {
+	m.list.TogglePausedFilter()
+	return m, nil
+}
+
+func (m *home) handleClearFilters() (tea.Model, tea.Cmd) {
+	m.list.ClearAllFilters()
+	return m, tea.WindowSize()
+}
+
+func (m *home) handleToggleGroup() (tea.Model, tea.Cmd) {
+	selected := m.list.GetSelectedInstance()
+	if selected != nil {
+		category := selected.Category
+		if category == "" {
+			category = "Uncategorized"
+		}
+		m.list.ToggleCategory(category)
+	}
+	return m, nil
+}
+
+func (m *home) handleHelp() (tea.Model, tea.Cmd) {
+	return m.showHelpScreen(helpTypeGeneral{}, nil)
+}
+
+func (m *home) handleEscape() (tea.Model, tea.Cmd) {
+	// Handle escape key for search mode
+	if m.isInState(state.Prompt) && m.menu.GetState() == ui.StateSearch {
+		m.list.ExitSearchMode()
+		m.transitionToDefault()
+		m.menu.SetState(ui.StateDefault)
+		m.uiCoordinator.HideOverlay(appui.ComponentTextInputOverlay)
+		return m, tea.WindowSize()
+	}
+	return m, nil
+}
+
+func (m *home) handleTab() (tea.Model, tea.Cmd) {
+	m.tabbedWindow.Toggle()
+	m.menu.SetInDiffTab(m.tabbedWindow.IsInDiffTab())
+	return m, m.instanceChanged()
+}
+
+func (m *home) handleConfirm() (tea.Model, tea.Cmd) {
+	// Handle confirmation in dialogs - trigger the confirmation action
+	if m.isInState(state.Confirm) {
+		if confirmationOverlay := m.uiCoordinator.GetConfirmationOverlay(); confirmationOverlay != nil {
+			// Trigger the confirmation callback
+			if confirmationOverlay.OnConfirm != nil {
+				confirmationOverlay.OnConfirm()
+			}
+			m.transitionToDefault()
+			m.uiCoordinator.HideOverlay(appui.ComponentConfirmationOverlay)
+		}
+	}
+	return m, nil
+}
+
+func (m *home) handleCommandMode() (tea.Model, tea.Cmd) {
+	// Enter vim-style command mode
+	m.statusBar.EnterCommandMode()
+	return m, nil
 }
 
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
+	// Debug: Compare received dimensions with our comprehensive detection
+	// Defensive nil check to prevent panic in tests
+	var detectedWidth, detectedHeight int
+	if m.terminalManager == nil {
+		detectedWidth, detectedHeight = msg.Width, msg.Height
+	} else {
+		detectedWidth, detectedHeight, _ = m.terminalManager.GetReliableSize()
+	}
+	// Debug: log.InfoLog.Printf("WindowSizeMsg: received %dx%d, detected %dx%d (method: %s)",
+	//	msg.Width, msg.Height, detectedWidth, detectedHeight, method)
+
+	// If there's a significant difference, log a warning
+	widthDiff := abs(msg.Width - detectedWidth)
+	heightDiff := abs(msg.Height - detectedHeight)
+	if widthDiff > 5 || heightDiff > 5 {
+		log.WarningLog.Printf("Size mismatch detected! BubbleTea: %dx%d vs Detection: %dx%d (diff: %d,%d)",
+			msg.Width, msg.Height, detectedWidth, detectedHeight, widthDiff, heightDiff)
+	}
+
 	// List takes 30% of width, preview takes 70%
 	listWidth := int(float32(msg.Width) * 0.3)
 	tabsWidth := msg.Width - listWidth
 
-	// Menu takes 10% of height, list and window take 90%
-	contentHeight := int(float32(msg.Height) * 0.9)
-	menuHeight := msg.Height - contentHeight - 1     // minus 1 for error box
-	m.errBox.SetSize(int(float32(msg.Width)*0.9), 1) // error box takes 1 row
+	// Menu takes space at bottom, error box takes 1 row, content gets remaining space
+	// No padding since we removed PaddingTop from the View method
+	menuHeight := 3 // Menu typically needs 3 rows for proper display
+	errorBoxHeight := 1
+	contentHeight := msg.Height - menuHeight - errorBoxHeight
+
+	if contentHeight < 10 { // Minimum content height
+		contentHeight = 10
+	}
+
+	m.errBox.SetSize(int(float32(msg.Width)*0.9), errorBoxHeight)
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
 
-	if m.textInputOverlay != nil {
-		m.textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
+	// Update overlay sizes using coordinator
+	if textInputOverlay := m.uiCoordinator.GetTextInputOverlay(); textInputOverlay != nil {
+		textInputOverlay.SetSize(int(float32(msg.Width)*0.6), int(float32(msg.Height)*0.4))
 	}
+	if messagesOverlay := m.uiCoordinator.GetMessagesOverlay(); messagesOverlay != nil {
+		width := int(float32(msg.Width) * 0.8)
+		height := int(float32(msg.Height) * 0.8)
+		messagesOverlay.SetDimensions(width, height)
+	}
+	if sessionSetupOverlay := m.uiCoordinator.GetSessionSetupOverlay(); sessionSetupOverlay != nil {
+		sessionSetupOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
+	}
+	if gitStatusOverlay := m.uiCoordinator.GetGitStatusOverlay(); gitStatusOverlay != nil {
+		gitStatusOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
+	}
+	if claudeSettingsOverlay := m.uiCoordinator.GetClaudeSettingsOverlay(); claudeSettingsOverlay != nil {
+		claudeSettingsOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
+	}
+	if zfSearchOverlay := m.uiCoordinator.GetZFSearchOverlay(); zfSearchOverlay != nil {
+		zfSearchOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
+	}
+	// Handle remaining legacy overlays used by help system
 	if m.textOverlay != nil {
-		m.textOverlay.SetWidth(int(float32(msg.Width) * 0.6))
+		m.textOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
 	}
-	if m.sessionSetupOverlay != nil {
-		m.sessionSetupOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
-	}
-	if m.gitStatusOverlay != nil {
-		m.gitStatusOverlay.SetSize(int(float32(msg.Width)*0.8), int(float32(msg.Height)*0.8))
+	if m.messagesOverlay != nil {
+		width := int(float32(msg.Width) * 0.8)
+		height := int(float32(msg.Height) * 0.8)
+		m.messagesOverlay.SetDimensions(width, height)
 	}
 
 	previewWidth, previewHeight := m.tabbedWindow.GetPreviewSize()
 	if err := m.list.SetSessionPreviewSize(previewWidth, previewHeight); err != nil {
-		log.ErrorLog.Print(err)
+		// PTY initialization errors are now handled at the list level as warnings
+		// Only log as error if it's a different type of issue
+		log.WarningLog.Printf("Preview size update issues: %v", err)
 	}
 	m.menu.SetSize(msg.Width, menuHeight)
+
+	// Update coordinator layout
+	m.uiCoordinator.HandleResize(msg.Width, msg.Height)
+
+	// Propagate window size to all tmux sessions for IntelliJ terminal compatibility
+	// This ensures that tmux sessions receive the correct terminal dimensions even when
+	// SIGWINCH signals don't work properly in embedded terminals
+	for _, instance := range m.list.GetInstances() {
+		if instance != nil && instance.Started() {
+			instance.SetWindowSize(msg.Width, msg.Height)
+		}
+	}
 }
 
 func (m *home) Init() tea.Cmd {
@@ -237,10 +870,14 @@ func (m *home) Init() tea.Cmd {
 	// update the spinner, which sends a new spinner.TickMsg. I think this lasts forever lol.
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
-		func() tea.Msg {
-			time.Sleep(100 * time.Millisecond)
+		// CRITICAL: Use proper async pattern to avoid blocking BubbleTea's main event loop
+		tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 			return previewTickMsg{}
-		},
+		}),
+		// CRITICAL: Use proper async pattern to avoid blocking BubbleTea's main event loop
+		tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+			return previewResultsMsg{}
+		}),
 		tickUpdateMetadataCmd,
 	}
 
@@ -249,6 +886,23 @@ func (m *home) Init() tea.Cmd {
 		cmds = append(cmds, tickSessionDetectionCmd(m.appConfig.SessionDetectionInterval))
 	}
 
+	// Terminal size checking disabled - let BubbleTea handle size detection naturally
+	// without alt screen, BubbleTea's natural detection should work better with tiling WMs
+	// cmds = append(cmds, tickTerminalSizeCheckCmd())
+
+	// Override BubbleTea's initial size detection for tiling window managers
+	// Only add terminal size detection if not in test environment
+	if m.terminalManager != nil {
+		cmds = append(cmds, func() tea.Msg {
+			// Use the new terminal manager for size detection
+			return m.terminalManager.CreateWindowSizeMsg()
+		})
+	}
+
+	// SIGWINCH signal handling disabled - let BubbleTea handle resize detection naturally
+	// without alt screen, BubbleTea should position content correctly in visible area
+	// cmds = append(cmds, setupSIGWINCHHandler())
+
 	return tea.Batch(cmds...)
 }
 
@@ -256,35 +910,59 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// Ensure categories are organized whenever the model updates
 	m.list.OrganizeByCategory()
 
+	// Check for pending session creation from advanced setup
+	if m.pendingSessionInstance != nil && !m.asyncSessionCreationActive {
+		instance := m.pendingSessionInstance
+		autoYes := m.pendingAutoYes
+
+		// Clear pending state
+		m.pendingSessionInstance = nil
+		m.pendingAutoYes = false
+
+		// Set async flag to prevent double processing
+		m.asyncSessionCreationActive = true
+
+		// Start async session creation with timeout protection
+		return m, m.createSessionWithTimeout(instance, false, autoYes)
+	}
+
 	switch msg := msg.(type) {
 	case sessionCreationResultMsg:
 		m.asyncSessionCreationActive = false
 
+		// CRITICAL: Clean up the session setup overlay after creation completes
+		// This ensures the overlay is properly removed from the UI coordinator
+		m.uiCoordinator.HideOverlay(appui.ComponentSessionSetupOverlay)
+
 		// Handle error if session creation failed
 		if msg.err != nil {
 			m.list.Kill()
-			m.state = stateDefault
+			m.transitionToDefault()
 			return m, m.handleError(msg.err)
 		}
 
 		// Save after adding new instance
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		if err := m.saveAllInstances(); err != nil {
 			return m, m.handleError(err)
 		}
 
 		// Instance added successfully, call the finalizer.
-		m.newInstanceFinalizer()
+		if m.newInstanceFinalizer != nil {
+			m.newInstanceFinalizer()
+		}
 		if msg.autoYes {
 			msg.instance.AutoYes = true
 		}
 
 		// Reset state
-		m.state = stateDefault
+		m.transitionToDefault()
 		if msg.promptAfterName {
-			m.state = statePrompt
+			m.transitionToState(state.Prompt)
 			m.menu.SetState(ui.StatePrompt)
-			// Initialize the text input overlay
-			m.textInputOverlay = overlay.NewTextInputOverlay("Enter prompt", "")
+			// Initialize the text input overlay using coordinator
+			if err := m.uiCoordinator.CreateTextInputOverlay("Enter prompt", ""); err != nil {
+				return m, m.handleError(fmt.Errorf("failed to create text input overlay: %w", err))
+			}
 			m.promptAfterName = false
 		} else {
 			m.menu.SetState(ui.StateDefault)
@@ -298,21 +976,32 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// First check if the selected instance exists and isn't paused before updating
 		selected := m.list.GetSelectedInstance()
 		if selected == nil || selected.Paused() {
-			return m, func() tea.Msg {
-				time.Sleep(500 * time.Millisecond) // Slower refresh for paused/empty instances
+			// CRITICAL: Use proper async pattern to avoid blocking BubbleTea's main event loop
+			return m, tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
 				return previewTickMsg{}
-			}
+			})
 		}
 
 		// Update the UI with the selected instance
 		cmd := m.instanceChanged()
 		return m, tea.Batch(
 			cmd,
-			func() tea.Msg {
-				time.Sleep(100 * time.Millisecond)
+			// CRITICAL: Use proper async pattern to avoid blocking BubbleTea's main event loop
+			tea.Tick(100*time.Millisecond, func(time.Time) tea.Msg {
 				return previewTickMsg{}
-			},
+			}),
 		)
+	case previewResultsMsg:
+		// Process any pending async results (both preview and diff)
+		if err := m.tabbedWindow.ProcessAllResults(); err != nil {
+			return m, m.handleError(err)
+		}
+
+		// Schedule next result processing
+		// CRITICAL: Use proper async pattern to avoid blocking BubbleTea's main event loop
+		return m, tea.Tick(50*time.Millisecond, func(time.Time) tea.Msg {
+			return previewResultsMsg{}
+		})
 	case keyupMsg:
 		m.menu.ClearKeydown()
 		return m, nil
@@ -394,10 +1083,43 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.updateHandleWindowSizeEvent(msg)
 		return m, nil
+	// case terminalSizeCheckMsg:
+		// Terminal size checking disabled - BubbleTea handles this naturally
+		// width, height, method := GetReliableTerminalSize()
+		// if override_width, override_height := getManualSizeOverride(); override_width > 0 && override_height > 0 {
+		//	width = override_width
+		//	height = override_height
+		// }
+		// if width != m.lastTerminalWidth || height != m.lastTerminalHeight {
+		//	m.lastTerminalWidth = width
+		//	m.lastTerminalHeight = height
+		//	return m, tea.Batch(
+		//		tickTerminalSizeCheckCmd(),
+		//		func() tea.Msg { return tea.WindowSizeMsg{Width: width, Height: height} },
+		//	)
+		// }
+		// return m, tickTerminalSizeCheckCmd()
+	// case sigwinchMsg:
+		// SIGWINCH handling disabled - BubbleTea handles resize naturally
+		// log.InfoLog.Printf("Processing SIGWINCH resize event: %dx%d", msg.width, msg.height)
+		// return m, tea.Batch(
+		//	func() tea.Msg { return tea.WindowSizeMsg{Width: msg.width, Height: msg.height} },
+		//	setupSIGWINCHHandler(),
+		// )
+	case terminal.ResizeMsg:
+		// Handle terminal resize messages from signal manager
+		log.InfoLog.Printf("Processing terminal resize event: %dx%d", msg.Width, msg.Height)
+		return m, func() tea.Msg { return tea.WindowSizeMsg{Width: msg.Width, Height: msg.Height} }
+	case terminal.SizeCheckMsg:
+		// Handle periodic size checking for IntelliJ compatibility
+		if m.terminalManager.HasSizeChanged() {
+			return m, func() tea.Msg { return m.terminalManager.CreateWindowSizeMsg() }
+		}
+		return m, m.signalManager.CreateSizeCheckCmd()
 	case gitStatusLoadedMsg:
 		// Handle git status data loaded
-		if m.gitStatusOverlay != nil {
-			m.gitStatusOverlay.SetFiles(msg.files, msg.branchName)
+		if gitStatusOverlay := m.uiCoordinator.GetGitStatusOverlay(); gitStatusOverlay != nil {
+			gitStatusOverlay.SetFiles(msg.files, msg.branchName)
 		}
 		return m, nil
 	case error:
@@ -406,31 +1128,44 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case instanceChangedMsg:
 		// Handle instance changed after confirmation action
 		return m, m.instanceChanged()
-	case instanceExpensiveUpdateMsg:
-		// Handle debounced expensive updates
-		return m, m.instanceExpensiveUpdate()
+	// instanceExpensiveUpdateMsg handler removed - now handled by ResponsiveNavigationManager
 	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
+		var spinnerCmd tea.Cmd
+		m.spinner, spinnerCmd = m.spinner.Update(msg)
+		return m, spinnerCmd
 	}
 	return m, nil
 }
 
 func (m *home) handleQuit() (tea.Model, tea.Cmd) {
-	// Save instances before quitting
-	if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
-		return m, m.handleError(err)
-	}
+	quitStart := time.Now()
+	log.DebugLog.Printf("handleQuit: Starting quit sequence")
 
-	// Release any locks held by the state manager
-	if stateManager, ok := m.storage.GetStateManager().(config.StateManager); ok {
-		if err := stateManager.Close(); err != nil {
-			log.WarningLog.Printf("Failed to close state manager: %v", err)
-			// Continue with quit anyway
-		}
-	}
+	// Perform final synchronous save before quitting to ensure no data loss
+	saveStart := time.Now()
+	instances := m.getAllInstances()
+	log.DebugLog.Printf("handleQuit: Retrieved %d instances to save", len(instances))
 
+	if err := m.storage.SaveInstancesSync(instances); err != nil {
+		log.WarningLog.Printf("Failed final save on quit: %v", err)
+		// Continue with quit anyway - we tried our best
+	}
+	log.DebugLog.Printf("handleQuit: SaveInstancesSync took %v", time.Since(saveStart))
+
+	// Output session log paths to stderr before exit
+	logPathsStart := time.Now()
+	log.LogSessionPathsToStderr()
+	log.DebugLog.Printf("handleQuit: LogSessionPathsToStderr took %v", time.Since(logPathsStart))
+
+	// Close storage - this flushes any pending async saves and releases locks
+	closeStart := time.Now()
+	if err := m.storage.Close(); err != nil {
+		log.WarningLog.Printf("Failed to close storage: %v", err)
+		// Continue with quit anyway
+	}
+	log.DebugLog.Printf("handleQuit: storage.Close took %v", time.Since(closeStart))
+
+	log.DebugLog.Printf("handleQuit: Total quit sequence took %v", time.Since(quitStart))
 	return m, tea.Quit
 }
 
@@ -441,63 +1176,67 @@ func (m *home) handleMenuHighlighting(msg tea.KeyMsg) (cmd tea.Cmd, returnEarly 
 		m.keySent = false
 		return nil, false
 	}
-	if m.state == statePrompt || m.state == stateHelp || m.state == stateConfirm {
+	if m.isInState(state.Prompt) || m.isInState(state.Help) || m.isInState(state.Confirm) {
 		return nil, false
 	}
-	// If it's in the global keymap, we should try to highlight it.
-	name, ok := keys.GlobalKeyStringsMap[msg.String()]
-	if !ok {
-		return nil, false
-	}
-
-	if m.list.GetSelectedInstance() != nil && m.list.GetSelectedInstance().Paused() && name == keys.KeyEnter {
-		return nil, false
-	}
-	if name == keys.KeyShiftDown || name == keys.KeyShiftUp {
+	// Check if the key is bound to any command in the current context
+	if !m.bridge.IsKeyBound(msg.String()) {
 		return nil, false
 	}
 
-	// Skip the menu highlighting if the key is not in the map or we are using the shift up and down keys.
-	// TODO: cleanup: when you press enter on stateNew, we use keys.KeySubmitName. We should unify the keymap.
-	if name == keys.KeyEnter && m.state == stateNew {
-		name = keys.KeySubmitName
+	// Skip highlighting for paused instances on enter key
+	if m.list.GetSelectedInstance() != nil && m.list.GetSelectedInstance().Paused() && msg.String() == "enter" {
+		return nil, false
 	}
+	// Skip highlighting for shift navigation keys
+	if msg.String() == "shift+up" || msg.String() == "shift+down" {
+		return nil, false
+	}
+
 	m.keySent = true
+
+	// Highlight the pressed key in the menu
+	m.menu.Keydown(msg.String())
+
 	return tea.Batch(
 		func() tea.Msg { return msg },
-		m.keydownCallback(name)), true
+		m.keydownCallback(msg.String())), true
 }
 
-func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
-	cmd, returnEarly := m.handleMenuHighlighting(msg)
+func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, teaCmd tea.Cmd) {
+	menuCmd, returnEarly := m.handleMenuHighlighting(msg)
 	if returnEarly {
-		return m, cmd
+		return m, menuCmd
 	}
 
-	if m.state == stateHelp {
+	if m.isInState(state.Help) {
 		return m.handleHelpState(msg)
 	}
 
-	if m.state == stateAdvancedNew {
+	if m.isInState(state.AdvancedNew) {
 		return m.handleAdvancedSessionSetupUpdate(msg)
 	}
 
-	if m.state == stateGit {
+	if m.isInState(state.Git) {
 		return m.handleGitState(msg)
 	}
 
-	if m.state == stateNew {
+	if m.isInState(state.ClaudeSettings) {
+		return m.handleClaudeSettingsState(msg)
+	}
+
+	if m.isInState(state.ZFSearch) {
+		return m.handleZFSearchState(msg)
+	}
+
+	if m.isInState(state.New) {
 		// Handle quit commands first. Don't handle q because the user might want to type that.
 		if msg.String() == "ctrl+c" {
-			m.state = stateDefault
+			m.transitionToDefault()
 			m.promptAfterName = false
 			m.list.Kill()
 			return m, tea.Sequence(
 				tea.WindowSize(),
-				func() tea.Msg {
-					m.menu.SetState(ui.StateDefault)
-					return nil
-				},
 			)
 		}
 
@@ -510,9 +1249,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 
 			// Set state to creating session and update menu
-			m.state = stateCreatingSession
-			m.asyncSessionCreationActive = true
-			m.menu.SetState(ui.StateCreatingInstance)
+			m.transitionToCreatingSession()
 
 			// Start session creation in a goroutine
 			// Store important values before the goroutine starts
@@ -520,18 +1257,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			autoYes := m.autoYes
 
 			// Return the tick command to send a message after session is created
-			return m, func() tea.Msg {
-				// Start the instance in a blocking operation
-				err := instance.Start(true)
-
-				// Return a message with the result
-				return sessionCreationResultMsg{
-					instance:        instance,
-					err:             err,
-					promptAfterName: promptAfterName,
-					autoYes:         autoYes,
-				}
-			}
+			return m, m.createSessionWithTimeout(instance, promptAfterName, autoYes)
 		case tea.KeyRunes:
 			if len(instance.Title) >= 32 {
 				return m, m.handleError(fmt.Errorf("title cannot be longer than 32 characters"))
@@ -552,7 +1278,7 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			}
 		case tea.KeyEsc:
 			m.list.Kill()
-			m.state = stateDefault
+			m.transitionToDefault()
 			m.instanceChanged()
 
 			return m, tea.Sequence(
@@ -565,21 +1291,39 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		default:
 		}
 		return m, nil
-	} else if m.state == statePrompt {
-		// Use the new TextInputOverlay component to handle all key events
-		shouldClose := m.textInputOverlay.HandleKeyPress(msg)
+	} else if m.isInState(state.Prompt) {
+		var shouldClose bool
 
-		// Check if the form was submitted or canceled
-		if shouldClose {
-			// Get the current menu state
-			// Handle search mode differently than prompt mode
-			if m.menu.GetState() == ui.StateSearch {
+		// Handle search overlay (live search)
+		liveSearchOverlay := m.uiCoordinator.GetLiveSearchOverlay()
+		if liveSearchOverlay != nil {
+			shouldClose = liveSearchOverlay.HandleKeyPress(msg)
+			if shouldClose {
 				// Close the overlay and reset state
-				m.textInputOverlay = nil
-				m.state = stateDefault
+				m.uiCoordinator.HideOverlay(appui.ComponentLiveSearchOverlay)
+				m.transitionToDefault()
 				m.menu.SetState(ui.StateDefault)
 				return m, tea.WindowSize()
 			}
+			return m, nil
+		}
+
+		// Handle regular text input overlay (prompts)
+		textInputOverlay := m.uiCoordinator.GetTextInputOverlay()
+		if textInputOverlay != nil {
+			shouldClose = textInputOverlay.HandleKeyPress(msg)
+
+			// Check if the form was submitted or canceled
+			if shouldClose {
+				// Get the current menu state
+				// Handle search mode differently than prompt mode
+				if m.menu.GetState() == ui.StateSearch {
+					// Close the overlay and reset state
+					m.uiCoordinator.HideOverlay(appui.ComponentTextInputOverlay)
+					m.transitionToDefault()
+					m.menu.SetState(ui.StateDefault)
+					return m, tea.WindowSize()
+				}
 
 			// Regular prompt handling
 			selected := m.list.GetSelectedInstance()
@@ -587,16 +1331,16 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 			if selected == nil {
 				return m, nil
 			}
-			if m.textInputOverlay.IsSubmitted() {
-				if err := selected.SendPrompt(m.textInputOverlay.GetValue()); err != nil {
+			if textInputOverlay.IsSubmitted() {
+				if err := selected.SendPrompt(textInputOverlay.GetValue()); err != nil {
 					// TODO: we probably end up in a bad state here.
 					return m, m.handleError(err)
 				}
 			}
 
 			// Close the overlay and reset state
-			m.textInputOverlay = nil
-			m.state = stateDefault
+			m.uiCoordinator.HideOverlay(appui.ComponentTextInputOverlay)
+			m.transitionToDefault()
 			return m, tea.Sequence(
 				tea.WindowSize(),
 				func() tea.Msg {
@@ -605,19 +1349,9 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 					return nil
 				},
 			)
+			}
 		}
 
-		return m, nil
-	}
-
-	// Handle confirmation state
-	if m.state == stateConfirm {
-		shouldClose := m.confirmationOverlay.HandleKeyPress(msg)
-		if shouldClose {
-			m.state = stateDefault
-			m.confirmationOverlay = nil
-			return m, nil
-		}
 		return m, nil
 	}
 
@@ -637,321 +1371,170 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, cmd tea.Cmd) {
 		}
 	}
 
-	// Handle quit commands first
-	if msg.String() == "ctrl+c" || msg.String() == "q" {
-		return m.handleQuit()
+	// Handle status bar command mode
+	if m.statusBar.IsInCommandMode() {
+		m.statusBar.HandleCommandInput(msg)
+
+		if msg.String() == "enter" {
+			command := m.statusBar.GetCommand()
+			m.statusBar.ExitCommandMode()
+
+			// Handle commands
+			switch command {
+			case "messages":
+				m.transitionToState(state.Help)
+				uiMessages := m.statusBar.GetMessageHistory()
+
+				// Convert ui.StatusMessage to overlay.StatusMessage to avoid circular imports
+				overlayMessages := make([]overlay.StatusMessage, len(uiMessages))
+				for i, msg := range uiMessages {
+					overlayMessages[i] = overlay.StatusMessage{
+						Timestamp: msg.Timestamp,
+						Level:     msg.Level,
+						Message:   msg.Message,
+					}
+				}
+
+				// Create messages overlay using coordinator
+				if err := m.uiCoordinator.CreateMessagesOverlay(overlayMessages); err != nil {
+					return m, m.handleError(fmt.Errorf("failed to create messages overlay: %w", err))
+				}
+
+				// Get the overlay and set dimensions
+				messagesOverlay := m.uiCoordinator.GetMessagesOverlay()
+				if messagesOverlay != nil {
+					// Set default dimensions - will be updated on next window resize
+					messagesOverlay.SetDimensions(100, 30)
+				}
+				m.menu.SetState(ui.StateDefault)
+				return m, nil
+			default:
+				m.statusBar.SetWarning(fmt.Sprintf("Unknown command: %s", command))
+			}
+		} else if msg.String() == "esc" {
+			m.statusBar.ExitCommandMode()
+		}
+
+		return m, nil
 	}
 
-	name, ok := keys.GlobalKeyStringsMap[msg.String()]
-	if !ok {
-		return m, nil
-	}
+	// Colon key now handled by bridge system
 
-	switch name {
-	case keys.KeyHelp:
-		return m.showHelpScreen(helpTypeGeneral{}, nil)
-	case keys.KeyEsc:
-		// Handle escape key for search mode
-		if m.state == statePrompt && m.menu.GetState() == ui.StateSearch {
-			m.list.ExitSearchMode()
-			m.state = stateDefault
-			m.menu.SetState(ui.StateDefault)
-			m.textInputOverlay = nil
-			return m, tea.WindowSize()
-		}
-		return m, nil
-	case keys.KeyPrompt:
-		// Use the advanced session setup overlay
-		return m.handleAdvancedSessionSetup()
-	case keys.KeyRight:
-		// Expand the selected category
-		selected := m.list.GetSelectedInstance()
-		if selected != nil {
-			category := selected.Category
-			if category == "" {
-				category = "Uncategorized"
-			}
-			m.list.ExpandCategory(category)
-		}
-		return m, nil
-	case keys.KeyLeft:
-		// Collapse the selected category
-		selected := m.list.GetSelectedInstance()
-		if selected != nil {
-			category := selected.Category
-			if category == "" {
-				category = "Uncategorized"
-			}
-			m.list.CollapseCategory(category)
-		}
-		return m, nil
-	case keys.KeyToggleGroup:
-		// Toggle expand/collapse of the selected category
-		selected := m.list.GetSelectedInstance()
-		if selected != nil {
-			category := selected.Category
-			if category == "" {
-				category = "Uncategorized"
-			}
-			m.list.ToggleCategory(category)
-		}
-		return m, nil
-	case keys.KeySearch:
-		// Create the text input overlay for search with previous query pre-populated
-		_, previousQuery := m.list.GetSearchState()
-		m.textInputOverlay = overlay.NewTextInputOverlay("Search Sessions", previousQuery)
+	// Handle quit commands - now handled by bridge, but keep special session creation handling
+	// ALSO handle Escape key for cancelling session creation
+	if (msg.String() == "ctrl+c" || msg.String() == "q" || msg.String() == "esc") && m.isInState(state.CreatingSession) {
+		// Special handling for session creation cancellation
+		log.InfoLog.Printf("User cancelled session creation with %s", msg.String())
 
-		// Set callback for when search is submitted
-		m.textInputOverlay.SetOnSubmitWithValue(func(query string) {
-			if query == "" {
-				// Exit search mode if query is empty
-				m.list.ExitSearchMode()
-			} else {
-				// Search by title
-				m.list.SearchByTitle(query)
+		// Cancel the ongoing session creation goroutines
+		if m.sessionCreationCancel != nil {
+			log.InfoLog.Printf("Cancelling session creation goroutines")
+			m.sessionCreationCancel()
+			m.sessionCreationCancel = nil
+		}
+
+		m.asyncSessionCreationActive = false
+
+		// Clean up the session setup overlay
+		m.uiCoordinator.HideOverlay(appui.ComponentSessionSetupOverlay)
+
+		m.transitionToDefault()
+		m.menu.SetState(ui.StateDefault)
+
+		// Clean up the pending instance if it was partially created
+		if m.pendingSessionInstance != nil {
+			log.InfoLog.Printf("Cleaning up pending session instance: %s", m.pendingSessionInstance.Title)
+			if err := m.pendingSessionInstance.Kill(); err != nil {
+				log.ErrorLog.Printf("Failed to cleanup pending session: %v", err)
 			}
-		})
+			m.pendingSessionInstance = nil
+		}
 
-		// Set callback for when search is canceled
-		m.textInputOverlay.SetOnCancel(func() {
-			m.list.ExitSearchMode()
-		})
-
-		// Set search mode state
-		m.state = statePrompt
-		m.menu.SetState(ui.StateSearch)
-		return m, nil
-	case keys.KeyFilterPaused:
-		// Toggle paused session filter
-		m.list.TogglePausedFilter()
-		return m, nil
-	case keys.KeyClearFilters:
-		// Clear all filters and search
-		m.list.ClearAllFilters()
+		m.statusBar.SetWarning("Session creation cancelled")
 		return m, tea.WindowSize()
-	case keys.KeyGit:
-		// Open git status interface
-		return m.handleGitStatus()
-	case keys.KeyHealthCheck:
-		// Perform session health check and recovery
-		return m.handleHealthCheck()
-	case keys.KeyNew:
-		if m.list.NumInstances() >= GlobalInstanceLimit {
-			return m, m.handleError(
-				fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
-		}
-		instance, err := session.NewInstance(session.InstanceOptions{
-			Title:   "",
-			Path:    ".",
-			Program: m.program,
-		})
-		if err != nil {
-			return m, m.handleError(err)
-		}
+	}
 
-		m.newInstanceFinalizer = m.list.AddInstance(instance)
-		m.list.SetSelectedInstance(m.list.NumInstances() - 1)
-		m.state = stateNew
-		m.menu.SetState(ui.StateNewInstance)
-
-		return m, nil
-	case keys.KeyUp:
-		m.list.Up()
-		return m, m.instanceChanged()
-	case keys.KeyDown:
-		m.list.Down()
-		return m, m.instanceChanged()
-	case keys.KeyShiftUp:
-		m.tabbedWindow.ScrollUp()
-		return m, m.instanceChanged()
-	case keys.KeyShiftDown:
-		m.tabbedWindow.ScrollDown()
-		return m, m.instanceChanged()
-	case keys.KeyTab:
-		m.tabbedWindow.Toggle()
-		m.menu.SetInDiffTab(m.tabbedWindow.IsInDiffTab())
-		return m, m.instanceChanged()
-	case keys.KeyKill:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil {
-			return m, nil
-		}
-
-		// Create the kill action as a tea.Cmd
-		killAction := func() tea.Msg {
-			// Get worktree and check if branch is checked out
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
+	// Handle confirmation state BEFORE command registry to prevent key conflicts
+	if m.isInState(state.Confirm) {
+		confirmationOverlay := m.uiCoordinator.GetConfirmationOverlay()
+		if confirmationOverlay != nil {
+			shouldClose := confirmationOverlay.HandleKeyPress(msg)
+			if shouldClose {
+				m.transitionToDefault()
+				// Note: overlay cleanup is handled by transitionToDefault()
+				// Force screen refresh after modal dismissal to ensure UI updates correctly
+				return m, tea.Batch(tea.WindowSize(), m.instanceChanged())
 			}
-
-			checkedOut, err := worktree.IsBranchCheckedOut()
-			if err != nil {
-				return err
-			}
-
-			if checkedOut {
-				return fmt.Errorf("instance %s is currently checked out", selected.Title)
-			}
-
-			// Delete from storage first
-			if err := m.storage.DeleteInstance(selected.Title); err != nil {
-				return err
-			}
-
-			// Then kill the instance
-			m.list.Kill()
-			return instanceChangedMsg{}
 		}
-
-		// Show confirmation modal
-		message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
-		return m, m.confirmAction(message, killAction)
-	case keys.KeySubmit:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil {
-			return m, nil
-		}
-
-		// Create the push action as a tea.Cmd
-		pushAction := func() tea.Msg {
-			// Default commit message with timestamp
-			commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s", selected.Title, time.Now().Format(time.RFC822))
-			worktree, err := selected.GetGitWorktree()
-			if err != nil {
-				return err
-			}
-			if err = worktree.PushChanges(commitMsg, true); err != nil {
-				return err
-			}
-			return nil
-		}
-
-		// Show confirmation modal
-		message := fmt.Sprintf("[!] Push changes from session '%s'?", selected.Title)
-		return m, m.confirmAction(message, pushAction)
-	case keys.KeyCheckout:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil {
-			return m, nil
-		}
-
-		// Show help screen before pausing
-		m.showHelpScreen(helpTypeInstanceCheckout{}, func() {
-			if err := selected.Pause(); err != nil {
-				m.handleError(err)
-			}
-			m.instanceChanged()
-		})
-		return m, nil
-	case keys.KeyResume:
-		selected := m.list.GetSelectedInstance()
-		if selected == nil {
-			return m, nil
-		}
-		if err := selected.Resume(); err != nil {
-			return m, m.handleError(err)
-		}
-		return m, tea.WindowSize()
-	case keys.KeyEnter:
-		if m.list.NumInstances() == 0 {
-			return m, nil
-		}
-		selected := m.list.GetSelectedInstance()
-		if selected == nil || selected.Paused() || !selected.TmuxAlive() {
-			return m, nil
-		}
-		// Show help screen before attaching
-		m.showHelpScreen(helpTypeInstanceAttach{}, func() {
-			ch, err := m.list.Attach()
-			if err != nil {
-				m.handleError(err)
-				return
-			}
-			<-ch
-			m.state = stateDefault
-		})
-		return m, nil
-	default:
 		return m, nil
 	}
+
+	// Route through the new bridge command system
+	log.DebugLog.Printf("Handling key: %s", msg.String())
+
+	// Check if bridge is nil (should never happen)
+	if m.bridge == nil {
+		log.ErrorLog.Printf("CRITICAL: bridge is nil when handling key %s", msg.String())
+		return m, m.handleError(fmt.Errorf("internal error: command bridge not initialized"))
+	}
+
+	// Use the bridge to handle the key
+	model, teaCmd, err := m.bridge.HandleKeyString(msg.String())
+	if err != nil {
+		log.ErrorLog.Printf("Bridge key handling error: %v", err)
+		return m, m.handleError(err)
+	}
+
+	if model != nil {
+		log.DebugLog.Printf("Bridge handled key successfully: %s", msg.String())
+		return model, teaCmd
+	}
+
+	// All keys should be handled by the bridge system now
+	// If we reach here, the key is not registered in the bridge
+	log.InfoLog.Printf("Unhandled key: %s", msg.String())
+	return m, nil
+
 }
 
-// instanceChanged updates the preview pane, menu, and diff pane based on the selected instance. 
+// instanceChanged updates the preview pane, menu, and diff pane based on the selected instance.
 // It provides instant UI feedback and debounces expensive operations.
 func (m *home) instanceChanged() tea.Cmd {
-	selected := m.list.GetSelectedInstance()
-	
-	// INSTANT UI UPDATES (must be <1ms for responsive feel)
-	m.menu.SetInstance(selected)              // 86ns from benchmark - instant
-	m.tabbedWindow.SetInstance(selected)      // Instant - just sets reference
-	
-	// Skip expensive operations if same instance
-	if m.lastSelectedInstance == selected {
-		return nil
+	// Use the optimized responsive navigation manager
+	if m.responsiveNav == nil {
+		m.responsiveNav = NewResponsiveNavigationManager()
 	}
-	m.lastSelectedInstance = selected
-	
-	// Debounce expensive operations (git diff + tmux capture)
-	return m.debouncedInstanceChanged()
+
+	selected := m.list.GetSelectedInstance()
+	m.responsiveNav.HandleInstanceChange(m, selected)
+
+	return nil // All expensive operations are now handled asynchronously
 }
 
-// debouncedInstanceChanged debounces expensive operations to improve navigation performance
-func (m *home) debouncedInstanceChanged() tea.Cmd {
-	// Cancel any existing timer
-	if m.selectionUpdateTimer != nil {
-		m.selectionUpdateTimer.Stop()
+// Legacy methods removed - functionality moved to ResponsiveNavigationManager
+// This eliminates blocking expensive operations during navigation
+
+// abs returns the absolute value of an integer
+func abs(x int) int {
+	if x < 0 {
+		return -x
 	}
-
-	// Start a new timer
-	m.selectionUpdateTimer = time.AfterFunc(m.selectionUpdateDelay, func() {
-		// This runs in a goroutine, so we need to send a message back to the main loop
-		// We can't directly update UI components from here
-	})
-
-	// Immediately update lightweight operations
-	return m.fastInstanceChanged()
+	return x
 }
 
-// fastInstanceChanged performs only lightweight operations that can run on every navigation
-func (m *home) fastInstanceChanged() tea.Cmd {
-	selected := m.list.GetSelectedInstance()
-
-	// Only update menu (lightweight operation)
-	m.menu.SetInstance(selected)
-
-	// Set instance reference (no expensive operations)
-	m.tabbedWindow.SetInstance(selected)
-
-	// Schedule expensive operations to run after debounce delay
-	return func() tea.Msg {
-		time.Sleep(m.selectionUpdateDelay)
-		return instanceExpensiveUpdateMsg{}
+// min returns the smaller of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
 	}
-}
-
-// instanceExpensiveUpdate performs the expensive operations after debounce delay
-func (m *home) instanceExpensiveUpdate() tea.Cmd {
-	selected := m.list.GetSelectedInstance()
-
-	// Ensure categories are organized (can be expensive with many sessions)
-	m.list.OrganizeByCategory()
-
-	// Update diff (expensive: git operations)
-	m.tabbedWindow.UpdateDiff(selected)
-
-	// Update preview (expensive: tmux capture-pane)
-	if err := m.tabbedWindow.UpdatePreview(selected); err != nil {
-		return m.handleError(err)
-	}
-	return nil
+	return b
 }
 
 type keyupMsg struct{}
 
 // keydownCallback clears the menu option highlighting after 500ms.
-func (m *home) keydownCallback(name keys.KeyName) tea.Cmd {
-	m.menu.Keydown(name)
+func (m *home) keydownCallback(keyString string) tea.Cmd {
+	// TODO: Update menu to use string-based key highlighting when menu system is migrated
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
@@ -968,13 +1551,17 @@ type hideErrMsg struct{}
 // previewTickMsg implements tea.Msg and triggers a preview update
 type previewTickMsg struct{}
 
+type previewResultsMsg struct{}
+
 type tickUpdateMetadataMessage struct{}
 
 type tickSessionDetectionMessage struct{}
 
 type instanceChangedMsg struct{}
 
-type instanceExpensiveUpdateMsg struct{}
+// terminalSizeCheckMsg removed - now handled by terminal.SizeCheckMsg
+
+// instanceExpensiveUpdateMsg removed - handled by ResponsiveNavigationManager
 
 // sessionCreationResultMsg is sent when async session creation completes
 type sessionCreationResultMsg struct {
@@ -986,18 +1573,20 @@ type sessionCreationResultMsg struct {
 
 // tickUpdateMetadataCmd is the callback to update the metadata of the instances every 500ms. Note that we iterate
 // overall the instances and capture their output. It's a pretty expensive operation. Let's do it 2x a second only.
-var tickUpdateMetadataCmd = func() tea.Msg {
-	time.Sleep(500 * time.Millisecond)
+// CRITICAL: Uses proper async pattern to avoid blocking BubbleTea's main event loop
+var tickUpdateMetadataCmd = tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg {
 	return tickUpdateMetadataMessage{}
-}
+})
 
 // tickSessionDetectionCmd creates a ticker for detecting new sessions created by other instances
+// CRITICAL: Uses proper async pattern to avoid blocking BubbleTea's main event loop
 func tickSessionDetectionCmd(intervalMs int) tea.Cmd {
-	return func() tea.Msg {
-		time.Sleep(time.Duration(intervalMs) * time.Millisecond)
+	return tea.Tick(time.Duration(intervalMs)*time.Millisecond, func(time.Time) tea.Msg {
 		return tickSessionDetectionMessage{}
-	}
+	})
 }
+
+// tickTerminalSizeCheckCmd removed - now handled by terminal.SignalManager.CreateSizeCheckCmd()
 
 // detectAndLoadNewSessions checks for new sessions created by other instances and adds them to the current list
 func (m *home) detectAndLoadNewSessions() error {
@@ -1030,7 +1619,7 @@ func (m *home) detectAndLoadNewSessions() error {
 
 	// If we found new instances, save our updated list and trigger UI refresh
 	if newInstancesFound {
-		if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+		if err := m.saveAllInstances(); err != nil {
 			log.WarningLog.Printf("failed to save instances after detecting new sessions: %v", err)
 		}
 		log.InfoLog.Printf("Successfully loaded new sessions from other instances")
@@ -1044,6 +1633,10 @@ func (m *home) detectAndLoadNewSessions() error {
 func (m *home) handleError(err error) tea.Cmd {
 	log.ErrorLog.Printf("%v", err)
 	m.errBox.SetError(err)
+
+	// Also add to status bar for vim-style error visibility
+	m.statusBar.SetError(err.Error())
+
 	return func() tea.Msg {
 		select {
 		case <-m.ctx.Done():
@@ -1056,24 +1649,28 @@ func (m *home) handleError(err error) tea.Cmd {
 
 // confirmAction shows a confirmation modal and stores the action to execute on confirm
 func (m *home) confirmAction(message string, action tea.Cmd) tea.Cmd {
-	m.state = stateConfirm
+	m.transitionToState(state.Confirm)
 
-	// Create and show the confirmation overlay using ConfirmationOverlay
-	m.confirmationOverlay = overlay.NewConfirmationOverlay(message)
-	// Set a fixed width for consistent appearance
-	m.confirmationOverlay.SetWidth(50)
-
-	// Set callbacks for confirmation and cancellation
-	m.confirmationOverlay.OnConfirm = func() {
-		m.state = stateDefault
-		// Execute the action if it exists
-		if action != nil {
-			_ = action()
-		}
+	// Create and show the confirmation overlay using coordinator
+	if err := m.uiCoordinator.CreateConfirmationOverlay(message); err != nil {
+		return m.handleError(fmt.Errorf("failed to create confirmation overlay: %w", err))
 	}
 
-	m.confirmationOverlay.OnCancel = func() {
-		m.state = stateDefault
+	// Get the overlay and set callbacks
+	confirmationOverlay := m.uiCoordinator.GetConfirmationOverlay()
+	if confirmationOverlay != nil {
+		// Set callbacks for confirmation and cancellation
+		confirmationOverlay.OnConfirm = func() {
+			m.transitionToDefault()
+			// Execute the action if it exists
+			if action != nil {
+				_ = action()
+			}
+		}
+
+		confirmationOverlay.SetOnCancel(func() {
+			m.transitionToDefault()
+		})
 	}
 
 	return nil
@@ -1091,75 +1688,51 @@ func (m *home) handleGitStatus() (tea.Model, tea.Cmd) {
 		return m, m.handleError(fmt.Errorf("session must be started and active for git operations"))
 	}
 
-	// Create and configure git status overlay
-	m.gitStatusOverlay = overlay.NewGitStatusOverlay()
-	m.gitStatusOverlay.SetSize(int(float32(m.list.NumInstances())*0.8), int(float32(m.list.NumInstances())*0.8))
+	// Create git status overlay using coordinator
+	if err := m.uiCoordinator.CreateGitStatusOverlay(); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create git status overlay: %w", err))
+	}
 
-	// Set up git operation callbacks
-	m.setupGitCallbacks(selected)
+	// Get the overlay and configure it
+	gitStatusOverlay := m.uiCoordinator.GetGitStatusOverlay()
+	if gitStatusOverlay != nil {
+		gitStatusOverlay.SetSize(int(float32(m.list.NumInstances())*0.8), int(float32(m.list.NumInstances())*0.8))
+		// Set up git operation callbacks
+		m.setupGitCallbacks(selected, gitStatusOverlay)
+	}
 
 	// Change to git state
-	m.state = stateGit
+	m.transitionToState(state.Git)
 
 	// Load git status data
 	return m, m.loadGitStatus(selected)
 }
 
-// handleHealthCheck performs a health check on all sessions and attempts recovery
-func (m *home) handleHealthCheck() (tea.Model, tea.Cmd) {
-	healthChecker := session.NewSessionHealthChecker(m.storage)
-
-	// Perform health check in background and show a message
-	go func() {
-		log.InfoLog.Printf("Starting manual health check...")
-		if err := healthChecker.RecoverUnhealthySessions(); err != nil {
-			log.ErrorLog.Printf("Health check failed: %v", err)
-		} else {
-			log.InfoLog.Printf("Health check completed successfully")
-		}
-
-		// Reload instances after potential recovery
-		instances, err := m.storage.LoadInstances()
-		if err != nil {
-			log.WarningLog.Printf("Failed to reload instances after health check: %v", err)
-			return
-		}
-
-		// Update the list with recovered instances
-		// Note: In a real implementation, we might want to send a message back to the UI
-		// to refresh the display, but for now we'll rely on the periodic updates
-		_ = instances // Use instances variable to avoid unused variable warning
-	}()
-
-	// Return immediately with a confirmation message
-	// In a more sophisticated implementation, we could show a progress indicator
-	return m, m.handleError(fmt.Errorf("health check initiated - check logs for results"))
-}
 
 // setupGitCallbacks configures the git operation callbacks for the overlay
-func (m *home) setupGitCallbacks(instance *session.Instance) {
-	m.gitStatusOverlay.OnCancel = func() {
-		m.state = stateDefault
-		m.gitStatusOverlay = nil
+func (m *home) setupGitCallbacks(instance *session.Instance, gitStatusOverlay *overlay.GitStatusOverlay) {
+	gitStatusOverlay.OnCancel = func() {
+		m.transitionToDefault()
+		m.uiCoordinator.HideOverlay(appui.ComponentGitStatusOverlay)
 	}
 
 	// TODO: Implement these callbacks with actual git operations
-	m.gitStatusOverlay.OnStageFile = func(path string) error {
+	gitStatusOverlay.OnStageFile = func(path string) error {
 		// Placeholder - will implement in next task
 		return fmt.Errorf("staging not yet implemented")
 	}
 
-	m.gitStatusOverlay.OnUnstageFile = func(path string) error {
+	gitStatusOverlay.OnUnstageFile = func(path string) error {
 		// Placeholder - will implement in next task
 		return fmt.Errorf("unstaging not yet implemented")
 	}
 
-	m.gitStatusOverlay.OnCommit = func() error {
+	gitStatusOverlay.OnCommit = func() error {
 		// Placeholder - will implement in next task
 		return fmt.Errorf("commit not yet implemented")
 	}
 
-	m.gitStatusOverlay.OnPush = func() error {
+	gitStatusOverlay.OnPush = func() error {
 		// Use existing push functionality
 		worktree, err := instance.GetGitWorktree()
 		if err != nil {
@@ -1172,18 +1745,47 @@ func (m *home) setupGitCallbacks(instance *session.Instance) {
 
 // handleGitState processes key events when in git status mode
 func (m *home) handleGitState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if m.gitStatusOverlay == nil {
-		m.state = stateDefault
+	gitStatusOverlay := m.uiCoordinator.GetGitStatusOverlay()
+	if gitStatusOverlay == nil {
+		m.transitionToDefault()
 		return m, nil
 	}
 
-	shouldClose := m.gitStatusOverlay.HandleKeyPress(msg)
+	shouldClose := gitStatusOverlay.HandleKeyPress(msg)
 	if shouldClose {
-		m.state = stateDefault
-		m.gitStatusOverlay = nil
+		m.transitionToDefault()
+		m.uiCoordinator.HideOverlay(appui.ComponentGitStatusOverlay)
 	}
 
 	return m, nil
+}
+
+// handleClaudeSettingsState processes key events when in Claude settings mode
+func (m *home) handleClaudeSettingsState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	claudeSettingsOverlay := m.uiCoordinator.GetClaudeSettingsOverlay()
+	if claudeSettingsOverlay == nil {
+		m.transitionToDefault()
+		return m, nil
+	}
+
+	shouldClose := claudeSettingsOverlay.HandleKeyPress(msg)
+	if shouldClose {
+		m.transitionToDefault()
+		m.uiCoordinator.HideOverlay(appui.ComponentClaudeSettingsOverlay)
+	}
+
+	return m, nil
+}
+
+// handleZFSearchState processes key events when in ZF search mode
+func (m *home) handleZFSearchState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	zfSearchOverlay := m.uiCoordinator.GetZFSearchOverlay()
+	if zfSearchOverlay == nil {
+		m.transitionToDefault()
+		return m, nil
+	}
+
+	return m, zfSearchOverlay.Update(msg)
 }
 
 // loadGitStatus loads git status information for the overlay
@@ -1210,50 +1812,469 @@ type gitStatusLoadedMsg struct {
 	branchName string
 }
 
-func (m *home) View() string {
-	listWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.list.String())
-	previewWithPadding := lipgloss.NewStyle().PaddingTop(1).Render(m.tabbedWindow.String())
-	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listWithPadding, previewWithPadding)
+// createSessionWithTimeout creates a session with a timeout to prevent hanging
+func (m *home) createSessionWithTimeout(instance *session.Instance, promptAfterName bool, autoYes bool) tea.Cmd {
+	return func() tea.Msg {
+		log.InfoLog.Printf("Starting session creation for '%s' with timeout monitoring", instance.Title)
 
+		// Create a cancellable context for this session creation
+		ctx, cancel := context.WithCancel(m.ctx)
+		m.sessionCreationCancel = cancel // Store cancel function for Ctrl+C handler
+
+		// Channel to receive the result
+		resultChan := make(chan sessionCreationResultMsg, 1)
+
+		// Start timestamp for duration tracking
+		startTime := time.Now()
+
+		// Start the session creation in a goroutine
+		go func() {
+			defer cancel() // Clean up context when done
+			log.InfoLog.Printf("Session creation goroutine started for '%s'", instance.Title)
+
+			// Add periodic logging to track progress
+			progressTicker := time.NewTicker(10 * time.Second)
+			defer progressTicker.Stop()
+
+			// Channel to signal completion
+			done := make(chan bool, 1)
+
+			// Start the actual session creation in another goroutine
+			go func() {
+				defer func() { done <- true }()
+				log.InfoLog.Printf("Calling instance.Start(true) for '%s'", instance.Title)
+				err := instance.Start(true)
+				if err != nil {
+					log.ErrorLog.Printf("Session creation failed for '%s': %v", instance.Title, err)
+				} else {
+					log.InfoLog.Printf("Session creation completed successfully for '%s' (duration: %v)", instance.Title, time.Since(startTime))
+				}
+
+				// Check if context was cancelled before sending result
+				select {
+				case <-ctx.Done():
+					log.InfoLog.Printf("Session creation for '%s' was cancelled, not sending result", instance.Title)
+					return
+				default:
+					resultChan <- sessionCreationResultMsg{
+						instance:        instance,
+						err:             err,
+						promptAfterName: promptAfterName,
+						autoYes:         autoYes,
+					}
+				}
+			}()
+
+			// Monitor progress with periodic logging
+			for {
+				select {
+				case <-ctx.Done():
+					log.InfoLog.Printf("Session creation monitoring cancelled for '%s'", instance.Title)
+					return
+				case <-done:
+					return
+				case <-progressTicker.C:
+					elapsed := time.Since(startTime)
+					log.DebugLog.Printf("Session creation for '%s' still in progress (elapsed: %v)", instance.Title, elapsed)
+				}
+			}
+		}()
+
+		// Wait for either completion, cancellation, or timeout
+		select {
+		case <-ctx.Done():
+			log.InfoLog.Printf("Session creation for '%s' cancelled by user", instance.Title)
+			return sessionCreationResultMsg{
+				instance:        instance,
+				err:             fmt.Errorf("session creation cancelled by user"),
+				promptAfterName: promptAfterName,
+				autoYes:         autoYes,
+			}
+		case result := <-resultChan:
+			totalDuration := time.Since(startTime)
+			if result.err != nil {
+				log.ErrorLog.Printf("Session creation for '%s' completed with error after %v: %v", instance.Title, totalDuration, result.err)
+			} else {
+				log.InfoLog.Printf("Session creation for '%s' completed successfully after %v", instance.Title, totalDuration)
+			}
+			return result
+		case <-time.After(60 * time.Second): // 60 second timeout
+			// Session creation timed out - clean up and return error
+			log.ErrorLog.Printf("Session creation for '%s' timed out after 60 seconds", instance.Title)
+			if cleanupErr := instance.Kill(); cleanupErr != nil {
+				log.ErrorLog.Printf("Failed to cleanup instance '%s' after timeout: %v", instance.Title, cleanupErr)
+			} else {
+				log.InfoLog.Printf("Successfully cleaned up timed-out instance '%s'", instance.Title)
+			}
+			return sessionCreationResultMsg{
+				instance:        instance,
+				err:             fmt.Errorf("session creation timed out after 60 seconds"),
+				promptAfterName: promptAfterName,
+				autoYes:         autoYes,
+			}
+		}
+	}
+}
+
+func (m *home) View() string {
+	// Build main view layout
+	listContent := m.list.String()
+	tabbedContent := m.tabbedWindow.String()
+	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listContent, tabbedContent)
 	mainView := lipgloss.JoinVertical(
-		lipgloss.Center,
+		lipgloss.Left,
 		listAndPreview,
 		m.menu.String(),
+		m.statusBar.View(80), // TODO: use actual terminal width
 		m.errBox.String(),
 	)
 
-	if m.state == statePrompt {
-		if m.textInputOverlay == nil {
-			log.ErrorLog.Printf("text input overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.textInputOverlay.Render(), mainView, true, true)
-	} else if m.state == stateHelp {
-		if m.textOverlay == nil {
-			log.ErrorLog.Printf("text overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.textOverlay.Render(), mainView, true, true)
-	} else if m.state == stateConfirm {
-		if m.confirmationOverlay == nil {
-			log.ErrorLog.Printf("confirmation overlay is nil")
-		}
-		return overlay.PlaceOverlay(0, 0, m.confirmationOverlay.Render(), mainView, true, true)
-	} else if m.state == stateCreatingSession {
-		// Show spinner or progress indicator when creating session
-		creatingMsg := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(m.spinner.View() + " Creating session...")
-		return overlay.PlaceOverlay(0, 0, creatingMsg, mainView, true, false)
-	} else if m.state == stateAdvancedNew {
-		if m.sessionSetupOverlay == nil {
-			log.ErrorLog.Printf("session setup overlay is nil")
-			return mainView
-		}
-		return overlay.PlaceOverlay(0, 0, m.sessionSetupOverlay.View(), mainView, true, true)
-	} else if m.state == stateGit {
-		if m.gitStatusOverlay == nil {
-			log.ErrorLog.Printf("git status overlay is nil")
-			return mainView
-		}
-		return overlay.PlaceOverlay(0, 0, m.gitStatusOverlay.View(), mainView, true, true)
+	// Get view directive from state manager
+	// Defensive nil check to prevent panic in tests or edge cases
+	if m.stateManager == nil {
+		return "Error: State manager not initialized"
+	}
+	directive := m.stateManager.GetViewDirective()
+
+	// Handle different view types based on directive
+	switch directive.Type {
+	case state.ViewMain:
+		return mainView
+
+	case state.ViewOverlay:
+		return m.renderOverlay(directive, mainView)
+
+	case state.ViewText:
+		return m.renderTextOverlay(directive, mainView)
+
+	case state.ViewSpinner:
+		return m.renderSpinnerOverlay(directive, mainView)
+
+	default:
+		// Fallback to main view for unknown directive types
+		return mainView
+	}
+}
+
+// View rendering helper methods
+
+// renderOverlay renders an overlay component based on the directive
+func (m *home) renderOverlay(directive state.ViewDirective, mainView string) string {
+	// Map overlay component names to component types
+	var componentType appui.ComponentType
+	var validComponent bool
+
+	switch directive.OverlayComponent {
+	case "textInputOverlay":
+		componentType = appui.ComponentTextInputOverlay
+		validComponent = true
+	case "liveSearchOverlay":
+		componentType = appui.ComponentLiveSearchOverlay
+		validComponent = true
+	case "confirmationOverlay":
+		componentType = appui.ComponentConfirmationOverlay
+		validComponent = true
+	case "sessionSetupOverlay":
+		componentType = appui.ComponentSessionSetupOverlay
+		validComponent = true
+	case "gitStatusOverlay":
+		componentType = appui.ComponentGitStatusOverlay
+		validComponent = true
+	case "claudeSettingsOverlay":
+		componentType = appui.ComponentClaudeSettingsOverlay
+		validComponent = true
+	case "zfSearchOverlay":
+		componentType = appui.ComponentZFSearchOverlay
+		validComponent = true
+	case "messagesOverlay":
+		componentType = appui.ComponentMessagesOverlay
+		validComponent = true
+	default:
+		validComponent = false
 	}
 
-	return mainView
+	if !validComponent {
+		if directive.ShouldResetOnNil {
+			log.ErrorLog.Printf("Unknown overlay component '%s' - resetting to default state", directive.OverlayComponent)
+			m.transitionToDefault()
+		}
+		return mainView
+	}
+
+	// Use coordinator to render the overlay
+	overlayContent := m.uiCoordinator.RenderOverlay(componentType)
+	if overlayContent == "" {
+		if directive.ShouldResetOnNil {
+			log.ErrorLog.Printf("%s overlay is not active - resetting to default state", directive.OverlayComponent)
+			m.transitionToDefault()
+		}
+		return mainView
+	}
+
+	// Place overlay with specified positioning
+	return overlay.PlaceOverlay(0, 0, overlayContent, mainView, directive.Centered, directive.Bordered)
+}
+
+// renderTextOverlay renders a text-based overlay (legacy text overlay)
+func (m *home) renderTextOverlay(directive state.ViewDirective, mainView string) string {
+	if m.textOverlay == nil {
+		if directive.ShouldResetOnNil {
+			log.ErrorLog.Printf("text overlay is nil - resetting to default state")
+			m.transitionToDefault()
+		}
+		return mainView
+	}
+
+	return overlay.PlaceOverlay(0, 0, m.textOverlay.Render(), mainView, directive.Centered, directive.Bordered)
+}
+
+// renderSpinnerOverlay renders a progress spinner with message
+func (m *home) renderSpinnerOverlay(directive state.ViewDirective, mainView string) string {
+	// Create styled message with spinner
+	spinnerMsg := lipgloss.NewStyle().Foreground(lipgloss.Color("205")).Bold(true).Render(
+		m.spinner.View() + " " + directive.Message)
+
+	return overlay.PlaceOverlay(0, 0, spinnerMsg, mainView, directive.Centered, directive.Bordered)
+}
+
+// State Manager Integration Helper Methods
+
+// Helper methods for common state transitions
+
+// isInState checks if the current state matches the given state
+func (m *home) isInState(state state.State) bool {
+	return m.stateManager.Current() == state
+}
+
+// setState sets the current state (facade for stateManager.Transition)
+func (m *home) setState(targetState state.State) error {
+	return m.stateManager.Transition(targetState)
+}
+
+// getState returns the current state (facade for stateManager.Current)
+func (m *home) getState() state.State {
+	return m.stateManager.Current()
+}
+
+
+// transitionToState performs a simple state transition
+func (m *home) transitionToState(targetState state.State) error {
+	return m.stateManager.Transition(targetState)
+}
+
+// transitionToDefault transitions to default state with cleanup actions
+func (m *home) transitionToDefault() error {
+	ctx := state.TransitionContext{
+		MenuState:          "Default",
+		ShouldCloseOverlay: true,
+		PostTransitionAction: func() error {
+			// Set menu state
+			m.menu.SetState(ui.StateDefault)
+			// Clear any overlays that should be closed
+			if ctx := m.stateManager.GetTransitionContext(); ctx.ShouldCloseOverlay {
+				m.clearOverlaysForState()
+			}
+			return nil
+		},
+	}
+
+	_, err := m.stateManager.TransitionToDefault(ctx)
+	return err
+}
+
+// transitionToOverlay transitions to an overlay state with setup
+func (m *home) transitionToOverlay(targetState state.State, menuState string, overlayName string) error {
+	ctx := state.TransitionContext{
+		MenuState:   menuState,
+		OverlayName: overlayName,
+		PostTransitionAction: func() error {
+			// Set appropriate menu state
+			switch menuState {
+			case "CreatingInstance":
+				m.menu.SetState(ui.StateCreatingInstance)
+			case "Search":
+				m.menu.SetState(ui.StateSearch)
+			case "Prompt":
+				m.menu.SetState(ui.StatePrompt)
+			default:
+				m.menu.SetState(ui.StateDefault)
+			}
+			return nil
+		},
+	}
+
+	_, err := m.stateManager.TransitionToOverlay(targetState, ctx)
+	return err
+}
+
+// transitionToCreatingSession transitions to session creation state
+func (m *home) transitionToCreatingSession() error {
+	_, err := m.stateManager.TransitionToCreatingSession()
+	if err == nil {
+		// Set session flags
+		m.asyncSessionCreationActive = true
+		m.menu.SetState(ui.StateCreatingInstance)
+	}
+	return err
+}
+
+// clearOverlaysForState clears overlays when transitioning to default
+func (m *home) clearOverlaysForState() {
+	// Use coordinator to close all overlays
+	if err := m.uiCoordinator.CloseAllOverlays(); err != nil {
+		log.WarningLog.Printf("Error closing overlays: %v", err)
+	}
+
+	// Clear remaining legacy overlay references (help system overlays)
+	m.textOverlay = nil
+	m.messagesOverlay = nil
+	// Note: All other overlays now managed by coordinator.CloseAllOverlays()
+}
+
+
+// populateCoordinatorRegistry populates the coordinator registry with existing components
+// This enables gradual migration from direct component access to coordinator-based access
+func (m *home) populateCoordinatorRegistry() {
+	registry := m.uiCoordinator.GetRegistry()
+
+	// Set existing components in the registry
+	if m.list != nil {
+		m.uiCoordinator.SetComponent(appui.ComponentList, m.list)
+	}
+	if m.menu != nil {
+		m.uiCoordinator.SetComponent(appui.ComponentMenu, m.menu)
+	}
+	if m.tabbedWindow != nil {
+		m.uiCoordinator.SetComponent(appui.ComponentTabbedWindow, m.tabbedWindow)
+	}
+	if m.errBox != nil {
+		m.uiCoordinator.SetComponent(appui.ComponentErrBox, m.errBox)
+	}
+	if m.statusBar != nil {
+		m.uiCoordinator.SetComponent(appui.ComponentStatusBar, m.statusBar)
+	}
+
+	// Set spinner from coordinator (it's initialized there)
+	m.spinner = registry.Spinner
+}
+
+// Migration helper methods - these will help transition from direct component access to coordinator access
+
+// getCoordinatorComponent returns a component from the coordinator registry
+func (m *home) getCoordinatorComponent(componentType appui.ComponentType) interface{} {
+	return m.uiCoordinator.GetComponentByType(componentType)
+}
+
+// updateCoordinatorOverlay updates an overlay in the coordinator registry
+func (m *home) updateCoordinatorOverlay(componentType appui.ComponentType, overlay interface{}) error {
+	return m.uiCoordinator.SetComponent(componentType, overlay)
+}
+
+// Facade methods for Law of Demeter compliance
+
+// addInstanceToList adds an instance to the list using proper encapsulation
+func (h *home) addInstanceToList(instance *session.Instance) {
+	// Call the finalizer immediately to complete the setup
+	finalizer := h.list.AddInstance(instance)
+	finalizer()
+}
+
+// restoreLastSelection restores the last selected index with proper bounds checking
+func (h *home) restoreLastSelection() {
+	lastSelectedIdx := h.getLastSelectedIndex()
+	totalInstances := h.getInstanceCount()
+
+	if lastSelectedIdx >= 0 && lastSelectedIdx < totalInstances {
+		// Check if this selection would require excessive scrolling on startup
+		// If so, start from the beginning for better UX
+		maxReasonableStartIndex := min(totalInstances-1, 10) // Don't start beyond item 10
+		if lastSelectedIdx <= maxReasonableStartIndex {
+			h.setSelectedIndex(lastSelectedIdx)
+		} else {
+			// Start from the beginning if the last selection was too far down
+			h.setSelectedIndex(0)
+		}
+	} else {
+		// Default to first item if no valid last index
+		if totalInstances > 0 {
+			h.setSelectedIndex(0)
+		}
+	}
+}
+
+// Facade methods for state access (avoiding direct appState access)
+
+// getLastSelectedIndex returns the last selected index from app state
+func (h *home) getLastSelectedIndex() int {
+	return h.appState.GetSelectedIndex()
+}
+
+// Facade methods for list operations (avoiding direct list access)
+
+// getInstanceCount returns the number of instances in the list
+func (h *home) getInstanceCount() int {
+	return h.list.NumInstances()
+}
+
+// setSelectedIndex sets the selected index in the list
+func (h *home) setSelectedIndex(index int) {
+	h.list.SetSelectedIdx(index)
+}
+
+// navigateUp moves list selection up
+func (h *home) navigateUp() {
+	h.list.Up()
+}
+
+// navigateDown moves list selection down
+func (h *home) navigateDown() {
+	h.list.Down()
+}
+
+// getSelectedInstance returns the currently selected instance
+func (h *home) getSelectedInstance() *session.Instance {
+	return h.list.GetSelectedInstance()
+}
+
+// getAllInstances returns all instances from the list
+func (h *home) getAllInstances() []*session.Instance {
+	return h.list.GetInstances()
+}
+
+// isAtNavigationStart checks if we're at the start of the list
+func (h *home) isAtNavigationStart() bool {
+	selected := h.getSelectedInstance()
+	return selected == nil || h.getInstanceCount() == 0
+}
+
+// isAtNavigationEnd checks if we're at the end of the list
+func (h *home) isAtNavigationEnd() bool {
+	if h.getInstanceCount() == 0 {
+		return true
+	}
+
+	// Get current selection index and compare with list size
+	instances := h.getAllInstances()
+	selectedIndex := -1
+	selected := h.getSelectedInstance()
+
+	if selected == nil {
+		return true
+	}
+
+	// Find the index of the selected instance
+	for i, instance := range instances {
+		if instance == selected {
+			selectedIndex = i
+			break
+		}
+	}
+
+	// We're at the end if we're at the last index
+	return selectedIndex >= len(instances)-1
+}
+
+// saveAllInstances saves all instances to storage using proper encapsulation
+func (h *home) saveAllInstances() error {
+	return h.storage.SaveInstances(h.getAllInstances())
 }

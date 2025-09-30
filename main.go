@@ -44,6 +44,10 @@ var (
 				LogMaxAge:      cfg.LogMaxAge,
 				LogCompress:    cfg.LogCompress,
 				UseSessionLogs: cfg.UseSessionLogs,
+				// Disable console output for TUI mode to prevent interfering with BubbleTea
+				ConsoleEnabled: false,
+				FileEnabled:    true,
+				FileLevel:      log.DEBUG,
 			}
 			log.InitializeWithConfig(daemonFlag, logCfg)
 			defer func() {
@@ -107,6 +111,10 @@ var (
 				LogMaxAge:      cfg.LogMaxAge,
 				LogCompress:    cfg.LogCompress,
 				UseSessionLogs: cfg.UseSessionLogs,
+				// Disable console output for CLI commands to keep output clean
+				ConsoleEnabled: false,
+				FileEnabled:    true,
+				FileLevel:      log.DEBUG,
 			}
 			log.InitializeWithConfig(false, logCfg)
 			defer func() {
@@ -159,6 +167,10 @@ var (
 				LogMaxAge:      cfg.LogMaxAge,
 				LogCompress:    cfg.LogCompress,
 				UseSessionLogs: cfg.UseSessionLogs,
+				// Disable console output for CLI commands to keep output clean
+				ConsoleEnabled: false,
+				FileEnabled:    true,
+				FileLevel:      log.DEBUG,
 			}
 			log.InitializeWithConfig(false, logCfg)
 			defer func() {

@@ -8,14 +8,14 @@ import (
 
 // TextInputOverlay represents a text input overlay with state management.
 type TextInputOverlay struct {
-	textarea      textarea.Model
-	Title         string
-	FocusIndex    int // 0 for text input, 1 for enter button
-	Submitted     bool
-	Canceled      bool
-	OnSubmit      func()
-	OnCancel      func()
-	width, height int
+	BaseOverlay // Embed base for common overlay functionality
+
+	textarea   textarea.Model
+	Title      string
+	FocusIndex int // 0 for text input, 1 for enter button
+	Submitted  bool
+	Canceled   bool
+	OnSubmit   func()
 }
 
 // NewTextInputOverlay creates a new text input overlay with the given title and initial value.
@@ -32,19 +32,27 @@ func NewTextInputOverlay(title string, initialValue string) *TextInputOverlay {
 	// Ensure no maximum height limit
 	ti.MaxHeight = 0
 
-	return &TextInputOverlay{
+	overlay := &TextInputOverlay{
 		textarea:   ti,
 		Title:      title,
 		FocusIndex: 0,
 		Submitted:  false,
 		Canceled:   false,
 	}
+
+	// Initialize BaseOverlay with default size
+	overlay.BaseOverlay.SetSize(60, 15)
+	overlay.BaseOverlay.Focus()
+
+	return overlay
 }
 
 func (t *TextInputOverlay) SetSize(width, height int) {
-	t.textarea.SetHeight(height) // Set textarea height to 10 lines
-	t.width = width
-	t.height = height
+	// Update BaseOverlay size
+	t.BaseOverlay.SetSize(width, height)
+
+	// Update textarea dimensions
+	t.textarea.SetHeight(height)
 }
 
 // Init initializes the text input overlay model
@@ -60,6 +68,14 @@ func (t *TextInputOverlay) View() string {
 // HandleKeyPress processes a key press and updates the state accordingly.
 // Returns true if the overlay should be closed.
 func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
+	// Use BaseOverlay for common keys (Esc)
+	if handled, shouldClose := t.BaseOverlay.HandleCommonKeys(msg); handled {
+		if shouldClose {
+			t.Canceled = true
+			return true
+		}
+	}
+
 	switch msg.Type {
 	case tea.KeyTab:
 		// Toggle focus between input and enter button.
@@ -79,13 +95,6 @@ func (t *TextInputOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			t.textarea.Blur()
 		}
 		return false
-	case tea.KeyEsc:
-		// Mark as canceled and call the cancel callback
-		t.Canceled = true
-		if t.OnCancel != nil {
-			t.OnCancel()
-		}
-		return true
 	case tea.KeyEnter:
 		if t.FocusIndex == 1 || msg.Type == tea.KeyEnter {
 			// Enter button is focused or Enter key is pressed, so submit.
@@ -133,19 +142,18 @@ func (t *TextInputOverlay) SetOnSubmitWithValue(onSubmit func(string)) {
 	}
 }
 
-// SetOnCancel sets a callback function for when the input is cancelled.
-func (t *TextInputOverlay) SetOnCancel(onCancel func()) {
-	// Store the onCancel function to be called when Esc is pressed
-	t.OnCancel = onCancel
-}
-
 // Render renders the text input overlay.
 func (t *TextInputOverlay) Render() string {
-	// Create styles
+	// Use responsive sizing from BaseOverlay
+	responsiveWidth := t.GetResponsiveWidth()
+	hPadding, vPadding := t.GetResponsivePadding()
+
+	// Create styles with responsive sizing
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color("62")).
-		Padding(1, 2)
+		Padding(vPadding, hPadding).
+		MaxWidth(responsiveWidth)
 
 	titleStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("62")).
@@ -160,8 +168,13 @@ func (t *TextInputOverlay) Render() string {
 		Background(lipgloss.Color("62")).
 		Foreground(lipgloss.Color("0"))
 
-	// Set textarea width to fit within the overlay
-	t.textarea.SetWidth(t.width - 6) // Account for padding and borders
+	// Set textarea width to fit within the responsive overlay
+	// Account for padding and borders
+	textareaWidth := responsiveWidth - (hPadding * 2) - 4
+	if textareaWidth < 20 {
+		textareaWidth = 20 // Minimum readable width
+	}
+	t.textarea.SetWidth(textareaWidth)
 
 	// Build the view
 	content := titleStyle.Render(t.Title) + "\n"

@@ -3,6 +3,7 @@ package ui
 import (
 	"claude-squad/session"
 	"claude-squad/session/git"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -324,4 +325,235 @@ func TestSearchByTitle(t *testing.T) {
 	if list.searchMode {
 		t.Errorf("Expected list to not be in search mode with empty query")
 	}
+}
+
+func TestScrollingAndViewport(t *testing.T) {
+	// Create test spinner for list
+	s := spinner.New()
+
+	// Create list with test spinner
+	list := NewList(&s, false, nil)
+
+	// Set a reasonable size for testing (simulate a terminal window)
+	list.SetSize(80, 20)
+
+	// Create many test instances to test scrolling
+	for i := 1; i <= 15; i++ {
+		instance := &session.Instance{
+			Title:     fmt.Sprintf("Test Instance %d", i),
+			Category:  "Test",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		list.AddInstance(instance)
+	}
+
+	// Test initial state
+	if list.scrollOffset != 0 {
+		t.Errorf("Expected initial scroll offset to be 0, got %d", list.scrollOffset)
+	}
+
+	// Test calculateMaxVisibleItems returns reasonable value
+	maxVisible := list.calculateMaxVisibleItems()
+	if maxVisible < 1 {
+		t.Errorf("Expected at least 1 visible item, got %d", maxVisible)
+	}
+	if maxVisible > 15 {
+		t.Errorf("Expected reasonable max visible items for height 20, got %d", maxVisible)
+	}
+
+	// Test getVisibleWindow returns correct slice
+	visibleWindow := list.getVisibleWindow()
+	if len(visibleWindow) > maxVisible {
+		t.Errorf("Expected visible window to respect max visible items (%d), got %d items",
+			maxVisible, len(visibleWindow))
+	}
+
+	// Test ensureSelectedVisible with different selections
+	// Select an item that should require scrolling
+	list.SetSelectedInstance(10) // Select 11th item (0-indexed)
+	list.ensureSelectedVisible()
+
+	// The scroll offset should have adjusted to show the selected item
+	selectedVisibleIdx := list.getVisibleIndex()
+	if selectedVisibleIdx == -1 {
+		t.Errorf("Selected item should be visible after ensureSelectedVisible")
+	}
+
+	// Verify scroll offset is reasonable
+	if list.scrollOffset < 0 {
+		t.Errorf("Scroll offset should not be negative, got %d", list.scrollOffset)
+	}
+	if list.scrollOffset > 15 {
+		t.Errorf("Scroll offset should not exceed item count, got %d", list.scrollOffset)
+	}
+}
+
+func TestItemNumbering(t *testing.T) {
+	// Create test spinner for list
+	s := spinner.New()
+
+	// Create list with test spinner
+	list := NewList(&s, false, nil)
+	list.SetSize(80, 20)
+
+	// Create test instances
+	for i := 1; i <= 5; i++ {
+		instance := &session.Instance{
+			Title:     fmt.Sprintf("Instance %d", i),
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		list.AddInstance(instance)
+	}
+
+	// Test that numbering starts from 1 and is sequential
+	for i := 0; i < 5; i++ {
+		instance := list.items[i]
+		rendered := list.renderer.Render(instance, i+1, false, false)
+
+		expectedNumber := fmt.Sprintf(" %d. ", i+1)
+		if !strings.Contains(rendered, expectedNumber) {
+			t.Errorf("Expected item %d to have number '%s' in rendered output, got: %s",
+				i, expectedNumber, rendered)
+		}
+	}
+
+	// Test search mode numbering uses global indices
+	list.SearchByTitle("Instance")
+	visibleWindow := list.getVisibleWindow()
+
+	// In search mode, numbering should still reflect global position
+	for i, item := range visibleWindow {
+		globalIdx := list.findGlobalIndex(item)
+		if globalIdx == -1 {
+			t.Errorf("Could not find global index for search result %d", i)
+			continue
+		}
+
+		rendered := list.renderer.Render(item, globalIdx+1, false, false)
+		expectedNumber := fmt.Sprintf(" %d. ", globalIdx+1)
+		if !strings.Contains(rendered, expectedNumber) {
+			t.Errorf("Expected search result to show global number '%s', got: %s",
+				expectedNumber, rendered)
+		}
+	}
+}
+
+func TestViewportConstraints(t *testing.T) {
+	// Create test spinner for list
+	s := spinner.New()
+
+	// Create list with test spinner
+	list := NewList(&s, false, nil)
+
+	// Set specific dimensions
+	width, height := 50, 15
+	list.SetSize(width, height)
+
+	// Create many instances to force scrolling
+	for i := 1; i <= 20; i++ {
+		instance := &session.Instance{
+			Title:     fmt.Sprintf("Long Instance Title %d", i),
+			Category:  fmt.Sprintf("Category %d", (i-1)/5+1), // 4 categories
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		list.AddInstance(instance)
+	}
+
+	// Render the list and check dimensions
+	rendered := list.String()
+
+	// Check that the rendered output doesn't exceed expected dimensions
+	lines := strings.Split(rendered, "\n")
+	if len(lines) > height+5 { // Allow some buffer for styling
+		t.Errorf("Rendered list should not exceed height constraint of %d (plus buffer), got %d lines",
+			height, len(lines))
+	}
+
+	// Check that lines don't exceed width (approximately, due to styling)
+	for i, line := range lines {
+		// Remove ANSI escape sequences for accurate length check
+		cleanLine := stripAnsiCodes(line)
+		if len(cleanLine) > width+10 { // Allow buffer for styling
+			t.Errorf("Line %d exceeds width constraint of %d (plus buffer): length %d",
+				i, width, len(cleanLine))
+		}
+	}
+}
+
+func TestFilteringWithScrolling(t *testing.T) {
+	// Create test spinner for list
+	s := spinner.New()
+
+	// Create list with test spinner
+	list := NewList(&s, false, nil)
+	list.SetSize(80, 20)
+
+	// Create mix of running and paused instances
+	for i := 1; i <= 10; i++ {
+		instance := &session.Instance{
+			Title:     fmt.Sprintf("Instance %d", i),
+			Status:    session.Running,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		}
+		if i%3 == 0 {
+			instance.Status = session.Paused
+		}
+		list.AddInstance(instance)
+	}
+
+	// Test that visible items changes when filter is applied
+	allItems := list.getVisibleItems()
+	initialCount := len(allItems)
+
+	// Apply paused filter
+	list.TogglePausedFilter()
+	filteredItems := list.getVisibleItems()
+	filteredCount := len(filteredItems)
+
+	if filteredCount >= initialCount {
+		t.Errorf("Expected filtering to reduce visible items from %d, got %d",
+			initialCount, filteredCount)
+	}
+
+	// Test that scroll offset resets when filter is applied
+	if list.scrollOffset != 0 {
+		t.Errorf("Expected scroll offset to reset to 0 when filter applied, got %d",
+			list.scrollOffset)
+	}
+
+	// Test that visible window respects the filter
+	visibleWindow := list.getVisibleWindow()
+	for i, item := range visibleWindow {
+		if item.Status == session.Paused {
+			t.Errorf("Paused item found in visible window at index %d when hidePaused is true", i)
+		}
+	}
+}
+
+// Helper function to strip ANSI escape codes for accurate length measurement
+func stripAnsiCodes(s string) string {
+	// Simple regex to remove common ANSI escape sequences
+	// This is a basic implementation - for more robust stripping, consider using a library
+	result := ""
+	inEscape := false
+
+	for i, r := range s {
+		if r == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			inEscape = true
+			continue
+		}
+		if inEscape {
+			if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') {
+				inEscape = false
+			}
+			continue
+		}
+		result += string(r)
+	}
+
+	return result
 }

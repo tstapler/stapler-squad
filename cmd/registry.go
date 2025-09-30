@@ -6,11 +6,12 @@ import (
 	"sync"
 
 	"claude-squad/cmd/interfaces"
+	"claude-squad/log"
 )
 
 // Use types from interfaces package to avoid duplication
 type CommandID = interfaces.CommandID
-type ContextID = interfaces.ContextID  
+type ContextID = interfaces.ContextID
 type Category = interfaces.Category
 
 // CommandRegistry is the central registry for all commands and keybindings
@@ -31,12 +32,12 @@ type Command struct {
 	Contexts    []ContextID
 
 	// Optional fields
-	Aliases     []string
-	Deprecated  *DeprecationInfo
+	Aliases       []string
+	Deprecated    *DeprecationInfo
 	Prerequisites []CommandID
-	
+
 	// Internal tracking
-	keys        []string // All keys bound to this command
+	keys []string // All keys bound to this command
 }
 
 // Context represents an application mode or state
@@ -47,7 +48,7 @@ type Context struct {
 	Description string
 }
 
-// CommandHandler is the function signature for command implementations  
+// CommandHandler is the function signature for command implementations
 type CommandHandler func(ctx *interfaces.CommandContext) error
 
 // CommandContext is now defined in interfaces package to avoid import cycles
@@ -61,9 +62,9 @@ type DeprecationInfo struct {
 
 // KeyConflict represents a keybinding conflict within a context
 type KeyConflict struct {
-	Key       string
-	Context   ContextID
-	Commands  []CommandID
+	Key      string
+	Context  ContextID
+	Commands []CommandID
 }
 
 // NewCommandRegistry creates a new command registry
@@ -97,12 +98,12 @@ func (r *CommandRegistry) RegisterContext(ctx *Context) error {
 	}
 
 	r.contexts[ctx.ID] = ctx
-	
+
 	// Initialize bindings map for this context
 	if r.bindings[ctx.ID] == nil {
 		r.bindings[ctx.ID] = make(map[string]CommandID)
 	}
-	
+
 	return nil
 }
 
@@ -121,7 +122,7 @@ func (r *CommandRegistry) Register(cmd *Command) *CommandBuilder {
 
 	// Store the command
 	r.commands[cmd.ID] = cmd
-	
+
 	// Initialize keys slice
 	cmd.keys = make([]string, 0)
 
@@ -150,7 +151,7 @@ func (cb *CommandBuilder) BindKeys(keys ...string) *CommandBuilder {
 	for _, key := range keys {
 		// Add to command's key list
 		cb.command.keys = append(cb.command.keys, key)
-		
+
 		// Bind in all contexts where this command is available
 		for _, contextID := range cb.command.Contexts {
 			if cb.registry.bindings[contextID] == nil {
@@ -159,7 +160,7 @@ func (cb *CommandBuilder) BindKeys(keys ...string) *CommandBuilder {
 			cb.registry.bindings[contextID][key] = cb.command.ID
 		}
 	}
-	
+
 	return cb
 }
 
@@ -169,14 +170,14 @@ func (cb *CommandBuilder) BindKeyInContext(key string, contexts ...ContextID) *C
 	defer cb.registry.mu.Unlock()
 
 	cb.command.keys = append(cb.command.keys, key)
-	
+
 	for _, contextID := range contexts {
 		if cb.registry.bindings[contextID] == nil {
 			cb.registry.bindings[contextID] = make(map[string]CommandID)
 		}
 		cb.registry.bindings[contextID][key] = cb.command.ID
 	}
-	
+
 	return cb
 }
 
@@ -205,18 +206,27 @@ func (r *CommandRegistry) ResolveCommand(contextID ContextID, key string) *Comma
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	log.DebugLog.Printf("ResolveCommand: contextID=%s, key=%s", contextID, key)
+
 	// First check the specific context
 	if bindings, exists := r.bindings[contextID]; exists {
+		log.DebugLog.Printf("ResolveCommand: found bindings for context %s, contains %d keys", contextID, len(bindings))
 		if cmdID, found := bindings[key]; found {
+			log.DebugLog.Printf("ResolveCommand: found command %s for key %s", cmdID, key)
 			return r.commands[cmdID]
 		}
+		log.DebugLog.Printf("ResolveCommand: key %s not found in context %s bindings", key, contextID)
+	} else {
+		log.DebugLog.Printf("ResolveCommand: no bindings exist for context %s", contextID)
 	}
 
 	// If not found, check parent contexts
 	if context, exists := r.contexts[contextID]; exists && context.Parent != nil {
+		log.DebugLog.Printf("ResolveCommand: checking parent context %s", *context.Parent)
 		return r.ResolveCommand(*context.Parent, key)
 	}
 
+	log.DebugLog.Printf("ResolveCommand: no command found for key %s in context %s", key, contextID)
 	return nil
 }
 
@@ -227,7 +237,7 @@ func (r *CommandRegistry) GetCommandsForContext(contextID ContextID) []*Command 
 
 	var commands []*Command
 	seen := make(map[CommandID]bool)
-	
+
 	r.collectCommandsForContext(contextID, &commands, seen)
 	return commands
 }
@@ -258,15 +268,15 @@ func (r *CommandRegistry) DetectConflicts() []KeyConflict {
 	defer r.mu.RUnlock()
 
 	var conflicts []KeyConflict
-	
+
 	for contextID, bindings := range r.bindings {
 		keyCommands := make(map[string][]CommandID)
-		
+
 		// Group commands by key
 		for key, cmdID := range bindings {
 			keyCommands[key] = append(keyCommands[key], cmdID)
 		}
-		
+
 		// Find conflicts (multiple commands for same key)
 		for key, cmdIDs := range keyCommands {
 			if len(cmdIDs) > 1 {
@@ -278,7 +288,7 @@ func (r *CommandRegistry) DetectConflicts() []KeyConflict {
 			}
 		}
 	}
-	
+
 	return conflicts
 }
 
@@ -286,7 +296,7 @@ func (r *CommandRegistry) DetectConflicts() []KeyConflict {
 func (r *CommandRegistry) GetCommand(id CommandID) (*Command, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	cmd, exists := r.commands[id]
 	return cmd, exists
 }
@@ -295,7 +305,7 @@ func (r *CommandRegistry) GetCommand(id CommandID) (*Command, bool) {
 func (r *CommandRegistry) GetContext(id ContextID) (*Context, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	ctx, exists := r.contexts[id]
 	return ctx, exists
 }
@@ -304,7 +314,7 @@ func (r *CommandRegistry) GetContext(id ContextID) (*Context, bool) {
 func (r *CommandRegistry) GetAllCommands() map[CommandID]*Command {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	// Return a copy to prevent external modification
 	result := make(map[CommandID]*Command)
 	for id, cmd := range r.commands {
@@ -317,7 +327,7 @@ func (r *CommandRegistry) GetAllCommands() map[CommandID]*Command {
 func (r *CommandRegistry) GetKeysForCommand(cmdID CommandID) []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	if cmd, exists := r.commands[cmdID]; exists {
 		// Return a copy to prevent external modification
 		keys := make([]string, len(cmd.keys))
@@ -331,19 +341,19 @@ func (r *CommandRegistry) GetKeysForCommand(cmdID CommandID) []string {
 func (r *CommandRegistry) String() string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	var sb strings.Builder
 	sb.WriteString("CommandRegistry:\n")
-	
+
 	sb.WriteString("  Contexts:\n")
 	for id, ctx := range r.contexts {
 		sb.WriteString(fmt.Sprintf("    %s: %s\n", id, ctx.Name))
 	}
-	
+
 	sb.WriteString("  Commands:\n")
 	for id, cmd := range r.commands {
 		sb.WriteString(fmt.Sprintf("    %s: %s (%v)\n", id, cmd.Name, cmd.keys))
 	}
-	
+
 	return sb.String()
 }

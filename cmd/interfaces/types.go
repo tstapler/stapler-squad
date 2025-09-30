@@ -1,9 +1,5 @@
 package interfaces
 
-import (
-	tea "github.com/charmbracelet/bubbletea"
-)
-
 // CommandContext provides context and state to command handlers
 type CommandContext struct {
 	Command  interface{} // The actual command (opaque to avoid circular import)

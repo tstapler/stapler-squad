@@ -1,0 +1,25 @@
+🚀 Create New Session
+                     
+● ● ● ●
+
+🌿 Branch Strategy
+                  
+┌─────────────────────────────────────────────────────────┐
+│ 🌱 Create New Branch                                    │
+│ A new branch will be created based on your session name │
+└─────────────────────────────────────────────────────────┘
+                                                           
+┌─────────────────────────────────────────┐
+│ 🔀 Use Current Branch                   │
+│ Work on the repository's current branch │
+└─────────────────────────────────────────┘
+                                           
+╭───────────────────────────────╮
+│ 🌿 Choose Another Branch      │
+│ Select from existing branches │
+╰───────────────────────────────╯
+                                 
+Loading branches...💡 ↑/↓ or j/k to navigate • Tab to cycle • Enter to select
+
+                          
+Esc: Cancel, ↑/↓: Navigate

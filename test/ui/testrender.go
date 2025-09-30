@@ -118,7 +118,8 @@ func (r *TestRenderer) CompareWithSnapshot(t *testing.T, model tea.Model, filena
 
 	// Check if we need to update the snapshot
 	if r.UpdateSnapshots {
-		if err := os.MkdirAll(r.SnapshotPath, 0755); err != nil {
+		// Create parent directories if they don't exist (including subdirectories)
+		if err := os.MkdirAll(filepath.Dir(snapshotPath), 0755); err != nil {
 			t.Fatalf("Failed to create snapshot directory: %v", err)
 		}
 
@@ -203,7 +204,8 @@ func (r *TestRenderer) CompareComponentWithSnapshot(t *testing.T, component inte
 
 	// Check if we need to update the snapshot
 	if r.UpdateSnapshots {
-		if err := os.MkdirAll(r.SnapshotPath, 0755); err != nil {
+		// Create parent directories if they don't exist (including subdirectories)
+		if err := os.MkdirAll(filepath.Dir(snapshotPath), 0755); err != nil {
 			t.Fatalf("Failed to create snapshot directory: %v", err)
 		}
 

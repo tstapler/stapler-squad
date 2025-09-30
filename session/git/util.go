@@ -84,3 +84,35 @@ func findGitRepoRoot(path string) (string, error) {
 		currentPath = parent
 	}
 }
+
+// getCurrentBranchName returns the current branch name for a git repository or worktree
+func getCurrentBranchName(path string) (string, error) {
+	cmd := exec.Command("git", "-C", path, "branch", "--show-current")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get current branch name: %w", err)
+	}
+
+	branchName := strings.TrimSpace(string(output))
+	if branchName == "" {
+		return "", fmt.Errorf("repository at '%s' is in detached HEAD state or has no branches", path)
+	}
+
+	return branchName, nil
+}
+
+// getHeadCommitSHA returns the SHA of the HEAD commit for a git repository or worktree
+func getHeadCommitSHA(path string) (string, error) {
+	cmd := exec.Command("git", "-C", path, "rev-parse", "HEAD")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get HEAD commit SHA: %w", err)
+	}
+
+	commitSHA := strings.TrimSpace(string(output))
+	if commitSHA == "" {
+		return "", fmt.Errorf("failed to get HEAD commit SHA: empty output")
+	}
+
+	return commitSHA, nil
+}

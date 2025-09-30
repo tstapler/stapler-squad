@@ -1,0 +1,7 @@
+╭─────────────────────────────────────────────────────────────────────────────────╮
+│                                                                                 │
+│   Are you sure you want to delete this session? This action cannot be undone.   │
+│                                                                                 │
+│   Press y to confirm, n or esc to cancel                                        │
+│                                                                                 │
+╰─────────────────────────────────────────────────────────────────────────────────╯

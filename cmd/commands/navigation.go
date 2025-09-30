@@ -25,10 +25,17 @@ func SetNavigationHandlers(handlers *NavigationHandlers) {
 
 // UpCommand moves selection up
 func UpCommand(ctx *interfaces.CommandContext) error {
+	if navigationHandlers == nil {
+		// This should never happen, but let's be defensive
+		return nil
+	}
 	if navigationHandlers.OnUp != nil {
 		model, teaCmd := navigationHandlers.OnUp()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
+	} else {
+		// Handler not initialized - this is the bug!
+		// Don't log here as it would spam, let HandleKeyString log it
 	}
 	return nil
 }

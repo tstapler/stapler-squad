@@ -72,6 +72,13 @@ func (t *TmuxSession) monitorWindowSize() {
 				return
 			case <-debouncedWinch:
 				doUpdate()
+			case extSize := <-t.externalResizeCh:
+				// Handle external resize events (e.g., from BubbleTea/IntelliJ)
+				if err := t.updateWindowSize(extSize.cols, extSize.rows); err != nil {
+					if everyN.ShouldLog() {
+						log.ErrorLog.Printf("failed to update window size from external source: %v", err)
+					}
+				}
 			}
 		}
 	}()

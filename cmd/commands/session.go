@@ -2,17 +2,19 @@ package commands
 
 import (
 	"claude-squad/cmd/interfaces"
+	"claude-squad/log"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 // SessionHandlers contains handlers for session management commands
 type SessionHandlers struct {
 	// These will be set by the application when integrating with the new system
-	OnNewSession    func() (tea.Model, tea.Cmd)
-	OnKillSession   func() (tea.Model, tea.Cmd)
-	OnAttachSession func() (tea.Model, tea.Cmd)
-	OnCheckout      func() (tea.Model, tea.Cmd)
-	OnResume        func() (tea.Model, tea.Cmd)
+	OnNewSession      func() (tea.Model, tea.Cmd)
+	OnKillSession     func() (tea.Model, tea.Cmd)
+	OnAttachSession   func() (tea.Model, tea.Cmd)
+	OnCheckout        func() (tea.Model, tea.Cmd)
+	OnResume          func() (tea.Model, tea.Cmd)
+	OnClaudeSettings  func() (tea.Model, tea.Cmd)
 }
 
 var sessionHandlers = &SessionHandlers{}
@@ -25,9 +27,13 @@ func SetSessionHandlers(handlers *SessionHandlers) {
 // NewSessionCommand creates a new session
 func NewSessionCommand(ctx *interfaces.CommandContext) error {
 	if sessionHandlers.OnNewSession != nil {
+		log.InfoLog.Printf("NewSessionCommand: calling OnNewSession handler")
 		model, teaCmd := sessionHandlers.OnNewSession()
+		log.InfoLog.Printf("NewSessionCommand: OnNewSession returned model: %v, cmd: %v", model != nil, teaCmd != nil)
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
+	} else {
+		log.InfoLog.Printf("NewSessionCommand: sessionHandlers.OnNewSession is nil!")
 	}
 	return nil
 }
@@ -66,6 +72,16 @@ func CheckoutCommand(ctx *interfaces.CommandContext) error {
 func ResumeCommand(ctx *interfaces.CommandContext) error {
 	if sessionHandlers.OnResume != nil {
 		model, teaCmd := sessionHandlers.OnResume()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// ClaudeSettingsCommand opens Claude Code settings configuration
+func ClaudeSettingsCommand(ctx *interfaces.CommandContext) error {
+	if sessionHandlers.OnClaudeSettings != nil {
+		model, teaCmd := sessionHandlers.OnClaudeSettings()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
 	}

@@ -4,8 +4,10 @@ import (
 	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session"
-	"errors"
+	"claude-squad/ui/debounce"
+	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -86,10 +88,136 @@ type List struct {
 
 	// Performance optimization: track if categories need reorganization
 	categoriesNeedUpdate bool
-	
+
+	// Performance optimization: O(1) instance lookups instead of O(n) searches
+	instanceToIndex   map[*session.Instance]int // O(1) index lookups
+	visibleItemsCache []*session.Instance       // Cache filtered items
+
+	// Search index for optimized fuzzy search performance
+	searchIndex *SearchIndex // Hybrid closestmatch + sahilm/fuzzy search index
+	visibleCacheValid bool                      // Cache validity flag
+	visibleIndexMap   map[*session.Instance]int // O(1) visible index lookups
+
 	// Performance optimization: debounce state saving during navigation
 	stateSaveTimer *time.Timer
 	stateSaveDelay time.Duration
+
+	// Dynamic element size tracking to prevent viewport overflow
+	actualItemHeight       int    // Measured height of a rendered item in lines
+	actualCategoryHeight   int    // Measured height of a category header in lines
+	lastMeasuredContent    string // Cache of last measured content to detect changes
+	sizeMeasurementValid   bool   // Whether our measurements are current
+	lastLoggedViewport     string // Cache last logged viewport to avoid spam
+	lastViewportLogTime    time.Time // Rate limit viewport logging
+
+	// Cache viewport calculations to avoid excessive recalculation
+	cachedMaxVisible     int  // Cached result of calculateMaxVisibleItems
+	maxVisibleCacheValid bool // Whether the cached max visible is valid
+	lastCachedHeight     int  // Height used for cached calculation
+	lastCachedCategories int  // Category count used for cached calculation
+
+	// Live search debouncing
+	searchDebouncer *debounce.Debouncer // Debouncer for live search input
+
+	// Streaming search state
+	searchCancel    context.CancelFunc // Cancel function for active streaming search
+	searchLoading   bool               // Whether search is currently in progress
+	searchStage     string             // Current search stage for user feedback
+}
+
+// SessionSearchSource implements the fuzzy.Source interface for session instances
+// This enables advanced fuzzy search across multiple session fields using sahilm/fuzzy
+type SessionSearchSource struct {
+	sessions []*session.Instance
+}
+
+// String returns the searchable text for the session at index i
+// Fields are prioritized by importance: Title, Category, Program, Branch, Path, WorkingDir
+func (s SessionSearchSource) String(i int) string {
+	if i < 0 || i >= len(s.sessions) {
+		return ""
+	}
+
+	instance := s.sessions[i]
+	parts := make([]string, 0, 6)
+
+	// Primary field - Title (highest priority)
+	if instance.Title != "" {
+		parts = append(parts, instance.Title)
+	}
+
+	// Secondary fields - Context and organization
+	if instance.Category != "" {
+		parts = append(parts, instance.Category)
+	}
+
+	if instance.Program != "" {
+		parts = append(parts, instance.Program)
+	}
+
+	if instance.Branch != "" {
+		parts = append(parts, instance.Branch)
+	}
+
+	// Path information - extract repo name and working directory
+	if instance.Path != "" {
+		repoName := filepath.Base(instance.Path)
+		if repoName != "" && repoName != "." {
+			parts = append(parts, repoName)
+		}
+	}
+
+	if instance.WorkingDir != "" {
+		parts = append(parts, instance.WorkingDir)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// Len returns the number of sessions in the source
+func (s SessionSearchSource) Len() int {
+	return len(s.sessions)
+}
+
+// SessionSearchItem wraps a session instance to implement the fuzzy.SearchItem interface
+type SessionSearchItem struct {
+	instance *session.Instance
+}
+
+// GetSearchText returns the text used for fuzzy matching
+func (s SessionSearchItem) GetSearchText() string {
+	parts := make([]string, 0, 6)
+
+	if s.instance.Title != "" {
+		parts = append(parts, s.instance.Title)
+	}
+	if s.instance.Category != "" {
+		parts = append(parts, s.instance.Category)
+	}
+	if s.instance.Program != "" {
+		parts = append(parts, s.instance.Program)
+	}
+	if s.instance.Branch != "" {
+		parts = append(parts, s.instance.Branch)
+	}
+	if s.instance.Path != "" {
+		parts = append(parts, filepath.Base(s.instance.Path))
+	}
+	if s.instance.WorkingDir != "" {
+		parts = append(parts, s.instance.WorkingDir)
+	}
+
+	return strings.Join(parts, " ")
+}
+
+// GetDisplayText returns the text to display in the UI (just the title)
+func (s SessionSearchItem) GetDisplayText() string {
+	return s.instance.Title
+}
+
+// GetID returns a unique identifier for the item
+func (s SessionSearchItem) GetID() string {
+	return s.instance.Title + "|" + s.instance.Path
 }
 
 func NewList(spinner *spinner.Model, autoYes bool, stateManager *config.State) *List {
@@ -99,13 +227,22 @@ func NewList(spinner *spinner.Model, autoYes bool, stateManager *config.State) *
 		repos:                make(map[string]int),
 		autoyes:              autoYes,
 		categoryGroups:       make(map[string][]*session.Instance),
+		instanceToIndex:      make(map[*session.Instance]int),
+		visibleItemsCache:    []*session.Instance{},
+		visibleCacheValid:    false,
+		visibleIndexMap:      make(map[*session.Instance]int),
 		groupExpanded:        make(map[string]bool),
 		searchMode:           false,
 		searchResults:        []*session.Instance{},
 		hidePaused:           false,
 		stateManager:         stateManager,
-		categoriesNeedUpdate: true, // Initialize as needing update
+		categoriesNeedUpdate: true,                   // Initialize as needing update
 		stateSaveDelay:       200 * time.Millisecond, // Debounce state saves during navigation
+		actualItemHeight:     4,                      // Default fallback
+		actualCategoryHeight: 2,                      // Default fallback
+		searchIndex:          NewSearchIndex(),       // Initialize optimized search index
+		sizeMeasurementValid: false,                  // Needs initial measurement
+		searchDebouncer:      debounce.New(200 * time.Millisecond), // Live search debouncing
 	}
 
 	// Load persisted UI state if available
@@ -114,8 +251,40 @@ func NewList(spinner *spinner.Model, autoYes bool, stateManager *config.State) *
 	return l
 }
 
+// rebuildInstanceIndex rebuilds the instanceToIndex map for O(1) lookups
+func (l *List) rebuildInstanceIndex() {
+	l.instanceToIndex = make(map[*session.Instance]int, len(l.items))
+	for idx, instance := range l.items {
+		l.instanceToIndex[instance] = idx
+	}
+}
+
+// invalidateVisibleCache marks the visible items cache as invalid
+func (l *List) invalidateVisibleCache() {
+	l.visibleCacheValid = false
+	l.visibleItemsCache = nil
+	// Clear the visible index map as well
+	for k := range l.visibleIndexMap {
+		delete(l.visibleIndexMap, k)
+	}
+}
+
+// IsVisibleCacheValid returns whether the visible cache is currently valid (debug helper)
+func (l *List) IsVisibleCacheValid() bool {
+	return l.visibleCacheValid
+}
+
+// GetVisibleItems returns the currently visible items (public accessor for debugging)
+func (l *List) GetVisibleItems() []*session.Instance {
+	return l.getVisibleItems()
+}
+
 // SetSize sets the height and width of the list.
 func (l *List) SetSize(width, height int) {
+	// Invalidate viewport cache if height changed
+	if l.height != height {
+		l.maxVisibleCacheValid = false
+	}
 	l.width = width
 	l.height = height
 	l.renderer.setWidth(width)
@@ -130,8 +299,11 @@ func (l *List) SetSessionPreviewSize(width, height int) (err error) {
 		}
 
 		if innerErr := item.SetPreviewSize(width, height); innerErr != nil {
-			err = errors.Join(
-				err, fmt.Errorf("could not set preview size for instance %d: %v", i, innerErr))
+			// Log PTY initialization errors but don't propagate them to avoid breaking the UI
+			// These errors are common when sessions are starting up or recovering
+			log.WarningLog.Printf("could not set preview size for instance %d (%s): %v", i, item.Title, innerErr)
+			// Don't accumulate these errors to prevent UI disruption
+			continue
 		}
 	}
 	return
@@ -313,14 +485,21 @@ var expandedIconStyle = lipgloss.NewStyle().
 var collapsedIconStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#ffffff"))
 
+// Performance optimization: pre-computed styles to avoid repeated allocations
+var noSessionsStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+
 func (l *List) String() string {
 	// Build dynamic title with filter status
 	titleText := " Instances"
 	var filters []string
 
-	// Add search filter info
+	// Add search filter info with progress indicator
 	if l.searchMode && l.searchQuery != "" {
-		filters = append(filters, fmt.Sprintf("🔍 %s", l.searchQuery))
+		searchText := fmt.Sprintf("🔍 %s", l.searchQuery)
+		if l.searchLoading && l.searchStage != "" {
+			searchText += fmt.Sprintf(" (%s...)", l.searchStage)
+		}
+		filters = append(filters, searchText)
 	}
 
 	// Add paused filter info
@@ -350,7 +529,8 @@ func (l *List) String() string {
 	b.WriteString("\n")
 
 	// Write title line with scroll indicators
-	titleWidth := AdjustPreviewWidth(l.width) + 2
+	// Use the actual list width, not adjusted preview width for proper layout
+	titleWidth := l.width
 	scrollIndicator := l.getScrollIndicator()
 	if !l.autoyes {
 		titleWithScroll := titleText + scrollIndicator
@@ -375,7 +555,12 @@ func (l *List) String() string {
 	// Render items with scrolling support
 	l.renderVisibleItems(&b, visibleWindow)
 
-	return lipgloss.Place(l.width, l.height, lipgloss.Left, lipgloss.Top, b.String())
+	// Return the rendered content - viewport calculations ensure proper sizing
+	content := b.String()
+
+	return lipgloss.NewStyle().
+		Width(l.width).
+		Render(content)
 }
 
 // Down selects the next item in the list.
@@ -440,6 +625,11 @@ func (l *List) Kill() {
 	// Since there's items after this, the selectedIdx can stay the same.
 	l.items = append(l.items[:l.selectedIdx], l.items[l.selectedIdx+1:]...)
 
+	// Rebuild index and invalidate cache due to list modification
+	l.rebuildInstanceIndex()
+	l.invalidateVisibleCache()
+	l.searchIndex.MarkNeedsRebuild() // Mark search index for rebuild
+
 	// Mark categories as needing update after item removal
 	l.categoriesNeedUpdate = true
 }
@@ -500,6 +690,11 @@ func (l *List) rmRepo(repo string) {
 // When creating a new one and entering the name, you want to call the finalizer once the name is done.
 func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
 	l.items = append(l.items, instance)
+
+	// Rebuild index and invalidate cache due to list modification
+	l.rebuildInstanceIndex()
+	l.invalidateVisibleCache()
+	l.searchIndex.MarkNeedsRebuild() // Mark search index for rebuild
 
 	// Add to the appropriate category group
 	category := instance.Category
@@ -609,16 +804,23 @@ func (l *List) OrganizeByCategory() {
 	// Reset category groups
 	l.categoryGroups = make(map[string][]*session.Instance)
 
-	// Group instances by category
+	// Group instances by category (supporting nested categories)
 	for _, instance := range l.items {
 		// Skip paused sessions if hidePaused is true
 		if l.hidePaused && instance.Status == session.Paused {
 			continue
 		}
 
-		category := instance.Category
-		if category == "" {
-			category = "Uncategorized"
+		categoryPath := instance.GetCategoryPath()
+
+		// Determine the category to use for grouping
+		var category string
+		if len(categoryPath) == 1 {
+			// Simple category (e.g., "Work" or "Uncategorized")
+			category = categoryPath[0]
+		} else {
+			// Nested category - use the full path (e.g., "Work/Frontend")
+			category = strings.Join(categoryPath, "/")
 		}
 
 		// Initialize the category if it doesn't exist
@@ -638,11 +840,15 @@ func (l *List) OrganizeByCategory() {
 
 	// Mark categories as updated
 	l.categoriesNeedUpdate = false
+	// Invalidate viewport cache since category count may have changed
+	l.maxVisibleCacheValid = false
 }
 
 // TogglePausedFilter toggles whether paused sessions are hidden
 func (l *List) TogglePausedFilter() {
 	l.hidePaused = !l.hidePaused
+	// Invalidate cache due to filter change
+	l.invalidateVisibleCache()
 	// Mark categories as needing update when filter changes
 	l.categoriesNeedUpdate = true
 	// Re-organize to apply the filter
@@ -678,45 +884,67 @@ func (l *List) TogglePausedFilter() {
 
 // getVisibleItems returns the items that should be visible based on current filters
 func (l *List) getVisibleItems() []*session.Instance {
+	// Return cached result if valid
+	if l.visibleCacheValid && l.visibleItemsCache != nil {
+		return l.visibleItemsCache
+	}
+
+	// Rebuild cache
+	var visible []*session.Instance
+
 	// If in search mode, return search results (already filtered)
 	if l.searchMode && len(l.searchResults) > 0 {
-		var visible []*session.Instance
 		for _, item := range l.searchResults {
 			if l.hidePaused && item.Status == session.Paused {
 				continue
 			}
 			visible = append(visible, item)
 		}
-		return visible
+	} else {
+		// Normal mode: filter items based on hidePaused
+		for _, item := range l.items {
+			if l.hidePaused && item.Status == session.Paused {
+				continue
+			}
+			visible = append(visible, item)
+		}
 	}
 
-	// Normal mode: filter items based on hidePaused
-	var visible []*session.Instance
-	for _, item := range l.items {
-		if l.hidePaused && item.Status == session.Paused {
-			continue
-		}
-		visible = append(visible, item)
+	// Cache the result and build visible index map for O(1) lookups
+	l.visibleItemsCache = visible
+	l.visibleCacheValid = true
+
+	// Build visible index map for O(1) getVisibleIndex lookups
+	for i, item := range visible {
+		l.visibleIndexMap[item] = i
 	}
+
 	return visible
 }
 
 // getVisibleIndex returns the index of the currently selected item in the visible items list
+// Performance optimized: O(1) using visible index map instead of O(n) scanning
 func (l *List) getVisibleIndex() int {
 	if l.selectedIdx < 0 || l.selectedIdx >= len(l.items) {
 		return -1
 	}
 
 	selectedItem := l.items[l.selectedIdx]
-	visibleItems := l.getVisibleItems()
 
-	for i, item := range visibleItems {
-		if item == selectedItem {
-			return i
-		}
+	// Check if selected item should be visible based on current filters
+	if l.hidePaused && selectedItem.Status == session.Paused {
+		return -1 // Selected item is filtered out
 	}
 
-	return -1
+	// Ensure visible items cache and index map are built
+	l.getVisibleItems()
+
+	// O(1) lookup in visible index map
+	if visibleIdx, exists := l.visibleIndexMap[selectedItem]; exists {
+		return visibleIdx
+	}
+
+	return -1 // Selected item not in visible items
 }
 
 // UI State Persistence Methods
@@ -865,13 +1093,15 @@ func (l *List) CollapseCategory(category string) {
 	}
 }
 
-// SearchByTitle enables search mode and filters instances by title
+// SearchByTitle enables search mode and filters instances using advanced fuzzy search
+// This searches across all session fields: title, category, program, branch, path, and working directory
 func (l *List) SearchByTitle(query string) {
 	if query == "" {
 		// Exit search mode if query is empty
 		l.searchMode = false
 		l.searchResults = nil
-		l.scrollOffset = 0 // Reset scroll when exiting search
+		l.invalidateVisibleCache() // Invalidate cache when exiting search
+		l.scrollOffset = 0         // Reset scroll when exiting search
 		l.ensureSelectedVisible()
 		l.saveUIState()
 		return
@@ -880,19 +1110,17 @@ func (l *List) SearchByTitle(query string) {
 	// Enter search mode
 	l.searchMode = true
 	l.searchQuery = query
-	l.scrollOffset = 0 // Reset scroll when entering search
+	l.invalidateVisibleCache() // Invalidate cache when search changes
+	l.scrollOffset = 0         // Reset scroll when entering search
 
-	// Convert query to lowercase for case-insensitive matching
-	query = strings.ToLower(query)
-
-	// Filter instances by title
-	l.searchResults = make([]*session.Instance, 0)
-	for _, instance := range l.items {
-		title := strings.ToLower(instance.Title)
-		if strings.Contains(title, query) {
-			l.searchResults = append(l.searchResults, instance)
-		}
+	// Ensure search index is up-to-date
+	if !l.searchIndex.IsIndexValid() {
+		l.searchIndex.RebuildIndex(l.items)
 	}
+
+	// Perform optimized hybrid fuzzy search
+	// This uses closestmatch for fast pre-filtering + sahilm/fuzzy for high-quality ranking
+	l.searchResults = l.searchIndex.Search(query, len(l.items)) // No limit, get all matches
 
 	// Ensure the selected item is visible in search results
 	l.ensureSelectedVisible()
@@ -903,9 +1131,17 @@ func (l *List) SearchByTitle(query string) {
 
 // ExitSearchMode exits search mode
 func (l *List) ExitSearchMode() {
+	// Cancel any active streaming search
+	if l.searchCancel != nil {
+		l.searchCancel()
+		l.searchCancel = nil
+	}
+
 	l.searchMode = false
 	l.searchQuery = ""
 	l.searchResults = nil
+	l.searchLoading = false
+	l.searchStage = ""
 	l.scrollOffset = 0 // Reset scroll when exiting search
 
 	// Ensure the selected item is visible after exiting search
@@ -915,26 +1151,166 @@ func (l *List) ExitSearchMode() {
 	l.saveUIState()
 }
 
-// getSortedCategories returns a sorted list of category names
-// with "Uncategorized" always at the end
+// SearchByTitleLive performs live search with debouncing to avoid excessive updates
+// This method should be called on every keystroke for instant search feedback
+func (l *List) SearchByTitleLive(query string) {
+	// If query is empty, exit search mode immediately
+	if query == "" {
+		l.searchDebouncer.Cancel()
+		l.ExitSearchMode()
+		return
+	}
+
+	// Use debouncer to avoid excessive search operations during fast typing
+	l.searchDebouncer.Trigger(func() {
+		l.SearchByTitleStreaming(query)
+	})
+}
+
+// SearchByTitleStreaming performs streaming search with parallel processing and intermediate results
+func (l *List) SearchByTitleStreaming(query string) {
+	// Cancel any existing search
+	if l.searchCancel != nil {
+		l.searchCancel()
+	}
+
+	if query == "" {
+		// Exit search mode if query is empty
+		l.searchMode = false
+		l.searchResults = nil
+		l.searchLoading = false
+		l.searchStage = ""
+		l.invalidateVisibleCache()
+		l.scrollOffset = 0
+		l.ensureSelectedVisible()
+		l.saveUIState()
+		return
+	}
+
+	// Enter search mode
+	l.searchMode = true
+	l.searchQuery = query
+	l.searchLoading = true
+	l.searchStage = "initializing"
+	l.invalidateVisibleCache()
+	l.scrollOffset = 0
+
+	// Ensure search index is up-to-date
+	if !l.searchIndex.IsIndexValid() {
+		l.searchIndex.RebuildIndex(l.items)
+	}
+
+	// Create context for this search
+	ctx, cancel := context.WithCancel(context.Background())
+	l.searchCancel = cancel
+
+	// Start streaming search
+	resultStream := l.searchIndex.SearchStream(ctx, query, len(l.items))
+
+	go func() {
+		defer func() {
+			l.searchLoading = false
+			l.searchStage = ""
+		}()
+
+		for result := range resultStream {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				// Update search results with latest data
+				l.searchResults = result.Instances
+				l.searchStage = result.Stage
+				l.searchLoading = !result.Complete
+
+				// Update UI cache
+				l.invalidateVisibleCache()
+				l.ensureSelectedVisible()
+
+				// Save state if search is complete
+				if result.Complete {
+					l.saveUIState()
+				}
+
+				// Note: In a real TUI app, we'd need to trigger a screen refresh here
+				// This would typically be done by sending a custom message to the BubbleTea update loop
+			}
+		}
+	}()
+}
+
+// getSortedCategories returns a sorted list of category names with nested hierarchy
+// Parent categories come before their children, and "Uncategorized" is always at the end
 func (l *List) getSortedCategories() []string {
 	categories := make([]string, 0, len(l.categoryGroups))
 	for category := range l.categoryGroups {
 		categories = append(categories, category)
 	}
 
-	// Sort categories alphabetically with "Uncategorized" at the end
-	sort.Slice(categories, func(i, j int) bool {
-		if categories[i] == "Uncategorized" {
+	// Separate parent and nested categories
+	parents := make([]string, 0)
+	nested := make([]string, 0)
+
+	for _, category := range categories {
+		if strings.Contains(category, "/") {
+			nested = append(nested, category)
+		} else {
+			parents = append(parents, category)
+		}
+	}
+
+	// Sort parents alphabetically (except "Uncategorized")
+	sort.Slice(parents, func(i, j int) bool {
+		if parents[i] == "Uncategorized" {
 			return false
 		}
-		if categories[j] == "Uncategorized" {
+		if parents[j] == "Uncategorized" {
 			return true
 		}
-		return categories[i] < categories[j]
+		return parents[i] < parents[j]
 	})
 
-	return categories
+	// Sort nested categories by parent, then by child
+	sort.Slice(nested, func(i, j int) bool {
+		partsI := strings.Split(nested[i], "/")
+		partsJ := strings.Split(nested[j], "/")
+
+		// First compare parent categories
+		if partsI[0] != partsJ[0] {
+			return partsI[0] < partsJ[0]
+		}
+
+		// If same parent, compare child categories
+		return partsI[1] < partsJ[1]
+	})
+
+	// Build final order: parents first, then their nested children
+	result := make([]string, 0, len(categories))
+	uncategorized := ""
+
+	for _, parent := range parents {
+		if parent == "Uncategorized" {
+			uncategorized = parent
+			continue
+		}
+
+		// Add parent category if it has instances
+		result = append(result, parent)
+
+		// Add nested categories for this parent
+		for _, category := range nested {
+			if strings.HasPrefix(category, parent+"/") {
+				result = append(result, category)
+			}
+		}
+	}
+
+	// Add "Uncategorized" at the end if it exists
+	if uncategorized != "" {
+		result = append(result, uncategorized)
+	}
+
+	return result
 }
 
 // isHeaderSelected returns true if the current selection is on a category header
@@ -963,22 +1339,89 @@ func (l *List) isHeaderSelected() bool {
 	return false
 }
 
+// measureActualContentSize measures the actual rendered size of content elements
+func (l *List) measureActualContentSize() {
+	if len(l.items) == 0 {
+		return
+	}
+
+	// Measure actual item height by rendering a sample item
+	sampleItem := l.items[0]
+	renderedItem := l.renderer.Render(sampleItem, 1, false, true)
+	l.actualItemHeight = strings.Count(renderedItem, "\n") + 1 // +1 for the content itself
+
+	// Add spacing between items (the "\n\n" we add between items)
+	l.actualItemHeight += 2
+
+	// Measure actual category header height
+	categoryHeader := categoryHeaderStyle.Render("▼ Sample Category (1)")
+	l.actualCategoryHeight = strings.Count(categoryHeader, "\n") + 1 // +1 for the content itself
+	l.actualCategoryHeight += 1 // Add spacing after header
+
+	l.sizeMeasurementValid = true
+
+	log.InfoLog.Printf("Measured content sizes: item=%d lines, category=%d lines",
+		l.actualItemHeight, l.actualCategoryHeight)
+}
+
+// invalidateContentSizeMeasurement marks size measurements as invalid when content changes
+func (l *List) invalidateContentSizeMeasurement() {
+	l.sizeMeasurementValid = false
+}
+
 // calculateMaxVisibleItems calculates how many items can fit in the available screen height
 func (l *List) calculateMaxVisibleItems() int {
-	// Account for title area (4 lines) and some padding
+	// Check if we can use cached result
+	currentCategories := len(l.categoryGroups)
+	if l.maxVisibleCacheValid && l.lastCachedHeight == l.height && l.lastCachedCategories == currentCategories {
+		return l.cachedMaxVisible
+	}
+
+	// Calculate fresh result
+	// Be much more conservative to prevent overflow
+	// Account for title area (4 lines) and generous padding
 	titleLines := 4
-	padding := 2
+	padding := 6 // Extra conservative padding for category headers and spacing
 	availableHeight := l.height - titleLines - padding
 
-	// Each session item takes 3 lines (title + branch + spacing)
-	linesPerItem := 3
+	// Each session item takes 4 lines (title + branch + 2 spacing lines)
+	// Based on actual rendering: lipgloss.JoinVertical + "\n\n" between items
+	linesPerItem := 4
 
-	// Estimate available space conservatively
-	// We'll refine this during actual rendering
+	// Reserve space for potential category headers
+	// This is a fixed conservative estimate rather than dynamic calculation
+	categoryHeaderReserve := 8 // Reserve space for up to 4 category headers
+	availableHeight -= categoryHeaderReserve
+
+	// Be very conservative with the calculation to prevent overflow
 	maxItems := availableHeight / linesPerItem
 	if maxItems < 1 {
 		maxItems = 1
 	}
+
+	// Much lower cap to prevent content going beyond visible area
+	if maxItems > 20 {
+		maxItems = 20
+	}
+
+	// Cache the result
+	l.cachedMaxVisible = maxItems
+	l.maxVisibleCacheValid = true
+	l.lastCachedHeight = l.height
+	l.lastCachedCategories = currentCategories
+
+	// Rate-limited debug logging to understand viewport calculations (avoid spam)
+	currentViewport := fmt.Sprintf("height=%d, available=%d, maxItems=%d, categories=%d",
+		l.height, availableHeight, maxItems, currentCategories)
+
+	// Only log if viewport changed OR it's been more than 5 seconds since last log
+	now := time.Now()
+	if l.lastLoggedViewport != currentViewport || now.Sub(l.lastViewportLogTime) > 5*time.Second {
+		log.InfoLog.Printf("Viewport calculation: %s", currentViewport)
+		l.lastLoggedViewport = currentViewport
+		l.lastViewportLogTime = now
+	}
+
 	return maxItems
 }
 
@@ -1100,7 +1543,8 @@ func (l *List) getScrollIndicator() string {
 // renderVisibleItems renders only the items in the visible window
 func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.Instance) {
 	if len(visibleWindow) == 0 {
-		b.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("8")).Render("No sessions available"))
+		// Use pre-computed style to avoid repeated lipgloss.NewStyle() calls
+		b.WriteString(noSessionsStyle.Render("No sessions available"))
 		return
 	}
 
@@ -1110,7 +1554,9 @@ func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.I
 			// visibleWindow already contains only search results, no need to double-check
 			globalIdx := l.findGlobalIndex(item)
 			if globalIdx >= 0 {
-				b.WriteString(l.renderer.Render(item, l.scrollOffset+i+1, globalIdx == l.selectedIdx, true))
+				// Use the actual global index + 1 for numbering, not scroll offset
+				displayNumber := globalIdx + 1
+				b.WriteString(l.renderer.Render(item, displayNumber, globalIdx == l.selectedIdx, true))
 				if i != len(visibleWindow)-1 {
 					b.WriteString("\n\n")
 				}
@@ -1130,10 +1576,13 @@ func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.I
 		categoriesInWindow[category] = append(categoriesInWindow[category], item)
 	}
 
-	// Get ALL existing categories from categoryGroups, not just those in window
-	categories := make([]string, 0, len(l.categoryGroups))
-	for category := range l.categoryGroups {
-		categories = append(categories, category)
+	// Get only categories that have items in the visible window
+	categories := make([]string, 0, len(categoriesInWindow))
+	for category := range categoriesInWindow {
+		// Only include categories that have items in the visible window
+		if len(categoriesInWindow[category]) > 0 {
+			categories = append(categories, category)
+		}
 	}
 	sort.Slice(categories, func(i, j int) bool {
 		if categories[i] == "Uncategorized" {
@@ -1191,7 +1640,20 @@ func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.I
 
 			// Get total count for category (not just visible)
 			totalInCategory := len(l.categoryGroups[category])
-			categoryHeader := fmt.Sprintf("%s%s (%d)", iconStyle.Render(icon), category, totalInCategory)
+
+			// Handle nested category display with indentation
+			displayName := category
+			indent := ""
+			if strings.Contains(category, "/") {
+				// Nested category - show only the child part with indentation
+				parts := strings.Split(category, "/")
+				if len(parts) >= 2 {
+					displayName = parts[len(parts)-1] // Last part (child category)
+					indent = "  "                     // Indent nested categories
+				}
+			}
+
+			categoryHeader := fmt.Sprintf("%s%s%s (%d)", indent, iconStyle.Render(icon), displayName, totalInCategory)
 
 			// Use selected style if this is the selected category header
 			isHeaderSelected := isSelectedCategory && !l.groupExpanded[category]
@@ -1208,7 +1670,9 @@ func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.I
 			for i, item := range instances {
 				globalIdx := l.findGlobalIndex(item)
 				if globalIdx >= 0 {
-					b.WriteString(l.renderer.Render(item, renderedCount+1, globalIdx == l.selectedIdx, true))
+					// Use the actual global index + 1 for numbering
+					displayNumber := globalIdx + 1
+					b.WriteString(l.renderer.Render(item, displayNumber, globalIdx == l.selectedIdx, true))
 					if i != len(instances)-1 || renderedCount < len(visibleWindow)-1 {
 						b.WriteString("\n\n")
 					}
@@ -1221,10 +1685,8 @@ func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.I
 
 // findGlobalIndex finds the global index of an instance in the items list
 func (l *List) findGlobalIndex(target *session.Instance) int {
-	for idx, instance := range l.items {
-		if instance == target {
-			return idx
-		}
+	if idx, exists := l.instanceToIndex[target]; exists {
+		return idx
 	}
 	return -1
 }
@@ -1257,4 +1719,9 @@ func (l *List) ClearAllFilters() {
 // GetSearchState returns the current search mode and query
 func (l *List) GetSearchState() (bool, string) {
 	return l.searchMode, l.searchQuery
+}
+
+// GetSearchStatus returns the current search loading state and stage
+func (l *List) GetSearchStatus() (loading bool, stage string) {
+	return l.searchLoading, l.searchStage
 }

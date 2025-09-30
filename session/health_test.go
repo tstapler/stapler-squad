@@ -3,9 +3,8 @@ package session
 import (
 	"testing"
 	"time"
-
-	"claude-squad/log"
 )
+
 
 // TestHealthCheckResult tests the HealthCheckResult struct
 func TestHealthCheckResult(t *testing.T) {
@@ -46,10 +45,6 @@ func TestHealthCheckResult(t *testing.T) {
 
 // TestNewSessionHealthChecker tests health checker creation
 func TestNewSessionHealthChecker(t *testing.T) {
-	// Initialize logging for the test
-	log.Initialize(false)
-	defer log.Close()
-
 	// We'll test with a nil storage for this basic test
 	checker := NewSessionHealthChecker(nil)
 
@@ -64,10 +59,6 @@ func TestNewSessionHealthChecker(t *testing.T) {
 
 // TestScheduledHealthCheck tests that the scheduled health check can start and stop
 func TestScheduledHealthCheck(t *testing.T) {
-	// Initialize logging for the test
-	log.Initialize(false)
-	defer log.Close()
-
 	checker := NewSessionHealthChecker(nil)
 
 	// Test that scheduled health check can be started and stopped

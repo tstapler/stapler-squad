@@ -1,6 +1,7 @@
 package app
 
 import (
+	"claude-squad/app/state"
 	"claude-squad/config"
 	"claude-squad/session"
 	"claude-squad/ui"
@@ -10,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 )
@@ -20,20 +20,20 @@ func BenchmarkWithRealGitChanges(b *testing.B) {
 	// Create temporary directory with real git repo and changes
 	tempDir, cleanup := setupRealGitRepo(b)
 	defer cleanup()
-	
+
 	sessionCounts := []int{5, 10, 20} // Smaller counts due to expensive setup
-	
+
 	for _, count := range sessionCounts {
 		b.Run(fmt.Sprintf("RealGit_%d", count), func(b *testing.B) {
 			h := setupHomeWithRealGitRepos(b, tempDir, count)
-			
+
 			b.ResetTimer()
-			
+
 			for i := 0; i < b.N; i++ {
 				sessionIdx := i % count
 				h.list.SetSelectedIdx(sessionIdx)
 				instance := h.list.GetSelectedInstance()
-				
+
 				if instance != nil {
 					// This will perform real git operations on actual changes
 					h.tabbedWindow.UpdateDiff(instance)    // Real git diff
@@ -49,30 +49,30 @@ func BenchmarkGitVsNoGitComparison(b *testing.B) {
 	// Setup real git repo
 	tempDir, cleanup := setupRealGitRepo(b)
 	defer cleanup()
-	
+
 	b.Run("WithGitChanges", func(b *testing.B) {
 		h := setupHomeWithRealGitRepos(b, tempDir, 10)
-		
+
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			instance := h.list.GetSelectedInstance()
 			h.tabbedWindow.UpdateDiff(instance) // Real git diff with changes
 		}
 	})
-	
+
 	b.Run("WithoutGitChanges", func(b *testing.B) {
 		h := setupHomeWithCleanGitRepos(b, tempDir, 10)
-		
+
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			instance := h.list.GetSelectedInstance()
 			h.tabbedWindow.UpdateDiff(instance) // Git diff with no changes
 		}
 	})
-	
+
 	b.Run("NoGitRepo", func(b *testing.B) {
 		h := setupHomeWithNonGitDirs(b, 10)
-		
+
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			instance := h.list.GetSelectedInstance()
@@ -85,10 +85,10 @@ func BenchmarkGitVsNoGitComparison(b *testing.B) {
 func BenchmarkTmuxVsMockComparison(b *testing.B) {
 	tempDir, cleanup := setupRealGitRepo(b)
 	defer cleanup()
-	
+
 	b.Run("RealTmuxSessions", func(b *testing.B) {
 		h := setupHomeWithRealTmuxSessions(b, tempDir, 5)
-		
+
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			instance := h.list.GetSelectedInstance()
@@ -97,10 +97,10 @@ func BenchmarkTmuxVsMockComparison(b *testing.B) {
 			}
 		}
 	})
-	
+
 	b.Run("MockTmuxSessions", func(b *testing.B) {
 		h := setupHomeWithMockSessions(b, 10)
-		
+
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
 			instance := h.list.GetSelectedInstance()
@@ -119,16 +119,16 @@ func setupRealGitRepo(b *testing.B) (string, func()) {
 	if err != nil {
 		b.Fatalf("Failed to create temp dir: %v", err)
 	}
-	
+
 	// Initialize git repo
 	os.Chdir(tempDir)
 	os.Mkdir("repo", 0755)
 	os.Chdir("repo")
-	
+
 	// Create initial commit
 	ioutil.WriteFile("README.md", []byte("# Test Repository\n\nInitial content.\n"), 0644)
 	os.Mkdir(".git", 0755) // Mock git directory
-	
+
 	// Create some changes for diff testing
 	ioutil.WriteFile("file1.txt", []byte("Original content\nLine 2\nLine 3\n"), 0644)
 	ioutil.WriteFile("file2.go", []byte(`package main
@@ -140,7 +140,7 @@ func main() {
 	// TODO: Add more functionality
 }
 `), 0644)
-	
+
 	// Create modified versions
 	ioutil.WriteFile("file1.txt", []byte("Modified content\nLine 2 changed\nLine 3\nNew line 4\n"), 0644)
 	ioutil.WriteFile("file3.py", []byte(`#!/usr/bin/env python3
@@ -151,11 +151,11 @@ def hello():
 if __name__ == "__main__":
     hello()
 `), 0644)
-	
+
 	cleanup := func() {
 		os.RemoveAll(tempDir)
 	}
-	
+
 	return filepath.Join(tempDir, "repo"), cleanup
 }
 
@@ -163,12 +163,12 @@ if __name__ == "__main__":
 func setupHomeWithRealGitRepos(b *testing.B, gitRepoPath string, sessionCount int) *home {
 	appConfig := config.DefaultConfig()
 	appState := config.LoadState()
-	
+
 	storage, err := session.NewStorage(appState)
 	if err != nil {
 		b.Fatalf("Failed to create storage: %v", err)
 	}
-	
+
 	ctx := context.Background()
 	h := &home{
 		ctx:                  ctx,
@@ -180,12 +180,11 @@ func setupHomeWithRealGitRepos(b *testing.B, gitRepoPath string, sessionCount in
 		appConfig:            appConfig,
 		program:              "echo",
 		autoYes:              true,
-		state:                stateDefault,
+		stateManager: state.NewManager(),
 		appState:             appState,
-		selectionUpdateDelay: 150 * time.Millisecond,
 	}
 	h.list = ui.NewList(&h.spinner, true, appState)
-	
+
 	// Create sessions pointing to real git repo with changes
 	for i := 0; i < sessionCount; i++ {
 		instance, err := session.NewInstance(session.InstanceOptions{
@@ -197,15 +196,15 @@ func setupHomeWithRealGitRepos(b *testing.B, gitRepoPath string, sessionCount in
 		if err != nil {
 			b.Fatalf("Failed to create instance: %v", err)
 		}
-		
+
 		h.list.AddInstance(instance)
 	}
-	
+
 	h.updateHandleWindowSizeEvent(struct {
 		Width  int
 		Height int
 	}{Width: 120, Height: 40})
-	
+
 	return h
 }
 
@@ -221,25 +220,25 @@ func setupHomeWithNonGitDirs(b *testing.B, sessionCount int) *home {
 	if err != nil {
 		b.Fatalf("Failed to create temp dir: %v", err)
 	}
-	
+
 	return setupHomeWithRealGitRepos(b, tempDir, sessionCount)
 }
 
 // setupHomeWithRealTmuxSessions creates sessions with actual tmux sessions
 func setupHomeWithRealTmuxSessions(b *testing.B, gitRepoPath string, sessionCount int) *home {
 	h := setupHomeWithRealGitRepos(b, gitRepoPath, sessionCount)
-	
+
 	// Start real tmux sessions for each instance
 	instances := h.list.GetInstances()
 	for i, instance := range instances {
 		if i < sessionCount {
 			// Start a real tmux session
-			if err := instance.Start(); err != nil {
+			if err := instance.Start(true); err != nil {
 				b.Logf("Failed to start tmux session %d: %v", i, err)
 			}
 		}
 	}
-	
+
 	return h
 }
 

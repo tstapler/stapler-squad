@@ -53,6 +53,22 @@ curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.s
 
 Configuration is stored in `~/.claude-squad/config.json`. You can view the location with `cs debug`.
 
+#### Application Data Directory
+
+Claude Squad stores all application data in `~/.claude-squad/`:
+
+```
+~/.claude-squad/
+├── logs/                    # Application logs (rotated automatically)
+│   ├── claude-squad.log     # Main application log
+│   └── debug.log           # Detailed debug information
+├── worktrees/              # Git worktrees for isolated sessions
+│   ├── session-name_hash/  # Individual worktree directories
+│   └── ...
+├── config.json            # Application configuration
+└── sessions.json          # Session state persistence
+```
+
 #### Logging Configuration
 
 Logs are stored in `~/.claude-squad/logs/` by default and include log rotation features. Configure logging with these options:
@@ -150,17 +166,51 @@ The menu at the bottom of the screen shows available commands:
 git clone https://github.com/smtg-ai/claude-squad.git
 cd claude-squad
 
+# Set up development environment (installs all tools)
+make dev-setup
+
 # Build the application
-go build .
+make build
 
-# Run tests
-go test ./...
-
-# Run benchmarks (performance tests)
-go test -bench=. -benchmem ./app
+# Quick validation (build + test + lint)
+make quick-check
 ```
 
-#### Testing
+#### Using the Makefile
+
+The project includes a comprehensive Makefile for streamlined development:
+
+```bash
+# Show all available commands
+make help
+
+# Development workflows
+make build         # Build the application
+make test          # Run tests
+make test-coverage # Generate HTML coverage report
+make pre-commit    # Full pre-commit validation
+make all           # Complete workflow: clean + build + test + analyze
+
+# Code quality and analysis
+make analyze       # Run all static analysis tools
+make nil-safety    # Comprehensive nil safety analysis
+make security      # Security vulnerability scanning
+make lint          # Code style and quality checks
+make format        # Format code with gofmt
+
+# Performance testing
+make benchmark          # Full benchmarks (runs in background)
+make benchmark-quick    # Fast subset for development
+make benchmark-navigation # Navigation performance tests
+make profile-cpu       # CPU profiling analysis
+
+# Tool management
+make install-tools # Install all development tools
+make validate-env  # Check tool installation status
+make clean         # Clean build artifacts
+```
+
+#### Manual Testing Commands
 
 ```bash
 # Run all tests
@@ -174,18 +224,85 @@ go test ./ui
 go test ./app
 go test ./session
 
-# Run performance benchmarks
-go test -bench=BenchmarkNavigation -benchmem ./app
-go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app
-go test -bench=BenchmarkListRendering -benchmem ./app
+# Run core integration tests
+go test ./session -run "TestComprehensiveSessionCreation|TestSessionRecoveryScenarios" -v
+
+# Run performance benchmarks (WARNING: Long running - use make benchmark instead)
+go test -bench=BenchmarkNavigation -benchmem ./app -timeout=10m &
+go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app -timeout=10m &
+go test -bench=BenchmarkListRendering -benchmem ./app -timeout=10m &
 ```
+
+**Test Infrastructure:**
+- Tests use isolated tmux sockets to prevent conflicts with production sessions
+- Mock executors for fast, reliable testing without external dependencies
+- Comprehensive session lifecycle testing including git worktree integration
+- All tests complete in <30s (core session tests) with proper isolation
+
+#### Code Quality Tools
+
+Claude Squad uses comprehensive static analysis for code quality:
+
+```bash
+# Install analysis tools
+make install-tools
+
+# Nil safety analysis (prevents panics)
+make nil-safety         # All nil safety tools
+make nilaway           # Advanced nil flow analysis
+go vet -nilness ./...  # Built-in Go nil analyzer
+
+# Comprehensive static analysis
+make staticcheck       # Production-grade analyzer
+make security          # Security vulnerability scan
+make lint             # Multi-tool linting suite
+```
+
+**Required Development Tools:**
+- [NilAway](https://github.com/uber-go/nilaway) - Advanced nil pointer safety
+- [Staticcheck](https://staticcheck.dev/) - Go static analyzer
+- [golangci-lint](https://golangci-lint.run/) - Meta-linter suite
+- [gosec](https://github.com/securego/gosec) - Security analyzer
+
+Install all tools with: `make install-tools`
+
+### Recent Improvements
+
+**Test Infrastructure Overhaul (2025-01):**
+- ✅ Fixed critical tmux integration test timeouts and hangs
+- ✅ Implemented isolated tmux sockets for reliable test execution
+- ✅ Added mock command executors to bypass external dependencies
+- ✅ Comprehensive session creation and lifecycle testing (25+ scenarios)
+- ✅ Git worktree integration fully tested and validated
+- ✅ Test execution time reduced from indefinite hangs to <30s
+
+**Key Test Improvements:**
+- `TestComprehensiveSessionCreation`: Full session lifecycle validation with mocked dependencies
+- `TestSessionRecoveryScenarios`: Git worktree restoration and multi-session independence
+- All tests now use dedicated tmux servers to prevent conflicts with production
+- Builder pattern for clean test setup with proper isolation
+
+**Developer Experience:**
+- Enhanced debugging with detailed logs in `~/.claude-squad/logs/`
+- Comprehensive Makefile for streamlined development workflows
+- Static analysis tools (NilAway, Staticcheck, gosec) for code quality
+- Performance benchmarks for navigation and rendering optimization
 
 ### FAQs
 
 #### Failed to start new session
 
-If you get an error like `failed to start new session: timed out waiting for tmux session`, update the
-underlying program (ex. `claude`) to the latest version.
+If you get an error like `failed to start new session: timed out waiting for tmux session`:
+
+1. **Update the underlying program**: Ensure you're using the latest version of `claude` or your chosen AI assistant
+2. **Check logs**: Review `~/.claude-squad/logs/claude-squad.log` for detailed error information
+3. **Verify tmux**: Make sure tmux is installed and working (`tmux -V`)
+4. **Check for conflicts**: If running multiple claude-squad instances, configure unique `tmux_session_prefix` values in config.json
+
+**Debugging Session Creation:**
+- Logs show detailed information about tmux commands, git operations, and timing
+- Look for patterns like "timed out waiting for tmux session" or external command hangs
+- Check if `which claude` or other external commands are blocking
 
 ### How It Works
 

@@ -53,6 +53,13 @@ go test -bench=BenchmarkMemoryUsage -benchmem ./app -timeout=15m &
 go test -bench=BenchmarkStartupPerformance -benchmem ./app -timeout=10m &
 go test -bench=BenchmarkRealtimeUpdates -benchmem ./app -timeout=10m &
 
+# Git integration and contextual discovery benchmarks
+go test -bench=BenchmarkGitRepositoryDiscovery -benchmem ./ui/overlay -timeout=5m &
+go test -bench=BenchmarkContextualDiscovery -benchmem ./ui/overlay -timeout=5m &
+
+# Path validation benchmarks
+go test -bench=BenchmarkValidatePath -benchmem ./ui/overlay -timeout=2m &
+
 # Profile benchmarks for detailed performance analysis
 go test -bench=BenchmarkLargeSessionNavigation -benchmem -cpuprofile=cpu.prof ./app -timeout=20m
 go tool pprof cpu.prof
@@ -66,7 +73,116 @@ go test -bench=BenchmarkAttachDetachPerformance -trace=trace.out ./app -timeout=
 go tool trace trace.out
 ```
 
-### Code Quality
+### Testing Interactive TUI Components
+
+**TTY Requirement**: Claude Squad is a terminal-based application that requires a TTY to run. This creates special considerations for testing interactive components.
+
+**Testing Strategies:**
+
+1. **Unit Tests for Business Logic** (Recommended)
+   ```bash
+   # Test core logic without TUI interaction
+   go test ./ui/overlay -run TestContextualDiscovery
+   go test ./ui/overlay -run TestSessionSetup
+   go test ./session -run TestInstance
+   ```
+
+2. **Mock TTY for Integration Tests**
+   ```bash
+   # For testing that requires terminal interaction, consider:
+   # - github.com/creack/pty (pseudo-terminal)
+   # - github.com/Netflix/go-expect (terminal automation)
+   # - Headless terminal testing with script automation
+   ```
+
+3. **Isolated Component Testing**
+   ```bash
+   # Test individual TUI components in isolation
+   go test ./ui -run TestFuzzyInputOverlay
+   go test ./ui -run TestMenuHandling
+   go test ./ui -run TestNavigationLogic
+   ```
+
+**Manual Testing Protocol:**
+```bash
+# Build and run for interactive testing
+go build .
+./claude-squad
+
+# Test specific flows:
+# 1. Session creation (n key) - test contextual path discovery
+# 2. Navigation (arrow keys) - test performance with multiple sessions
+# 3. Filtering (f key) - test session visibility
+# 4. Search (s key) - test fuzzy matching
+# 5. Menu shortcuts - verify bottom menu displays active key bindings
+```
+
+**Menu Shortcut Testing:**
+Since the menu shortcuts cannot be tested interactively in TTY-less environments, use integration tests:
+
+```bash
+# Test menu shortcut integration
+go test ./app -run TestMenuShortcutIntegration -v
+
+# Test menu context updates
+go test ./app -run TestUpdateMenuFromContext -v
+
+# Manual verification checklist:
+# - Bottom menu shows key shortcuts (n, D, g, q, etc.)
+# - Shortcuts correspond to actual available commands
+# - Menu updates when context changes (if applicable)
+# - All registered commands appear with correct descriptions
+```
+
+**TTY-Related Issue Debugging:**
+```bash
+# Common TTY issues and solutions:
+
+# Issue: "could not open a new TTY: open /dev/tty: device not configured"
+# Solution: Run in actual terminal, not programmatically
+
+# Issue: Menu shortcuts not displaying
+# Root cause: SetAvailableCommands not called with bridge commands
+# Fix: Ensure bridge.GetAvailableKeys() is passed to menu.SetAvailableCommands()
+
+# Issue: Terminal size detection problems
+# Solution: Use reliable terminal size detection methods (see app/app.go:791)
+```
+
+**CI/CD Considerations:**
+- Unit tests run in CI without TTY
+- Integration tests may need headless terminal or be run manually
+- Performance benchmarks should be run in background (`&`)
+- Menu functionality tested via integration tests, not manual interaction
+
+### Code Quality and Analysis
+
+**Using Makefile (Recommended):**
+```bash
+# Install all development tools
+make install-tools
+
+# Quick development validation
+make quick-check
+
+# Comprehensive analysis (all static analysis tools)
+make analyze
+
+# Individual analysis tools
+make nil-safety     # Comprehensive nil safety analysis
+make staticcheck    # Advanced static analysis
+make security       # Security vulnerability scanning
+make lint          # Comprehensive linting
+
+# Pre-commit validation
+make pre-commit
+
+# Dead code detection
+make deadcode       # Find unreachable code
+deadcode -test ./...  # Include test files in analysis
+```
+
+**Manual Commands:**
 ```bash
 # Check for issues
 go vet ./...
@@ -77,6 +193,217 @@ go fmt ./...
 # Build and check for compilation errors
 go build .
 ```
+
+### Nil Safety Analysis
+
+Claude Squad includes comprehensive nil safety analysis tools to prevent panic-causing nil pointer dereferences:
+
+```bash
+# Run all nil safety tools
+make nil-safety
+
+# Individual tools
+make nilaway        # Advanced nil flow analysis (Uber)
+go vet -nilness ./... # Built-in Go nilness analyzer
+go-nilcheck ./...   # Function pointer validation
+```
+
+**Required Tools Installation:**
+```bash
+make install-tools
+# Or manually:
+go install go.uber.org/nilaway/cmd/nilaway@latest
+go install honnef.co/go/tools/cmd/staticcheck@latest
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+go install github.com/securego/gosec/v2/cmd/gosec@latest
+```
+
+**Nil Safety Best Practices:**
+1. Always run `make nil-safety` before committing code
+2. Use NilAway for the most comprehensive nil flow analysis
+3. Include nil checks before pointer dereferences
+4. Use defensive programming in overlay rendering (see app/app.go:1225)
+
+### Static Analysis Tools
+
+**Comprehensive Toolchain:**
+- **NilAway** - Advanced nil pointer safety analysis (Uber)
+- **Staticcheck** - Production-grade static analyzer  
+- **golangci-lint** - Meta-linter with multiple analyzers
+- **gosec** - Security-focused static analysis
+- **go vet** - Built-in Go static analysis
+
+## Application Data Directory
+
+Claude Squad stores application data, logs, and git worktrees in the `~/.claude-squad` directory:
+
+```
+~/.claude-squad/
+├── logs/                    # Application logs for debugging
+│   ├── claude-squad.log     # Main application log
+│   └── debug.log           # Detailed debug information
+├── worktrees/              # Git worktrees for isolated sessions
+│   ├── session-name_hash/  # Individual worktree directories
+│   └── ...
+├── config.json            # Application configuration
+└── sessions.json          # Session state persistence
+```
+
+**Debugging Session Creation Issues:**
+- Check `~/.claude-squad/logs/claude-squad.log` for session creation attempts
+- Look for tmux command executions, git operations, and timeout messages
+- Debug logs show detailed command execution and timing information
+
+**Key Log Patterns to Look For:**
+- `Starting tmux session` - Session creation initiation
+- `timed out waiting for tmux session` - Session creation hangs
+- `which claude` - External command execution that may block
+- `git worktree` operations - Git integration issues
+- `DoesSessionExist()` polling - Session existence checking loops
+
+## State File Isolation and Multi-Instance Support
+
+Claude Squad implements hierarchical state file isolation to prevent conflicts between tests, benchmarks, and multiple production instances. This ensures safe concurrent execution and data integrity.
+
+### Isolation Hierarchy
+
+State files are automatically isolated based on a priority hierarchy:
+
+1. **Explicit Instance ID** (Highest Priority)
+   ```bash
+   # Named instance with dedicated state
+   CLAUDE_SQUAD_INSTANCE=work ./claude-squad
+
+   # Backward compatibility - shared global state
+   CLAUDE_SQUAD_INSTANCE=shared ./claude-squad
+   ```
+   - State location: `~/.claude-squad/instances/{INSTANCE_ID}/`
+   - Use case: Named instances for different projects/contexts
+
+2. **Test Mode Auto-Detection**
+   - Automatically activated when running `go test` or benchmarks
+   - State location: `~/.claude-squad/test/test-{PID}/`
+   - Use case: Prevents tests from corrupting production state
+   - No configuration needed - works automatically
+
+3. **Workspace-Based Isolation** (Production Default)
+   ```bash
+   # Automatic per-directory state (default behavior)
+   cd ~/my-project && ./claude-squad
+
+   # Disable workspace isolation if needed
+   CLAUDE_SQUAD_WORKSPACE_MODE=false ./claude-squad
+   ```
+   - State location: `~/.claude-squad/workspaces/{WORKSPACE_HASH}/`
+   - Use case: Different state per git repository/working directory
+   - Each directory gets a stable, unique workspace ID (SHA256 hash)
+
+4. **Global Shared State** (Fallback)
+   - State location: `~/.claude-squad/`
+   - Use case: Backward compatibility, explicit sharing
+   - Activated when workspace mode is disabled or detection fails
+
+### Instance Identification in Logs
+
+All log messages include instance identifiers for debugging multi-instance scenarios:
+
+```bash
+# Named instance logs
+[work] INFO: Session created
+
+# PID-based logs (with timestamp to prevent PID reuse confusion)
+[pid-12345-1704132000] INFO: Session started
+
+# Daemon logs
+[work][DAEMON] INFO: Polling sessions
+```
+
+The instance identifier prevents confusion when:
+- Multiple instances run simultaneously
+- Analyzing historical logs with reused PIDs
+- Debugging concurrent test execution
+
+### Common Usage Patterns
+
+**Development Workflow:**
+```bash
+# Default: Workspace isolation (safest, per-project state)
+cd ~/my-feature && ./claude-squad
+
+# Different project, different state automatically
+cd ~/other-project && ./claude-squad
+```
+
+**Testing and Benchmarks:**
+```bash
+# Automatic isolation - no configuration needed
+go test ./...
+go test -bench=. ./app
+
+# Tests never interfere with production state
+# Each test/benchmark gets isolated directories
+```
+
+**Multiple Named Instances:**
+```bash
+# Work sessions
+CLAUDE_SQUAD_INSTANCE=work ./claude-squad
+
+# Personal projects
+CLAUDE_SQUAD_INSTANCE=personal ./claude-squad
+
+# Completely isolated state files
+```
+
+**Legacy Shared State:**
+```bash
+# Use pre-isolation behavior if needed
+CLAUDE_SQUAD_INSTANCE=shared ./claude-squad
+
+# Or disable workspace mode
+CLAUDE_SQUAD_WORKSPACE_MODE=false ./claude-squad
+```
+
+### Migration Notes
+
+**Existing Users:**
+- Workspace isolation is now the default (per-directory state)
+- To use old shared behavior: `CLAUDE_SQUAD_INSTANCE=shared`
+- Or disable workspace mode: `CLAUDE_SQUAD_WORKSPACE_MODE=false`
+- Your existing `~/.claude-squad/` state is preserved
+
+**Test Authors:**
+- Tests automatically get isolated state - no code changes needed
+- Benchmarks no longer corrupt production state files
+- Test mode is auto-detected from command-line arguments
+
+**Multi-Instance Users:**
+- Safe concurrent execution is now supported by default
+- Each workspace/instance gets its own state file
+- File locking prevents corruption within each instance
+- Log messages include instance IDs for debugging
+
+### Troubleshooting
+
+**Issue: "Can't find my sessions after restart"**
+- Check if you're in a different directory (workspace isolation active)
+- Use `CLAUDE_SQUAD_WORKSPACE_MODE=false` for directory-independent state
+- Or set `CLAUDE_SQUAD_INSTANCE=shared` for global shared state
+
+**Issue: "Tests are modifying production state"**
+- Should not happen with auto-detection
+- Verify tests are run with `go test` command
+- Check test binary names contain `.test` suffix
+
+**Issue: "Multiple instances conflicting"**
+- Each instance should have its own workspace automatically
+- Check instance identifiers in logs to verify isolation
+- Use explicit `CLAUDE_SQUAD_INSTANCE` for named instances
+
+**Issue: "Want to share state across multiple directories"**
+- Use named instance: `CLAUDE_SQUAD_INSTANCE=shared`
+- Or disable workspace mode: `CLAUDE_SQUAD_WORKSPACE_MODE=false`
+- Both approaches give you global shared state
 
 ## Architecture Overview
 
@@ -228,3 +555,48 @@ Configure tmux session prefixes for process isolation:
 ```
 
 This allows multiple claude-squad processes to run simultaneously without session conflicts.
+
+## Makefile Usage
+
+The project includes a comprehensive Makefile for development workflows:
+
+### Quick Start
+```bash
+make help          # Show all available commands
+make dev-setup     # Set up development environment
+make validate-env  # Check if tools are installed
+```
+
+### Development Workflows
+```bash
+make build         # Build the application
+make test         # Run tests
+make quick-check   # Build + test + lint (fast validation)
+make pre-commit    # Full pre-commit validation
+make all          # Complete workflow: clean + build + test + analyze
+```
+
+### Analysis and Quality
+```bash
+make analyze       # Run all static analysis tools
+make nil-safety    # Comprehensive nil safety analysis
+make security      # Security vulnerability scanning
+make lint         # Code style and quality checks
+```
+
+### Performance Testing
+```bash
+make benchmark          # Full benchmarks (runs in background)
+make benchmark-quick    # Fast subset for validation
+make benchmark-navigation # Navigation performance only
+make profile-cpu       # CPU profiling
+```
+
+### Tool Management
+```bash
+make install-tools # Install all development tools
+make clean        # Clean build artifacts  
+make clean-tools  # Remove installed tools (caution)
+```
+
+The Makefile handles long-running benchmarks automatically and provides comprehensive development automation.

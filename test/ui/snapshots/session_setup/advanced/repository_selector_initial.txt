@@ -1,0 +1,16 @@
+🚀 Create New Session
+                     
+● ● ● ●
+
+Select Repository
+                 
+╭────────────────────────────────────────────────────────────╮
+│ > Type path or search repositories (~, /path, relative)    │
+╰────────────────────────────────────────────────────────────╯
+
+⣾  Searching...
+
+ 💡 ↑↓ navigate • Enter select/use path • Tab autocomplete • Esc cancel 
+
+                          
+Esc: Cancel, ↑/↓: Navigate

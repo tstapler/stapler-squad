@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"claude-squad/keys"
 	"strings"
 
 	"claude-squad/session"
@@ -45,37 +44,68 @@ const (
 	StateSearch
 )
 
+// MenuOption represents a single menu item
+type MenuOption struct {
+	Key         string
+	Description string
+	Highlighted bool
+}
+
 type Menu struct {
-	options       []keys.KeyName
+	options       []MenuOption
 	height, width int
 	state         MenuState
 	instance      *session.Instance
 	isInDiffTab   bool
 
-	// keyDown is the key which is pressed. The default is -1.
-	keyDown keys.KeyName
+	// keyDown is the key which is pressed. Empty string means no key pressed.
+	keyDown string
 }
 
-var defaultMenuOptions = []keys.KeyName{keys.KeyNew, keys.KeyPrompt, keys.KeySearch, keys.KeyFilterPaused, keys.KeyHelp, keys.KeyQuit}
-var newInstanceMenuOptions = []keys.KeyName{keys.KeySubmitName}
-var promptMenuOptions = []keys.KeyName{keys.KeySubmitName}
-var searchMenuOptions = []keys.KeyName{keys.KeySubmitName}
+// Static menu options - these will be replaced by dynamic command registry lookups
+var defaultMenuCommands = []string{"session.new", "nav.search", "org.filter_paused", "sys.help", "sys.quit"}
+var newInstanceMenuCommands = []string{} // Enter key for submission
+var promptMenuCommands = []string{}      // Enter key for submission
+var searchMenuCommands = []string{}      // Enter key for submission
 
 func NewMenu() *Menu {
 	return &Menu{
-		options:     defaultMenuOptions,
+		options:     []MenuOption{}, // Will be populated by updateOptions
 		state:       StateEmpty,
 		isInDiffTab: false,
-		keyDown:     -1,
+		keyDown:     "",
 	}
 }
 
-func (m *Menu) Keydown(name keys.KeyName) {
-	m.keyDown = name
+func (m *Menu) Keydown(key string) {
+	m.keyDown = key
 }
 
 func (m *Menu) ClearKeydown() {
-	m.keyDown = -1
+	m.keyDown = ""
+}
+
+// SetAvailableCommands updates menu options from available commands
+// availableCommands is a map of key -> description from the command bridge
+func (m *Menu) SetAvailableCommands(availableCommands map[string]string) {
+	// Create menu options from the available commands
+	var options []MenuOption
+
+	// For now, we'll use a simplified approach - just show the most common commands
+	// This will be improved when we have proper command priority/grouping
+	commonKeys := []string{"n", "D", "enter", "g", "c", "r", "/", "f", "tab", "?", "q"}
+
+	for _, key := range commonKeys {
+		if desc, exists := availableCommands[key]; exists {
+			options = append(options, MenuOption{
+				Key:         key,
+				Description: desc,
+				Highlighted: key == m.keyDown,
+			})
+		}
+	}
+
+	m.options = options
 }
 
 // SetState updates the menu state and options accordingly
@@ -110,63 +140,17 @@ func (m *Menu) SetInDiffTab(inDiffTab bool) {
 }
 
 // updateOptions updates the menu options based on current state and instance
+// This is now a stub - the menu will be populated via SetAvailableCommands from the command bridge
 func (m *Menu) updateOptions() {
+	// The command bridge will populate menu options via SetAvailableCommands
+	// This method is kept for compatibility but logic has moved to bridge-based system
 	switch m.state {
-	case StateEmpty:
-		m.options = defaultMenuOptions
-	case StateDefault:
-		if m.instance != nil {
-			// When there is an instance, show that instance's options plus organization options
-			m.addInstanceOptions()
-		} else {
-			// When there is no instance, show the empty state
-			m.options = defaultMenuOptions
-		}
-	case StateNewInstance:
-		m.options = newInstanceMenuOptions
-	case StatePrompt:
-		m.options = promptMenuOptions
-	case StateCreatingInstance:
-		// No menu options during session creation
-		m.options = []keys.KeyName{}
-	case StateAdvancedNew:
-		// No menu options during advanced session setup
-		m.options = []keys.KeyName{}
-	case StateSearch:
-		// Show submit option for search
-		m.options = searchMenuOptions
+	case StateCreatingInstance, StateAdvancedNew:
+		// Clear menu during special states
+		m.options = []MenuOption{}
+	default:
+		// Menu will be populated by command bridge calling SetAvailableCommands
 	}
-}
-
-func (m *Menu) addInstanceOptions() {
-	// Instance management group
-	options := []keys.KeyName{keys.KeyNew, keys.KeyKill}
-
-	// Action group
-	actionGroup := []keys.KeyName{keys.KeyEnter, keys.KeySubmit, keys.KeyGit}
-	if m.instance.Status == session.Paused {
-		actionGroup = append(actionGroup, keys.KeyResume)
-	} else {
-		actionGroup = append(actionGroup, keys.KeyCheckout)
-	}
-
-	// Navigation group (when in diff tab)
-	if m.isInDiffTab {
-		actionGroup = append(actionGroup, keys.KeyShiftUp)
-	}
-
-	// Organization group - always available
-	orgGroup := []keys.KeyName{keys.KeySearch, keys.KeyFilterPaused}
-
-	// System group
-	systemGroup := []keys.KeyName{keys.KeyTab, keys.KeyHelp, keys.KeyQuit}
-
-	// Combine all groups
-	options = append(options, actionGroup...)
-	options = append(options, orgGroup...)
-	options = append(options, systemGroup...)
-
-	m.options = options
 }
 
 // SetSize sets the width of the window. The menu will be centered horizontally within this width.
@@ -176,70 +160,112 @@ func (m *Menu) SetSize(width, height int) {
 }
 
 func (m *Menu) String() string {
-	var s strings.Builder
-
-	// Define group boundaries - these need to be updated based on actual menu structure
-	// Since menu options vary by state, we'll use a more flexible approach
-	groups := []struct {
-		start int
-		end   int
-	}{
-		{0, 2},  // Instance management group (n, d) or (n, prompt)
-		{2, 5},  // Action group (enter, submit, pause/resume)
-		{5, 7},  // Organization group (search, filter)
-		{7, 10}, // System group (tab, help, q)
+	if len(m.options) == 0 {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, "")
 	}
 
-	for i, k := range m.options {
-		binding := keys.GlobalkeyBindings[k]
+	// Calculate available width (leave some padding)
+	availableWidth := m.width - 4
+	if availableWidth < 20 {
+		availableWidth = 20
+	}
 
+	// Build menu items with length checking
+	var menuItems []string
+	currentLineLength := 0
+	var currentLine strings.Builder
+	actionKeys := []string{"enter", "D", "g", "c", "r"}
+
+	for _, option := range m.options {
 		var (
 			localActionStyle = actionGroupStyle
 			localKeyStyle    = keyStyle
 			localDescStyle   = descStyle
 		)
-		if m.keyDown == k {
+
+		// Highlight if this key is pressed
+		if m.keyDown == option.Key {
 			localActionStyle = localActionStyle.Underline(true)
 			localKeyStyle = localKeyStyle.Underline(true)
 			localDescStyle = localDescStyle.Underline(true)
 		}
 
-		var inActionGroup bool
-		switch m.state {
-		case StateEmpty:
-			// For empty state, the action group is the first group
-			inActionGroup = i <= 1
-		default:
-			// For other states, the action group is the second group
-			inActionGroup = i >= groups[1].start && i < groups[1].end
+		// Check if this is an action key
+		isActionKey := false
+		for _, actionKey := range actionKeys {
+			if option.Key == actionKey {
+				isActionKey = true
+				break
+			}
 		}
 
-		if inActionGroup {
-			s.WriteString(localActionStyle.Render(binding.Help().Key))
-			s.WriteString(" ")
-			s.WriteString(localActionStyle.Render(binding.Help().Desc))
+		// Build the item text
+		var itemText string
+		if isActionKey {
+			itemText = localActionStyle.Render(option.Key) + " " + localActionStyle.Render(option.Description)
 		} else {
-			s.WriteString(localKeyStyle.Render(binding.Help().Key))
-			s.WriteString(" ")
-			s.WriteString(localDescStyle.Render(binding.Help().Desc))
+			itemText = localKeyStyle.Render(option.Key) + " " + localDescStyle.Render(option.Description)
 		}
 
-		// Add appropriate separator
-		if i != len(m.options)-1 {
-			isGroupEnd := false
-			for _, group := range groups {
-				if i == group.end-1 {
-					s.WriteString(sepStyle.Render(verticalSeparator))
-					isGroupEnd = true
-					break
+		// Calculate the length without ANSI codes for width checking
+		itemLength := len(option.Key) + 1 + len(option.Description)
+		separatorLength := 3 // " • "
+
+		// Check if adding this item would exceed the line length
+		needNewLine := false
+		if currentLineLength > 0 { // Not the first item on the line
+			if currentLineLength+separatorLength+itemLength > availableWidth {
+				needNewLine = true
+			}
+		} else { // First item on line
+			if itemLength > availableWidth {
+				// Truncate long descriptions
+				maxDescLength := availableWidth - len(option.Key) - 1 - 3 // key + space + "..."
+				if maxDescLength < 10 {
+					maxDescLength = 10
+				}
+				if len(option.Description) > maxDescLength {
+					truncatedDesc := option.Description[:maxDescLength-3] + "..."
+					if isActionKey {
+						itemText = localActionStyle.Render(option.Key) + " " + localActionStyle.Render(truncatedDesc)
+					} else {
+						itemText = localKeyStyle.Render(option.Key) + " " + localDescStyle.Render(truncatedDesc)
+					}
+					itemLength = len(option.Key) + 1 + len(truncatedDesc)
 				}
 			}
-			if !isGroupEnd {
-				s.WriteString(sepStyle.Render(separator))
-			}
 		}
+
+		if needNewLine {
+			// Add current line to items and start a new line
+			menuItems = append(menuItems, currentLine.String())
+			currentLine.Reset()
+			currentLineLength = 0
+		}
+
+		// Add separator if not the first item on the line
+		if currentLineLength > 0 {
+			currentLine.WriteString(sepStyle.Render(separator))
+			currentLineLength += separatorLength
+		}
+
+		// Add the item
+		currentLine.WriteString(itemText)
+		currentLineLength += itemLength
 	}
 
-	centeredMenuText := menuStyle.Render(s.String())
+	// Add the last line if it has content
+	if currentLine.Len() > 0 {
+		menuItems = append(menuItems, currentLine.String())
+	}
+
+	// Join lines and render
+	menuText := strings.Join(menuItems, "\n")
+	centeredMenuText := menuStyle.Render(menuText)
 	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, centeredMenuText)
+}
+
+// GetOptions returns the current menu options for testing
+func (m *Menu) GetOptions() []MenuOption {
+	return m.options
 }

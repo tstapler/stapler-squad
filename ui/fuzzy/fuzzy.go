@@ -367,3 +367,22 @@ func NewBasicStringItems(items []string) []SearchItem {
 	}
 	return result
 }
+
+// FileSearchItem implements SearchItem for file paths
+type FileSearchItem struct {
+	ID       string
+	FullPath string
+	Filename string
+}
+
+func (f *FileSearchItem) GetSearchText() string {
+	return f.FullPath
+}
+
+func (f *FileSearchItem) GetDisplayText() string {
+	return f.FullPath
+}
+
+func (f *FileSearchItem) GetID() string {
+	return f.ID
+}

@@ -4,7 +4,9 @@ import (
 	"claude-squad/config"
 	"claude-squad/log"
 	"fmt"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -43,9 +45,22 @@ func NewGitWorktreeFromStorage(repoPath string, worktreePath string, sessionName
 
 // NewGitWorktree creates a new GitWorktree instance
 func NewGitWorktree(repoPath string, sessionName string) (tree *GitWorktree, branchname string, err error) {
+	return NewGitWorktreeWithBranch(repoPath, sessionName, "")
+}
+
+// NewGitWorktreeWithBranch creates a new GitWorktree instance with an optional custom branch name
+func NewGitWorktreeWithBranch(repoPath string, sessionName string, customBranch string) (tree *GitWorktree, branchname string, err error) {
 	cfg := config.LoadConfig()
-	sanitizedName := sanitizeBranchName(sessionName)
-	branchName := fmt.Sprintf("%s%s", cfg.BranchPrefix, sanitizedName)
+
+	var branchName string
+	if customBranch != "" {
+		// Use the custom branch name directly
+		branchName = customBranch
+	} else {
+		// Generate branch name from session name
+		sanitizedName := sanitizeBranchName(sessionName)
+		branchName = fmt.Sprintf("%s%s", cfg.BranchPrefix, sanitizedName)
+	}
 
 	// Convert repoPath to absolute path
 	absPath, err := filepath.Abs(repoPath)
@@ -65,6 +80,20 @@ func NewGitWorktree(repoPath string, sessionName string) (tree *GitWorktree, bra
 		return nil, "", err
 	}
 
+	// First check if the branch is already checked out in an existing worktree
+	existingWorktreePath, found := findExistingWorktreeForBranch(repoPath, branchName)
+	if found {
+		log.InfoLog.Printf("Found existing worktree for branch '%s' at '%s', reusing it", branchName, existingWorktreePath)
+		return &GitWorktree{
+			repoPath:     repoPath,
+			sessionName:  sessionName,
+			branchName:   branchName,
+			worktreePath: existingWorktreePath,
+		}, branchName, nil
+	}
+
+	// No existing worktree found, create a new one with timestamp suffix
+	sanitizedName := sanitizeBranchName(sessionName)
 	worktreePath := filepath.Join(worktreeDir, sanitizedName)
 	worktreePath = worktreePath + "_" + fmt.Sprintf("%x", time.Now().UnixNano())
 
@@ -99,4 +128,87 @@ func (g *GitWorktree) GetRepoName() string {
 // GetBaseCommitSHA returns the base commit SHA for the worktree
 func (g *GitWorktree) GetBaseCommitSHA() string {
 	return g.baseCommitSHA
+}
+
+// NewGitWorktreeFromExisting creates a GitWorktree from an existing worktree path
+// This is used when connecting to worktrees that were created manually or by deleted sessions
+func NewGitWorktreeFromExisting(existingWorktreePath string, sessionName string) (*GitWorktree, error) {
+	// Ensure the path exists and is a valid git worktree
+	if !IsGitRepo(existingWorktreePath) {
+		return nil, fmt.Errorf("path '%s' is not a valid git repository or worktree", existingWorktreePath)
+	}
+
+	// Find the repository root from the worktree path
+	repoPath, err := findGitRepoRoot(existingWorktreePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to find repository root for worktree '%s': %w", existingWorktreePath, err)
+	}
+
+	// Detect the current branch name in the worktree
+	branchName, err := getCurrentBranchName(existingWorktreePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to detect branch name for worktree '%s': %w", existingWorktreePath, err)
+	}
+
+	// Get the base commit SHA (HEAD commit)
+	baseCommitSHA, err := getHeadCommitSHA(existingWorktreePath)
+	if err != nil {
+		// This is not critical - we can continue without it
+		log.WarningLog.Printf("Failed to get base commit SHA for worktree '%s': %v", existingWorktreePath, err)
+		baseCommitSHA = ""
+	}
+
+	return &GitWorktree{
+		repoPath:      repoPath,
+		worktreePath:  existingWorktreePath,
+		sessionName:   sessionName,
+		branchName:    branchName,
+		baseCommitSHA: baseCommitSHA,
+	}, nil
+}
+
+// findExistingWorktreeForBranch checks if the given branch is already checked out in an existing worktree
+// Returns the path to the existing worktree and true if found, empty string and false otherwise
+func findExistingWorktreeForBranch(repoPath, branchName string) (string, bool) {
+	// Run git worktree list --porcelain to get detailed worktree information
+	cmd := exec.Command("git", "worktree", "list", "--porcelain")
+	cmd.Dir = repoPath
+	output, err := cmd.Output()
+	if err != nil {
+		// If the command fails, assume no existing worktrees
+		log.InfoLog.Printf("Failed to list worktrees for branch check: %v", err)
+		return "", false
+	}
+
+	// Parse the porcelain output to find matching branch
+	return parseWorktreeListForBranch(string(output), branchName)
+}
+
+// parseWorktreeListForBranch parses the output of 'git worktree list --porcelain'
+// and returns the path of the worktree that has the specified branch checked out
+func parseWorktreeListForBranch(porcelainOutput, targetBranch string) (string, bool) {
+	lines := strings.Split(strings.TrimSpace(porcelainOutput), "\n")
+	var currentWorktreePath string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			// Empty line separates worktree entries
+			currentWorktreePath = ""
+			continue
+		}
+
+		if strings.HasPrefix(line, "worktree ") {
+			// Extract worktree path
+			currentWorktreePath = strings.TrimPrefix(line, "worktree ")
+		} else if strings.HasPrefix(line, "branch ") && currentWorktreePath != "" {
+			// Extract branch name and check if it matches
+			branchName := strings.TrimPrefix(line, "branch refs/heads/")
+			if branchName == targetBranch {
+				return currentWorktreePath, true
+			}
+		}
+	}
+
+	return "", false
 }

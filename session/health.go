@@ -48,7 +48,7 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 				result.InstanceTitle, result.Issues)
 			if result.RecoveryAttempted {
 				if result.RecoverySuccess {
-					log.InfoLog.Printf("Successfully recovered session '%s'", result.InstanceTitle)
+					log.DebugLog.Printf("Successfully recovered session '%s'", result.InstanceTitle)
 				} else {
 					log.ErrorLog.Printf("Failed to recover session '%s'", result.InstanceTitle)
 				}
@@ -138,7 +138,7 @@ func (h *SessionHealthChecker) RecoverUnhealthySessions() error {
 		}
 	}
 
-	log.InfoLog.Printf("Session recovery completed: %d recovered, %d failed", recoveredCount, failedCount)
+	log.DebugLog.Printf("Session recovery completed: %d recovered, %d failed", recoveredCount, failedCount)
 
 	// Save the updated state if any recoveries were attempted
 	if recoveredCount > 0 || failedCount > 0 {
@@ -160,7 +160,7 @@ func (h *SessionHealthChecker) ScheduledHealthCheck(interval time.Duration, stop
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.InfoLog.Printf("Starting scheduled health checks every %v", interval)
+	log.DebugLog.Printf("Starting scheduled health checks every %v", interval)
 
 	for {
 		select {
@@ -169,7 +169,7 @@ func (h *SessionHealthChecker) ScheduledHealthCheck(interval time.Duration, stop
 				log.ErrorLog.Printf("Scheduled health check failed: %v", err)
 			}
 		case <-stopChan:
-			log.InfoLog.Printf("Stopping scheduled health checks")
+			log.DebugLog.Printf("Stopping scheduled health checks")
 			return
 		}
 	}

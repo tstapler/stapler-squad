@@ -1,0 +1,17 @@
+╭───────────────────────────────────────────────────────────────
+│                                                               
+│  Messages (8 total)                                           
+│  ──────────────────────────────────────────────────────────── 
+│  [00:00:00] INFO: System started successfully                 
+│  [00:00:00] WARN: Configuration file not found, using         
+│                   defaults                                    
+│  [00:00:00] ERROR: Failed to connect to database              
+│  [00:00:00] INFO: Retrying connection...                      
+│  [00:00:00] INFO: Connected to database successfully          
+│  [00:00:00] WARN: Memory usage is high                        
+│  [00:00:00] ERROR: Request timeout after 30 seconds           
+│  [00:00:00] INFO: Request completed successfully              
+│  ──────────────────────────────────────────────────────────── 
+│  j/k: scroll, q/esc: quit, g/G: top/bottom, Ctrl+d/u: half pag
+│                                                               
+╰───────────────────────────────────────────────────────────────

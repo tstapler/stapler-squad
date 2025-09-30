@@ -212,6 +212,18 @@ func (f *FuzzyInputOverlay) Update(msg tea.Msg) tea.Cmd {
 				}
 				return nil
 			}
+
+			// If no selection but there's text input, treat it as raw path entry
+			currentInput := strings.TrimSpace(f.input.Value())
+			if currentInput != "" && f.onSelect != nil {
+				// Create a basic item from the raw input
+				rawItem := fuzzy.BasicStringItem{
+					ID:   currentInput,
+					Text: currentInput,
+				}
+				f.onSelect(rawItem)
+				return nil
+			}
 			return nil
 
 		case tea.KeyEsc:
@@ -244,8 +256,15 @@ func (f *FuzzyInputOverlay) Update(msg tea.Msg) tea.Cmd {
 		case tea.KeyTab:
 			// Autocomplete with the selected result if available
 			if len(f.results) > 0 && f.selectedIndex >= 0 && f.selectedIndex < len(f.results) {
-				text := f.results[f.selectedIndex].Item.GetDisplayText()
-				f.input.SetValue(text)
+				// Use the ID (actual path) instead of display text for better completion
+				selectedItem := f.results[f.selectedIndex].Item
+				completionText := selectedItem.GetID()
+
+				// For paths, try to provide smart completion
+				currentInput := strings.TrimSpace(f.input.Value())
+				smartCompletion := f.getSmartPathCompletion(currentInput, completionText)
+
+				f.input.SetValue(smartCompletion)
 				f.updateSearch()
 			}
 			return nil
@@ -345,5 +364,68 @@ func (f *FuzzyInputOverlay) View() string {
 		sb.WriteString("\n")
 	}
 
+	// Add keyboard shortcuts help at the bottom
+	sb.WriteString("\n")
+	helpText := f.getKeyboardShortcutsHelp()
+	sb.WriteString(f.resultStyle.Render(helpText))
+
 	return sb.String()
+}
+
+// getKeyboardShortcutsHelp returns formatted keyboard shortcuts help text
+func (f *FuzzyInputOverlay) getKeyboardShortcutsHelp() string {
+	shortcuts := []string{
+		"↑↓ navigate",
+		"Enter select/use path",
+		"Tab autocomplete",
+		"Esc cancel",
+	}
+
+	// Join with separator
+	return "💡 " + strings.Join(shortcuts, " • ")
+}
+
+// getSmartPathCompletion provides intelligent path completion
+func (f *FuzzyInputOverlay) getSmartPathCompletion(currentInput, completionText string) string {
+	// If the current input is empty, return the full completion
+	if currentInput == "" {
+		return completionText
+	}
+
+	// If the completion text starts with the current input, return the completion
+	if strings.HasPrefix(completionText, currentInput) {
+		return completionText
+	}
+
+	// Try to find common path prefix completion
+	if strings.Contains(currentInput, "/") && strings.Contains(completionText, "/") {
+		currentParts := strings.Split(currentInput, "/")
+		completionParts := strings.Split(completionText, "/")
+
+		// Find common prefix parts
+		var commonParts []string
+		for i := 0; i < len(currentParts) && i < len(completionParts); i++ {
+			if currentParts[i] == completionParts[i] || currentParts[i] == "" {
+				commonParts = append(commonParts, completionParts[i])
+			} else if strings.HasPrefix(completionParts[i], currentParts[i]) {
+				// Partial completion of the current part
+				commonParts = append(commonParts, completionParts[i])
+				break
+			} else {
+				break
+			}
+		}
+
+		if len(commonParts) > 0 {
+			// Add remaining parts from completion
+			remainingStart := len(commonParts)
+			if remainingStart < len(completionParts) {
+				commonParts = append(commonParts, completionParts[remainingStart:]...)
+			}
+			return strings.Join(commonParts, "/")
+		}
+	}
+
+	// Fallback: return the full completion text
+	return completionText
 }

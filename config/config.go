@@ -2,6 +2,7 @@ package config
 
 import (
 	"claude-squad/log"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,18 +13,109 @@ import (
 	"strings"
 )
 
+// CommandExecutor defines the interface for executing external commands
+type CommandExecutor interface {
+	Command(name string, args ...string) *exec.Cmd
+	Output(cmd *exec.Cmd) ([]byte, error)
+	LookPath(file string) (string, error)
+}
+
+// realCommandExecutor implements CommandExecutor using actual system commands
+type realCommandExecutor struct{}
+
+func (r *realCommandExecutor) Command(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
+
+func (r *realCommandExecutor) Output(cmd *exec.Cmd) ([]byte, error) {
+	return cmd.Output()
+}
+
+func (r *realCommandExecutor) LookPath(file string) (string, error) {
+	return exec.LookPath(file)
+}
+
+// Global command executor instance - can be overridden for testing
+var globalCommandExecutor CommandExecutor = &realCommandExecutor{}
+
+// SetCommandExecutor sets the global command executor (primarily for testing)
+func SetCommandExecutor(executor CommandExecutor) {
+	globalCommandExecutor = executor
+}
+
+// ResetCommandExecutor resets the global command executor to the default implementation
+func ResetCommandExecutor() {
+	globalCommandExecutor = &realCommandExecutor{}
+}
+
 const (
 	ConfigFileName = "config.json"
 	defaultProgram = "claude"
 )
 
+// isTestMode detects if the application is running in test/benchmark mode
+func isTestMode() bool {
+	// Check command line arguments for test/benchmark indicators
+	for _, arg := range os.Args {
+		// Match test binary names and flags
+		if strings.Contains(arg, ".test") ||
+			strings.Contains(arg, "-test.") ||
+			strings.HasSuffix(arg, ".test.exe") ||
+			strings.Contains(arg, "-bench") {
+			return true
+		}
+	}
+	return false
+}
+
 // GetConfigDir returns the path to the application's configuration directory
+// with hierarchical isolation for safe multi-instance and test execution.
+//
+// Priority hierarchy:
+//  1. Explicit instance ID via CLAUDE_SQUAD_INSTANCE environment variable
+//  2. Test mode auto-detection (automatic isolation for tests/benchmarks)
+//  3. Workspace-based isolation (default for production, per-directory state)
+//  4. Global shared state (fallback, backward compatibility)
 func GetConfigDir() (string, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get config home directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".claude-squad"), nil
+
+	baseDir := filepath.Join(homeDir, ".claude-squad")
+
+	// Priority 1: Explicit instance ID (tests, named instances, backward compat)
+	if instanceID := os.Getenv("CLAUDE_SQUAD_INSTANCE"); instanceID != "" {
+		// Special value "shared" maintains backward compatibility
+		if instanceID == "shared" {
+			return baseDir, nil
+		}
+		return filepath.Join(baseDir, "instances", instanceID), nil
+	}
+
+	// Priority 2: Test mode auto-detection (automatic isolation)
+	if isTestMode() {
+		// Each test/benchmark process gets its own isolated state
+		pid := os.Getpid()
+		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
+	}
+
+	// Priority 3: Workspace-based isolation (production default)
+	// Can be disabled with CLAUDE_SQUAD_WORKSPACE_MODE=false
+	if os.Getenv("CLAUDE_SQUAD_WORKSPACE_MODE") != "false" {
+		workDir, err := os.Getwd()
+		if err == nil {
+			// Hash the workspace path for a stable, filesystem-safe identifier
+			hash := sha256.Sum256([]byte(workDir))
+			workspaceID := fmt.Sprintf("%x", hash[:8])
+			return filepath.Join(baseDir, "workspaces", workspaceID), nil
+		}
+		// If we can't get working directory, fall through to shared state
+		log.WarningLog.Printf("Failed to get working directory for workspace isolation: %v", err)
+	}
+
+	// Priority 4: Global shared state (fallback, backward compatibility)
+	return baseDir, nil
 }
 
 // Config represents the application configuration
@@ -58,6 +150,10 @@ type Config struct {
 	UseSessionLogs bool `json:"use_session_logs"`
 	// TmuxSessionPrefix allows customizing the tmux session prefix for process isolation
 	TmuxSessionPrefix string `json:"tmux_session_prefix"`
+	// PerformBackgroundHealthChecks enables non-blocking health checks for session maintenance
+	PerformBackgroundHealthChecks bool `json:"perform_background_health_checks"`
+	// KeyCategories defines custom category mappings for key bindings in help system
+	KeyCategories map[string]string `json:"key_categories"`
 }
 
 // DefaultConfig returns the default configuration
@@ -89,8 +185,10 @@ func DefaultConfig() *Config {
 		LogMaxFiles:              5,  // Keep 5 rotated files
 		LogMaxAge:                30, // 30 days
 		LogCompress:              true,
-		UseSessionLogs:           true,
-		TmuxSessionPrefix:        "claudesquad_", // Default prefix for backward compatibility
+		UseSessionLogs:                true,
+		TmuxSessionPrefix:             "claudesquad_", // Default prefix for backward compatibility
+		PerformBackgroundHealthChecks: true,            // Enabled by default for automated session maintenance
+		KeyCategories:                 getDefaultKeyCategories(),
 	}
 }
 
@@ -117,8 +215,8 @@ func GetClaudeCommand() (string, error) {
 		shellCmd = "which claude"
 	}
 
-	cmd := exec.Command(shell, "-c", shellCmd)
-	output, err := cmd.Output()
+	cmd := globalCommandExecutor.Command(shell, "-c", shellCmd)
+	output, err := globalCommandExecutor.Output(cmd)
 	if err == nil && len(output) > 0 {
 		path := strings.TrimSpace(string(output))
 		if path != "" {
@@ -134,7 +232,7 @@ func GetClaudeCommand() (string, error) {
 	}
 
 	// Otherwise, try to find in PATH directly
-	claudePath, err := exec.LookPath("claude")
+	claudePath, err := globalCommandExecutor.LookPath("claude")
 	if err == nil {
 		return claudePath, nil
 	}
@@ -171,6 +269,11 @@ func LoadConfig() *Config {
 		return DefaultConfig()
 	}
 
+	// Apply defaults for fields that might not be in saved config (e.g., newly added fields)
+	if config.KeyCategories == nil {
+		config.KeyCategories = getDefaultKeyCategories()
+	}
+
 	return &config
 }
 
@@ -197,4 +300,66 @@ func saveConfig(config *Config) error {
 // SaveConfig exports the saveConfig function for use by other packages
 func SaveConfig(config *Config) error {
 	return saveConfig(config)
+}
+
+// getDefaultKeyCategories returns the default key category mappings
+func getDefaultKeyCategories() map[string]string {
+	return map[string]string{
+		// Session Management
+		"n":     "Session Management",
+		"D":     "Session Management",
+		"enter": "Session Management",
+		"c":     "Session Management",
+		"r":     "Session Management",
+
+		// Git Integration
+		"g": "Git Integration",
+		"P": "Git Integration",
+
+		// Navigation
+		"up":    "Navigation",
+		"down":  "Navigation",
+		"left":  "Navigation",
+		"right": "Navigation",
+		"j":     "Navigation",
+		"k":     "Navigation",
+		"h":     "Navigation",
+		"l":     "Navigation",
+		"/":     "Navigation",
+		"s":     "Navigation",
+
+		// Organization
+		"f":     "Organization",
+		"C":     "Organization",
+		"space": "Organization",
+
+		// System
+		"tab": "System",
+		"?":   "System",
+		"q":   "System",
+		"esc": "System",
+	}
+}
+
+// GetKeyCategoryForKey returns the category for a specific key, or empty string if not found
+func (c *Config) GetKeyCategoryForKey(key string) string {
+	if c.KeyCategories == nil {
+		return ""
+	}
+	return c.KeyCategories[key]
+}
+
+// SetKeyCategory updates the category for a specific key
+func (c *Config) SetKeyCategory(key, category string) {
+	if c.KeyCategories == nil {
+		c.KeyCategories = make(map[string]string)
+	}
+	c.KeyCategories[key] = category
+}
+
+// RemoveKeyCategory removes the category mapping for a specific key
+func (c *Config) RemoveKeyCategory(key string) {
+	if c.KeyCategories != nil {
+		delete(c.KeyCategories, key)
+	}
 }

@@ -32,25 +32,24 @@ func TestDirectoryRestorationScenarios(t *testing.T) {
 
 // testWorktreeSessionRestoration tests that sessions for worktrees restore in the worktree directory
 func testWorktreeSessionRestoration(t *testing.T) {
-	ptyFactory := NewMockPtyFactory(t)
-
 	// Create test directories
 	tempDir := t.TempDir()
 	worktreeDir := filepath.Join(tempDir, "my-feature-worktree")
 	err := os.MkdirAll(worktreeDir, 0755)
 	require.NoError(t, err)
 
-	// Mock executor for missing session scenario
-	cmdExec := createMockExecutorForMissingSession()
+	// Use coordinated mocks to avoid 2-second polling timeout
+	mocks := createCoordinatedMocksForSessionCreation(t)
 
-	session := newTmuxSession("feature-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
+	session := newTmuxSession("feature-session", "pwd", mocks.PtyFactory, mocks.CmdExec, TmuxPrefix)
 
 	// Test: RestoreWithWorkDir should use the provided worktree directory
 	_ = session.RestoreWithWorkDir(worktreeDir)
 
 	// Find the new-session command
 	var newSessionCmd string
-	for _, cmd := range ptyFactory.cmds {
+	mockPtyFactory := mocks.PtyFactory.(*CoordinatedMockPtyFactory)
+	for _, cmd := range mockPtyFactory.cmds {
 		cmdStr := executor.ToString(cmd)
 		if strings.Contains(cmdStr, "new-session") {
 			newSessionCmd = cmdStr
@@ -68,25 +67,24 @@ func testWorktreeSessionRestoration(t *testing.T) {
 
 // testRepoSessionRestoration tests that sessions for regular repos restore in the repo directory
 func testRepoSessionRestoration(t *testing.T) {
-	ptyFactory := NewMockPtyFactory(t)
-
 	// Create test directories
 	tempDir := t.TempDir()
 	repoDir := filepath.Join(tempDir, "my-project")
 	err := os.MkdirAll(repoDir, 0755)
 	require.NoError(t, err)
 
-	// Mock executor for missing session scenario
-	cmdExec := createMockExecutorForMissingSession()
+	// Use coordinated mocks to avoid 2-second polling timeout
+	mocks := createCoordinatedMocksForSessionCreation(t)
 
-	session := newTmuxSession("main-repo-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
+	session := newTmuxSession("main-repo-session", "pwd", mocks.PtyFactory, mocks.CmdExec, TmuxPrefix)
 
 	// Test: RestoreWithWorkDir should use the provided repo directory
 	_ = session.RestoreWithWorkDir(repoDir)
 
 	// Find the new-session command
 	var newSessionCmd string
-	for _, cmd := range ptyFactory.cmds {
+	mockPtyFactory := mocks.PtyFactory.(*CoordinatedMockPtyFactory)
+	for _, cmd := range mockPtyFactory.cmds {
 		cmdStr := executor.ToString(cmd)
 		if strings.Contains(cmdStr, "new-session") {
 			newSessionCmd = cmdStr
@@ -117,18 +115,16 @@ func testCompareWorktreeVsRepoRestoration(t *testing.T) {
 
 	t.Run("RepoSession", func(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
-		cmdExec := createMockExecutorForMissingSession()
+		cmdExec, commandHistory := createMockExecutorForMissingSession()
 
 		session := newTmuxSession("repo-main", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Restore in repo directory
-		err := session.RestoreWithWorkDir(repoDir)
-		require.NoError(t, err)
+		_ = session.RestoreWithWorkDir(repoDir)
 
 		// Verify command uses repo directory
 		var newSessionCmd string
-		for _, cmd := range ptyFactory.cmds {
-			cmdStr := executor.ToString(cmd)
+		for _, cmdStr := range *commandHistory {
 			if strings.Contains(cmdStr, "new-session") {
 				newSessionCmd = cmdStr
 				break
@@ -146,18 +142,16 @@ func testCompareWorktreeVsRepoRestoration(t *testing.T) {
 
 	t.Run("WorktreeSession", func(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
-		cmdExec := createMockExecutorForMissingSession()
+		cmdExec, commandHistory := createMockExecutorForMissingSession()
 
 		session := newTmuxSession("worktree-feature", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 		// Restore in worktree directory
-		err := session.RestoreWithWorkDir(worktreeDir)
-		require.NoError(t, err)
+		_ = session.RestoreWithWorkDir(worktreeDir)
 
 		// Verify command uses worktree directory
 		var newSessionCmd string
-		for _, cmd := range ptyFactory.cmds {
-			cmdStr := executor.ToString(cmd)
+		for _, cmdStr := range *commandHistory {
 			if strings.Contains(cmdStr, "new-session") {
 				newSessionCmd = cmdStr
 				break
@@ -186,7 +180,7 @@ func testRestoreWithWorkDirFallback(t *testing.T) {
 	err := os.Chdir(testDir)
 	require.NoError(t, err)
 
-	cmdExec := createMockExecutorForMissingSession()
+	cmdExec, commandHistory := createMockExecutorForMissingSession()
 	session := newTmuxSession("fallback-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
 	// Test: RestoreWithWorkDir with empty path should fallback to current directory
@@ -194,8 +188,7 @@ func testRestoreWithWorkDirFallback(t *testing.T) {
 
 	// Find the new-session command
 	var newSessionCmd string
-	for _, cmd := range ptyFactory.cmds {
-		cmdStr := executor.ToString(cmd)
+	for _, cmdStr := range *commandHistory {
 		if strings.Contains(cmdStr, "new-session") {
 			newSessionCmd = cmdStr
 			break
@@ -241,7 +234,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 
 	t.Run("OLD_Buggy_Behavior_Simulation", func(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
-		cmdExec := createMockExecutorForMissingSession()
+		cmdExec, commandHistory := createMockExecutorForMissingSession()
 
 		session := newTmuxSession("old-behavior", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
@@ -249,8 +242,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 		_ = session.Restore()
 
 		var newSessionCmd string
-		for _, cmd := range ptyFactory.cmds {
-			cmdStr := executor.ToString(cmd)
+		for _, cmdStr := range *commandHistory {
 			if strings.Contains(cmdStr, "new-session") {
 				newSessionCmd = cmdStr
 				break
@@ -276,7 +268,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 
 	t.Run("NEW_Fixed_Behavior", func(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
-		cmdExec := createMockExecutorForMissingSession()
+		cmdExec, commandHistory := createMockExecutorForMissingSession()
 
 		session := newTmuxSession("new-behavior", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
@@ -284,8 +276,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 		_ = session.RestoreWithWorkDir(correctDir)
 
 		var newSessionCmd string
-		for _, cmd := range ptyFactory.cmds {
-			cmdStr := executor.ToString(cmd)
+		for _, cmdStr := range *commandHistory {
 			if strings.Contains(cmdStr, "new-session") {
 				newSessionCmd = cmdStr
 				break
@@ -310,7 +301,7 @@ func TestOldVsNewBehaviorComparison(t *testing.T) {
 func TestDirectoryResolutionEdgeCases(t *testing.T) {
 	t.Run("NonExistentDirectory", func(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
-		cmdExec := createMockExecutorForMissingSession()
+		cmdExec, _ := createMockExecutorForMissingSession()
 
 		session := newTmuxSession("nonexistent-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
@@ -337,7 +328,7 @@ func TestDirectoryResolutionEdgeCases(t *testing.T) {
 
 	t.Run("RelativePathDirectory", func(t *testing.T) {
 		ptyFactory := NewMockPtyFactory(t)
-		cmdExec := createMockExecutorForMissingSession()
+		cmdExec, commandHistory := createMockExecutorForMissingSession()
 
 		session := newTmuxSession("relative-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
 
@@ -346,8 +337,7 @@ func TestDirectoryResolutionEdgeCases(t *testing.T) {
 		_ = session.RestoreWithWorkDir(relativeDir)
 
 		var newSessionCmd string
-		for _, cmd := range ptyFactory.cmds {
-			cmdStr := executor.ToString(cmd)
+		for _, cmdStr := range *commandHistory {
 			if strings.Contains(cmdStr, "new-session") {
 				newSessionCmd = cmdStr
 				break

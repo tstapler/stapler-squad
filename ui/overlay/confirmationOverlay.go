@@ -7,16 +7,14 @@ import (
 
 // ConfirmationOverlay represents a confirmation dialog overlay
 type ConfirmationOverlay struct {
+	BaseOverlay // Embed base for common overlay functionality
+
 	// Whether the overlay has been dismissed
 	Dismissed bool
 	// Message to display in the overlay
 	message string
-	// Width of the overlay
-	width int
 	// Callback function to be called when the user confirms (presses 'y')
 	OnConfirm func()
-	// Callback function to be called when the user cancels (presses 'n' or 'esc')
-	OnCancel func()
 	// Custom confirm key (defaults to 'y')
 	ConfirmKey string
 	// Custom cancel key (defaults to 'n')
@@ -27,19 +25,32 @@ type ConfirmationOverlay struct {
 
 // NewConfirmationOverlay creates a new confirmation dialog overlay with the given message
 func NewConfirmationOverlay(message string) *ConfirmationOverlay {
-	return &ConfirmationOverlay{
+	overlay := &ConfirmationOverlay{
 		Dismissed:   false,
 		message:     message,
-		width:       50, // Default width
 		ConfirmKey:  "y",
 		CancelKey:   "n",
 		borderColor: lipgloss.Color("#de613e"), // Red color for confirmations
 	}
+
+	// Initialize BaseOverlay with default size
+	overlay.BaseOverlay.SetSize(50, 10)
+	overlay.BaseOverlay.Focus()
+
+	return overlay
 }
 
 // HandleKeyPress processes a key press and updates the state
 // Returns true if the overlay should be closed
 func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
+	// Use BaseOverlay for Esc key handling
+	if handled, shouldClose := c.BaseOverlay.HandleCommonKeys(msg); handled {
+		if shouldClose {
+			c.Dismissed = true
+			return true
+		}
+	}
+
 	switch msg.String() {
 	case c.ConfirmKey:
 		c.Dismissed = true
@@ -47,10 +58,10 @@ func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 			c.OnConfirm()
 		}
 		return true
-	case c.CancelKey, "esc":
+	case c.CancelKey:
 		c.Dismissed = true
-		if c.OnCancel != nil {
-			c.OnCancel()
+		if c.onCancel != nil {
+			c.onCancel()
 		}
 		return true
 	default:
@@ -61,11 +72,15 @@ func (c *ConfirmationOverlay) HandleKeyPress(msg tea.KeyMsg) bool {
 
 // Render renders the confirmation overlay
 func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
+	// Use responsive width from BaseOverlay
+	responsiveWidth := c.GetResponsiveWidth()
+	hPadding, vPadding := c.GetResponsivePadding()
+
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(c.borderColor).
-		Padding(1, 2).
-		Width(c.width)
+		Padding(vPadding, hPadding).
+		MaxWidth(responsiveWidth)
 
 	// Add the confirmation instructions
 	content := c.message + "\n\n" +
@@ -81,11 +96,6 @@ func (c *ConfirmationOverlay) Render(opts ...WhitespaceOption) string {
 // This is needed for the TestRenderer to render the component
 func (c *ConfirmationOverlay) View() string {
 	return c.Render()
-}
-
-// SetWidth sets the width of the confirmation overlay
-func (c *ConfirmationOverlay) SetWidth(width int) {
-	c.width = width
 }
 
 // SetBorderColor sets the border color of the confirmation overlay
