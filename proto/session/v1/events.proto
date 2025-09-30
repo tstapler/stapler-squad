@@ -1,0 +1,83 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+import "session/v1/types.proto";
+
+// SessionEvent represents a real-time event about session state changes.
+// Used for WatchSessions streaming RPC to push updates to clients.
+message SessionEvent {
+  // Timestamp when the event occurred
+  google.protobuf.Timestamp timestamp = 1;
+
+  // Event type (one of the following)
+  oneof event {
+    SessionCreatedEvent session_created = 2;
+    SessionUpdatedEvent session_updated = 3;
+    SessionDeletedEvent session_deleted = 4;
+    SessionStatusChangedEvent status_changed = 5;
+  }
+}
+
+// SessionCreatedEvent is emitted when a new session is created
+message SessionCreatedEvent {
+  Session session = 1;
+}
+
+// SessionUpdatedEvent is emitted when session properties are modified
+message SessionUpdatedEvent {
+  Session session = 1;
+  // Fields that were updated (for efficient client updates)
+  repeated string updated_fields = 2;
+}
+
+// SessionDeletedEvent is emitted when a session is deleted
+message SessionDeletedEvent {
+  string session_id = 1;
+  string reason = 2; // Optional deletion reason
+}
+
+// SessionStatusChangedEvent is emitted when session status transitions
+message SessionStatusChangedEvent {
+  string session_id = 1;
+  SessionStatus old_status = 2;
+  SessionStatus new_status = 3;
+}
+
+// TerminalData represents terminal I/O for bidirectional streaming.
+// Used for StreamTerminal RPC to provide real-time terminal access.
+message TerminalData {
+  // Session identifier
+  string session_id = 1;
+
+  // Terminal message type
+  oneof data {
+    TerminalOutput output = 2;
+    TerminalInput input = 3;
+    TerminalResize resize = 4;
+    TerminalError error = 5;
+  }
+}
+
+// TerminalOutput contains data from the terminal (server to client)
+message TerminalOutput {
+  bytes data = 1; // Raw terminal output bytes (ANSI escape codes, etc)
+}
+
+// TerminalInput contains user input for the terminal (client to server)
+message TerminalInput {
+  bytes data = 1; // Raw input bytes (keystrokes, etc)
+}
+
+// TerminalResize notifies of terminal dimension changes
+message TerminalResize {
+  int32 rows = 1;
+  int32 cols = 2;
+}
+
+// TerminalError indicates a terminal streaming error
+message TerminalError {
+  string message = 1;
+  string code = 2; // Error code (e.g., "session_not_found", "tmux_error")
+}

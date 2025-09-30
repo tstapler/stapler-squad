@@ -4,6 +4,7 @@ package session.v1;
 
 import "google/protobuf/timestamp.proto";
 import "session/v1/types.proto";
+import "session/v1/events.proto";
 
 // SessionService manages AI agent session lifecycle operations.
 // Provides CRUD operations and real-time streaming for session management.
@@ -25,11 +26,11 @@ service SessionService {
 
   // WatchSessions streams real-time session events (created/updated/deleted).
   // Server-streaming RPC for live updates without polling.
-  rpc WatchSessions(WatchSessionsRequest) returns (stream WatchSessionsResponse) {}
+  rpc WatchSessions(WatchSessionsRequest) returns (stream SessionEvent) {}
 
   // StreamTerminal provides bidirectional streaming for terminal I/O.
   // Clients can send input and receive output from the tmux PTY.
-  rpc StreamTerminal(stream StreamTerminalRequest) returns (stream StreamTerminalResponse) {}
+  rpc StreamTerminal(stream TerminalData) returns (stream TerminalData) {}
 
   // GetSessionDiff retrieves the current git diff for a session.
   rpc GetSessionDiff(GetSessionDiffRequest) returns (GetSessionDiffResponse) {}
@@ -136,83 +137,6 @@ message WatchSessionsRequest {
 
   // Optional: Only watch sessions with this status.
   optional SessionStatus status_filter = 2;
-}
-
-// WatchSessionsResponse is streamed for each session event.
-message WatchSessionsResponse {
-  // The session event that occurred.
-  SessionEvent event = 1;
-}
-
-// SessionEvent represents a real-time session state change.
-message SessionEvent {
-  // Timestamp when event occurred.
-  google.protobuf.Timestamp timestamp = 1;
-
-  oneof event {
-    SessionCreated session_created = 2;
-    SessionUpdated session_updated = 3;
-    SessionDeleted session_deleted = 4;
-    SessionStatusChanged status_changed = 5;
-  }
-}
-
-message SessionCreated {
-  Session session = 1;
-}
-
-message SessionUpdated {
-  Session session = 1;
-  // Fields that were updated.
-  repeated string updated_fields = 2;
-}
-
-message SessionDeleted {
-  string session_id = 1;
-}
-
-message SessionStatusChanged {
-  string session_id = 1;
-  SessionStatus old_status = 2;
-  SessionStatus new_status = 3;
-}
-
-// StreamTerminalRequest is sent by client for terminal input and control.
-message StreamTerminalRequest {
-  // Session identifier for terminal stream.
-  string session_id = 1;
-
-  oneof message {
-    TerminalInput input = 2;
-    TerminalResize resize = 3;
-  }
-}
-
-// StreamTerminalResponse is sent by server for terminal output.
-message StreamTerminalResponse {
-  // Session identifier for terminal stream.
-  string session_id = 1;
-
-  oneof message {
-    TerminalOutput output = 2;
-  }
-}
-
-message TerminalOutput {
-  // Raw terminal output bytes (ANSI escape sequences included).
-  bytes data = 1;
-}
-
-message TerminalInput {
-  // Raw keyboard input bytes.
-  bytes data = 1;
-}
-
-message TerminalResize {
-  // Terminal columns.
-  int32 cols = 1;
-  // Terminal rows.
-  int32 rows = 2;
 }
 
 message GetSessionDiffRequest {

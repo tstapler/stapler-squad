@@ -293,7 +293,7 @@ func (s *SessionService) DeleteSession(
 func (s *SessionService) WatchSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.WatchSessionsRequest],
-	stream *connect.ServerStream[sessionv1.WatchSessionsResponse],
+	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
 	return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("WatchSessions not yet implemented"))
 }
@@ -302,7 +302,7 @@ func (s *SessionService) WatchSessions(
 // TODO: Implement in Task 2.3
 func (s *SessionService) StreamTerminal(
 	ctx context.Context,
-	stream *connect.BidiStream[sessionv1.StreamTerminalRequest, sessionv1.StreamTerminalResponse],
+	stream *connect.BidiStream[sessionv1.TerminalData, sessionv1.TerminalData],
 ) error {
 	return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("StreamTerminal not yet implemented"))
 }
