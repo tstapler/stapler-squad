@@ -172,22 +172,120 @@ func (s *SessionService) CreateSession(
 	}), nil
 }
 
-// UpdateSession modifies session properties (pause/resume, category, etc).
-// TODO: Implement in next task (Task 1.7)
+// UpdateSession modifies session properties (pause/resume, category, title).
 func (s *SessionService) UpdateSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateSessionRequest],
 ) (*connect.Response[sessionv1.UpdateSessionResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("UpdateSession not yet implemented"))
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find the instance to update
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Handle status change (pause/resume)
+	if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
+
+		if targetStatus == session.Paused && instance.Status != session.Paused {
+			if err := instance.Pause(); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to pause session: %w", err))
+			}
+		} else if targetStatus != session.Paused && instance.Status == session.Paused {
+			// Resume from paused state
+			if err := instance.Resume(); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resume session: %w", err))
+			}
+		}
+	}
+
+	// Handle category update
+	if req.Msg.Category != nil {
+		instance.Category = *req.Msg.Category
+	}
+
+	// Handle title update
+	if req.Msg.Title != nil && *req.Msg.Title != "" && *req.Msg.Title != instance.Title {
+		// Check if new title already exists
+		for _, inst := range instances {
+			if inst.Title == *req.Msg.Title {
+				return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("session with title '%s' already exists", *req.Msg.Title))
+			}
+		}
+		instance.Title = *req.Msg.Title
+	}
+
+	// Update the instance in the list and save
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
+		Session: adapters.InstanceToProto(instance),
+	}), nil
 }
 
 // DeleteSession stops and removes a session, cleaning up resources.
-// TODO: Implement in next task (Task 1.7)
 func (s *SessionService) DeleteSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.DeleteSessionRequest],
 ) (*connect.Response[sessionv1.DeleteSessionResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("DeleteSession not yet implemented"))
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find the instance to delete
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Destroy the session (cleanup tmux + git worktree)
+	if err := instance.Destroy(); err != nil {
+		// Log error but continue with deletion from storage
+		fmt.Printf("Warning: failed to cleanup session resources: %v\n", err)
+	}
+
+	// Delete from storage
+	if err := s.storage.DeleteInstance(req.Msg.Id); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.DeleteSessionResponse{
+		Success: true,
+		Message: fmt.Sprintf("Session '%s' deleted successfully", req.Msg.Id),
+	}), nil
 }
 
 // WatchSessions streams real-time session events (created/updated/deleted).
