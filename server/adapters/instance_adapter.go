@@ -66,8 +66,8 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 	return protoSession
 }
 
-// statusToProto converts session.Status to proto SessionStatus enum.
-func statusToProto(status session.Status) sessionv1.SessionStatus {
+// StatusToProto converts session.Status to proto SessionStatus enum.
+func StatusToProto(status session.Status) sessionv1.SessionStatus {
 	switch status {
 	case session.Running:
 		return sessionv1.SessionStatus_SESSION_STATUS_RUNNING
@@ -82,6 +82,11 @@ func statusToProto(status session.Status) sessionv1.SessionStatus {
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
+}
+
+// statusToProto is kept for backward compatibility
+func statusToProto(status session.Status) sessionv1.SessionStatus {
+	return StatusToProto(status)
 }
 
 // sessionTypeToProto converts session.SessionType to proto SessionType enum.

@@ -4,6 +4,7 @@ import (
 	"claude-squad/config"
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
 	"claude-squad/server/adapters"
+	"claude-squad/server/events"
 	"claude-squad/session"
 	"connectrpc.com/connect"
 	"context"
@@ -12,13 +13,15 @@ import (
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
-	storage *session.Storage
+	storage  *session.Storage
+	eventBus *events.EventBus
 }
 
-// NewSessionService creates a new SessionService with the given storage.
-func NewSessionService(storage *session.Storage) *SessionService {
+// NewSessionService creates a new SessionService with the given storage and event bus.
+func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *SessionService {
 	return &SessionService{
-		storage: storage,
+		storage:  storage,
+		eventBus: eventBus,
 	}
 }
 
@@ -29,7 +32,8 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize storage: %w", err)
 	}
-	return NewSessionService(storage), nil
+	eventBus := events.NewEventBus(100) // Buffer 100 events per subscriber
+	return NewSessionService(storage, eventBus), nil
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -167,6 +171,9 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
+	// Publish SessionCreated event to all watchers
+	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
+
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: adapters.InstanceToProto(instance),
 	}), nil
@@ -201,25 +208,33 @@ func (s *SessionService) UpdateSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Track which fields are being updated for event publishing
+	var updatedFields []string
+	var oldStatus session.Status
+
 	// Handle status change (pause/resume)
 	if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
+		oldStatus = instance.Status
 
 		if targetStatus == session.Paused && instance.Status != session.Paused {
 			if err := instance.Pause(); err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to pause session: %w", err))
 			}
+			updatedFields = append(updatedFields, "status")
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resume session: %w", err))
 			}
+			updatedFields = append(updatedFields, "status")
 		}
 	}
 
 	// Handle category update
 	if req.Msg.Category != nil {
 		instance.Category = *req.Msg.Category
+		updatedFields = append(updatedFields, "category")
 	}
 
 	// Handle title update
@@ -231,12 +246,23 @@ func (s *SessionService) UpdateSession(
 			}
 		}
 		instance.Title = *req.Msg.Title
+		updatedFields = append(updatedFields, "title")
 	}
 
 	// Update the instance in the list and save
 	instances[instanceIndex] = instance
 	if err := s.storage.SaveInstances(instances); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	// Publish events based on what was updated
+	if len(updatedFields) > 0 {
+		// Check if status changed specifically
+		if oldStatus != instance.Status && oldStatus != 0 {
+			s.eventBus.Publish(events.NewSessionStatusChangedEvent(instance, oldStatus, instance.Status))
+		}
+		// Also publish general update event
+		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
@@ -282,6 +308,9 @@ func (s *SessionService) DeleteSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
 	}
 
+	// Publish SessionDeleted event to all watchers
+	s.eventBus.Publish(events.NewSessionDeletedEvent(req.Msg.Id))
+
 	return connect.NewResponse(&sessionv1.DeleteSessionResponse{
 		Success: true,
 		Message: fmt.Sprintf("Session '%s' deleted successfully", req.Msg.Id),
@@ -289,13 +318,77 @@ func (s *SessionService) DeleteSession(
 }
 
 // WatchSessions streams real-time session events (created/updated/deleted).
-// TODO: Implement in Task 2.2
+// Sends initial snapshot of all sessions, then subscribes to real-time updates.
 func (s *SessionService) WatchSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.WatchSessionsRequest],
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
-	return connect.NewError(connect.CodeUnimplemented, fmt.Errorf("WatchSessions not yet implemented"))
+	// Send initial snapshot of all sessions
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Apply optional filters from request
+	for _, inst := range instances {
+		// Filter by category if specified
+		if req.Msg.CategoryFilter != nil && *req.Msg.CategoryFilter != "" {
+			if inst.Category != *req.Msg.CategoryFilter {
+				continue
+			}
+		}
+
+		// Filter by status if specified
+		if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+			if adapters.StatusToProto(inst.Status) != *req.Msg.StatusFilter {
+				continue
+			}
+		}
+
+		// Send as SessionCreated event for initial snapshot
+		event := createInitialSnapshotEvent(inst)
+		if err := stream.Send(event); err != nil {
+			return fmt.Errorf("failed to send initial snapshot: %w", err)
+		}
+	}
+
+	// Subscribe to real-time events from event bus
+	eventCh, subID := s.eventBus.Subscribe(ctx)
+	defer s.eventBus.Unsubscribe(subID)
+
+	// Stream events until client disconnects or context is canceled
+	for {
+		select {
+		case <-ctx.Done():
+			// Client disconnected or context canceled
+			return nil
+		case event, ok := <-eventCh:
+			if !ok {
+				// Event channel closed (should not happen with proper cleanup)
+				return nil
+			}
+
+			// Apply filters to real-time events
+			if req.Msg.CategoryFilter != nil && *req.Msg.CategoryFilter != "" {
+				if event.Session != nil && event.Session.Category != *req.Msg.CategoryFilter {
+					continue
+				}
+			}
+
+			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+				if event.Session != nil && adapters.StatusToProto(event.Session.Status) != *req.Msg.StatusFilter {
+					continue
+				}
+			}
+
+			// Convert internal event to protobuf and send
+			protoEvent := convertEventToProto(event)
+			if err := stream.Send(protoEvent); err != nil {
+				return fmt.Errorf("failed to send event: %w", err)
+			}
+		}
+	}
 }
 
 // StreamTerminal provides bidirectional streaming for terminal I/O.
