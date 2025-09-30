@@ -11,7 +11,10 @@
   "dependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "next": "15.3.2"
+    "next": "15.3.2",
+    "@connectrpc/connect": "^2.3.0",
+    "@connectrpc/connect-web": "^2.3.0",
+    "@bufbuild/protobuf": "^2.4.0"
   },
   "devDependencies": {
     "typescript": "^5",

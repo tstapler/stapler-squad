@@ -1,36 +1,102 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Claude Squad Web Client
 
-## Getting Started
+Next.js web client for Claude Squad session management with ConnectRPC.
 
-First, run the development server:
+## Setup
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+## Development
+
+Run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## ConnectRPC Client Generation
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The TypeScript client code is automatically generated from Protocol Buffer definitions using Buf CLI.
+
+### Prerequisites
+
+- [Buf CLI](https://buf.build/docs/installation) installed
+- Protocol Buffer definitions in `/proto` directory
+
+### Generate Client Code
+
+To regenerate the TypeScript ConnectRPC client after proto changes:
+
+```bash
+# From project root
+buf generate
+```
+
+Generated files are written to `web/src/gen/session/v1/`:
+- `session_pb.ts` - Message types (Session, CreateSessionRequest, etc.)
+- `session_connect.ts` - RPC service definitions
+- `events_pb.ts` - Event types (SessionEvent, etc.)
+- `events_connect.ts` - Event streaming definitions
+
+### Client Usage
+
+Import the generated client and create a ConnectRPC transport:
+
+```typescript
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { createClient } from "@connectrpc/connect";
+import { SessionService } from "@/gen/session/v1/session_connect";
+
+// Create ConnectRPC transport
+const transport = createConnectTransport({
+  baseUrl: "http://localhost:8080",
+});
+
+// Create client and make RPC calls
+const client = createClient(SessionService, transport);
+const response = await client.listSessions({});
+```
+
+## Project Structure
+
+```
+web/
+├── src/
+│   ├── app/           # Next.js app directory (pages, layouts)
+│   ├── gen/           # Generated ConnectRPC client code (do not edit)
+│   └── lib/           # Utility functions, hooks, and helpers
+├── public/            # Static assets
+├── package.json       # Dependencies and scripts
+└── README.md          # This file
+```
+
+## Dependencies
+
+- **Next.js 15** - React framework
+- **ConnectRPC** - Type-safe RPC client
+  - `@connectrpc/connect` - Core ConnectRPC library
+  - `@connectrpc/connect-web` - Browser transport for ConnectRPC
+- **Protobuf** - Protocol Buffers for TypeScript
+  - `@bufbuild/protobuf` - Protobuf runtime
+
+## Build
+
+Build for production:
+
+```bash
+npm run build
+npm run start
+```
 
 ## Learn More
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js Documentation](https://nextjs.org/docs)
+- [ConnectRPC Documentation](https://connectrpc.com/docs)
+- [Buf Documentation](https://buf.build/docs)
+- [Next.js GitHub Repository](https://github.com/vercel/next.js)
