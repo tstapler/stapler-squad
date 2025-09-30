@@ -7,6 +7,7 @@ import (
 )
 
 // responseWriter wraps http.ResponseWriter to capture status code.
+// It also implements http.Flusher for streaming support (required by ConnectRPC).
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -26,6 +27,13 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 		rw.WriteHeader(http.StatusOK)
 	}
 	return rw.ResponseWriter.Write(b)
+}
+
+// Flush implements http.Flusher for streaming support
+func (rw *responseWriter) Flush() {
+	if flusher, ok := rw.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
 }
 
 // Logging middleware logs all HTTP requests with timing information.
