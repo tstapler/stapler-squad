@@ -17,17 +17,17 @@ plugins:
     opt:
       - paths=source_relative
 
-  # TypeScript protobuf message types generation (for Next.js frontend)
+  # TypeScript protobuf message types generation (for web-app)
   - remote: buf.build/bufbuild/es:v1.10.0
-    out: web/src/gen
+    out: web-app/src/gen
     opt:
       - target=ts
       - ts_nocheck=false
       - keep_empty_files=true
 
-  # TypeScript ConnectRPC service generation (for Next.js frontend)
+  # TypeScript ConnectRPC service generation (for web-app)
   - remote: buf.build/connectrpc/es:v1.6.1
-    out: web/src/gen
+    out: web-app/src/gen
     opt:
       - target=ts
       - ts_nocheck=false
