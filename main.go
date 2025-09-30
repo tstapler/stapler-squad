@@ -63,8 +63,8 @@ var (
 
 			// Web server mode
 			if webFlag {
-				srv := server.NewServer(":8543")
-				log.InfoLog.Printf("Starting web server mode on :8543")
+				srv := server.NewServer("localhost:8543")
+				log.InfoLog.Printf("Starting web server mode on localhost:8543")
 				return srv.Start(ctx)
 			}
 
@@ -269,7 +269,7 @@ func init() {
 		"[experimental] If enabled, all instances will automatically accept prompts")
 	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
 		" and runs autoyes mode on them.")
-	rootCmd.Flags().BoolVar(&webFlag, "web", false, "Run HTTP server with ConnectRPC API on :8543")
+	rootCmd.Flags().BoolVar(&webFlag, "web", false, "Run HTTP server with ConnectRPC API on localhost:8543")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")

@@ -89,6 +89,7 @@ func (s *Server) Start(ctx context.Context) error {
 	})
 
 	log.InfoLog.Printf("Starting HTTP server on %s", s.addr)
+	log.InfoLog.Printf("Web UI: http://%s", s.addr)
 	log.InfoLog.Printf("Health check: http://%s/health", s.addr)
 
 	// Start server in goroutine
