@@ -3,6 +3,7 @@ package services
 import (
 	"claude-squad/config"
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
+	"claude-squad/log"
 	"claude-squad/server/adapters"
 	"claude-squad/server/events"
 	"claude-squad/session"
@@ -166,7 +167,7 @@ func (s *SessionService) CreateSession(
 		// Cleanup on save failure
 		if destroyErr := instance.Destroy(); destroyErr != nil {
 			// Log cleanup error but return original save error
-			fmt.Printf("Failed to cleanup after save error: %v\n", destroyErr)
+			log.ErrorLog.Printf("Failed to cleanup after save error: %v", destroyErr)
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
@@ -300,7 +301,7 @@ func (s *SessionService) DeleteSession(
 	// Destroy the session (cleanup tmux + git worktree)
 	if err := instance.Destroy(); err != nil {
 		// Log error but continue with deletion from storage
-		fmt.Printf("Warning: failed to cleanup session resources: %v\n", err)
+		log.WarningLog.Printf("Failed to cleanup session resources: %v", err)
 	}
 
 	// Delete from storage
@@ -559,7 +560,7 @@ func (s *SessionService) StreamTerminal(
 
 				case *sessionv1.TerminalData_Error:
 					// Client sent an error, log it
-					fmt.Printf("Client error: %s (%s)\n", data.Error.Message, data.Error.Code)
+					log.ErrorLog.Printf("Client error: %s (%s)", data.Error.Message, data.Error.Code)
 				}
 			}
 		}
@@ -575,10 +576,53 @@ func (s *SessionService) StreamTerminal(
 }
 
 // GetSessionDiff retrieves the current git diff for a session.
-// TODO: Implement in Task 4.3
 func (s *SessionService) GetSessionDiff(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetSessionDiffRequest],
 ) (*connect.Response[sessionv1.GetSessionDiffResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("GetSessionDiff not yet implemented"))
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find instance by ID (using Title as ID)
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Get diff stats from the instance
+	diffStats := instance.GetDiffStats()
+	if diffStats == nil {
+		// Return empty diff stats if none available
+		return connect.NewResponse(&sessionv1.GetSessionDiffResponse{
+			DiffStats: &sessionv1.DiffStats{
+				Added:   0,
+				Removed: 0,
+				Content: "",
+			},
+		}), nil
+	}
+
+	// Convert to proto message
+	protoDiffStats := &sessionv1.DiffStats{
+		Added:   int32(diffStats.Added),
+		Removed: int32(diffStats.Removed),
+		Content: diffStats.Content,
+	}
+
+	return connect.NewResponse(&sessionv1.GetSessionDiffResponse{
+		DiffStats: protoDiffStats,
+	}), nil
 }

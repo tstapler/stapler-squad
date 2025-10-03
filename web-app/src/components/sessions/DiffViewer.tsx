@@ -1,6 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { createPromiseClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_connect";
 import styles from "./DiffViewer.module.css";
 
 interface DiffViewerProps {
@@ -30,43 +33,143 @@ interface DiffLine {
   newLineNumber?: number;
 }
 
+// Parse unified diff format from git
+function parseDiff(diffContent: string): DiffFile[] {
+  if (!diffContent || diffContent.trim() === "") {
+    return [];
+  }
+
+  const files: DiffFile[] = [];
+  const lines = diffContent.split("\n");
+  let currentFile: DiffFile | null = null;
+  let currentHunk: DiffHunk | null = null;
+  let oldLineNum = 0;
+  let newLineNum = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // File header: diff --git a/file b/file
+    if (line.startsWith("diff --git")) {
+      if (currentFile && currentHunk) {
+        currentFile.changes.push(currentHunk);
+      }
+      if (currentFile) {
+        files.push(currentFile);
+      }
+      currentFile = {
+        filename: "",
+        additions: 0,
+        deletions: 0,
+        changes: [],
+      };
+      currentHunk = null;
+    }
+    // +++ b/filename
+    else if (line.startsWith("+++")) {
+      const match = line.match(/\+\+\+ b\/(.*)/);
+      if (match && currentFile) {
+        currentFile.filename = match[1];
+      }
+    }
+    // Hunk header: @@ -10,5 +10,7 @@
+    else if (line.startsWith("@@")) {
+      if (currentFile && currentHunk) {
+        currentFile.changes.push(currentHunk);
+      }
+      const match = line.match(/@@ -(\d+),(\d+) \+(\d+),(\d+) @@/);
+      if (match) {
+        currentHunk = {
+          oldStart: parseInt(match[1]),
+          oldLines: parseInt(match[2]),
+          newStart: parseInt(match[3]),
+          newLines: parseInt(match[4]),
+          lines: [],
+        };
+        oldLineNum = parseInt(match[1]);
+        newLineNum = parseInt(match[3]);
+      }
+    }
+    // Diff line content
+    else if (currentHunk && (line.startsWith("+") || line.startsWith("-") || line.startsWith(" "))) {
+      if (line.startsWith("+")) {
+        currentHunk.lines.push({
+          type: "add",
+          content: line,
+          newLineNumber: newLineNum++,
+        });
+        if (currentFile) currentFile.additions++;
+      } else if (line.startsWith("-")) {
+        currentHunk.lines.push({
+          type: "delete",
+          content: line,
+          oldLineNumber: oldLineNum++,
+        });
+        if (currentFile) currentFile.deletions++;
+      } else {
+        currentHunk.lines.push({
+          type: "context",
+          content: line,
+          oldLineNumber: oldLineNum++,
+          newLineNumber: newLineNum++,
+        });
+      }
+    }
+  }
+
+  // Push last file and hunk
+  if (currentFile && currentHunk) {
+    currentFile.changes.push(currentHunk);
+  }
+  if (currentFile) {
+    files.push(currentFile);
+  }
+
+  return files;
+}
+
 export function DiffViewer({ sessionId, baseUrl }: DiffViewerProps) {
   const [diff, setDiff] = useState<DiffFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<"split" | "unified">("unified");
+  const [rawDiffContent, setRawDiffContent] = useState<string>("");
+  const [totalAdditions, setTotalAdditions] = useState(0);
+  const [totalDeletions, setTotalDeletions] = useState(0);
 
-  // Placeholder for fetching diff data
   useEffect(() => {
-    setLoading(true);
-    // Simulate loading
-    setTimeout(() => {
-      // Placeholder diff data
-      setDiff([
-        {
-          filename: "example.ts",
-          additions: 15,
-          deletions: 8,
-          changes: [
-            {
-              oldStart: 10,
-              oldLines: 5,
-              newStart: 10,
-              newLines: 7,
-              lines: [
-                { type: "context", content: "function example() {", oldLineNumber: 10, newLineNumber: 10 },
-                { type: "delete", content: "  const oldCode = true;", oldLineNumber: 11 },
-                { type: "add", content: "  const newCode = true;", newLineNumber: 11 },
-                { type: "add", content: "  const moreCode = false;", newLineNumber: 12 },
-                { type: "context", content: "  return result;", oldLineNumber: 12, newLineNumber: 13 },
-                { type: "context", content: "}", oldLineNumber: 13, newLineNumber: 14 },
-              ],
-            },
-          ],
-        },
-      ]);
-      setLoading(false);
-    }, 500);
+    const fetchDiff = async () => {
+      setLoading(true);
+      setError(null);
+
+      try {
+        const client = createPromiseClient(
+          SessionService,
+          createConnectTransport({ baseUrl })
+        );
+
+        const response = await client.getSessionDiff({ id: sessionId });
+
+        if (response.diffStats) {
+          setTotalAdditions(response.diffStats.added);
+          setTotalDeletions(response.diffStats.removed);
+          setRawDiffContent(response.diffStats.content);
+
+          // Parse the diff content
+          const parsedDiff = parseDiff(response.diffStats.content);
+          setDiff(parsedDiff);
+        } else {
+          setDiff([]);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load diff");
+        console.error("Error fetching diff:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDiff();
   }, [sessionId, baseUrl]);
 
   if (loading) {
@@ -85,7 +188,7 @@ export function DiffViewer({ sessionId, baseUrl }: DiffViewerProps) {
     );
   }
 
-  if (diff.length === 0) {
+  if (diff.length === 0 && !loading && !error) {
     return (
       <div className={styles.container}>
         <div className={styles.empty}>
@@ -98,27 +201,34 @@ export function DiffViewer({ sessionId, baseUrl }: DiffViewerProps) {
     );
   }
 
-  const totalAdditions = diff.reduce((sum, file) => sum + file.additions, 0);
-  const totalDeletions = diff.reduce((sum, file) => sum + file.deletions, 0);
-
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
         <div className={styles.stats}>
-          <span className={styles.filesChanged}>{diff.length} files changed</span>
+          <span className={styles.filesChanged}>
+            {diff.length} {diff.length === 1 ? "file" : "files"} changed
+          </span>
           <span className={styles.additions}>+{totalAdditions}</span>
           <span className={styles.deletions}>-{totalDeletions}</span>
         </div>
         <div className={styles.viewModeToggle}>
           <button
-            className={`${styles.viewModeButton} ${viewMode === "unified" ? styles.active : ""}`}
+            className={`${styles.viewModeButton} ${
+              viewMode === "unified" ? styles.active : ""
+            }`}
             onClick={() => setViewMode("unified")}
+            aria-label="Unified diff view"
           >
             Unified
           </button>
           <button
-            className={`${styles.viewModeButton} ${viewMode === "split" ? styles.active : ""}`}
+            className={`${styles.viewModeButton} ${
+              viewMode === "split" ? styles.active : ""
+            }`}
             onClick={() => setViewMode("split")}
+            disabled
+            title="Split view coming soon"
+            aria-label="Split diff view (coming soon)"
           >
             Split
           </button>
@@ -139,7 +249,8 @@ export function DiffViewer({ sessionId, baseUrl }: DiffViewerProps) {
             {file.changes.map((hunk, hunkIndex) => (
               <div key={hunkIndex} className={styles.hunk}>
                 <div className={styles.hunkHeader}>
-                  @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@
+                  @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},
+                  {hunk.newLines} @@
                 </div>
                 <div className={styles.lines}>
                   {hunk.lines.map((line, lineIndex) => (
@@ -150,10 +261,10 @@ export function DiffViewer({ sessionId, baseUrl }: DiffViewerProps) {
                       {viewMode === "unified" && (
                         <>
                           <span className={styles.lineNumber}>
-                            {line.oldLineNumber || " "}
+                            {line.oldLineNumber !== undefined ? line.oldLineNumber : " "}
                           </span>
                           <span className={styles.lineNumber}>
-                            {line.newLineNumber || " "}
+                            {line.newLineNumber !== undefined ? line.newLineNumber : " "}
                           </span>
                         </>
                       )}
@@ -165,17 +276,6 @@ export function DiffViewer({ sessionId, baseUrl }: DiffViewerProps) {
             ))}
           </div>
         ))}
-      </div>
-
-      <div className={styles.placeholder}>
-        <p>Full diff visualization coming soon...</p>
-        <ul>
-          <li>Real-time diff updates via API</li>
-          <li>Syntax highlighting for different languages</li>
-          <li>Inline diff comments</li>
-          <li>File tree navigation</li>
-          <li>Expand/collapse hunks</li>
-        </ul>
       </div>
     </div>
   );
