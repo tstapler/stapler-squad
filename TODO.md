@@ -1,35 +1,45 @@
 # Claude Squad - Current Priority Tasks
 
-## IN PROGRESS: Web Server Implementation with ConnectRPC 🚀
+## ✅ COMPLETE: Web Server & UI Foundation (Stories 1 & 2)
 
-**Status**: Tasks 1.1 & 1.2 COMPLETE - Code generation pipeline ready
-**Priority**: P1 - New feature development
+**Status**: Web server operational, UI foundation complete
+**Priority**: P1 - Feature development ongoing
 
-### Progress:
-- [x] ✅ **Task 1.1**: Protocol Buffer Definitions (2h)
-  - Created `proto/session/v1/session.proto` with SessionService
-  - Created `proto/session/v1/types.proto` with message types
-  - Configured `buf.yaml` for linting and validation
-  - Configured `buf.gen.yaml` for Go + TypeScript code generation
-  - All proto files validated with `buf lint` and `buf build`
+### Completed Work:
+- [x] ✅ **ConnectRPC Server**: Full server implementation with session management API
+  - Protocol Buffer definitions and code generation
+  - HTTP server with ConnectRPC handlers on port 8543
+  - Session CRUD operations (List, Create, Pause, Resume, Delete)
+  - Static file serving for Next.js web app
 
-- [x] ✅ **Task 1.2**: Go Code Generation Setup (1h)
-  - Created `tools.go` for buf and protoc plugin dependencies
-  - Added ConnectRPC v1.19.0 and protobuf v1.36.9 to go.mod
-  - Added Makefile targets: `proto-gen`, `proto-lint`, `proto-build`
-  - Generated Go code with ConnectRPC server stubs
-  - Generated TypeScript client code for Next.js
-  - All generated code compiles successfully
+- [x] ✅ **Story 1 - UI Foundation** (4 tasks, 9 hours)
+  - Modal-based navigation with session detail overlay
+  - Skeleton loading states with shimmer animation
+  - Error boundaries with retry functionality
+  - Keyboard shortcuts (?, Escape, r) with help modal
+
+- [x] ✅ **Story 2 - Session Detail View** (4 tasks, 10 hours)
+  - Tabbed interface (Terminal, Diff, Logs, Info)
+  - Terminal output component with VS Code dark theme
+  - Diff visualization with unified/split views
+  - Session metadata display with comprehensive info
+
+### Currently Deployed:
+- Web UI accessible at `http://localhost:8543`
+- 23 new components and utilities created
+- Professional dark theme matching VS Code
+- Responsive foundation with mobile considerations
 
 ### Next Atomic Task:
-- [ ] **Task 1.4**: HTTP Server Foundation (2h)
-  - Create `server/server.go` with ConnectRPC handler registration
-  - Create `server/middleware/cors.go` and `logging.go`
-  - Add `--web` flag to `main.go`
-  - HTTP server starts on `:8080`
-  - Graceful shutdown on SIGTERM/SIGINT
+- [ ] **Story 3, Task 3.1**: Session Creation Wizard (3h)
+  - Create multi-step form (Basic Info → Repository → Configuration)
+  - Add form validation with zod
+  - Integrate with `useSessionService.createSession`
+  - Success feedback and error handling
 
-**See**: [Web Server ConnectRPC Implementation](docs/tasks/web-server-connectrpc-implementation.md)
+**See**:
+- [Web UI Enhancement Epic](docs/tasks/web-ui-enhancements.md)
+- [Implementation Status Report](docs/tasks/web-ui-implementation-status.md)
 
 ---
 
