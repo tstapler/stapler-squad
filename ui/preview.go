@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"claude-squad/log"
 	"claude-squad/session"
 	"context"
 	"fmt"
@@ -129,7 +130,14 @@ func (p *PreviewPane) previewWorker() {
 
 // processPreviewRequest handles a single preview request asynchronously
 func (p *PreviewPane) processPreviewRequest(req previewRequest) {
+	instanceName := "nil"
+	if req.instance != nil {
+		instanceName = req.instance.Title
+	}
+	log.DebugLog.Printf("[PREVIEW] Worker processing request for instance: %s (fullHistory: %v)", instanceName, req.fullHistory)
+
 	if req.instance == nil {
+		log.DebugLog.Printf("[PREVIEW] Nil instance, sending empty result")
 		p.previewResultCh <- previewResult{
 			content:    "",
 			err:        nil,
@@ -138,10 +146,59 @@ func (p *PreviewPane) processPreviewRequest(req previewRequest) {
 		return
 	}
 
+	// Handle paused sessions with fallback content
+	if req.instance.Status == session.Paused {
+		log.DebugLog.Printf("[PREVIEW] Paused instance '%s', sending fallback content", instanceName)
+
+		// Build appropriate message based on session type
+		var fallbackLines []string
+		fallbackLines = append(fallbackLines, "Session is paused. Press 'r' to resume.")
+		fallbackLines = append(fallbackLines, "")
+
+		// Check if this is a worktree-based or directory-based session
+		workDir := req.instance.GetWorkingDirectory()
+		if req.instance.Branch != "" {
+			// Worktree-based session - show branch info
+			fallbackLines = append(fallbackLines,
+				lipgloss.NewStyle().
+					Foreground(lipgloss.AdaptiveColor{
+						Light: "#FFD700",
+						Dark:  "#FFD700",
+					}).
+					Render(fmt.Sprintf(
+						"Branch: %s | Directory not found",
+						req.instance.Branch,
+					)),
+			)
+		} else {
+			// Directory-based session - show path info
+			fallbackLines = append(fallbackLines,
+				lipgloss.NewStyle().
+					Foreground(lipgloss.AdaptiveColor{
+						Light: "#FFD700",
+						Dark:  "#FFD700",
+					}).
+					Render(fmt.Sprintf(
+						"Directory: %s (not found)",
+						workDir,
+					)),
+			)
+		}
+
+		fallbackContent := lipgloss.JoinVertical(lipgloss.Center, fallbackLines...)
+		p.previewResultCh <- previewResult{
+			content:    lipgloss.JoinVertical(lipgloss.Center, FallBackText, "", fallbackContent),
+			err:        nil,
+			instanceID: p.getInstanceID(req.instance),
+		}
+		return
+	}
+
 	instanceID := p.getInstanceID(req.instance)
 
 	// Check cache first
 	if cached, ok := p.getCachedContent(instanceID, req.fullHistory); ok {
+		log.DebugLog.Printf("[PREVIEW] Cache hit for instance: %s, content length: %d", instanceName, len(cached))
 		p.previewResultCh <- previewResult{
 			content:    cached,
 			err:        nil,
@@ -149,6 +206,8 @@ func (p *PreviewPane) processPreviewRequest(req previewRequest) {
 		}
 		return
 	}
+
+	log.DebugLog.Printf("[PREVIEW] Cache miss for instance: %s, fetching from tmux", instanceName)
 
 	// Perform expensive tmux operation in background
 	var content string
@@ -160,10 +219,17 @@ func (p *PreviewPane) processPreviewRequest(req previewRequest) {
 		content, err = req.instance.Preview()
 	}
 
+	if err != nil {
+		log.ErrorLog.Printf("[PREVIEW] Error fetching content for instance: %s: %v", instanceName, err)
+	} else {
+		log.DebugLog.Printf("[PREVIEW] Fetched content for instance: %s, length: %d", instanceName, len(content))
+	}
+
 	// Cache the result
 	p.setCachedContent(instanceID, content, req.fullHistory)
 
 	// Send result back
+	log.DebugLog.Printf("[PREVIEW] Sending result to channel for instance: %s", instanceName)
 	p.previewResultCh <- previewResult{
 		content:    content,
 		err:        err,
@@ -225,6 +291,12 @@ func (p *PreviewPane) invalidateCache(instanceID string) {
 
 // UpdateContentAsync requests a preview update asynchronously with debouncing
 func (p *PreviewPane) UpdateContentAsync(instance *session.Instance) {
+	instanceName := "nil"
+	if instance != nil {
+		instanceName = instance.Title
+	}
+	log.DebugLog.Printf("[PREVIEW] UpdateContentAsync called for instance: %s", instanceName)
+
 	// Cancel any existing debounce timer
 	if p.debounceTimer != nil {
 		p.debounceTimer.Stop()
@@ -235,41 +307,64 @@ func (p *PreviewPane) UpdateContentAsync(instance *session.Instance) {
 
 	// Set up debounced execution
 	p.debounceTimer = time.AfterFunc(previewDebounceDelay, func() {
+		log.DebugLog.Printf("[PREVIEW] Debounce timer fired for instance: %s", instanceName)
 		p.requestPreviewUpdate(p.pendingInstance, false)
 	})
 }
 
 // requestPreviewUpdate sends a preview request to the worker
 func (p *PreviewPane) requestPreviewUpdate(instance *session.Instance, fullHistory bool) {
+	instanceName := "nil"
+	if instance != nil {
+		instanceName = instance.Title
+	}
+
 	select {
 	case p.previewRequestCh <- previewRequest{
 		instance:    instance,
 		fullHistory: fullHistory,
 	}:
+		log.DebugLog.Printf("[PREVIEW] Request queued for instance: %s (fullHistory: %v)", instanceName, fullHistory)
 	default:
 		// Channel is full, skip this request to prevent blocking
+		log.WarningLog.Printf("[PREVIEW] Channel full, dropping request for instance: %s", instanceName)
 	}
 }
 
 // ProcessResults processes any pending results from the background worker
 func (p *PreviewPane) ProcessResults() error {
+	resultCount := 0
 	for {
 		select {
 		case result := <-p.previewResultCh:
+			resultCount++
+			log.DebugLog.Printf("[PREVIEW] ProcessResults: received result #%d, instanceID: '%s', content length: %d",
+				resultCount, result.instanceID, len(result.content))
+
 			if result.err != nil {
+				log.ErrorLog.Printf("[PREVIEW] ProcessResults: error in result: %v", result.err)
 				return result.err
 			}
 
 			// Update preview state with the result
 			if result.instanceID != "" {
+				// Valid instance - update with content
+				log.DebugLog.Printf("[PREVIEW] ProcessResults: updating state with content for instanceID: %s", result.instanceID)
 				p.previewState = previewState{
 					fallback: false,
 					text:     result.content,
 				}
 				p.lastInstanceID = result.instanceID
+			} else {
+				// Nil instance - show fallback content
+				log.DebugLog.Printf("[PREVIEW] ProcessResults: showing fallback for nil instance")
+				p.setFallbackState("No agents running yet. Spin up a new instance with 'n' to get started!")
 			}
 		default:
 			// No more results to process
+			if resultCount > 0 {
+				log.DebugLog.Printf("[PREVIEW] ProcessResults: processed %d results total", resultCount)
+			}
 			return nil
 		}
 	}

@@ -368,7 +368,13 @@ func LaunchDaemon() error {
 		return fmt.Errorf("failed to write PID file: %w", err)
 	}
 
-	// Don't wait for the child to exit, it's detached
+	// Release the process so it won't become a zombie when it exits
+	// This tells the OS that the parent won't wait for the child
+	if err := cmd.Process.Release(); err != nil {
+		log.WarningLog.Printf("failed to release daemon process (may become zombie on exit): %v", err)
+	}
+
+	// Don't wait for the child to exit, it's detached and released
 	return nil
 }
 

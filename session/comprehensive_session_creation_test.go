@@ -227,9 +227,9 @@ func (b *TestInstanceBuilder) buildWithMockTmux() (*Instance, tmux.CleanupFunc, 
 // mockPtyFactory implements tmux.PtyFactory for testing
 type mockPtyFactory struct{}
 
-func (m *mockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
+func (m *mockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	// Return a mock file descriptor - we can use stdin as a safe mock
-	return os.Stdin, nil
+	return os.Stdin, cmd, nil
 }
 
 func (m *mockPtyFactory) Close() {

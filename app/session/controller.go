@@ -54,6 +54,14 @@ func (op SessionOperationType) String() string {
 	}
 }
 
+// DiscoveryConfig represents discovery configuration interface
+type DiscoveryConfig interface {
+	IsExternalDiscoveryEnabled() bool
+	IsManagedDiscoveryEnabled() bool
+	ShouldConfirmOperation(isExternal bool) bool
+	CanAttachToExternal() bool
+}
+
 // Dependencies represents the external dependencies needed by the session controller
 type Dependencies struct {
 	// Core components
@@ -71,6 +79,7 @@ type Dependencies struct {
 	AutoYes             bool
 	GlobalInstanceLimit int
 	TmuxPrefix          string
+	DiscoveryConfig     DiscoveryConfig
 
 	// Overlay management
 	SetSessionSetupOverlay func(*overlay.SessionSetupOverlay)

@@ -1,0 +1,72 @@
+# Status detection patterns for Claude Code instances
+# Patterns are regular expressions matched against PTY output
+# Priority: higher values are checked first
+
+ready:
+  - name: claude_prompt
+    pattern: ".*"  # Catch-all for ready state
+    description: "Claude Code command prompt (default)"
+    priority: 1
+
+processing:
+  - name: thinking
+    pattern: "(?i)(thinking|processing|analyzing|working)"
+    description: "Claude is processing a command"
+    priority: 10
+
+  - name: tool_use
+    pattern: "(?i)(reading|writing|editing|executing|running)"
+    description: "Claude is using tools"
+    priority: 9
+
+  - name: generating
+    pattern: "(?i)(generating|creating|building)"
+    description: "Claude is generating content"
+    priority: 8
+
+needs_approval:
+  - name: file_permission_claude
+    pattern: "(?i)(Yes, allow reading|Yes, allow writing|Yes, allow once|No, and tell Claude)"
+    description: "Claude Code file permission prompt"
+    priority: 20
+
+  - name: proceed_prompt
+    pattern: "(?i)Do you want to proceed\\?"
+    description: "Generic proceed confirmation"
+    priority: 19
+
+  - name: aider_permission
+    pattern: "\\(Y\\)es/\\(N\\)o/\\(D\\)on't ask again"
+    description: "Aider permission prompt"
+    priority: 18
+
+  - name: gemini_permission
+    pattern: "(?i)Yes, allow once"
+    description: "Gemini permission prompt"
+    priority: 17
+
+  - name: destructive_warning
+    pattern: "(?i)(warning|caution|dangerous|destructive)"
+    description: "Destructive operation warning"
+    priority: 16
+
+error:
+  - name: error_message
+    pattern: "(?i)(error|failed|exception|fatal)"
+    description: "Generic error indicators"
+    priority: 30
+
+  - name: connection_error
+    pattern: "(?i)(connection refused|timeout|network error)"
+    description: "Network and connection errors"
+    priority: 29
+
+  - name: auth_error
+    pattern: "(?i)(unauthorized|authentication failed|invalid credentials)"
+    description: "Authentication errors"
+    priority: 28
+
+  - name: not_found
+    pattern: "(?i)(not found|does not exist|no such file)"
+    description: "File or resource not found"
+    priority: 27

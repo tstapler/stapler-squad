@@ -4,6 +4,7 @@ package cmd
 const (
 	ContextGlobal    ContextID = "global"
 	ContextList      ContextID = "list"
+	ContextPTYList   ContextID = "pty-list"
 	ContextGitStatus ContextID = "git-status"
 	ContextHelp      ContextID = "help"
 	ContextPrompt    ContextID = "prompt"
@@ -24,6 +25,12 @@ func InitializeContexts(registry *CommandRegistry) error {
 			Name:        "Session List",
 			Parent:      ptr(ContextGlobal),
 			Description: "Commands available when viewing the session list",
+		},
+		{
+			ID:          ContextPTYList,
+			Name:        "PTY List",
+			Parent:      ptr(ContextGlobal),
+			Description: "Commands available when viewing the PTY list",
 		},
 		{
 			ID:          ContextGitStatus,

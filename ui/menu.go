@@ -9,18 +9,18 @@ import (
 )
 
 var keyStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#655F5F",
-	Dark:  "#7F7A7A",
+	Light: "#4A4545",
+	Dark:  "#C0C0C0",
 })
 
 var descStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#7A7474",
-	Dark:  "#9C9494",
+	Light: "#5A5454",
+	Dark:  "#B8B8B8",
 })
 
 var sepStyle = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{
-	Light: "#DDDADA",
-	Dark:  "#3C3C3C",
+	Light: "#C0BCBC",
+	Dark:  "#707070",
 })
 
 var actionGroupStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("99"))

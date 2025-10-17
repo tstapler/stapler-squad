@@ -165,3 +165,83 @@ message ClaudeSettings {
   // Consider sessions stale after this time (minutes).
   int32 session_timeout_minutes = 5;
 }
+
+// ReviewItem represents a session that needs user attention.
+// Maps to session.ReviewItem in Go.
+message ReviewItem {
+  // Unique session identifier (uses session title).
+  string session_id = 1;
+
+  // Human-readable session name.
+  string session_name = 2;
+
+  // Reason why session needs attention.
+  AttentionReason reason = 3;
+
+  // Priority level for ordering in queue.
+  Priority priority = 4;
+
+  // When this item was detected as needing attention.
+  google.protobuf.Timestamp detected_at = 5;
+
+  // Additional context about why attention is needed.
+  string context = 6;
+
+  // Name of detection pattern that triggered this item.
+  string pattern_name = 7;
+
+  // Additional metadata key-value pairs.
+  map<string, string> metadata = 8;
+}
+
+// Priority levels for review queue items (highest to lowest urgency).
+enum Priority {
+  PRIORITY_UNSPECIFIED = 0;
+  // 🔴 Critical - requires immediate attention (errors, failures).
+  PRIORITY_URGENT = 1;
+  // 🟡 Important - needs attention soon (approvals, prompts).
+  PRIORITY_HIGH = 2;
+  // 🔵 Normal - routine attention needed (idle, waiting).
+  PRIORITY_MEDIUM = 3;
+  // ⚪ Low - informational (task complete, status change).
+  PRIORITY_LOW = 4;
+}
+
+// AttentionReason indicates why a session needs user attention.
+enum AttentionReason {
+  ATTENTION_REASON_UNSPECIFIED = 0;
+  // Session is waiting for user approval on a prompt.
+  ATTENTION_REASON_APPROVAL_PENDING = 1;
+  // Session needs user input to continue.
+  ATTENTION_REASON_INPUT_REQUIRED = 2;
+  // Session encountered an error state.
+  ATTENTION_REASON_ERROR_STATE = 3;
+  // Session has been idle for too long.
+  ATTENTION_REASON_IDLE_TIMEOUT = 4;
+  // Session completed a task and is ready for next steps.
+  ATTENTION_REASON_TASK_COMPLETE = 5;
+}
+
+// ReviewQueue contains statistics and items needing attention.
+message ReviewQueue {
+  // Total number of items in queue.
+  int32 total_items = 1;
+
+  // Items organized by priority (sorted highest to lowest).
+  repeated ReviewItem items = 2;
+
+  // Statistics by priority level.
+  map<int32, int32> by_priority = 3;
+
+  // Statistics by attention reason.
+  map<int32, int32> by_reason = 4;
+
+  // Average age of items in queue (seconds).
+  int64 average_age_seconds = 5;
+
+  // Oldest item session ID.
+  string oldest_item_id = 6;
+
+  // Age of oldest item (seconds).
+  int64 oldest_age_seconds = 7;
+}

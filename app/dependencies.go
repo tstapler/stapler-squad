@@ -11,6 +11,7 @@ import (
 	"context"
 
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Dependencies defines the external dependencies needed by the home struct
@@ -19,6 +20,7 @@ type Dependencies interface {
 	// Configuration dependencies
 	GetAppConfig() *config.Config
 	GetAppState() *config.State
+	GetDiscoveryConfig() *config.DiscoveryConfig
 
 	// Storage dependencies
 	GetStorage() *session.Storage
@@ -31,6 +33,9 @@ type Dependencies interface {
 	GetErrBox() *ui.ErrBox
 	GetStatusBar() *ui.StatusBar
 	GetSpinner() spinner.Model
+	// UpdateSpinner updates the shared spinner instance that all components use
+	// CRITICAL: This ensures spinner updates propagate to List renderer
+	UpdateSpinner(newSpinner spinner.Model)
 
 	// System dependencies
 	GetTerminalManager() *terminal.Manager
@@ -54,6 +59,7 @@ type ProductionDependencies struct {
 	// Lazy-initialized dependencies
 	appConfig       *config.Config
 	appState        *config.State
+	discoveryConfig *config.DiscoveryConfig
 	storage         *session.Storage
 	uiCoordinator   appui.Coordinator
 	list            *ui.List
@@ -108,6 +114,14 @@ func (p *ProductionDependencies) GetAppState() *config.State {
 	return p.appState
 }
 
+// GetDiscoveryConfig returns the discovery configuration
+func (p *ProductionDependencies) GetDiscoveryConfig() *config.DiscoveryConfig {
+	if p.discoveryConfig == nil {
+		p.discoveryConfig = config.LoadDiscoveryConfig()
+	}
+	return p.discoveryConfig
+}
+
 // GetStorage returns the session storage
 func (p *ProductionDependencies) GetStorage() *session.Storage {
 	if p.storage == nil {
@@ -132,9 +146,11 @@ func (p *ProductionDependencies) GetUICoordinator() appui.Coordinator {
 // GetList returns the session list component
 func (p *ProductionDependencies) GetList() *ui.List {
 	if p.list == nil {
-		spinner := p.GetSpinner()
+		// CRITICAL: Pass pointer to the actual spinner field, not a local copy
+		// GetSpinner() ensures the spinner is initialized before we take its address
+		_ = p.GetSpinner() // Initialize spinner first
 		appState := p.GetAppState()
-		p.list = ui.NewList(&spinner, p.autoYes, appState)
+		p.list = ui.NewList(&p.spinner, p.autoYes, appState)
 	}
 	return p.list
 }
@@ -174,9 +190,19 @@ func (p *ProductionDependencies) GetStatusBar() *ui.StatusBar {
 // GetSpinner returns the spinner component
 func (p *ProductionDependencies) GetSpinner() spinner.Model {
 	if p.spinner.View() == "" { // Check if spinner is initialized
-		p.spinner = spinner.New(spinner.WithSpinner(spinner.MiniDot))
+		// CRITICAL: Initialize spinner with functional options to avoid showing "(error)"
+		// The spinner.View() method returns "(error)" when frame is uninitialized
+		p.spinner = spinner.New(
+			spinner.WithSpinner(spinner.MiniDot),
+			spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
+		)
 	}
 	return p.spinner
+}
+
+// UpdateSpinner updates the shared spinner instance
+func (p *ProductionDependencies) UpdateSpinner(newSpinner spinner.Model) {
+	p.spinner = newSpinner
 }
 
 // GetTerminalManager returns the terminal manager
@@ -220,6 +246,7 @@ type MockDependencies struct {
 	autoYes         bool
 	appConfig       *config.Config
 	appState        *config.State
+	discoveryConfig *config.DiscoveryConfig
 	storage         *session.Storage
 	uiCoordinator   appui.Coordinator
 	list            *ui.List
@@ -245,15 +272,16 @@ func NewMockDependencies() *MockDependencies {
 	list := ui.NewList(&spinner, false, appState)
 
 	return &MockDependencies{
-		ctx:           context.Background(),
-		appConfig:     config.DefaultConfig(),
-		appState:      appState,
-		storage:       storage,
-		stateManager:  state.NewManager(), // Each instance gets a new manager
-		uiCoordinator: appui.NewCoordinator(),
-		statusBar:     ui.NewStatusBar(),
-		spinner:       spinner,
-		list:          list,
+		ctx:             context.Background(),
+		appConfig:       config.DefaultConfig(),
+		appState:        appState,
+		discoveryConfig: config.DefaultDiscoveryConfig(),
+		storage:         storage,
+		stateManager:    state.NewManager(), // Each instance gets a new manager
+		uiCoordinator:   appui.NewCoordinator(),
+		statusBar:       ui.NewStatusBar(),
+		spinner:         spinner,
+		list:            list,
 	}
 }
 
@@ -287,6 +315,7 @@ func (m *MockDependencies) GetProgram() string { return m.program }
 func (m *MockDependencies) GetAutoYes() bool { return m.autoYes }
 func (m *MockDependencies) GetAppConfig() *config.Config { return m.appConfig }
 func (m *MockDependencies) GetAppState() *config.State { return m.appState }
+func (m *MockDependencies) GetDiscoveryConfig() *config.DiscoveryConfig { return m.discoveryConfig }
 func (m *MockDependencies) GetStorage() *session.Storage { return m.storage }
 func (m *MockDependencies) GetUICoordinator() appui.Coordinator { return m.uiCoordinator }
 func (m *MockDependencies) GetList() *ui.List { return m.list }
@@ -295,6 +324,7 @@ func (m *MockDependencies) GetTabbedWindow() *ui.TabbedWindow { return m.tabbedW
 func (m *MockDependencies) GetErrBox() *ui.ErrBox { return m.errBox }
 func (m *MockDependencies) GetStatusBar() *ui.StatusBar { return m.statusBar }
 func (m *MockDependencies) GetSpinner() spinner.Model { return m.spinner }
+func (m *MockDependencies) UpdateSpinner(newSpinner spinner.Model) { m.spinner = newSpinner }
 func (m *MockDependencies) GetTerminalManager() *terminal.Manager { return m.terminalManager }
 func (m *MockDependencies) GetSignalManager() *terminal.SignalManager { return m.signalManager }
 func (m *MockDependencies) GetBridge() *cmd.Bridge { return m.bridge }

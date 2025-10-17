@@ -250,7 +250,7 @@ type CoordinatedMockPtyFactory struct {
 	sessionsCreated map[string]bool
 }
 
-func (pt *CoordinatedMockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
+func (pt *CoordinatedMockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	// Track when new-session commands are called
 	cmdStr := cmd.String()
 	if strings.Contains(cmdStr, "new-session") {

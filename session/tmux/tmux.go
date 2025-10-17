@@ -83,8 +83,14 @@ const TmuxPrefix = "claudesquad_"
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
-func toClaudeSquadTmuxName(str string) string {
+// ToClaudeSquadTmuxName converts a string to a valid tmux session name with the default prefix
+func ToClaudeSquadTmuxName(str string) string {
 	return toClaudeSquadTmuxNameWithPrefix(str, TmuxPrefix)
+}
+
+// toClaudeSquadTmuxName is the internal version for backward compatibility
+func toClaudeSquadTmuxName(str string) string {
+	return ToClaudeSquadTmuxName(str)
 }
 
 func toClaudeSquadTmuxNameWithPrefix(str string, prefix string) string {
@@ -183,6 +189,11 @@ func (t *TmuxSession) buildTmuxCommand(args ...string) *exec.Cmd {
 	cmdArgs = append(cmdArgs, args...)
 
 	return exec.Command("tmux", cmdArgs...)
+}
+
+// buildAttachCommand creates a tmux attach-session command for PTY operations
+func (t *TmuxSession) buildAttachCommand() *exec.Cmd {
+	return t.buildTmuxCommand("attach-session", "-t", t.sanitizedName)
 }
 
 // Start creates and starts a new tmux session, then attaches to it. Program is the command to run in
@@ -315,14 +326,26 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 		}
 		log.InfoLog.Printf("Created new tmux session '%s' in directory '%s'", t.sanitizedName, workDir)
 		t.invalidateExistsCache() // Session was created, invalidate cache
-		return nil
 	}
 
-	// Session exists, we just need to set up monitoring for restore operations
-	// The PTY will be created later when actually needed for attachment
-	// No need to create PTY during restore
+	// Session exists - create PTY connection for detached operations
+	// This is needed for SetDetachedSize(), SendKeys(), and the Direct Claude Command Interface
+	// We use tmux attach-session to get a PTY handle without actually attaching interactively
+	if t.ptmx == nil {
+		ptmx, _, err := t.ptyFactory.Start(t.buildAttachCommand())
+		if err != nil {
+			// Graceful degradation - log warning but allow session to continue
+			// Session can still be viewed via tmux capture-pane, just won't support
+			// PTY-based operations like resizing or command sending
+			log.WarningLog.Printf("PTY initialization failed for session '%s': %v (session will work with limited functionality)", t.sanitizedName, err)
+			// Continue without PTY - operations that require it will fail gracefully
+		} else {
+			t.ptmx = ptmx
+			log.InfoLog.Printf("Successfully restored PTY connection for tmux session '%s'", t.sanitizedName)
+		}
+	}
+
 	t.monitor = newStatusMonitor()
-	log.InfoLog.Printf("Successfully verified tmux session '%s' exists and is ready", t.sanitizedName)
 	return nil
 }
 
@@ -384,25 +407,120 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 		return false, false
 	}
 
-	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
-	hasPrompt = t.detectPromptInContent(content)
+	// Filter out the tmux status line (bottom line with clock) before checking for updates
+	// The status line updates every second and causes false positive update detection
+	contentWithoutStatusLine := t.filterStatusLine(content)
 
-	if !bytes.Equal(t.monitor.hash(content), t.monitor.prevOutputHash) {
-		t.monitor.prevOutputHash = t.monitor.hash(content)
+	// Only set hasPrompt for claude and aider. Use these strings to check for a prompt.
+	hasPrompt = t.detectPromptInContent(contentWithoutStatusLine)
+
+	if !bytes.Equal(t.monitor.hash(contentWithoutStatusLine), t.monitor.prevOutputHash) {
+		t.monitor.prevOutputHash = t.monitor.hash(contentWithoutStatusLine)
 		return true, hasPrompt
 	}
 	return false, hasPrompt
 }
 
+// filterStatusLine removes the tmux status line (last line) from the content
+// The status line typically contains session info and a clock that updates every second
+// This uses sophisticated detection to identify actual status lines rather than blindly removing the last line
+func (t *TmuxSession) filterStatusLine(content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) <= 1 {
+		return content
+	}
+
+	lastLine := lines[len(lines)-1]
+
+	// Check if the last line looks like a tmux status line
+	// Tmux status lines typically have:
+	// 1. Session name at the start (our sanitizedName)
+	// 2. A time/date stamp (various formats: HH:MM, HH:MM:SS, MMM DD, etc.)
+	// 3. Often contain ANSI color codes
+	// 4. Are relatively short (< 200 chars typically)
+
+	// Quick length check - status lines are usually short
+	if len(lastLine) > 200 {
+		return content // Last line too long to be a status line
+	}
+
+	// Check for session name in the line (strong indicator)
+	hasSessionName := strings.Contains(lastLine, t.sanitizedName)
+
+	// Check for time patterns (HH:MM or HH:MM:SS format)
+	// Matches: "12:34", "23:59:59", "1:23", etc.
+	timePattern := regexp.MustCompile(`\b([0-2]?[0-9]):([0-5][0-9])(:[0-5][0-9])?\b`)
+	hasTime := timePattern.MatchString(lastLine)
+
+	// Check for date patterns (common formats: "Jan 15", "2025-01-15", "15 Jan", etc.)
+	datePattern := regexp.MustCompile(`\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\b|\b\d{4}-\d{2}-\d{2}\b|\b\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b`)
+	hasDate := datePattern.MatchString(lastLine)
+
+	// Check for ANSI color codes (ESC sequences like \x1b[...m)
+	hasColorCodes := strings.Contains(lastLine, "\x1b[")
+
+	// Decision logic: Remove last line if it looks like a status line
+	// Strong indicators: session name + (time OR date)
+	// Weak indicators: just time/date without session name (could be program output)
+	isStatusLine := false
+
+	if hasSessionName && (hasTime || hasDate) {
+		// Very likely a status line - has session name and timestamp
+		isStatusLine = true
+	} else if hasTime && hasDate && hasColorCodes {
+		// Likely a status line - has both time and date with colors
+		isStatusLine = true
+	} else if hasTime && hasColorCodes && len(lastLine) < 100 {
+		// Possibly a status line - has time, colors, and is short
+		// This catches cases where session name might be styled/truncated
+		isStatusLine = true
+	}
+
+	if isStatusLine {
+		// Remove the status line
+		return strings.Join(lines[:len(lines)-1], "\n")
+	}
+
+	// Not a status line, keep the original content
+	return content
+}
+
 // detectPromptInContent checks if the given content contains a prompt from the configured program
 func (t *TmuxSession) detectPromptInContent(content string) bool {
 	if t.program == ProgramClaude {
-		// Claude Code prompts can have various patterns, check for multiple signatures
+		// Claude Code approval dialogs have a distinctive pattern:
+		// An arrow selector (❯) followed by numbered options (1., 2., 3.)
+		// This is more reliable than checking for specific text that might change.
+		//
+		// Example:
+		// ❯ 1. Yes
+		//   2. Yes, allow all edits during this session (shift+tab)
+		//   3. No, and tell Claude what to do differently (esc)
+
+		// Check for the arrow selector with numbered option pattern
+		// Look for: arrow (❯) followed by number and period (1., 2., etc.) on subsequent lines
+		if strings.Contains(content, "❯") {
+			// If we have the arrow, check for numbered options nearby
+			// Split into lines and look for the pattern
+			lines := strings.Split(content, "\n")
+			for i, line := range lines {
+				if strings.Contains(line, "❯") {
+					// Found the arrow, check next few lines for numbered options
+					for j := i; j < i+5 && j < len(lines); j++ {
+						trimmed := strings.TrimSpace(lines[j])
+						// Check for numbered options (1., 2., 3., etc.)
+						if len(trimmed) > 0 && (trimmed[0] >= '1' && trimmed[0] <= '9') &&
+						   len(trimmed) > 1 && trimmed[1] == '.' {
+							return true
+						}
+					}
+				}
+			}
+		}
+
+		// Fallback: Check for legacy patterns in case the UI changes
 		return strings.Contains(content, "No, and tell Claude what to do differently") ||
-			strings.Contains(content, "Do you want to proceed?") ||
-			strings.Contains(content, "Yes, allow reading") ||
-			strings.Contains(content, "Yes, allow writing") ||
-			strings.Contains(content, "Yes, allow once")
+			strings.Contains(content, "Yes, allow all edits during this session")
 	} else if strings.HasPrefix(t.program, ProgramAider) {
 		return strings.Contains(content, "(Y)es/(N)o/(D)on't ask again")
 	} else if strings.HasPrefix(t.program, ProgramGemini) {
@@ -715,24 +833,25 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 	})
 }
 
-// SetWindowSize allows external callers (like BubbleTea) to set terminal dimensions
-// This is particularly useful for IntelliJ terminal integration where SIGWINCH doesn't work properly
-func (t *TmuxSession) SetWindowSize(cols, rows int) {
-	if t.externalResizeCh != nil {
-		select {
-		case t.externalResizeCh <- windowSize{cols: cols, rows: rows}:
-		default:
-			// Channel is full, drop the oldest resize event and try again
-			select {
-			case <-t.externalResizeCh:
-			default:
-			}
-			select {
-			case t.externalResizeCh <- windowSize{cols: cols, rows: rows}:
-			default:
-			}
-		}
+// SetWindowSize allows external callers (like web UI) to set terminal dimensions.
+// This is particularly useful for web terminal integration where the browser controls the size.
+// This method executes the resize immediately by calling both PTY and tmux resize commands.
+func (t *TmuxSession) SetWindowSize(cols, rows int) error {
+	// First resize the PTY using the existing method
+	if err := t.updateWindowSize(cols, rows); err != nil {
+		// Log warning but don't fail - PTY resize might not be critical
+		log.WarningLog.Printf("Failed to resize PTY for session '%s': %v", t.sanitizedName, err)
 	}
+
+	// Also resize the tmux window itself to ensure the dimensions are applied
+	// This ensures the tmux pane reflects the new size
+	cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", fmt.Sprintf("%d", cols), "-y", fmt.Sprintf("%d", rows))
+	if err := t.cmdExec.Run(cmd); err != nil {
+		return fmt.Errorf("failed to resize tmux window: %w", err)
+	}
+
+	log.InfoLog.Printf("Resized tmux session '%s' to %dx%d", t.sanitizedName, cols, rows)
+	return nil
 }
 
 func (t *TmuxSession) DoesSessionExist() bool {

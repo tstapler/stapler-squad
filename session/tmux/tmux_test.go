@@ -20,7 +20,7 @@ type MockPtyFactory struct {
 	files []*os.File
 }
 
-func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
+func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	// Use a safe test name for the file path - replace problematic characters
 	safeName := strings.ReplaceAll(pt.t.Name(), "/", "_")
 	safeName = strings.ReplaceAll(safeName, " ", "_")
@@ -30,7 +30,7 @@ func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
 		pt.cmds = append(pt.cmds, cmd)
 		pt.files = append(pt.files, f)
 	}
-	return f, err
+	return f, cmd, err
 }
 
 func (pt *MockPtyFactory) Close() {}

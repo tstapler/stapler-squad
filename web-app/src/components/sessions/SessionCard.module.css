@@ -54,6 +54,29 @@
   color: var(--text-primary);
 }
 
+.badges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reviewInfo {
+  margin-top: 8px;
+  padding: 8px;
+  background: var(--review-info-bg);
+  border-left: 3px solid var(--review-info-border);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.reviewContext {
+  font-size: 13px;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
 .status {
   padding: 4px 12px;
   border-radius: 12px;
@@ -216,6 +239,8 @@
     --button-border: #4b5563;
     --button-bg-hover: #4b5563;
     --button-border-hover: #6b7280;
+    --review-info-bg: #374151;
+    --review-info-border: #fbbf24;
   }
 
   .statusRunning {
@@ -270,5 +295,7 @@
     --button-border: #d1d5db;
     --button-bg-hover: #f9fafb;
     --button-border-hover: #9ca3af;
+    --review-info-bg: #fef3c7;
+    --review-info-border: #f59e0b;
   }
 }

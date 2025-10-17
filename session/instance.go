@@ -8,6 +8,7 @@ import (
 
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +78,33 @@ type Instance struct {
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
+	// Review queue integration for tracking sessions needing attention
+	reviewQueue *ReviewQueue
+
+	// LastAcknowledged tracks when the user last acknowledged this session in the review queue
+	// Sessions acknowledged after their last update won't appear in the queue until they update again
+	LastAcknowledged time.Time
+
+	// Terminal update timestamps for tracking activity
+	// LastTerminalUpdate is the timestamp of the last output received from the terminal (any output)
+	LastTerminalUpdate time.Time
+	// LastMeaningfulOutput is the timestamp of the last meaningful output (excludes tmux status banners)
+	// This is used by the review queue to determine session staleness
+	LastMeaningfulOutput time.Time
+
+	// Status manager for idle detection and queue management
+	statusManager *InstanceStatusManager
+	// Claude controller for automated interaction and status monitoring
+	claudeController *ClaudeController
+
+	// Instance type and management metadata
+	// InstanceType indicates whether this is a squad-managed or external instance
+	InstanceType InstanceType
+	// IsManaged is true if this is a squad-managed session (backward compatible helper)
+	IsManaged bool
+	// ExternalMetadata contains additional information for externally discovered instances
+	ExternalMetadata *ExternalInstanceMetadata
+
 	// The below fields are initialized upon calling Start().
 
 	started bool
@@ -97,22 +125,24 @@ type Instance struct {
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
 	data := InstanceData{
-		Title:       i.Title,
-		Path:        i.Path,
-		WorkingDir:  i.WorkingDir,
-		Branch:      i.Branch,
-		Status:      i.Status,
-		Height:      i.Height,
-		Width:       i.Width,
-		CreatedAt:   i.CreatedAt,
-		UpdatedAt:   time.Now(),
-		Program:     i.Program,
-		AutoYes:     i.AutoYes,
-		Prompt:      i.Prompt,
-		Category:    i.Category,
-		IsExpanded:  i.IsExpanded,
-		SessionType: i.SessionType,
-		TmuxPrefix:  i.TmuxPrefix,
+		Title:                i.Title,
+		Path:                 i.Path,
+		WorkingDir:           i.WorkingDir,
+		Branch:               i.Branch,
+		Status:               i.Status,
+		Height:               i.Height,
+		Width:                i.Width,
+		CreatedAt:            i.CreatedAt,
+		UpdatedAt:            time.Now(),
+		Program:              i.Program,
+		AutoYes:              i.AutoYes,
+		Prompt:               i.Prompt,
+		Category:             i.Category,
+		IsExpanded:           i.IsExpanded,
+		SessionType:          i.SessionType,
+		TmuxPrefix:           i.TmuxPrefix,
+		LastTerminalUpdate:   i.LastTerminalUpdate,
+		LastMeaningfulOutput: i.LastMeaningfulOutput,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -145,22 +175,54 @@ func (i *Instance) ToInstanceData() InstanceData {
 
 // FromInstanceData creates a new Instance from serialized data
 func FromInstanceData(data InstanceData) (*Instance, error) {
+	// MIGRATION: Fix corrupted paths from before defensive tilde expansion was added
+	// Detect paths like "/absolute/path/~/other/path" and fix them
+	migratedPath := data.Path
+	if strings.Contains(data.Path, "/~/") {
+		// Path contains unexpanded tilde - extract and expand it
+		log.WarningLog.Printf("Migrating corrupted path for instance '%s': %s", data.Title, data.Path)
+
+		// Find the index of "/~/"
+		idx := strings.Index(data.Path, "/~/")
+		if idx >= 0 {
+			// Extract the tilde path (everything from "~/" onwards)
+			tildePath := data.Path[idx+1:] // Skip the leading "/"
+
+			// Expand the tilde path
+			if strings.HasPrefix(tildePath, "~/") {
+				usr, err := user.Current()
+				if err != nil {
+					log.ErrorLog.Printf("Failed to expand corrupted path for '%s': %v", data.Title, err)
+					// Fall back to original path
+				} else {
+					migratedPath = filepath.Join(usr.HomeDir, tildePath[2:])
+					log.InfoLog.Printf("Migrated path for instance '%s': %s -> %s", data.Title, data.Path, migratedPath)
+				}
+			}
+		}
+	}
+
 	instance := &Instance{
-		Title:       data.Title,
-		Path:        data.Path,
-		WorkingDir:  data.WorkingDir,
-		Branch:      data.Branch,
-		Status:      data.Status,
-		Height:      data.Height,
-		Width:       data.Width,
-		CreatedAt:   data.CreatedAt,
-		UpdatedAt:   data.UpdatedAt,
-		Program:     data.Program,
-		Prompt:      data.Prompt,
-		Category:    data.Category,
-		IsExpanded:  data.IsExpanded,
-		SessionType: data.SessionType,
-		TmuxPrefix:  data.TmuxPrefix,
+		Title:                data.Title,
+		Path:                 migratedPath, // Use migrated path
+		WorkingDir:           data.WorkingDir,
+		Branch:               data.Branch,
+		Status:               data.Status,
+		Height:               data.Height,
+		Width:                data.Width,
+		CreatedAt:            data.CreatedAt,
+		UpdatedAt:            data.UpdatedAt,
+		Program:              data.Program,
+		Prompt:               data.Prompt,
+		Category:             data.Category,
+		IsExpanded:           data.IsExpanded,
+		SessionType:          data.SessionType,
+		TmuxPrefix:           data.TmuxPrefix,
+		LastTerminalUpdate:   data.LastTerminalUpdate,
+		LastMeaningfulOutput: data.LastMeaningfulOutput,
+		InstanceType:         InstanceTypeManaged, // Restored instances are always managed
+		IsManaged:            true,
+		ExternalMetadata:     nil, // External instances are not persisted
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -261,10 +323,28 @@ type InstanceOptions struct {
 func NewInstance(opts InstanceOptions) (*Instance, error) {
 	t := time.Now()
 
-	// Convert path to absolute
-	absPath, err := filepath.Abs(opts.Path)
+	// DEFENSIVE: Expand tilde (~) in path before converting to absolute
+	// This prevents bugs where unexpanded tildes get concatenated with current directory
+	// Example: ~/foo becomes /current/dir/~/foo instead of /home/user/foo
+	expandedPath := opts.Path
+	if strings.HasPrefix(expandedPath, "~/") {
+		usr, err := user.Current()
+		if err != nil {
+			return nil, fmt.Errorf("failed to expand home directory in path '%s': %w", opts.Path, err)
+		}
+		expandedPath = filepath.Join(usr.HomeDir, expandedPath[2:])
+	} else if expandedPath == "~" {
+		usr, err := user.Current()
+		if err != nil {
+			return nil, fmt.Errorf("failed to expand home directory in path '%s': %w", opts.Path, err)
+		}
+		expandedPath = usr.HomeDir
+	}
+
+	// Convert to absolute path (after tilde expansion)
+	absPath, err := filepath.Abs(expandedPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+		return nil, fmt.Errorf("failed to get absolute path for '%s': %w", expandedPath, err)
 	}
 
 	// Default to directory session if not specified for backward compatibility
@@ -274,22 +354,27 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	}
 
 	return &Instance{
-		Title:            opts.Title,
-		Status:           Ready,
-		Path:             absPath,
-		Program:          opts.Program,
-		Height:           0,
-		Width:            0,
-		CreatedAt:        t,
-		UpdatedAt:        t,
-		AutoYes:          opts.AutoYes,
-		Prompt:           opts.Prompt,
-		ExistingWorktree: opts.ExistingWorktree,
-		Category:         opts.Category,
-		SessionType:      sessionType,
-		TmuxPrefix:       opts.TmuxPrefix,
-		TmuxServerSocket: opts.TmuxServerSocket,
-		IsExpanded:       true, // Default to expanded for newly created instances
+		Title:                opts.Title,
+		Status:               Ready,
+		Path:                 absPath,
+		Program:              opts.Program,
+		Height:               0,
+		Width:                0,
+		CreatedAt:            t,
+		UpdatedAt:            t,
+		AutoYes:              opts.AutoYes,
+		Prompt:               opts.Prompt,
+		ExistingWorktree:     opts.ExistingWorktree,
+		Category:             opts.Category,
+		SessionType:          sessionType,
+		TmuxPrefix:           opts.TmuxPrefix,
+		TmuxServerSocket:     opts.TmuxServerSocket,
+		IsExpanded:           true, // Default to expanded for newly created instances
+		InstanceType:         InstanceTypeManaged,
+		IsManaged:            true,
+		ExternalMetadata:     nil,                // Only set for external instances
+		LastTerminalUpdate:   t,                  // Initialize to creation time
+		LastMeaningfulOutput: t,                  // Initialize to creation time
 	}, nil
 }
 
@@ -549,6 +634,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// that check Started() will see the correct state
 	i.started = true
 
+	// Start ClaudeController for idle detection and automation
+	// This is non-critical - we log errors but don't fail the instance startup
+	if err := i.StartController(); err != nil {
+		log.WarningLog.Printf("Failed to start controller for instance '%s': %v", i.Title, err)
+		// Continue - controller is optional functionality
+	}
+
 	return nil
 }
 
@@ -564,6 +656,9 @@ func (i *Instance) Destroy() error {
 		// If instance was never started, just return success
 		return nil
 	}
+
+	// Stop the controller first
+	i.StopController()
 
 	var errs []error
 
@@ -746,6 +841,9 @@ func (i *Instance) Pause() error {
 		return fmt.Errorf("instance is already paused")
 	}
 
+	// Stop the controller when pausing
+	i.StopController()
+
 	var errs []error
 
 	// Check if there are any changes to commit
@@ -869,6 +967,14 @@ func (i *Instance) Resume() error {
 	}
 
 	i.SetStatus(Running)
+
+	// Start ClaudeController for idle detection and automation
+	// This is non-critical - we log errors but don't fail the resume
+	if err := i.StartController(); err != nil {
+		log.WarningLog.Printf("Failed to start controller for instance '%s': %v", i.Title, err)
+		// Continue - controller is optional functionality
+	}
+
 	return nil
 }
 
@@ -924,8 +1030,10 @@ func (i *Instance) ResizePTY(cols, rows int) error {
 		return fmt.Errorf("tmux session not initialized")
 	}
 
-	// Use the existing SetWindowSize method
-	i.tmuxSession.SetWindowSize(cols, rows)
+	// Use the existing SetWindowSize method - now returns error
+	if err := i.tmuxSession.SetWindowSize(cols, rows); err != nil {
+		return fmt.Errorf("failed to resize terminal: %w", err)
+	}
 	return nil
 }
 
@@ -1041,10 +1149,11 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 
 // SetWindowSize propagates window size changes to the tmux session
 // This enables proper terminal resizing in environments like IntelliJ where SIGWINCH doesn't work
-func (i *Instance) SetWindowSize(cols, rows int) {
+func (i *Instance) SetWindowSize(cols, rows int) error {
 	if i.tmuxSession != nil {
-		i.tmuxSession.SetWindowSize(cols, rows)
+		return i.tmuxSession.SetWindowSize(cols, rows)
 	}
+	return nil
 }
 
 // SetGitWorktree sets the git worktree for testing purposes
@@ -1242,4 +1351,146 @@ func (i *Instance) SetClaudeSession(sessionData *ClaudeSessionData) {
 // HasClaudeSession returns true if this instance has Claude session data
 func (i *Instance) HasClaudeSession() bool {
 	return i.claudeSession != nil && i.claudeSession.SessionID != ""
+}
+
+// GetReviewQueue returns the review queue for this instance
+func (i *Instance) GetReviewQueue() *ReviewQueue {
+	return i.reviewQueue
+}
+
+// SetReviewQueue sets the review queue for this instance
+func (i *Instance) SetReviewQueue(queue *ReviewQueue) {
+	i.reviewQueue = queue
+}
+
+// NeedsReview returns true if this session is in the review queue
+func (i *Instance) NeedsReview() bool {
+	if i.reviewQueue == nil {
+		return false
+	}
+	return i.reviewQueue.Has(i.Title)
+}
+
+// GetReviewItem returns the review item for this instance if it exists
+func (i *Instance) GetReviewItem() (*ReviewItem, bool) {
+	if i.reviewQueue == nil {
+		return nil, false
+	}
+	return i.reviewQueue.Get(i.Title)
+}
+
+// SetStatusManager sets the status manager for idle detection
+func (i *Instance) SetStatusManager(manager *InstanceStatusManager) {
+	i.statusManager = manager
+}
+
+// GetStatusManager returns the status manager
+func (i *Instance) GetStatusManager() *InstanceStatusManager {
+	return i.statusManager
+}
+
+// StartController creates and initializes a ClaudeController for this instance
+// The controller enables automated idle detection and queue management
+func (i *Instance) StartController() error {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+
+	// Only start if we have a status manager
+	if i.statusManager == nil {
+		log.DebugLog.Printf("No status manager set for instance %s, skipping controller", i.Title)
+		return nil
+	}
+
+	// Don't create controller if instance isn't started
+	if !i.started {
+		log.DebugLog.Printf("Instance %s not started yet, skipping controller", i.Title)
+		return nil
+	}
+
+	// Don't recreate if already exists
+	if i.claudeController != nil {
+		log.DebugLog.Printf("Controller already exists for instance %s", i.Title)
+		return nil
+	}
+
+	// Create new controller
+	controller, err := NewClaudeController(i)
+	if err != nil {
+		return fmt.Errorf("failed to create controller: %w", err)
+	}
+
+	// Initialize the controller
+	if err := controller.Initialize(); err != nil {
+		return fmt.Errorf("failed to initialize controller: %w", err)
+	}
+
+	// Register with status manager
+	i.statusManager.RegisterController(i.Title, controller)
+	i.claudeController = controller
+
+	log.InfoLog.Printf("Started ClaudeController for instance %s", i.Title)
+	return nil
+}
+
+// StopController stops and cleans up the ClaudeController for this instance
+func (i *Instance) StopController() {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+
+	if i.claudeController == nil {
+		return
+	}
+
+	// Unregister from status manager
+	if i.statusManager != nil {
+		i.statusManager.UnregisterController(i.Title)
+	}
+
+	// Stop the controller
+	i.claudeController.Stop()
+	i.claudeController = nil
+
+	log.InfoLog.Printf("Stopped ClaudeController for instance %s", i.Title)
+}
+
+// GetController returns the ClaudeController if one exists
+func (i *Instance) GetController() *ClaudeController {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+	return i.claudeController
+}
+
+// GetPermissions returns the permissions for this instance based on its type
+func (i *Instance) GetPermissions() InstancePermissions {
+	if i.IsManaged {
+		return GetManagedPermissions()
+	}
+
+	// External instance - permissions depend on discovery configuration
+	// For now, we'll use a conservative default (view-only)
+	// TODO: This should be configurable via PTYDiscoveryConfig
+	return GetExternalPermissions(false)
+}
+
+// GetStatusIconForType returns the appropriate status icon based on instance type
+func (i *Instance) GetStatusIconForType() string {
+	if !i.IsManaged {
+		return "👁" // Eye icon for external/view-only instances
+	}
+
+	// Managed instance - use standard status icons
+	switch i.Status {
+	case Running:
+		return "●"
+	case Ready:
+		return "○"
+	case Paused:
+		return "⏸"
+	case Loading:
+		return "⏳"
+	case NeedsApproval:
+		return "❓"
+	default:
+		return "?"
+	}
 }

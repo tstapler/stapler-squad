@@ -1,41 +1,96 @@
 # Claude Squad - Current Priority Tasks
 
-## ✅ COMPLETE: Web Server & UI Foundation (Stories 1 & 2)
+## 🚧 IN PROGRESS: Web UI Implementation
 
-**Status**: Web server operational, UI foundation complete
-**Priority**: P1 - Feature development ongoing
+**Status**: Foundation complete (Stories 1-2), Session Creation pending
+**Priority**: P1 - Core user workflows, production deployment pending
+**Progress**: 40% complete (2 of 5 stories)
 
-### Completed Work:
-- [x] ✅ **ConnectRPC Server**: Full server implementation with session management API
-  - Protocol Buffer definitions and code generation
-  - HTTP server with ConnectRPC handlers on port 8543
-  - Session CRUD operations (List, Create, Pause, Resume, Delete)
-  - Static file serving for Next.js web app
+### ✅ Completed Work:
 
-- [x] ✅ **Story 1 - UI Foundation** (4 tasks, 9 hours)
-  - Modal-based navigation with session detail overlay
-  - Skeleton loading states with shimmer animation
-  - Error boundaries with retry functionality
-  - Keyboard shortcuts (?, Escape, r) with help modal
+#### ConnectRPC Server
+- [x] ✅ Full server implementation with session management API
+- [x] ✅ Protocol Buffer definitions and code generation
+- [x] ✅ HTTP server with ConnectRPC handlers on port 8543
+- [x] ✅ Session CRUD operations (List, Create, Pause, Resume, Delete)
+- [x] ✅ Static file serving for Next.js web app
+- [x] ✅ Real-time terminal PTY streaming with ConnectRPC
+- [x] ✅ GetSessionDiff RPC and real diff visualization
 
-- [x] ✅ **Story 2 - Session Detail View** (4 tasks, 10 hours)
-  - Tabbed interface (Terminal, Diff, Logs, Info)
-  - Terminal output component with VS Code dark theme
-  - Diff visualization with unified/split views
-  - Session metadata display with comprehensive info
+#### ✅ Story 1 - UI Foundation (COMPLETE - 4 tasks)
+- [x] Modal-based navigation with session detail overlay
+- [x] Skeleton loading states with shimmer animation
+- [x] Error boundaries with retry functionality
+- [x] Keyboard shortcuts (?, Escape, r) with help modal
 
-### Currently Deployed:
-- Web UI accessible at `http://localhost:8543`
-- 23 new components and utilities created
-- Professional dark theme matching VS Code
-- Responsive foundation with mobile considerations
+#### ✅ Story 2 - Session Detail View (COMPLETE - 4 tasks)
+- [x] Tabbed interface (Terminal, Diff, Info)
+- [x] Terminal output component with VS Code dark theme
+- [x] Diff visualization with unified/split views
+- [x] Session metadata display with comprehensive info
 
-### Next Atomic Task:
-- [ ] **Story 3, Task 3.1**: Session Creation Wizard (3h)
-  - Create multi-step form (Basic Info → Repository → Configuration)
-  - Add form validation with zod
-  - Integrate with `useSessionService.createSession`
-  - Success feedback and error handling
+### 🎯 Next Atomic Task: Story 3.1 - Session Creation Wizard
+
+**Task**: Create Multi-Step Session Creation Form
+**Estimated Time**: 3 hours
+**Priority**: P1 - Unblocks core user workflow
+**Context Boundary**: 3 files (page.tsx, SessionWizard.tsx, sessionSchema.ts) ✅
+
+**Implementation Steps**:
+1. Install dependencies: `zod`, `react-hook-form`, `@hookform/resolvers`
+2. Create `web-app/src/app/sessions/new/page.tsx` - Creation page route
+3. Create `web-app/src/components/sessions/SessionWizard.tsx` - Multi-step wizard component
+4. Create `web-app/src/lib/validation/sessionSchema.ts` - Zod validation schema
+5. Implement three wizard steps:
+   - Step 1: Basic Info (title, category)
+   - Step 2: Repository (path, workingDir, branch)
+   - Step 3: Configuration (program, prompt, autoYes)
+6. Integrate with `useSessionService.createSession` hook
+7. Add success/error feedback with navigation
+8. Test complete session creation flow
+
+**Context Files to Understand**:
+- `web-app/src/gen/session/v1/types_pb.ts` - CreateSessionRequest structure
+- `ui/overlay/sessionSetup.go` - TUI session creation reference
+- `web-app/src/lib/hooks/useSessionService.ts` - createSession implementation
+
+**Success Criteria**:
+- ✅ Three-step wizard with progress indicator
+- ✅ Field validation prevents invalid data
+- ✅ Form state persists across steps
+- ✅ Success navigates to session list
+- ✅ Error handling with retry
+
+**Dependencies**: Story 1 complete ✅
+
+### ⏸️ Pending Stories:
+
+#### Story 3 - Session Creation Wizard (NOT STARTED - 3 tasks, 7h)
+- [ ] Task 3.1: Multi-step form with validation (3h) **← NEXT**
+- [ ] Task 3.2: Path discovery and auto-fill (2h)
+- [ ] Task 3.3: Session templates (2h)
+
+#### Story 4 - Bulk Operations (NOT STARTED - 3 tasks, 8h)
+- [ ] Task 4.1: Multi-select and bulk actions (3h)
+- [ ] Task 4.2: Advanced filtering (2h)
+- [ ] Task 4.3: Performance dashboard (3h)
+
+#### Story 5 - Mobile & Accessibility (NOT STARTED - 3 tasks, 8h)
+- [ ] Task 5.1: Responsive mobile layout (3h)
+- [ ] Task 5.2: WCAG 2.1 AA compliance (3h)
+- [ ] Task 5.3: Touch gestures (2h)
+
+### Current Deployment:
+- **Web UI**: `http://localhost:8543`
+- **Build Status**: ✅ Builds successfully (~1.5s)
+- **Bundle Size**: 138KB (main), 153KB (wizard route)
+- **Routes**: Home (/), Review Queue (/review-queue), New Session (/sessions/new)
+
+### Technical Debt:
+- [ ] **Zero test coverage** - No unit/integration tests yet
+- [ ] **Terminal streaming** - Placeholder implementation only
+- [ ] **Diff updates** - Mock data, needs real API integration
+- [ ] **Static export limitation** - Can't share direct session detail URLs
 
 **See**:
 - [Web UI Enhancement Epic](docs/tasks/web-ui-enhancements.md)

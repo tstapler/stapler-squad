@@ -23,18 +23,44 @@ import (
 )
 
 var (
-	version     = "1.0.12"
-	programFlag string
-	autoYesFlag bool
-	daemonFlag  bool
-	webFlag     bool
-	rootCmd     = &cobra.Command{
+	version            = "1.0.12"
+	programFlag        string
+	autoYesFlag        bool
+	daemonFlag         bool
+	webFlag            bool
+	discoveryModeFlag  string
+	discoverExtFlag    bool
+	rootCmd            = &cobra.Command{
 		Use:   "claude-squad",
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
+
+			// Load discovery config
+			discoveryCfg := config.LoadDiscoveryConfig()
+
+			// Apply discovery mode flag overrides
+			if discoveryModeFlag != "" {
+				mode := config.DiscoveryMode(discoveryModeFlag)
+				// Validate the mode
+				if mode != config.DiscoveryManagedOnly &&
+				   mode != config.DiscoveryExternalOnly &&
+				   mode != config.DiscoveryAll {
+					return fmt.Errorf("invalid discovery mode '%s', must be one of: managed-only, external-only, all", discoveryModeFlag)
+				}
+				discoveryCfg.Mode = mode
+				log.InfoLog.Printf("Discovery mode set to: %s (from --discovery-mode flag)", mode)
+			}
+
+			// Apply --discover-external shorthand flag
+			if discoverExtFlag {
+				discoveryCfg.Mode = config.DiscoveryAll
+				discoveryCfg.AllowExternalAttach = true
+				log.InfoLog.Printf("External discovery enabled (from --discover-external flag)")
+			}
+
 			// Convert config to log config
 			logCfg := &log.LogConfig{
 				LogsEnabled:    true,
@@ -260,6 +286,162 @@ var (
 			fmt.Printf("https://github.com/smtg-ai/claude-squad/releases/tag/v%s\n", version)
 		},
 	}
+
+	testPtyCmd = &cobra.Command{
+		Use:   "test-pty",
+		Short: "Test PTY initialization and discovery",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize logging
+			cfg := config.LoadConfig()
+			logCfg := &log.LogConfig{
+				LogsEnabled:    true,
+				LogsDir:        "",
+				LogMaxSize:     cfg.LogMaxSize,
+				LogMaxFiles:    cfg.LogMaxFiles,
+				LogMaxAge:      cfg.LogMaxAge,
+				LogCompress:    cfg.LogCompress,
+				UseSessionLogs: cfg.UseSessionLogs,
+				ConsoleEnabled: true,
+				FileEnabled:    true,
+				FileLevel:      log.DEBUG,
+			}
+			log.InitializeWithConfig(false, logCfg)
+			defer log.Close()
+
+			fmt.Println("=== PTY Initialization Test ===")
+
+			// Load existing sessions
+			state := config.LoadState()
+			storage, err := session.NewStorage(state)
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			instances, err := storage.LoadInstances()
+			if err != nil {
+				return fmt.Errorf("failed to load instances: %w", err)
+			}
+
+			fmt.Printf("Found %d sessions\n\n", len(instances))
+
+			// Test PTY initialization for each session
+			for _, inst := range instances {
+				fmt.Printf("Session: %s\n", inst.Title)
+				fmt.Printf("  Status: %v\n", inst.Status)
+				fmt.Printf("  Path: %s\n", inst.Path)
+				fmt.Printf("  Branch: %s\n", inst.Branch)
+
+				// Test PTY access
+				if inst.Started() {
+					ptyReader, err := inst.GetPTYReader()
+					if err != nil {
+						fmt.Printf("  ❌ PTY Error: %v\n", err)
+					} else {
+						fmt.Printf("  ✅ PTY: FD %d\n", ptyReader.Fd())
+
+						// Try to get PTY path (cross-platform)
+						var ptyPath string
+						linuxPath := fmt.Sprintf("/proc/self/fd/%d", ptyReader.Fd())
+						macosPath := fmt.Sprintf("/dev/fd/%d", ptyReader.Fd())
+
+						ptyPath, err = os.Readlink(linuxPath)
+						if err != nil {
+							ptyPath, err = os.Readlink(macosPath)
+							if err != nil {
+								fmt.Printf("  ⚠️  PTY Path: Unable to resolve (error: %v)\n", err)
+							} else {
+								fmt.Printf("  ✅ PTY Path: %s (macOS)\n", ptyPath)
+							}
+						} else {
+							fmt.Printf("  ✅ PTY Path: %s (Linux)\n", ptyPath)
+						}
+					}
+				} else {
+					fmt.Printf("  ⚠️  Session not started\n")
+				}
+				fmt.Println()
+			}
+
+			// Test PTY discovery
+			fmt.Println("=== PTY Discovery Test ===")
+			discovery := session.NewPTYDiscovery()
+			discovery.SetSessions(instances)
+			err = discovery.Refresh()
+			if err != nil {
+				fmt.Printf("❌ Discovery Error: %v\n", err)
+			} else {
+				connections := discovery.GetConnections()
+				fmt.Printf("Discovered %d PTY connections:\n\n", len(connections))
+				for i, conn := range connections {
+					fmt.Printf("%d. Session: %s\n", i+1, conn.SessionName)
+					fmt.Printf("   Path: %s\n", conn.Path)
+					fmt.Printf("   PID: %d\n", conn.PID)
+					fmt.Printf("   Command: %s\n", conn.Command)
+					fmt.Printf("   Status: %v\n", conn.Status)
+					fmt.Println()
+				}
+			}
+
+			return nil
+		},
+	}
+
+	listSessionsCmd = &cobra.Command{
+		Use:   "list",
+		Short: "List all sessions",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Initialize logging
+			cfg := config.LoadConfig()
+			logCfg := &log.LogConfig{
+				LogsEnabled:    true,
+				LogsDir:        "",
+				LogMaxSize:     cfg.LogMaxSize,
+				LogMaxFiles:    cfg.LogMaxFiles,
+				LogMaxAge:      cfg.LogMaxAge,
+				LogCompress:    cfg.LogCompress,
+				UseSessionLogs: cfg.UseSessionLogs,
+				ConsoleEnabled: false,
+				FileEnabled:    true,
+				FileLevel:      log.DEBUG,
+			}
+			log.InitializeWithConfig(false, logCfg)
+			defer log.Close()
+
+			state := config.LoadState()
+			storage, err := session.NewStorage(state)
+			if err != nil {
+				return fmt.Errorf("failed to initialize storage: %w", err)
+			}
+
+			instances, err := storage.LoadInstances()
+			if err != nil {
+				return fmt.Errorf("failed to load instances: %w", err)
+			}
+
+			if len(instances) == 0 {
+				fmt.Println("No sessions found")
+				return nil
+			}
+
+			fmt.Printf("Found %d sessions:\n\n", len(instances))
+			for i, inst := range instances {
+				fmt.Printf("%d. %s\n", i+1, inst.Title)
+				fmt.Printf("   Status: %v\n", inst.Status)
+				fmt.Printf("   Path: %s\n", inst.Path)
+				if inst.Branch != "" {
+					fmt.Printf("   Branch: %s\n", inst.Branch)
+				}
+				if inst.Started() {
+					fmt.Printf("   Started: Yes\n")
+				} else {
+					fmt.Printf("   Started: No\n")
+				}
+				fmt.Println()
+			}
+
+			return nil
+		},
+	}
 )
 
 func init() {
@@ -271,6 +453,12 @@ func init() {
 		" and runs autoyes mode on them.")
 	rootCmd.Flags().BoolVar(&webFlag, "web", false, "Run HTTP server with ConnectRPC API on localhost:8543")
 
+	// Discovery mode flags
+	rootCmd.Flags().StringVar(&discoveryModeFlag, "discovery-mode", "",
+		"Instance discovery mode: managed-only, external-only, or all (default: managed-only)")
+	rootCmd.Flags().BoolVar(&discoverExtFlag, "discover-external", false,
+		"Enable external instance discovery (shorthand for --discovery-mode=all with attach enabled)")
+
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
 	if err != nil {
@@ -280,6 +468,8 @@ func init() {
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
+	rootCmd.AddCommand(testPtyCmd)
+	rootCmd.AddCommand(listSessionsCmd)
 }
 
 func main() {

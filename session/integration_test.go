@@ -18,7 +18,7 @@ import (
 // TestMain runs before all tests to set up the test environment
 func TestMain(m *testing.M) {
 	// Initialize the logger for tests with ERROR level to reduce noise
-	log.InitializeForTests(log.ERROR)
+	log.InitializeForTests(log.ERROR, log.ERROR)
 	defer log.Close()
 
 	// Run all tests

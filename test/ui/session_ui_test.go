@@ -15,7 +15,10 @@ func TestSessionSetupOverlayRendering(t *testing.T) {
 	// Category field is now implemented in InstanceOptions struct
 
 	// Create a session setup overlay
-	sessionSetup := overlay.NewSessionSetupOverlay()
+	sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+		OnComplete: func(session.InstanceOptions) {},
+		OnCancel:   func() {},
+	})
 
 	// Create a test renderer
 	renderer := NewTestRenderer().

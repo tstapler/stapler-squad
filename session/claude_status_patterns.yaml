@@ -1,0 +1,96 @@
+# Claude Code Status Detection Patterns
+# This file defines regex patterns for detecting Claude Code session states
+# Patterns are checked in priority order (higher priority checked first)
+
+ready:
+  - name: command_prompt
+    pattern: "\\$\\s*$"
+    description: "Shell command prompt at end of output"
+    priority: 5
+
+processing:
+  - name: thinking
+    pattern: "(?i)(thinking|processing|analyzing|working)"
+    description: "Claude is processing a command"
+    priority: 10
+
+  - name: tool_use
+    pattern: "(?i)(reading|writing|editing|executing|running)"
+    description: "Claude is using tools"
+    priority: 9
+
+needs_approval:
+  - name: file_permission_claude
+    pattern: "(?i)(Yes, allow reading|Yes, allow writing|Yes, allow once|No, and tell Claude)"
+    description: "Claude Code file permission prompt"
+    priority: 20
+
+  - name: proceed_prompt
+    pattern: "(?i)Do you want to proceed\\?"
+    description: "Generic proceed confirmation"
+    priority: 19
+
+  - name: aider_permission
+    pattern: "\\(Y\\)es/\\(N\\)o/\\(D\\)on't ask again"
+    description: "Aider permission prompt"
+    priority: 18
+
+  - name: gemini_permission
+    pattern: "(?i)Yes, allow once"
+    description: "Gemini permission prompt"
+    priority: 17
+
+error:
+  - name: error_message
+    pattern: "(?i)(error|failed|exception|fatal)"
+    description: "Generic error indicators"
+    priority: 30
+
+  - name: connection_error
+    pattern: "(?i)(connection refused|timeout|network error)"
+    description: "Network and connection errors"
+    priority: 29
+
+# Idle patterns - waiting for user input
+idle:
+  - name: insert_mode
+    pattern: "—\\s*INSERT\\s*—"
+    description: "Claude Code in INSERT mode, waiting for input"
+    priority: 15
+
+  - name: command_prompt_idle
+    pattern: "\\$\\s*$"
+    description: "Shell command prompt at end of output"
+    priority: 14
+
+  - name: vim_normal_mode
+    pattern: "—\\s*NORMAL\\s*—"
+    description: "Vim in NORMAL mode"
+    priority: 13
+
+# Active patterns - actively executing commands
+active:
+  - name: esc_to_interrupt
+    pattern: "\\(esc to interrupt\\)"
+    description: "Active operation that can be interrupted"
+    priority: 25
+
+  - name: running_status
+    pattern: "Running\\.{3,}"
+    description: "Command actively running"
+    priority: 24
+
+  - name: progress_indicators
+    pattern: "[✓✔⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*(?:ing|Processing|Working|Executing|Verifying|Testing|Building)"
+    description: "Progress indicators with action verbs"
+    priority: 23
+
+  - name: tool_execution_active
+    pattern: "(?i)(Executing|Verifying|Testing|Building|Deploying).*\\(esc"
+    description: "Tool execution with interrupt option"
+    priority: 22
+
+  - name: bash_running
+    pattern: "Bash\\(.*\\): running"
+    description: "Bash command actively running"
+    priority: 21

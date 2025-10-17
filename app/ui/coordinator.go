@@ -125,10 +125,13 @@ func (c *coordinator) Initialize() error {
 		return nil
 	}
 
-	// Initialize spinner
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	// CRITICAL: Initialize spinner with WithSpinner option to avoid showing "(error)"
+	// The spinner.View() method returns "(error)" when frame is uninitialized,
+	// which happens before the first spinner.TickMsg is processed
+	s := spinner.New(
+		spinner.WithSpinner(spinner.Dot),
+		spinner.WithStyle(lipgloss.NewStyle().Foreground(lipgloss.Color("205"))),
+	)
 	c.registry.Spinner = s
 
 	c.initialized = true

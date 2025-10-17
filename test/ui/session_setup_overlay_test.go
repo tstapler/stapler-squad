@@ -23,7 +23,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "basics_initial_name_focused",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 				return sessionSetup
 			},
@@ -32,7 +35,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "basics_program_focused",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 				// Tab to switch to program field
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyTab})
@@ -43,7 +49,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "basics_filled_out",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 				// Fill both fields
 				sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("awesome-project")})
@@ -58,7 +67,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "location_current_selected",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Fill basics and move to location step
@@ -73,7 +85,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "location_different_selected",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Fill basics and move to location step
@@ -88,7 +103,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "location_existing_selected",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Fill basics and move to location step
@@ -106,7 +124,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "confirm_current_location",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Complete flow to confirm step (current location)
@@ -121,7 +142,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "confirm_with_category",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Navigate to confirm step with category filled
@@ -139,7 +163,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "error_empty_name",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Try to advance without entering a name (should show error)
@@ -154,7 +181,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "responsive_small_terminal",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(50, 20) // Smaller terminal
 				return sessionSetup
 			},
@@ -163,7 +193,10 @@ func TestSessionSetupOverlay_Snapshots(t *testing.T) {
 		{
 			name: "responsive_large_terminal",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(120, 40) // Larger terminal
 				return sessionSetup
 			},
@@ -235,7 +268,10 @@ func TestSessionSetupOverlay_Navigation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sessionSetup := overlay.NewSessionSetupOverlay()
+			sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+				OnComplete: func(session.InstanceOptions) {},
+				OnCancel:   func() {},
+			})
 			sessionSetup.SetSize(80, 30)
 
 			// Process all key events
@@ -264,7 +300,10 @@ func TestSessionSetupOverlay_StateTransitions(t *testing.T) {
 			name:        "complete_flow_current_repo",
 			description: "Test complete streamlined flow using current repository",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// New streamlined flow: Basics -> Location (current) -> Confirm
@@ -280,7 +319,10 @@ func TestSessionSetupOverlay_StateTransitions(t *testing.T) {
 			name:        "flow_with_different_location",
 			description: "Test flow selecting different repository location",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Navigate through basics, then select different location
@@ -297,7 +339,10 @@ func TestSessionSetupOverlay_StateTransitions(t *testing.T) {
 			name:        "empty_program_uses_default",
 			description: "Test that empty program field uses default from config",
 			setup: func() *overlay.SessionSetupOverlay {
-				sessionSetup := overlay.NewSessionSetupOverlay()
+				sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				sessionSetup.SetSize(80, 30)
 
 				// Enter only session name, leave program field empty
@@ -322,16 +367,17 @@ func TestSessionSetupOverlay_Callbacks(t *testing.T) {
 	// Test callback functionality (this won't generate snapshots but validates callback behavior)
 
 	t.Run("on_complete_callback", func(t *testing.T) {
-		sessionSetup := overlay.NewSessionSetupOverlay()
-		sessionSetup.SetSize(80, 30)
-
 		var callbackTriggered bool
 		var receivedOptions session.InstanceOptions
 
-		sessionSetup.SetOnComplete(func(options session.InstanceOptions) {
-			callbackTriggered = true
-			receivedOptions = options
+		sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(options session.InstanceOptions) {
+				callbackTriggered = true
+				receivedOptions = options
+			},
+			OnCancel: func() {},
 		})
+		sessionSetup.SetSize(80, 30)
 
 		// Navigate through streamlined flow
 		sessionSetup.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
@@ -358,14 +404,15 @@ func TestSessionSetupOverlay_Callbacks(t *testing.T) {
 	})
 
 	t.Run("on_cancel_callback", func(t *testing.T) {
-		sessionSetup := overlay.NewSessionSetupOverlay()
-		sessionSetup.SetSize(80, 30)
-
 		var cancelCallbackTriggered bool
 
-		sessionSetup.SetOnCancel(func() {
-			cancelCallbackTriggered = true
+		sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(session.InstanceOptions) {},
+			OnCancel: func() {
+				cancelCallbackTriggered = true
+			},
 		})
+		sessionSetup.SetSize(80, 30)
 
 		// Trigger cancel with Escape
 		sessionSetup.Update(tea.KeyMsg{Type: tea.KeyEscape})

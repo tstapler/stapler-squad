@@ -103,8 +103,14 @@ func (c *controller) KillSession() SessionOperation {
 		return instanceChangedMsg{}
 	}
 
-	// Show confirmation dialog
-	message := fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
+	// Show confirmation dialog with external instance warning if applicable
+	var message string
+	if !selected.IsManaged && c.deps.DiscoveryConfig != nil && c.deps.DiscoveryConfig.ShouldConfirmOperation(true) {
+		message = fmt.Sprintf("[!] WARNING: Kill EXTERNAL session '%s'?\nThis is not a claude-squad managed session.", selected.Title)
+	} else {
+		message = fmt.Sprintf("[!] Kill session '%s'?", selected.Title)
+	}
+
 	result.Cmd = c.deps.ConfirmAction(message, killAction)
 	result.Success = true
 	return result
@@ -122,16 +128,36 @@ func (c *controller) AttachSession() SessionOperation {
 		return result
 	}
 
-	// Show help screen and perform attach
-	c.deps.ShowHelpScreen(helpTypeInstanceAttach{}, func() {
-		ch, err := c.deps.List.Attach()
-		if err != nil {
-			c.deps.ErrorHandler(err)()
-			return
-		}
-		<-ch
-		c.deps.StateTransition("Default")
-	})
+	selected := c.GetSelectedSession()
+	if selected == nil {
+		result.Success = true // No-op if no selection
+		return result
+	}
+
+	// Define the attach action
+	attachAction := func() tea.Msg {
+		// Show help screen and perform attach
+		c.deps.ShowHelpScreen(helpTypeInstanceAttach{}, func() {
+			ch, err := c.deps.List.Attach()
+			if err != nil {
+				c.deps.ErrorHandler(err)()
+				return
+			}
+			<-ch
+			c.deps.StateTransition("Default")
+		})
+		return nil
+	}
+
+	// Check if this is an external instance and confirmation is needed
+	if !selected.IsManaged && c.deps.DiscoveryConfig != nil && c.deps.DiscoveryConfig.ShouldConfirmOperation(true) {
+		// Show confirmation dialog with external instance warning
+		message := fmt.Sprintf("[!] WARNING: Attach to EXTERNAL session '%s'?\nThis is not a claude-squad managed session.", selected.Title)
+		result.Cmd = c.deps.ConfirmAction(message, attachAction)
+	} else {
+		// Proceed normally without confirmation
+		result.Cmd = attachAction
+	}
 
 	result.Success = true
 	return result
@@ -150,13 +176,27 @@ func (c *controller) CheckoutSession() SessionOperation {
 		return result
 	}
 
-	// Show help screen and perform checkout
-	c.deps.ShowHelpScreen(helpTypeInstanceCheckout{}, func() {
-		if err := selected.Pause(); err != nil {
-			c.deps.ErrorHandler(err)()
-		}
-		c.deps.InstanceChanged()()
-	})
+	// Define the checkout action
+	checkoutAction := func() tea.Msg {
+		// Show help screen and perform checkout
+		c.deps.ShowHelpScreen(helpTypeInstanceCheckout{}, func() {
+			if err := selected.Pause(); err != nil {
+				c.deps.ErrorHandler(err)()
+			}
+			c.deps.InstanceChanged()()
+		})
+		return nil
+	}
+
+	// Check if this is an external instance and confirmation is needed
+	if !selected.IsManaged && c.deps.DiscoveryConfig != nil && c.deps.DiscoveryConfig.ShouldConfirmOperation(true) {
+		// Show confirmation dialog with external instance warning
+		message := fmt.Sprintf("[!] WARNING: Checkout EXTERNAL session '%s'?\nThis is not a claude-squad managed session.", selected.Title)
+		result.Cmd = c.deps.ConfirmAction(message, checkoutAction)
+	} else {
+		// Proceed normally without confirmation
+		result.Cmd = checkoutAction
+	}
 
 	result.Success = true
 	return result

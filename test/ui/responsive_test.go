@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"claude-squad/session"
 	"claude-squad/ui/overlay"
 	"testing"
 
@@ -60,7 +61,10 @@ func TestOverlayResponsiveness(t *testing.T) {
 					SetDimensions(size.width, size.height).
 					DisableColors()
 
-				setupOverlay := overlay.NewSessionSetupOverlay()
+				setupOverlay := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				setupOverlay.SetSize(size.width, size.height)
 
 				renderer.CompareComponentWithSnapshot(t, setupOverlay, size.name+"_basics.txt")
@@ -72,7 +76,10 @@ func TestOverlayResponsiveness(t *testing.T) {
 					SetDimensions(size.width, size.height).
 					DisableColors()
 
-				setupOverlay := overlay.NewSessionSetupOverlay()
+				setupOverlay := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				setupOverlay.SetSize(size.width, size.height)
 
 				// Advance to location step
@@ -88,7 +95,10 @@ func TestOverlayResponsiveness(t *testing.T) {
 					SetDimensions(size.width, size.height).
 					DisableColors()
 
-				setupOverlay := overlay.NewSessionSetupOverlay()
+				setupOverlay := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				setupOverlay.SetSize(size.width, size.height)
 
 				// Advance to branch step (basics -> location -> branch)

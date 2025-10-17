@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Navigation } from "@/components/ui/Navigation";
+import { Header } from "@/components/layout/Header";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import "./globals.css";
 
@@ -17,8 +17,8 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <ErrorBoundary>
-          <Navigation />
-          <main>{children}</main>
+          <Header />
+          {children}
         </ErrorBoundary>
       </body>
     </html>

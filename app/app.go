@@ -52,6 +52,12 @@ type home struct {
 	ctx        context.Context
 	cancelFunc context.CancelFunc
 
+	// -- Dependencies --
+
+	// deps stores the dependencies to allow updating shared state
+	// CRITICAL: Needed for spinner updates to propagate to List renderer
+	deps Dependencies
+
 	// -- Storage and Configuration --
 
 	program string
@@ -97,6 +103,10 @@ type home struct {
 	terminalManager *terminal.Manager
 	signalManager   *terminal.SignalManager
 
+	// Terminal dimensions for viewport-aware rendering
+	termWidth  int
+	termHeight int
+
 	// -- UI Components --
 
 	// uiCoordinator manages all UI components and their orchestration
@@ -121,7 +131,38 @@ type home struct {
 	// Note: All other overlays now managed by UI coordinator
 	// statusBar provides vim-style status bar with :messages command
 	statusBar *ui.StatusBar
+
+	// -- PTY Management --
+
+	// viewMode determines if we're showing sessions or PTYs
+	viewMode ViewMode
+	// ptyDiscovery discovers and monitors PTY connections
+	ptyDiscovery *session.PTYDiscovery
+	// ptyList displays available PTY connections
+	ptyList *ui.PTYList
+	// ptyPreview shows output from selected PTY
+	ptyPreview *ui.PTYPreview
+
+	// -- Review Queue --
+
+	// reviewQueue tracks sessions needing user attention
+	reviewQueue *session.ReviewQueue
+	// queueView displays the review queue
+	queueView *ui.QueueView
+	// statusManager manages instance status information for idle detection
+	statusManager *session.InstanceStatusManager
+	// reviewQueuePoller automatically adds idle sessions to review queue
+	reviewQueuePoller *session.ReviewQueuePoller
 }
+
+// ViewMode represents the current view (sessions, PTYs, or review queue)
+type ViewMode int
+
+const (
+	ViewModeSessions ViewMode = iota
+	ViewModePTYs
+	ViewModeReviewQueue
+)
 
 // newHomeWithDependencies creates a home instance using dependency injection
 // This constructor follows clean architecture principles and makes testing easier
@@ -135,6 +176,7 @@ func newHomeWithDependencies(deps Dependencies) *home {
 	h := &home{
 		ctx:                  ctx,
 		cancelFunc:           nil, // Will be set by Run() for production use
+		deps:                 deps, // Store deps for accessing shared state
 		program:              deps.GetProgram(),
 		autoYes:              deps.GetAutoYes(),
 		storage:              deps.GetStorage(),
@@ -151,6 +193,12 @@ func newHomeWithDependencies(deps Dependencies) *home {
 		statusBar:            deps.GetStatusBar(),
 		uiCoordinator:        deps.GetUICoordinator(),
 		bridge:               deps.GetBridge(),
+
+		// Initialize PTY management
+		viewMode:     ViewModeSessions,
+		ptyDiscovery: session.NewPTYDiscovery(),
+		ptyList:      ui.NewPTYList(),
+		ptyPreview:   ui.NewPTYPreview(),
 	}
 
 	// Initialize coordinator with components
@@ -167,6 +215,7 @@ func newHomeWithDependencies(deps Dependencies) *home {
 		Storage:             h.storage,
 		AutoYes:             h.autoYes,
 		GlobalInstanceLimit: GlobalInstanceLimit,
+		DiscoveryConfig:     deps.GetDiscoveryConfig(),
 		ErrorHandler:        h.handleError,
 		StateTransition: func(to string) error {
 			// Map string states to enum and transition
@@ -218,8 +267,17 @@ func newHomeWithDependencies(deps Dependencies) *home {
 		},
 	})
 
+	// Initialize review queue and status management
+	h.reviewQueue = session.NewReviewQueue()
+	h.queueView = ui.NewQueueView(h.reviewQueue)
+	h.statusManager = session.NewInstanceStatusManager()
+	h.reviewQueuePoller = session.NewReviewQueuePoller(h.reviewQueue, h.statusManager)
+
 	// Load saved instances and perform initialization
 	h.initializeWithSavedData()
+
+	// Start the review queue poller after instances are loaded
+	h.reviewQueuePoller.Start(ctx)
 
 	// Old command registry removed - now using bridge system exclusively
 
@@ -261,7 +319,18 @@ func (h *home) initializeWithSavedData() {
 		if h.autoYes {
 			instance.AutoYes = true
 		}
+		// Wire up review queue to each instance
+		instance.SetReviewQueue(h.reviewQueue)
 	}
+
+	// Wire up review queue to the list UI
+	h.list.SetReviewQueue(h.reviewQueue)
+
+	// Set instances for review queue poller to monitor
+	h.reviewQueuePoller.SetInstances(instances)
+
+	// Perform startup health check to detect orphaned sessions
+	h.performStartupHealthCheck()
 
 	// Restore selection using facade method
 	h.restoreLastSelection()
@@ -297,6 +366,43 @@ func (h *home) startBackgroundHealthChecker() {
 		// Context cancelled during startup delay - exit immediately
 		log.DebugLog.Printf("Health checker cancelled during startup delay")
 		return
+	}
+}
+
+// performStartupHealthCheck validates all loaded sessions and marks orphaned ones as Paused
+func (h *home) performStartupHealthCheck() {
+	orphanedCount := 0
+	checkedCount := 0
+
+	for _, instance := range h.getAllInstances() {
+		// Skip paused sessions - they're not expected to have tmux backing
+		if instance.Paused() {
+			continue
+		}
+
+		// Skip sessions that haven't been started
+		if !instance.Started() {
+			continue
+		}
+
+		checkedCount++
+
+		// Check if tmux session actually exists
+		if !instance.TmuxAlive() {
+			log.WarningLog.Printf("Startup health check: Instance '%s' marked as Ready but tmux session doesn't exist, marking as Paused", instance.Title)
+			instance.SetStatus(session.Paused)
+			orphanedCount++
+		}
+	}
+
+	if orphanedCount > 0 {
+		log.InfoLog.Printf("Startup health check: Found %d orphaned sessions out of %d checked, marked as Paused", orphanedCount, checkedCount)
+		// Save the updated state to persist the Paused status
+		if err := h.saveAllInstances(); err != nil {
+			log.ErrorLog.Printf("Failed to save instances after health check: %v", err)
+		}
+	} else if checkedCount > 0 {
+		log.InfoLog.Printf("Startup health check: All %d active sessions are healthy", checkedCount)
 	}
 }
 
@@ -411,6 +517,15 @@ func (m *home) initializeCommandBridge() {
 		OnSearch: func() (tea.Model, tea.Cmd) {
 			return m.handleSearch()
 		},
+		OnNextReview: func() (tea.Model, tea.Cmd) {
+			return m.handleNextReview()
+		},
+		OnPreviousReview: func() (tea.Model, tea.Cmd) {
+			return m.handlePreviousReview()
+		},
+		OnToggleReviewQueue: func() (tea.Model, tea.Cmd) {
+			return m.handleToggleReviewQueue()
+		},
 	}
 
 	// Set up organization handlers
@@ -446,10 +561,38 @@ func (m *home) initializeCommandBridge() {
 		OnCommandMode: func() (tea.Model, tea.Cmd) {
 			return m.handleCommandMode()
 		},
+		OnResize: func() (tea.Model, tea.Cmd) {
+			return m.handleResize()
+		},
+	}
+
+	// Set up PTY handlers
+	ptyHandlers := &commands.PTYHandlers{
+		OnTogglePTYView: func() (tea.Model, tea.Cmd) {
+			return m.handleTogglePTYView()
+		},
+		OnAttachPTY: func() (tea.Model, tea.Cmd) {
+			return m.handleAttachPTY()
+		},
+		OnSendCommand: func() (tea.Model, tea.Cmd) {
+			return m.handleSendCommandToPTY()
+		},
+		OnDisconnectPTY: func() (tea.Model, tea.Cmd) {
+			return m.handleDisconnectPTY()
+		},
+		OnRefreshPTYs: func() (tea.Model, tea.Cmd) {
+			return m.handleRefreshPTYs()
+		},
 	}
 
 	// Initialize the bridge with all handlers
 	m.bridge.Initialize(sessionHandlers, gitHandlers, navigationHandlers, organizationHandlers, systemHandlers)
+
+	// Set PTY handlers separately (they have their own registration method)
+	commands.SetPTYHandlers(ptyHandlers)
+
+	// Start PTY discovery service
+	m.ptyDiscovery.Start()
 
 	// Validate bridge setup and log any key conflicts
 	if issues := m.bridge.ValidateSetup(); len(issues) > 0 {
@@ -469,8 +612,19 @@ func (m *home) initializeCommandBridge() {
 }
 
 // updateMenuFromContext updates the menu with commands available in the current context
+// This applies permission-based filtering when an instance is selected
 func (m *home) updateMenuFromContext() {
 	if m.bridge != nil && m.menu != nil {
+		// Get selected instance if available (only in sessions view)
+		if m.viewMode == ViewModeSessions && m.list != nil {
+			selectedInstance := m.list.GetSelectedInstance()
+			if selectedInstance != nil {
+				// Use permission-aware filtering for the selected instance
+				m.menu.SetAvailableCommands(m.bridge.GetAvailableKeysForInstance(selectedInstance))
+				return
+			}
+		}
+		// Fallback to showing all commands if no instance selected
 		m.menu.SetAvailableCommands(m.bridge.GetAvailableKeys())
 	}
 }
@@ -593,6 +747,17 @@ func (m *home) handleClaudeSettings() (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleNavigationUp() (tea.Model, tea.Cmd) {
+	// Handle PTY view navigation
+	if m.viewMode == ViewModePTYs {
+		m.ptyList.MoveUp()
+		// Update preview with selected PTY
+		if selected := m.ptyList.GetSelected(); selected != nil {
+			m.ptyPreview.SetConnection(selected)
+		}
+		return m, nil
+	}
+
+	// Session view navigation
 	if m.isAtNavigationStart() {
 		return m, nil
 	}
@@ -602,14 +767,37 @@ func (m *home) handleNavigationUp() (tea.Model, tea.Cmd) {
 
 func (m *home) handleNavigationDown() (tea.Model, tea.Cmd) {
 	log.DebugLog.Printf("handleNavigationDown called")
-	// Use facade method for navigation
+
+	// Handle PTY view navigation
+	if m.viewMode == ViewModePTYs {
+		m.ptyList.MoveDown()
+		// Update preview with selected PTY
+		if selected := m.ptyList.GetSelected(); selected != nil {
+			m.ptyPreview.SetConnection(selected)
+		}
+		return m, nil
+	}
+
+	// Session view navigation - use facade method for navigation
 	m.navigateDown()
 	log.DebugLog.Printf("Called navigateDown(), triggering instance change")
 	return m, m.instanceChanged()
 }
 
 func (m *home) handlePageUp() (tea.Model, tea.Cmd) {
-	// Page up - implement with multiple Up calls using facade
+	// Handle PTY view navigation
+	if m.viewMode == ViewModePTYs {
+		for i := 0; i < 10; i++ {
+			m.ptyList.MoveUp()
+		}
+		// Update preview with selected PTY
+		if selected := m.ptyList.GetSelected(); selected != nil {
+			m.ptyPreview.SetConnection(selected)
+		}
+		return m, nil
+	}
+
+	// Session view - page up - implement with multiple Up calls using facade
 	for i := 0; i < 10; i++ {
 		if m.isAtNavigationStart() {
 			break
@@ -620,7 +808,19 @@ func (m *home) handlePageUp() (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handlePageDown() (tea.Model, tea.Cmd) {
-	// Page down - implement with multiple Down calls using facade
+	// Handle PTY view navigation
+	if m.viewMode == ViewModePTYs {
+		for i := 0; i < 10; i++ {
+			m.ptyList.MoveDown()
+		}
+		// Update preview with selected PTY
+		if selected := m.ptyList.GetSelected(); selected != nil {
+			m.ptyPreview.SetConnection(selected)
+		}
+		return m, nil
+	}
+
+	// Session view - page down - implement with multiple Down calls using facade
 	for i := 0; i < 10; i++ {
 		if m.isAtNavigationEnd() {
 			break
@@ -742,6 +942,16 @@ func (m *home) handleClearFilters() (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleToggleGroup() (tea.Model, tea.Cmd) {
+	// Handle PTY view category toggle
+	if m.viewMode == ViewModePTYs {
+		if m.ptyList.IsOnCategoryHeader() {
+			category := m.ptyList.GetSelectedCategory()
+			m.ptyList.ToggleCategory(category)
+		}
+		return m, nil
+	}
+
+	// Session view category toggle
 	selected := m.list.GetSelectedInstance()
 	if selected != nil {
 		category := selected.Category
@@ -796,6 +1006,110 @@ func (m *home) handleCommandMode() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *home) handleResize() (tea.Model, tea.Cmd) {
+	// Force terminal resize detection using the terminal manager
+	if m.terminalManager == nil {
+		m.statusBar.SetWarning("Terminal manager not initialized")
+		return m, nil
+	}
+
+	// Create a window size message with current dimensions
+	msg := m.terminalManager.CreateWindowSizeMsg()
+
+	// Show feedback to user
+	m.statusBar.SetInfo(fmt.Sprintf("Terminal resized: %dx%d", msg.Width, msg.Height))
+
+	// Return the window size message to trigger the resize handler
+	return m, func() tea.Msg { return msg }
+}
+
+// handleNextReview navigates to the next session in the review queue
+func (m *home) handleNextReview() (tea.Model, tea.Cmd) {
+	if m.reviewQueue.Count() == 0 {
+		m.statusBar.SetInfo("No sessions need attention")
+		return m, nil
+	}
+
+	// Get current session
+	currentSessionID := ""
+	if selected := m.list.GetSelectedInstance(); selected != nil {
+		currentSessionID = selected.Title
+	}
+
+	// Get next review item
+	nextSessionID, found := m.reviewQueue.Next(currentSessionID)
+	if !found {
+		return m, nil
+	}
+
+	// Find and select the session
+	instances := m.list.GetInstances()
+	for idx, inst := range instances {
+		if inst.Title == nextSessionID {
+			m.list.SetSelectedIdx(idx)
+			if reviewItem, ok := inst.GetReviewItem(); ok {
+				m.statusBar.SetInfo(fmt.Sprintf("Review: %s - %s", reviewItem.Reason.String(), reviewItem.Context))
+			}
+			return m, m.instanceChanged()
+		}
+	}
+
+	return m, nil
+}
+
+// handlePreviousReview navigates to the previous session in the review queue
+func (m *home) handlePreviousReview() (tea.Model, tea.Cmd) {
+	if m.reviewQueue.Count() == 0 {
+		m.statusBar.SetInfo("No sessions need attention")
+		return m, nil
+	}
+
+	// Get current session
+	currentSessionID := ""
+	if selected := m.list.GetSelectedInstance(); selected != nil {
+		currentSessionID = selected.Title
+	}
+
+	// Get previous review item
+	prevSessionID, found := m.reviewQueue.Previous(currentSessionID)
+	if !found {
+		return m, nil
+	}
+
+	// Find and select the session
+	instances := m.list.GetInstances()
+	for idx, inst := range instances {
+		if inst.Title == prevSessionID {
+			m.list.SetSelectedIdx(idx)
+			if reviewItem, ok := inst.GetReviewItem(); ok {
+				m.statusBar.SetInfo(fmt.Sprintf("Review: %s - %s", reviewItem.Reason.String(), reviewItem.Context))
+			}
+			return m, m.instanceChanged()
+		}
+	}
+
+	return m, nil
+}
+
+// handleToggleReviewQueue toggles between normal view and review queue view
+func (m *home) handleToggleReviewQueue() (tea.Model, tea.Cmd) {
+	if m.viewMode == ViewModeReviewQueue {
+		// Switch back to sessions view
+		m.viewMode = ViewModeSessions
+		m.statusBar.SetInfo("Switched to sessions view")
+	} else {
+		// Switch to review queue view
+		m.viewMode = ViewModeReviewQueue
+		queueCount := m.reviewQueue.Count()
+		if queueCount == 0 {
+			m.statusBar.SetInfo("Review queue is empty - all caught up!")
+		} else {
+			m.statusBar.SetInfo(fmt.Sprintf("Review queue: %d items need attention", queueCount))
+		}
+	}
+	return m, nil
+}
+
 // updateHandleWindowSizeEvent sets the sizes of the components.
 // The components will try to render inside their bounds.
 func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
@@ -818,6 +1132,10 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 			msg.Width, msg.Height, detectedWidth, detectedHeight, widthDiff, heightDiff)
 	}
 
+	// Store terminal dimensions for viewport-aware rendering in View()
+	m.termWidth = msg.Width
+	m.termHeight = msg.Height
+
 	// List takes 30% of width, preview takes 70%
 	listWidth := int(float32(msg.Width) * 0.3)
 	tabsWidth := msg.Width - listWidth
@@ -836,6 +1154,10 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 
 	m.tabbedWindow.SetSize(tabsWidth, contentHeight)
 	m.list.SetSize(listWidth, contentHeight)
+
+	// Update PTY list and review queue view sizes
+	m.ptyList.SetSize(listWidth, contentHeight)
+	m.queueView.SetSize(msg.Width, contentHeight)
 
 	// Update overlay sizes using coordinator
 	if textInputOverlay := m.uiCoordinator.GetTextInputOverlay(); textInputOverlay != nil {
@@ -875,6 +1197,10 @@ func (m *home) updateHandleWindowSizeEvent(msg tea.WindowSizeMsg) {
 		log.WarningLog.Printf("Preview size update issues: %v", err)
 	}
 	m.menu.SetSize(msg.Width, menuHeight)
+
+	// Update PTY components
+	m.ptyList.SetSize(listWidth, contentHeight)
+	m.ptyPreview.SetSize(tabsWidth, contentHeight)
 
 	// Update coordinator layout
 	m.uiCoordinator.HandleResize(msg.Width, msg.Height)
@@ -1084,15 +1410,34 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			updated, prompt := instance.HasUpdated()
 			if updated {
 				instance.SetStatus(session.Running)
+				// Remove from review queue if it was there
+				if m.reviewQueue != nil {
+					m.reviewQueue.Remove(instance.Title)
+				}
 			} else {
 				if prompt {
 					if instance.AutoYes {
 						instance.TapEnter()
 					} else {
 						instance.SetStatus(session.NeedsApproval)
+						// Add to review queue when approval is needed
+						if m.reviewQueue != nil {
+							m.reviewQueue.Add(&session.ReviewItem{
+								SessionID:   instance.Title,
+								SessionName: instance.Title,
+								Reason:      session.ReasonApprovalPending,
+								Priority:    session.PriorityHigh,
+								DetectedAt:  time.Now(),
+								Context:     "Waiting for user approval",
+							})
+						}
 					}
 				} else {
 					instance.SetStatus(session.Ready)
+					// Remove from review queue when ready
+					if m.reviewQueue != nil {
+						m.reviewQueue.Remove(instance.Title)
+					}
 				}
 			}
 		}
@@ -1191,6 +1536,8 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		var spinnerCmd tea.Cmd
 		m.spinner, spinnerCmd = m.spinner.Update(msg)
+		// CRITICAL: Update the shared spinner in dependencies so List renderer sees the update
+		m.deps.UpdateSpinner(m.spinner)
 		return m, spinnerCmd
 	}
 	return m, nil
@@ -1982,7 +2329,17 @@ func (m *home) createSessionWithTimeout(instance *session.Instance, promptAfterN
 }
 
 func (m *home) View() string {
-	// Build main view layout
+	// Check if we're in PTY view mode
+	if m.viewMode == ViewModePTYs {
+		return m.renderPTYView()
+	}
+
+	// Check if we're in review queue view mode
+	if m.viewMode == ViewModeReviewQueue {
+		return m.renderReviewQueueView()
+	}
+
+	// Build main view layout (session list)
 	listContent := m.list.String()
 	tabbedContent := m.tabbedWindow.String()
 	listAndPreview := lipgloss.JoinHorizontal(lipgloss.Top, listContent, tabbedContent)
@@ -1990,7 +2347,7 @@ func (m *home) View() string {
 		lipgloss.Left,
 		listAndPreview,
 		m.menu.String(),
-		m.statusBar.View(80), // TODO: use actual terminal width
+		m.statusBar.View(m.termWidth),
 		m.errBox.String(),
 	)
 
@@ -2239,9 +2596,18 @@ func (m *home) updateCoordinatorOverlay(componentType appui.ComponentType, overl
 
 // addInstanceToList adds an instance to the list using proper encapsulation
 func (h *home) addInstanceToList(instance *session.Instance) {
+	// Wire up review queue to new instance
+	instance.SetReviewQueue(h.reviewQueue)
+
+	// Wire up status manager for idle detection
+	instance.SetStatusManager(h.statusManager)
+
 	// Call the finalizer immediately to complete the setup
 	finalizer := h.list.AddInstance(instance)
 	finalizer()
+
+	// Add instance to review queue poller for monitoring
+	h.reviewQueuePoller.AddInstance(instance)
 }
 
 // restoreLastSelection restores the last selected index with proper bounds checking

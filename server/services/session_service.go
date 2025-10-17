@@ -10,19 +10,33 @@ import (
 	"connectrpc.com/connect"
 	"context"
 	"fmt"
+	"strings"
+	"time"
 )
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
-	storage  *session.Storage
-	eventBus *events.EventBus
+	storage     *session.Storage
+	eventBus    *events.EventBus
+	reviewQueue *session.ReviewQueue
 }
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
 func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *SessionService {
+	reviewQueue := session.NewReviewQueue()
+
+	// Wire up review queue to loaded instances
+	instances, err := storage.LoadInstances()
+	if err == nil {
+		for _, inst := range instances {
+			inst.SetReviewQueue(reviewQueue)
+		}
+	}
+
 	return &SessionService{
-		storage:  storage,
-		eventBus: eventBus,
+		storage:     storage,
+		eventBus:    eventBus,
+		reviewQueue: reviewQueue,
 	}
 }
 
@@ -35,6 +49,11 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 	}
 	eventBus := events.NewEventBus(100) // Buffer 100 events per subscriber
 	return NewSessionService(storage, eventBus), nil
+}
+
+// GetStorage returns the storage instance for direct access (e.g., WebSocket handlers).
+func (s *SessionService) GetStorage() *session.Storage {
+	return s.storage
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -512,7 +531,19 @@ func (s *SessionService) StreamTerminal(
 			default:
 				msg, receiveErr := stream.Receive()
 				if receiveErr != nil {
-					// Stream closed or error
+					// Check if this is a normal EOF (client closed connection)
+					// ConnectRPC returns io.EOF or various "stream ended" errors
+					errStr := receiveErr.Error()
+					if receiveErr == context.Canceled ||
+						receiveErr == context.DeadlineExceeded ||
+						errStr == "EOF" ||
+						errStr == "stream ended" ||
+						strings.Contains(errStr, "stream closed") ||
+						strings.Contains(errStr, "connection closed") {
+						// Client closed gracefully, exit without error
+						return
+					}
+					// Other errors should be reported
 					errCh <- fmt.Errorf("stream receive error: %w", receiveErr)
 					return
 				}
@@ -569,8 +600,10 @@ func (s *SessionService) StreamTerminal(
 	// Wait for either context cancellation or error
 	select {
 	case <-streamCtx.Done():
+		log.InfoLog.Printf("StreamTerminal: context done for session %s", initialMsg.SessionId)
 		return nil // Clean shutdown
 	case err := <-errCh:
+		log.ErrorLog.Printf("StreamTerminal: error for session %s: %v", initialMsg.SessionId, err)
 		return connect.NewError(connect.CodeInternal, err)
 	}
 }
@@ -625,4 +658,253 @@ func (s *SessionService) GetSessionDiff(
 	return connect.NewResponse(&sessionv1.GetSessionDiffResponse{
 		DiffStats: protoDiffStats,
 	}), nil
+}
+
+// GetReviewQueue returns sessions needing user attention with priority ordering.
+// It dynamically builds the queue from session statuses and actively checks for approval dialogs and idle sessions.
+func (s *SessionService) GetReviewQueue(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetReviewQueueRequest],
+) (*connect.Response[sessionv1.GetReviewQueueResponse], error) {
+	// Build review queue dynamically from session statuses
+	queue := session.NewReviewQueue()
+
+	// Load all instances
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Configuration for idle detection
+	const idleThreshold = 15 * time.Minute // Sessions idle for more than 15 minutes
+
+	// Check each session for approval dialogs, waiting states, and idle status
+	for _, inst := range instances {
+		// Skip paused or unstarted sessions
+		if !inst.Started() || inst.Paused() {
+			continue
+		}
+
+		// Actively check for approval dialogs by calling HasUpdated()
+		// This triggers the detection logic that sets NeedsApproval status
+		_, hasPrompt := inst.HasUpdated()
+
+		// If session has a prompt and AutoYes is disabled, set status to NeedsApproval
+		if hasPrompt && !inst.AutoYes {
+			inst.SetStatus(session.NeedsApproval)
+		} else if inst.Status == session.NeedsApproval && !hasPrompt {
+			// Clear NeedsApproval status if no prompt is detected
+			inst.SetStatus(session.Ready)
+		}
+
+		// Check for idle sessions (no updates for extended period)
+		idleDuration := time.Since(inst.UpdatedAt)
+		isIdle := idleDuration > idleThreshold
+
+		// Sessions in Ready or Running state that haven't been updated recently are likely waiting for input
+		// This catches Claude Code sessions in INSERT mode (Running status) and other idle sessions
+		isWaitingForInput := (inst.Status == session.Ready || inst.Status == session.Running) && idleDuration > 5*time.Second
+
+		// Check if session was dismissed (acknowledged after last update)
+		isDismissed := !inst.LastAcknowledged.IsZero() && inst.LastAcknowledged.After(inst.UpdatedAt)
+
+		// Add sessions with NeedsApproval status to queue
+		if inst.Status == session.NeedsApproval {
+			// Create review item for this session
+			item := &session.ReviewItem{
+				SessionID:   inst.Title,
+				SessionName: inst.Title,
+				Reason:      session.ReasonApprovalPending,
+				Priority:    session.PriorityHigh,
+				DetectedAt:  inst.UpdatedAt, // Use actual last update time
+				Context:     "Waiting for user approval",
+			}
+
+			// Apply filters if specified
+			if req.Msg.PriorityFilter != nil {
+				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
+				if item.Priority != targetPriority {
+					continue
+				}
+			}
+
+			if req.Msg.ReasonFilter != nil {
+				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
+				if item.Reason != targetReason {
+					continue
+				}
+			}
+
+			// Add to queue
+			queue.Add(item)
+		} else if isWaitingForInput {
+			// Add sessions waiting for input to review queue
+			item := &session.ReviewItem{
+				SessionID:   inst.Title,
+				SessionName: inst.Title,
+				Reason:      session.ReasonInputRequired,
+				Priority:    session.PriorityMedium,
+				DetectedAt:  inst.UpdatedAt, // Use last update time, not current time
+				Context:     "Waiting for user input",
+			}
+
+			// Apply filters if specified
+			if req.Msg.PriorityFilter != nil {
+				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
+				if item.Priority != targetPriority {
+					continue
+				}
+			}
+
+			if req.Msg.ReasonFilter != nil {
+				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
+				if item.Reason != targetReason {
+					continue
+				}
+			}
+
+			// Add to queue
+			queue.Add(item)
+		} else if isIdle {
+			// Add idle sessions to review queue
+			item := &session.ReviewItem{
+				SessionID:   inst.Title,
+				SessionName: inst.Title,
+				Reason:      session.ReasonIdleTimeout,
+				Priority:    session.PriorityLow,
+				DetectedAt:  inst.UpdatedAt, // Use last actual update time
+				Context:     fmt.Sprintf("No activity for %s", formatDuration(idleDuration)),
+			}
+
+			// Apply filters if specified
+			if req.Msg.PriorityFilter != nil {
+				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
+				if item.Priority != targetPriority {
+					continue
+				}
+			}
+
+			if req.Msg.ReasonFilter != nil {
+				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
+				if item.Reason != targetReason {
+					continue
+				}
+			}
+
+			// Add to queue
+			queue.Add(item)
+		} else if isDismissed {
+			// Add dismissed sessions to review queue with very low priority
+			// Show time since last changes to help user decide if worth revisiting
+			timeSinceChange := time.Since(inst.UpdatedAt)
+			item := &session.ReviewItem{
+				SessionID:   inst.Title,
+				SessionName: inst.Title,
+				Reason:      session.ReasonIdleTimeout, // Use idle timeout as reason for dismissed sessions
+				Priority:    session.PriorityLow,       // Very low priority since user already acknowledged
+				DetectedAt:  inst.UpdatedAt,            // Use last actual update time
+				Context:     fmt.Sprintf("Dismissed - last changed %s ago", formatDuration(timeSinceChange)),
+			}
+
+			// Apply filters if specified
+			if req.Msg.PriorityFilter != nil {
+				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
+				if item.Priority != targetPriority {
+					continue
+				}
+			}
+
+			if req.Msg.ReasonFilter != nil {
+				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
+				if item.Reason != targetReason {
+					continue
+				}
+			}
+
+			// Add to queue
+			queue.Add(item)
+		}
+	}
+
+	// Save updated statuses back to storage
+	if err := s.storage.SaveInstances(instances); err != nil {
+		log.WarningLog.Printf("Failed to save updated session statuses: %v", err)
+		// Don't fail the request if save fails - return current queue state
+	}
+
+	// Convert to proto using adapters
+	protoQueue := adapters.ReviewQueueToProto(queue)
+
+	return connect.NewResponse(&sessionv1.GetReviewQueueResponse{
+		ReviewQueue: protoQueue,
+	}), nil
+}
+
+// AcknowledgeSession marks a session as acknowledged in the review queue.
+// The session won't reappear in the queue until it receives an update.
+func (s *SessionService) AcknowledgeSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AcknowledgeSessionRequest],
+) (*connect.Response[sessionv1.AcknowledgeSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find the instance to acknowledge
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Set the acknowledgment timestamp to now
+	instance.LastAcknowledged = time.Now()
+
+	// Update the instance in the list and save
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.AcknowledgeSessionResponse{
+		Success: true,
+		Message: fmt.Sprintf("Session '%s' acknowledged and removed from review queue", req.Msg.Id),
+	}), nil
+}
+
+// formatDuration formats a time.Duration in a human-readable way.
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		hours := int(d.Hours())
+		minutes := int(d.Minutes()) % 60
+		if minutes == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	if hours == 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd%dh", days, hours)
 }

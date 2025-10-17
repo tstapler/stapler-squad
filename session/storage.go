@@ -38,6 +38,10 @@ type InstanceData struct {
 	ClaudeSession ClaudeSessionData `json:"claude_session,omitempty"`
 	// Tmux session prefix for isolation
 	TmuxPrefix string `json:"tmux_prefix,omitempty"`
+
+	// Terminal update timestamps for activity tracking
+	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
+	LastMeaningfulOutput time.Time `json:"last_meaningful_output,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

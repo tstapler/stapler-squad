@@ -34,6 +34,13 @@ service SessionService {
 
   // GetSessionDiff retrieves the current git diff for a session.
   rpc GetSessionDiff(GetSessionDiffRequest) returns (GetSessionDiffResponse) {}
+
+  // GetReviewQueue returns sessions needing user attention with priority ordering.
+  rpc GetReviewQueue(GetReviewQueueRequest) returns (GetReviewQueueResponse) {}
+
+  // AcknowledgeSession marks a session as acknowledged in the review queue.
+  // The session won't reappear in the queue until it receives an update.
+  rpc AcknowledgeSession(AcknowledgeSessionRequest) returns (AcknowledgeSessionResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -147,4 +154,30 @@ message GetSessionDiffRequest {
 message GetSessionDiffResponse {
   // Git diff statistics.
   DiffStats diff_stats = 1;
+}
+
+message GetReviewQueueRequest {
+  // Optional: Filter by priority level.
+  optional Priority priority_filter = 1;
+
+  // Optional: Filter by attention reason.
+  optional AttentionReason reason_filter = 2;
+}
+
+message GetReviewQueueResponse {
+  // Review queue with all items and statistics.
+  ReviewQueue review_queue = 1;
+}
+
+message AcknowledgeSessionRequest {
+  // Session identifier to acknowledge.
+  string id = 1;
+}
+
+message AcknowledgeSessionResponse {
+  // Whether acknowledgment was successful.
+  bool success = 1;
+
+  // Human-readable message.
+  string message = 2;
 }

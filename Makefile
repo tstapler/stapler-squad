@@ -1,7 +1,7 @@
 # Claude Squad Makefile
 # Comprehensive development and analysis toolchain
 
-.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build
+.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web
 
 # Default target
 help: ## Show this help message
@@ -10,8 +10,45 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # Build targets
-build: ## Build the application
+build: server/web/dist ## Build the Go application (depends on web dist being ready)
 	go build -o claude-squad .
+
+# Build Next.js app to web-app/out
+web-app/out: $(shell find web-app/src -type f) web-app/package.json web-app/next.config.ts
+	@echo "Building Next.js web UI..."
+	@cd web-app && npm run build
+	@touch web-app/out # Update timestamp to mark completion
+
+# Copy web-app/out to server/web/dist (used by Go embed)
+server/web/dist: web-app/out
+	@echo "Copying built files to server/web/dist..."
+	@rm -rf server/web/dist
+	@cp -r web-app/out server/web/dist
+	@touch server/web/dist # Update timestamp
+	@echo "✅ Web UI built and copied successfully"
+
+web-build: server/web/dist ## Build the Next.js web UI (convenience target)
+
+build-all: build ## Build both web UI and Go application
+	@echo "✅ Full build complete (web + server)"
+
+restart-web: build-all ## Rebuild and restart the web server
+	@echo "Stopping existing claude-squad processes..."
+	@-pkill -f "./claude-squad --web" 2>/dev/null || true
+	@sleep 1
+	@echo "Starting server..."
+	@./claude-squad --web &
+	@sleep 2
+	@echo "✅ Server restarted at http://localhost:8543"
+
+web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
+	@echo "Stopping existing claude-squad processes..."
+	@-pkill -f "./claude-squad --web" 2>/dev/null || true
+	@sleep 1
+	@echo "Starting server..."
+	@./claude-squad --web &
+	@sleep 2
+	@echo "✅ Server restarted at http://localhost:8543"
 
 install: ## Install claude-squad locally
 	go install .

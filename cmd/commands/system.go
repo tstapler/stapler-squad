@@ -13,6 +13,7 @@ type SystemHandlers struct {
 	OnTab         func() (tea.Model, tea.Cmd)
 	OnConfirm     func() (tea.Model, tea.Cmd)
 	OnCommandMode func() (tea.Model, tea.Cmd)
+	OnResize      func() (tea.Model, tea.Cmd)
 }
 
 var systemHandlers = &SystemHandlers{}
@@ -76,6 +77,16 @@ func ConfirmCommand(ctx *interfaces.CommandContext) error {
 func CommandModeCommand(ctx *interfaces.CommandContext) error {
 	if systemHandlers.OnCommandMode != nil {
 		model, teaCmd := systemHandlers.OnCommandMode()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// ResizeCommand manually triggers terminal resize detection
+func ResizeCommand(ctx *interfaces.CommandContext) error {
+	if systemHandlers.OnResize != nil {
+		model, teaCmd := systemHandlers.OnResize()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
 	}

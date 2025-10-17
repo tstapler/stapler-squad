@@ -331,7 +331,7 @@ type MockPtyFactory struct {
 	files []*os.File
 }
 
-func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
+func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	filePath := filepath.Join(pt.t.TempDir(), fmt.Sprintf("pty-%s-%d", pt.t.Name(), len(pt.cmds)))
 	f, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR, 0644)
 	if err == nil {
@@ -341,7 +341,7 @@ func (pt *MockPtyFactory) Start(cmd *exec.Cmd) (*os.File, error) {
 		// Execute the command through our mock to trigger session creation logic
 		_ = pt.cmdExec.Run(cmd)
 	}
-	return f, err
+	return f, cmd, err
 }
 
 func (pt *MockPtyFactory) Close() {}

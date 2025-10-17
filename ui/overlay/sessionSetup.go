@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"claude-squad/config"
+	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/ui/fuzzy"
 	"fmt"
@@ -845,10 +846,10 @@ func (s *SessionSetupOverlay) Update(msg tea.Msg) tea.Cmd {
 // View renders the overlay based on the current step
 func (s *SessionSetupOverlay) View() string {
 	// Debug: Log focus state
-	fmt.Printf("DEBUG SessionSetupOverlay.View(): focused=%v, width=%d, height=%d\n", s.focused, s.width, s.height)
+	log.DebugLog.Printf("SessionSetupOverlay.View(): focused=%v, width=%d, height=%d", s.focused, s.width, s.height)
 
 	if !s.focused {
-		fmt.Println("DEBUG: Returning empty string because !s.focused")
+		log.DebugLog.Printf("SessionSetupOverlay.View(): returning empty (not focused)")
 		return ""
 	}
 

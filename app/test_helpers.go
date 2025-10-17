@@ -117,6 +117,7 @@ func (b *TestHomeBuilder) BuildWithMockDependenciesNoInit(t *testing.T, setupMoc
 	// Create home instance with injected dependencies (without initialization)
 	h := &home{
 		ctx:                  mockDeps.GetContext(),
+		deps:                 mockDeps, // Store deps for shared state updates
 		program:              mockDeps.GetProgram(),
 		autoYes:              mockDeps.GetAutoYes(),
 		storage:              mockDeps.GetStorage(),
@@ -133,6 +134,15 @@ func (b *TestHomeBuilder) BuildWithMockDependenciesNoInit(t *testing.T, setupMoc
 		statusBar:            mockDeps.GetStatusBar(),
 		uiCoordinator:        mockDeps.GetUICoordinator(),
 		bridge:               mockDeps.GetBridge(),
+
+		// Initialize PTY management to match production initialization
+		viewMode:     ViewModeSessions,
+		ptyDiscovery: session.NewPTYDiscovery(),
+		ptyList:      ui.NewPTYList(),
+		ptyPreview:   ui.NewPTYPreview(),
+
+		// Initialize review queue
+		reviewQueue: session.NewReviewQueue(),
 	}
 
 	// Initialize session controller with dependencies - only in test mode

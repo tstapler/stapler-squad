@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"claude-squad/session"
 	"claude-squad/ui/overlay"
 	"testing"
 )
@@ -141,7 +142,10 @@ func TestSessionSetupHeightResponsiveness(t *testing.T) {
 				SetDimensions(80, hv.height).
 				DisableColors()
 
-			setupOverlay := overlay.NewSessionSetupOverlay()
+			setupOverlay := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+				OnComplete: func(session.InstanceOptions) {},
+				OnCancel:   func() {},
+			})
 			setupOverlay.SetSize(80, hv.height)
 
 			renderer.CompareComponentWithSnapshot(t, setupOverlay, hv.name+"_basics.txt")

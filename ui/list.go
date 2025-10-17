@@ -30,7 +30,7 @@ var removedLinesStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#de613e"))
 
 var pausedStyle = lipgloss.NewStyle().
-	Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#888888"})
+	Foreground(lipgloss.AdaptiveColor{Light: "#707070", Dark: "#B0B0B0"})
 
 var needsApprovalStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("#ffaa00"))
@@ -41,7 +41,7 @@ var titleStyle = lipgloss.NewStyle().
 
 var listDescStyle = lipgloss.NewStyle().
 	Padding(0, 1, 1, 1).
-	Foreground(lipgloss.AdaptiveColor{Light: "#A49FA5", Dark: "#777777"})
+	Foreground(lipgloss.AdaptiveColor{Light: "#6B6570", Dark: "#B0B0B0"})
 
 var selectedTitleStyle = lipgloss.NewStyle().
 	Padding(1, 1, 0, 1).
@@ -79,6 +79,7 @@ type List struct {
 	searchQuery    string                         // Current search query
 	searchResults  []*session.Instance            // Filtered search results
 	hidePaused     bool                           // Whether to hide paused sessions
+	reviewQueue    *session.ReviewQueue           // Review queue for tracking sessions needing attention
 
 	// State management for persistence
 	stateManager *config.State // Reference to state manager for persistence
@@ -342,16 +343,36 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 
 	// add spinner next to title if it's running
 	var join string
-	switch i.Status {
-	case session.Running:
-		join = fmt.Sprintf("%s ", r.spinner.View())
-	case session.Ready:
-		join = readyStyle.Render(readyIcon)
-	case session.Paused:
-		join = pausedStyle.Render(pausedIcon)
-	case session.NeedsApproval:
-		join = needsApprovalStyle.Render(needsApprovalIcon)
-	default:
+
+	// Use instance-type-aware status icon (handles managed vs external)
+	statusIcon := i.GetStatusIconForType()
+
+	if i.IsManaged {
+		// Managed instances use the standard status rendering
+		switch i.Status {
+		case session.Running:
+			join = fmt.Sprintf("%s ", r.spinner.View())
+		case session.Ready:
+			join = readyStyle.Render(readyIcon)
+		case session.Paused:
+			join = pausedStyle.Render(pausedIcon)
+		case session.NeedsApproval:
+			join = needsApprovalStyle.Render(needsApprovalIcon)
+		default:
+		}
+	} else {
+		// External instances use the eye icon with a distinctive color
+		externalStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#888888"))
+		join = externalStyle.Render(statusIcon + " ")
+	}
+
+	// Add review queue badge if session needs attention
+	if i.NeedsReview() {
+		reviewItem, _ := i.GetReviewItem()
+		if reviewItem != nil {
+			badge := reviewItem.Priority.Emoji()
+			join = join + " " + badge
+		}
 	}
 
 	// Cut the title if it's too long
@@ -412,8 +433,11 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 					// Only call expensive git operation if not cached
 					name, err := i.RepoName()
 					if err != nil {
-						// Log at warning level but don't break rendering
-						log.WarningLog.Printf("could not get repo name in instance renderer: %v", err)
+						// Silently skip repo name for directory sessions without git worktrees
+						// This is expected behavior and not an error
+						if !strings.Contains(err.Error(), "gitWorktree is nil") {
+							log.WarningLog.Printf("could not get repo name in instance renderer: %v", err)
+						}
 					} else {
 						repoName = name
 						// Cache the result for future renders
@@ -424,7 +448,10 @@ func (r *InstanceRenderer) Render(i *session.Instance, idx int, selected bool, h
 				// Fallback to direct call if cache not initialized
 				name, err := i.RepoName()
 				if err != nil {
-					log.WarningLog.Printf("could not get repo name in instance renderer: %v", err)
+					// Silently skip repo name for directory sessions without git worktrees
+					if !strings.Contains(err.Error(), "gitWorktree is nil") {
+						log.WarningLog.Printf("could not get repo name in instance renderer: %v", err)
+					}
 				} else {
 					repoName = name
 				}
@@ -795,6 +822,9 @@ func (l *List) GetInstances() []*session.Instance {
 }
 
 // OrganizeByCategory organizes sessions into category groups
+// Managed and external instances are separated into distinct top-level sections:
+// - "Squad Sessions" for managed instances
+// - "External Claude" for externally discovered instances
 func (l *List) OrganizeByCategory() {
 	// Only reorganize if needed (performance optimization)
 	if !l.categoriesNeedUpdate {
@@ -821,6 +851,24 @@ func (l *List) OrganizeByCategory() {
 		} else {
 			// Nested category - use the full path (e.g., "Work/Frontend")
 			category = strings.Join(categoryPath, "/")
+		}
+
+		// Prepend top-level section based on instance type
+		// This creates two-tier hierarchy: "Squad Sessions/Work" or "External Claude/Uncategorized"
+		if instance.IsManaged {
+			// Managed instances go under "Squad Sessions"
+			if category == "Uncategorized" {
+				category = "Squad Sessions"
+			} else {
+				category = "Squad Sessions/" + category
+			}
+		} else {
+			// External instances go under "External Claude"
+			if category == "Uncategorized" {
+				category = "External Claude"
+			} else {
+				category = "External Claude/" + category
+			}
 		}
 
 		// Initialize the category if it doesn't exist
@@ -1724,4 +1772,14 @@ func (l *List) GetSearchState() (bool, string) {
 // GetSearchStatus returns the current search loading state and stage
 func (l *List) GetSearchStatus() (loading bool, stage string) {
 	return l.searchLoading, l.searchStage
+}
+
+// SetReviewQueue sets the review queue for the list
+func (l *List) SetReviewQueue(queue *session.ReviewQueue) {
+	l.reviewQueue = queue
+}
+
+// GetReviewQueue returns the review queue
+func (l *List) GetReviewQueue() *session.ReviewQueue {
+	return l.reviewQueue
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, ReviewItem } from "@/gen/session/v1/types_pb";
+import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import styles from "./SessionCard.module.css";
 
 interface SessionCardProps {
@@ -9,9 +10,11 @@ interface SessionCardProps {
   onDelete?: () => void;
   onPause?: () => void;
   onResume?: () => void;
+  onDuplicate?: () => void;
   selectMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: () => void;
+  reviewItem?: ReviewItem; // Optional review queue item if session needs attention
 }
 
 export function SessionCard({
@@ -20,9 +23,11 @@ export function SessionCard({
   onDelete,
   onPause,
   onResume,
+  onDuplicate,
   selectMode = false,
   isSelected = false,
   onToggleSelect,
+  reviewItem,
 }: SessionCardProps) {
   const getStatusColor = (status: SessionStatus): string => {
     switch (status) {
@@ -100,12 +105,33 @@ export function SessionCard({
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <h3 className={styles.title}>{session.title}</h3>
-          <span className={`${styles.status} ${getStatusColor(session.status)}`}>
-            {getStatusText(session.status)}
-          </span>
+          <div className={styles.badges}>
+            {reviewItem && (
+              <ReviewQueueBadge
+                priority={reviewItem.priority}
+                reason={reviewItem.reason}
+                compact={true}
+              />
+            )}
+            <span className={`${styles.status} ${getStatusColor(session.status)}`}>
+              {getStatusText(session.status)}
+            </span>
+          </div>
         </div>
         {session.category && (
           <span className={styles.category}>{session.category}</span>
+        )}
+        {reviewItem && !selectMode && (
+          <div className={styles.reviewInfo}>
+            <ReviewQueueBadge
+              priority={reviewItem.priority}
+              reason={reviewItem.reason}
+              compact={false}
+            />
+            {reviewItem.context && (
+              <span className={styles.reviewContext}>{reviewItem.context}</span>
+            )}
+          </div>
         )}
       </div>
 
@@ -173,6 +199,16 @@ export function SessionCard({
               Pause
             </button>
           )}
+          <button
+            className={styles.actionButton}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDuplicate?.();
+            }}
+            title="Duplicate this session with editable configuration"
+          >
+            Duplicate
+          </button>
           <button
             className={`${styles.actionButton} ${styles.deleteButton}`}
             onClick={(e) => {

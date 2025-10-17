@@ -1,20 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import dynamic from "next/dynamic";
 import { Session } from "@/gen/session/v1/types_pb";
-import { TerminalOutput } from "./TerminalOutput";
 import { DiffViewer } from "./DiffViewer";
 import styles from "./SessionDetail.module.css";
+
+// Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
+const TerminalOutput = dynamic(
+  () => import("./TerminalOutput").then((mod) => mod.TerminalOutput),
+  {
+    ssr: false,
+    loading: () => (
+      <div style={{ padding: "20px", textAlign: "center" }}>
+        Loading terminal...
+      </div>
+    ),
+  }
+);
 
 export type SessionDetailTab = "terminal" | "diff" | "logs" | "info";
 
 interface SessionDetailProps {
   session: Session;
   onClose: () => void;
+  onFullscreenChange?: (isFullscreen: boolean) => void;
+  initialTab?: SessionDetailTab;
 }
 
-export function SessionDetail({ session, onClose }: SessionDetailProps) {
-  const [activeTab, setActiveTab] = useState<SessionDetailTab>("info");
+export function SessionDetail({ session, onClose, onFullscreenChange, initialTab = "info" }: SessionDetailProps) {
+  const [activeTab, setActiveTab] = useState<SessionDetailTab>(initialTab);
+  const [isFullscreen, setIsFullscreen] = useState(initialTab === "terminal" || initialTab === "diff");
+
+  // Notify parent of fullscreen state changes
+  useEffect(() => {
+    onFullscreenChange?.(isFullscreen);
+  }, [isFullscreen, onFullscreenChange]);
 
   const tabs: { id: SessionDetailTab; label: string; icon: string }[] = [
     { id: "terminal", label: "Terminal", icon: "⌨️" },
@@ -23,17 +44,51 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
     { id: "info", label: "Info", icon: "ℹ️" },
   ];
 
+  const handleTabChange = (tabId: SessionDetailTab) => {
+    setActiveTab(tabId);
+    // Automatically enter fullscreen for terminal and diff tabs
+    if (tabId === "terminal" || tabId === "diff") {
+      setIsFullscreen(true);
+    } else {
+      setIsFullscreen(false);
+    }
+  };
+
+  // Keyboard shortcut: Escape to exit fullscreen
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isFullscreen]);
+
   return (
-    <div className={styles.container}>
+    <div className={`${styles.container} ${isFullscreen ? styles.fullscreen : ""}`}>
       <div className={styles.header}>
         <h2 className={styles.title}>{session.title}</h2>
-        <button
-          className={styles.closeButton}
-          onClick={onClose}
-          aria-label="Close"
-        >
-          ✕
-        </button>
+        <div className={styles.headerActions}>
+          {(activeTab === "terminal" || activeTab === "diff") && (
+            <button
+              className={styles.fullscreenButton}
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              title={isFullscreen ? "Exit fullscreen (Esc)" : "Enter fullscreen"}
+            >
+              {isFullscreen ? "⊗" : "⛶"}
+            </button>
+          )}
+          <button
+            className={styles.closeButton}
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       <div className={styles.tabs}>
@@ -41,7 +96,7 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
           <button
             key={tab.id}
             className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""}`}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabChange(tab.id)}
           >
             <span className={styles.tabIcon}>{tab.icon}</span>
             <span className={styles.tabLabel}>{tab.label}</span>
@@ -49,7 +104,7 @@ export function SessionDetail({ session, onClose }: SessionDetailProps) {
         ))}
       </div>
 
-      <div className={styles.content}>
+      <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {activeTab === "terminal" && (
           <div className={styles.tabContent}>
             <TerminalOutput sessionId={session.id} baseUrl="http://localhost:8543" />

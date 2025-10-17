@@ -120,12 +120,7 @@ func (w *TabbedWindow) ToggleWithReset(instance *session.Instance) error {
 
 // UpdatePreview updates the content of the preview pane asynchronously. instance may be nil.
 func (w *TabbedWindow) UpdatePreview(instance *session.Instance) error {
-	// Skip if instance is paused to avoid expensive tmux operations
-	if instance != nil && instance.Status == session.Paused {
-		return nil
-	}
-
-	// Use async update instead of blocking update - returns immediately
+	// Always call async update - let the worker handle paused sessions with fallback content
 	w.preview.UpdateContentAsync(instance)
 	log.InfoLog.Printf("UpdatePreview called for instance: %s", getInstanceName(instance))
 
@@ -146,20 +141,21 @@ func (w *TabbedWindow) ProcessDiffResults() error {
 
 // ProcessAllResults processes both preview and diff results
 func (w *TabbedWindow) ProcessAllResults() error {
+	log.DebugLog.Printf("[TABBED] ProcessAllResults called by ticker")
 	if err := w.ProcessPreviewResults(); err != nil {
+		log.ErrorLog.Printf("[TABBED] ProcessPreviewResults error: %v", err)
 		return err
 	}
-	return w.ProcessDiffResults()
+	if err := w.ProcessDiffResults(); err != nil {
+		log.ErrorLog.Printf("[TABBED] ProcessDiffResults error: %v", err)
+		return err
+	}
+	return nil
 }
 
 // UpdateDiff updates the content of the diff pane asynchronously
 func (w *TabbedWindow) UpdateDiff(instance *session.Instance) {
-	// Skip if instance is paused to avoid expensive git operations
-	if instance != nil && instance.Status == session.Paused {
-		return
-	}
-
-	// Use async update instead of blocking update
+	// Always call async update - let the worker handle paused sessions with fallback content
 	w.diff.UpdateDiffAsync(instance)
 	log.InfoLog.Printf("UpdateDiff called for instance: %s", getInstanceName(instance))
 }

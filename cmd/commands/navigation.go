@@ -7,13 +7,16 @@ import (
 
 // NavigationHandlers contains handlers for navigation commands
 type NavigationHandlers struct {
-	OnUp       func() (tea.Model, tea.Cmd)
-	OnDown     func() (tea.Model, tea.Cmd)
-	OnLeft     func() (tea.Model, tea.Cmd)
-	OnRight    func() (tea.Model, tea.Cmd)
-	OnPageUp   func() (tea.Model, tea.Cmd)
-	OnPageDown func() (tea.Model, tea.Cmd)
-	OnSearch   func() (tea.Model, tea.Cmd)
+	OnUp                 func() (tea.Model, tea.Cmd)
+	OnDown               func() (tea.Model, tea.Cmd)
+	OnLeft               func() (tea.Model, tea.Cmd)
+	OnRight              func() (tea.Model, tea.Cmd)
+	OnPageUp             func() (tea.Model, tea.Cmd)
+	OnPageDown           func() (tea.Model, tea.Cmd)
+	OnSearch             func() (tea.Model, tea.Cmd)
+	OnNextReview         func() (tea.Model, tea.Cmd)
+	OnPreviousReview     func() (tea.Model, tea.Cmd)
+	OnToggleReviewQueue  func() (tea.Model, tea.Cmd)
 }
 
 var navigationHandlers = &NavigationHandlers{}
@@ -94,6 +97,36 @@ func PageDownCommand(ctx *interfaces.CommandContext) error {
 func SearchCommand(ctx *interfaces.CommandContext) error {
 	if navigationHandlers.OnSearch != nil {
 		model, teaCmd := navigationHandlers.OnSearch()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// NextReviewCommand navigates to the next session in the review queue
+func NextReviewCommand(ctx *interfaces.CommandContext) error {
+	if navigationHandlers.OnNextReview != nil {
+		model, teaCmd := navigationHandlers.OnNextReview()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// PreviousReviewCommand navigates to the previous session in the review queue
+func PreviousReviewCommand(ctx *interfaces.CommandContext) error {
+	if navigationHandlers.OnPreviousReview != nil {
+		model, teaCmd := navigationHandlers.OnPreviousReview()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// ToggleReviewQueueCommand toggles the review queue view mode
+func ToggleReviewQueueCommand(ctx *interfaces.CommandContext) error {
+	if navigationHandlers.OnToggleReviewQueue != nil {
+		model, teaCmd := navigationHandlers.OnToggleReviewQueue()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
 	}

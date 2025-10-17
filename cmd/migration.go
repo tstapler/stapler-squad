@@ -224,6 +224,30 @@ func (b *Bridge) GetAvailableKeys() map[string]string {
 	return keyMap
 }
 
+// GetAvailableKeysForInstance returns keys available based on instance permissions
+// This filters commands to only show what the user is allowed to execute for the given instance
+func (b *Bridge) GetAvailableKeysForInstance(instance interfaces.Instance) map[string]string {
+	// Get all commands for current context
+	commands := b.registry.GetCommandsForContext(b.GetCurrentContext())
+
+	// Get instance permissions
+	perms := instance.GetPermissions()
+
+	// Filter commands based on permissions
+	filtered := FilterCommandsByPermissions(commands, perms)
+
+	// Build key map from filtered commands
+	keyMap := make(map[string]string)
+	for _, command := range filtered {
+		keys := b.registry.GetKeysForCommand(command.ID)
+		for _, key := range keys {
+			keyMap[key] = command.Description
+		}
+	}
+
+	return keyMap
+}
+
 // IsKeyBound checks if a key is bound to any command in current context
 func (b *Bridge) IsKeyBound(key string) bool {
 	command := b.registry.ResolveCommand(b.GetCurrentContext(), key)

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
 import styles from "./SessionList.module.css";
@@ -11,6 +12,7 @@ interface SessionListProps {
   onDeleteSession?: (sessionId: string) => void;
   onPauseSession?: (sessionId: string) => void;
   onResumeSession?: (sessionId: string) => void;
+  onDuplicateSession?: (sessionId: string) => void;
 }
 
 export function SessionList({
@@ -19,6 +21,7 @@ export function SessionList({
   onDeleteSession,
   onPauseSession,
   onResumeSession,
+  onDuplicateSession,
 }: SessionListProps) {
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedStatus, setSelectedStatus] = useState<SessionStatus | "all">("all");
@@ -98,7 +101,13 @@ export function SessionList({
   return (
     <div className={styles.container}>
       <div className={styles.header}>
-        <h2 className={styles.title}>Sessions ({filteredSessions.length})</h2>
+        <div className={styles.headerTop}>
+          <h2 className={styles.title}>Sessions ({filteredSessions.length})</h2>
+          <Link href="/sessions/new" className={styles.newSessionButton}>
+            <span className={styles.newSessionIcon}>+</span>
+            New Session
+          </Link>
+        </div>
 
         <div className={styles.filters}>
           {/* Search input */}
@@ -159,8 +168,11 @@ export function SessionList({
       {/* Session list */}
       {filteredSessions.length === 0 ? (
         <div className={styles.empty}>
-          <p>No sessions found</p>
-          {searchQuery && (
+          <p>{searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || hidePaused
+            ? "No sessions found"
+            : "No sessions yet"
+          }</p>
+          {searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || hidePaused ? (
             <button
               className={styles.clearButton}
               onClick={() => {
@@ -172,6 +184,16 @@ export function SessionList({
             >
               Clear filters
             </button>
+          ) : (
+            <div className={styles.emptyActions}>
+              <p className={styles.emptyHint}>
+                Get started by creating your first AI coding session
+              </p>
+              <Link href="/sessions/new" className={styles.newSessionButtonLarge}>
+                <span className={styles.newSessionIcon}>+</span>
+                Create Your First Session
+              </Link>
+            </div>
           )}
         </div>
       ) : (
@@ -190,6 +212,7 @@ export function SessionList({
                     onDelete={() => onDeleteSession?.(session.id)}
                     onPause={() => onPauseSession?.(session.id)}
                     onResume={() => onResumeSession?.(session.id)}
+                    onDuplicate={() => onDuplicateSession?.(session.id)}
                   />
                 ))}
               </div>

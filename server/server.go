@@ -6,9 +6,12 @@ import (
 	"claude-squad/server/middleware"
 	"claude-squad/server/services"
 	"claude-squad/server/web"
+	"claude-squad/session/scrollback"
 	"context"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"time"
 
 	"connectrpc.com/connect"
@@ -32,7 +35,7 @@ func NewServer(addr string) *Server {
 			Addr:         addr,
 			Handler:      nil, // Will be set in Start() with middleware
 			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 15 * time.Second,
+			WriteTimeout: 0, // No write timeout - we have long-lived streaming connections
 			IdleTimeout:  60 * time.Second,
 		},
 	}
@@ -43,6 +46,24 @@ func NewServer(addr string) *Server {
 		log.ErrorLog.Printf("Failed to initialize SessionService: %v", err)
 		// Continue without SessionService - will return errors on RPC calls
 	} else {
+		// Initialize ScrollbackManager
+		homeDir, _ := os.UserHomeDir()
+		scrollbackPath := filepath.Join(homeDir, ".claude-squad", "sessions")
+
+		scrollbackConfig := scrollback.DefaultScrollbackConfig()
+		scrollbackConfig.StoragePath = scrollbackPath
+		scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)
+
+		log.InfoLog.Printf("Initialized ScrollbackManager: path=%s, compression=%s, maxLines=%d",
+			scrollbackPath, scrollbackConfig.CompressionType, scrollbackConfig.MaxLines)
+
+		// Register ConnectRPC WebSocket handler FIRST for streaming RPCs
+		// This must come before the general ConnectRPC handler to avoid response writer wrapping
+		wsHandler := services.NewConnectRPCWebSocketHandler(sessionService, scrollbackManager)
+		srv.mux.HandleFunc(sessionv1connect.SessionServiceStreamTerminalProcedure, wsHandler.HandleWebSocket)
+		log.InfoLog.Printf("Registered ConnectRPC WebSocket handler: %s", sessionv1connect.SessionServiceStreamTerminalProcedure)
+
+		// Register general ConnectRPC handler (for unary calls)
 		path, handler := sessionv1connect.NewSessionServiceHandler(sessionService, ConnectOptions()...)
 		srv.RegisterConnectHandler(path, handler)
 	}

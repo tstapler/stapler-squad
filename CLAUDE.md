@@ -15,6 +15,18 @@ go build .
 # Run with flags
 ./claude-squad -y  # Auto-yes mode
 ./claude-squad -p "aider --model ollama_chat/gemma3:1b"  # Custom program
+
+# Web development workflow
+make restart-web    # Build web UI and restart server (ALWAYS use this)
+
+# Auto-rebuild on file changes (recommended for development)
+# Install fswatch if not available: brew install fswatch
+fswatch -o web-app/src | xargs -n1 -I{} make restart-web
+
+# Debug menu controls (available in web UI)
+# - Click 🛠️ button in header to access debug menu
+# - Toggle "Terminal Stream Logging" to enable/disable verbose terminal output
+# - Or use console: localStorage.setItem('debug-terminal', 'true')
 ```
 
 ### Testing

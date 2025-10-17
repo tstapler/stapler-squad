@@ -118,3 +118,143 @@ func TestStatusEnumValues(t *testing.T) {
 		}
 	}
 }
+
+func TestTildeExpansionInNewInstance(t *testing.T) {
+	// Get home directory for comparison
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home directory: %v", err)
+	}
+
+	tests := []struct {
+		name              string
+		inputPath         string
+		expectStartsWith  string
+		expectEndsWith    string
+	}{
+		{
+			name:             "Tilde with path",
+			inputPath:        "~/test-project",
+			expectStartsWith: homeDir,
+			expectEndsWith:   "test-project",
+		},
+		{
+			name:             "Just tilde",
+			inputPath:        "~",
+			expectStartsWith: homeDir,
+			expectEndsWith:   "",
+		},
+		{
+			name:             "Absolute path unchanged",
+			inputPath:        "/tmp/test",
+			expectStartsWith: "/tmp",
+			expectEndsWith:   "test",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			instance, err := NewInstance(InstanceOptions{
+				Title:   "Test Session",
+				Path:    tt.inputPath,
+				Program: "claude",
+			})
+
+			if err != nil {
+				t.Fatalf("NewInstance failed: %v", err)
+			}
+
+			// Critical check: path should NOT contain "/~/" pattern (the bug we're fixing)
+			if filepath.Dir(instance.Path) != instance.Path && filepath.Base(filepath.Dir(instance.Path)) == "~" {
+				t.Errorf("Path contains unexpanded tilde directory pattern: %s", instance.Path)
+			}
+
+			// Check expected prefix
+			if tt.expectStartsWith != "" && !filepath.IsAbs(tt.expectStartsWith) {
+				// Convert to absolute for comparison
+				tt.expectStartsWith, _ = filepath.Abs(tt.expectStartsWith)
+			}
+			if tt.expectStartsWith != "" && !filepath.HasPrefix(instance.Path, tt.expectStartsWith) {
+				t.Errorf("Expected path to start with %s, got: %s", tt.expectStartsWith, instance.Path)
+			}
+
+			// Check expected suffix
+			if tt.expectEndsWith != "" && filepath.Base(instance.Path) != tt.expectEndsWith {
+				t.Errorf("Expected path to end with %s, got: %s", tt.expectEndsWith, filepath.Base(instance.Path))
+			}
+		})
+	}
+}
+
+func TestMigrationOfCorruptedPaths(t *testing.T) {
+	// Get home directory for comparison
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("Failed to get home directory: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		corruptedPath  string
+		expectedPrefix string
+		shouldFix      bool
+	}{
+		{
+			name:           "Corrupted path with tilde",
+			corruptedPath:  "/Users/tylerstapler/IdeaProjects/claude-squad/~/IdeaProjects/platform",
+			expectedPrefix: homeDir,
+			shouldFix:      true,
+		},
+		{
+			name:           "Another corrupted pattern",
+			corruptedPath:  "/tmp/project/~/Documents/code",
+			expectedPrefix: homeDir,
+			shouldFix:      true,
+		},
+		{
+			name:           "Valid path should not change",
+			corruptedPath:  "/Users/tylerstapler/valid/path",
+			expectedPrefix: "/Users/tylerstapler",
+			shouldFix:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Create instance data with potentially corrupted path
+			data := InstanceData{
+				Title:   "Test Session",
+				Path:    tt.corruptedPath,
+				Program: "claude",
+				Status:  Paused, // Use paused to avoid starting actual session
+			}
+
+			instance, err := FromInstanceData(data)
+			if err != nil {
+				t.Fatalf("FromInstanceData failed: %v", err)
+			}
+
+			if tt.shouldFix {
+				// Path should be fixed - should not contain "/~/"
+				if filepath.Dir(instance.Path) != instance.Path && filepath.Base(filepath.Dir(instance.Path)) == "~" {
+					t.Errorf("Migration failed - path still contains unexpanded tilde: %s", instance.Path)
+				}
+
+				// Path should start with home directory
+				if !filepath.IsAbs(instance.Path) || !filepath.HasPrefix(instance.Path, tt.expectedPrefix) {
+					t.Errorf("Expected migrated path to start with %s, got: %s", tt.expectedPrefix, instance.Path)
+				}
+
+				// Path should not equal original corrupted path
+				if instance.Path == tt.corruptedPath {
+					t.Errorf("Path was not migrated, still: %s", instance.Path)
+				}
+			} else {
+				// Path should remain unchanged
+				if instance.Path != tt.corruptedPath {
+					t.Errorf("Valid path was incorrectly modified from %s to %s", tt.corruptedPath, instance.Path)
+				}
+			}
+		})
+	}
+}

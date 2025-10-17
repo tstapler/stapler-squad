@@ -2,6 +2,13 @@ package cmd
 
 import (
 	"claude-squad/cmd/commands"
+	"claude-squad/cmd/interfaces"
+)
+
+// Import category constants from interfaces
+const (
+	CategoryView = interfaces.CategoryView
+	CategoryPTY  = interfaces.CategoryPTY
 )
 
 // InitializeCommands sets up all standard commands in the registry
@@ -235,6 +242,33 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Contexts:    []ContextID{ContextList},
 	}).BindKey("/")
 
+	registry.Register(&Command{
+		ID:          "nav.next_review",
+		Name:        "Next Review",
+		Description: "Navigate to next session needing attention",
+		Category:    CategoryNavigation,
+		Handler:     commands.NextReviewCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("R")
+
+	registry.Register(&Command{
+		ID:          "nav.previous_review",
+		Name:        "Previous Review",
+		Description: "Navigate to previous session needing attention",
+		Category:    CategoryNavigation,
+		Handler:     commands.PreviousReviewCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKeys("shift+r")
+
+	registry.Register(&Command{
+		ID:          "nav.toggle_review_queue",
+		Name:        "Review Queue",
+		Description: "Toggle review queue view",
+		Category:    CategoryNavigation,
+		Handler:     commands.ToggleReviewQueueCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("r")
+
 	// Organization commands
 	registry.Register(&Command{
 		ID:          "org.filter_paused",
@@ -308,6 +342,61 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Handler:     commands.CommandModeCommand,
 		Contexts:    []ContextID{ContextList},
 	}).BindKey(":")
+
+	registry.Register(&Command{
+		ID:          "sys.resize",
+		Name:        "Force Resize",
+		Description: "Manually trigger terminal resize detection",
+		Category:    CategorySystem,
+		Handler:     commands.ResizeCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("ctrl+l")
+
+	// PTY management commands
+	registry.Register(&Command{
+		ID:          "pty.toggle_view",
+		Name:        "Toggle PTY View",
+		Description: "Switch between session list and PTY list",
+		Category:    CategoryView,
+		Handler:     commands.TogglePTYViewCommand,
+		Contexts:    []ContextID{ContextList, ContextPTYList},
+	}).BindKey("t")
+
+	registry.Register(&Command{
+		ID:          "pty.attach",
+		Name:        "Attach to PTY",
+		Description: "Connect to selected PTY",
+		Category:    CategoryPTY,
+		Handler:     commands.AttachPTYCommand,
+		Contexts:    []ContextID{ContextPTYList},
+	}).BindKey("enter")
+
+	registry.Register(&Command{
+		ID:          "pty.send_command",
+		Name:        "Send Command to PTY",
+		Description: "Send command to selected PTY",
+		Category:    CategoryPTY,
+		Handler:     commands.SendCommandToPTYCommand,
+		Contexts:    []ContextID{ContextPTYList},
+	}).BindKey("i")
+
+	registry.Register(&Command{
+		ID:          "pty.disconnect",
+		Name:        "Disconnect PTY",
+		Description: "Disconnect from current PTY",
+		Category:    CategoryPTY,
+		Handler:     commands.DisconnectPTYCommand,
+		Contexts:    []ContextID{ContextPTYList},
+	}).BindKey("d")
+
+	registry.Register(&Command{
+		ID:          "pty.refresh",
+		Name:        "Refresh PTYs",
+		Description: "Manually refresh PTY list",
+		Category:    CategoryPTY,
+		Handler:     commands.RefreshPTYsCommand,
+		Contexts:    []ContextID{ContextPTYList},
+	}).BindKey("r")
 
 	// Confirmation dialog specific commands
 	registry.Register(&Command{

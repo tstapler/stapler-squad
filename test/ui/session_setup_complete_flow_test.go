@@ -1,9 +1,10 @@
 package ui
 
 import (
+	"claude-squad/session"
+	"claude-squad/ui/overlay"
 	"testing"
 
-	"claude-squad/ui/overlay"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -24,7 +25,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "repository_selector_initial",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(80, 30)
 				// Navigate to repository selector
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
@@ -38,7 +42,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "repository_selector_with_input",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(80, 30)
 				// Navigate to repository selector and type a path
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
@@ -56,7 +63,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "worktree_selector_initial",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(80, 30)
 				// Navigate to worktree selector
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
@@ -73,7 +83,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "branch_choice_new_selected",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(80, 30)
 				// Navigate through current location to branch choice
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
@@ -87,7 +100,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "branch_choice_current_selected",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(80, 30)
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
 				s.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Basics -> Location
@@ -100,7 +116,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "branch_choice_existing_selected",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(80, 30)
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
 				s.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Basics -> Location
@@ -116,7 +135,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "error_empty_name_at_basics",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(80, 30)
 				// Try to advance without entering a name
 				s.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -129,7 +151,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "repository_selector_small_terminal",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(60, 20) // Smaller terminal
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
 				s.Update(tea.KeyMsg{Type: tea.KeyEnter}) // Basics -> Location
@@ -142,7 +167,10 @@ func TestSessionSetupOverlay_AllSteps_Snapshots(t *testing.T) {
 		{
 			name: "branch_choice_large_terminal",
 			setup: func() *overlay.SessionSetupOverlay {
-				s := overlay.NewSessionSetupOverlay()
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel:   func() {},
+				})
 				s.SetSize(100, 35) // Larger terminal
 				s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
 				s.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -223,7 +251,10 @@ func TestSessionSetupOverlay_CompleteFlows(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sessionSetup := overlay.NewSessionSetupOverlay()
+			sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+				OnComplete: func(session.InstanceOptions) {},
+				OnCancel:   func() {},
+			})
 			sessionSetup.SetSize(80, 30)
 
 			// Process all key events
@@ -273,7 +304,10 @@ func TestSessionSetupOverlay_BackNavigation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sessionSetup := overlay.NewSessionSetupOverlay()
+			sessionSetup := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+				OnComplete: func(session.InstanceOptions) {},
+				OnCancel:   func() {},
+			})
 			sessionSetup.SetSize(80, 30)
 
 			// Process all key events

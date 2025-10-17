@@ -168,7 +168,7 @@ func (zf *ZFSearchOverlay) indexDirectories() {
 		default:
 			if err := zf.zfEngine.IndexDirectory(dir); err != nil {
 				// Log error but continue with other directories
-				fmt.Printf("Warning: Failed to index directory %s: %v\n", dir, err)
+				log.WarningLog.Printf("Failed to index directory %s: %v", dir, err)
 			}
 		}
 	}

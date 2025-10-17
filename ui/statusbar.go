@@ -48,7 +48,7 @@ func NewStatusBar() *StatusBar {
 		messageHistory: make([]StatusMessage, 0),
 		maxMessages:    100, // Keep last 100 messages
 		commandInput:   input,
-		infoStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		infoStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
 		warnStyle:      lipgloss.NewStyle().Foreground(lipgloss.Color("220")),
 		errorStyle:     lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
 		commandStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("39")),
@@ -141,6 +141,11 @@ func (s *StatusBar) GetMessagesView(width, height int) string {
 		return "No messages"
 	}
 
+	// Handle very small widths gracefully
+	if width < 10 {
+		return "Terminal too narrow"
+	}
+
 	var lines []string
 
 	// Show recent messages (fit within height)
@@ -201,6 +206,11 @@ func (s *StatusBar) View(width int) string {
 	}
 
 	if s.currentMessage == "" {
+		return ""
+	}
+
+	// Handle very small widths gracefully
+	if width < 10 {
 		return ""
 	}
 

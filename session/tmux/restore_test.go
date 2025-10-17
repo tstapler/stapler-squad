@@ -37,10 +37,11 @@ func TestRestoreWithExistingSession(t *testing.T) {
 	err := session.Restore()
 	require.NoError(t, err)
 
-	// Current behavior: Restore() only verifies the session exists and sets up monitoring
-	// It doesn't create PTY or attach commands - those happen later when needed
-	// So we just verify that Restore() succeeded without error
-	require.Equal(t, 0, len(ptyFactory.cmds), "Restore() should not create any PTY commands when session already exists")
+	// Updated behavior: Restore() now creates a PTY connection for detached operations
+	// This enables SetDetachedSize(), SendKeys(), and the Direct Claude Command Interface
+	// The PTY is created via tmux attach-session command
+	require.Equal(t, 1, len(ptyFactory.cmds), "Restore() should create a PTY connection via attach-session")
+	require.Contains(t, ptyFactory.cmds[0].String(), "attach-session", "PTY should be created via attach-session")
 }
 
 // TestRestoreWithWorkDirParameter tests the new RestoreWithWorkDir method

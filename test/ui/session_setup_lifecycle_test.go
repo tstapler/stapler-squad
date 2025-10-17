@@ -12,16 +12,17 @@ import (
 // This ensures callbacks fire correctly and the overlay state is valid after callbacks
 func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 	t.Run("onComplete fires with correct session data", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
 		var callbackFired bool
 		var receivedOpts session.InstanceOptions
 
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			callbackFired = true
-			receivedOpts = opts
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				callbackFired = true
+				receivedOpts = opts
+			},
+			OnCancel: func() {},
 		})
+		s.SetSize(80, 30)
 
 		// Complete the flow with current location
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test-session")})
@@ -70,16 +71,17 @@ func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 
 		for _, tt := range locationTests {
 			t.Run(tt.name, func(t *testing.T) {
-				s := overlay.NewSessionSetupOverlay()
-				s.SetSize(80, 30)
-
 				var callbackFired bool
 				var receivedOpts session.InstanceOptions
 
-				s.SetOnComplete(func(opts session.InstanceOptions) {
-					callbackFired = true
-					receivedOpts = opts
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(opts session.InstanceOptions) {
+						callbackFired = true
+						receivedOpts = opts
+					},
+					OnCancel: func() {},
 				})
+				s.SetSize(80, 30)
 
 				// Execute the key sequence
 				for _, key := range tt.setupKeys {
@@ -136,13 +138,15 @@ func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 
 		for _, step := range steps {
 			t.Run(step.name, func(t *testing.T) {
-				s := overlay.NewSessionSetupOverlay()
-				s.SetSize(80, 30)
-
 				var cancelFired bool
-				s.SetOnCancel(func() {
-					cancelFired = true
+
+				s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+					OnComplete: func(session.InstanceOptions) {},
+					OnCancel: func() {
+						cancelFired = true
+					},
 				})
+				s.SetSize(80, 30)
 
 				// Navigate to the step
 				step.navigate(s)
@@ -158,13 +162,15 @@ func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 	})
 
 	t.Run("overlay state after onComplete callback", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
 		callbackCompleted := false
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			callbackCompleted = true
+
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				callbackCompleted = true
+			},
+			OnCancel: func() {},
 		})
+		s.SetSize(80, 30)
 
 		// Complete the full flow
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
@@ -188,13 +194,15 @@ func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 	})
 
 	t.Run("overlay state after onCancel callback", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
 		cancelCalled := false
-		s.SetOnCancel(func() {
-			cancelCalled = true
+
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(session.InstanceOptions) {},
+			OnCancel: func() {
+				cancelCalled = true
+			},
 		})
+		s.SetSize(80, 30)
 
 		// Navigate partway through
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
@@ -212,22 +220,16 @@ func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 		// Should not crash
 	})
 
-	t.Run("multiple callback registrations work correctly", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
+	t.Run("callbacks passed at construction time work correctly", func(t *testing.T) {
+		callbackFired := false
+
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				callbackFired = true
+			},
+			OnCancel: func() {},
+		})
 		s.SetSize(80, 30)
-
-		firstCallbackFired := false
-		secondCallbackFired := false
-
-		// Register first callback
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			firstCallbackFired = true
-		})
-
-		// Register second callback (should replace first)
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			secondCallbackFired = true
-		})
 
 		// Complete flow
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
@@ -236,13 +238,9 @@ func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 		s.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		s.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-		// Only the second callback should fire (last registered wins)
-		if firstCallbackFired {
-			t.Error("First callback should not fire after being replaced")
-		}
-
-		if !secondCallbackFired {
-			t.Error("Second callback should fire")
+		// The callback should fire when construction-time callbacks are used
+		if !callbackFired {
+			t.Error("Callback should fire when passed at construction time")
 		}
 	})
 }
@@ -251,12 +249,13 @@ func TestSessionSetupOverlay_CallbackLifecycle(t *testing.T) {
 // This is the core regression test for the reported bug
 func TestSessionSetupOverlay_KeyHandlingAfterCallbacks(t *testing.T) {
 	t.Run("enter key after complete callback", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			// Callback fires
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				// Callback fires
+			},
+			OnCancel: func() {},
 		})
+		s.SetSize(80, 30)
 
 		// Complete the flow
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
@@ -271,12 +270,13 @@ func TestSessionSetupOverlay_KeyHandlingAfterCallbacks(t *testing.T) {
 	})
 
 	t.Run("escape key after complete callback", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			// Callback fires
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				// Callback fires
+			},
+			OnCancel: func() {},
 		})
+		s.SetSize(80, 30)
 
 		// Complete the flow
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
@@ -291,12 +291,13 @@ func TestSessionSetupOverlay_KeyHandlingAfterCallbacks(t *testing.T) {
 	})
 
 	t.Run("tab key after complete callback", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			// Callback fires
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				// Callback fires
+			},
+			OnCancel: func() {},
 		})
+		s.SetSize(80, 30)
 
 		// Complete the flow
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
@@ -311,12 +312,13 @@ func TestSessionSetupOverlay_KeyHandlingAfterCallbacks(t *testing.T) {
 	})
 
 	t.Run("text input after complete callback", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			// Callback fires
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				// Callback fires
+			},
+			OnCancel: func() {},
 		})
+		s.SetSize(80, 30)
 
 		// Complete the flow
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})
@@ -334,7 +336,10 @@ func TestSessionSetupOverlay_KeyHandlingAfterCallbacks(t *testing.T) {
 // TestSessionSetupOverlay_FocusState tests focus management throughout the lifecycle
 func TestSessionSetupOverlay_FocusState(t *testing.T) {
 	t.Run("overlay starts focused", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(session.InstanceOptions) {},
+			OnCancel:   func() {},
+		})
 		s.SetSize(80, 30)
 
 		// Overlay should be focused by default
@@ -346,7 +351,10 @@ func TestSessionSetupOverlay_FocusState(t *testing.T) {
 	})
 
 	t.Run("focus after blur", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(session.InstanceOptions) {},
+			OnCancel:   func() {},
+		})
 		s.SetSize(80, 30)
 
 		// Blur the overlay
@@ -360,12 +368,13 @@ func TestSessionSetupOverlay_FocusState(t *testing.T) {
 	})
 
 	t.Run("focus state after callback", func(t *testing.T) {
-		s := overlay.NewSessionSetupOverlay()
-		s.SetSize(80, 30)
-
-		s.SetOnComplete(func(opts session.InstanceOptions) {
-			// Callback fires
+		s := overlay.NewSessionSetupOverlay(overlay.SessionSetupCallbacks{
+			OnComplete: func(opts session.InstanceOptions) {
+				// Callback fires
+			},
+			OnCancel: func() {},
 		})
+		s.SetSize(80, 30)
 
 		// Complete flow
 		s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("test")})

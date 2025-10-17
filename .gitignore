@@ -8,3 +8,6 @@ claude-squad-test
 # Generated protocol buffer code
 gen/
 web/src/gen/
+/web-app/.next
+/web-app/node_modules/
+/.playwright-mcp

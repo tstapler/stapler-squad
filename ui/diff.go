@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"claude-squad/log"
 	"claude-squad/session"
 	"context"
 	"fmt"
@@ -189,7 +190,14 @@ func (d *DiffPane) diffWorker() {
 
 // processDiffRequest handles a single diff request asynchronously
 func (d *DiffPane) processDiffRequest(req diffRequest) {
+	instanceName := "nil"
+	if req.instance != nil {
+		instanceName = req.instance.Title
+	}
+	log.DebugLog.Printf("[DIFF] Worker processing request for instance: %s", instanceName)
+
 	if req.instance == nil {
+		log.DebugLog.Printf("[DIFF] Nil instance, sending empty result")
 		d.diffResultCh <- diffResult{
 			stats:      "",
 			diff:       "",
@@ -199,10 +207,36 @@ func (d *DiffPane) processDiffRequest(req diffRequest) {
 		return
 	}
 
+	// Handle paused sessions with fallback content
+	if req.instance.Status == session.Paused {
+		log.DebugLog.Printf("[DIFF] Paused instance '%s', sending fallback content", instanceName)
+		// For paused sessions, show a centered message explaining the status
+		centeredMessage := lipgloss.Place(
+			d.width,
+			d.height,
+			lipgloss.Center,
+			lipgloss.Center,
+			lipgloss.JoinVertical(lipgloss.Center,
+				"Session is paused",
+				"",
+				"Diff unavailable - worktree directory not found",
+			),
+		)
+		d.diffResultCh <- diffResult{
+			stats:      "",
+			diff:       centeredMessage,
+			err:        nil,
+			instanceID: d.getInstanceID(req.instance),
+		}
+		return
+	}
+
 	instanceID := d.getInstanceID(req.instance)
 
 	// Check cache first
 	if cached, ok := d.getCachedDiff(instanceID); ok {
+		log.DebugLog.Printf("[DIFF] Cache hit for instance: %s, stats length: %d, diff length: %d",
+			instanceName, len(cached.stats), len(cached.diff))
 		d.diffResultCh <- diffResult{
 			stats:      cached.stats,
 			diff:       cached.diff,
@@ -212,15 +246,19 @@ func (d *DiffPane) processDiffRequest(req diffRequest) {
 		return
 	}
 
+	log.DebugLog.Printf("[DIFF] Cache miss for instance: %s, fetching from git", instanceName)
+
 	// Perform expensive git operation in background
 	stats := req.instance.GetDiffStats()
 	var statsStr, diffStr string
 
 	if stats == nil {
+		log.DebugLog.Printf("[DIFF] GetDiffStats returned nil for instance: %s", instanceName)
 		statsStr = ""
 		diffStr = ""
 	} else if stats.Error != nil {
 		// Error case - don't cache errors
+		log.ErrorLog.Printf("[DIFF] Error fetching diff for instance: %s: %v", instanceName, stats.Error)
 		d.diffResultCh <- diffResult{
 			stats:      "",
 			diff:       "",
@@ -229,9 +267,12 @@ func (d *DiffPane) processDiffRequest(req diffRequest) {
 		}
 		return
 	} else if stats.IsEmpty() {
+		log.DebugLog.Printf("[DIFF] Empty diff for instance: %s", instanceName)
 		statsStr = ""
 		diffStr = ""
 	} else {
+		log.DebugLog.Printf("[DIFF] Non-empty diff for instance: %s (Added: %d, Removed: %d, Content length: %d)",
+			instanceName, stats.Added, stats.Removed, len(stats.Content))
 		additions := AdditionStyle.Render(fmt.Sprintf("%d additions(+)", stats.Added))
 		deletions := DeletionStyle.Render(fmt.Sprintf("%d deletions(-)", stats.Removed))
 		statsStr = lipgloss.JoinHorizontal(lipgloss.Center, additions, " ", deletions)
@@ -242,6 +283,7 @@ func (d *DiffPane) processDiffRequest(req diffRequest) {
 	d.setCachedDiff(instanceID, statsStr, diffStr)
 
 	// Send result back
+	log.DebugLog.Printf("[DIFF] Sending result to channel for instance: %s", instanceName)
 	d.diffResultCh <- diffResult{
 		stats:      statsStr,
 		diff:       diffStr,
@@ -286,6 +328,12 @@ func (d *DiffPane) setCachedDiff(instanceID, stats, diff string) {
 
 // UpdateDiffAsync requests a diff update asynchronously with debouncing
 func (d *DiffPane) UpdateDiffAsync(instance *session.Instance) {
+	instanceName := "nil"
+	if instance != nil {
+		instanceName = instance.Title
+	}
+	log.DebugLog.Printf("[DIFF] UpdateDiffAsync called for instance: %s", instanceName)
+
 	// Cancel any existing debounce timer
 	if d.debounceTimer != nil {
 		d.debounceTimer.Stop()
@@ -296,39 +344,74 @@ func (d *DiffPane) UpdateDiffAsync(instance *session.Instance) {
 
 	// Set up debounced execution
 	d.debounceTimer = time.AfterFunc(diffDebounceDelay, func() {
+		log.DebugLog.Printf("[DIFF] Debounce timer fired for instance: %s", instanceName)
 		d.requestDiffUpdate(d.pendingInstance)
 	})
 }
 
 // requestDiffUpdate sends a diff request to the worker
 func (d *DiffPane) requestDiffUpdate(instance *session.Instance) {
+	instanceName := "nil"
+	if instance != nil {
+		instanceName = instance.Title
+	}
+
 	select {
 	case d.diffRequestCh <- diffRequest{instance: instance}:
+		log.DebugLog.Printf("[DIFF] Request queued for instance: %s", instanceName)
 	default:
 		// Channel is full, skip this request to prevent blocking
+		log.WarningLog.Printf("[DIFF] Channel full, dropping request for instance: %s", instanceName)
 	}
 }
 
 // ProcessResults processes any pending results from the background worker
 func (d *DiffPane) ProcessResults() error {
+	resultCount := 0
 	for {
 		select {
 		case result := <-d.diffResultCh:
+			resultCount++
+			log.DebugLog.Printf("[DIFF] ProcessResults: received result #%d, instanceID: '%s', stats length: %d, diff length: %d",
+				resultCount, result.instanceID, len(result.stats), len(result.diff))
+
 			if result.err != nil {
+				log.ErrorLog.Printf("[DIFF] ProcessResults: error in result: %v", result.err)
 				return result.err
 			}
 
 			// Update diff state with the result
 			if result.instanceID != "" {
+				// Valid instance - update with diff content
+				log.DebugLog.Printf("[DIFF] ProcessResults: updating viewport with content for instanceID: %s", result.instanceID)
 				d.stats = result.stats
 				d.diff = result.diff
 				d.lastInstanceID = result.instanceID
 
 				// Update viewport content
-				d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
+				// For paused sessions, stats will be empty and diff will contain the fallback message
+				if d.stats == "" {
+					d.viewport.SetContent(d.diff)
+				} else {
+					d.viewport.SetContent(lipgloss.JoinVertical(lipgloss.Left, d.stats, d.diff))
+				}
+			} else {
+				// Nil instance - show fallback content
+				log.DebugLog.Printf("[DIFF] ProcessResults: showing fallback for nil instance")
+				centeredFallbackMessage := lipgloss.Place(
+					d.width,
+					d.height,
+					lipgloss.Center,
+					lipgloss.Center,
+					"No changes",
+				)
+				d.viewport.SetContent(centeredFallbackMessage)
 			}
 		default:
 			// No more results to process
+			if resultCount > 0 {
+				log.DebugLog.Printf("[DIFF] ProcessResults: processed %d results total", resultCount)
+			}
 			return nil
 		}
 	}

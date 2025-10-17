@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionList } from "@/components/sessions/SessionList";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
@@ -11,9 +12,12 @@ import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import styles from "./page.module.css";
 
-export default function Home() {
+function HomeContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  const [isSessionFullscreen, setIsSessionFullscreen] = useState(false);
   const {
     sessions,
     loading,
@@ -27,6 +31,34 @@ export default function Home() {
     autoWatch: true,
   });
 
+  // Handle direct session selection from URL (e.g., from review queue)
+  useEffect(() => {
+    const sessionId = searchParams.get("session");
+    if (sessionId) {
+      const session = sessions.find((s) => s.id === sessionId);
+      if (session) {
+        setSelectedSession(session);
+      }
+    }
+  }, [searchParams, sessions]);
+
+  // Handle session deletion - close modal first if this session is selected
+  const handleDeleteSession = async (sessionId: string) => {
+    // Close modal if we're deleting the currently selected session
+    // This ensures WebSocket cleanup happens before deletion
+    if (selectedSession?.id === sessionId) {
+      setSelectedSession(null);
+      // Small delay to let cleanup complete
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    await deleteSession(sessionId);
+  };
+
+  // Handle session duplication
+  const handleDuplicateSession = (sessionId: string) => {
+    router.push(`/sessions/new?duplicate=${sessionId}`);
+  };
+
   // Keyboard shortcuts
   useKeyboard({
     "?": () => setShowHelp(true),
@@ -37,7 +69,7 @@ export default function Home() {
         setSelectedSession(null);
       }
     },
-    "r": () => !loading && listSessions(),
+    "R": () => !loading && listSessions(),
   });
 
   return (
@@ -56,9 +88,10 @@ export default function Home() {
           <SessionList
             sessions={sessions}
             onSessionClick={(session) => setSelectedSession(session)}
-            onDeleteSession={deleteSession}
+            onDeleteSession={handleDeleteSession}
             onPauseSession={pauseSession}
             onResumeSession={resumeSession}
+            onDuplicateSession={handleDuplicateSession}
           />
         )}
       </main>
@@ -66,10 +99,14 @@ export default function Home() {
       {/* Session detail modal */}
       {selectedSession && (
         <div className={styles.modal} onClick={() => setSelectedSession(null)}>
-          <div className={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+          <div
+            className={`${styles.modalContent} ${isSessionFullscreen ? styles.modalContentFullscreen : ""}`}
+            onClick={(e) => e.stopPropagation()}
+          >
             <SessionDetail
               session={selectedSession}
               onClose={() => setSelectedSession(null)}
+              onFullscreenChange={setIsSessionFullscreen}
             />
           </div>
         </div>
@@ -94,7 +131,7 @@ export default function Home() {
                 hints={[
                   { keys: "?", description: "Show keyboard shortcuts" },
                   { keys: "Escape", description: "Close modal / dialog" },
-                  { keys: "r", description: "Refresh session list" },
+                  { keys: "R", description: "Refresh session list" },
                   { keys: "Enter", description: "Open selected session" },
                   { keys: "/", description: "Focus search (coming soon)" },
                   { keys: ["↑", "↓"], description: "Navigate sessions (coming soon)" },
@@ -115,5 +152,13 @@ export default function Home() {
         ?
       </button>
     </div>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<SessionListSkeleton count={4} />}>
+      <HomeContent />
+    </Suspense>
   );
 }

@@ -137,6 +137,63 @@
   cursor: not-allowed;
 }
 
+/* Review step styles */
+.reviewSection {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem;
+  background: var(--gray-50, #f9fafb);
+  border-radius: 8px;
+  border: 1px solid var(--border-color, #e5e7eb);
+}
+
+.reviewSection h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--foreground);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color, #e5e7eb);
+}
+
+.reviewItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.reviewLabel {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--gray-600, #4b5563);
+}
+
+.reviewValue {
+  font-size: 0.9375rem;
+  color: var(--foreground);
+  padding: 0.5rem 0.75rem;
+  background: white;
+  border-radius: 4px;
+  border: 1px solid var(--border-color, #e5e7eb);
+  word-break: break-word;
+}
+
+/* Submit error styles */
+.submitError {
+  padding: 1rem;
+  background: var(--error-background, #fef2f2);
+  border: 1px solid var(--error, #ef4444);
+  border-radius: 6px;
+  color: var(--error-dark, #b91c1c);
+  font-size: 0.9375rem;
+  margin-top: 1rem;
+}
+
+.submitError strong {
+  font-weight: 600;
+}
+
 /* Mobile responsiveness */
 @media (max-width: 768px) {
   .step {
