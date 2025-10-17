@@ -94,7 +94,7 @@ export function useTerminalStream({
 
   // Performance optimization: Batch terminal output updates
   const outputBufferRef = useRef<string[]>([]);
-  const pendingUpdateRef = useRef<number | null>(null);
+  const pendingUpdateRef = useRef<NodeJS.Timeout | null>(null);
   const textDecoderRef = useRef(new TextDecoder()); // Reuse decoder for performance
 
   // Sync ref with state
@@ -102,7 +102,7 @@ export function useTerminalStream({
     isConnectedRef.current = isConnected;
   }, [isConnected]);
 
-  // Flush buffered output to state (batched with RAF)
+  // Flush buffered output to state (batched with minimal delay)
   const flushOutputBuffer = useCallback(() => {
     if (outputBufferRef.current.length > 0) {
       const bufferedText = outputBufferRef.current.join("");
@@ -112,12 +112,12 @@ export function useTerminalStream({
     pendingUpdateRef.current = null;
   }, []);
 
-  // Schedule output update (debounced with requestAnimationFrame)
+  // Schedule output update (batched with 5ms delay to reduce flickering while maintaining responsiveness)
   const scheduleOutputUpdate = useCallback((text: string) => {
     outputBufferRef.current.push(text);
 
     if (!pendingUpdateRef.current) {
-      pendingUpdateRef.current = requestAnimationFrame(flushOutputBuffer);
+      pendingUpdateRef.current = setTimeout(flushOutputBuffer, 5);
     }
   }, [flushOutputBuffer]);
 
@@ -339,9 +339,9 @@ export function useTerminalStream({
   useEffect(() => {
     connect();
     return () => {
-      // Cleanup: Cancel any pending RAF updates
+      // Cleanup: Cancel any pending timeout updates
       if (pendingUpdateRef.current) {
-        cancelAnimationFrame(pendingUpdateRef.current);
+        clearTimeout(pendingUpdateRef.current);
         pendingUpdateRef.current = null;
       }
       // Flush any remaining buffered output

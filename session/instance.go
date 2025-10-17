@@ -727,7 +727,15 @@ func (i *Instance) Preview() (string, error) {
 		return "", nil
 	}
 
-	return i.tmuxSession.CapturePaneContent()
+	content, err := i.tmuxSession.CapturePaneContent()
+	if err != nil {
+		return "", err
+	}
+
+	// Update terminal activity timestamps based on captured content
+	i.UpdateTerminalTimestamps(content)
+
+	return content, nil
 }
 
 func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
@@ -1493,4 +1501,49 @@ func (i *Instance) GetStatusIconForType() string {
 	default:
 		return "?"
 	}
+}
+
+// UpdateTerminalTimestamps updates the terminal activity timestamps based on captured output.
+// This method checks for meaningful content (excluding tmux banners) and updates timestamps accordingly.
+// It should be called whenever terminal output is captured or processed.
+func (i *Instance) UpdateTerminalTimestamps(content string) {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+
+	now := time.Now()
+
+	// Always update LastTerminalUpdate for any output (even if just banners)
+	if len(strings.TrimSpace(content)) > 0 {
+		i.LastTerminalUpdate = now
+	}
+
+	// Check if the output contains meaningful content (not just tmux banners)
+	if i.tmuxSession != nil && i.tmuxSession.HasMeaningfulContent(content) {
+		i.LastMeaningfulOutput = now
+		log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (detected non-banner output)")
+	}
+}
+
+// GetTimeSinceLastMeaningfulOutput returns the duration since the last meaningful terminal output
+func (i *Instance) GetTimeSinceLastMeaningfulOutput() time.Duration {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+
+	if i.LastMeaningfulOutput.IsZero() {
+		// If never updated, return time since creation
+		return time.Since(i.CreatedAt)
+	}
+	return time.Since(i.LastMeaningfulOutput)
+}
+
+// GetTimeSinceLastTerminalUpdate returns the duration since any terminal activity
+func (i *Instance) GetTimeSinceLastTerminalUpdate() time.Duration {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+
+	if i.LastTerminalUpdate.IsZero() {
+		// If never updated, return time since creation
+		return time.Since(i.CreatedAt)
+	}
+	return time.Since(i.LastTerminalUpdate)
 }

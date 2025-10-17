@@ -48,6 +48,8 @@ type TmuxSession struct {
 	ptmx *os.File
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
 	monitor *statusMonitor
+	// bannerFilter detects and filters tmux status line banners from terminal output
+	bannerFilter *BannerFilter
 
 	// Initialized by Attach
 	// Deinitilaized by Detach
@@ -170,6 +172,7 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 		serverSocket:     serverSocket,
 		ptyFactory:       ptyFactory,
 		cmdExec:          cmdExec,
+		bannerFilter:     NewBannerFilter(),          // Initialize banner filter for terminal output filtering
 		externalResizeCh: make(chan windowSize, 10), // Buffered channel for resize events
 		existsCacheTTL:   500 * time.Millisecond,    // Cache session existence for 500ms
 	}
@@ -954,6 +957,27 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
 	}
 	return string(output), nil
+}
+
+// HasMeaningfulContent checks if the terminal output contains meaningful content
+// (excluding tmux status banners). This is used to determine if the session has
+// produced actual output versus just tmux status line updates.
+func (t *TmuxSession) HasMeaningfulContent(content string) bool {
+	if t.bannerFilter == nil {
+		// No banner filter available, assume all content is meaningful
+		return len(strings.TrimSpace(content)) > 0
+	}
+	return t.bannerFilter.HasMeaningfulContent(content)
+}
+
+// FilterBanners removes tmux status banners from terminal output.
+// This is useful for processing terminal output while excluding tmux status lines.
+func (t *TmuxSession) FilterBanners(content string) (filteredContent string, bannersRemoved int) {
+	if t.bannerFilter == nil {
+		// No banner filter available, return content as-is
+		return content, 0
+	}
+	return t.bannerFilter.FilterBannersFromText(content)
 }
 
 // CleanupSessions kills all tmux sessions that start with "session-" on the default server
