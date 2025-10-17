@@ -58,13 +58,13 @@
 
 .priorityLow {
   background: #f3f4f6;
-  color: #4b5563;
+  color: #374151;
   border: 1px solid #d1d5db;
 }
 
 .priorityUnspecified {
   background: #f9fafb;
-  color: #6b7280;
+  color: #4b5563;
   border: 1px solid #e5e7eb;
 }
 
@@ -89,7 +89,7 @@
 
 .reasonIdle {
   background: #e0e7ff;
-  color: #3730a3;
+  color: #4338ca;
   border: 1px solid #a5b4fc;
 }
 
@@ -101,7 +101,7 @@
 
 .reasonUnspecified {
   background: #f3f4f6;
-  color: #6b7280;
+  color: #4b5563;
   border: 1px solid #d1d5db;
 }
 

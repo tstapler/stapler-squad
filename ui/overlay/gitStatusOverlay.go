@@ -382,7 +382,7 @@ func (g *GitStatusOverlay) Render() string {
 
 	// Status message
 	content.WriteString("\n")
-	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(g.statusMessage))
+	content.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Render(g.statusMessage))
 
 	// Help section
 	if g.showHelp {

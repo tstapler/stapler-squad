@@ -102,7 +102,7 @@
 
 .statusLoading {
   background: #e0e7ff;
-  color: #3730a3;
+  color: #4338ca;
 }
 
 .statusNeedsApproval {
@@ -112,7 +112,7 @@
 
 .statusUnknown {
   background: #f3f4f6;
-  color: #4b5563;
+  color: #374151;
 }
 
 .category {

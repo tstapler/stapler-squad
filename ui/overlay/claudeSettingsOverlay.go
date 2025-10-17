@@ -293,7 +293,7 @@ func (c *ClaudeSettingsOverlay) renderSettings() string {
 		// Add description line
 		if i == c.selectedField {
 			desc := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#6B7280")).
+				Foreground(lipgloss.Color("#9CA3AF")).
 				Italic(true).
 				PaddingLeft(4).
 				Render("  " + field.description)
@@ -302,7 +302,7 @@ func (c *ClaudeSettingsOverlay) renderSettings() string {
 	}
 
 	instructions := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6B7280")).
+		Foreground(lipgloss.Color("#9CA3AF")).
 		PaddingTop(1).
 		Render("Navigation: ↑/↓  Edit: Enter/Space  Save: Ctrl+S  Cancel: Esc")
 
@@ -334,12 +334,12 @@ func (c *ClaudeSettingsOverlay) renderSessionList() string {
 
 	if len(c.availableSessions) == 0 {
 		noSessions := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B7280")).
+			Foreground(lipgloss.Color("#9CA3AF")).
 			Italic(true).
 			Render("No Claude sessions found")
 
 		instructions := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6B7280")).
+			Foreground(lipgloss.Color("#9CA3AF")).
 			PaddingTop(1).
 			Render("Press Esc to return to settings")
 
@@ -369,7 +369,7 @@ func (c *ClaudeSettingsOverlay) renderSessionList() string {
 	}
 
 	instructions := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#6B7280")).
+		Foreground(lipgloss.Color("#9CA3AF")).
 		PaddingTop(1).
 		Render("Select: Enter  Cancel: Esc")
 

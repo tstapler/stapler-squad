@@ -136,10 +136,23 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
 
   // Send resize after scrollback load completes
   useEffect(() => {
-    if (scrollbackLoaded && isConnected && lastResizeRef.current) {
-      const { cols, rows } = lastResizeRef.current;
-      console.log(`[TerminalOutput] Scrollback complete, sending final resize: ${cols}x${rows}`);
-      resize(cols, rows);
+    if (scrollbackLoaded && isConnected) {
+      // If we have a saved resize from during scrollback load, use it
+      if (lastResizeRef.current) {
+        const { cols, rows } = lastResizeRef.current;
+        console.log(`[TerminalOutput] Scrollback complete, sending saved resize: ${cols}x${rows}`);
+        resize(cols, rows);
+      } else if (xtermRef.current?.terminal) {
+        // Otherwise, fit terminal and send current size
+        console.log("[TerminalOutput] Scrollback complete, fitting terminal and sending resize");
+        xtermRef.current.fit();
+        const terminal = xtermRef.current.terminal;
+        const cols = terminal.cols;
+        const rows = terminal.rows;
+        console.log(`[TerminalOutput] Initial resize after scrollback: ${cols}x${rows}`);
+        lastResizeRef.current = { cols, rows };
+        resize(cols, rows);
+      }
     }
   }, [scrollbackLoaded, isConnected, resize]);
 
@@ -170,8 +183,23 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
   const handleManualResize = () => {
     console.log("[TerminalOutput] Manual resize triggered");
     if (xtermRef.current) {
+      // Call fit() to resize terminal to container
       xtermRef.current.fit();
-      console.log("[TerminalOutput] Terminal resized manually");
+
+      // Get current terminal size after fit
+      const terminal = xtermRef.current.terminal;
+      if (terminal) {
+        const cols = terminal.cols;
+        const rows = terminal.rows;
+        console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+
+        // Force send resize message to backend even if blocked by scrollback
+        if (isConnected) {
+          console.log(`[TerminalOutput] Forcing resize message to backend: ${cols}x${rows}`);
+          lastResizeRef.current = { cols, rows };
+          resize(cols, rows);
+        }
+      }
     }
   };
 

@@ -45,7 +45,7 @@ func NewMessagesOverlay(messages []StatusMessage) *MessagesOverlay {
 		Dismissed:    false,
 		messages:     messages,
 		scrollOffset: 0,
-		infoStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
+		infoStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color("250")),
 		warnStyle:    lipgloss.NewStyle().Foreground(lipgloss.Color("220")),
 		errorStyle:   lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true),
 		headerStyle:  lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39")),
@@ -300,7 +300,7 @@ func (m *MessagesOverlay) Render(opts ...WhitespaceOption) string {
 	}
 	result = append(result, visibleLines...)
 	result = append(result, strings.Repeat("─", contentWidth))
-	result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(helpText))
+	result = append(result, lipgloss.NewStyle().Foreground(lipgloss.Color("250")).Render(helpText))
 
 	content := strings.Join(result, "\n")
 
