@@ -162,6 +162,33 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Use reader as writer (PTY file is bidirectional)
 	ptyWriter := ptyReader
 
+	// Send initial terminal state (current pane content) before streaming updates
+	// This ensures the client sees the existing screen content immediately on connect
+	initialContent, err := instance.CapturePaneContent()
+	if err != nil {
+		log.WarningLog.Printf("Failed to capture initial pane content for session %s: %v", sessionID, err)
+	} else if len(initialContent) > 0 {
+		// Send initial screen state as first message
+		terminalData := &sessionv1.TerminalData{
+			SessionId: sessionID,
+			Data: &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{
+					Data: []byte(initialContent),
+				},
+			},
+		}
+
+		dataBytes, err := proto.Marshal(terminalData)
+		if err == nil {
+			envelope := protocol.CreateEnvelope(0, dataBytes)
+			if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+				log.WarningLog.Printf("Failed to send initial content: %v", err)
+			} else {
+				log.InfoLog.Printf("Sent initial pane content (%d bytes) to WebSocket for session %s", len(initialContent), sessionID)
+			}
+		}
+	}
+
 	// Create error channel for goroutine coordination
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})

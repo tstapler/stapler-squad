@@ -84,6 +84,20 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Send initial terminal state (current pane content) before streaming updates
+	// This ensures the client sees the existing screen content immediately on connect
+	initialContent, err := instance.CapturePaneContent()
+	if err != nil {
+		log.WarningLog.Printf("Failed to capture initial pane content for session '%s': %v", sessionID, err)
+	} else if len(initialContent) > 0 {
+		// Send initial screen state as first message
+		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(initialContent)); err != nil {
+			log.WarningLog.Printf("Failed to send initial content: %v", err)
+		} else {
+			log.InfoLog.Printf("Sent initial pane content (%d bytes) to WebSocket for session '%s'", len(initialContent), sessionID)
+		}
+	}
+
 	// Create channels for coordinating goroutines
 	var wg sync.WaitGroup
 	done := make(chan struct{})
