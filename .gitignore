@@ -11,3 +11,9 @@ web/src/gen/
 /web-app/.next
 /web-app/node_modules/
 /.playwright-mcp
+
+# Test outputs
+test-results/
+tests/playwright-report/
+tests/test-results/
+tests/test-results.json
