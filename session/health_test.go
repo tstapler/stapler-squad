@@ -5,7 +5,6 @@ import (
 	"time"
 )
 
-
 // TestHealthCheckResult tests the HealthCheckResult struct
 func TestHealthCheckResult(t *testing.T) {
 	// Test the HealthCheckResult struct creation and field access

@@ -46,8 +46,8 @@ type Command struct {
 	Priority  int           `json:"priority"`  // Higher priority = executed first
 	Timestamp time.Time     `json:"timestamp"` // When the command was queued
 	Status    CommandStatus `json:"status"`
-	Result    string        `json:"result,omitempty"`    // Command result/output
-	Error     string        `json:"error,omitempty"`     // Error message if failed
+	Result    string        `json:"result,omitempty"`     // Command result/output
+	Error     string        `json:"error,omitempty"`      // Error message if failed
 	StartTime time.Time     `json:"start_time,omitempty"` // When execution started
 	EndTime   time.Time     `json:"end_time,omitempty"`   // When execution finished
 }

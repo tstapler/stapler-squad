@@ -118,7 +118,7 @@ func TestProcessOutput_CursorMovement(t *testing.T) {
 		{"Cursor Up", "\x1b[A", -1, 0}, // Will be clamped to 0
 		{"Cursor Down", "\x1b[B", 1, 0},
 		{"Cursor Forward", "\x1b[C", 0, 1},
-		{"Cursor Backward", "\x1b[D", 0, 0}, // Will be clamped to 0
+		{"Cursor Backward", "\x1b[D", 0, 0},          // Will be clamped to 0
 		{"Cursor Position 5,10", "\x1b[5;10H", 4, 9}, // 1-based to 0-based
 	}
 
@@ -476,12 +476,12 @@ func TestComplexOutput(t *testing.T) {
 	state := NewTerminalState(25, 80)
 
 	// Simulate complex terminal output (like tmux status line)
-	output := "\x1b[2J\x1b[H" +                    // Clear screen and home cursor
-		"Session: test\n" +                      // Line 1
-		"\x1b[32mActive\x1b[0m\n" +              // Line 2 with color
-		"\x1b[24;1H" +                           // Move to last line
-		"\x1b[7m[0] bash\x1b[0m " +              // Reverse video status
-		"\x1b[33m10:30\x1b[0m"                   // Yellow time
+	output := "\x1b[2J\x1b[H" + // Clear screen and home cursor
+		"Session: test\n" + // Line 1
+		"\x1b[32mActive\x1b[0m\n" + // Line 2 with color
+		"\x1b[24;1H" + // Move to last line
+		"\x1b[7m[0] bash\x1b[0m " + // Reverse video status
+		"\x1b[33m10:30\x1b[0m" // Yellow time
 
 	err := state.ProcessOutput([]byte(output))
 	if err != nil {

@@ -9,18 +9,18 @@ import (
 
 // ApprovalAutomation orchestrates automatic approval handling.
 type ApprovalAutomation struct {
-	sessionName    string
-	detector       *ApprovalDetector
-	policyEngine   *PolicyEngine
-	controller     *ClaudeController
-	mu             sync.RWMutex
-	ctx            context.Context
-	cancel         context.CancelFunc
-	running        bool
-	approvalQueue  []*PendingApproval
-	queueMu        sync.Mutex
-	subscribers    map[string]chan<- ApprovalEvent
-	subMu          sync.RWMutex
+	sessionName   string
+	detector      *ApprovalDetector
+	policyEngine  *PolicyEngine
+	controller    *ClaudeController
+	mu            sync.RWMutex
+	ctx           context.Context
+	cancel        context.CancelFunc
+	running       bool
+	approvalQueue []*PendingApproval
+	queueMu       sync.Mutex
+	subscribers   map[string]chan<- ApprovalEvent
+	subMu         sync.RWMutex
 }
 
 // PendingApproval represents an approval request awaiting action.
@@ -69,11 +69,11 @@ const (
 
 // ApprovalAutomationOptions configures approval automation behavior.
 type ApprovalAutomationOptions struct {
-	AutoExecute       bool          // Automatically execute approved commands
-	UserTimeout       time.Duration // Time to wait for user response
-	ProcessingDelay   time.Duration // Delay between processing approvals
-	MaxQueueSize      int           // Maximum pending approvals
-	EnableAuditLog    bool          // Log all approval actions
+	AutoExecute     bool          // Automatically execute approved commands
+	UserTimeout     time.Duration // Time to wait for user response
+	ProcessingDelay time.Duration // Delay between processing approvals
+	MaxQueueSize    int           // Maximum pending approvals
+	EnableAuditLog  bool          // Log all approval actions
 }
 
 // DefaultApprovalAutomationOptions returns sensible defaults.

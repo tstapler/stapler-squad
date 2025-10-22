@@ -127,10 +127,10 @@ func TestTildeExpansionInNewInstance(t *testing.T) {
 	}
 
 	tests := []struct {
-		name              string
-		inputPath         string
-		expectStartsWith  string
-		expectEndsWith    string
+		name             string
+		inputPath        string
+		expectStartsWith string
+		expectEndsWith   string
 	}{
 		{
 			name:             "Tilde with path",

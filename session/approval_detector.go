@@ -12,25 +12,25 @@ import (
 type ApprovalType string
 
 const (
-	ApprovalCommand      ApprovalType = "command"       // Shell command approval
-	ApprovalFileWrite    ApprovalType = "file_write"    // File write/edit approval
-	ApprovalFileRead     ApprovalType = "file_read"     // File read approval
-	ApprovalToolUse      ApprovalType = "tool_use"      // Tool/API usage approval
-	ApprovalConfirmation ApprovalType = "confirmation"  // Generic confirmation request
-	ApprovalUnknown      ApprovalType = "unknown"       // Unrecognized approval pattern
+	ApprovalCommand      ApprovalType = "command"      // Shell command approval
+	ApprovalFileWrite    ApprovalType = "file_write"   // File write/edit approval
+	ApprovalFileRead     ApprovalType = "file_read"    // File read approval
+	ApprovalToolUse      ApprovalType = "tool_use"     // Tool/API usage approval
+	ApprovalConfirmation ApprovalType = "confirmation" // Generic confirmation request
+	ApprovalUnknown      ApprovalType = "unknown"      // Unrecognized approval pattern
 )
 
 // ApprovalRequest represents a detected approval request from Claude.
 type ApprovalRequest struct {
-	ID            string                 `json:"id"`
-	Type          ApprovalType           `json:"type"`
-	Timestamp     time.Time              `json:"timestamp"`
-	DetectedText  string                 `json:"detected_text"`   // The text that matched the pattern
-	Context       string                 `json:"context"`         // Surrounding context
-	ExtractedData map[string]string      `json:"extracted_data"`  // Pattern capture groups
-	Confidence    float64                `json:"confidence"`      // 0.0-1.0 confidence score
-	Status        ApprovalRequestStatus  `json:"status"`
-	Response      *ApprovalResponse      `json:"response,omitempty"`
+	ID            string                `json:"id"`
+	Type          ApprovalType          `json:"type"`
+	Timestamp     time.Time             `json:"timestamp"`
+	DetectedText  string                `json:"detected_text"`  // The text that matched the pattern
+	Context       string                `json:"context"`        // Surrounding context
+	ExtractedData map[string]string     `json:"extracted_data"` // Pattern capture groups
+	Confidence    float64               `json:"confidence"`     // 0.0-1.0 confidence score
+	Status        ApprovalRequestStatus `json:"status"`
+	Response      *ApprovalResponse     `json:"response,omitempty"`
 }
 
 // ApprovalRequestStatus tracks the lifecycle of an approval request.
@@ -204,14 +204,14 @@ func (ad *ApprovalDetector) Detect(output string) []*ApprovalRequest {
 		for _, pattern := range patterns {
 			if match := pattern.compiled.FindStringSubmatch(line); match != nil {
 				request := &ApprovalRequest{
-					ID:           generateApprovalID(),
-					Type:         pattern.Type,
-					Timestamp:    time.Now(),
-					DetectedText: match[0],
-					Context:      extractContext(lines, lineIdx, pattern.ContextSize),
+					ID:            generateApprovalID(),
+					Type:          pattern.Type,
+					Timestamp:     time.Now(),
+					DetectedText:  match[0],
+					Context:       extractContext(lines, lineIdx, pattern.ContextSize),
 					ExtractedData: extractCaptureGroups(match, pattern.CaptureKeys),
-					Confidence:   pattern.Confidence,
-					Status:       ApprovalPending,
+					Confidence:    pattern.Confidence,
+					Status:        ApprovalPending,
 				}
 
 				detected = append(detected, request)

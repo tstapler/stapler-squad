@@ -54,20 +54,20 @@ func DefaultExecutionOptions() ExecutionOptions {
 
 // CommandExecutor executes commands by writing to PTY and monitoring responses.
 type CommandExecutor struct {
-	sessionName     string
-	ptyAccess       *PTYAccess
-	responseStream  *ResponseStream
-	statusDetector  *StatusDetector
-	queue           *CommandQueue
-	options         ExecutionOptions
-	mu              sync.RWMutex
-	executing       bool
-	currentCommand  *Command
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wg              sync.WaitGroup
-	resultCallback  func(*ExecutionResult)
-	subscriberID    string
+	sessionName    string
+	ptyAccess      *PTYAccess
+	responseStream *ResponseStream
+	statusDetector *StatusDetector
+	queue          *CommandQueue
+	options        ExecutionOptions
+	mu             sync.RWMutex
+	executing      bool
+	currentCommand *Command
+	ctx            context.Context
+	cancel         context.CancelFunc
+	wg             sync.WaitGroup
+	resultCallback func(*ExecutionResult)
+	subscriberID   string
 }
 
 // NewCommandExecutor creates a new command executor for the given session.

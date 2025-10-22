@@ -124,10 +124,10 @@ func TestPolicyEngine_UpdatePolicy(t *testing.T) {
 	engine := NewPolicyEngine()
 
 	policy := &ApprovalPolicy{
-		Name:    "test_update",
-		Enabled: true,
+		Name:     "test_update",
+		Enabled:  true,
 		Priority: 100,
-		Action:  ActionAutoApprove,
+		Action:   ActionAutoApprove,
 	}
 
 	engine.AddPolicy(policy)
@@ -409,8 +409,8 @@ func TestPolicyEngine_TimeRestriction(t *testing.T) {
 		Action:        ActionAutoApprove,
 		TimeRestriction: &TimeRestriction{
 			DaysOfWeek: []time.Weekday{now.Weekday()}, // Current day
-			StartHour:  now.Hour() - 1,                 // One hour ago
-			EndHour:    now.Hour() + 1,                 // One hour from now
+			StartHour:  now.Hour() - 1,                // One hour ago
+			EndHour:    now.Hour() + 1,                // One hour from now
 		},
 		Conditions: []PolicyCondition{},
 	}

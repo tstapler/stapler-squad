@@ -13,12 +13,12 @@ import (
 type CircularBuffer struct {
 	data     []byte
 	size     int
-	head     int    // Write position
-	tail     int    // Read position
-	count    int    // Number of bytes in buffer
+	head     int // Write position
+	tail     int // Read position
+	count    int // Number of bytes in buffer
 	diskFile *os.File
 	mu       sync.RWMutex
-	wrapped  bool   // True if head has wrapped around past tail
+	wrapped  bool // True if head has wrapped around past tail
 }
 
 const (
@@ -33,11 +33,11 @@ func NewCircularBuffer(size int) *CircularBuffer {
 		size = DefaultBufferSize
 	}
 	return &CircularBuffer{
-		data: make([]byte, size),
-		size: size,
-		head: 0,
-		tail: 0,
-		count: 0,
+		data:    make([]byte, size),
+		size:    size,
+		head:    0,
+		tail:    0,
+		count:   0,
 		wrapped: false,
 	}
 }

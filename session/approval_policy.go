@@ -10,27 +10,27 @@ import (
 
 // ApprovalPolicy defines a rule for automatic approval.
 type ApprovalPolicy struct {
-	ID              string              `json:"id"`
-	Name            string              `json:"name"`
-	Description     string              `json:"description"`
-	ApprovalTypes   []ApprovalType      `json:"approval_types"`    // Types this policy applies to
-	Enabled         bool                `json:"enabled"`
-	Priority        int                 `json:"priority"`          // Higher priority policies checked first
-	Conditions      []PolicyCondition   `json:"conditions"`        // All must match
-	Action          PolicyAction        `json:"action"`            // What to do when matched
-	TimeRestriction *TimeRestriction    `json:"time_restriction,omitempty"`
-	UsageLimit      *UsageLimit         `json:"usage_limit,omitempty"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
-	usageCount      int                 // Runtime tracking
-	lastUsed        time.Time           // Runtime tracking
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Description     string            `json:"description"`
+	ApprovalTypes   []ApprovalType    `json:"approval_types"` // Types this policy applies to
+	Enabled         bool              `json:"enabled"`
+	Priority        int               `json:"priority"`   // Higher priority policies checked first
+	Conditions      []PolicyCondition `json:"conditions"` // All must match
+	Action          PolicyAction      `json:"action"`     // What to do when matched
+	TimeRestriction *TimeRestriction  `json:"time_restriction,omitempty"`
+	UsageLimit      *UsageLimit       `json:"usage_limit,omitempty"`
+	CreatedAt       time.Time         `json:"created_at"`
+	UpdatedAt       time.Time         `json:"updated_at"`
+	usageCount      int               // Runtime tracking
+	lastUsed        time.Time         // Runtime tracking
 }
 
 // PolicyCondition represents a single condition that must be met.
 type PolicyCondition struct {
-	Field    string `json:"field"`     // Field to check (e.g., "command", "file_path")
-	Operator string `json:"operator"`  // "equals", "contains", "regex", "not_contains"
-	Value    string `json:"value"`     // Value to compare against
+	Field    string `json:"field"`    // Field to check (e.g., "command", "file_path")
+	Operator string `json:"operator"` // "equals", "contains", "regex", "not_contains"
+	Value    string `json:"value"`    // Value to compare against
 	compiled *regexp.Regexp
 }
 
@@ -53,9 +53,9 @@ type TimeRestriction struct {
 
 // UsageLimit restricts how many times a policy can be used.
 type UsageLimit struct {
-	MaxUses     int           `json:"max_uses"`      // 0 = unlimited
-	TimeWindow  time.Duration `json:"time_window"`   // 0 = no time window
-	PerApproval bool          `json:"per_approval"`  // Track per approval type vs globally
+	MaxUses     int           `json:"max_uses"`     // 0 = unlimited
+	TimeWindow  time.Duration `json:"time_window"`  // 0 = no time window
+	PerApproval bool          `json:"per_approval"` // Track per approval type vs globally
 }
 
 // PolicyEngine manages approval policies and evaluates approval requests.
@@ -68,13 +68,13 @@ type PolicyEngine struct {
 
 // PolicyAuditEntry records policy evaluation results.
 type PolicyAuditEntry struct {
-	Timestamp      time.Time          `json:"timestamp"`
-	RequestID      string             `json:"request_id"`
-	PolicyID       string             `json:"policy_id"`
-	PolicyName     string             `json:"policy_name"`
-	Action         PolicyAction       `json:"action"`
-	MatchedRequest *ApprovalRequest   `json:"matched_request"`
-	Reason         string             `json:"reason"`
+	Timestamp      time.Time        `json:"timestamp"`
+	RequestID      string           `json:"request_id"`
+	PolicyID       string           `json:"policy_id"`
+	PolicyName     string           `json:"policy_name"`
+	Action         PolicyAction     `json:"action"`
+	MatchedRequest *ApprovalRequest `json:"matched_request"`
+	Reason         string           `json:"reason"`
 }
 
 // NewPolicyEngine creates a new approval policy engine.
@@ -198,10 +198,10 @@ func (pe *PolicyEngine) Evaluate(request *ApprovalRequest) (*PolicyDecision, err
 	defer pe.mu.Unlock()
 
 	decision := &PolicyDecision{
-		Request:    request,
-		Timestamp:  time.Now(),
-		Decision:   ActionPrompt, // Default to prompting user
-		Matched:    false,
+		Request:   request,
+		Timestamp: time.Now(),
+		Decision:  ActionPrompt, // Default to prompting user
+		Matched:   false,
 	}
 
 	// Check each policy in priority order
@@ -256,12 +256,12 @@ func (pe *PolicyEngine) Evaluate(request *ApprovalRequest) (*PolicyDecision, err
 
 // PolicyDecision represents the result of policy evaluation.
 type PolicyDecision struct {
-	Request       *ApprovalRequest  `json:"request"`
-	Timestamp     time.Time         `json:"timestamp"`
-	Decision      PolicyAction      `json:"decision"`
-	Matched       bool              `json:"matched"`
-	MatchedPolicy *ApprovalPolicy   `json:"matched_policy,omitempty"`
-	Reason        string            `json:"reason"`
+	Request       *ApprovalRequest `json:"request"`
+	Timestamp     time.Time        `json:"timestamp"`
+	Decision      PolicyAction     `json:"decision"`
+	Matched       bool             `json:"matched"`
+	MatchedPolicy *ApprovalPolicy  `json:"matched_policy,omitempty"`
+	Reason        string           `json:"reason"`
 }
 
 // appliesToType checks if a policy applies to a given approval type.
@@ -461,8 +461,8 @@ func (pe *PolicyEngine) GetStatistics() PolicyStatistics {
 	defer pe.mu.RUnlock()
 
 	stats := PolicyStatistics{
-		TotalPolicies:  len(pe.policies),
-		EnabledPolicies: 0,
+		TotalPolicies:    len(pe.policies),
+		EnabledPolicies:  0,
 		TotalEvaluations: len(pe.auditLog),
 	}
 

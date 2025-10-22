@@ -230,9 +230,9 @@ func TestPTYConnection_GetStatusColor(t *testing.T) {
 
 func TestPTYConnection_GetDisplayName(t *testing.T) {
 	tests := []struct {
-		name        string
-		conn        PTYConnection
-		want        string
+		name string
+		conn PTYConnection
+		want string
 	}{
 		{
 			name: "with session name",

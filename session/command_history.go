@@ -356,10 +356,10 @@ func (ch *CommandHistory) saveUnsafe() error {
 
 	// Marshal to JSON
 	data := struct {
-		SessionName string           `json:"session_name"`
-		Entries     []*HistoryEntry  `json:"entries"`
-		Timestamp   time.Time        `json:"timestamp"`
-		MaxEntries  int              `json:"max_entries"`
+		SessionName string          `json:"session_name"`
+		Entries     []*HistoryEntry `json:"entries"`
+		Timestamp   time.Time       `json:"timestamp"`
+		MaxEntries  int             `json:"max_entries"`
 	}{
 		SessionName: ch.sessionName,
 		Entries:     ch.entries,
@@ -402,10 +402,10 @@ func (ch *CommandHistory) Load() error {
 
 	// Unmarshal JSON
 	var data struct {
-		SessionName string           `json:"session_name"`
-		Entries     []*HistoryEntry  `json:"entries"`
-		Timestamp   time.Time        `json:"timestamp"`
-		MaxEntries  int              `json:"max_entries"`
+		SessionName string          `json:"session_name"`
+		Entries     []*HistoryEntry `json:"entries"`
+		Timestamp   time.Time       `json:"timestamp"`
+		MaxEntries  int             `json:"max_entries"`
 	}
 
 	if err := json.Unmarshal(jsonData, &data); err != nil {

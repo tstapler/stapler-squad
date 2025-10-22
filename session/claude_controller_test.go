@@ -15,8 +15,8 @@ func createMockInstance(t *testing.T) *Instance {
 
 	// Create a basic instance
 	instance := &Instance{
-		Title:  "test-session",
-		Status: Running,
+		Title:   "test-session",
+		Status:  Running,
 		started: true,
 	}
 

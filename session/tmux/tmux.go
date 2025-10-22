@@ -980,6 +980,48 @@ func (t *TmuxSession) FilterBanners(content string) (filteredContent string, ban
 	return t.bannerFilter.FilterBannersFromText(content)
 }
 
+// GetCursorPosition returns the current cursor position in the tmux pane.
+// Returns cursor X (column) and Y (row) coordinates, both 0-based.
+func (t *TmuxSession) GetCursorPosition() (x, y int, err error) {
+	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
+		"#{cursor_x} #{cursor_y}")
+
+	output, err := t.cmdExec.Output(cmd)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get cursor position for session '%s': %w", t.sanitizedName, err)
+	}
+
+	// Parse "x y" format
+	var cursorX, cursorY int
+	_, err = fmt.Sscanf(strings.TrimSpace(string(output)), "%d %d", &cursorX, &cursorY)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse cursor position '%s': %w", string(output), err)
+	}
+
+	return cursorX, cursorY, nil
+}
+
+// GetPaneDimensions returns the current dimensions of the tmux pane.
+// Returns width (columns) and height (rows).
+func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
+	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
+		"#{pane_width} #{pane_height}")
+
+	output, err := t.cmdExec.Output(cmd)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get pane dimensions for session '%s': %w", t.sanitizedName, err)
+	}
+
+	// Parse "width height" format
+	var paneWidth, paneHeight int
+	_, err = fmt.Sscanf(strings.TrimSpace(string(output)), "%d %d", &paneWidth, &paneHeight)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to parse pane dimensions '%s': %w", string(output), err)
+	}
+
+	return paneWidth, paneHeight, nil
+}
+
 // CleanupSessions kills all tmux sessions that start with "session-" on the default server
 func CleanupSessions(cmdExec executor.Executor) error {
 	return CleanupSessionsOnServer(cmdExec, "")

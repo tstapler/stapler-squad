@@ -34,12 +34,12 @@ type StatusPattern struct {
 
 // StatusPatterns contains all patterns for status detection.
 type StatusPatterns struct {
-	Ready          []StatusPattern `yaml:"ready"`
-	Processing     []StatusPattern `yaml:"processing"`
-	NeedsApproval  []StatusPattern `yaml:"needs_approval"`
-	Error          []StatusPattern `yaml:"error"`
-	Idle           []StatusPattern `yaml:"idle"`   // Waiting for user input
-	Active         []StatusPattern `yaml:"active"` // Actively executing commands
+	Ready         []StatusPattern `yaml:"ready"`
+	Processing    []StatusPattern `yaml:"processing"`
+	NeedsApproval []StatusPattern `yaml:"needs_approval"`
+	Error         []StatusPattern `yaml:"error"`
+	Idle          []StatusPattern `yaml:"idle"`   // Waiting for user input
+	Active        []StatusPattern `yaml:"active"` // Actively executing commands
 }
 
 // StatusDetector analyzes PTY output to determine the current status of a Claude instance.

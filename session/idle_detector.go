@@ -26,19 +26,19 @@ type IdleDetectorConfig struct {
 // DefaultIdleDetectorConfig returns sensible defaults for idle detection.
 func DefaultIdleDetectorConfig() IdleDetectorConfig {
 	return IdleDetectorConfig{
-		IdleThreshold: 10 * time.Second, // Reduced from 30s for faster detection
+		IdleThreshold: 10 * time.Second,       // Reduced from 30s for faster detection
 		DebounceDelay: 500 * time.Millisecond, // Reduced from 2s for faster response
-		BufferSize:    4096, // 4KB should capture recent status indicators
+		BufferSize:    4096,                   // 4KB should capture recent status indicators
 	}
 }
 
 // IdleDetector monitors PTY output to determine if a Claude Code session is idle.
 // It uses pattern matching on recent output and tracks state transitions with debouncing.
 type IdleDetector struct {
-	sessionName string
+	sessionName    string
 	statusDetector *StatusDetector
-	ptyAccess *PTYAccess
-	config IdleDetectorConfig
+	ptyAccess      *PTYAccess
+	config         IdleDetectorConfig
 
 	// State tracking
 	currentState    IdleState

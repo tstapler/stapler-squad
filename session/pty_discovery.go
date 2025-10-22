@@ -20,9 +20,9 @@ type PTYStatus int
 
 const (
 	PTYReady PTYStatus = iota // Waiting for input
-	PTYBusy                    // Executing command
-	PTYIdle                    // No activity
-	PTYError                   // Error state
+	PTYBusy                   // Executing command
+	PTYIdle                   // No activity
+	PTYError                  // Error state
 )
 
 func (s PTYStatus) String() string {
@@ -63,9 +63,9 @@ type PTYConnection struct {
 type PTYCategory int
 
 const (
-	PTYCategorySquad PTYCategory = iota // Squad-managed sessions
-	PTYCategoryOrphaned                 // Unmanaged Claude instances
-	PTYCategoryOther                    // Other tools (aider, etc.)
+	PTYCategorySquad    PTYCategory = iota // Squad-managed sessions
+	PTYCategoryOrphaned                    // Unmanaged Claude instances
+	PTYCategoryOther                       // Other tools (aider, etc.)
 )
 
 func (c PTYCategory) String() string {
@@ -83,12 +83,12 @@ func (c PTYCategory) String() string {
 
 // PTYDiscovery manages PTY discovery and monitoring
 type PTYDiscovery struct {
-	mu            sync.RWMutex
-	connections   []*PTYConnection
-	sessionMap    map[string]*Instance // Session name -> Instance
-	stopCh        chan struct{}
-	refreshRate   time.Duration
-	config        PTYDiscoveryConfig // Discovery configuration
+	mu          sync.RWMutex
+	connections []*PTYConnection
+	sessionMap  map[string]*Instance // Session name -> Instance
+	stopCh      chan struct{}
+	refreshRate time.Duration
+	config      PTYDiscoveryConfig // Discovery configuration
 }
 
 // NewPTYDiscovery creates a new PTY discovery service with default configuration
