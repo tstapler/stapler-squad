@@ -146,9 +146,173 @@ Tests hang in `config.GetClaudeCommand()` which executes shell commands during s
 
 ---
 
-## Future Priorities (After Emergency Resolution)
+---
 
-### Medium Term (Next 3-5 Sessions):
+## PLANNED: Claude Config Editor & Session History Viewer
+
+**Status**: Planning Complete - Ready for Implementation
+**Priority**: P2 - After Web UI MVP complete
+**Epic ID**: FEATURE-001
+**Estimated Effort**: 3-4 weeks (1 engineer)
+**Progress**: 0% (Planning phase)
+
+### Overview
+
+Add comprehensive Claude Code configuration management and session history viewing to Claude Squad:
+- View/edit Claude configuration files (.claude/CLAUDE.md, settings.json, agents.md)
+- Browse historical Claude sessions from ~/.claude/history.jsonl
+- Launch new sessions based on historical sessions
+- Review past work through conversation history
+
+**Strategic Value**:
+- **Productivity**: Resume interrupted work by launching from history
+- **Transparency**: Direct config access eliminates manual file editing
+- **Workflow Integration**: Tight Claude Code + Claude Squad integration
+
+### 🎯 Recommended First Task: TASK-001.1 - Backend Config Foundation
+
+**Task**: Create config/claude.go File Structure
+**Estimated Time**: 1 hour
+**Priority**: P2 - Foundation for all config features
+**Context Boundary**: 1 file (config/claude.go) ✅
+
+**Why This Task First?**:
+1. **Zero Dependencies**: No prerequisites, can start immediately
+2. **Architectural Foundation**: Establishes patterns for entire feature
+3. **Minimal Context**: Single file, clear scope, fast validation
+4. **Enables Parallel Work**: Unblocks TASK-001.2, 001.3, 001.4
+5. **AIC Framework Perfect Fit**: 1h task, 1 file, atomic scope
+
+**Implementation Steps**:
+1. Create `config/claude.go` with ClaudeConfigManager struct
+2. Add GetClaudeDir() helper method
+3. Define ConfigFile struct (Name, Path, Content, ModTime)
+4. Add basic error types (ErrConfigNotFound, ErrInvalidConfig)
+5. Export manager constructor: NewClaudeConfigManager()
+6. Add comprehensive GoDoc comments
+7. Compile and validate: `go build ./config`
+
+**Context Files to Understand**:
+- `config/config.go` - Existing config patterns and conventions
+- `config/state.go` - State management patterns
+- `~/.claude/` - Target directory structure (CLAUDE.md, settings.json, agents.md)
+
+**Success Criteria**:
+- ✅ File compiles without errors
+- ✅ Exports ClaudeConfigManager struct
+- ✅ GetClaudeDir() returns ~/.claude path
+- ✅ ConfigFile struct properly defined
+- ✅ GoDoc comments complete
+- ✅ Follows existing config package patterns
+
+**Next Tasks After This**:
+- TASK-001.2: Implement GetConfig() method (2h)
+- TASK-001.3: Add JSON validation (2h)
+- TASK-001.4: Atomic write with backup (3h)
+
+### Implementation Phases
+
+#### Phase 1: Foundation (Week 1) - NEXT
+**Goal**: Backend infrastructure for config and history management
+
+**Stories**:
+1. **STORY-001: Backend Config Management** [2 days]
+   - TASK-001.1: Create config/claude.go structure [1h] **← RECOMMENDED START**
+   - TASK-001.2: Implement GetConfig() method [2h]
+   - TASK-001.3: Add JSON validation support [2h]
+   - TASK-001.4: Implement atomic write with backup [3h]
+
+2. **STORY-002: History Parser Implementation** [2 days]
+   - TASK-002.1: Create session/history.go structure [1h]
+   - TASK-002.2: Implement JSONL streaming parser [3h]
+   - TASK-002.3: Build SessionHistoryIndex [2h]
+   - TASK-002.4: Add project grouping logic [2h]
+
+3. **STORY-003: Protocol Buffer Definitions** [1 day]
+   - TASK-003.1: Add config RPCs to session.proto [2h]
+   - TASK-003.2: Add history RPCs to session.proto [2h]
+   - TASK-003.3: Generate Go and TypeScript bindings [1h]
+
+**Milestone 1**: Backend Complete - Can read/write configs and parse history programmatically
+
+#### Phase 2: TUI Implementation (Week 2)
+**Goal**: Build overlay components for config editing and history browsing
+
+**Stories**:
+4. **STORY-004: Config Editor Overlay** [3 days]
+   - Create ui/overlay/configEditorOverlay.go
+   - Implement syntax highlighting (Markdown/JSON)
+   - Add edit mode with validation
+   - Wire up save/cancel actions
+
+5. **STORY-005: History Browser Overlay** [2 days]
+   - Create ui/overlay/sessionHistoryBrowserOverlay.go
+   - Implement list rendering with grouping
+   - Add date range filters and search
+   - Enable session launch from history
+
+**Milestone 2**: TUI MVP - Can view/edit configs and browse history in TUI
+
+#### Phase 3: Web UI Implementation (Week 3)
+**Goal**: Build web components with feature parity to TUI
+
+**Stories**:
+6. **STORY-006: Config Editor Web Component** [3 days]
+   - Monaco editor integration
+   - Syntax highlighting and validation
+   - Real-time error feedback
+
+7. **STORY-007: History Browser Web Component** [2 days]
+   - Virtual scrolling for performance
+   - Filtering and search UI
+   - Project-based grouping
+
+**Milestone 3**: Web UI Complete - Feature parity with TUI
+
+#### Phase 4: Integration & Polish (Week 4)
+**Goal**: Complete feature integration and testing
+
+**Stories**:
+8. **STORY-008: Launch Session from History** [2 days]
+9. **STORY-009: Conversation Viewer** [2 days]
+10. **STORY-010: Testing & Documentation** [1 day]
+
+**Milestone 4**: Feature Complete - Ready for production release
+
+### Technical Notes
+
+**Dependencies Already Available**:
+- ✅ `github.com/gofrs/flock` - File locking (already in go.mod)
+- ✅ `github.com/mattn/go-sqlite3` - SQLite driver (already in go.mod)
+- Need to add: `github.com/xeipuuv/gojsonschema` - JSON validation
+
+**Integration Points**:
+- Reuse existing config directory resolution (config/config.go)
+- Follow overlay pattern from ui/overlay/sessionSetup.go
+- Extend proto/session/v1/session.proto with new RPCs
+- Add key bindings in keys/keys.go (C for config, H for history)
+
+**Context Boundaries**:
+- Phase 1 tasks: 1-3 files each, 1-3 hours
+- All tasks respect AIC framework (3-5 files max, single responsibility)
+- No task requires > 800 lines of total context
+
+**Testing Strategy**:
+- Unit tests for all backend services (>80% coverage)
+- Integration tests for file operations
+- TUI overlay tests with teatest framework
+- E2E tests with Playwright for web UI
+
+**See Full Details**:
+- [Complete Feature Plan](docs/tasks/claude-config-editor.md) - 70KB, 2,145 lines
+- [Implementation Summary](docs/tasks/claude-config-editor-summary.md) - 12KB, 348 lines
+
+---
+
+## Future Priorities
+
+### Medium Term (After Web UI MVP):
+- [ ] **Claude Config Editor** - View/edit Claude configs (PLANNED - see above)
 - [ ] **Session Health Check Integration** - Evaluate health check system
 - [ ] **Filtering System Enhancement** - Tag vs Category analysis
 - [ ] **Help System Consolidation** - Compare current vs unused help generator
@@ -162,11 +326,15 @@ Tests hang in `config.GetClaudeCommand()` which executes shell commands during s
 
 ## Context Notes
 
-**Last Updated**: 2025-01-17
-**Current Phase**: Emergency Build Stabilization
-**Next Milestone**: Restore compilation and test execution capability
+**Last Updated**: 2025-11-10
+**Current Phase**: Web UI Implementation (40% complete)
+**Next Milestone**: Web UI MVP with session creation wizard
+
+**Active Projects**:
+1. **Web UI Implementation** (P1 - In Progress)
+2. **Claude Config Editor** (P2 - Planned, ready to start)
 
 **Critical Dependencies**:
-- Build failures must be resolved before any other development work
-- Test stabilization required for production deployment confidence
-- All major feature work is complete and functional (when builds work)
+- Web UI MVP is the current priority (P1)
+- Claude Config Editor can start after Web UI Session Creation complete
+- Test stabilization work deferred until major features complete
