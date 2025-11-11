@@ -139,6 +139,11 @@
   color: var(--color-text-muted);
 }
 
+.permissionWarning {
+  color: var(--color-warning, #ff9800);
+  font-style: italic;
+}
+
 .toggle {
   position: relative;
   width: 48px;

@@ -48,6 +48,25 @@ service SessionService {
   // WatchReviewQueue streams real-time review queue events (items added/removed/updated).
   // Server-streaming RPC for live queue updates without polling.
   rpc WatchReviewQueue(WatchReviewQueueRequest) returns (stream ReviewQueueEvent) {}
+
+  // LogUserInteraction logs a user interaction event for audit trail.
+  // Records user actions for compliance, debugging, and analytics.
+  rpc LogUserInteraction(LogUserInteractionRequest) returns (LogUserInteractionResponse) {}
+
+  // GetClaudeConfig retrieves a Claude configuration file by name (CLAUDE.md, settings.json, agents.md).
+  rpc GetClaudeConfig(GetClaudeConfigRequest) returns (GetClaudeConfigResponse) {}
+
+  // ListClaudeConfigs returns all configuration files in the ~/.claude directory.
+  rpc ListClaudeConfigs(ListClaudeConfigsRequest) returns (ListClaudeConfigsResponse) {}
+
+  // UpdateClaudeConfig updates a Claude configuration file with atomic write and backup.
+  rpc UpdateClaudeConfig(UpdateClaudeConfigRequest) returns (UpdateClaudeConfigResponse) {}
+
+  // ListClaudeHistory returns Claude session history entries with optional filtering.
+  rpc ListClaudeHistory(ListClaudeHistoryRequest) returns (ListClaudeHistoryResponse) {}
+
+  // GetClaudeHistoryDetail retrieves detailed information for a specific history entry.
+  rpc GetClaudeHistoryDetail(GetClaudeHistoryDetailRequest) returns (GetClaudeHistoryDetailResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -240,4 +259,121 @@ message WatchReviewQueueRequest {
 
   // Optional: Only events for specific sessions.
   repeated string session_ids = 5;
+}
+
+message LogUserInteractionRequest {
+  // Session identifier (optional - may be empty for panel-level actions).
+  optional string session_id = 1;
+
+  // Type of interaction (from UserInteractionEvent.InteractionType enum).
+  UserInteractionEvent.InteractionType interaction_type = 2;
+
+  // Additional context about the interaction.
+  optional string context = 3;
+
+  // Optional: Notification ID if this interaction involves a notification.
+  optional string notification_id = 4;
+
+  // Optional: Additional metadata as key-value pairs.
+  map<string, string> metadata = 5;
+}
+
+message LogUserInteractionResponse {
+  // Whether the log was successfully recorded.
+  bool success = 1;
+
+  // Optional: Error message if logging failed.
+  optional string error = 2;
+}
+
+
+// Claude Config Management Messages
+
+message GetClaudeConfigRequest {
+  // Filename to retrieve (e.g., "CLAUDE.md", "settings.json", "agents.md")
+  string filename = 1;
+}
+
+message GetClaudeConfigResponse {
+  // Configuration file data
+  ClaudeConfigFile config = 1;
+}
+
+message ListClaudeConfigsRequest {
+  // Empty request - returns all config files
+}
+
+message ListClaudeConfigsResponse {
+  // List of all configuration files
+  repeated ClaudeConfigFile configs = 1;
+}
+
+message UpdateClaudeConfigRequest {
+  // Filename to update
+  string filename = 1;
+  // New file content
+  string content = 2;
+  // If true, validate JSON content before writing (for .json files)
+  bool validate = 3;
+}
+
+message UpdateClaudeConfigResponse {
+  // Updated configuration file data
+  ClaudeConfigFile config = 1;
+}
+
+message ClaudeConfigFile {
+  // Filename (e.g., "CLAUDE.md", "settings.json")
+  string name = 1;
+  // Absolute path to the file
+  string path = 2;
+  // File content
+  string content = 3;
+  // Last modification timestamp
+  google.protobuf.Timestamp mod_time = 4;
+}
+
+// Claude Session History Messages
+
+message ListClaudeHistoryRequest {
+  // Optional project path filter
+  optional string project = 1;
+  // Optional search query (searches name and project)
+  optional string search_query = 2;
+  // Maximum number of results to return (0 = all)
+  int32 limit = 3;
+}
+
+message ListClaudeHistoryResponse {
+  // List of history entries
+  repeated ClaudeHistoryEntry entries = 1;
+  // Total count of entries (before limit applied)
+  int32 total_count = 2;
+}
+
+message GetClaudeHistoryDetailRequest {
+  // History entry ID
+  string id = 1;
+}
+
+message GetClaudeHistoryDetailResponse {
+  // Detailed history entry
+  ClaudeHistoryEntry entry = 1;
+}
+
+message ClaudeHistoryEntry {
+  // Unique conversation identifier
+  string id = 1;
+  // Conversation title/name
+  string name = 2;
+  // Project/directory path
+  string project = 3;
+  // Conversation creation timestamp
+  google.protobuf.Timestamp created_at = 4;
+  // Last update timestamp
+  google.protobuf.Timestamp updated_at = 5;
+  // Claude model used (e.g., "claude-sonnet-4")
+  string model = 6;
+  // Number of messages in the conversation
+  int32 message_count = 7;
 }

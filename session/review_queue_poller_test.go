@@ -188,3 +188,86 @@ func TestReviewQueuePoller_ContextChangeUpdatesTimestamp(t *testing.T) {
 
 	t.Logf("Context change correctly triggered timestamp update")
 }
+
+// TestReviewQueue_SortsByLastActivity verifies that review items are sorted
+// by LastActivity timestamp, with most recent activity first (within same priority).
+func TestReviewQueue_SortsByLastActivity(t *testing.T) {
+	// Create review queue
+	queue := NewReviewQueue()
+
+	// Create three sessions with same priority but different LastActivity times
+	now := time.Now()
+
+	// Session 1: Last activity 5 days ago
+	item1 := &ReviewItem{
+		SessionID:    "session-old",
+		SessionName:  "session-old",
+		Reason:       ReasonInputRequired,
+		Priority:     PriorityMedium,
+		DetectedAt:   now.Add(-5 * 24 * time.Hour),
+		Context:      "Waiting for input",
+		LastActivity: now.Add(-5 * 24 * time.Hour), // 5 days ago
+	}
+
+	// Session 2: Last activity 6 days ago (oldest)
+	item2 := &ReviewItem{
+		SessionID:    "session-oldest",
+		SessionName:  "session-oldest",
+		Reason:       ReasonInputRequired,
+		Priority:     PriorityMedium,
+		DetectedAt:   now.Add(-6 * 24 * time.Hour),
+		Context:      "Waiting for input",
+		LastActivity: now.Add(-6 * 24 * time.Hour), // 6 days ago
+	}
+
+	// Session 3: Last activity 10 days ago but had recent activity
+	item3 := &ReviewItem{
+		SessionID:    "session-recent",
+		SessionName:  "session-recent",
+		Reason:       ReasonInputRequired,
+		Priority:     PriorityMedium,
+		DetectedAt:   now.Add(-10 * 24 * time.Hour),
+		Context:      "Waiting for input",
+		LastActivity: now.Add(-1 * time.Hour), // 1 hour ago (most recent)
+	}
+
+	// Add items in random order
+	queue.Add(item2)
+	queue.Add(item1)
+	queue.Add(item3)
+
+	// Get sorted list
+	items := queue.List()
+
+	// Verify we have all 3 items
+	if len(items) != 3 {
+		t.Fatalf("Expected 3 items in queue, got %d", len(items))
+	}
+
+	// Verify sorting: most recent activity should be first
+	if items[0].SessionID != "session-recent" {
+		t.Errorf("Expected first item to be 'session-recent' (most recent activity), got '%s'", items[0].SessionID)
+	}
+
+	if items[1].SessionID != "session-old" {
+		t.Errorf("Expected second item to be 'session-old', got '%s'", items[1].SessionID)
+	}
+
+	if items[2].SessionID != "session-oldest" {
+		t.Errorf("Expected third item to be 'session-oldest' (least recent activity), got '%s'", items[2].SessionID)
+	}
+
+	// Verify the LastActivity times are in correct order
+	if !items[0].LastActivity.After(items[1].LastActivity) {
+		t.Error("First item should have more recent LastActivity than second item")
+	}
+
+	if !items[1].LastActivity.After(items[2].LastActivity) {
+		t.Error("Second item should have more recent LastActivity than third item")
+	}
+
+	t.Logf("✓ Review queue correctly sorted by LastActivity (most recent first)")
+	t.Logf("  1. %s - Last activity: %s ago", items[0].SessionID, formatDuration(time.Since(items[0].LastActivity)))
+	t.Logf("  2. %s - Last activity: %s ago", items[1].SessionID, formatDuration(time.Since(items[1].LastActivity)))
+	t.Logf("  3. %s - Last activity: %s ago", items[2].SessionID, formatDuration(time.Since(items[2].LastActivity)))
+}

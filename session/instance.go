@@ -89,6 +89,10 @@ type Instance struct {
 	// Sessions acknowledged after their last update won't appear in the queue until they update again
 	LastAcknowledged time.Time
 
+	// LastAddedToQueue tracks when this session was last added to the review queue
+	// Used to prevent notification spam by enforcing a minimum re-add interval
+	LastAddedToQueue time.Time
+
 	// Terminal update timestamps for tracking activity
 	// LastTerminalUpdate is the timestamp of the last output received from the terminal (any output)
 	LastTerminalUpdate time.Time
@@ -148,6 +152,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		TmuxPrefix:           i.TmuxPrefix,
 		LastTerminalUpdate:   i.LastTerminalUpdate,
 		LastMeaningfulOutput: i.LastMeaningfulOutput,
+		LastAddedToQueue:     i.LastAddedToQueue,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -236,6 +241,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		TmuxPrefix:           data.TmuxPrefix,
 		LastTerminalUpdate:   data.LastTerminalUpdate,
 		LastMeaningfulOutput: data.LastMeaningfulOutput,
+		LastAddedToQueue:     data.LastAddedToQueue,
 		InstanceType:         InstanceTypeManaged, // Restored instances are always managed
 		IsManaged:            true,
 		ExternalMetadata:     nil, // External instances are not persisted
@@ -659,10 +665,16 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.started = true
 
 	// Start ClaudeController for idle detection and automation
-	// This is non-critical - we log errors but don't fail the instance startup
-	if err := i.StartController(); err != nil {
-		log.WarningLog.Printf("Failed to start controller for instance '%s': %v", i.Title, err)
-		// Continue - controller is optional functionality
+	// Only start controller for new sessions - loaded sessions get controllers started
+	// by server.go after wiring dependencies (statusManager, reviewQueue)
+	if firstTimeSetup {
+		// This is non-critical - we log errors but don't fail the instance startup
+		if err := i.StartController(); err != nil {
+			log.WarningLog.Printf("Failed to start controller for instance '%s': %v", i.Title, err)
+			// Continue - controller is optional functionality
+		}
+	} else {
+		log.DebugLog.Printf("Skipping controller startup for loaded instance '%s' (will be started after wiring)", i.Title)
 	}
 
 	return nil
@@ -757,7 +769,7 @@ func (i *Instance) Preview() (string, error) {
 	}
 
 	// Update terminal activity timestamps based on captured content
-	i.UpdateTerminalTimestamps(content)
+	i.UpdateTerminalTimestamps(content, false)
 
 	return content, nil
 }
@@ -1069,6 +1081,24 @@ func (i *Instance) ResizePTY(cols, rows int) error {
 	return nil
 }
 
+// CapturePaneContent captures the current visible tmux pane content.
+// This is a simple wrapper around TmuxSession.CapturePaneContent() for compatibility
+// with the terminal WebSocket handlers.
+func (i *Instance) CapturePaneContent() (string, error) {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+
+	if !i.started || i.Status == Paused {
+		return "", fmt.Errorf("session not started or paused")
+	}
+
+	if i.tmuxSession == nil {
+		return "", fmt.Errorf("tmux session not initialized")
+	}
+
+	return i.tmuxSession.CapturePaneContent()
+}
+
 // GetCurrentPaneContent captures the current visible tmux pane content.
 // This is what the user would see if they attached to tmux directly.
 // Unlike scrollback, this gives a clean snapshot of the current terminal state,
@@ -1086,15 +1116,18 @@ func (i *Instance) GetCurrentPaneContent(lines int) (string, error) {
 		lines = 50 // Default to last 50 lines (typical terminal height)
 	}
 
-	// Use tmux capture-pane to get visible content
+	// CRITICAL FIX: Use -S - to capture from start of history
+	// Previous approach used -S -50 which meant "start 50 lines BEFORE cursor"
+	// This failed for fresh panes because it skipped visible content above line 21
+	//
 	// -p: print to stdout
 	// -e: include escape sequences (colors, formatting)
 	// -J: join wrapped lines
-	// -S -N: start N lines back from bottom
-	// -E -: end at current line (bottom)
+	// -S -: start at beginning of scrollback history (captures everything)
+	// -E -: end at current line (bottom of visible pane)
 	content, err := i.tmuxSession.CapturePaneContentWithOptions(
-		fmt.Sprintf("-%d", lines), // Start N lines from bottom
-		"-",                        // End at current line (bottom)
+		"-",  // Start at beginning of history (captures all visible content)
+		"-",  // End at current line (bottom)
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture current pane content: %w", err)
@@ -1127,6 +1160,21 @@ func (i *Instance) GetPaneDimensions() (width, height int, err error) {
 	}
 
 	return i.tmuxSession.GetPaneDimensions()
+}
+
+// GetScrollbackHistory captures scrollback history from tmux using line ranges.
+// Uses tmux's native scrollback capabilities instead of stored sequences.
+// startLine and endLine follow tmux conventions: negative numbers go back from current position,
+// use "-" for the start/end of history.
+func (i *Instance) GetScrollbackHistory(startLine, endLine string) (string, error) {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+
+	if i.tmuxSession == nil {
+		return "", fmt.Errorf("tmux session not initialized")
+	}
+
+	return i.tmuxSession.CapturePaneContentWithOptions(startLine, endLine)
 }
 
 // UpdateDiffStats updates the git diff statistics for this instance
@@ -1236,7 +1284,7 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 	}
 
 	// Update terminal activity timestamps based on full history capture
-	i.UpdateTerminalTimestamps(content)
+	i.UpdateTerminalTimestamps(content, false)
 
 	return content, nil
 }
@@ -1492,39 +1540,56 @@ func (i *Instance) GetStatusManager() *InstanceStatusManager {
 // StartController creates and initializes a ClaudeController for this instance
 // The controller enables automated idle detection and queue management
 func (i *Instance) StartController() error {
+	// Check preconditions under lock
 	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
 
 	// Only start if we have a status manager
 	if i.statusManager == nil {
+		i.stateMutex.Unlock()
 		log.DebugLog.Printf("No status manager set for instance %s, skipping controller", i.Title)
 		return nil
 	}
 
 	// Don't create controller if instance isn't started
 	if !i.started {
+		i.stateMutex.Unlock()
 		log.DebugLog.Printf("Instance %s not started yet, skipping controller", i.Title)
 		return nil
 	}
 
 	// Don't recreate if already exists
 	if i.claudeController != nil {
+		i.stateMutex.Unlock()
 		log.DebugLog.Printf("Controller already exists for instance %s", i.Title)
 		return nil
 	}
 
-	// Create new controller
+	// Release lock before creating/initializing controller
+	// This prevents deadlock when Initialize() calls GetPTYReader() which acquires read lock
+	i.stateMutex.Unlock()
+
+	// Create new controller (no lock needed - NewClaudeController doesn't access mutex-protected fields)
 	controller, err := NewClaudeController(i)
 	if err != nil {
 		return fmt.Errorf("failed to create controller: %w", err)
 	}
 
-	// Initialize the controller
+	// Initialize the controller (calls GetPTYReader which needs to acquire read lock)
 	if err := controller.Initialize(); err != nil {
 		return fmt.Errorf("failed to initialize controller: %w", err)
 	}
 
-	// Register with status manager
+	// Re-acquire lock to update instance state
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+
+	// Double-check controller hasn't been set by another goroutine (defensive)
+	if i.claudeController != nil {
+		log.DebugLog.Printf("Controller already exists for instance %s (race detected)", i.Title)
+		return nil
+	}
+
+	// Register with status manager and store controller
 	i.statusManager.RegisterController(i.Title, controller)
 	i.claudeController = controller
 
@@ -1598,7 +1663,8 @@ func (i *Instance) GetStatusIconForType() string {
 // UpdateTerminalTimestamps updates the terminal activity timestamps based on captured output.
 // This method checks for meaningful content (excluding tmux banners) and updates timestamps accordingly.
 // It should be called whenever terminal output is captured or processed.
-func (i *Instance) UpdateTerminalTimestamps(content string) {
+// The forceUpdate parameter bypasses meaningful content checking for user-initiated interactions.
+func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
 
@@ -1609,10 +1675,25 @@ func (i *Instance) UpdateTerminalTimestamps(content string) {
 		i.LastTerminalUpdate = now
 	}
 
-	// Check if the output contains meaningful content (not just tmux banners)
-	if i.tmuxSession != nil && i.tmuxSession.HasMeaningfulContent(content) {
+	// For user-initiated interactions (viewing/typing in web UI), always update LastMeaningfulOutput
+	// This ensures "Last Activity" reflects actual user engagement, not just terminal output content
+	if forceUpdate {
 		i.LastMeaningfulOutput = now
-		log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (detected non-banner output)")
+		log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (user interaction - forced update)")
+		return
+	}
+
+	// Check if the output contains meaningful content (not just tmux banners)
+	// This path is for automated checks where banner filtering makes sense
+	if i.tmuxSession != nil {
+		hasMeaningful := i.tmuxSession.HasMeaningfulContent(content)
+		log.LogForSession(i.Title, "debug", "HasMeaningfulContent=%v for %d bytes: %q", hasMeaningful, len(content), content)
+		if hasMeaningful {
+			i.LastMeaningfulOutput = now
+			log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (detected non-banner output)")
+		} else {
+			log.LogForSession(i.Title, "debug", "NOT updating LastMeaningfulOutput - content classified as non-meaningful (banners only)")
+		}
 	}
 }
 

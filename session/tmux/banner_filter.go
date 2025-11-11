@@ -125,10 +125,19 @@ func (bf *BannerFilter) FilterBannersFromText(text string) (string, int) {
 }
 
 // HasMeaningfulContent returns true if the text has content beyond just banners
+// Excludes the last line (tmux status bar) from meaningful content detection
 func (bf *BannerFilter) HasMeaningfulContent(text string) bool {
 	lines := strings.Split(text, "\n")
 
-	for _, line := range lines {
+	// Exclude the last line (tmux status bar with timestamp)
+	// If we have at least one line, check all but the last
+	numLinesToCheck := len(lines)
+	if numLinesToCheck > 0 {
+		numLinesToCheck-- // Exclude last line
+	}
+
+	for i := 0; i < numLinesToCheck; i++ {
+		line := lines[i]
 		trimmed := strings.TrimSpace(line)
 		// Skip empty lines
 		if trimmed == "" {

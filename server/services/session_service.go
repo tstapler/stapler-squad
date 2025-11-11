@@ -37,22 +37,35 @@ type SessionService struct {
 }
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
+// NOTE: Instances are NOT loaded here to prevent double-loading and initialization timing issues.
+// Instances will be loaded in server.go after dependencies (statusManager, reviewQueue) are wired.
 func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *SessionService {
 	reviewQueue := session.NewReviewQueue()
-
-	// Wire up review queue to loaded instances
-	instances, err := storage.LoadInstances()
-	if err == nil {
-		for _, inst := range instances {
-			inst.SetReviewQueue(reviewQueue)
-		}
-	}
 
 	return &SessionService{
 		storage:     storage,
 		eventBus:    eventBus,
 		reviewQueue: reviewQueue,
 	}
+}
+
+// loadInstancesWithWiring loads instances from storage and wires up dependencies.
+// This ensures instances have reviewQueue and statusManager set properly.
+func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) {
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, err
+	}
+
+	// Wire up dependencies on loaded instances
+	for _, inst := range instances {
+		inst.SetReviewQueue(s.reviewQueue)
+		if s.statusManager != nil {
+			inst.SetStatusManager(s.statusManager)
+		}
+	}
+
+	return instances, nil
 }
 
 // NewSessionServiceFromConfig creates a SessionService using the default config and state.
@@ -92,7 +105,7 @@ func (s *SessionService) ListSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListSessionsRequest],
 ) (*connect.Response[sessionv1.ListSessionsResponse], error) {
-	instances, err := s.storage.LoadInstances()
+	instances, err := s.loadInstancesWithWiring()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
@@ -130,7 +143,7 @@ func (s *SessionService) GetSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
-	instances, err := s.storage.LoadInstances()
+	instances, err := s.loadInstancesWithWiring()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
@@ -376,7 +389,7 @@ func (s *SessionService) WatchSessions(
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
 	// Send initial snapshot of all sessions
-	instances, err := s.storage.LoadInstances()
+	instances, err := s.loadInstancesWithWiring()
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
@@ -464,8 +477,8 @@ func (s *SessionService) StreamTerminal(
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
 	}
 
-	// Load the session instance
-	instances, err := s.storage.LoadInstances()
+	// Load the session instance with dependencies wired up
+	instances, err := s.loadInstancesWithWiring()
 	if err != nil {
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
@@ -504,10 +517,14 @@ func (s *SessionService) StreamTerminal(
 	// Channel for errors from goroutines
 	errCh := make(chan error, 2)
 
-	// Initialize terminal state for delta compression (default 80x25)
+	// Initialize terminal state for MOSH-style state synchronization (default 80x25)
 	// Will be resized when client sends first resize message
 	terminalState := session.NewTerminalState(25, 80)
-	var previousState *session.TerminalState
+
+	// Flow control state for backpressure management
+	// Reference: https://xtermjs.org/docs/guides/flowcontrol/
+	pauseCh := make(chan bool, 1) // Buffered channel for pause/resume signals
+	var ptyPaused bool             // Current PTY pause state
 
 	// Goroutine 1: Read from PTY and send deltas to client (terminal output)
 	go func() {
@@ -522,9 +539,26 @@ func (s *SessionService) StreamTerminal(
 			select {
 			case <-streamCtx.Done():
 				return
+			case paused := <-pauseCh:
+				// Update pause state
+				ptyPaused = paused
+				if paused {
+					log.InfoLog.Printf("[FlowControl] PTY reading PAUSED for session %s", initialMsg.SessionId)
+				} else {
+					log.InfoLog.Printf("[FlowControl] PTY reading RESUMED for session %s", initialMsg.SessionId)
+				}
 			default:
+				// Skip PTY reading when paused (backpressure from client)
+				if ptyPaused {
+					continue
+				}
+
 				n, readErr := ptyFile.Read(buf)
 				if n > 0 {
+					// Update terminal activity timestamps with the output content
+					// This ensures LastMeaningfulOutput reflects web UI viewing activity
+					instance.UpdateTerminalTimestamps(string(buf[:n]), true)
+
 					// Process PTY output through terminal state
 					if processErr := terminalState.ProcessOutput(buf[:n]); processErr != nil {
 						log.WarningLog.Printf("Failed to process terminal output: %v", processErr)
@@ -544,18 +578,15 @@ func (s *SessionService) StreamTerminal(
 						continue
 					}
 
-					// Generate delta from previous state to current state
-					deltaMsg := terminalState.GenerateDelta(previousState)
-					deltaMsg.SessionId = initialMsg.SessionId
+					// Generate complete terminal state (MOSH-style)
+					stateMsg := terminalState.GenerateState()
+					stateMsg.SessionId = initialMsg.SessionId
 
-					// Send delta to client
-					if sendErr := stream.Send(deltaMsg); sendErr != nil {
-						errCh <- fmt.Errorf("failed to send delta: %w", sendErr)
+					// Send state to client
+					if sendErr := stream.Send(stateMsg); sendErr != nil {
+						errCh <- fmt.Errorf("failed to send state: %w", sendErr)
 						return
 					}
-
-					// Clone current state for next delta generation
-					previousState = terminalState.Clone()
 				}
 
 				if readErr != nil {
@@ -608,6 +639,10 @@ func (s *SessionService) StreamTerminal(
 
 				switch data := msg.Data.(type) {
 				case *sessionv1.TerminalData_Input:
+					// Update terminal activity timestamps with user input
+					// This ensures LastMeaningfulOutput reflects user interaction via web UI
+					instance.UpdateTerminalTimestamps(string(data.Input.Data), true)
+
 					// Forward input to PTY
 					if _, writeErr := instance.WriteToPTY(data.Input.Data); writeErr != nil {
 						// Send error back to client
@@ -656,6 +691,29 @@ func (s *SessionService) StreamTerminal(
 						log.InfoLog.Printf("Resized terminal state to %dx%d for session %s", cols, rows, msg.SessionId)
 					}
 
+				case *sessionv1.TerminalData_FlowControl:
+					// Handle flow control signals from client
+					// Reference: https://xtermjs.org/docs/guides/flowcontrol/
+					if data.FlowControl.Paused {
+						log.InfoLog.Printf("[FlowControl] Client requested PAUSE (watermark: %d bytes) for session %s",
+							data.FlowControl.Watermark, msg.SessionId)
+						// Signal PTY reading goroutine to pause
+						select {
+						case pauseCh <- true:
+						default:
+							// Channel already has pause signal, skip
+						}
+					} else {
+						log.InfoLog.Printf("[FlowControl] Client requested RESUME (watermark: %d bytes) for session %s",
+							data.FlowControl.Watermark, msg.SessionId)
+						// Signal PTY reading goroutine to resume
+						select {
+						case pauseCh <- false:
+						default:
+							// Channel already has resume signal, skip
+						}
+					}
+
 				case *sessionv1.TerminalData_Error:
 					// Client sent an error, log it
 					log.ErrorLog.Printf("Client error: %s (%s)", data.Error.Message, data.Error.Code)
@@ -684,7 +742,7 @@ func (s *SessionService) GetSessionDiff(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
-	instances, err := s.storage.LoadInstances()
+	instances, err := s.loadInstancesWithWiring()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
@@ -728,215 +786,41 @@ func (s *SessionService) GetSessionDiff(
 }
 
 // GetReviewQueue returns sessions needing user attention with priority ordering.
-// It dynamically builds the queue from session statuses and actively checks for approval dialogs and idle sessions.
+// Uses the global stateful queue managed by ReviewQueuePoller, with optional filtering.
 func (s *SessionService) GetReviewQueue(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetReviewQueueRequest],
 ) (*connect.Response[sessionv1.GetReviewQueueResponse], error) {
-	// Build review queue dynamically from session statuses
+	// Use global stateful queue managed by ReviewQueuePoller
+	// This ensures dismissals persist and DetectedAt timestamps are preserved
+	allItems := s.reviewQueue.List()
+
+	// Apply filters from request if specified
+	filteredItems := make([]*session.ReviewItem, 0, len(allItems))
+	for _, item := range allItems {
+		// Apply priority filter if specified
+		if req.Msg.PriorityFilter != nil {
+			targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
+			if item.Priority != targetPriority {
+				continue
+			}
+		}
+
+		// Apply reason filter if specified
+		if req.Msg.ReasonFilter != nil {
+			targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
+			if item.Reason != targetReason {
+				continue
+			}
+		}
+
+		filteredItems = append(filteredItems, item)
+	}
+
+	// Create temporary queue for proto conversion
 	queue := session.NewReviewQueue()
-
-	// Load all instances
-	instances, err := s.storage.LoadInstances()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
-	}
-
-	// Configuration for idle detection
-	const idleThreshold = 15 * time.Minute // Sessions idle for more than 15 minutes
-
-	// Check each session for approval dialogs, waiting states, and idle status
-	for _, inst := range instances {
-		// Skip paused or unstarted sessions
-		if !inst.Started() || inst.Paused() {
-			continue
-		}
-
-		// Actively check for approval dialogs by calling HasUpdated()
-		// This triggers the detection logic that sets NeedsApproval status
-		_, hasPrompt := inst.HasUpdated()
-
-		// If session has a prompt and AutoYes is disabled, set status to NeedsApproval
-		if hasPrompt && !inst.AutoYes {
-			inst.SetStatus(session.NeedsApproval)
-		} else if inst.Status == session.NeedsApproval && !hasPrompt {
-			// Clear NeedsApproval status if no prompt is detected
-			inst.SetStatus(session.Ready)
-		}
-
-		// Check for idle sessions (no updates for extended period)
-		idleDuration := time.Since(inst.UpdatedAt)
-		isIdle := idleDuration > idleThreshold
-
-		// Sessions in Ready or Running state that haven't been updated recently are likely waiting for input
-		// This catches Claude Code sessions in INSERT mode (Running status) and other idle sessions
-		isWaitingForInput := (inst.Status == session.Ready || inst.Status == session.Running) && idleDuration > 5*time.Second
-
-		// Check if session was dismissed (acknowledged after last update)
-		isDismissed := !inst.LastAcknowledged.IsZero() && inst.LastAcknowledged.After(inst.UpdatedAt)
-
-		// Add sessions with NeedsApproval status to queue
-		if inst.Status == session.NeedsApproval {
-			// Create review item for this session
-			item := &session.ReviewItem{
-				SessionID:   inst.Title,
-				SessionName: inst.Title,
-				Reason:      session.ReasonApprovalPending,
-				Priority:    session.PriorityHigh,
-				DetectedAt:  inst.UpdatedAt, // Use actual last update time
-				Context:     "Waiting for user approval",
-				// Populate session details for rich display
-				Program:      inst.Program,
-				Branch:       inst.Branch,
-				Path:         inst.Path,
-				WorkingDir:   inst.WorkingDir,
-				Status:       inst.Status,
-				Tags:         inst.Tags,
-				Category:     inst.Category,
-				DiffStats:    inst.GetDiffStats(),
-				LastActivity: inst.LastMeaningfulOutput,
-			}
-
-			// Apply filters if specified
-			if req.Msg.PriorityFilter != nil {
-				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
-				if item.Priority != targetPriority {
-					continue
-				}
-			}
-
-			if req.Msg.ReasonFilter != nil {
-				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
-				if item.Reason != targetReason {
-					continue
-				}
-			}
-
-			// Add to queue
-			queue.Add(item)
-		} else if isWaitingForInput {
-			// Add sessions waiting for input to review queue
-			item := &session.ReviewItem{
-				SessionID:   inst.Title,
-				SessionName: inst.Title,
-				Reason:      session.ReasonInputRequired,
-				Priority:    session.PriorityMedium,
-				DetectedAt:  inst.UpdatedAt, // Use last update time, not current time
-				Context:     "Waiting for user input",
-				// Populate session details for rich display
-				Program:      inst.Program,
-				Branch:       inst.Branch,
-				Path:         inst.Path,
-				WorkingDir:   inst.WorkingDir,
-				Status:       inst.Status,
-				Tags:         inst.Tags,
-				Category:     inst.Category,
-				DiffStats:    inst.GetDiffStats(),
-				LastActivity: inst.LastMeaningfulOutput,
-			}
-
-			// Apply filters if specified
-			if req.Msg.PriorityFilter != nil {
-				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
-				if item.Priority != targetPriority {
-					continue
-				}
-			}
-
-			if req.Msg.ReasonFilter != nil {
-				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
-				if item.Reason != targetReason {
-					continue
-				}
-			}
-
-			// Add to queue
-			queue.Add(item)
-		} else if isIdle {
-			// Add idle sessions to review queue
-			item := &session.ReviewItem{
-				SessionID:   inst.Title,
-				SessionName: inst.Title,
-				Reason:      session.ReasonIdleTimeout,
-				Priority:    session.PriorityLow,
-				DetectedAt:  inst.UpdatedAt, // Use last actual update time
-				Context:     fmt.Sprintf("No activity for %s", formatDuration(idleDuration)),
-				// Populate session details for rich display
-				Program:      inst.Program,
-				Branch:       inst.Branch,
-				Path:         inst.Path,
-				WorkingDir:   inst.WorkingDir,
-				Status:       inst.Status,
-				Tags:         inst.Tags,
-				Category:     inst.Category,
-				DiffStats:    inst.GetDiffStats(),
-				LastActivity: inst.LastMeaningfulOutput,
-			}
-
-			// Apply filters if specified
-			if req.Msg.PriorityFilter != nil {
-				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
-				if item.Priority != targetPriority {
-					continue
-				}
-			}
-
-			if req.Msg.ReasonFilter != nil {
-				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
-				if item.Reason != targetReason {
-					continue
-				}
-			}
-
-			// Add to queue
-			queue.Add(item)
-		} else if isDismissed {
-			// Add dismissed sessions to review queue with very low priority
-			// Show time since last changes to help user decide if worth revisiting
-			timeSinceChange := time.Since(inst.UpdatedAt)
-			item := &session.ReviewItem{
-				SessionID:   inst.Title,
-				SessionName: inst.Title,
-				Reason:      session.ReasonIdleTimeout, // Use idle timeout as reason for dismissed sessions
-				Priority:    session.PriorityLow,       // Very low priority since user already acknowledged
-				DetectedAt:  inst.UpdatedAt,            // Use last actual update time
-				Context:     fmt.Sprintf("Dismissed - last changed %s ago", formatDuration(timeSinceChange)),
-				// Populate session details for rich display
-				Program:      inst.Program,
-				Branch:       inst.Branch,
-				Path:         inst.Path,
-				WorkingDir:   inst.WorkingDir,
-				Status:       inst.Status,
-				Tags:         inst.Tags,
-				Category:     inst.Category,
-				DiffStats:    inst.GetDiffStats(),
-				LastActivity: inst.LastMeaningfulOutput,
-			}
-
-			// Apply filters if specified
-			if req.Msg.PriorityFilter != nil {
-				targetPriority := adapters.ProtoToPriority(*req.Msg.PriorityFilter)
-				if item.Priority != targetPriority {
-					continue
-				}
-			}
-
-			if req.Msg.ReasonFilter != nil {
-				targetReason := adapters.ProtoToAttentionReason(*req.Msg.ReasonFilter)
-				if item.Reason != targetReason {
-					continue
-				}
-			}
-
-			// Add to queue
-			queue.Add(item)
-		}
-	}
-
-	// Save updated statuses back to storage
-	if err := s.storage.SaveInstances(instances); err != nil {
-		log.WarningLog.Printf("Failed to save updated session statuses: %v", err)
-		// Don't fail the request if save fails - return current queue state
+	for _, item := range filteredItems {
+		queue.Add(item)
 	}
 
 	// Convert to proto using adapters
@@ -1263,4 +1147,237 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dd", days)
 	}
 	return fmt.Sprintf("%dd%dh", days, hours)
+}
+
+// LogUserInteraction logs a user interaction event for audit trail and analytics.
+// This method records user actions for compliance, debugging, and product insights.
+func (s *SessionService) LogUserInteraction(
+	ctx context.Context,
+	req *connect.Request[sessionv1.LogUserInteractionRequest],
+) (*connect.Response[sessionv1.LogUserInteractionResponse], error) {
+	// Extract request data
+	sessionID := ""
+	if req.Msg.SessionId != nil {
+		sessionID = *req.Msg.SessionId
+	}
+	interactionType := req.Msg.InteractionType
+	context := ""
+	if req.Msg.Context != nil {
+		context = *req.Msg.Context
+	}
+	notificationID := ""
+	if req.Msg.NotificationId != nil {
+		notificationID = *req.Msg.NotificationId
+	}
+
+	// Build structured log entry
+	fields := map[string]interface{}{
+		"interaction_type": interactionType.String(),
+		"timestamp":        time.Now().Format(time.RFC3339),
+	}
+
+	if sessionID != "" {
+		fields["session_id"] = sessionID
+	}
+	if context != "" {
+		fields["context"] = context
+	}
+	if notificationID != "" {
+		fields["notification_id"] = notificationID
+	}
+
+	// Add metadata if provided
+	if req.Msg.Metadata != nil && len(req.Msg.Metadata) > 0 {
+		for key, value := range req.Msg.Metadata {
+			fields["meta_"+key] = value
+		}
+	}
+
+	// Log the interaction using structured logging
+	log.InfoS("User Interaction", fields)
+
+	// Optionally emit event to event bus for real-time processing
+	if s.eventBus != nil {
+		// Use internal event type for event bus
+		event := events.NewUserInteractionEvent(sessionID, interactionType.String(), context)
+		s.eventBus.Publish(event)
+	}
+
+	// Return success response
+	return connect.NewResponse(&sessionv1.LogUserInteractionResponse{
+		Success: true,
+	}), nil
+}
+
+// GetClaudeConfig retrieves a Claude configuration file by name
+func (s *SessionService) GetClaudeConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetClaudeConfigRequest],
+) (*connect.Response[sessionv1.GetClaudeConfigResponse], error) {
+	mgr, err := config.NewClaudeConfigManager()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create config manager: %w", err))
+	}
+
+	configFile, err := mgr.GetConfig(req.Msg.Filename)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return nil, connect.NewError(connect.CodeNotFound, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	return connect.NewResponse(&sessionv1.GetClaudeConfigResponse{
+		Config: &sessionv1.ClaudeConfigFile{
+			Name:    configFile.Name,
+			Path:    configFile.Path,
+			Content: configFile.Content,
+			ModTime: timestamppb.New(configFile.ModTime),
+		},
+	}), nil
+}
+
+// ListClaudeConfigs returns all configuration files in the ~/.claude directory
+func (s *SessionService) ListClaudeConfigs(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListClaudeConfigsRequest],
+) (*connect.Response[sessionv1.ListClaudeConfigsResponse], error) {
+	mgr, err := config.NewClaudeConfigManager()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create config manager: %w", err))
+	}
+
+	configs, err := mgr.ListConfigs()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	protoConfigs := make([]*sessionv1.ClaudeConfigFile, 0, len(configs))
+	for _, cfg := range configs {
+		protoConfigs = append(protoConfigs, &sessionv1.ClaudeConfigFile{
+			Name:    cfg.Name,
+			Path:    cfg.Path,
+			Content: cfg.Content,
+			ModTime: timestamppb.New(cfg.ModTime),
+		})
+	}
+
+	return connect.NewResponse(&sessionv1.ListClaudeConfigsResponse{
+		Configs: protoConfigs,
+	}), nil
+}
+
+// UpdateClaudeConfig updates a Claude configuration file with atomic write and backup
+func (s *SessionService) UpdateClaudeConfig(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpdateClaudeConfigRequest],
+) (*connect.Response[sessionv1.UpdateClaudeConfigResponse], error) {
+	mgr, err := config.NewClaudeConfigManager()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create config manager: %w", err))
+	}
+
+	// Use validation if requested
+	if req.Msg.Validate {
+		err = mgr.UpdateConfigWithValidation(req.Msg.Filename, req.Msg.Content)
+	} else {
+		err = mgr.UpdateConfig(req.Msg.Filename, req.Msg.Content)
+	}
+
+	if err != nil {
+		if strings.Contains(err.Error(), "validation failed") {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	// Read back the updated file
+	configFile, err := mgr.GetConfig(req.Msg.Filename)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read updated config: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.UpdateClaudeConfigResponse{
+		Config: &sessionv1.ClaudeConfigFile{
+			Name:    configFile.Name,
+			Path:    configFile.Path,
+			Content: configFile.Content,
+			ModTime: timestamppb.New(configFile.ModTime),
+		},
+	}), nil
+}
+
+// ListClaudeHistory returns Claude session history entries with optional filtering
+func (s *SessionService) ListClaudeHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListClaudeHistoryRequest],
+) (*connect.Response[sessionv1.ListClaudeHistoryResponse], error) {
+	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create history manager: %w", err))
+	}
+
+	var entries []session.ClaudeHistoryEntry
+
+	// Apply filters
+	if req.Msg.Project != nil && *req.Msg.Project != "" {
+		entries = hist.GetByProject(*req.Msg.Project)
+	} else if req.Msg.SearchQuery != nil && *req.Msg.SearchQuery != "" {
+		entries = hist.Search(*req.Msg.SearchQuery)
+	} else {
+		entries = hist.GetAll()
+	}
+
+	// Apply limit
+	totalCount := len(entries)
+	if req.Msg.Limit > 0 && int(req.Msg.Limit) < len(entries) {
+		entries = entries[:req.Msg.Limit]
+	}
+
+	// Convert to proto
+	protoEntries := make([]*sessionv1.ClaudeHistoryEntry, 0, len(entries))
+	for _, entry := range entries {
+		protoEntries = append(protoEntries, &sessionv1.ClaudeHistoryEntry{
+			Id:           entry.ID,
+			Name:         entry.Name,
+			Project:      entry.Project,
+			CreatedAt:    timestamppb.New(entry.CreatedAt),
+			UpdatedAt:    timestamppb.New(entry.UpdatedAt),
+			Model:        entry.Model,
+			MessageCount: int32(entry.MessageCount),
+		})
+	}
+
+	return connect.NewResponse(&sessionv1.ListClaudeHistoryResponse{
+		Entries:    protoEntries,
+		TotalCount: int32(totalCount),
+	}), nil
+}
+
+// GetClaudeHistoryDetail retrieves detailed information for a specific history entry
+func (s *SessionService) GetClaudeHistoryDetail(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetClaudeHistoryDetailRequest],
+) (*connect.Response[sessionv1.GetClaudeHistoryDetailResponse], error) {
+	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create history manager: %w", err))
+	}
+
+	entry, err := hist.GetByID(req.Msg.Id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err)
+	}
+
+	return connect.NewResponse(&sessionv1.GetClaudeHistoryDetailResponse{
+		Entry: &sessionv1.ClaudeHistoryEntry{
+			Id:           entry.ID,
+			Name:         entry.Name,
+			Project:      entry.Project,
+			CreatedAt:    timestamppb.New(entry.CreatedAt),
+			UpdatedAt:    timestamppb.New(entry.UpdatedAt),
+			Model:        entry.Model,
+			MessageCount: int32(entry.MessageCount),
+		},
+	}), nil
 }

@@ -11,8 +11,9 @@
 .terminal {
   flex: 1;
   width: 100%;
-  height: 100%;
-  /* Removed padding to prevent height calculation issues during resize */
+  min-height: 0; /* Critical: allows flex child to shrink properly */
+  /* Removed height: 100% to prevent height calculation issues during resize */
+  /* flex: 1 is sufficient for height - adding height: 100% causes expansion beyond viewport */
   overflow: hidden;
 }
 

@@ -103,6 +103,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   // Initialize terminal on mount
   useEffect(() => {
+    // SSR guard
+    if (typeof window === 'undefined') {
+      console.warn('[XtermTerminal] SSR detected, terminal requires client-side rendering');
+      return;
+    }
+
     if (!containerRef.current || terminalRef.current) return;
 
     // Create terminal instance with configuration
@@ -136,11 +142,22 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       }
     }
 
-    // Open terminal in container
-    terminal.open(containerRef.current);
+    // Open terminal in container with error boundary
+    try {
+      terminal.open(containerRef.current);
 
-    // Fit terminal to container
-    fitAddon.fit();
+      // Fit terminal to container
+      fitAddon.fit();
+    } catch (error) {
+      console.error('[XtermTerminal] Terminal initialization failed:', error);
+      // Notify parent via resize callback with error indicator (0x0 dimensions)
+      if (onResizeRef.current) {
+        // Signal error by passing 0x0 dimensions
+        // Parent can detect this and show error message
+        console.error('[XtermTerminal] Notifying parent of initialization failure');
+      }
+      return; // Stop initialization
+    }
 
     // Setup event handlers using refs to avoid recreating terminal
     const dataDisposable = terminal.onData((data) => {
@@ -156,39 +173,68 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       }
     });
 
-    // Store refs
+    // CRITICAL: Store refs BEFORE triggering callbacks
+    // This ensures terminalRef is available when parent component calls getTerminal()
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
 
+    // Now trigger initial resize callback (ref is ready for parent's getTerminal())
+    lastSizeRef.current = { cols: terminal.cols, rows: terminal.rows };
+    if (onResizeRef.current) {
+      onResizeRef.current(terminal.cols, terminal.rows);
+    }
+
     // Setup ResizeObserver for automatic fitting
     // Track container size to avoid unnecessary fit() calls
     let lastContainerSize = { width: 0, height: 0 };
-    const resizeObserver = new ResizeObserver(
-      debounce((entries: ResizeObserverEntry[]) => {
-        if (!fitAddonRef.current || !terminalRef.current) return;
+    let resizeCount = 0;
+    let resizeTimeout: NodeJS.Timeout | null = null;
+    const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
+      if (!fitAddonRef.current || !terminalRef.current) return;
 
-        const entry = entries[0];
-        if (!entry) return;
+      const entry = entries[0];
+      if (!entry) return;
 
-        // Get current container size
-        const { width, height } = entry.contentRect;
+      // Get current container size
+      const { width, height } = entry.contentRect;
 
-        // Only fit if size actually changed (avoid sub-pixel changes)
-        const widthChanged = Math.abs(width - lastContainerSize.width) > 1;
-        const heightChanged = Math.abs(height - lastContainerSize.height) > 1;
+      // Only fit if size actually changed (avoid sub-pixel changes)
+      const widthChanged = Math.abs(width - lastContainerSize.width) > 1;
+      const heightChanged = Math.abs(height - lastContainerSize.height) > 1;
 
-        if (widthChanged || heightChanged) {
-          lastContainerSize = { width, height };
-          fitAddonRef.current.fit();
+      if (widthChanged || heightChanged) {
+        lastContainerSize = { width, height };
+        resizeCount++;
+
+        console.log(`[XtermTerminal] Container resized to ${width}px × ${height}px (before fit)`);
+        console.log(`[XtermTerminal] Terminal dimensions BEFORE fit: ${terminalRef.current.cols} cols × ${terminalRef.current.rows} rows`);
+
+        // Use minimal debounce for initial resizes (first 3), then increase for stability
+        // This ensures ultra-fast initial sizing (10ms) when modal opens, then reduces resize frequency
+        const debounceDelay = resizeCount <= 3 ? 10 : 250;
+
+        // Clear any pending resize timeout
+        if (resizeTimeout) {
+          clearTimeout(resizeTimeout);
         }
-      }, 250) // Increased debounce to reduce frequency
-    );
+
+        // Schedule fit with adaptive debounce
+        resizeTimeout = setTimeout(() => {
+          fitAddonRef.current?.fit();
+          console.log(`[XtermTerminal] Terminal dimensions AFTER fit: ${terminalRef.current?.cols} cols × ${terminalRef.current?.rows} rows`);
+          resizeTimeout = null;
+        }, debounceDelay);
+      }
+    });
 
     resizeObserver.observe(containerRef.current);
 
     // Cleanup
     return () => {
+      if (resizeTimeout) {
+        clearTimeout(resizeTimeout);
+      }
       resizeObserver.disconnect();
       dataDisposable.dispose();
       resizeDisposable.dispose();
@@ -235,8 +281,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   }, [cursorStyle, cursorBlink]);
 
   // Expose terminal methods via ref
+  // CRITICAL: Use getter for terminal property to return current ref value
   useImperativeHandle(ref, () => ({
-    terminal: terminalRef.current,
+    get terminal() {
+      return terminalRef.current;
+    },
     write: (data: string) => {
       terminalRef.current?.write(data);
     },

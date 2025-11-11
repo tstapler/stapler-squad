@@ -4,7 +4,10 @@ import (
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
 	"claude-squad/gen/proto/go/session/v1/sessionv1connect"
 	"claude-squad/log"
+	"claude-squad/server/compression"
+	"claude-squad/server/events"
 	"claude-squad/server/protocol"
+	"claude-squad/server/terminal"
 	"claude-squad/session"
 	"claude-squad/session/scrollback"
 	"fmt"
@@ -31,13 +34,20 @@ var wsUpgrader = websocket.Upgrader{
 type ConnectRPCWebSocketHandler struct {
 	sessionService    *SessionService
 	scrollbackManager *scrollback.ScrollbackManager
+	streamingMode     string // "raw", "state", or "hybrid"
 }
 
 // NewConnectRPCWebSocketHandler creates a new ConnectRPC WebSocket handler
-func NewConnectRPCWebSocketHandler(sessionService *SessionService, scrollbackManager *scrollback.ScrollbackManager) *ConnectRPCWebSocketHandler {
+func NewConnectRPCWebSocketHandler(sessionService *SessionService, scrollbackManager *scrollback.ScrollbackManager, streamingMode string) *ConnectRPCWebSocketHandler {
+	// Default to raw if not specified or invalid
+	if streamingMode != "raw" && streamingMode != "state" && streamingMode != "hybrid" {
+		streamingMode = "raw"
+	}
+
 	return &ConnectRPCWebSocketHandler{
 		sessionService:    sessionService,
 		scrollbackManager: scrollbackManager,
+		streamingMode:     streamingMode,
 	}
 }
 
@@ -135,6 +145,10 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	sessionID := terminalData.SessionId
 	log.InfoLog.Printf("StreamTerminal called for session: %s", sessionID)
 
+	// Extract streaming mode from initial request (will be overridden by CurrentPaneRequest if provided)
+	streamingMode := h.streamingMode // Use handler's default
+	log.InfoLog.Printf("Initial streaming mode for session %s: %s", sessionID, streamingMode)
+
 	// Get the session instance - load all instances and find by title
 	instances, err := h.sessionService.storage.LoadInstances()
 	if err != nil {
@@ -162,36 +176,94 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Use reader as writer (PTY file is bidirectional)
 	ptyWriter := ptyReader
 
-	// Send initial terminal state (current pane content) before streaming updates
-	// This ensures the client sees the existing screen content immediately on connect
-	initialContent, err := instance.CapturePaneContent()
+	// Get terminal dimensions
+	paneWidth, paneHeight, err := instance.GetPaneDimensions()
 	if err != nil {
-		log.WarningLog.Printf("Failed to capture initial pane content for session %s: %v", sessionID, err)
-	} else if len(initialContent) > 0 {
-		// Send initial screen state as first message
-		terminalData := &sessionv1.TerminalData{
-			SessionId: sessionID,
-			Data: &sessionv1.TerminalData_Output{
-				Output: &sessionv1.TerminalOutput{
-					Data: []byte(initialContent),
-				},
-			},
-		}
-
-		dataBytes, err := proto.Marshal(terminalData)
-		if err == nil {
-			envelope := protocol.CreateEnvelope(0, dataBytes)
-			if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
-				log.WarningLog.Printf("Failed to send initial content: %v", err)
-			} else {
-				log.InfoLog.Printf("Sent initial pane content (%d bytes) to WebSocket for session %s", len(initialContent), sessionID)
-			}
-		}
+		log.ErrorLog.Printf("Failed to get pane dimensions: %v (using defaults)", err)
+		paneWidth, paneHeight = 80, 24
 	}
 
-	// Create error channel for goroutine coordination
+	// Create state generator for MOSH-style complete state snapshots
+	stateGen := terminal.NewStateGenerator(paneWidth, paneHeight)
+
+	// NOTE: Initial terminal content is now loaded via currentPaneRequest/Response flow
+	// This ensures proper dimension synchronization - the client tells us its terminal size
+	// before we send any content, preventing dimension mismatches that cause corruption.
+	// The old approach of sending fullSyncDelta immediately caused race conditions:
+	// 1. Server sends fullSyncDelta with server's pane dimensions (e.g., 129x68)
+	// 2. Client receives delta and resizes terminal to match (129x68)
+	// 3. Client then sends currentPaneRequest with its actual size (129x69)
+	// 4. Dimension mismatch → corruption and dropped lines
+	//
+	// New flow:
+	// 1. Client connects and immediately sends currentPaneRequest with targetDimensions
+	// 2. Server resizes pane to match client's terminal
+	// 3. Server sends currentPaneResponse with correctly-sized content
+	// 4. Both sides stay in sync from the start
+
+	// Create channels for goroutine coordination
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})
+	clearBufferChan := make(chan struct{}, 1) // Signal to clear output buffer
+	bufferClearedChan := make(chan struct{}, 1) // Confirmation that buffer was cleared
+
+	// Synchronization for dimension updates to prevent race conditions
+	dimensionMutex := sync.RWMutex{} // Protects stateGen dimension access
+
+	// Track terminal readiness to prevent duplicate pane responses
+	terminalReady := false
+	terminalReadyMutex := sync.Mutex{}
+
+	// Timestamp persistence: Track when timestamps need saving to disk
+	// This allows real-time updates without waiting for connection close
+	timestampsNeedSave := false
+	timestampSaveMutex := sync.Mutex{}
+
+	// Mark timestamps as needing persistence
+	markTimestampsForSave := func() {
+		timestampSaveMutex.Lock()
+		timestampsNeedSave = true
+		timestampSaveMutex.Unlock()
+	}
+
+	// Check and save timestamps if needed, returns true if save was performed
+	saveTimestampsIfNeeded := func() bool {
+		timestampSaveMutex.Lock()
+		needsSave := timestampsNeedSave
+		if needsSave {
+			timestampsNeedSave = false // Reset flag
+		}
+		timestampSaveMutex.Unlock()
+
+		if needsSave {
+			if saveErr := h.persistInstanceTimestamps(instance); saveErr != nil {
+				log.ErrorLog.Printf("Failed to persist timestamps for session %s: %v", sessionID, saveErr)
+				return false
+			}
+			log.DebugLog.Printf("Persisted timestamps during active connection for session %s", sessionID)
+			return true
+		}
+		return false
+	}
+
+	// Goroutine: Periodic timestamp persistence (every 10 seconds)
+	// This ensures timestamps are saved continuously during long-running connections
+	// instead of waiting until the connection closes
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-doneChan:
+				// Final save before exiting
+				saveTimestampsIfNeeded()
+				return
+			case <-ticker.C:
+				saveTimestampsIfNeeded()
+			}
+		}
+	}()
 
 	// Goroutine 1: Read from PTY and send to WebSocket (output stream)
 	// Uses buffering to batch rapid successive updates (e.g., tmux status line redraws)
@@ -226,33 +298,160 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 				return nil
 			}
 
-			// Capture output to scrollback
-			if h.scrollbackManager != nil {
-				if err := h.scrollbackManager.AppendOutput(sessionID, outputBuffer); err != nil {
-					log.ErrorLog.Printf("Failed to append to scrollback for session %s: %v", sessionID, err)
+			// MODE SWITCHING: Choose output format based on streaming mode
+			switch streamingMode {
+			case "raw":
+				// RAW STREAMING: Send tmux output directly without processing
+				// Tmux ANSI codes handle all cursor positioning, clearing, colors, etc.
+				terminalData := &sessionv1.TerminalData{
+					SessionId: sessionID,
+					Data: &sessionv1.TerminalData_Output{
+						Output: &sessionv1.TerminalOutput{
+							Data: outputBuffer, // Raw bytes with ANSI codes
+						},
+					},
+				}
+
+				dataBytes, err := proto.Marshal(terminalData)
+				if err != nil {
+					return fmt.Errorf("failed to marshal terminal output: %w", err)
+				}
+
+				envelope := protocol.CreateEnvelope(0, dataBytes)
+				if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+					return fmt.Errorf("failed to send terminal output: %w", err)
+				}
+
+				log.DebugLog.Printf("Sent raw terminal output (%d bytes) to WebSocket for session %s",
+					len(outputBuffer), sessionID)
+
+			case "raw-compressed":
+				// RAW + LZMA COMPRESSION: Compress raw bytes before sending
+				compressed, ratio, err := compression.CompressLZMA(outputBuffer)
+				if err != nil {
+					log.ErrorLog.Printf("LZMA compression failed, falling back to raw: %v", err)
+					// Fallback to uncompressed on error
+					compressed = outputBuffer
+					ratio = 1.0
+				}
+
+				terminalData := &sessionv1.TerminalData{
+					SessionId: sessionID,
+					Data: &sessionv1.TerminalData_Output{
+						Output: &sessionv1.TerminalOutput{
+							Data: compressed, // Compressed raw bytes
+						},
+					},
+				}
+
+				dataBytes, err := proto.Marshal(terminalData)
+				if err != nil {
+					return fmt.Errorf("failed to marshal compressed terminal output: %w", err)
+				}
+
+				envelope := protocol.CreateEnvelope(0, dataBytes)
+				if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+					return fmt.Errorf("failed to send compressed terminal output: %w", err)
+				}
+
+				log.DebugLog.Printf("Sent compressed terminal output (%d bytes → %d bytes, ratio: %.2f) for session %s",
+					len(outputBuffer), len(compressed), ratio, sessionID)
+
+			case "state":
+				// STATE SYNC: Generate complete terminal state (MOSH-style)
+				dimensionMutex.RLock()
+				state := stateGen.GenerateState(outputBuffer)
+				dimensionMutex.RUnlock()
+
+				terminalData := &sessionv1.TerminalData{
+					SessionId: sessionID,
+					Data: &sessionv1.TerminalData_State{
+						State: state,
+					},
+				}
+
+				dataBytes, err := proto.Marshal(terminalData)
+				if err != nil {
+					return fmt.Errorf("failed to marshal terminal state: %w", err)
+				}
+
+				envelope := protocol.CreateEnvelope(0, dataBytes)
+				if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+					return fmt.Errorf("failed to send terminal state: %w", err)
+				}
+
+				log.DebugLog.Printf("Sent terminal state (sequence %d) for session %s",
+					state.Sequence, sessionID)
+
+			case "hybrid":
+				// HYBRID: Send both raw AND state for comparison
+				// First send raw output
+				rawData := &sessionv1.TerminalData{
+					SessionId: sessionID,
+					Data: &sessionv1.TerminalData_Output{
+						Output: &sessionv1.TerminalOutput{
+							Data: outputBuffer,
+						},
+					},
+				}
+
+				rawBytes, err := proto.Marshal(rawData)
+				if err != nil {
+					return fmt.Errorf("failed to marshal raw output: %w", err)
+				}
+
+				rawEnvelope := protocol.CreateEnvelope(0, rawBytes)
+				if err := stream.WriteMessage(websocket.BinaryMessage, rawEnvelope); err != nil {
+					return fmt.Errorf("failed to send raw output: %w", err)
+				}
+
+				// Then send state
+				dimensionMutex.RLock()
+				state := stateGen.GenerateState(outputBuffer)
+				dimensionMutex.RUnlock()
+
+				stateData := &sessionv1.TerminalData{
+					SessionId: sessionID,
+					Data: &sessionv1.TerminalData_State{
+						State: state,
+					},
+				}
+
+				stateBytes, err := proto.Marshal(stateData)
+				if err != nil {
+					return fmt.Errorf("failed to marshal state: %w", err)
+				}
+
+				stateEnvelope := protocol.CreateEnvelope(0, stateBytes)
+				if err := stream.WriteMessage(websocket.BinaryMessage, stateEnvelope); err != nil {
+					return fmt.Errorf("failed to send state: %w", err)
+				}
+
+				log.DebugLog.Printf("Sent hybrid output (raw + state) for session %s", sessionID)
+
+			default:
+				log.ErrorLog.Printf("Unknown streaming mode '%s', defaulting to raw", streamingMode)
+				// Fallback to raw mode
+				terminalData := &sessionv1.TerminalData{
+					SessionId: sessionID,
+					Data: &sessionv1.TerminalData_Output{
+						Output: &sessionv1.TerminalOutput{
+							Data: outputBuffer,
+						},
+					},
+				}
+
+				dataBytes, err := proto.Marshal(terminalData)
+				if err != nil {
+					return fmt.Errorf("failed to marshal terminal output: %w", err)
+				}
+
+				envelope := protocol.CreateEnvelope(0, dataBytes)
+				if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+					return fmt.Errorf("failed to send terminal output: %w", err)
 				}
 			}
 
-			terminalData := &sessionv1.TerminalData{
-				SessionId: sessionID,
-				Data: &sessionv1.TerminalData_Output{
-					Output: &sessionv1.TerminalOutput{
-						Data: append([]byte(nil), outputBuffer...), // Copy buffer
-					},
-				},
-			}
-
-			dataBytes, err := proto.Marshal(terminalData)
-			if err != nil {
-				return fmt.Errorf("failed to marshal output: %w", err)
-			}
-
-			envelope := protocol.CreateEnvelope(0, dataBytes)
-			if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
-				return fmt.Errorf("failed to send output: %w", err)
-			}
-
-			log.DebugLog.Printf("Sent %d bytes (batched) output to WebSocket for session %s", len(outputBuffer), sessionID)
 			outputBuffer = outputBuffer[:0] // Reset buffer
 			return nil
 		}
@@ -266,6 +465,16 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 					log.ErrorLog.Printf("Failed to send buffered output: %v", err)
 					errChan <- err
 					return
+				}
+			case <-clearBufferChan:
+				// Clear output buffer on delta generator reset (synchronous confirmation)
+				outputBuffer = outputBuffer[:0]
+				log.InfoLog.Printf("Cleared output buffer for session %s", sessionID)
+
+				// Send confirmation that buffer was cleared
+				select {
+				case bufferClearedChan <- struct{}{}:
+				default:
 				}
 			default:
 				// Try to read from PTY (non-blocking with short timeout)
@@ -287,6 +496,13 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 				}
 
 				if n > 0 {
+					// Update terminal activity timestamps with the output content
+					// This ensures LastMeaningfulOutput reflects web UI viewing activity
+					content := string(buffer[:n])
+					log.DebugLog.Printf("[WebSocket] Calling UpdateTerminalTimestamps for session %s with %d bytes", sessionID, len(content))
+					instance.UpdateTerminalTimestamps(string(buffer[:n]), true)
+					markTimestampsForSave() // Mark for periodic persistence
+
 					// Append to output buffer
 					outputBuffer = append(outputBuffer, buffer[:n]...)
 
@@ -376,6 +592,10 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 
 				// Handle input
 				if input := incomingData.GetInput(); input != nil {
+				// Update terminal activity timestamps with user input
+				// This ensures LastMeaningfulOutput reflects user interaction via web UI
+				instance.UpdateTerminalTimestamps(string(input.Data), true)
+			markTimestampsForSave() // Mark for periodic persistence
 					log.InfoLog.Printf("Writing input to PTY for session %s: %d bytes", sessionID, len(input.Data))
 					if _, err := ptyWriter.Write(input.Data); err != nil {
 						errChan <- fmt.Errorf("failed to write to PTY: %w", err)
@@ -386,51 +606,131 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 
 				// Handle resize
 				if resize := incomingData.GetResize(); resize != nil {
-					log.InfoLog.Printf("Terminal resize for session %s: %dx%d", sessionID, resize.Cols, resize.Rows)
+					log.InfoLog.Printf("🔄 Terminal resize REQUEST for session %s: %dx%d", sessionID, resize.Cols, resize.Rows)
 					// Set the window size on the instance, which will delegate to tmux PTY
-					instance.SetWindowSize(int(resize.Cols), int(resize.Rows))
+					if err := instance.SetWindowSize(int(resize.Cols), int(resize.Rows)); err != nil {
+						log.ErrorLog.Printf("❌ Failed to resize tmux window for session %s: %v", sessionID, err)
+					} else {
+						log.InfoLog.Printf("✅ Successfully resized tmux window for session %s to %dx%d", sessionID, resize.Cols, resize.Rows)
+					}
+
+					// Update state generator dimensions with synchronization
+					dimensionMutex.Lock()
+					stateGen.UpdateDimensions(int(resize.Cols), int(resize.Rows))
+					dimensionMutex.Unlock()
+
+					// CRITICAL: After resize, we must send fresh content to prevent corruption
+					// The terminal dimensions changed, so old content may not render correctly
+					log.InfoLog.Printf("Sending post-resize complete state for session %s", sessionID)
+
+					// Get fresh content at new dimensions
+					content, err := instance.GetCurrentPaneContent(int(resize.Rows))
+					if err != nil {
+						log.ErrorLog.Printf("Failed to get content after resize: %v", err)
+					} else {
+						// Generate complete terminal state to overwrite client's stale content with dimension synchronization
+						dimensionMutex.RLock()
+
+						// Get real cursor position and dimensions after resize
+						cursorX, cursorY, err := instance.GetPaneCursorPosition()
+						if err != nil {
+							log.ErrorLog.Printf("Failed to get cursor position after resize: %v (using calculated)", err)
+						}
+
+						paneWidth, paneHeight, err := instance.GetPaneDimensions()
+						if err != nil {
+							log.ErrorLog.Printf("Failed to get pane dimensions after resize: %v (using StateGenerator dimensions)", err)
+						}
+
+						// Use real cursor and dimensions when available
+						var state *sessionv1.TerminalState
+						if cursorX >= 0 && cursorY >= 0 && paneWidth > 0 && paneHeight > 0 {
+							state = stateGen.GenerateStateWithCursor([]byte(content), &cursorX, &cursorY, &paneWidth, &paneHeight)
+							log.InfoLog.Printf("Post-resize state with real cursor (%d,%d) and dimensions %dx%d", cursorX, cursorY, paneWidth, paneHeight)
+						} else {
+							state = stateGen.GenerateStateWithCursor([]byte(content), nil, nil, nil, nil)
+							log.InfoLog.Printf("Post-resize state with calculated cursor and dimensions")
+						}
+
+						dimensionMutex.RUnlock()
+
+						terminalData := &sessionv1.TerminalData{
+							SessionId: sessionID,
+							Data: &sessionv1.TerminalData_State{
+								State: state,
+							},
+						}
+
+						dataBytes, err := proto.Marshal(terminalData)
+						if err != nil {
+							log.ErrorLog.Printf("Failed to marshal post-resize state: %v", err)
+						} else {
+							envelope := protocol.CreateEnvelope(0, dataBytes)
+							if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+								log.ErrorLog.Printf("Failed to send post-resize state: %v", err)
+							} else {
+								log.InfoLog.Printf("Sent post-resize complete state (sequence %d) for session %s", state.Sequence, sessionID)
+							}
+						}
+					}
 				}
 
-				// Handle scrollback request
-				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil && h.scrollbackManager != nil {
-					log.InfoLog.Printf("Scrollback request for session %s: fromSeq=%d, limit=%d",
+				// Handle scrollback request using tmux-native history capture
+				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
+					log.InfoLog.Printf("Scrollback request for session %s: fromSeq=%d, limit=%d (using tmux history)",
 						sessionID, scrollbackReq.FromSequence, scrollbackReq.Limit)
 
-					// Get scrollback data
+					// Use tmux capture-pane to get scrollback history instead of stored sequences
 					limit := int(scrollbackReq.Limit)
 					if limit <= 0 || limit > 10000 {
 						limit = 1000 // Default to 1000 lines
 					}
 
-					entries, err := h.scrollbackManager.GetScrollback(sessionID, scrollbackReq.FromSequence, limit)
+					// Calculate tmux line range for requested scrollback
+					// Use negative numbers to go back from current position
+					startLine := fmt.Sprintf("-%d", limit)
+					endLine := "-1" // Up to current position
+
+					// Capture scrollback history from tmux
+					historyContent, err := instance.GetScrollbackHistory(startLine, endLine)
 					if err != nil {
-						log.ErrorLog.Printf("Failed to get scrollback: %v", err)
+						log.ErrorLog.Printf("Failed to capture tmux scrollback history: %v", err)
 						continue
 					}
 
-					// Convert entries to chunks
-					chunks := make([]*sessionv1.ScrollbackChunk, 0, len(entries))
-					for _, entry := range entries {
+					// Convert tmux history to state-based chunks (no raw sequences)
+					lines := strings.Split(historyContent, "\n")
+					chunks := make([]*sessionv1.ScrollbackChunk, 0, len(lines))
+
+					// Generate state-based scrollback chunks instead of raw sequence replay
+					for i, line := range lines {
+						if strings.TrimSpace(line) == "" && i == len(lines)-1 {
+							continue // Skip trailing empty line
+						}
+
+						// Create state-based chunk with proper sequence numbering
+						sequence := scrollbackReq.FromSequence + uint64(i)
 						chunks = append(chunks, &sessionv1.ScrollbackChunk{
-							Data:        entry.Data,
-							Sequence:    entry.Sequence,
-							TimestampMs: entry.Timestamp.UnixMilli(),
+							Data:        []byte(line),
+							Sequence:    sequence,
+							TimestampMs: time.Now().UnixMilli(), // Current time for tmux capture
 						})
 					}
 
-					// Get stats for response metadata
-					stats, _ := h.scrollbackManager.GetStats(sessionID)
+					// Calculate response metadata based on actual tmux history
+					totalLines := uint64(len(lines))
+					hasMore := totalLines >= uint64(limit) // Estimate based on request size
 
-					// Send scrollback response
+					// Send scrollback response with tmux-native data
 					scrollbackResp := &sessionv1.TerminalData{
 						SessionId: sessionID,
 						Data: &sessionv1.TerminalData_ScrollbackResponse{
 							ScrollbackResponse: &sessionv1.ScrollbackResponse{
 								Chunks:          chunks,
-								HasMore:         uint64(len(entries)) >= uint64(limit),
-								TotalLines:      uint64(stats.MemoryLines),
-								OldestSequence:  stats.OldestSequence,
-								NewestSequence:  stats.NewestSequence,
+								HasMore:         hasMore,
+								TotalLines:      totalLines,
+								OldestSequence:  scrollbackReq.FromSequence,
+								NewestSequence:  scrollbackReq.FromSequence + totalLines - 1,
 							},
 						},
 					}
@@ -454,6 +754,85 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 				if currentPaneReq := incomingData.GetCurrentPaneRequest(); currentPaneReq != nil {
 					log.InfoLog.Printf("Current pane request for session %s: lines=%d, includeEscapes=%v",
 						sessionID, currentPaneReq.Lines, currentPaneReq.IncludeEscapes)
+
+					// Extract streaming mode from request if provided
+					if currentPaneReq.StreamingMode != nil && *currentPaneReq.StreamingMode != "" {
+						requestedMode := *currentPaneReq.StreamingMode
+						if requestedMode == "raw" || requestedMode == "raw-compressed" || requestedMode == "state" || requestedMode == "hybrid" {
+							streamingMode = requestedMode
+							log.InfoLog.Printf("Updated streaming mode for session %s: %s", sessionID, streamingMode)
+						} else {
+							log.ErrorLog.Printf("Invalid streaming mode '%s' requested, keeping current mode: %s", requestedMode, streamingMode)
+						}
+					}
+
+					// Check if we've already processed a pane request to prevent duplicates
+					terminalReadyMutex.Lock()
+					if terminalReady {
+						log.InfoLog.Printf("Ignoring duplicate current pane request for session %s (terminal already initialized)", sessionID)
+						terminalReadyMutex.Unlock()
+						continue
+					}
+					terminalReady = true
+					terminalReadyMutex.Unlock()
+
+					// CRITICAL: Atomic reset of state generator and output buffer
+					// This ensures sequence synchronization starts from 0 to match the client's StateApplicator
+					// Without this, the server continues from its previous sequence (e.g., 186) while
+					// the client starts at sequence 0, causing "State sequence mismatch" errors
+
+					// Step 1: Reset state generator first
+					stateGen.Reset()
+					log.InfoLog.Printf("Reset state generator for session %s (sequence = 0)", sessionID)
+
+					// Step 2: Synchronously clear output buffer to prevent stale states
+					select {
+					case clearBufferChan <- struct{}{}:
+						// Wait for confirmation that buffer was actually cleared
+						select {
+						case <-bufferClearedChan:
+							log.InfoLog.Printf("Output buffer cleared synchronously for session %s", sessionID)
+						case <-time.After(100 * time.Millisecond):
+							log.ErrorLog.Printf("Timeout waiting for buffer clear confirmation for session %s", sessionID)
+						}
+					default:
+						log.InfoLog.Printf("Buffer clear signal channel full for session %s", sessionID)
+					}
+
+					log.InfoLog.Printf("Atomic reset complete for session %s (starting from version 0)", sessionID)
+
+					// Resize tmux pane to target dimensions if provided (prevents size mismatch)
+					// This ensures captured content matches client's browser terminal size
+					if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
+						targetCols := int(*currentPaneReq.TargetCols)
+						targetRows := int(*currentPaneReq.TargetRows)
+
+						// CRITICAL: Update StateGenerator dimensions FIRST before generating state
+						// This ensures content truncation uses correct viewport size
+						stateGen.UpdateDimensions(targetCols, targetRows)
+						log.InfoLog.Printf("Updated StateGenerator dimensions to %dx%d for session %s",
+							targetCols, targetRows, sessionID)
+
+						log.InfoLog.Printf("Resizing tmux pane for session %s to %dx%d before capture",
+							sessionID, targetCols, targetRows)
+
+						if resizeErr := instance.ResizePTY(targetCols, targetRows); resizeErr != nil {
+							log.ErrorLog.Printf("Failed to resize tmux pane before capture: %v", resizeErr)
+							// Send error response but don't fail the request
+							errorResp := &sessionv1.TerminalData{
+								SessionId: sessionID,
+								Data: &sessionv1.TerminalData_Error{
+									Error: &sessionv1.TerminalError{
+										Message: fmt.Sprintf("Failed to resize pane before capture: %v", resizeErr),
+										Code:    "resize_error",
+									},
+								},
+							}
+							respBytes, _ := proto.Marshal(errorResp)
+							respEnvelope := protocol.CreateEnvelope(0, respBytes)
+							stream.WriteMessage(websocket.BinaryMessage, respEnvelope)
+						}
+					}
 
 					// Get current pane content from instance
 					lines := int(currentPaneReq.Lines)
@@ -480,47 +859,81 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 						continue
 					}
 
-					// Get cursor position and pane dimensions
-					cursorX, cursorY, err := instance.GetPaneCursorPosition()
-					if err != nil {
-						log.ErrorLog.Printf("Failed to get cursor position: %v (using defaults)", err)
-						cursorX, cursorY = 0, 0
-					}
-
-					paneWidth, paneHeight, err := instance.GetPaneDimensions()
-					if err != nil {
-						log.ErrorLog.Printf("Failed to get pane dimensions: %v (using defaults)", err)
-						paneWidth, paneHeight = 80, 24
-					}
-
-					// Send current pane response
-					currentPaneResp := &sessionv1.TerminalData{
-						SessionId: sessionID,
-						Data: &sessionv1.TerminalData_CurrentPaneResponse{
-							CurrentPaneResponse: &sessionv1.CurrentPaneResponse{
-								Content:    []byte(content),
-								CursorX:    int32(cursorX),
-								CursorY:    int32(cursorY),
-								PaneWidth:  int32(paneWidth),
-								PaneHeight: int32(paneHeight),
+					// MODE SWITCHING: Send initial content based on streaming mode
+					var respBytes []byte
+					switch streamingMode {
+					case "raw", "raw-compressed":
+						// For initial load, send uncompressed even in raw-compressed mode
+						// This avoids issues with client not being ready for compressed data yet
+						terminalData := &sessionv1.TerminalData{
+							SessionId: sessionID,
+							Data: &sessionv1.TerminalData_Output{
+								Output: &sessionv1.TerminalOutput{
+									Data: []byte(content), // Raw tmux output with ANSI codes
+								},
 							},
-						},
-					}
+						}
 
-					respBytes, err := proto.Marshal(currentPaneResp)
-					if err != nil {
-						log.ErrorLog.Printf("Failed to marshal current pane response: %v", err)
-						continue
+						var err error
+						respBytes, err = proto.Marshal(terminalData)
+						if err != nil {
+							log.ErrorLog.Printf("Failed to marshal terminal output: %v", err)
+							continue
+						}
+
+						log.InfoLog.Printf("Sent initial pane content for session %s: %d bytes (%s mode)",
+							sessionID, len(content), streamingMode)
+
+					case "state", "hybrid":
+						// Generate state from content
+						dimensionMutex.RLock()
+						state := stateGen.GenerateState([]byte(content))
+						dimensionMutex.RUnlock()
+
+						terminalData := &sessionv1.TerminalData{
+							SessionId: sessionID,
+							Data: &sessionv1.TerminalData_State{
+								State: state,
+							},
+						}
+
+						var err error
+						respBytes, err = proto.Marshal(terminalData)
+						if err != nil {
+							log.ErrorLog.Printf("Failed to marshal terminal state: %v", err)
+							continue
+						}
+
+						log.InfoLog.Printf("Sent initial pane content for session %s: state sequence %d (%s mode)",
+							sessionID, state.Sequence, streamingMode)
+
+					default:
+						// Fallback to raw
+						terminalData := &sessionv1.TerminalData{
+							SessionId: sessionID,
+							Data: &sessionv1.TerminalData_Output{
+								Output: &sessionv1.TerminalOutput{
+									Data: []byte(content),
+								},
+							},
+						}
+
+						var err error
+						respBytes, err = proto.Marshal(terminalData)
+						if err != nil {
+							log.ErrorLog.Printf("Failed to marshal terminal output: %v", err)
+							continue
+						}
+
+						log.InfoLog.Printf("Sent initial pane content for session %s: %d bytes (fallback to raw)",
+							sessionID, len(content))
 					}
 
 					respEnvelope := protocol.CreateEnvelope(0, respBytes)
 					if err := stream.WriteMessage(websocket.BinaryMessage, respEnvelope); err != nil {
-						log.ErrorLog.Printf("Failed to send current pane response: %v", err)
+						log.ErrorLog.Printf("Failed to send initial content: %v", err)
 						continue
 					}
-
-					log.InfoLog.Printf("Sent current pane response for session %s: %d bytes, cursor=(%d,%d), size=%dx%d",
-						sessionID, len(content), cursorX, cursorY, paneWidth, paneHeight)
 				}
 			}
 		}
@@ -528,7 +941,60 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 
 	// Wait for either goroutine to complete or error
 	err = <-errChan
+
+	// CRITICAL FIX: Persist timestamp updates to disk so GetReviewQueue sees them
+	// The WebSocket handler loads instances at connection start, updates timestamps in memory
+	// during the connection, but those updates are lost unless we save them back to storage.
+	// This ensures "Last Activity" timestamps in the Review Queue UI reflect terminal viewing.
+	if saveErr := h.persistInstanceTimestamps(instance); saveErr != nil {
+		log.ErrorLog.Printf("Failed to persist timestamp updates for session %s: %v", sessionID, saveErr)
+		// Don't fail the connection - log and continue
+	}
+
 	return err
+}
+
+// persistInstanceTimestamps saves the instance's updated timestamps back to storage
+// This is called when a WebSocket connection closes to ensure in-memory timestamp
+// updates are persisted to disk, making them visible to GetReviewQueue.
+func (h *ConnectRPCWebSocketHandler) persistInstanceTimestamps(updatedInstance *session.Instance) error {
+	// Load all instances from storage
+	instances, err := h.sessionService.storage.LoadInstances()
+	if err != nil {
+		return fmt.Errorf("failed to load instances: %w", err)
+	}
+
+	// Find and update the matching instance
+	found := false
+	for i, inst := range instances {
+		if inst.Title == updatedInstance.Title {
+			// Update timestamps from the in-memory instance
+			inst.LastTerminalUpdate = updatedInstance.LastTerminalUpdate
+			inst.LastMeaningfulOutput = updatedInstance.LastMeaningfulOutput
+			instances[i] = inst
+			found = true
+			log.InfoLog.Printf("Persisting timestamp updates for session %s: LastMeaningfulOutput=%v",
+				updatedInstance.Title, updatedInstance.LastMeaningfulOutput)
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("session %s not found in storage", updatedInstance.Title)
+	}
+
+	// Save all instances back to storage
+	if err := h.sessionService.storage.SaveInstances(instances); err != nil {
+		return fmt.Errorf("failed to save instances: %w", err)
+	}
+
+	// Broadcast session updated event to notify clients of timestamp changes
+	// This ensures "Last Activity" updates in real-time in the UI
+	event := events.NewSessionUpdatedEvent(updatedInstance, []string{"LastTerminalUpdate", "LastMeaningfulOutput"})
+	h.sessionService.eventBus.Publish(event)
+	log.DebugLog.Printf("Broadcasted timestamp update event for session %s", updatedInstance.Title)
+
+	return nil
 }
 
 // parseConnectHeaders parses HTTP headers from ConnectRPC format (key: value\r\n)
@@ -557,17 +1023,44 @@ func sendErrorResponse(conn *websocket.Conn, errorMsg string) {
 
 // sendEndStreamSuccess sends a successful EndStream message
 func sendEndStreamSuccess(stream *connectWebSocketStream) {
-	// EndStream message with empty metadata
-	endStreamJSON := []byte(`{"metadata":{}}`)
-	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, endStreamJSON)
+	// Send empty TerminalData message with EndStream flag to signal completion
+	emptyTerminalData := &sessionv1.TerminalData{
+		SessionId: "",
+		Data:      nil,
+	}
+
+	dataBytes, err := proto.Marshal(emptyTerminalData)
+	if err != nil {
+		log.ErrorLog.Printf("Failed to marshal EndStream TerminalData: %v", err)
+		// Fallback to simple JSON
+		dataBytes = []byte(`{"metadata":{}}`)
+	}
+
+	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
 	stream.WriteMessage(websocket.BinaryMessage, envelope)
 }
 
 // sendEndStreamError sends an error EndStream message
 func sendEndStreamError(stream *connectWebSocketStream, err error) {
-	// EndStream message with error
-	errorJSON := fmt.Sprintf(`{"error":{"code":"internal","message":"%s"}}`, err.Error())
-	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, []byte(errorJSON))
+	// Send TerminalData with error info and EndStream flag
+	errorTerminalData := &sessionv1.TerminalData{
+		SessionId: "",
+		Data: &sessionv1.TerminalData_Error{
+			Error: &sessionv1.TerminalError{
+				Message: err.Error(),
+				Code:    "internal",
+			},
+		},
+	}
+
+	dataBytes, errMarshal := proto.Marshal(errorTerminalData)
+	if errMarshal != nil {
+		log.ErrorLog.Printf("Failed to marshal EndStream error TerminalData: %v", errMarshal)
+		// Fallback to simple JSON
+		dataBytes = []byte(fmt.Sprintf(`{"error":{"code":"internal","message":"%s"}}`, err.Error()))
+	}
+
+	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
 	stream.WriteMessage(websocket.BinaryMessage, envelope)
 }
 

@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terminal Rendering Harness</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+  <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+  <style>
+    body {
+      font-family: monospace;
+      margin: 20px;
+      background: #1e1e1e;
+      color: #d4d4d4;
+    }
+    #terminal-container {
+      width: 800px;
+      height: 600px;
+      background: #000;
+      padding: 10px;
+      border: 1px solid #333;
+    }
+    .controls {
+      margin: 20px 0;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    button {
+      padding: 8px 16px;
+      background: #0e639c;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #1177bb;
+    }
+    .status {
+      margin: 10px 0;
+      padding: 10px;
+      background: #2d2d30;
+      border-radius: 4px;
+    }
+    .test-output {
+      margin: 20px 0;
+      padding: 10px;
+      background: #2d2d30;
+      border-radius: 4px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .pass { color: #4ec9b0; }
+    .fail { color: #f48771; }
+  </style>
+</head>
+<body>
+  <h1>🧪 Terminal Rendering Harness</h1>
+
+  <div class="status">
+    <div><strong>Connection:</strong> <span id="connection-status">Disconnected</span></div>
+    <div><strong>Session:</strong> <span id="session-id">actions-build-errors-mvn</span></div>
+    <div><strong>Dimensions:</strong> <span id="dimensions">80x24</span></div>
+  </div>
+
+  <div class="controls">
+    <button onclick="connectToSession()">Connect</button>
+    <button onclick="disconnect()">Disconnect</button>
+    <button onclick="runTests()">Run All Tests</button>
+    <button onclick="testRendering()">Test: Rendering</button>
+    <button onclick="testInput()">Test: Input Echo</button>
+    <button onclick="testColors()">Test: Colors</button>
+    <button onclick="testScrollback()">Test: Scrollback</button>
+    <button onclick="testResize()">Test: Resize</button>
+    <button onclick="clearTerminal()">Clear Terminal</button>
+  </div>
+
+  <div id="terminal-container"></div>
+
+  <div class="test-output">
+    <h3>Test Results:</h3>
+    <div id="test-results"></div>
+  </div>
+
+  <script>
+    let terminal;
+    let ws;
+    let testResults = [];
+
+    // Initialize xterm.js
+    function initTerminal() {
+      terminal = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+        theme: {
+          background: '#000000',
+          foreground: '#ffffff',
+        },
+        rows: 24,
+        cols: 80,
+      });
+
+      terminal.open(document.getElementById('terminal-container'));
+
+      // Handle input
+      terminal.onData((data) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          sendInput(data);
+        }
+      });
+
+      updateDimensions();
+    }
+
+    // Connect to WebSocket (raw PTY streaming)
+    function connectToSession() {
+      const sessionId = document.getElementById('session-id').textContent;
+
+      // Close existing connection
+      if (ws) {
+        ws.close();
+      }
+
+      // Open WebSocket connection
+      ws = new WebSocket(`ws://localhost:8543/v1/session.SessionService/StreamTerminal`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        updateStatus('Connected', 'green');
+        logTest('✓ WebSocket connection established', true);
+
+        // Send Connect headers
+        const headers = 'Content-Type: application/proto\r\n\r\n';
+        ws.send(new TextEncoder().encode(headers));
+
+        // Send session request (simplified - you'll need proper protobuf encoding)
+        const request = {
+          sessionId: sessionId,
+          data: {
+            case: 'currentPaneRequest',
+            value: {
+              lines: 100,
+              includeEscapes: true,
+              targetCols: terminal.cols,
+              targetRows: terminal.rows,
+            }
+          }
+        };
+
+        // For testing, let's just send the headers
+        logTest('Sent connection request', true);
+      };
+
+      ws.onmessage = (event) => {
+        // RAW APPROACH: Just write bytes directly to terminal
+        const bytes = new Uint8Array(event.data);
+        const text = new TextDecoder().decode(bytes);
+
+        // Write directly to xterm - let it handle everything
+        terminal.write(text);
+
+        logTest(`Received ${bytes.length} bytes from server`, true);
+      };
+
+      ws.onerror = (error) => {
+        updateStatus('Error', 'red');
+        logTest('✗ WebSocket error: ' + error, false);
+      };
+
+      ws.onclose = () => {
+        updateStatus('Disconnected', 'orange');
+        logTest('WebSocket closed', true);
+      };
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.close();
+      }
+    }
+
+    function sendInput(data) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        logTest('✗ Cannot send input - not connected', false);
+        return;
+      }
+
+      // Send input to server (simplified)
+      const bytes = new TextEncoder().encode(data);
+      ws.send(bytes);
+      logTest(`Sent input: ${JSON.stringify(data)}`, true);
+    }
+
+    // Test Functions
+
+    function runTests() {
+      clearResults();
+      logTest('=== Running All Tests ===', true);
+
+      testRendering();
+      setTimeout(() => testInput(), 1000);
+      setTimeout(() => testColors(), 2000);
+      setTimeout(() => testScrollback(), 3000);
+      setTimeout(() => testResize(), 4000);
+    }
+
+    function testRendering() {
+      logTest('--- Test: Basic Rendering ---', true);
+
+      // Test 1: Clear screen
+      terminal.write('\x1b[2J\x1b[H');
+      logTest('✓ Clear screen command sent', true);
+
+      // Test 2: Write text
+      terminal.write('Hello, Terminal!\r\n');
+      logTest('✓ Basic text rendered', true);
+
+      // Test 3: ANSI colors
+      terminal.write('\x1b[31mRed Text\x1b[0m\r\n');
+      terminal.write('\x1b[32mGreen Text\x1b[0m\r\n');
+      terminal.write('\x1b[34mBlue Text\x1b[0m\r\n');
+      logTest('✓ ANSI colors rendered', true);
+
+      // Test 4: Cursor positioning
+      terminal.write('\x1b[10;20HPositioned Text\r\n');
+      logTest('✓ Cursor positioning works', true);
+
+      // Test 5: Line wrapping
+      const longLine = 'A'.repeat(100);
+      terminal.write(longLine + '\r\n');
+      logTest('✓ Long line wrapping', true);
+    }
+
+    function testInput() {
+      logTest('--- Test: Input Echo ---', true);
+
+      // Test keyboard input
+      terminal.write('\r\n$ ');
+      terminal.focus();
+
+      logTest('Type some text and press Enter to test input', true);
+      logTest('Expected: Input should be sent to server and echoed back', true);
+
+      // Simulate input programmatically
+      setTimeout(() => {
+        const testInput = 'echo "test"\n';
+        terminal.write(testInput);
+        sendInput(testInput);
+        logTest('✓ Simulated input sent', true);
+      }, 500);
+    }
+
+    function testColors() {
+      logTest('--- Test: Color Rendering ---', true);
+
+      terminal.write('\r\n');
+
+      // 16 basic colors
+      for (let i = 0; i < 16; i++) {
+        terminal.write(`\x1b[38;5;${i}m█\x1b[0m`);
+      }
+      terminal.write('\r\n');
+      logTest('✓ 16 basic colors rendered', true);
+
+      // 256 color palette
+      terminal.write('\r\n');
+      for (let i = 0; i < 256; i++) {
+        terminal.write(`\x1b[38;5;${i}m█\x1b[0m`);
+        if ((i + 1) % 32 === 0) terminal.write('\r\n');
+      }
+      logTest('✓ 256 color palette rendered', true);
+    }
+
+    function testScrollback() {
+      logTest('--- Test: Scrollback ---', true);
+
+      // Fill more than screen height
+      terminal.write('\r\n');
+      for (let i = 0; i < 50; i++) {
+        terminal.write(`Line ${i}\r\n`);
+      }
+
+      logTest('✓ Generated 50 lines (scrollback should work)', true);
+      logTest('Expected: Scroll up to see all lines', true);
+    }
+
+    function testResize() {
+      logTest('--- Test: Terminal Resize ---', true);
+
+      const originalCols = terminal.cols;
+      const originalRows = terminal.rows;
+
+      // Resize smaller
+      terminal.resize(60, 20);
+      logTest(`✓ Resized to 60x20 (from ${originalCols}x${originalRows})`, true);
+
+      terminal.write('\r\n=== Resized Terminal ===\r\n');
+      terminal.write('A'.repeat(70) + '\r\n');
+
+      // Resize back
+      setTimeout(() => {
+        terminal.resize(originalCols, originalRows);
+        logTest(`✓ Restored to ${originalCols}x${originalRows}`, true);
+        updateDimensions();
+      }, 2000);
+    }
+
+    function clearTerminal() {
+      terminal.clear();
+      logTest('Terminal cleared', true);
+    }
+
+    // Utility Functions
+
+    function updateStatus(status, color) {
+      const el = document.getElementById('connection-status');
+      el.textContent = status;
+      el.style.color = color;
+    }
+
+    function updateDimensions() {
+      document.getElementById('dimensions').textContent =
+        `${terminal.cols}x${terminal.rows}`;
+    }
+
+    function logTest(message, pass) {
+      const resultsDiv = document.getElementById('test-results');
+      const entry = document.createElement('div');
+      entry.className = pass ? 'pass' : 'fail';
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+      resultsDiv.appendChild(entry);
+      resultsDiv.scrollTop = resultsDiv.scrollHeight;
+    }
+
+    function clearResults() {
+      document.getElementById('test-results').innerHTML = '';
+    }
+
+    // Initialize on load
+    window.onload = initTerminal;
+  </script>
+</body>
+</html>

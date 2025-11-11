@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/creack/pty"
 )
@@ -840,20 +841,43 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 // This is particularly useful for web terminal integration where the browser controls the size.
 // This method executes the resize immediately by calling both PTY and tmux resize commands.
 func (t *TmuxSession) SetWindowSize(cols, rows int) error {
+	log.InfoLog.Printf("🔧 SetWindowSize called for session '%s': target %dx%d", t.sanitizedName, cols, rows)
+
+	// Get current dimensions for comparison
+	currentWidth, currentHeight, _ := t.GetPaneDimensions()
+	log.InfoLog.Printf("📏 Current tmux pane dimensions for '%s': %dx%d", t.sanitizedName, currentWidth, currentHeight)
+
 	// First resize the PTY using the existing method
 	if err := t.updateWindowSize(cols, rows); err != nil {
 		// Log warning but don't fail - PTY resize might not be critical
-		log.WarningLog.Printf("Failed to resize PTY for session '%s': %v", t.sanitizedName, err)
+		log.WarningLog.Printf("⚠️ Failed to resize PTY for session '%s': %v", t.sanitizedName, err)
+	} else {
+		log.InfoLog.Printf("✅ PTY resized successfully for session '%s'", t.sanitizedName)
 	}
 
 	// Also resize the tmux window itself to ensure the dimensions are applied
 	// This ensures the tmux pane reflects the new size
+	log.InfoLog.Printf("🔧 Running tmux resize-window command for '%s' to %dx%d", t.sanitizedName, cols, rows)
 	cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", fmt.Sprintf("%d", cols), "-y", fmt.Sprintf("%d", rows))
 	if err := t.cmdExec.Run(cmd); err != nil {
+		log.ErrorLog.Printf("❌ tmux resize-window failed for '%s': %v", t.sanitizedName, err)
 		return fmt.Errorf("failed to resize tmux window: %w", err)
 	}
 
-	log.InfoLog.Printf("Resized tmux session '%s' to %dx%d", t.sanitizedName, cols, rows)
+	// Verify the resize actually worked
+	newWidth, newHeight, err := t.GetPaneDimensions()
+	if err != nil {
+		log.WarningLog.Printf("⚠️ Could not verify resize for '%s': %v", t.sanitizedName, err)
+	} else {
+		log.InfoLog.Printf("📏 New tmux pane dimensions for '%s': %dx%d (expected %dx%d)",
+			t.sanitizedName, newWidth, newHeight, cols, rows)
+		if newWidth != cols || newHeight != rows {
+			log.ErrorLog.Printf("❌ Dimension mismatch after resize for '%s': got %dx%d, expected %dx%d",
+				t.sanitizedName, newWidth, newHeight, cols, rows)
+		}
+	}
+
+	log.InfoLog.Printf("✅ Resized tmux session '%s' to %dx%d", t.sanitizedName, cols, rows)
 	return nil
 }
 
@@ -944,7 +968,9 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 		}
 		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
 	}
-	return string(output), nil
+	// Convert bytes to valid UTF-8 string, replacing invalid sequences
+	// This prevents downstream parsing errors while preserving ANSI sequences
+	return sanitizeUTF8String(output), nil
 }
 
 // CapturePaneContentWithOptions captures the pane content with additional options
@@ -956,7 +982,9 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
 	}
-	return string(output), nil
+	// Convert bytes to valid UTF-8 string, replacing invalid sequences
+	// This prevents downstream parsing errors while preserving ANSI sequences
+	return sanitizeUTF8String(output), nil
 }
 
 // HasMeaningfulContent checks if the terminal output contains meaningful content
@@ -1067,4 +1095,65 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 		}
 	}
 	return nil
+}
+
+// sanitizeUTF8String converts raw bytes to valid UTF-8 string, preserving ANSI escape sequences
+// This prevents xterm.js parsing errors from invalid byte sequences while maintaining
+// terminal formatting and color information
+func sanitizeUTF8String(rawBytes []byte) string {
+	if len(rawBytes) == 0 {
+		return ""
+	}
+
+	var result strings.Builder
+	inEscape := false
+
+	for i := 0; i < len(rawBytes); {
+		// Start of ANSI escape sequence
+		if rawBytes[i] == '\x1b' {
+			inEscape = true
+			result.WriteByte(rawBytes[i])
+			i++
+			continue
+		}
+
+		// Inside ANSI escape sequence - preserve all bytes
+		if inEscape {
+			b := rawBytes[i]
+			result.WriteByte(b)
+			// End of escape sequence (letter terminates most ANSI sequences)
+			if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') {
+				inEscape = false
+			}
+			i++
+			continue
+		}
+
+		// Outside escape sequences - handle UTF-8 and control characters
+		r, size := utf8.DecodeRune(rawBytes[i:])
+
+		if r == utf8.RuneError && size == 1 {
+			// Invalid UTF-8 byte - replace with replacement character
+			result.WriteString("�")
+			i++
+		} else if r < 32 {
+			// Control character - allow common terminal chars
+			switch r {
+			case '\t', '\n', '\r':
+				result.WriteRune(r) // Keep tab, newline, carriage return
+			case 7, 8:
+				result.WriteRune(r) // Keep bell (BEL) and backspace (BS)
+			default:
+				// Replace other control characters with space to prevent parsing issues
+				result.WriteByte(' ')
+			}
+			i += size
+		} else {
+			// Valid UTF-8 character
+			result.WriteRune(r)
+			i += size
+		}
+	}
+
+	return result.String()
 }

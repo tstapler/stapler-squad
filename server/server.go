@@ -52,20 +52,67 @@ func NewServer(addr string) *Server {
 		eventBus := sessionService.GetEventBus()
 		reviewQueue := sessionService.GetReviewQueueInstance()
 
+		// CRITICAL: Create and wire dependencies BEFORE starting storage
+		// This ensures instances have statusManager when they start, allowing
+		// controller initialization to succeed
+		statusManager := session.NewInstanceStatusManager()
+		reviewQueuePoller := session.NewReviewQueuePoller(reviewQueue, statusManager)
+
+		// CRITICAL: Start storage AFTER creating statusManager
+		// This loads and starts instances with proper dependency wiring
+		if err := storage.Start(); err != nil {
+			log.ErrorLog.Printf("Failed to start storage: %v", err)
+		} else {
+			log.InfoLog.Printf("Storage started - instances loaded and ready")
+		}
+
+		// Load instances (now they're already started with controllers running)
 		instances, err := storage.LoadInstances()
 		if err != nil {
 			log.ErrorLog.Printf("Failed to load instances for reactive queue: %v", err)
 		} else {
-			// Create status manager and poller
-			statusManager := session.NewInstanceStatusManager()
-			reviewQueuePoller := session.NewReviewQueuePoller(reviewQueue, statusManager)
-
-			// Wire up review queue and status manager to instances
+			// Wire up review queue and status manager to ALL instances
+			// This handles both newly loaded instances and ensures consistency
 			for _, inst := range instances {
 				inst.SetReviewQueue(reviewQueue)
 				inst.SetStatusManager(statusManager)
 			}
 			reviewQueuePoller.SetInstances(instances)
+
+			// CRITICAL: Start loaded instances now that dependencies are wired
+			// LoadInstances() reads data from disk but doesn't start tmux sessions
+			// We must explicitly start instances here for controller initialization to work
+			for _, inst := range instances {
+				if !inst.Started() {
+					// Start with firstTimeSetup=false since this is a loaded session
+					if err := inst.Start(false); err != nil {
+						log.ErrorLog.Printf("Failed to start loaded instance '%s': %v", inst.Title, err)
+					} else {
+						log.InfoLog.Printf("Started loaded instance '%s'", inst.Title)
+					}
+				}
+			}
+
+			// Start controllers for loaded instances that deferred startup
+			// Now that statusManager is wired, controller initialization can succeed
+			log.InfoLog.Printf("Attempting controller startup for %d loaded instances", len(instances))
+			for _, inst := range instances {
+				started := inst.Started()
+				paused := inst.Paused()
+				log.InfoLog.Printf("Instance '%s': Started()=%v, Paused()=%v", inst.Title, started, paused)
+				if started && !paused {
+					// Check if controller already exists (shouldn't happen but defensive)
+					if inst.GetController() == nil {
+						if err := inst.StartController(); err != nil {
+							log.WarningLog.Printf("Failed to start controller for loaded instance '%s': %v", inst.Title, err)
+						} else {
+							log.InfoLog.Printf("Started controller for loaded instance '%s'", inst.Title)
+						}
+					} else {
+						log.InfoLog.Printf("Instance '%s' already has active controller", inst.Title)
+					}
+				}
+			}
 
 			// Create and start ReactiveQueueManager
 			reactiveQueueMgr := NewReactiveQueueManager(
@@ -98,7 +145,8 @@ func NewServer(addr string) *Server {
 
 		// Register ConnectRPC WebSocket handler FIRST for streaming RPCs
 		// This must come before the general ConnectRPC handler to avoid response writer wrapping
-		wsHandler := services.NewConnectRPCWebSocketHandler(sessionService, scrollbackManager)
+		// Default to "raw" streaming mode (simplest, most reliable)
+		wsHandler := services.NewConnectRPCWebSocketHandler(sessionService, scrollbackManager, "raw")
 		srv.mux.HandleFunc(sessionv1connect.SessionServiceStreamTerminalProcedure, wsHandler.HandleWebSocket)
 		log.InfoLog.Printf("Registered ConnectRPC WebSocket handler: %s", sessionv1connect.SessionServiceStreamTerminalProcedure)
 

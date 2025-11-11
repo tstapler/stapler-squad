@@ -196,6 +196,9 @@ type Config struct {
 	PerformBackgroundHealthChecks bool `json:"perform_background_health_checks"`
 	// KeyCategories defines custom category mappings for key bindings in help system
 	KeyCategories map[string]string `json:"key_categories"`
+	// TerminalStreamingMode controls how terminal output is streamed to the client
+	// Options: "raw" (direct PTY streaming), "state" (MOSH-style state sync), "hybrid" (both)
+	TerminalStreamingMode string `json:"terminal_streaming_mode"`
 }
 
 // DefaultConfig returns the default configuration
@@ -231,6 +234,7 @@ func DefaultConfig() *Config {
 		TmuxSessionPrefix:             "claudesquad_", // Default prefix for backward compatibility
 		PerformBackgroundHealthChecks: true,            // Enabled by default for automated session maintenance
 		KeyCategories:                 getDefaultKeyCategories(),
+		TerminalStreamingMode:         "raw", // Default to raw streaming (simpler, more reliable)
 	}
 }
 

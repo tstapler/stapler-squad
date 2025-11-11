@@ -22,6 +22,7 @@
     "@xterm/xterm": "^5.5.0",
     "ansi-to-html": "^0.7.2",
     "it-ws": "^6.1.5",
+    "lzma-js": "^1.0.1",
     "next": "15.3.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

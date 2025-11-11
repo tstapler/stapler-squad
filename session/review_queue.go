@@ -86,7 +86,7 @@ func (rq *ReviewQueue) Add(item *ReviewItem) bool {
 		item.DetectedAt = time.Now()
 	}
 
-	_, exists := rq.items[item.SessionID]
+	existingItem, exists := rq.items[item.SessionID]
 	rq.items[item.SessionID] = item
 
 	// Notify observers
@@ -95,8 +95,17 @@ func (rq *ReviewQueue) Add(item *ReviewItem) bool {
 			observer.OnItemAdded(item)
 		}
 	} else {
-		for _, observer := range rq.observers {
-			observer.OnQueueUpdated(rq.getSortedItemsUnsafe())
+		// Only fire OnQueueUpdated if something meaningful changed
+		// This prevents spurious notifications when the poller preserves DetectedAt
+		hasSignificantChange := existingItem.Reason != item.Reason ||
+			existingItem.Priority != item.Priority ||
+			existingItem.Context != item.Context ||
+			!existingItem.LastActivity.Equal(item.LastActivity)
+
+		if hasSignificantChange {
+			for _, observer := range rq.observers {
+				observer.OnQueueUpdated(rq.getSortedItemsUnsafe())
+			}
 		}
 	}
 

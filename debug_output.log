@@ -1,0 +1,21 @@
+Global log: /Users/tylerstapler/.claude-squad/logs/claudesquad.log
+Error: could not open a new TTY: open /dev/tty: device not configured
+Usage:
+  claude-squad [flags]
+  claude-squad [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  debug       Print debug information like config paths
+  help        Help about any command
+  reset       Reset all stored instances
+  version     Print the version number of claude-squad
+
+Flags:
+  -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts
+  -h, --help             help for claude-squad
+  -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
+
+Use "claude-squad [command] --help" for more information about a command.
+
+could not open a new TTY: open /dev/tty: device not configured

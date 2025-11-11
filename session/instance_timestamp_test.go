@@ -33,7 +33,7 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 
 	// Test 1: Update with meaningful content (non-banner)
 	meaningfulContent := "Hello, world!\nThis is actual output\nError: something happened"
-	instance.UpdateTerminalTimestamps(meaningfulContent)
+	instance.UpdateTerminalTimestamps(meaningfulContent, false)
 
 	// Both timestamps should be updated
 	if !instance.LastTerminalUpdate.After(initialTerminalUpdate) {
@@ -51,7 +51,7 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 
 	// Test 2: Update with banner-only content
 	bannerOnlyContent := "14:23 5-Jan-24\n[session] 0:bash* \"localhost\" 14:23 5-Jan-24"
-	instance.UpdateTerminalTimestamps(bannerOnlyContent)
+	instance.UpdateTerminalTimestamps(bannerOnlyContent, false)
 
 	// LastTerminalUpdate should be updated (any output)
 	if !instance.LastTerminalUpdate.After(beforeBannerTerminalUpdate) {
@@ -76,7 +76,7 @@ func TestInstance_UpdateTerminalTimestamps(t *testing.T) {
 	beforeEmptyMeaningfulOutput := instance.LastMeaningfulOutput
 	time.Sleep(10 * time.Millisecond)
 
-	instance.UpdateTerminalTimestamps("")
+	instance.UpdateTerminalTimestamps("", false)
 
 	if instance.LastTerminalUpdate.After(beforeEmptyTerminalUpdate) {
 		t.Error("LastTerminalUpdate should not be updated for empty content")
@@ -120,7 +120,7 @@ func TestInstance_GetTimeSinceMethods(t *testing.T) {
 	instance.SetTmuxSession(mockTmux)
 
 	time.Sleep(50 * time.Millisecond)
-	instance.UpdateTerminalTimestamps("meaningful output here")
+	instance.UpdateTerminalTimestamps("meaningful output here", false)
 
 	// Time since should be very small (just updated)
 	timeSinceTerminal := instance.GetTimeSinceLastTerminalUpdate()
@@ -190,7 +190,7 @@ func TestInstance_TimestampConcurrency(t *testing.T) {
 				if j%2 == 0 {
 					content = "14:23 5-Jan-24" // Banner only
 				}
-				instance.UpdateTerminalTimestamps(content)
+				instance.UpdateTerminalTimestamps(content, false)
 				_ = instance.GetTimeSinceLastTerminalUpdate()
 				_ = instance.GetTimeSinceLastMeaningfulOutput()
 			}

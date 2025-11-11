@@ -126,11 +126,11 @@ func TestReviewQueue_List_SortsByTime(t *testing.T) {
 
 	now := time.Now()
 
-	// Add items with same priority but different times
+	// Add items with same priority but different LastActivity times
 	items := []*ReviewItem{
-		{SessionID: "newer", Priority: PriorityHigh, DetectedAt: now.Add(2 * time.Second)},
-		{SessionID: "oldest", Priority: PriorityHigh, DetectedAt: now},
-		{SessionID: "older", Priority: PriorityHigh, DetectedAt: now.Add(1 * time.Second)},
+		{SessionID: "newer", Priority: PriorityHigh, DetectedAt: now, LastActivity: now.Add(2 * time.Second)},
+		{SessionID: "oldest", Priority: PriorityHigh, DetectedAt: now, LastActivity: now},
+		{SessionID: "older", Priority: PriorityHigh, DetectedAt: now, LastActivity: now.Add(1 * time.Second)},
 	}
 
 	for _, item := range items {
@@ -139,15 +139,15 @@ func TestReviewQueue_List_SortsByTime(t *testing.T) {
 
 	sorted := rq.List()
 
-	// Should be sorted by time (oldest first) when priorities are equal
-	if sorted[0].SessionID != "oldest" {
-		t.Errorf("Expected oldest item first, got %s", sorted[0].SessionID)
+	// Should be sorted by LastActivity (most recent first) when priorities are equal
+	if sorted[0].SessionID != "newer" {
+		t.Errorf("Expected newer item first (most recent activity), got %s", sorted[0].SessionID)
 	}
 	if sorted[1].SessionID != "older" {
 		t.Errorf("Expected older item second, got %s", sorted[1].SessionID)
 	}
-	if sorted[2].SessionID != "newer" {
-		t.Errorf("Expected newer item third, got %s", sorted[2].SessionID)
+	if sorted[2].SessionID != "oldest" {
+		t.Errorf("Expected oldest item third (least recent activity), got %s", sorted[2].SessionID)
 	}
 }
 

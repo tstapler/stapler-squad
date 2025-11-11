@@ -5,11 +5,14 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { DebugMenu } from "@/components/ui/DebugMenu";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import styles from "./Header.module.css";
 
 export function Header() {
   const pathname = usePathname();
   const [isDebugMenuOpen, setIsDebugMenuOpen] = useState(false);
+  const { togglePanel, getUnreadCount } = useNotifications();
+  const unreadCount = getUnreadCount();
 
   return (
     <>
@@ -50,6 +53,17 @@ export function Header() {
             <span className={styles.newSessionIcon}>+</span>
             New Session
           </Link>
+          <button
+            className={styles.notificationButton}
+            onClick={togglePanel}
+            aria-label="Open notifications"
+            title="Notifications"
+          >
+            🔔
+            {unreadCount > 0 && (
+              <span className={styles.notificationBadge}>{unreadCount}</span>
+            )}
+          </button>
           <button
             className={styles.debugButton}
             onClick={() => setIsDebugMenuOpen(true)}

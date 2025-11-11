@@ -4,6 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_connect";
+import { formatTimestamp, getUserTimezone } from "@/lib/utils/datetime";
 import styles from "./page.module.css";
 
 interface LogEntry {
@@ -92,9 +93,14 @@ export default function LogsPage() {
     <div className={styles.container}>
       <header className={styles.header}>
         <h1>Application Logs</h1>
-        <button onClick={fetchLogs} className={styles.refreshButton}>
-          🔄 Refresh
-        </button>
+        <div className={styles.headerActions}>
+          <span className={styles.timezone} title="Your local timezone">
+            🕐 {getUserTimezone()}
+          </span>
+          <button onClick={fetchLogs} className={styles.refreshButton}>
+            🔄 Refresh
+          </button>
+        </div>
       </header>
 
       <div className={styles.filters}>
@@ -172,7 +178,7 @@ export default function LogsPage() {
                 <tr key={index} className={styles.logRow}>
                   <td className={styles.timestamp}>
                     {log.timestamp
-                      ? log.timestamp.toDate().toLocaleString()
+                      ? formatTimestamp(log.timestamp.toDate())
                       : "N/A"}
                   </td>
                   <td className={`${styles.level} ${getLevelClass(log.level)}`}>

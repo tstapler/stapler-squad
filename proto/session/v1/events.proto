@@ -62,9 +62,11 @@ message TerminalData {
     TerminalError error = 5;
     ScrollbackRequest scrollback_request = 6;
     ScrollbackResponse scrollback_response = 7;
-    TerminalDelta delta = 8;  // Delta compression for efficient updates
+    TerminalDelta delta = 8;  // Delta compression for efficient updates (DEPRECATED - use state)
     CurrentPaneRequest current_pane_request = 9;   // Request current tmux pane content
-    CurrentPaneResponse current_pane_response = 10; // Response with current pane content
+    CurrentPaneResponse current_pane_response = 10; // Response with current pane content (DEPRECATED - use state)
+    FlowControl flow_control = 11;  // Flow control signals for backpressure management (xterm.js best practice)
+    TerminalState state = 12;  // Complete terminal state (MOSH-style)
   }
 }
 
@@ -88,6 +90,32 @@ message TerminalResize {
 message TerminalError {
   string message = 1;
   string code = 2; // Error code (e.g., "session_not_found", "tmux_error")
+}
+
+// FlowControl manages backpressure between client and server for terminal streaming.
+// Implements watermark-based flow control following xterm.js best practices.
+//
+// Reference: https://xtermjs.org/docs/guides/flowcontrol/
+//
+// How it works:
+// 1. Client tracks watermark (bytes queued in xterm.js write buffer)
+// 2. When watermark exceeds HIGH threshold (100KB), client sends pause=true
+// 3. Server stops reading from PTY and buffers data
+// 4. When watermark drops below LOW threshold (10KB), client sends pause=false
+// 5. Server resumes reading from PTY
+//
+// This prevents:
+// - Browser tab crashes from memory exhaustion
+// - Terminal rendering lag from write queue backup
+// - Lost data from WebSocket buffer overflow
+message FlowControl {
+  // If true, server should pause PTY output (HIGH watermark exceeded)
+  // If false, server should resume PTY output (LOW watermark reached)
+  bool paused = 1;
+
+  // Current watermark value in bytes (optional, for server-side metrics/debugging)
+  // Watermark = bytes queued in xterm.js but not yet parsed/rendered
+  optional uint64 watermark = 2;
 }
 
 // ScrollbackRequest requests historical terminal scrollback
@@ -121,6 +149,18 @@ message CurrentPaneRequest {
 
   // Include escape sequences for colors and formatting (default: true)
   bool include_escapes = 2;
+
+  // Target terminal dimensions (optional)
+  // If provided, server will resize tmux pane to match BEFORE capturing content
+  // This prevents size mismatches between client's browser terminal and server's tmux pane
+  optional int32 target_cols = 3;  // Target columns (width)
+  optional int32 target_rows = 4;  // Target rows (height)
+
+  // Streaming mode for terminal output (optional)
+  // Options: "raw" (direct PTY bytes), "raw-compressed" (PTY bytes with LZMA),
+  //          "state" (MOSH-style state sync), "hybrid" (both raw and state)
+  // Default: "raw" if not specified
+  optional string streaming_mode = 5;
 }
 
 // CurrentPaneResponse contains the current visible tmux pane content
@@ -170,7 +210,7 @@ message LineDelta {
 
   // Operation to perform on this line
   oneof operation {
-    string replace_line = 2;    // Replace entire line with this text
+    bytes replace_line = 2;     // Replace entire line with this content (raw bytes with ANSI codes)
     LineEdit edit = 3;          // Character-level edit within line
     bool delete_line = 4;       // Delete this line (shifts lines up)
     InsertLine insert = 5;      // Insert new line (shifts lines down)
@@ -182,12 +222,12 @@ message LineDelta {
 message LineEdit {
   uint32 start_col = 1;  // Start column (0-based)
   uint32 end_col = 2;    // End column (exclusive, like string slice)
-  string text = 3;       // Replacement text (may include ANSI codes)
+  bytes text = 3;        // Replacement text (raw bytes with ANSI codes)
 }
 
 // InsertLine represents insertion of a new line
 message InsertLine {
-  string text = 1;       // Line content (may include ANSI codes)
+  bytes text = 1;        // Line content (raw bytes with ANSI codes)
   bool at_cursor = 2;    // If true, insert at cursor; else at line_number
 }
 
@@ -202,6 +242,108 @@ message CursorPosition {
 message TerminalDimensions {
   uint32 rows = 1;       // Number of rows
   uint32 cols = 2;       // Number of columns
+}
+
+// ============================================================================
+// MOSH-Style State Synchronization Protocol (SSP)
+// ============================================================================
+
+// TerminalState represents complete terminal state using MOSH-style SSP.
+// Unlike deltas, this contains the complete visible terminal screen state.
+// Optimized with LZMA compression and dynamic dictionary learning.
+message TerminalState {
+  // State sequence number for idempotent updates
+  uint64 sequence = 1;
+
+  // Terminal dimensions
+  TerminalDimensions dimensions = 2;
+
+  // Complete screen buffer - array of terminal lines
+  repeated TerminalLine lines = 3;
+
+  // Cursor position
+  CursorPosition cursor = 4;
+
+  // Scrollback information
+  optional ScrollbackInfo scrollback = 5;
+
+  // Compression metadata (optional)
+  optional CompressionMetadata compression = 6;
+}
+
+// TerminalLine represents a single line in the terminal buffer
+message TerminalLine {
+  // Line content with ANSI escape sequences preserved
+  bytes content = 1;
+
+  // Line attributes for optimization
+  optional LineAttributes attributes = 2;
+}
+
+// LineAttributes provide metadata for compression optimization
+message LineAttributes {
+  // True if line is empty (optimization)
+  bool is_empty = 1;
+
+  // True if line contains only printable ASCII (optimization)
+  bool ascii_only = 2;
+
+  // Character encoding hint for compression
+  optional string encoding = 3;
+
+  // Pattern hash for dictionary learning
+  optional uint64 pattern_hash = 4;
+}
+
+// ScrollbackInfo provides context about terminal scrollback
+message ScrollbackInfo {
+  // Total lines available in scrollback
+  uint64 total_lines = 1;
+
+  // First visible line number (0-based)
+  uint64 first_visible = 2;
+
+  // Last visible line number (0-based)
+  uint64 last_visible = 3;
+}
+
+// CompressionMetadata tracks LZMA compression and dictionary learning
+message CompressionMetadata {
+  // Compression algorithm used
+  string algorithm = 1;  // "lzma", "none"
+
+  // Dictionary ID used for this state
+  optional string dictionary_id = 2;
+
+  // Uncompressed size in bytes
+  uint64 uncompressed_size = 3;
+
+  // Compressed size in bytes
+  uint64 compressed_size = 4;
+
+  // Compression ratio (compressed/uncompressed)
+  float compression_ratio = 5;
+
+  // Dictionary learning metadata
+  optional DictionaryMetadata dictionary = 6;
+}
+
+// DictionaryMetadata tracks dynamic dictionary learning progress
+message DictionaryMetadata {
+  // Dictionary learning level (base/session/user/project)
+  string level = 1;
+
+  // Number of patterns learned
+  uint64 pattern_count = 2;
+
+  // Dictionary effectiveness score (0.0-1.0)
+  float effectiveness = 3;
+
+  // Last update timestamp
+  int64 updated_at = 4;
+
+  // Dictionary size in bytes
+  uint64 size_bytes = 5;
 }
 
 // ============================================================================
@@ -235,6 +377,24 @@ message UserInteractionEvent {
     INTERACTION_TYPE_SESSION_ATTACHED = 5;
     // User detached from session
     INTERACTION_TYPE_SESSION_DETACHED = 6;
+    // User opened notification panel
+    INTERACTION_TYPE_NOTIFICATION_PANEL_OPENED = 7;
+    // User closed notification panel
+    INTERACTION_TYPE_NOTIFICATION_PANEL_CLOSED = 8;
+    // User viewed a notification
+    INTERACTION_TYPE_NOTIFICATION_VIEWED = 9;
+    // User dismissed a notification
+    INTERACTION_TYPE_NOTIFICATION_DISMISSED = 10;
+    // User marked notification as read
+    INTERACTION_TYPE_NOTIFICATION_MARKED_READ = 11;
+    // User marked all notifications as read
+    INTERACTION_TYPE_NOTIFICATION_MARKED_ALL_READ = 12;
+    // User removed notification from history
+    INTERACTION_TYPE_NOTIFICATION_REMOVED = 13;
+    // User cleared notification history
+    INTERACTION_TYPE_NOTIFICATION_HISTORY_CLEARED = 14;
+    // User clicked notification to view session
+    INTERACTION_TYPE_NOTIFICATION_SESSION_VIEWED = 15;
   }
 }
 

@@ -21,6 +21,22 @@
   font-weight: 600;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.timezone {
+  padding: 0.5rem 1rem;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  color: #999;
+  cursor: help;
+}
+
 .refreshButton {
   padding: 0.5rem 1rem;
   background-color: #1a1a1a;

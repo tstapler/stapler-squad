@@ -53,7 +53,7 @@ func TestTerminalStateIntegration(t *testing.T) {
 		// Check that we have a replace_line operation
 		switch op := firstLine.Operation.(type) {
 		case *sessionv1.LineDelta_ReplaceLine:
-			if op.ReplaceLine == "" {
+			if len(op.ReplaceLine) == 0 {
 				t.Error("Expected replace_line operation with text")
 			}
 		default:
@@ -126,7 +126,7 @@ func TestTerminalStateIntegration(t *testing.T) {
 		switch op := firstLine.Operation.(type) {
 		case *sessionv1.LineDelta_ReplaceLine:
 			lineText := op.ReplaceLine
-			if lineText == "" {
+			if len(lineText) == 0 {
 				t.Fatal("Expected line text")
 			}
 			// Line should contain ANSI codes for bold

@@ -43,6 +43,9 @@ type InstanceData struct {
 	// Terminal update timestamps for activity tracking
 	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
 	LastMeaningfulOutput time.Time `json:"last_meaningful_output,omitempty"`
+
+	// Review queue spam prevention
+	LastAddedToQueue time.Time `json:"last_added_to_queue,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree
@@ -87,20 +90,33 @@ type Storage struct {
 	stateService *config.StateService
 }
 
-// NewStorage creates a new storage instance with async save capabilities
+// NewStorage creates a new storage instance with async save capabilities.
+// Note: You must call Start() after wiring dependencies (statusManager, reviewQueue)
+// to load and start instances. This prevents initialization timing issues where
+// instances try to start controllers before statusManager is available.
 func NewStorage(state config.InstanceStorage) (*Storage, error) {
-	// Create and start the state service for async saves
-	// Only if the state is actually a *config.State (not a mock in tests)
+	// Create the state service but DON'T start it yet
+	// Starting happens explicitly via Start() after dependencies are wired
 	var stateService *config.StateService
 	if concreteState, ok := state.(*config.State); ok {
 		stateService = config.NewStateService(concreteState)
-		stateService.Start()
+		// REMOVED: stateService.Start() - now called explicitly in server.go after wiring
 	}
 
 	return &Storage{
 		state:        state,
 		stateService: stateService,
 	}, nil
+}
+
+// Start initializes the storage by starting the StateService, which loads
+// and starts all persisted instances. This should be called AFTER wiring
+// dependencies like statusManager and reviewQueue to instances.
+func (s *Storage) Start() error {
+	if s.stateService != nil {
+		s.stateService.Start()
+	}
+	return nil
 }
 
 // SaveInstances saves the list of instances to disk

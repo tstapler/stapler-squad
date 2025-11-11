@@ -26,7 +26,7 @@ type IdleDetectorConfig struct {
 // DefaultIdleDetectorConfig returns sensible defaults for idle detection.
 func DefaultIdleDetectorConfig() IdleDetectorConfig {
 	return IdleDetectorConfig{
-		IdleThreshold: 10 * time.Second,       // Reduced from 30s for faster detection
+		IdleThreshold: 5 * time.Second,        // 5-second idle threshold for immediate user notifications
 		DebounceDelay: 500 * time.Millisecond, // Reduced from 2s for faster response
 		BufferSize:    4096,                   // 4KB should capture recent status indicators
 	}

@@ -1,7 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
+import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
 import { getApiBaseUrl } from "@/lib/config";
+import { NotificationSound } from "@/lib/utils/notifications";
 import styles from "./ReviewQueueNavBadge.module.css";
 
 interface ReviewQueueNavBadgeProps {
@@ -13,10 +16,24 @@ interface ReviewQueueNavBadgeProps {
  * Used in the header navigation to show queue status at a glance.
  */
 export function ReviewQueueNavBadge({ inline = false }: ReviewQueueNavBadgeProps) {
+  const router = useRouter();
   const { items, loading } = useReviewQueue({
     baseUrl: getApiBaseUrl(),
     autoRefresh: true,
     refreshInterval: 5000,
+  });
+
+  // Play notification sound when new items are added to the queue
+  useReviewQueueNotifications(items, {
+    enabled: true,
+    soundType: NotificationSound.DING,
+    showBrowserNotification: true,
+    showToastNotification: true,
+    notificationTitle: "Session Needs Attention",
+    onNavigateToSession: (sessionId) => {
+      // Navigate directly to review queue with session pre-selected
+      router.push(`/review-queue?session=${sessionId}`);
+    },
   });
 
   const count = items.length;

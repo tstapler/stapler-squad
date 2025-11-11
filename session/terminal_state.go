@@ -580,7 +580,7 @@ func (ts *TerminalState) GenerateDelta(fromState *TerminalState) *sessionv1.Term
 			delta.Lines = append(delta.Lines, &sessionv1.LineDelta{
 				LineNumber: uint32(i),
 				Operation: &sessionv1.LineDelta_ReplaceLine{
-					ReplaceLine: lineText,
+					ReplaceLine: []byte(lineText),
 				},
 			})
 		}
@@ -596,7 +596,7 @@ func (ts *TerminalState) GenerateDelta(fromState *TerminalState) *sessionv1.Term
 				delta.Lines = append(delta.Lines, &sessionv1.LineDelta{
 					LineNumber: uint32(i),
 					Operation: &sessionv1.LineDelta_ReplaceLine{
-						ReplaceLine: lineText,
+						ReplaceLine: []byte(lineText),
 					},
 				})
 			}
@@ -607,6 +607,43 @@ func (ts *TerminalState) GenerateDelta(fromState *TerminalState) *sessionv1.Term
 		SessionId: "", // Will be set by caller
 		Data: &sessionv1.TerminalData_Delta{
 			Delta: delta,
+		},
+	}
+}
+
+// GenerateState generates a complete terminal state message (MOSH-style).
+// This is the preferred method over GenerateDelta for robust synchronization.
+func (ts *TerminalState) GenerateState() *sessionv1.TerminalData {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+
+	// Build complete terminal state with all lines
+	lines := make([]*sessionv1.TerminalLine, 0, ts.Rows)
+	for i := 0; i < ts.Rows; i++ {
+		lineText := ts.getLineText(i)
+		lines = append(lines, &sessionv1.TerminalLine{
+			Content: []byte(lineText),
+		})
+	}
+
+	state := &sessionv1.TerminalState{
+		Sequence: ts.Version,
+		Lines:    lines,
+		Cursor: &sessionv1.CursorPosition{
+			Row:     uint32(ts.CursorRow),
+			Col:     uint32(ts.CursorCol),
+			Visible: ts.CursorVisible,
+		},
+		Dimensions: &sessionv1.TerminalDimensions{
+			Rows: uint32(ts.Rows),
+			Cols: uint32(ts.Cols),
+		},
+	}
+
+	return &sessionv1.TerminalData{
+		SessionId: "", // Will be set by caller
+		Data: &sessionv1.TerminalData_State{
+			State: state,
 		},
 	}
 }
@@ -714,4 +751,28 @@ func parseIntParam(param string, defaultVal int) int {
 		return defaultVal
 	}
 	return val
+}
+
+// CreateFullSyncDeltaFromRawContent creates a full-sync delta from raw tmux content.
+// This is used when sending initial pane content to clients over WebSocket.
+// The raw content is processed into a proper delta to avoid xterm.js parsing errors.
+func CreateFullSyncDeltaFromRawContent(rawContent string, cursorRow, cursorCol, rows, cols int) *sessionv1.TerminalData {
+	// Create temporary terminal state and process the raw content
+	tempState := NewTerminalState(rows, cols)
+
+	// Process the raw ANSI content through our terminal parser
+	if err := tempState.ProcessOutput([]byte(rawContent)); err != nil {
+		// Log error but continue - we want to send whatever we can
+		// (logging happens in ProcessOutput)
+	}
+
+	// Override cursor position with actual tmux cursor (our processing might differ)
+	tempState.CursorRow = cursorRow
+	tempState.CursorCol = cursorCol
+	tempState.CursorVisible = true
+
+	// Generate full-sync delta (pass nil as fromState to force full sync)
+	delta := tempState.GenerateDelta(nil)
+
+	return delta
 }

@@ -3,8 +3,10 @@
 import { useState, useEffect } from "react";
 import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
+import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { Priority, AttentionReason } from "@/gen/session/v1/types_pb";
+import { NotificationSound } from "@/lib/utils/notifications";
 import styles from "./ReviewQueuePanel.module.css";
 
 interface ReviewQueuePanelProps {
@@ -74,6 +76,19 @@ export function ReviewQueuePanel({
       onSessionClick?.(item.sessionId);
     },
     enableKeyboardShortcuts: true,
+  });
+
+  // Play notification sound when new items are added to the queue
+  useReviewQueueNotifications(items, {
+    enabled: true,
+    soundType: NotificationSound.DING,
+    showBrowserNotification: true,
+    showToastNotification: true,
+    notificationTitle: "Session Needs Attention",
+    onNavigateToSession: (sessionId) => {
+      // Open the session when clicking "View Session" in toast
+      onSessionClick?.(sessionId);
+    },
   });
 
   const formatAge = (timestampSeconds: bigint): string => {

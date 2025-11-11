@@ -19,8 +19,8 @@ type ReviewQueuePollerConfig struct {
 // DefaultReviewQueuePollerConfig returns sensible defaults for polling.
 func DefaultReviewQueuePollerConfig() ReviewQueuePollerConfig {
 	return ReviewQueuePollerConfig{
-		PollInterval:       2 * time.Second,  // Poll every 2 seconds for immediate detection
-		IdleThreshold:      10 * time.Second, // Add to queue after 10s idle (reduced from 30s for faster detection)
+		PollInterval:       2 * time.Second, // Poll every 2 seconds for immediate detection
+		IdleThreshold:      5 * time.Second, // Add to queue after 5s idle for immediate user notifications
 		InputWaitDuration:  3 * time.Second,  // Flag if waiting for input > 3s (reduced from 5s)
 		StalenessThreshold: 2 * time.Minute,  // Flag if no meaningful output for 2 minutes (reduced from 5min)
 	}
@@ -148,31 +148,19 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 
 // checkSession checks a single session and adds/removes from queue as needed.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
-	// Get comprehensive status
-	statusInfo := rqp.statusManager.GetStatus(inst)
+	log.InfoLog.Printf("[ReviewQueue] === CHECKING SESSION '%s' === (started=%v, paused=%v)",
+		inst.Title, inst.Started(), inst.Paused())
 
-	if !statusInfo.IsControllerActive {
-		// No controller active, remove from queue if present
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': No active controller (started=%v, paused=%v)",
+	// Skip paused or unstarted sessions
+	if !inst.Started() || inst.Paused() {
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': Skipping (started=%v, paused=%v)",
 			inst.Title, inst.Started(), inst.Paused())
 		rqp.queue.Remove(inst.Title)
 		return
 	}
 
-	// Get controller for idle detection
-	controller, exists := rqp.statusManager.GetController(inst.Title)
-	if !exists || controller == nil {
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Controller not found in status manager", inst.Title)
-		rqp.queue.Remove(inst.Title)
-		return
-	}
-
-	log.DebugLog.Printf("[ReviewQueue] Session '%s': Checking idle state (controller active)", inst.Title)
-
-	// Get idle state
-	idleState, lastActivity := controller.GetIdleState()
-	log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected idle state=%s, lastActivity=%s",
-		inst.Title, idleState.String(), formatDuration(time.Since(lastActivity)))
+	// Get comprehensive status
+	statusInfo := rqp.statusManager.GetStatus(inst)
 
 	// Determine if needs attention and why
 	var reason AttentionReason
@@ -180,61 +168,96 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	var shouldAdd bool
 	var context string
 
-	switch idleState {
-	case IdleStateActive:
-		// Actively working, remove from queue
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Active state - removing from queue", inst.Title)
-		rqp.queue.Remove(inst.Title)
-		return
+	// Check for controller-based states if controller is active
+	if statusInfo.IsControllerActive {
+		controller, exists := rqp.statusManager.GetController(inst.Title)
+		if exists && controller != nil {
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Checking idle state (controller active)", inst.Title)
 
-	case IdleStateWaiting:
-		// Normal idle state (e.g., INSERT mode) - don't add to queue by default
-		// Only add if there are specific issues (approval, error) checked below
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Waiting state - will check for specific issues", inst.Title)
-		shouldAdd = false
+			// Get idle state from controller
+			idleState, lastActivity := controller.GetIdleState()
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected idle state=%s, lastActivity=%s",
+				inst.Title, idleState.String(), formatDuration(time.Since(lastActivity)))
 
-	case IdleStateTimeout:
-		// Definite timeout - been idle too long
-		reason = ReasonIdleTimeout
-		priority = PriorityLow
-		shouldAdd = true
-		idleDuration := time.Since(lastActivity)
-		context = fmt.Sprintf("Timed out after %s of inactivity", formatDuration(idleDuration))
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Timeout detected - idle for %s", inst.Title, formatDuration(idleDuration))
+			switch idleState {
+			case IdleStateActive:
+				// Actively working, remove from queue
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Active state - removing from queue", inst.Title)
+				rqp.queue.Remove(inst.Title)
+				return
 
-	default:
-		// Unknown state, remove from queue
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Unknown idle state - removing from queue", inst.Title)
-		rqp.queue.Remove(inst.Title)
-		return
+			case IdleStateWaiting:
+				// Normal idle state (e.g., INSERT mode) - don't add by default
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Waiting state - will check for specific issues", inst.Title)
+				shouldAdd = false
+
+			case IdleStateTimeout:
+				// Definite timeout - been idle too long
+				reason = ReasonIdleTimeout
+				priority = PriorityLow
+				shouldAdd = true
+				idleDuration := time.Since(lastActivity)
+				context = fmt.Sprintf("Timed out after %s of inactivity", formatDuration(idleDuration))
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Timeout detected - idle for %s", inst.Title, formatDuration(idleDuration))
+			}
+
+			// Check for approval needs (higher priority than idle)
+			if statusInfo.ClaudeStatus == StatusNeedsApproval || statusInfo.PendingApprovals > 0 {
+				reason = ReasonApprovalPending
+				priority = PriorityHigh
+				shouldAdd = true
+				context = "Waiting for approval to proceed"
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Approval needed (status=%s, pendingApprovals=%d)",
+					inst.Title, statusInfo.ClaudeStatus.String(), statusInfo.PendingApprovals)
+			}
+
+			// Check for errors (highest priority)
+			if statusInfo.ClaudeStatus == StatusError {
+				reason = ReasonErrorState
+				priority = PriorityUrgent
+				shouldAdd = true
+				context = "Error state detected"
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Error state detected", inst.Title)
+			}
+		}
+	} else {
+		// No controller - use basic time-based detection
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': No active controller - using basic time-based checks", inst.Title)
+
+		// Check if session has been idle for a long time based on UpdatedAt
+		idleDuration := time.Since(inst.UpdatedAt)
+		const basicIdleThreshold = 5 * time.Second
+
+		if idleDuration > basicIdleThreshold {
+			reason = ReasonIdleTimeout
+			priority = PriorityLow
+			shouldAdd = true
+			context = fmt.Sprintf("No controller activity for %s", formatDuration(idleDuration))
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Basic idle check - %s since UpdatedAt",
+				inst.Title, formatDuration(idleDuration))
+		}
 	}
 
-	// Check for approval needs (higher priority than idle)
-	if statusInfo.ClaudeStatus == StatusNeedsApproval || statusInfo.PendingApprovals > 0 {
-		reason = ReasonApprovalPending
-		priority = PriorityHigh
-		shouldAdd = true
-		context = "Waiting for approval to proceed"
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Approval needed (status=%s, pendingApprovals=%d)",
-			inst.Title, statusInfo.ClaudeStatus.String(), statusInfo.PendingApprovals)
-	}
-
-	// Check for errors (highest priority)
-	if statusInfo.ClaudeStatus == StatusError {
-		reason = ReasonErrorState
-		priority = PriorityUrgent
-		shouldAdd = true
-		context = "Error state detected"
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Error state detected", inst.Title)
+	// Capture current terminal output to update LastMeaningfulOutput timestamp
+	// This ensures we have the most recent activity data before checking staleness
+	if inst.Started() && !inst.Paused() && inst.TmuxAlive() {
+		_, err := inst.Preview()
+		if err != nil {
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to capture terminal content for staleness check: %v",
+				inst.Title, err)
+		}
 	}
 
 	// Check for terminal staleness (no meaningful output for configured threshold)
 	// This helps identify sessions that might be stuck or waiting without showing obvious idle state
 	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
-	log.DebugLog.Printf("[ReviewQueue] Session '%s': Staleness check - %s since last meaningful output (threshold: %s)",
-		inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold))
+	log.InfoLog.Printf("[ReviewQueue] Session '%s': Staleness check - %s since last meaningful output (threshold: %s, shouldAdd=%v, priority=%v)",
+		inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold), shouldAdd, priority)
 
 	if timeSinceOutput > rqp.config.StalenessThreshold {
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - time since output (%s) > threshold (%s)",
+			inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold))
+
 		// Only override if we don't already have a higher-priority reason
 		if !shouldAdd || priority < PriorityMedium {
 			reason = ReasonIdleTimeout // Reuse idle timeout reason for staleness
@@ -243,15 +266,55 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			context = fmt.Sprintf("No meaningful output for %s (may be stuck or waiting)",
 				formatDuration(timeSinceOutput))
 
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Flagged as stale - %s since last meaningful output",
+			log.InfoLog.Printf("[ReviewQueue] Session '%s': SETTING shouldAdd=true - flagged as stale - %s since last meaningful output",
 				inst.Title, formatDuration(timeSinceOutput))
 		} else {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
+			log.InfoLog.Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
 				inst.Title, reason.String())
+		}
+	} else {
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': NOT STALE - time since output (%s) <= threshold (%s)",
+			inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold))
+	}
+
+	// Check if user dismissed this session
+	// Sessions are dismissed (snoozed) when LastAcknowledged is newer than LastMeaningfulOutput
+	// This ensures sessions stay snoozed until NEW terminal output appears
+	// (not just any save operation which updates UpdatedAt)
+	if !inst.LastAcknowledged.IsZero() && inst.LastAcknowledged.After(inst.LastMeaningfulOutput) {
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': User acknowledged (snoozed until new output), removing from queue", inst.Title)
+		rqp.queue.Remove(inst.Title)
+		return
+	}
+
+	// Grace period: Don't re-add for 5 minutes after acknowledgment, even with new output
+	// This prevents immediate re-notification after user dismisses a session
+	if !inst.LastAcknowledged.IsZero() {
+		gracePeriod := 5 * time.Minute
+		timeSinceAck := time.Since(inst.LastAcknowledged)
+		if timeSinceAck < gracePeriod {
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Still in grace period (%s / %s since acknowledgment), skipping queue add",
+				inst.Title, formatDuration(timeSinceAck), formatDuration(gracePeriod))
+			rqp.queue.Remove(inst.Title)
+			return
+		}
+	}
+
+	// Spam prevention: Enforce minimum re-add interval to prevent notification spam
+	// This prevents the same session from being added to the queue repeatedly every few seconds
+	if shouldAdd {
+		minReAddInterval := 2 * time.Minute
+		if !inst.LastAddedToQueue.IsZero() && time.Since(inst.LastAddedToQueue) < minReAddInterval {
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Skipping queue add (too soon - last added %v ago, minimum %v)",
+				inst.Title, time.Since(inst.LastAddedToQueue), minReAddInterval)
+			return
 		}
 	}
 
 	// Add or update in queue
+	log.InfoLog.Printf("[ReviewQueue] Session '%s': Final decision - shouldAdd=%v, reason=%s, priority=%s, context=%q",
+		inst.Title, shouldAdd, reason.String(), priority.String(), context)
+
 	if shouldAdd {
 		// Check if item already exists and preserve DetectedAt if status hasn't changed
 		detectedAt := time.Now()
@@ -269,6 +332,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 					inst.Title, existingItem.Reason.String(), reason.String(), existingItem.Priority.String(), priority.String())
 			}
 		}
+
+		// DO NOT update LastMeaningfulOutput here - it must reflect actual terminal output time
+		// Updating it would defeat staleness detection by making the session appear fresh
 
 		item := &ReviewItem{
 			SessionID:    inst.Title,
@@ -288,10 +354,17 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			DiffStats:    inst.GetDiffStats(),
 			LastActivity: inst.LastMeaningfulOutput,
 		}
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': ADDING TO QUEUE - reason=%s, priority=%s, context=%q",
+			inst.Title, reason.String(), priority.String(), context)
 		rqp.queue.Add(item)
 
+		// Update spam prevention timestamp
+		inst.LastAddedToQueue = time.Now()
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': Updated LastAddedToQueue timestamp to %v",
+			inst.Title, inst.LastAddedToQueue)
+
 		if !isUpdate {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Added to queue - %s (priority: %s, context: %s)",
+			log.InfoLog.Printf("[ReviewQueue] Session '%s': Successfully added to queue - %s (priority: %s, context: %s)",
 				inst.Title, reason.String(), priority.String(), context)
 		}
 	} else {

@@ -2,10 +2,11 @@
 
 import { createPromiseClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_connect";
-import { TerminalData, TerminalInput, TerminalResize, ScrollbackRequest, CurrentPaneRequest } from "@/gen/session/v1/events_pb";
+import { TerminalData, TerminalInput, TerminalResize, ScrollbackRequest, CurrentPaneRequest, FlowControl } from "@/gen/session/v1/events_pb";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { useEffect, useRef, useState, useCallback } from "react";
-import { DeltaApplicator } from "@/lib/terminal/DeltaApplicator";
+import { StateApplicator } from "@/lib/terminal/StateApplicator";
+import { decompressLZMA, isLZMACompressed } from "@/lib/compression/lzma";
 import type { Terminal } from '@xterm/xterm';
 
 interface ScrollbackMetadata {
@@ -18,11 +19,15 @@ interface ScrollbackMetadata {
 interface UseTerminalStreamOptions {
   baseUrl: string;
   sessionId: string;
-  terminal?: Terminal | null; // Terminal instance for delta compression
+  getTerminal?: () => Terminal | null; // Getter function for terminal instance (evaluated at connect time)
   scrollbackLines?: number; // Number of lines to request from scrollback
   onError?: (error: Error) => void;
   onScrollbackReceived?: (scrollback: string, metadata?: ScrollbackMetadata) => void; // Callback when scrollback is received
   onOutput?: (output: string) => void; // Callback when new output is received (bypass React state)
+  autoConnect?: boolean; // If false, requires manual connect() call (default: true)
+  initialCols?: number; // Initial terminal columns (prevents size mismatch on first load)
+  initialRows?: number; // Initial terminal rows (prevents size mismatch on first load)
+  streamingMode?: "raw" | "raw-compressed" | "state" | "hybrid"; // Terminal streaming mode (default: "raw")
 }
 
 interface TerminalStreamResult {
@@ -31,10 +36,12 @@ interface TerminalStreamResult {
   error: Error | null;
   sendInput: (input: string) => void;
   resize: (cols: number, rows: number) => void;
-  connect: () => void;
+  connect: (cols?: number, rows?: number) => void; // Optional dimensions to override initial values
   disconnect: () => void;
   scrollbackLoaded: boolean; // Indicates if scrollback has been loaded
   requestScrollback: (fromSequence: number, limit: number) => void; // Request historical scrollback
+  sendFlowControl: (paused: boolean, watermark?: number) => void; // Send flow control signal to server
+  getIsApplyingState: () => boolean; // Check if StateApplicator is currently applying a state (prevents scrollback auto-load)
 }
 
 // Queue to manage outgoing terminal messages
@@ -84,11 +91,15 @@ class MessageQueue {
 export function useTerminalStream({
   baseUrl,
   sessionId,
-  terminal,
+  getTerminal,
   scrollbackLines = 1000,
   onError,
   onScrollbackReceived,
   onOutput,
+  autoConnect = true,
+  initialCols,
+  initialRows,
+  streamingMode = "raw",
 }: UseTerminalStreamOptions): TerminalStreamResult {
   const [output, setOutput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
@@ -99,8 +110,12 @@ export function useTerminalStream({
   const abortControllerRef = useRef<AbortController | null>(null);
   const isDisconnectingRef = useRef(false);
   const isConnectedRef = useRef(false); // Track connection state in ref for callbacks
+  const isResyncingRef = useRef(false); // Prevent disconnect during resync
+  const waitingForPaneResponseRef = useRef(false); // Skip deltas until pane response
   const lastResizeTimeRef = useRef<number>(0); // Timestamp of last resize message sent
-  const deltaApplicatorRef = useRef<DeltaApplicator | null>(null);
+  const lastResyncTimeRef = useRef<number>(0); // Timestamp of last resync request
+  const stateApplicatorRef = useRef<StateApplicator | null>(null);
+  const dimensionSyncRef = useRef<{cols?: number, rows?: number}>({});
   const clientRef = useRef(createPromiseClient(
     SessionService,
     createWebsocketBasedTransport({
@@ -138,19 +153,96 @@ export function useTerminalStream({
     }
   }, [flushOutputBuffer]);
 
-  const connect = useCallback(async () => {
+  // Request full resync from server (used for desync recovery)
+  // MUST be defined before connect() since it's called from within connect's async function
+  const requestFullResync = useCallback((urgent: boolean = false) => {
+    if (!messageQueueRef.current || !isConnectedRef.current) {
+      console.warn("[useTerminalStream] Cannot request resync: stream not connected");
+      return;
+    }
+
+    const currentTerminal = getTerminal?.();
+    if (!currentTerminal) {
+      console.warn("[useTerminalStream] Cannot request resync: terminal not available");
+      return;
+    }
+
+    // Throttle resync requests to prevent spam (max 1 per 2 seconds)
+    // But allow urgent requests (dimension mismatches) to bypass throttling
+    const now = Date.now();
+    const timeSinceLastResync = now - lastResyncTimeRef.current;
+    const RESYNC_THROTTLE_MS = 2000; // 2 second throttle
+
+    if (!urgent && timeSinceLastResync < RESYNC_THROTTLE_MS && lastResyncTimeRef.current !== 0) {
+      console.log(`[useTerminalStream] Resync throttled (${timeSinceLastResync}ms since last, need ${RESYNC_THROTTLE_MS}ms)`);
+      return;
+    }
+
+    if (urgent) {
+      console.log(`[useTerminalStream] Urgent resync bypassing throttle (${timeSinceLastResync}ms since last)`);
+    }
+
+    try {
+      console.log(`[useTerminalStream] Requesting full resync with current dimensions: ${currentTerminal.cols}x${currentTerminal.rows}`);
+      lastResyncTimeRef.current = now;
+      isResyncingRef.current = true; // Mark as resyncing to prevent disconnect
+      waitingForPaneResponseRef.current = true; // Skip deltas until we get fresh state
+
+      // Store dimensions for consistency checking
+      dimensionSyncRef.current = {
+        cols: currentTerminal.cols,
+        rows: currentTerminal.rows
+      };
+
+      const currentPaneReq = new CurrentPaneRequest({
+        lines: 50, // Get last 50 lines
+        includeEscapes: true, // Preserve colors and formatting
+        targetCols: currentTerminal.cols,
+        targetRows: currentTerminal.rows,
+        streamingMode: streamingMode, // Pass streaming mode to server
+      });
+
+      messageQueueRef.current.push(
+        new TerminalData({
+          sessionId,
+          data: {
+            case: "currentPaneRequest",
+            value: currentPaneReq,
+          },
+        })
+      );
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      console.error("[useTerminalStream] Failed to request resync:", error);
+      setError(error);
+      onError?.(error);
+    }
+  }, [sessionId, getTerminal, onError]);
+
+  const connect = useCallback(async (overrideCols?: number, overrideRows?: number) => {
     if (isConnectedRef.current || !sessionId) {
       return;
+    }
+
+    // Use provided dimensions (from connect call) or fall back to initial values or current terminal
+    let targetCols = overrideCols ?? initialCols;
+    let targetRows = overrideRows ?? initialRows;
+
+    // If no dimensions provided, try to get from current terminal
+    if (targetCols === undefined || targetRows === undefined) {
+      const currentTerminal = getTerminal?.();
+      if (currentTerminal) {
+        targetCols = currentTerminal.cols;
+        targetRows = currentTerminal.rows;
+        console.log(`[useTerminalStream] Using current terminal dimensions: ${targetCols}x${targetRows}`);
+      }
     }
 
     // Reset disconnecting flag on connect
     isDisconnectingRef.current = false;
 
-    // Initialize delta applicator if terminal is available
-    if (terminal && !deltaApplicatorRef.current) {
-      deltaApplicatorRef.current = new DeltaApplicator(terminal);
-      console.log('[useTerminalStream] Delta applicator initialized');
-    }
+    // Note: StateApplicator is lazily initialized when first state arrives
+    // This avoids race conditions with terminal ref availability
 
     try {
       abortControllerRef.current = new AbortController();
@@ -165,16 +257,31 @@ export function useTerminalStream({
       );
 
       // Request current pane content (what user would see if they attached to tmux)
-      // This gives us the current terminal state, ideal for apps that rewrite lines
+      // This gives us the current terminal state for fast initial load
+      // NOTE: This is NOT scrollback - it's just the visible pane content
+      // Include terminal dimensions to prevent size mismatch on first load
+      const currentPaneReq = new CurrentPaneRequest({
+        lines: 50, // Get last 50 lines (typical terminal viewport)
+        includeEscapes: true, // Preserve colors and formatting
+        streamingMode: streamingMode, // Pass streaming mode to server
+      });
+
+      // Set target dimensions if available (prevents garbled output on first load)
+      // Server will resize tmux pane to match before capturing content
+      if (targetCols !== undefined && targetRows !== undefined) {
+        currentPaneReq.targetCols = targetCols;
+        currentPaneReq.targetRows = targetRows;
+        console.log(`[useTerminalStream] Requesting initial pane content with target size: ${targetCols}x${targetRows}`);
+      } else {
+        console.warn(`[useTerminalStream] No terminal dimensions available for initial pane request`);
+      }
+
       messageQueueRef.current.push(
         new TerminalData({
           sessionId,
           data: {
             case: "currentPaneRequest",
-            value: new CurrentPaneRequest({
-              lines: 50, // Get last 50 lines (typical terminal viewport)
-              includeEscapes: true, // Preserve colors and formatting
-            }),
+            value: currentPaneReq,
           },
         })
       );
@@ -195,26 +302,87 @@ export function useTerminalStream({
             // Set connected after receiving first message
             if (firstMessage) {
               setIsConnected(true);
+              setScrollbackLoaded(true); // Mark as loaded immediately (no need for scrollback loading state)
               firstMessage = false;
             }
 
-            if (msg.data.case === "delta") {
-              // Handle delta compression
-              if (deltaApplicatorRef.current) {
-                const success = deltaApplicatorRef.current.applyDelta(msg.data.value);
-                if (!success) {
-                  // Desync detected - request full sync by resetting version
-                  console.error('[useTerminalStream] Delta desync detected, terminal may be out of sync');
-                  deltaApplicatorRef.current.resetVersion();
-                  // TODO: Send error message to server to request full sync
+            if (msg.data.case === "state") {
+              // Handle complete terminal state (MOSH-style) with lazy initialization
+              // Initialize StateApplicator on first state if terminal is now ready
+              if (!stateApplicatorRef.current) {
+                const currentTerminal = getTerminal?.();
+                if (currentTerminal) {
+                  stateApplicatorRef.current = new StateApplicator(currentTerminal);
+                  console.log('[useTerminalStream] State applicator lazily initialized on first state');
+                } else {
+                  console.warn('[useTerminalStream] Received state but terminal not ready yet');
+                  continue; // Skip this state and wait for terminal to be ready
                 }
-              } else {
-                console.warn('[useTerminalStream] Received delta but no delta applicator initialized');
+              }
+
+              // If waiting for pane response, this is likely the initial state
+              if (waitingForPaneResponseRef.current) {
+                console.log('[useTerminalStream] Received complete terminal state as pane response');
+                waitingForPaneResponseRef.current = false;
+                isResyncingRef.current = false;
+              }
+
+              if (stateApplicatorRef.current) {
+                // Check for dimension consistency before applying state (for logging/monitoring)
+                const currentTerminal = getTerminal?.();
+                if (currentTerminal && msg.data.value.dimensions) {
+                  const stateCols = Number(msg.data.value.dimensions.cols);
+                  const stateRows = Number(msg.data.value.dimensions.rows);
+
+                  if (stateCols !== currentTerminal.cols || stateRows !== currentTerminal.rows) {
+                    console.log(
+                      `[useTerminalStream] State dimension difference: ` +
+                      `state=${stateCols}x${stateRows}, terminal=${currentTerminal.cols}x${currentTerminal.rows}. ` +
+                      `StateApplicator will handle resize automatically.`
+                    );
+                  }
+                }
+
+                // Apply complete terminal state (MOSH-style - always succeeds)
+                const success = stateApplicatorRef.current.applyState(msg.data.value);
+                if (!success) {
+                  // State was ignored (old/duplicate sequence) - this is normal
+                  console.log(
+                    `[useTerminalStream] State sequence ${msg.data.value.sequence} ignored ` +
+                    `(current: ${stateApplicatorRef.current.getCurrentSequence()})`
+                  );
+                } else {
+                  // State applied successfully
+                  console.log(
+                    `[useTerminalStream] Applied state sequence ${msg.data.value.sequence} ` +
+                    `(${msg.data.value.lines.length} lines)`
+                  );
+                }
               }
             } else if (msg.data.case === "output") {
-              // Handle raw output (fallback mode or when delta not available)
-              const text = textDecoderRef.current.decode(msg.data.value.data, { stream: true });
-              // Only log if debug mode is enabled (toggle with: localStorage.setItem('debug-terminal', 'true'))
+              // Handle raw output (may be compressed in raw-compressed mode)
+              const rawData = msg.data.value.data;
+
+              // Detect and decompress LZMA-compressed data
+              let decodedData: Uint8Array;
+              if (streamingMode === "raw-compressed" && isLZMACompressed(rawData)) {
+                try {
+                  // Decompress LZMA data
+                  decodedData = await decompressLZMA(rawData);
+                  if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
+                    console.debug(`[useTerminalStream] Decompressed output: ${rawData.length} → ${decodedData.length} bytes`);
+                  }
+                } catch (err) {
+                  console.error(`[useTerminalStream] LZMA decompression failed, using raw data:`, err);
+                  decodedData = rawData; // Fallback to raw on decompression error
+                }
+              } else {
+                decodedData = rawData;
+              }
+
+              const text = textDecoderRef.current.decode(decodedData, { stream: true });
+
+              // Only log if debug mode is enabled
               if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
                 console.debug(`[useTerminalStream] Received output: ${text.length} bytes`);
               }
@@ -227,21 +395,36 @@ export function useTerminalStream({
                 scheduleOutputUpdate(text);
               }
             } else if (msg.data.case === "currentPaneResponse") {
-              // Handle current pane content (what tmux shows now)
+              // DEPRECATED: Server now sends full-sync deltas instead of raw currentPaneResponse
+              // This case is kept for backward compatibility with old server versions
+              console.warn("[useTerminalStream] Received deprecated currentPaneResponse - server should send full-sync delta instead");
+
               const response = msg.data.value;
               const content = textDecoderRef.current.decode(response.content);
 
-              console.log(`[useTerminalStream] Received current pane: ${content.length} bytes, ` +
+              console.log(`[useTerminalStream] Received current pane (deprecated): ${content.length} bytes, ` +
                           `cursor at (${response.cursorX},${response.cursorY}), ` +
                           `pane size: ${response.paneWidth}x${response.paneHeight}`);
 
-              // Write current pane content to terminal
+              // Initialize or reinitialize state applicator when we get fresh pane content
+              const currentTerminal = getTerminal?.();
+              if (currentTerminal) {
+                // Create fresh state applicator with proper terminal reference
+                stateApplicatorRef.current = new StateApplicator(currentTerminal);
+                console.log("[useTerminalStream] Created fresh state applicator after receiving current pane");
+              }
+
+              // Write current pane content to terminal (raw write - may cause parsing errors!)
               if (onScrollbackReceived) {
                 onScrollbackReceived(content);
               }
 
-              // Mark as loaded (reuse scrollbackLoaded flag for compatibility)
-              setScrollbackLoaded(true);
+              // Mark resync as complete
+              isResyncingRef.current = false;
+
+              // Clear pane response wait flag - now safe to process deltas
+              waitingForPaneResponseRef.current = false;
+              console.log("[useTerminalStream] Pane response received - ready to process deltas");
             } else if (msg.data.case === "scrollbackResponse") {
               // Keep scrollback support for "load more history" feature
               // Optimize: Use array and join instead of concatenation
@@ -266,8 +449,6 @@ export function useTerminalStream({
               if (onScrollbackReceived) {
                 onScrollbackReceived(scrollbackText, metadata);
               }
-
-              setScrollbackLoaded(true);
             } else if (msg.data.case === "error") {
               const err = new Error(msg.data.value.message);
               setError(err);
@@ -288,11 +469,16 @@ export function useTerminalStream({
       onError?.(error);
       setIsConnected(false);
     }
-  }, [sessionId, terminal, scrollbackLines, onError, onScrollbackReceived, onOutput, scheduleOutputUpdate]); // Include terminal and onOutput
+  }, [sessionId, getTerminal, scrollbackLines, onError, onScrollbackReceived, onOutput, scheduleOutputUpdate, requestFullResync]); // Include getTerminal, onOutput, and requestFullResync
 
   const disconnect = useCallback(async () => {
-    // Prevent double-disconnect
-    if (isDisconnectingRef.current) {
+    // Prevent double-disconnect or disconnect during resync
+    if (isDisconnectingRef.current || isResyncingRef.current) {
+      if (isResyncingRef.current) {
+        console.log("[useTerminalStream] Delaying disconnect - resync in progress");
+        // Wait for resync to complete, then retry disconnect
+        setTimeout(() => disconnect(), 500);
+      }
       return;
     }
     isDisconnectingRef.current = true;
@@ -366,10 +552,11 @@ export function useTerminalStream({
         return;
       }
 
-      // Throttle resize messages to max 1 per second to prevent feedback loops
+      // Reduced throttle to 200ms (from 1s) for more responsive resizing
+      // This prevents feedback loops while still allowing timely dimension updates
       const now = Date.now();
       const timeSinceLastResize = now - lastResizeTimeRef.current;
-      const THROTTLE_MS = 1000; // 1 second throttle
+      const THROTTLE_MS = 200; // 200ms throttle (down from 1000ms)
 
       if (timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
         console.log(`[useTerminalStream] Resize throttled (${timeSinceLastResize}ms since last, need ${THROTTLE_MS}ms)`);
@@ -377,7 +564,7 @@ export function useTerminalStream({
       }
 
       try {
-        console.log(`[useTerminalStream] Pushing resize message to queue: ${cols}x${rows}`);
+        console.log(`[useTerminalStream] Sending resize to server: ${cols}x${rows}`);
         lastResizeTimeRef.current = now;
         messageQueueRef.current.push(
           new TerminalData({
@@ -427,9 +614,46 @@ export function useTerminalStream({
     [sessionId, onError]
   );
 
-  // Auto-connect on mount
+  const sendFlowControl = useCallback(
+    (paused: boolean, watermark?: number) => {
+      if (!messageQueueRef.current || !isConnectedRef.current) {
+        console.warn("Cannot send flow control: stream not connected");
+        return;
+      }
+
+      try {
+        console.log(`[useTerminalStream] Sending flow control: paused=${paused}, watermark=${watermark || 'N/A'}`);
+        messageQueueRef.current.push(
+          new TerminalData({
+            sessionId,
+            data: {
+              case: "flowControl",
+              value: new FlowControl({
+                paused,
+                watermark: watermark !== undefined ? BigInt(watermark) : undefined,
+              }),
+            },
+          })
+        );
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        setError(error);
+        onError?.(error);
+      }
+    },
+    [sessionId, onError]
+  );
+
+  // Helper to check if StateApplicator is currently applying a state
+  const getIsApplyingState = useCallback(() => {
+    return stateApplicatorRef.current?.getIsApplyingState() ?? false;
+  }, []);
+
+  // Auto-connect on mount (if enabled)
   useEffect(() => {
-    connect();
+    if (autoConnect) {
+      connect();
+    }
     return () => {
       // Cleanup: Cancel any pending timeout updates
       if (pendingUpdateRef.current) {
@@ -438,10 +662,17 @@ export function useTerminalStream({
       }
       // Flush any remaining buffered output
       flushOutputBuffer();
+
+      // Reset state applicator to prevent stale state
+      if (stateApplicatorRef.current) {
+        stateApplicatorRef.current.resetSequence();
+        stateApplicatorRef.current = null;
+      }
+
       disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]); // Only reconnect if sessionId changes
+  }, [sessionId, autoConnect]); // Only reconnect if sessionId or autoConnect changes
 
   return {
     output,
@@ -453,5 +684,7 @@ export function useTerminalStream({
     disconnect,
     scrollbackLoaded,
     requestScrollback,
+    sendFlowControl,
+    getIsApplyingState,
   };
 }

@@ -13,6 +13,15 @@
 
 import { Terminal } from '@xterm/xterm';
 import { TerminalDelta, LineDelta, CursorPosition, TerminalDimensions } from '@/gen/session/v1/events_pb';
+import {
+  positionAndClearLine,
+  moveCursorTo,
+  CURSOR_SHOW,
+  CURSOR_HIDE,
+  DELETE_LINE,
+  INSERT_LINE,
+  CLEAR_LINE
+} from './AnsiCodes';
 
 /**
  * DeltaApplicator applies terminal state deltas to xterm.js terminal.
@@ -20,6 +29,7 @@ import { TerminalDelta, LineDelta, CursorPosition, TerminalDimensions } from '@/
 export class DeltaApplicator {
   private terminal: Terminal;
   private currentVersion: bigint = BigInt(0);
+  private textDecoder: TextDecoder = new TextDecoder();
 
   constructor(terminal: Terminal) {
     this.terminal = terminal;
@@ -27,25 +37,59 @@ export class DeltaApplicator {
 
   /**
    * Apply a terminal delta to the terminal.
+   * MOSH-inspired approach: More forgiving of version gaps, self-healing.
    *
    * @param delta - The delta to apply
    * @returns true if applied successfully, false if desync detected
    */
   applyDelta(delta: TerminalDelta): boolean {
-    // Check for version mismatch (desynchronization)
-    if (delta.fromState !== this.currentVersion && !delta.fullSync) {
-      console.warn(
-        `[DeltaApplicator] State desync: expected ${this.currentVersion}, got ${delta.fromState}. Requesting full sync.`
-      );
-      return false; // Signal caller to request full sync
-    }
-
-    // Handle full sync (initial state or recovery)
+    // Handle full sync first (initial state or recovery)
     if (delta.fullSync) {
-      console.log('[DeltaApplicator] Applying full sync');
+      console.log(`[DeltaApplicator] Applying full sync: version ${this.currentVersion} -> ${delta.toState}`);
       this.applyFullSync(delta);
       this.currentVersion = delta.toState;
       return true;
+    }
+
+    // MOSH-inspired: Accept deltas with reasonable version gaps (out-of-order tolerance)
+    const versionGap = Number(delta.fromState) - Number(this.currentVersion);
+    const MAX_VERSION_GAP = 10; // Allow up to 10 versions ahead (like MOSH sequence tolerance)
+
+    if (delta.fromState !== this.currentVersion) {
+      if (versionGap > 0 && versionGap <= MAX_VERSION_GAP) {
+        // Future delta - apply optimistically and update to newer version
+        console.warn(
+          `[DeltaApplicator] Accepting future delta: current=${this.currentVersion}, got=${delta.fromState} (gap=${versionGap})`
+        );
+        this.currentVersion = delta.fromState; // Jump forward to match delta
+      } else if (versionGap < 0 && Math.abs(versionGap) <= MAX_VERSION_GAP) {
+        // Old delta - apply anyway (idempotent screen updates)
+        console.warn(
+          `[DeltaApplicator] Accepting old delta: current=${this.currentVersion}, got=${delta.fromState} (age=${Math.abs(versionGap)})`
+        );
+        // Don't update version for old deltas
+      } else {
+        // Large gap - request full sync
+        console.warn(
+          `[DeltaApplicator] Version gap too large: current=${this.currentVersion}, got=${delta.fromState} (gap=${versionGap}). Requesting full sync.`
+        );
+        return false; // Signal caller to request full sync
+      }
+    }
+
+    // Check for dimension mismatch (prevents data loss from out-of-bounds line numbers)
+    // Server includes dimensions in all deltas to detect resize race conditions
+    if (delta.dimensions && !delta.fullSync) {
+      const deltaRows = Number(delta.dimensions.rows);
+      const deltaCols = Number(delta.dimensions.cols);
+
+      if (deltaRows !== this.terminal.rows || deltaCols !== this.terminal.cols) {
+        console.warn(
+          `[DeltaApplicator] Dimension mismatch: delta=${deltaCols}x${deltaRows}, ` +
+          `terminal=${this.terminal.cols}x${this.terminal.rows}. Requesting full resync.`
+        );
+        return false; // Triggers automatic resync
+      }
     }
 
     // Handle dimension changes
@@ -74,10 +118,21 @@ export class DeltaApplicator {
   private applyFullSync(delta: TerminalDelta): void {
     // Resize if dimensions provided
     if (delta.dimensions) {
-      const rows = Number(delta.dimensions.rows);
-      const cols = Number(delta.dimensions.cols);
-      if (this.terminal.rows !== rows || this.terminal.cols !== cols) {
-        this.terminal.resize(cols, rows);
+      const targetRows = Number(delta.dimensions.rows);
+      const targetCols = Number(delta.dimensions.cols);
+
+      if (this.terminal.rows !== targetRows || this.terminal.cols !== targetCols) {
+        console.log(`[DeltaApplicator] Resizing terminal from ${this.terminal.cols}x${this.terminal.rows} to ${targetCols}x${targetRows} for full sync`);
+        this.terminal.resize(targetCols, targetRows);
+
+        // Verify resize succeeded (browser might override it)
+        if (this.terminal.rows !== targetRows || this.terminal.cols !== targetCols) {
+          console.error(
+            `[DeltaApplicator] Terminal resize failed! Expected ${targetCols}x${targetRows}, got ${this.terminal.cols}x${this.terminal.rows}. ` +
+            `This will cause data loss. Delta has ${delta.lines.length} lines but terminal has ${this.terminal.rows} rows.`
+          );
+          // Continue anyway - some lines will be skipped but at least we don't crash
+        }
       }
     }
 
@@ -91,11 +146,11 @@ export class DeltaApplicator {
       // Get line content
       let lineText = '';
       if (lineDelta.operation.case === 'replaceLine') {
-        lineText = lineDelta.operation.value;
+        lineText = this.textDecoder.decode(lineDelta.operation.value);
       }
 
       // Position cursor and write line
-      this.terminal.write(`\x1b[${lineNum + 1};1H${lineText}`);
+      this.terminal.write(moveCursorTo(lineNum + 1, 1) + lineText);
     }
 
     // Update cursor
@@ -123,18 +178,22 @@ export class DeltaApplicator {
   private applyLineDelta(lineDelta: LineDelta): void {
     const lineNum = Number(lineDelta.lineNumber);
 
-    // Validate line number
+    // Validate line number - skip out-of-bounds lines (can happen during resize race conditions)
+    // WARNING: This means we're dropping data! Should only happen during browser resize races.
     if (lineNum < 0 || lineNum >= this.terminal.rows) {
-      console.warn(`[DeltaApplicator] Invalid line number: ${lineNum} (rows: ${this.terminal.rows})`);
+      console.warn(
+        `[DeltaApplicator] Dropping out-of-bounds line ${lineNum} (terminal has ${this.terminal.rows} rows). ` +
+        `This indicates a dimension mismatch - data loss is occurring!`
+      );
       return;
     }
 
     switch (lineDelta.operation.case) {
       case 'replaceLine': {
         // Replace entire line
-        const text = lineDelta.operation.value;
+        const text = this.textDecoder.decode(lineDelta.operation.value);
         // Move cursor to line, clear it, and write new content
-        this.terminal.write(`\x1b[${lineNum + 1};1H\x1b[2K${text}`);
+        this.terminal.write(positionAndClearLine(lineNum + 1) + text);
         break;
       }
 
@@ -142,31 +201,31 @@ export class DeltaApplicator {
         // Character-level edit within line
         const edit = lineDelta.operation.value;
         const startCol = Number(edit.startCol);
-        const text = edit.text;
+        const text = this.textDecoder.decode(edit.text);
         // Move cursor to position and write text (overwrites existing)
-        this.terminal.write(`\x1b[${lineNum + 1};${startCol + 1}H${text}`);
+        this.terminal.write(moveCursorTo(lineNum + 1, startCol + 1) + text);
         break;
       }
 
       case 'deleteLine': {
         // Delete line (shift lines up)
         // Move to line and delete it
-        this.terminal.write(`\x1b[${lineNum + 1};1H\x1b[M`);
+        this.terminal.write(moveCursorTo(lineNum + 1, 1) + DELETE_LINE);
         break;
       }
 
       case 'insert': {
         // Insert new line (shift lines down)
         const insert = lineDelta.operation.value;
-        const text = insert.text;
+        const text = this.textDecoder.decode(insert.text);
         // Move to line, insert blank line, then write text
-        this.terminal.write(`\x1b[${lineNum + 1};1H\x1b[L${text}`);
+        this.terminal.write(moveCursorTo(lineNum + 1, 1) + INSERT_LINE + text);
         break;
       }
 
       case 'clearLine': {
         // Clear line to empty
-        this.terminal.write(`\x1b[${lineNum + 1};1H\x1b[2K`);
+        this.terminal.write(moveCursorTo(lineNum + 1, 1) + CLEAR_LINE);
         break;
       }
 
@@ -183,13 +242,13 @@ export class DeltaApplicator {
     const col = Number(cursor.col);
 
     // Move cursor to position
-    this.terminal.write(`\x1b[${row + 1};${col + 1}H`);
+    this.terminal.write(moveCursorTo(row + 1, col + 1));
 
     // Handle cursor visibility
     if (cursor.visible) {
-      this.terminal.write('\x1b[?25h'); // Show cursor
+      this.terminal.write(CURSOR_SHOW);
     } else {
-      this.terminal.write('\x1b[?25l'); // Hide cursor
+      this.terminal.write(CURSOR_HIDE);
     }
   }
 

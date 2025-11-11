@@ -3,6 +3,8 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { XtermTerminal } from "./XtermTerminal";
+import { EscapeSequenceParser } from "@/lib/terminal/EscapeSequenceParser";
+import { decompressLZMA, isLZMACompressed } from "@/lib/compression/lzma";
 import styles from "./TerminalOutput.module.css";
 
 interface TerminalOutputProps {
@@ -18,13 +20,37 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
   const previousConnectionStateRef = useRef(false);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const refreshCountRef = useRef(0); // Track number of forced refreshes
+  const isMountedRef = useRef(true); // Track component mount state for async operations
 
-  // Scrollback loading state
-  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
-  const [hasMoreHistory, setHasMoreHistory] = useState(true);
-  const [oldestLoadedSequence, setOldestLoadedSequence] = useState<number>(0);
-  const scrollPositionBeforeLoadRef = useRef<number>(0);
-  const isScrollingToTopRef = useRef(false);
+  // Scrollback loading state - DISABLED (scrollback functionality removed)
+  // const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  // const [hasMoreHistory, setHasMoreHistory] = useState(true);
+  // const [oldestLoadedSequence, setOldestLoadedSequence] = useState<number>(0);
+  // const scrollPositionBeforeLoadRef = useRef<number>(0);
+  // const isScrollingToTopRef = useRef(false);
+
+  // Write batching to prevent queue backup during rapid output (e.g., Claude Code animations)
+  const writeBufferRef = useRef<string>("");
+  const writeScheduledRef = useRef<boolean>(false);
+
+  // Track pending write operations for flow control
+  const pendingWritesRef = useRef<number>(0);
+  const totalBytesWrittenRef = useRef<number>(0);
+  const totalBytesCompletedRef = useRef<number>(0);
+
+  // Watermark-based flow control (xterm.js best practices)
+  const HIGH_WATERMARK = 100000; // 100KB - pause when buffer exceeds this
+  const LOW_WATERMARK = 10000;   // 10KB - resume when buffer drops below this
+  const watermarkRef = useRef<number>(0);
+  const isPausedRef = useRef<boolean>(false);
+
+  // Escape sequence parser to prevent splitting ANSI codes mid-sequence
+  // Critical: ANSI escape sequences must be written atomically to avoid terminal corruption
+  // Reference: https://xtermjs.org/docs/guides/flowcontrol/
+  const escapeParserRef = useRef<EscapeSequenceParser>(new EscapeSequenceParser());
+
+  // Ref to hold sendFlowControl function (allows use in callbacks defined before useTerminalStream)
+  const sendFlowControlRef = useRef<((paused: boolean, watermark?: number) => void) | null>(null);
 
   // Debug mode state - synced with localStorage
   const [debugMode, setDebugMode] = useState(() => {
@@ -34,48 +60,163 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
     return false;
   });
 
-  // Callback to write scrollback directly to terminal
-  // For historical scrollback, we prepend at the top and maintain scroll position
+  // Streaming mode selection (per-session configuration)
+  const [streamingMode, setStreamingMode] = useState<"raw" | "raw-compressed" | "state" | "hybrid">("raw");
+
+  // Callback to write initial pane content to terminal
+  // Accepts initial pane content (no metadata) but rejects historical scrollback (with metadata)
   const handleScrollbackReceived = useCallback((scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => {
-    console.log(`[TerminalOutput] Received ${scrollback.length} bytes of scrollback`, metadata);
     if (!xtermRef.current?.terminal) return;
 
     const terminal = xtermRef.current.terminal;
 
-    // Update metadata state if provided (for historical loads)
+    // Reject historical scrollback requests (with metadata) - this is what was garbling output
     if (metadata) {
-      setHasMoreHistory(metadata.hasMore);
-      setOldestLoadedSequence(metadata.oldestSequence);
-      console.log(`[TerminalOutput] Updated scrollback state: hasMore=${metadata.hasMore}, oldestSeq=${metadata.oldestSequence}`);
+      console.log(`[TerminalOutput] Ignoring historical scrollback request (${scrollback.length} bytes) - auto-load disabled`, metadata);
+      return;
+    }
 
-      // Historical load - prepend at top and maintain scroll position
-      const buffer = terminal.buffer.active;
-      const scrollFromBottom = buffer.length - buffer.viewportY;
+    // Accept initial pane content (no metadata) - this is for fast initial load
+    console.log(`[TerminalOutput] Received initial pane content: ${scrollback.length} bytes`);
 
-      // Write historical content
-      terminal.write(scrollback);
+    // Current pane content - clear terminal first, then write with callback and scroll to bottom
+    terminal.clear();
+    terminal.write(scrollback, () => {
+      // Current pane write completed
+      if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
+        console.log('[FlowControl] Initial pane write completed', {
+          bytes: scrollback.length,
+        });
+      }
 
-      // Restore scroll position (maintaining user's view)
-      setTimeout(() => {
-        const newLines = scrollback.split('\n').length;
-        terminal.scrollLines(-newLines);
-        setIsLoadingHistory(false);
-      }, 10);
-    } else {
-      // Current pane content - just write and scroll to bottom
-      terminal.write(scrollback);
+      // Use multiple strategies to ensure we scroll to bottom
+      // Some terminal content may not render immediately
       terminal.scrollToBottom();
-    }
-  }, []);
+    });
 
-  // Callback to write output directly to terminal (bypasses React state for better performance)
+    // Also schedule delayed scrolls in case content is still rendering
+    setTimeout(() => {
+      terminal.scrollToBottom();
+    }, 10);
+
+    setTimeout(() => {
+      terminal.scrollToBottom();
+    }, 100);
+  }, []); // No dependencies needed
+
+  // Flush write buffer to terminal (called by requestAnimationFrame)
+  const flushWriteBuffer = useCallback(() => {
+    if (writeBufferRef.current && xtermRef.current) {
+      const dataToWrite = writeBufferRef.current;
+      const byteLength = dataToWrite.length;
+
+      // Track write operation start
+      pendingWritesRef.current++;
+      totalBytesWrittenRef.current += byteLength;
+
+      // Increase watermark (data queued for xterm.js)
+      watermarkRef.current += byteLength;
+
+      // Check if we should pause (exceeds HIGH_WATERMARK)
+      if (watermarkRef.current > HIGH_WATERMARK && !isPausedRef.current) {
+        isPausedRef.current = true;
+        console.warn(`[FlowControl] HIGH WATERMARK EXCEEDED - Pausing stream (watermark: ${watermarkRef.current} bytes)`);
+        sendFlowControlRef.current?.(true, watermarkRef.current);
+      }
+
+      // Write with callback to track completion
+      xtermRef.current.terminal?.write(dataToWrite, () => {
+        // Write completed - decrement pending count and watermark
+        pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+        totalBytesCompletedRef.current += byteLength;
+        watermarkRef.current = Math.max(0, watermarkRef.current - byteLength);
+
+        // Check if we should resume (below LOW_WATERMARK)
+        if (watermarkRef.current < LOW_WATERMARK && isPausedRef.current) {
+          isPausedRef.current = false;
+          console.log(`[FlowControl] LOW WATERMARK REACHED - Resuming stream (watermark: ${watermarkRef.current} bytes)`);
+          sendFlowControlRef.current?.(false, watermarkRef.current);
+        }
+
+        // Log in debug mode
+        if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
+          console.log('[FlowControl] Write completed', {
+            bytes: byteLength,
+            watermark: watermarkRef.current,
+            paused: isPausedRef.current,
+            pending: pendingWritesRef.current,
+            totalWritten: totalBytesWrittenRef.current,
+            totalCompleted: totalBytesCompletedRef.current,
+            backlog: totalBytesWrittenRef.current - totalBytesCompletedRef.current,
+          });
+        }
+      });
+
+      writeBufferRef.current = "";
+    }
+    writeScheduledRef.current = false;
+  }, [HIGH_WATERMARK, LOW_WATERMARK]);
+
+  // Callback to write output directly to terminal
+  // For raw/raw-compressed modes: NO BATCHING - write immediately for lowest latency
+  // For state/hybrid modes: Use batching to prevent flickering during state application
   const handleOutput = useCallback((output: string) => {
-    if (xtermRef.current) {
-      xtermRef.current.write(output);
-    }
-  }, []);
+    if (!xtermRef.current) return;
 
-  // Wrap terminal refresh method to detect all refresh calls
+    // RAW MODES: Write immediately without batching (tmux already handles output efficiently)
+    if (streamingMode === "raw" || streamingMode === "raw-compressed") {
+      // Process chunk through escape sequence parser to prevent splitting ANSI codes
+      // This ensures control codes like \x1b[31m (red color) are written atomically
+      const safeOutput = escapeParserRef.current.processChunk(output);
+
+      if (safeOutput.length > 0) {
+        // Track write operation for flow control
+        pendingWritesRef.current++;
+        totalBytesWrittenRef.current += safeOutput.length;
+        watermarkRef.current += safeOutput.length;
+
+        // Check if we should pause (exceeds HIGH_WATERMARK)
+        if (watermarkRef.current > HIGH_WATERMARK && !isPausedRef.current) {
+          isPausedRef.current = true;
+          console.warn(`[FlowControl] HIGH WATERMARK EXCEEDED - Pausing stream (watermark: ${watermarkRef.current} bytes)`);
+          sendFlowControlRef.current?.(true, watermarkRef.current);
+        }
+
+        // Write immediately without batching
+        xtermRef.current.terminal?.write(safeOutput, () => {
+          // Write completed - decrement pending count and watermark
+          pendingWritesRef.current = Math.max(0, pendingWritesRef.current - 1);
+          totalBytesCompletedRef.current += safeOutput.length;
+          watermarkRef.current = Math.max(0, watermarkRef.current - safeOutput.length);
+
+          // Check if we should resume (below LOW_WATERMARK)
+          if (watermarkRef.current < LOW_WATERMARK && isPausedRef.current) {
+            isPausedRef.current = false;
+            console.log(`[FlowControl] LOW WATERMARK REACHED - Resuming stream (watermark: ${watermarkRef.current} bytes)`);
+            sendFlowControlRef.current?.(false, watermarkRef.current);
+          }
+        });
+      }
+      return;
+    }
+
+    // STATE/HYBRID MODES: Use batching to prevent flickering
+    const safeOutput = escapeParserRef.current.processChunk(output);
+
+    // Only accumulate if we have complete data to write
+    // Partial escape sequences are buffered in the parser
+    if (safeOutput.length > 0) {
+      writeBufferRef.current += safeOutput;
+
+      // Schedule flush if not already scheduled (one write per animation frame)
+      if (!writeScheduledRef.current) {
+        writeScheduledRef.current = true;
+        requestAnimationFrame(flushWriteBuffer);
+      }
+    }
+  }, [streamingMode, flushWriteBuffer, HIGH_WATERMARK, LOW_WATERMARK]);
+
+  // Wrap terminal refresh method to detect all refresh calls (only in debug mode)
   useEffect(() => {
     if (xtermRef.current?.terminal && !xtermRef.current.terminal._refreshMonitorInstalled) {
       const terminal = xtermRef.current.terminal;
@@ -107,50 +248,76 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
         return originalWrite(data, callback);
       };
 
-      // Wrap refresh to log all calls and detect race conditions
+      // Wrap refresh to log all calls and detect race conditions (only in debug mode to avoid overhead)
       terminal.refresh = (start: number, end: number) => {
-        const stackTrace = new Error().stack;
-        const caller = stackTrace?.split('\n')[2]?.trim() || 'unknown';
-        const timeSinceLastWrite = performance.now() - lastWriteTime;
+        // Only run expensive monitoring in debug mode
+        if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
+          const stackTrace = new Error().stack;
+          const caller = stackTrace?.split('\n')[2]?.trim() || 'unknown';
+          const timeSinceLastWrite = performance.now() - lastWriteTime;
 
-        console.log('[XtermRefresh] Refresh called', {
-          start,
-          end,
-          rows: terminal.rows,
-          timeSinceLastWrite: `${timeSinceLastWrite.toFixed(2)}ms`,
-          recentWrites: writeCount,
-          caller: caller.replace(/^at /, ''),
-          possibleRaceCondition: timeSinceLastWrite < 50, // Flag if refresh happens <50ms after write
-          timestamp: new Date().toISOString()
-        });
+          console.log('[XtermRefresh] Refresh called', {
+            start,
+            end,
+            rows: terminal.rows,
+            timeSinceLastWrite: `${timeSinceLastWrite.toFixed(2)}ms`,
+            recentWrites: writeCount,
+            caller: caller.replace(/^at /, ''),
+            possibleRaceCondition: timeSinceLastWrite < 50, // Flag if refresh happens <50ms after write
+            timestamp: new Date().toISOString()
+          });
 
-        // Reset write counter after refresh
-        writeCount = 0;
+          // Reset write counter after refresh
+          writeCount = 0;
+        }
 
         return originalRefresh(start, end);
       };
 
       terminal._refreshMonitorInstalled = true;
-      console.log('[TerminalOutput] Refresh and write monitoring installed');
+      if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
+        console.log('[TerminalOutput] Refresh and write monitoring installed');
+      }
     }
   }, [xtermRef.current?.terminal]);
 
-  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback } = useTerminalStream({
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, getIsApplyingState } = useTerminalStream({
     baseUrl,
     sessionId,
-    terminal: xtermRef.current?.terminal || null, // Pass terminal for delta compression
+    getTerminal: () => xtermRef.current?.terminal || null, // Getter function for delta compression
     scrollbackLines: 1000,
+    autoConnect: false, // Manual connection after terminal is properly sized
     onError: (err) => {
       console.error("Terminal stream error:", err);
       setConnectionAttempts((prev) => prev + 1);
     },
     onScrollbackReceived: handleScrollbackReceived,
     onOutput: handleOutput,
+    // Pass actual terminal dimensions (set by first resize before connection)
+    initialCols: lastResizeRef.current?.cols,
+    initialRows: lastResizeRef.current?.rows,
+    streamingMode: streamingMode, // Pass streaming mode to control server output format
   });
 
-  // Disconnect WebSocket on unmount
+  // Update ref when sendFlowControl is available (allows use in callbacks defined earlier)
+  useEffect(() => {
+    sendFlowControlRef.current = sendFlowControl;
+  }, [sendFlowControl]);
+
+  // Disconnect WebSocket on unmount and flush any pending writes
   useEffect(() => {
     return () => {
+      isMountedRef.current = false; // Mark as unmounted
+
+      // Flush any buffered output before unmounting
+      if (writeBufferRef.current && xtermRef.current) {
+        xtermRef.current.write(writeBufferRef.current);
+        writeBufferRef.current = "";
+      }
+
+      // Reset escape sequence parser to clear any buffered partial sequences
+      escapeParserRef.current.reset();
+
       disconnect();
     };
   }, [disconnect]);
@@ -162,30 +329,37 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
 
   // Handle terminal resize - only send if size actually changed
   const handleTerminalResize = useCallback((cols: number, rows: number) => {
+    console.log(`[TerminalOutput] Terminal resized to ${cols}x${rows}`);
+
+    // Always save resize dimensions (even if blocked) so they can be used for initial connection
+    const lastResize = lastResizeRef.current;
+    const sizeChanged = !lastResize || lastResize.cols !== cols || lastResize.rows !== rows;
+
+    if (sizeChanged) {
+      lastResizeRef.current = { cols, rows };
+      console.log(`[TerminalOutput] Saved resize dimensions: ${cols}x${rows}`);
+
+      // If this is the first resize and we're not connected yet, initiate connection
+      if (!lastResize && !isConnected && !error && isMountedRef.current) {
+        console.log(`[TerminalOutput] First resize received, initiating connection with ${cols}x${rows}`);
+        connect(cols, rows); // Pass dimensions directly to connect
+      }
+    }
+
     if (!isConnected) {
       console.log(`[TerminalOutput] Resize blocked - not connected (${cols}x${rows})`);
       return;
     }
 
-    // Block resize messages during scrollback load to prevent feedback loop
-    if (!scrollbackLoaded) {
-      console.log(`[TerminalOutput] Resize blocked - scrollback loading (${cols}x${rows})`);
-      // Save the size for after scrollback completes
-      lastResizeRef.current = { cols, rows };
-      return;
-    }
-
-    const lastResize = lastResizeRef.current;
-    if (lastResize && lastResize.cols === cols && lastResize.rows === rows) {
-      // Size unchanged, don't send resize message
+    // Don't send if size unchanged (already saved above)
+    if (!sizeChanged) {
       console.log(`[TerminalOutput] Resize blocked - unchanged (${cols}x${rows})`);
       return;
     }
 
     console.log(`[TerminalOutput] Sending resize: ${cols}x${rows} (prev: ${lastResize?.cols || 'none'}x${lastResize?.rows || 'none'})`);
-    lastResizeRef.current = { cols, rows };
     resize(cols, rows);
-  }, [isConnected, scrollbackLoaded, resize]);
+  }, [isConnected, resize]);
 
   // Monitor connection state changes and show notifications
   useEffect(() => {
@@ -236,28 +410,6 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
       return () => clearTimeout(timeout);
     }
   }, [isConnected, error, connectionAttempts, connect]);
-
-  // Send resize after scrollback load completes
-  useEffect(() => {
-    if (scrollbackLoaded && isConnected) {
-      // If we have a saved resize from during scrollback load, use it
-      if (lastResizeRef.current) {
-        const { cols, rows } = lastResizeRef.current;
-        console.log(`[TerminalOutput] Scrollback complete, sending saved resize: ${cols}x${rows}`);
-        resize(cols, rows);
-      } else if (xtermRef.current?.terminal) {
-        // Otherwise, fit terminal and send current size
-        console.log("[TerminalOutput] Scrollback complete, fitting terminal and sending resize");
-        xtermRef.current.fit();
-        const terminal = xtermRef.current.terminal;
-        const cols = terminal.cols;
-        const rows = terminal.rows;
-        console.log(`[TerminalOutput] Initial resize after scrollback: ${cols}x${rows}`);
-        lastResizeRef.current = { cols, rows };
-        resize(cols, rows);
-      }
-    }
-  }, [scrollbackLoaded, isConnected, resize]);
 
   const handleManualReconnect = useCallback(() => {
     console.log("[TerminalOutput] Manual reconnect requested");
@@ -363,43 +515,15 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
     }
   };
 
-  const handleLoadMoreHistory = useCallback(() => {
-    if (isLoadingHistory || !hasMoreHistory || !isConnected) {
-      console.log(`[TerminalOutput] Cannot load history: loading=${isLoadingHistory}, hasMore=${hasMoreHistory}, connected=${isConnected}`);
-      return;
-    }
+  // Disabled: handleLoadMoreHistory - scrollback functionality removed
+  // const handleLoadMoreHistory = useCallback(() => {
+  //   console.log(`[TerminalOutput] Scrollback disabled`);
+  // }, []);
 
-    setIsLoadingHistory(true);
-    console.log(`[TerminalOutput] Loading more history from sequence ${oldestLoadedSequence}`);
-
-    // Request 200 more lines of history
-    requestScrollback(oldestLoadedSequence, 200);
-  }, [isLoadingHistory, hasMoreHistory, isConnected, oldestLoadedSequence, requestScrollback]);
-
-  // Infinite scroll detection - load more when scrolled to top
-  useEffect(() => {
-    const terminal = xtermRef.current?.terminal;
-    if (!terminal || !isConnected) return;
-
-    const handleScroll = () => {
-      const buffer = terminal.buffer.active;
-      const isAtTop = buffer.viewportY === 0;
-
-      if (isAtTop && !isScrollingToTopRef.current && !isLoadingHistory && hasMoreHistory) {
-        console.log('[TerminalOutput] Scrolled to top, triggering auto-load');
-        isScrollingToTopRef.current = true;
-        handleLoadMoreHistory();
-
-        // Reset flag after a delay
-        setTimeout(() => {
-          isScrollingToTopRef.current = false;
-        }, 1000);
-      }
-    };
-
-    // Listen for scroll events
-    terminal.onScroll(handleScroll);
-  }, [isConnected, isLoadingHistory, hasMoreHistory, handleLoadMoreHistory]);
+  // Infinite scroll detection - DISABLED (scrollback functionality removed)
+  // useEffect(() => {
+  //   // Scrollback auto-load disabled
+  // }, [isConnected]);
 
   return (
     <div className={styles.container}>
@@ -413,9 +537,6 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
           <span className={styles.statusText}>
             {isConnected ? "Connected" : "Disconnected"}
           </span>
-          {isConnected && !scrollbackLoaded && (
-            <span className={styles.statusText}> • Loading scrollback...</span>
-          )}
           {!isConnected && connectionAttempts > 0 && connectionAttempts < 5 && (
             <span className={styles.statusText}>
               {" "}• Reconnecting (attempt {connectionAttempts}/5)...
@@ -439,16 +560,7 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
               🔄 Reconnect
             </button>
           )}
-          <button
-            className={styles.toolbarButton}
-            onClick={handleLoadMoreHistory}
-            disabled={isLoadingHistory || !hasMoreHistory || !isConnected}
-            title={!hasMoreHistory ? "No more history available" : isLoadingHistory ? "Loading..." : "Load more history (scroll to top for auto-load)"}
-            aria-label="Load more terminal history"
-            style={isLoadingHistory ? { opacity: 0.6, cursor: 'wait' } : !hasMoreHistory ? { opacity: 0.4, cursor: 'not-allowed' } : {}}
-          >
-            {isLoadingHistory ? '⏳ Loading...' : hasMoreHistory ? '📜 Load History' : '📜 No More'}
-          </button>
+          {/* Scrollback button removed - scrollback functionality disabled */}
           <button
             className={`${styles.toolbarButton} ${debugMode ? styles.debugActive : ''}`}
             onClick={handleToggleDebug}
@@ -458,6 +570,20 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
           >
             🛠️ {debugMode ? 'Debug ON' : 'Debug'}
           </button>
+          <select
+            value={streamingMode}
+            onChange={(e) => setStreamingMode(e.target.value as "raw" | "raw-compressed" | "state" | "hybrid")}
+            className={styles.toolbarButton}
+            title="Terminal streaming mode - choose how terminal output is delivered"
+            aria-label="Select terminal streaming mode"
+            disabled={!isConnected}
+            style={{ minWidth: '140px' }}
+          >
+            <option value="raw">🚀 Raw</option>
+            <option value="raw-compressed">📦 Raw+LZMA</option>
+            <option value="state">🔄 State Sync</option>
+            <option value="hybrid">🔬 Hybrid</option>
+          </select>
           <button
             className={styles.toolbarButton}
             onClick={handleManualResize}

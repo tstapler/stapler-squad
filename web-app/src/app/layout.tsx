@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import { Header } from "@/components/layout/Header";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
+import { NotificationProvider } from "@/lib/contexts/NotificationContext";
+import { NotificationPanel } from "@/components/ui/NotificationPanel";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -17,8 +19,11 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <ErrorBoundary>
-          <Header />
-          {children}
+          <NotificationProvider>
+            <Header />
+            {children}
+            <NotificationPanel />
+          </NotificationProvider>
         </ErrorBoundary>
       </body>
     </html>
