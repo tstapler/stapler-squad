@@ -148,26 +148,119 @@ Tests hang in `config.GetClaudeCommand()` which executes shell commands during s
 
 ---
 
-## PLANNED: Claude Config Editor & Session History Viewer
+## PLANNED: Session History Viewer Integration
+
+**Status**: Backend Complete, Integration Pending
+**Priority**: P2 - After Web UI Session Creation
+**Epic ID**: FEATURE-002-Integration
+**Estimated Effort**: 8-10 hours (1-2 days)
+**Progress**: Backend 100%, TUI Overlay 100%, Integration 0%
+
+### Implementation Status
+
+**✅ Complete Components**:
+- ✅ **Backend**: `session/history.go` (236 lines) - JSONL parser, search, filtering
+- ✅ **TUI Overlay**: `ui/overlay/historyBrowserOverlay.go` (350 lines) - List/detail modes
+- ✅ **RPC Handlers**: `server/services/session_service.go` - ListClaudeHistory, GetClaudeHistoryDetail
+- ✅ **Proto Definitions**: `proto/session/v1/session.proto` - ClaudeHistoryEntry messages
+- ✅ **Web UI**: `web-app/src/app/history/page.tsx` (264 lines) - Full browser page
+
+**❌ Missing Integration**:
+- [ ] Add HistoryBrowser state to `app/state/types.go`
+- [ ] Wire history browser into UI coordinator
+- [ ] Create `handleHistoryBrowser()` function in `app/app.go`
+- [ ] Add `handleHistoryBrowserState()` key handler
+- [ ] Add H key binding to menu and bridge
+
+### 🎯 Recommended Next Task: Task 1.1 - Add HistoryBrowser State
+
+**Task**: Add HistoryBrowser State to Application State Machine
+**Estimated Time**: 1 hour
+**Priority**: P2 - Foundation for history viewer feature
+**Context Boundary**: 1 file (app/state/types.go, 75 lines) ✅
+
+**Why This Task First?**:
+1. **Zero Dependencies**: No prerequisites, can start immediately
+2. **Minimal Context**: Single file, simple enum addition
+3. **Foundation**: Unblocks all 4 subsequent integration tasks
+4. **Low Risk**: Trivial change, easy to verify
+5. **Quick Win**: Completes in 1 hour
+
+**Implementation Steps**:
+1. Add `HistoryBrowser` constant after `TagEditor` in State enum
+2. Update `String()` method to return "HistoryBrowser"
+3. Update `IsValid()` upper bound to `HistoryBrowser`
+4. Add `HistoryBrowser` to `IsOverlayState()` switch case
+5. Compile: `go build ./app/state`
+6. Test: `go test ./app/state -v`
+
+**Context Files to Understand**:
+- `app/state/types.go` (75 lines) - State enum and methods
+
+**Success Criteria**:
+- ✅ HistoryBrowser constant added to State enum
+- ✅ All state methods updated correctly
+- ✅ Code compiles without errors
+- ✅ Tests pass
+
+**Next Tasks After This**:
+- Task 1.2: Add UI Coordinator History Browser Methods (2h)
+- Task 1.3: Add handleHistoryBrowser Function (2h)
+- Task 1.4: Add handleHistoryBrowserState Handler (2h)
+- Task 1.5: Add Key Binding and Menu Integration (1h)
+
+### Feature Overview
+
+Browse and search Claude session history from ~/.claude/history.jsonl:
+- **View Historical Sessions**: Grouped by directory/project
+- **Search & Filter**: By name, project, date range
+- **Session Details**: View metadata, timestamps, message counts
+- **Launch from History**: Resume work contexts (Phase 2, deferred)
+
+**Strategic Value**:
+- **Productivity**: Quick access to past work contexts
+- **Transparency**: Review historical Claude interactions
+- **Workflow Integration**: Seamless Claude Code + Claude Squad integration
+
+### Remaining Work Breakdown
+
+**Story 1: TUI Integration** (8 hours, 5 tasks):
+- [ ] Task 1.1: Add HistoryBrowser State [1h] **← NEXT**
+- [ ] Task 1.2: UI Coordinator Methods [2h]
+- [ ] Task 1.3: handleHistoryBrowser Function [2h]
+- [ ] Task 1.4: handleHistoryBrowserState Handler [2h]
+- [ ] Task 1.5: Key Binding & Menu Integration [1h]
+
+**Story 2: Launch from History** (DEFERRED - Phase 2):
+- [ ] Task 2.1: Session creation from entry [3h]
+- [ ] Task 2.2: Worktree/branch setup [2h]
+- [ ] Task 2.3: Pre-populate fields [1h]
+
+**See Full Details**:
+- [History Viewer Integration Plan](docs/tasks/history-viewer-integration.md) - Complete atomic task breakdown
+
+---
+
+## PLANNED: Claude Config Editor
 
 **Status**: Planning Complete - Ready for Implementation
-**Priority**: P2 - After Web UI MVP complete
+**Priority**: P2 - After History Viewer Integration
 **Epic ID**: FEATURE-001
 **Estimated Effort**: 3-4 weeks (1 engineer)
 **Progress**: 0% (Planning phase)
 
 ### Overview
 
-Add comprehensive Claude Code configuration management and session history viewing to Claude Squad:
+Add comprehensive Claude Code configuration management to Claude Squad:
 - View/edit Claude configuration files (.claude/CLAUDE.md, settings.json, agents.md)
-- Browse historical Claude sessions from ~/.claude/history.jsonl
-- Launch new sessions based on historical sessions
-- Review past work through conversation history
+- Syntax highlighting and validation
+- Real-time error feedback
+- Web UI integration with Monaco editor
 
 **Strategic Value**:
-- **Productivity**: Resume interrupted work by launching from history
 - **Transparency**: Direct config access eliminates manual file editing
 - **Workflow Integration**: Tight Claude Code + Claude Squad integration
+- **Developer Experience**: In-app config management
 
 ### 🎯 Recommended First Task: TASK-001.1 - Backend Config Foundation
 
@@ -213,7 +306,7 @@ Add comprehensive Claude Code configuration management and session history viewi
 ### Implementation Phases
 
 #### Phase 1: Foundation (Week 1) - NEXT
-**Goal**: Backend infrastructure for config and history management
+**Goal**: Backend infrastructure for config management
 
 **Stories**:
 1. **STORY-001: Backend Config Management** [2 days]
@@ -222,50 +315,32 @@ Add comprehensive Claude Code configuration management and session history viewi
    - TASK-001.3: Add JSON validation support [2h]
    - TASK-001.4: Implement atomic write with backup [3h]
 
-2. **STORY-002: History Parser Implementation** [2 days]
-   - TASK-002.1: Create session/history.go structure [1h]
-   - TASK-002.2: Implement JSONL streaming parser [3h]
-   - TASK-002.3: Build SessionHistoryIndex [2h]
-   - TASK-002.4: Add project grouping logic [2h]
-
-3. **STORY-003: Protocol Buffer Definitions** [1 day]
+2. **STORY-003: Protocol Buffer Definitions** [1 day]
    - TASK-003.1: Add config RPCs to session.proto [2h]
-   - TASK-003.2: Add history RPCs to session.proto [2h]
    - TASK-003.3: Generate Go and TypeScript bindings [1h]
 
-**Milestone 1**: Backend Complete - Can read/write configs and parse history programmatically
+**Milestone 1**: Backend Complete - Can read/write configs programmatically
 
 #### Phase 2: TUI Implementation (Week 2)
-**Goal**: Build overlay components for config editing and history browsing
+**Goal**: Build overlay components for config editing
 
 **Stories**:
-4. **STORY-004: Config Editor Overlay** [3 days]
+3. **STORY-004: Config Editor Overlay** [3 days]
    - Create ui/overlay/configEditorOverlay.go
    - Implement syntax highlighting (Markdown/JSON)
    - Add edit mode with validation
    - Wire up save/cancel actions
 
-5. **STORY-005: History Browser Overlay** [2 days]
-   - Create ui/overlay/sessionHistoryBrowserOverlay.go
-   - Implement list rendering with grouping
-   - Add date range filters and search
-   - Enable session launch from history
-
-**Milestone 2**: TUI MVP - Can view/edit configs and browse history in TUI
+**Milestone 2**: TUI MVP - Can view/edit configs in TUI
 
 #### Phase 3: Web UI Implementation (Week 3)
 **Goal**: Build web components with feature parity to TUI
 
 **Stories**:
-6. **STORY-006: Config Editor Web Component** [3 days]
+4. **STORY-006: Config Editor Web Component** [3 days]
    - Monaco editor integration
    - Syntax highlighting and validation
    - Real-time error feedback
-
-7. **STORY-007: History Browser Web Component** [2 days]
-   - Virtual scrolling for performance
-   - Filtering and search UI
-   - Project-based grouping
 
 **Milestone 3**: Web UI Complete - Feature parity with TUI
 
@@ -273,42 +348,9 @@ Add comprehensive Claude Code configuration management and session history viewi
 **Goal**: Complete feature integration and testing
 
 **Stories**:
-8. **STORY-008: Launch Session from History** [2 days]
-9. **STORY-009: Conversation Viewer** [2 days]
-10. **STORY-010: Testing & Documentation** [1 day]
+5. **STORY-010: Testing & Documentation** [1 day]
 
 **Milestone 4**: Feature Complete - Ready for production release
-
-### Technical Notes
-
-**Dependencies Already Available**:
-- ✅ `github.com/gofrs/flock` - File locking (already in go.mod)
-- ✅ `github.com/mattn/go-sqlite3` - SQLite driver (already in go.mod)
-- Need to add: `github.com/xeipuuv/gojsonschema` - JSON validation
-
-**Integration Points**:
-- Reuse existing config directory resolution (config/config.go)
-- Follow overlay pattern from ui/overlay/sessionSetup.go
-- Extend proto/session/v1/session.proto with new RPCs
-- Add key bindings in keys/keys.go (C for config, H for history)
-
-**Context Boundaries**:
-- Phase 1 tasks: 1-3 files each, 1-3 hours
-- All tasks respect AIC framework (3-5 files max, single responsibility)
-- No task requires > 800 lines of total context
-
-**Testing Strategy**:
-- Unit tests for all backend services (>80% coverage)
-- Integration tests for file operations
-- TUI overlay tests with teatest framework
-- E2E tests with Playwright for web UI
-
-**See Full Details**:
-- [Complete Feature Plan](docs/tasks/claude-config-editor.md) - 70KB, 2,145 lines
-- [Implementation Summary](docs/tasks/claude-config-editor-summary.md) - 12KB, 348 lines
-
----
-
 ## Future Priorities
 
 ### Medium Term (After Web UI MVP):
