@@ -109,15 +109,14 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 		requestMsg: envelope.Data,
 	}
 
-	// Call StreamTerminal
+	// Call StreamTerminal - it will handle sending EndStream messages internally
+	// This ensures EndStream is sent while the WebSocket is still open, avoiding race conditions
 	if err := h.streamTerminal(stream); err != nil {
 		log.ErrorLog.Printf("StreamTerminal error: %v", err)
-		sendEndStreamError(stream, err)
+		// EndStream already sent by streamTerminal
 		return
 	}
-
-	// Send EndStream message
-	sendEndStreamSuccess(stream)
+	// EndStream success already sent by streamTerminal
 }
 
 // connectWebSocketStream wraps a WebSocket connection for ConnectRPC streaming
@@ -166,6 +165,10 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	if instance == nil {
 		return fmt.Errorf("session not found: %s", sessionID)
 	}
+
+	// Update LastViewed timestamp - user is viewing this session
+	instance.LastViewed = time.Now()
+	log.InfoLog.Printf("Updated LastViewed timestamp for session %s", sessionID)
 
 	// Get the PTY reader and writer
 	ptyReader, err := instance.GetPTYReader()
@@ -942,6 +945,15 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Wait for either goroutine to complete or error
 	err = <-errChan
 
+	// Send EndStream message while WebSocket is still open
+	// CRITICAL: This must happen BEFORE returning, while we're still in control of the goroutines
+	// If we wait until after returning to HandleWebSocket, the WebSocket may already be closed
+	if err != nil {
+		sendEndStreamError(stream, err)
+	} else {
+		sendEndStreamSuccess(stream)
+	}
+
 	// CRITICAL FIX: Persist timestamp updates to disk so GetReviewQueue sees them
 	// The WebSocket handler loads instances at connection start, updates timestamps in memory
 	// during the connection, but those updates are lost unless we save them back to storage.
@@ -970,16 +982,18 @@ func (h *ConnectRPCWebSocketHandler) persistInstanceTimestamps(updatedInstance *
 		updatedInstance.Title,
 		updatedInstance.LastTerminalUpdate,
 		updatedInstance.LastMeaningfulOutput,
+		updatedInstance.LastOutputSignature,
+		updatedInstance.LastViewed,
 	); err != nil {
 		return fmt.Errorf("failed to update timestamps: %w", err)
 	}
 
-	log.InfoLog.Printf("Persisting timestamp updates for session %s: LastMeaningfulOutput=%v",
-		updatedInstance.Title, updatedInstance.LastMeaningfulOutput)
+	log.InfoLog.Printf("Persisting timestamp updates for session %s: LastMeaningfulOutput=%v, LastViewed=%v",
+		updatedInstance.Title, updatedInstance.LastMeaningfulOutput, updatedInstance.LastViewed)
 
 	// Broadcast session updated event to notify clients of timestamp changes
 	// This ensures "Last Activity" updates in real-time in the UI
-	event := events.NewSessionUpdatedEvent(updatedInstance, []string{"LastTerminalUpdate", "LastMeaningfulOutput"})
+	event := events.NewSessionUpdatedEvent(updatedInstance, []string{"LastTerminalUpdate", "LastMeaningfulOutput", "LastViewed"})
 	h.sessionService.eventBus.Publish(event)
 	log.DebugLog.Printf("Broadcasted timestamp update event for session %s", updatedInstance.Title)
 
@@ -1012,6 +1026,8 @@ func sendErrorResponse(conn *websocket.Conn, errorMsg string) {
 
 // sendEndStreamSuccess sends a successful EndStream message
 func sendEndStreamSuccess(stream *connectWebSocketStream) {
+	log.InfoLog.Printf("Sending EndStreamSuccess")
+
 	// Send empty TerminalData message with EndStream flag to signal completion
 	emptyTerminalData := &sessionv1.TerminalData{
 		SessionId: "",
@@ -1026,7 +1042,11 @@ func sendEndStreamSuccess(stream *connectWebSocketStream) {
 	}
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
-	stream.WriteMessage(websocket.BinaryMessage, envelope)
+	if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+		log.ErrorLog.Printf("Failed to send EndStreamSuccess: %v", err)
+	} else {
+		log.InfoLog.Printf("EndStreamSuccess sent successfully")
+	}
 }
 
 // sendEndStreamError sends an error EndStream message

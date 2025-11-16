@@ -124,32 +124,51 @@ export function useTerminalStream({
     })
   ));
 
-  // Performance optimization: Batch terminal output updates
+  // Performance optimization: Adaptive batching with requestAnimationFrame
+  // This automatically syncs with display refresh rate (60Hz/120Hz/144Hz)
   const outputBufferRef = useRef<string[]>([]);
-  const pendingUpdateRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingUpdateRef = useRef<number | null>(null); // RAF ID instead of timeout
   const textDecoderRef = useRef(new TextDecoder()); // Reuse decoder for performance
+  const bufferSizeRef = useRef<number>(0); // Track buffer size for adaptive flushing
 
   // Sync ref with state
   useEffect(() => {
     isConnectedRef.current = isConnected;
   }, [isConnected]);
 
-  // Flush buffered output to state (batched with minimal delay)
+  // Flush buffered output to state (adaptive batching)
   const flushOutputBuffer = useCallback(() => {
     if (outputBufferRef.current.length > 0) {
       const bufferedText = outputBufferRef.current.join("");
       outputBufferRef.current = [];
+      bufferSizeRef.current = 0;
       setOutput((prev) => prev + bufferedText);
     }
     pendingUpdateRef.current = null;
   }, []);
 
-  // Schedule output update (batched with 5ms delay to reduce flickering while maintaining responsiveness)
+  // Schedule output update with adaptive batching strategy:
+  // - Uses requestAnimationFrame for display-synchronized updates (60-144fps)
+  // - Flushes immediately if buffer exceeds 4KB (prevents lag on large bursts)
+  // - Automatically adapts to high refresh rate displays (120Hz/144Hz)
   const scheduleOutputUpdate = useCallback((text: string) => {
     outputBufferRef.current.push(text);
+    bufferSizeRef.current += text.length;
 
-    if (!pendingUpdateRef.current) {
-      pendingUpdateRef.current = setTimeout(flushOutputBuffer, 5);
+    // Immediate flush for large buffers (>4KB) to prevent lag
+    // This handles burst scenarios like build errors or code generation
+    if (bufferSizeRef.current > 4096) {
+      if (pendingUpdateRef.current !== null) {
+        cancelAnimationFrame(pendingUpdateRef.current);
+        pendingUpdateRef.current = null;
+      }
+      flushOutputBuffer();
+      return;
+    }
+
+    // Otherwise, use RAF for display-synchronized batching
+    if (pendingUpdateRef.current === null) {
+      pendingUpdateRef.current = requestAnimationFrame(flushOutputBuffer);
     }
   }, [flushOutputBuffer]);
 
@@ -655,9 +674,9 @@ export function useTerminalStream({
       connect();
     }
     return () => {
-      // Cleanup: Cancel any pending timeout updates
-      if (pendingUpdateRef.current) {
-        clearTimeout(pendingUpdateRef.current);
+      // Cleanup: Cancel any pending RAF updates
+      if (pendingUpdateRef.current !== null) {
+        cancelAnimationFrame(pendingUpdateRef.current);
         pendingUpdateRef.current = null;
       }
       // Flush any remaining buffered output

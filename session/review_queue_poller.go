@@ -211,6 +211,15 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 					inst.Title, statusInfo.ClaudeStatus.String(), statusInfo.PendingApprovals)
 			}
 
+			// Check for input required (explicit prompts asking for user input)
+			if statusInfo.ClaudeStatus == StatusInputRequired {
+				reason = ReasonInputRequired
+				priority = PriorityMedium
+				shouldAdd = true
+				context = "Waiting for explicit user input"
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Input required detected", inst.Title)
+			}
+
 			// Check for errors (highest priority)
 			if statusInfo.ClaudeStatus == StatusError {
 				reason = ReasonErrorState
@@ -218,6 +227,47 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				shouldAdd = true
 				context = "Error state detected"
 				log.DebugLog.Printf("[ReviewQueue] Session '%s': Error state detected", inst.Title)
+			}
+
+			// Check for tests failing (high priority - actionable failures)
+			if statusInfo.ClaudeStatus == StatusTestsFailing {
+				reason = ReasonTestsFailing
+				priority = PriorityHigh
+				shouldAdd = true
+				context = "Tests are failing"
+				log.InfoLog.Printf("[ReviewQueue] Session '%s': Tests failing detected", inst.Title)
+			}
+
+			// Check for task completion (high priority - user wants to know when work is done)
+			if statusInfo.ClaudeStatus == StatusSuccess {
+				reason = ReasonTaskComplete
+				priority = PriorityLow // Low priority since it's informational, not blocking
+				shouldAdd = true
+				context = "Task completed successfully"
+				log.InfoLog.Printf("[ReviewQueue] Session '%s': Task completion detected", inst.Title)
+			}
+
+			// Check for uncommitted changes (informational - user may want to review and commit)
+			// Only check if we don't already have a higher-priority reason
+			if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
+				worktree, err := inst.GetGitWorktree()
+				if err != nil {
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
+				} else if worktree != nil {
+					isDirty, err := worktree.IsDirty()
+					if err != nil {
+						log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to check git status: %v", inst.Title, err)
+					} else if isDirty {
+						// Only override if we don't have a higher priority reason already
+						if !shouldAdd || priority == PriorityLow {
+							reason = ReasonUncommittedChanges
+							priority = PriorityLow
+							shouldAdd = true
+							context = "Uncommitted changes ready to commit"
+							log.InfoLog.Printf("[ReviewQueue] Session '%s': Uncommitted changes detected", inst.Title)
+						}
+					}
+				}
 			}
 		}
 	} else {
@@ -236,12 +286,57 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			log.DebugLog.Printf("[ReviewQueue] Session '%s': Basic idle check - %s since UpdatedAt",
 				inst.Title, formatDuration(idleDuration))
 		}
+
+		// Check for uncommitted changes (informational - user may want to review and commit)
+		// Only check if we don't already have a higher-priority reason
+		if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
+			worktree, err := inst.GetGitWorktree()
+			if err != nil {
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
+			} else if worktree != nil {
+				isDirty, err := worktree.IsDirty()
+				if err != nil {
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to check git status: %v", inst.Title, err)
+				} else if isDirty {
+					// Only override if we don't have a higher priority reason already
+					if !shouldAdd || priority == PriorityLow {
+						reason = ReasonUncommittedChanges
+						priority = PriorityLow
+						shouldAdd = true
+						context = "Uncommitted changes ready to commit"
+						log.InfoLog.Printf("[ReviewQueue] Session '%s': Uncommitted changes detected", inst.Title)
+					}
+				}
+			}
+		}
 	}
 
-	// Note: We do NOT call inst.Preview() here because:
-	// 1. It's a blocking synchronous tmux command that can hang the entire poller
-	// 2. LastMeaningfulOutput is already updated by WebSocket terminal streaming
-	// 3. Keeping the poller fast and non-blocking is critical for responsive notifications
+	// CRITICAL FIX: Update timestamps when WebSocket isn't active
+	// The original assumption that "LastMeaningfulOutput is already updated by WebSocket terminal streaming"
+	// is ONLY true when users view the terminal in the web UI. When users directly attach to tmux
+	// (via tmux attach-session), there's NO WebSocket connection, so NO timestamp updates!
+	//
+	// To fix this, we call Preview() to refresh timestamps, but only when:
+	// 1. Timestamps are stale (> 30 seconds old)
+	// 2. Session is running (not paused)
+	// 3. Tmux session is alive
+	//
+	// This balances the need for accurate timestamps with the performance concern of blocking tmux calls.
+	timeSinceLastUpdate := time.Since(inst.LastTerminalUpdate)
+	if timeSinceLastUpdate > 30*time.Second && inst.Status == Running && inst.TmuxAlive() {
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': Timestamps stale (%s), refreshing via Preview()",
+			inst.Title, formatDuration(timeSinceLastUpdate))
+
+		// Call Preview() to capture current pane content and update timestamps
+		// This is safe because we only do it when timestamps are very stale (30s+)
+		if _, err := inst.Preview(); err != nil {
+			log.ErrorLog.Printf("[ReviewQueue] Session '%s': Failed to refresh timestamps: %v", inst.Title, err)
+			// Continue processing even if Preview fails - we'll use stale timestamps
+		} else {
+			log.InfoLog.Printf("[ReviewQueue] Session '%s': Refreshed timestamps (LastMeaningfulOutput now: %v)",
+				inst.Title, inst.LastMeaningfulOutput)
+		}
+	}
 
 	// Check for terminal staleness (no meaningful output for configured threshold)
 	// This helps identify sessions that might be stuck or waiting without showing obvious idle state

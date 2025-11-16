@@ -1,23 +1,31 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { SessionService } from "@/gen/proto/session/v1/session_connect";
-import { ClaudeHistoryEntry } from "@/gen/proto/session/v1/session_pb";
+import { useState, useEffect, useRef } from "react";
+import { SessionService } from "@/gen/session/v1/session_connect";
+import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
+import styles from "./history.module.css";
 
 export default function HistoryBrowserPage() {
   const [entries, setEntries] = useState<ClaudeHistoryEntry[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<ClaudeHistoryEntry | null>(null);
+  const [messages, setMessages] = useState<ClaudeMessage[]>([]);
+  const [showMessages, setShowMessages] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Create gRPC client
-  const transport = createConnectTransport({
-    baseUrl: window.location.origin,
-  });
-  const client = createPromiseClient(SessionService, transport);
+  const clientRef = useRef<any>(null);
+
+  // Initialize ConnectRPC client
+  useEffect(() => {
+    const transport = createConnectTransport({
+      baseUrl: window.location.origin,
+    });
+    clientRef.current = createPromiseClient(SessionService, transport);
+  }, []);
 
   // Load history on mount
   useEffect(() => {
@@ -25,10 +33,12 @@ export default function HistoryBrowserPage() {
   }, []);
 
   const loadHistory = async (query?: string) => {
+    if (!clientRef.current) return;
+
     try {
       setLoading(true);
       setError(null);
-      const response = await client.listClaudeHistory({
+      const response = await clientRef.current.listClaudeHistory({
         limit: 100,
         searchQuery: query,
       });
@@ -41,9 +51,11 @@ export default function HistoryBrowserPage() {
   };
 
   const loadEntryDetail = async (id: string) => {
+    if (!clientRef.current) return;
+
     try {
       setError(null);
-      const response = await client.getClaudeHistoryDetail({ id });
+      const response = await clientRef.current.getClaudeHistoryDetail({ id });
       if (response.entry) {
         setSelectedEntry(response.entry);
       }
@@ -56,6 +68,22 @@ export default function HistoryBrowserPage() {
     loadHistory(searchQuery || undefined);
   };
 
+  const loadMessages = async (id: string) => {
+    if (!clientRef.current) return;
+
+    try {
+      setLoadingMessages(true);
+      setError(null);
+      const response = await clientRef.current.getClaudeHistoryMessages({ id });
+      setMessages(response.messages);
+      setShowMessages(true);
+    } catch (err) {
+      setError(`Failed to load messages: ${err}`);
+    } finally {
+      setLoadingMessages(false);
+    }
+  };
+
   const formatDate = (timestamp: any) => {
     if (!timestamp) return "N/A";
     const date = new Date(Number(timestamp.seconds) * 1000);
@@ -63,53 +91,31 @@ export default function HistoryBrowserPage() {
   };
 
   return (
-    <div style={{ padding: "20px", maxWidth: "1400px", margin: "0 auto" }}>
-      <h1 style={{ marginBottom: "20px", fontSize: "24px", fontWeight: "bold" }}>
+    <div className={styles.container}>
+      <h1 className={styles.title}>
         📚 Claude History Browser
       </h1>
 
       {error && (
-        <div
-          style={{
-            padding: "10px",
-            marginBottom: "20px",
-            backgroundColor: "#fee",
-            border: "1px solid #f88",
-            borderRadius: "4px",
-            color: "#c00",
-          }}
-        >
+        <div className="alert alert-error">
           {error}
         </div>
       )}
 
       {/* Search bar */}
-      <div style={{ marginBottom: "20px", display: "flex", gap: "10px" }}>
+      <div className={styles.searchBar}>
         <input
           type="text"
           placeholder="Search history..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          style={{
-            flex: 1,
-            padding: "10px",
-            border: "1px solid #ccc",
-            borderRadius: "4px",
-            fontSize: "14px",
-          }}
+          className="input"
+          style={{ flex: 1 }}
         />
         <button
           onClick={handleSearch}
-          style={{
-            padding: "10px 20px",
-            backgroundColor: "#0070f3",
-            color: "#fff",
-            border: "none",
-            borderRadius: "4px",
-            cursor: "pointer",
-            fontWeight: "600",
-          }}
+          className="btn btn-primary"
         >
           Search
         </button>
@@ -118,71 +124,51 @@ export default function HistoryBrowserPage() {
             setSearchQuery("");
             loadHistory();
           }}
-          style={{
-            padding: "10px 20px",
-            backgroundColor: "#666",
-            color: "#fff",
-            border: "none",
-            borderRadius: "4px",
-            cursor: "pointer",
-          }}
+          className="btn btn-secondary"
         >
           Clear
         </button>
       </div>
 
-      <div style={{ display: "flex", gap: "20px" }}>
+      <div className={styles.content}>
         {/* Entry list */}
-        <div style={{ flex: 1 }}>
-          <h2 style={{ marginBottom: "10px", fontSize: "18px", fontWeight: "600" }}>
+        <div className={styles.entryList}>
+          <h2 className={styles.sectionTitle}>
             History ({entries.length} entries)
           </h2>
           {loading ? (
-            <div>Loading...</div>
+            <div className={styles.loadingContainer}>
+              <div className="spinner" />
+              <div className={styles.loadingTitle}>
+                Loading Claude History...
+              </div>
+              <div className="text-muted" style={{ fontSize: "14px" }}>
+                {entries.length === 0
+                  ? "This may take a few moments on first load while scanning conversation files..."
+                  : "Refreshing..."}
+              </div>
+            </div>
           ) : (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: "10px",
-                maxHeight: "700px",
-                overflowY: "auto",
-              }}
-            >
+            <div className={styles.entryCards}>
               {entries.map((entry) => (
                 <div
                   key={entry.id}
                   onClick={() => loadEntryDetail(entry.id)}
-                  style={{
-                    padding: "15px",
-                    border: "1px solid #ccc",
-                    borderRadius: "4px",
-                    backgroundColor:
-                      selectedEntry?.id === entry.id ? "#e0f0ff" : "#fff",
-                    cursor: "pointer",
-                    transition: "background-color 0.2s",
-                  }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.backgroundColor =
-                      selectedEntry?.id === entry.id ? "#e0f0ff" : "#f9f9f9")
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.backgroundColor =
-                      selectedEntry?.id === entry.id ? "#e0f0ff" : "#fff")
-                  }
+                  className={`card ${selectedEntry?.id === entry.id ? styles.selected : ""}`}
+                  style={{ cursor: "pointer", transition: "all 0.2s" }}
                 >
-                  <div style={{ fontWeight: "600", marginBottom: "5px" }}>
+                  <div className={styles.entryName}>
                     {entry.name}
                   </div>
-                  <div style={{ fontSize: "13px", color: "#666" }}>
+                  <div className="text-secondary" style={{ fontSize: "13px" }}>
                     {formatDate(entry.updatedAt)} • {entry.model} • {entry.messageCount}{" "}
                     messages
                   </div>
                   {entry.project && (
                     <div
+                      className="text-muted"
                       style={{
                         fontSize: "12px",
-                        color: "#888",
                         marginTop: "5px",
                         fontFamily: "monospace",
                       }}
@@ -197,68 +183,141 @@ export default function HistoryBrowserPage() {
         </div>
 
         {/* Detail panel */}
-        <div style={{ width: "400px", flexShrink: 0 }}>
+        <div className={styles.detailPanel}>
           {selectedEntry ? (
             <div>
-              <h2 style={{ marginBottom: "15px", fontSize: "18px", fontWeight: "600" }}>
+              <h2 className={styles.sectionTitle}>
                 Entry Details
               </h2>
-              <div style={{ display: "flex", flexDirection: "column", gap: "15px" }}>
-                <div>
-                  <div style={{ fontWeight: "600", marginBottom: "5px" }}>Name:</div>
-                  <div style={{ color: "#333" }}>{selectedEntry.name}</div>
+              <div className={styles.detailFields}>
+                <div className={styles.detailField}>
+                  <div className={styles.fieldLabel}>Name:</div>
+                  <div className="text-primary">{selectedEntry.name}</div>
                 </div>
-                <div>
-                  <div style={{ fontWeight: "600", marginBottom: "5px" }}>ID:</div>
-                  <div style={{ fontFamily: "monospace", fontSize: "12px", color: "#666" }}>
+                <div className={styles.detailField}>
+                  <div className={styles.fieldLabel}>ID:</div>
+                  <div className="text-muted" style={{ fontFamily: "monospace", fontSize: "12px" }}>
                     {selectedEntry.id}
                   </div>
                 </div>
                 {selectedEntry.project && (
-                  <div>
-                    <div style={{ fontWeight: "600", marginBottom: "5px" }}>Project:</div>
-                    <div style={{ fontFamily: "monospace", fontSize: "13px", color: "#0070f3" }}>
+                  <div className={styles.detailField}>
+                    <div className={styles.fieldLabel}>Project:</div>
+                    <div style={{ fontFamily: "monospace", fontSize: "13px", color: "var(--primary)" }}>
                       {selectedEntry.project}
                     </div>
                   </div>
                 )}
-                <div>
-                  <div style={{ fontWeight: "600", marginBottom: "5px" }}>Model:</div>
-                  <div style={{ color: "#333" }}>{selectedEntry.model}</div>
+                <div className={styles.detailField}>
+                  <div className={styles.fieldLabel}>Model:</div>
+                  <div className="text-primary">{selectedEntry.model}</div>
                 </div>
-                <div>
-                  <div style={{ fontWeight: "600", marginBottom: "5px" }}>Message Count:</div>
-                  <div style={{ color: "#333" }}>{selectedEntry.messageCount}</div>
+                <div className={styles.detailField}>
+                  <div className={styles.fieldLabel}>Message Count:</div>
+                  <div className="text-primary">{selectedEntry.messageCount}</div>
                 </div>
-                <div>
-                  <div style={{ fontWeight: "600", marginBottom: "5px" }}>Created:</div>
-                  <div style={{ fontSize: "13px", color: "#666" }}>
+                <div className={styles.detailField}>
+                  <div className={styles.fieldLabel}>Created:</div>
+                  <div className="text-secondary" style={{ fontSize: "13px" }}>
                     {formatDate(selectedEntry.createdAt)}
                   </div>
                 </div>
-                <div>
-                  <div style={{ fontWeight: "600", marginBottom: "5px" }}>Last Updated:</div>
-                  <div style={{ fontSize: "13px", color: "#666" }}>
+                <div className={styles.detailField}>
+                  <div className={styles.fieldLabel}>Last Updated:</div>
+                  <div className="text-secondary" style={{ fontSize: "13px" }}>
                     {formatDate(selectedEntry.updatedAt)}
                   </div>
                 </div>
+                <button
+                  onClick={() => loadMessages(selectedEntry.id)}
+                  disabled={loadingMessages}
+                  className="btn btn-primary"
+                  style={{ marginTop: "10px" }}
+                >
+                  {loadingMessages ? "Loading..." : "View Messages"}
+                </button>
               </div>
             </div>
           ) : (
-            <div
-              style={{
-                padding: "40px 20px",
-                textAlign: "center",
-                color: "#888",
-                border: "2px dashed #ddd",
-                borderRadius: "4px",
-              }}
-            >
+            <div className={styles.emptyState}>
               Select an entry to view details
             </div>
           )}
         </div>
       </div>
+
+      {/* Messages Modal */}
+      {showMessages && (
+        <div
+          className="modal-overlay"
+          onClick={() => setShowMessages(false)}
+        >
+          <div
+            className="modal"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="modal-header">
+              <h2 style={{ fontSize: "20px", fontWeight: "bold", margin: 0 }}>
+                Conversation Messages ({messages.length})
+              </h2>
+              <button
+                onClick={() => setShowMessages(false)}
+                style={{
+                  background: "none",
+                  border: "none",
+                  fontSize: "24px",
+                  cursor: "pointer",
+                  padding: "0 10px",
+                  color: "var(--text-primary)",
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Messages List */}
+            <div className="modal-content">
+              {messages.map((msg, idx) => (
+                <div
+                  key={idx}
+                  className={msg.role === "user" ? styles.messageUser : styles.messageAssistant}
+                >
+                  <div className={styles.messageHeader}>
+                    <div
+                      style={{
+                        fontWeight: "600",
+                        color: msg.role === "user" ? "var(--primary)" : "var(--text-secondary)",
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      {msg.role}
+                    </div>
+                    <div className="text-muted" style={{ fontSize: "12px" }}>
+                      {formatDate(msg.timestamp)}
+                    </div>
+                  </div>
+                  <div className={styles.messageContent}>
+                    {msg.content}
+                  </div>
+                  {msg.model && (
+                    <div
+                      className="text-muted"
+                      style={{
+                        fontSize: "11px",
+                        marginTop: "8px",
+                        fontFamily: "monospace",
+                      }}
+                    >
+                      Model: {msg.model}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

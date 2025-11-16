@@ -45,7 +45,7 @@ func NewResponseStream(sessionName string, ptyAccess *PTYAccess) *ResponseStream
 		sessionName: sessionName,
 		ptyAccess:   ptyAccess,
 		subscribers: make(map[string]*Subscriber),
-		bufferSize:  100, // Default buffer size
+		bufferSize:  2000, // Increased from 100 to handle high-output scenarios (build errors, code generation)
 		started:     false,
 	}
 }

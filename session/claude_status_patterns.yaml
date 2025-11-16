@@ -94,3 +94,37 @@ active:
     pattern: "Bash\\(.*\\): running"
     description: "Bash command actively running"
     priority: 21
+
+# Success patterns - task completion indicators
+success:
+  - name: task_completed
+    pattern: "(?i)(\\btask\\s+(completed|finished|done)|completed successfully|finished successfully|all done)"
+    description: "Task completion indicators"
+    priority: 28
+
+  - name: success_checkmark
+    pattern: "✓.*(?i)(complete|success|done|finished)"
+    description: "Success checkmark with completion words"
+    priority: 27
+
+  - name: build_success
+    pattern: "(?i)(build succeeded|tests? passed|all tests? passed)"
+    description: "Build and test success"
+    priority: 26
+
+# Input required patterns - explicitly waiting for user input prompts
+input_required:
+  - name: explicit_input_prompt
+    pattern: "(?i)(enter|type|provide|input|specify).*:"
+    description: "Explicit prompts asking for user input"
+    priority: 16
+
+  - name: question_prompt
+    pattern: "(?i)^\\s*(what|which|how|when|where)\\b.*\\?"
+    description: "Questions waiting for user response"
+    priority: 15
+
+  - name: please_provide
+    pattern: "(?i)please\\s+(provide|enter|type|specify|give)"
+    description: "Polite input requests"
+    priority: 14

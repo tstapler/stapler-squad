@@ -299,7 +299,17 @@ export function createWebsocketBasedTransport(
                 stream.socket.send(msgBytes);
               }
               if (isDebugEnabled()) {
-                console.log("[WebSocket] Message iterator completed");
+                console.log("[WebSocket] Message iterator completed, sending EndStream");
+              }
+
+              // CRITICAL: Send EndStream envelope to signal graceful close
+              // Without this, the server detects an abnormal WebSocket closure (code 1005)
+              // and cannot send EndStreamResponse, causing "missing EndStreamResponse" error
+              const endStreamEnvelope = encodeEnvelope(endStreamFlag, new Uint8Array(0));
+              stream.socket.send(endStreamEnvelope);
+
+              if (isDebugEnabled()) {
+                console.log("[WebSocket] EndStream sent successfully");
               }
             } catch (err) {
               console.error("[WebSocket] Error sending input messages:", err);

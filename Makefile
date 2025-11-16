@@ -1,7 +1,11 @@
 # Claude Squad Makefile
 # Comprehensive development and analysis toolchain
 
-.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web
+# Variables
+PROFILE_FLAGS ?=
+PROFILE_PORT ?= 6060
+
+.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile
 
 # Default target
 help: ## Show this help message
@@ -13,10 +17,10 @@ help: ## Show this help message
 build: server/web/dist ## Build the Go application (depends on web dist being ready)
 	go build -o claude-squad .
 
-# Build Next.js app to web-app/out
+# Build Next.js app to web-app/out (using development mode for unminified React)
 web-app/out: $(shell find web-app/src -type f) web-app/package.json web-app/next.config.ts
-	@echo "Building Next.js web UI..."
-	@cd web-app && npm run build
+	@echo "Building Next.js web UI (development mode for better error messages)..."
+	@cd web-app && NEXT_BUILD_MODE=development npm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -34,21 +38,38 @@ build-all: build ## Build both web UI and Go application
 
 restart-web: build-all ## Rebuild and restart the web server
 	@echo "Stopping existing claude-squad processes..."
-	@-pkill -f "./claude-squad --web" 2>/dev/null || true
+	@-pkill -f "claude-squad.*--web" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
-	@./claude-squad --web &
+	@./claude-squad --web $(PROFILE_FLAGS) &
 	@sleep 2
 	@echo "✅ Server restarted at http://localhost:8543"
+	@if [ -n "$(PROFILE_FLAGS)" ]; then \
+		echo "📊 Profiling enabled at http://localhost:$(PROFILE_PORT)/debug/pprof/"; \
+	fi
+
+restart-web-profile: ## Rebuild and restart web server with profiling enabled
+	@$(MAKE) restart-web PROFILE_FLAGS="--profile --trace" PROFILE_PORT=$(PROFILE_PORT)
+	@echo ""
+	@echo "📊 Profiling Endpoints:"
+	@echo "  Goroutines: http://localhost:$(PROFILE_PORT)/debug/pprof/goroutine?debug=1"
+	@echo "  Block:      http://localhost:$(PROFILE_PORT)/debug/pprof/block?debug=1"
+	@echo "  Mutex:      http://localhost:$(PROFILE_PORT)/debug/pprof/mutex?debug=1"
+	@echo ""
+	@echo "📝 Trace file will be saved to /tmp/claude-squad-trace-*.out on exit"
+	@echo "   Analyze with: go tool trace /tmp/claude-squad-trace-*.out"
 
 web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
 	@echo "Stopping existing claude-squad processes..."
-	@-pkill -f "./claude-squad --web" 2>/dev/null || true
+	@-pkill -f "claude-squad.*--web" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
-	@./claude-squad --web &
+	@./claude-squad --web $(PROFILE_FLAGS) &
 	@sleep 2
 	@echo "✅ Server restarted at http://localhost:8543"
+	@if [ -n "$(PROFILE_FLAGS)" ]; then \
+		echo "📊 Profiling enabled at http://localhost:$(PROFILE_PORT)/debug/pprof/"; \
+	fi
 
 install: ## Install claude-squad locally
 	go install .

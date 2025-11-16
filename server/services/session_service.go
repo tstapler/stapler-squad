@@ -34,6 +34,11 @@ type SessionService struct {
 	statusManager      *session.InstanceStatusManager
 	reviewQueuePoller  *session.ReviewQueuePoller
 	reactiveQueueMgr   ReactiveQueueManager
+
+	// History cache
+	historyCache      *session.ClaudeSessionHistory
+	historyCacheTime  time.Time
+	historyCacheTTL   time.Duration
 }
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
@@ -43,9 +48,10 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 	reviewQueue := session.NewReviewQueue()
 
 	return &SessionService{
-		storage:     storage,
-		eventBus:    eventBus,
-		reviewQueue: reviewQueue,
+		storage:          storage,
+		eventBus:         eventBus,
+		reviewQueue:      reviewQueue,
+		historyCacheTTL:  5 * time.Minute, // Cache history for 5 minutes
 	}
 }
 
@@ -902,18 +908,27 @@ func (s *SessionService) GetLogs(
 	defer file.Close()
 
 	// Parse logs with filters
-	entries, err := parseLogs(file, req.Msg)
+	result, err := parseLogs(file, req.Msg)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to parse logs: %w", err))
 	}
 
 	return connect.NewResponse(&sessionv1.GetLogsResponse{
-		Entries: entries,
+		Entries:    result.Entries,
+		TotalCount: int32(result.TotalCount),
+		HasMore:    result.HasMore,
 	}), nil
 }
 
+// parseLogsResult contains the result of parsing logs with pagination info
+type parseLogsResult struct {
+	Entries    []*sessionv1.LogEntry
+	TotalCount int
+	HasMore    bool
+}
+
 // parseLogs reads log file and applies filters to return matching entries
-func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) ([]*sessionv1.LogEntry, error) {
+func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResult, error) {
 	// Log line format: [instance] LEVEL:date time file:line: message
 	// Example: [pid-12345-timestamp] INFO:2025/10/17 14:23:45 app.go:123: Starting session
 	logLineRegex := regexp.MustCompile(`^\[([^\]]+)\]\s+(\w+):(\d{4}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+([^:]+:\d+):\s+(.*)$`)
@@ -925,6 +940,12 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) ([]*sessionv1.Lo
 	limit := 100
 	if req.Limit != nil && *req.Limit > 0 {
 		limit = int(*req.Limit)
+	}
+
+	// Parse offset (default: 0)
+	offset := 0
+	if req.Offset != nil && *req.Offset > 0 {
+		offset = int(*req.Offset)
 	}
 
 	// Parse filters
@@ -1004,18 +1025,45 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) ([]*sessionv1.Lo
 		}
 
 		entries = append(entries, entry)
-
-		// Apply limit
-		if len(entries) >= limit {
-			break
-		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("error reading log file: %w", err)
 	}
 
-	return entries, nil
+	// Reverse entries to show most recent first
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	// Store total count before pagination
+	totalCount := len(entries)
+
+	// Apply offset
+	if offset >= len(entries) {
+		// Offset beyond available entries, return empty result
+		return &parseLogsResult{
+			Entries:    []*sessionv1.LogEntry{},
+			TotalCount: totalCount,
+			HasMore:    false,
+		}, nil
+	}
+
+	// Apply offset and limit
+	start := offset
+	end := offset + limit
+	if end > len(entries) {
+		end = len(entries)
+	}
+
+	paginatedEntries := entries[start:end]
+	hasMore := end < len(entries)
+
+	return &parseLogsResult{
+		Entries:    paginatedEntries,
+		TotalCount: totalCount,
+		HasMore:    hasMore,
+	}, nil
 }
 
 // WatchReviewQueueFilters contains filters for review queue event streaming.
@@ -1307,14 +1355,38 @@ func (s *SessionService) UpdateClaudeConfig(
 	}), nil
 }
 
+// getOrRefreshHistoryCache returns the cached history or refreshes it if stale
+func (s *SessionService) getOrRefreshHistoryCache() (*session.ClaudeSessionHistory, error) {
+	now := time.Now()
+
+	// Check if cache is valid
+	if s.historyCache != nil && now.Sub(s.historyCacheTime) < s.historyCacheTTL {
+		return s.historyCache, nil
+	}
+
+	// Cache is stale or doesn't exist - refresh it
+	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create history manager: %w", err)
+	}
+
+	// Update cache
+	s.historyCache = hist
+	s.historyCacheTime = now
+
+	fmt.Printf("History cache refreshed: %d entries\n", hist.Count())
+	return hist, nil
+}
+
 // ListClaudeHistory returns Claude session history entries with optional filtering
 func (s *SessionService) ListClaudeHistory(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListClaudeHistoryRequest],
 ) (*connect.Response[sessionv1.ListClaudeHistoryResponse], error) {
-	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
+	// Use cached history
+	hist, err := s.getOrRefreshHistoryCache()
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create history manager: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
 	var entries []session.ClaudeHistoryEntry
@@ -1359,9 +1431,10 @@ func (s *SessionService) GetClaudeHistoryDetail(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetClaudeHistoryDetailRequest],
 ) (*connect.Response[sessionv1.GetClaudeHistoryDetailResponse], error) {
-	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
+	// Use cached history
+	hist, err := s.getOrRefreshHistoryCache()
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create history manager: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
 
 	entry, err := hist.GetByID(req.Msg.Id)
@@ -1379,5 +1452,57 @@ func (s *SessionService) GetClaudeHistoryDetail(
 			Model:        entry.Model,
 			MessageCount: int32(entry.MessageCount),
 		},
+	}), nil
+}
+
+// GetClaudeHistoryMessages retrieves messages from a specific conversation
+func (s *SessionService) GetClaudeHistoryMessages(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetClaudeHistoryMessagesRequest],
+) (*connect.Response[sessionv1.GetClaudeHistoryMessagesResponse], error) {
+	// Use cached history to validate session exists
+	hist, err := s.getOrRefreshHistoryCache()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
+	}
+
+	// Validate session exists
+	_, err = hist.GetByID(req.Msg.Id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %w", err))
+	}
+
+	// Get messages from conversation file
+	messages, err := hist.GetMessagesFromConversationFile(req.Msg.Id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load messages: %w", err))
+	}
+
+	// Apply pagination
+	totalCount := len(messages)
+	offset := int(req.Msg.Offset)
+	limit := int(req.Msg.Limit)
+
+	if offset > 0 && offset < len(messages) {
+		messages = messages[offset:]
+	}
+	if limit > 0 && limit < len(messages) {
+		messages = messages[:limit]
+	}
+
+	// Convert to proto messages
+	protoMessages := make([]*sessionv1.ClaudeMessage, 0, len(messages))
+	for _, msg := range messages {
+		protoMessages = append(protoMessages, &sessionv1.ClaudeMessage{
+			Role:      msg.Role,
+			Content:   msg.Content,
+			Timestamp: timestamppb.New(msg.Timestamp),
+			Model:     msg.Model,
+		})
+	}
+
+	return connect.NewResponse(&sessionv1.GetClaudeHistoryMessagesResponse{
+		Messages:   protoMessages,
+		TotalCount: int32(totalCount),
 	}), nil
 }

@@ -44,8 +44,23 @@ type InstanceData struct {
 	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
 	LastMeaningfulOutput time.Time `json:"last_meaningful_output,omitempty"`
 
+	// Content signature for detecting actual terminal changes vs restarts
+	// This is a SHA256 hash of the terminal content used to prevent false "new activity"
+	// notifications when app restarts but terminal content hasn't changed
+	LastOutputSignature string `json:"last_output_signature,omitempty"`
+
 	// Review queue spam prevention
 	LastAddedToQueue time.Time `json:"last_added_to_queue,omitempty"`
+
+	// User interaction tracking
+	// LastViewed tracks when the user last viewed this session (terminal, session details, etc.)
+	// Used for smarter review queue notifications (don't notify if just viewed)
+	LastViewed time.Time `json:"last_viewed,omitempty"`
+
+	// Review queue snooze tracking
+	// LastAcknowledged tracks when the user last dismissed this session from review queue
+	// Sessions acknowledged after their last update won't appear in the queue until they update again
+	LastAcknowledged time.Time `json:"last_acknowledged,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree
@@ -341,7 +356,7 @@ func (s *Storage) DeleteAllInstances() error {
 // UpdateInstanceTimestampsOnly updates ONLY the timestamp fields in storage without
 // creating Instance objects. This preserves in-memory state like controllers.
 // This is critical for WebSocket terminal streaming which updates timestamps frequently.
-func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate, lastMeaningfulOutput time.Time) error {
+func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate, lastMeaningfulOutput time.Time, lastOutputSignature string, lastViewed time.Time) error {
 	// Load raw JSON data directly
 	jsonData := s.state.GetInstances()
 
@@ -356,6 +371,8 @@ func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate,
 		if data.Title == title {
 			instancesData[i].LastTerminalUpdate = lastTerminalUpdate
 			instancesData[i].LastMeaningfulOutput = lastMeaningfulOutput
+			instancesData[i].LastOutputSignature = lastOutputSignature
+			instancesData[i].LastViewed = lastViewed
 			found = true
 			log.DebugLog.Printf("Updating timestamps in storage for session %s (no instance objects created)", title)
 			break

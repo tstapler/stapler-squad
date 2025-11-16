@@ -18,9 +18,12 @@ const (
 	StatusReady
 	StatusProcessing
 	StatusNeedsApproval
+	StatusInputRequired // Explicit user input prompts (questions, "enter X:", etc.)
 	StatusError
-	StatusIdle   // Waiting for user input (INSERT mode, command prompt, etc.)
-	StatusActive // Actively executing commands (shows "esc to interrupt")
+	StatusTestsFailing // Tests are failing
+	StatusIdle         // Waiting for user input (INSERT mode, command prompt, etc.)
+	StatusActive       // Actively executing commands (shows "esc to interrupt")
+	StatusSuccess      // Task completed successfully
 )
 
 // StatusPattern represents a regex pattern for detecting a specific status.
@@ -37,9 +40,12 @@ type StatusPatterns struct {
 	Ready         []StatusPattern `yaml:"ready"`
 	Processing    []StatusPattern `yaml:"processing"`
 	NeedsApproval []StatusPattern `yaml:"needs_approval"`
+	InputRequired []StatusPattern `yaml:"input_required"` // Explicit input prompts
 	Error         []StatusPattern `yaml:"error"`
-	Idle          []StatusPattern `yaml:"idle"`   // Waiting for user input
-	Active        []StatusPattern `yaml:"active"` // Actively executing commands
+	TestsFailing  []StatusPattern `yaml:"tests_failing"`  // Tests are failing
+	Idle          []StatusPattern `yaml:"idle"`           // Waiting for user input
+	Active        []StatusPattern `yaml:"active"`         // Actively executing commands
+	Success       []StatusPattern `yaml:"success"`        // Task completed successfully
 }
 
 // StatusDetector analyzes PTY output to determine the current status of a Claude instance.
@@ -49,9 +55,12 @@ type StatusDetector struct {
 	readyRegexes         []*regexp.Regexp
 	processingRegexes    []*regexp.Regexp
 	needsApprovalRegexes []*regexp.Regexp
+	inputRequiredRegexes []*regexp.Regexp
 	errorRegexes         []*regexp.Regexp
+	testsFailingRegexes  []*regexp.Regexp
 	idleRegexes          []*regexp.Regexp
 	activeRegexes        []*regexp.Regexp
+	successRegexes       []*regexp.Regexp
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
@@ -132,12 +141,30 @@ func (sd *StatusDetector) compilePatterns() error {
 		}
 	}
 
+	// Compile input required patterns
+	sd.inputRequiredRegexes = make([]*regexp.Regexp, len(sd.patterns.InputRequired))
+	for i, pattern := range sd.patterns.InputRequired {
+		sd.inputRequiredRegexes[i], err = regexp.Compile(pattern.Pattern)
+		if err != nil {
+			return fmt.Errorf("failed to compile input_required pattern '%s': %w", pattern.Name, err)
+		}
+	}
+
 	// Compile error patterns
 	sd.errorRegexes = make([]*regexp.Regexp, len(sd.patterns.Error))
 	for i, pattern := range sd.patterns.Error {
 		sd.errorRegexes[i], err = regexp.Compile(pattern.Pattern)
 		if err != nil {
 			return fmt.Errorf("failed to compile error pattern '%s': %w", pattern.Name, err)
+		}
+	}
+
+	// Compile tests failing patterns
+	sd.testsFailingRegexes = make([]*regexp.Regexp, len(sd.patterns.TestsFailing))
+	for i, pattern := range sd.patterns.TestsFailing {
+		sd.testsFailingRegexes[i], err = regexp.Compile(pattern.Pattern)
+		if err != nil {
+			return fmt.Errorf("failed to compile tests_failing pattern '%s': %w", pattern.Name, err)
 		}
 	}
 
@@ -159,11 +186,20 @@ func (sd *StatusDetector) compilePatterns() error {
 		}
 	}
 
+	// Compile success patterns
+	sd.successRegexes = make([]*regexp.Regexp, len(sd.patterns.Success))
+	for i, pattern := range sd.patterns.Success {
+		sd.successRegexes[i], err = regexp.Compile(pattern.Pattern)
+		if err != nil {
+			return fmt.Errorf("failed to compile success pattern '%s': %w", pattern.Name, err)
+		}
+	}
+
 	return nil
 }
 
 // Detect analyzes the provided PTY output and returns the detected status.
-// Patterns are checked in priority order: Error > NeedsApproval > Active > Processing > Idle > Ready.
+// Patterns are checked in priority order: Error > TestsFailing > Success > NeedsApproval > InputRequired > Active > Processing > Idle > Ready.
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 	text := string(output)
@@ -175,10 +211,31 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 		}
 	}
 
+	// Check tests failing patterns (high priority - actionable failures)
+	for _, regex := range sd.testsFailingRegexes {
+		if regex.MatchString(text) {
+			return StatusTestsFailing
+		}
+	}
+
+	// Check success patterns (task completion)
+	for _, regex := range sd.successRegexes {
+		if regex.MatchString(text) {
+			return StatusSuccess
+		}
+	}
+
 	// Check needs approval patterns
 	for _, regex := range sd.needsApprovalRegexes {
 		if regex.MatchString(text) {
 			return StatusNeedsApproval
+		}
+	}
+
+	// Check input required patterns (explicit prompts)
+	for _, regex := range sd.inputRequiredRegexes {
+		if regex.MatchString(text) {
+			return StatusInputRequired
 		}
 	}
 
@@ -225,10 +282,31 @@ func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, stri
 		}
 	}
 
+	// Check tests failing patterns (high priority - actionable failures)
+	for i, regex := range sd.testsFailingRegexes {
+		if match := regex.FindString(text); match != "" {
+			return StatusTestsFailing, fmt.Sprintf("Matched tests_failing pattern '%s': %s", sd.patterns.TestsFailing[i].Name, match)
+		}
+	}
+
+	// Check success patterns (task completion)
+	for i, regex := range sd.successRegexes {
+		if match := regex.FindString(text); match != "" {
+			return StatusSuccess, fmt.Sprintf("Matched success pattern '%s': %s", sd.patterns.Success[i].Name, match)
+		}
+	}
+
 	// Check needs approval patterns
 	for i, regex := range sd.needsApprovalRegexes {
 		if match := regex.FindString(text); match != "" {
 			return StatusNeedsApproval, fmt.Sprintf("Matched approval pattern '%s': %s", sd.patterns.NeedsApproval[i].Name, match)
+		}
+	}
+
+	// Check input required patterns
+	for i, regex := range sd.inputRequiredRegexes {
+		if match := regex.FindString(text); match != "" {
+			return StatusInputRequired, fmt.Sprintf("Matched input_required pattern '%s': %s", sd.patterns.InputRequired[i].Name, match)
 		}
 	}
 
@@ -317,8 +395,8 @@ func getDefaultPatterns() StatusPatterns {
 		Error: []StatusPattern{
 			{
 				Name:        "error_message",
-				Pattern:     `(?i)(error|failed|exception|fatal)`,
-				Description: "Generic error indicators",
+				Pattern:     `(?i)(^ERROR|Error:|Fatal error|Exception:|Traceback|panic:)`,
+				Description: "Generic error indicators (not test failures)",
 				Priority:    30,
 			},
 			{
@@ -326,6 +404,38 @@ func getDefaultPatterns() StatusPatterns {
 				Pattern:     `(?i)(connection refused|timeout|network error)`,
 				Description: "Network and connection errors",
 				Priority:    29,
+			},
+		},
+		TestsFailing: []StatusPattern{
+			{
+				Name:        "go_test_fail",
+				Pattern:     `(?i)(FAIL|--- FAIL:|test.*failed)`,
+				Description: "Go test failures",
+				Priority:    28,
+			},
+			{
+				Name:        "pytest_fail",
+				Pattern:     `(?i)(FAILED.*test_|pytest.*failed|\d+ failed)`,
+				Description: "Python pytest failures",
+				Priority:    27,
+			},
+			{
+				Name:        "jest_fail",
+				Pattern:     `(?i)(FAIL.*\.test\.|Tests:.*failed|\d+ failing)`,
+				Description: "JavaScript Jest test failures",
+				Priority:    26,
+			},
+			{
+				Name:        "generic_test_fail",
+				Pattern:     `(?i)(\d+\s+(test|tests)\s+(failed|failing)|test suite failed|all tests? failed)`,
+				Description: "Generic test failure patterns",
+				Priority:    25,
+			},
+			{
+				Name:        "test_error_count",
+				Pattern:     `(?i)(Failures:\s*\d+|Errors:\s*\d+|Failed:\s*\d+)`,
+				Description: "Test error count indicators",
+				Priority:    24,
 			},
 		},
 		Idle: []StatusPattern{
@@ -374,6 +484,58 @@ func getDefaultPatterns() StatusPatterns {
 				Priority:    22,
 			},
 		},
+		Success: []StatusPattern{
+			{
+				Name:        "task_complete",
+				Pattern:     `(?i)(✓ Successfully completed|Task (completed|finished)|I've completed|All done)`,
+				Description: "Task completed successfully",
+				Priority:    20,
+			},
+			{
+				Name:        "success_checkmark",
+				Pattern:     `(?i)✓.*(?:complete|done|success|finished)`,
+				Description: "Success indicator with completion words",
+				Priority:    19,
+			},
+			{
+				Name:        "finished_successfully",
+				Pattern:     `(?i)(Finished successfully|Completed successfully)`,
+				Description: "Explicit success confirmation",
+				Priority:    18,
+			},
+			{
+				Name:        "tests_passed",
+				Pattern:     `(?i)(All tests passed|Tests: .*passed)`,
+				Description: "Test suite completed successfully",
+				Priority:    17,
+			},
+			{
+				Name:        "build_success",
+				Pattern:     `(?i)(Build succeeded|Build: SUCCESS)`,
+				Description: "Build completed successfully",
+				Priority:    16,
+			},
+		},
+		InputRequired: []StatusPattern{
+			{
+				Name:        "explicit_input_prompt",
+				Pattern:     `(?i)(enter|type|provide|input|specify).*:`,
+				Description: "Explicit prompts asking for user input",
+				Priority:    16,
+			},
+			{
+				Name:        "question_prompt",
+				Pattern:     `(?i)^\s*(what|which|how|when|where)\b.*\?`,
+				Description: "Questions waiting for user response",
+				Priority:    15,
+			},
+			{
+				Name:        "please_provide",
+				Pattern:     `(?i)please\s+(provide|enter|type|specify|give)`,
+				Description: "Polite input requests",
+				Priority:    14,
+			},
+		},
 	}
 }
 
@@ -386,12 +548,18 @@ func (s DetectedStatus) String() string {
 		return "Processing"
 	case StatusNeedsApproval:
 		return "Needs Approval"
+	case StatusInputRequired:
+		return "Input Required"
 	case StatusError:
 		return "Error"
+	case StatusTestsFailing:
+		return "Tests Failing"
 	case StatusIdle:
 		return "Idle"
 	case StatusActive:
 		return "Active"
+	case StatusSuccess:
+		return "Success"
 	default:
 		return "Unknown"
 	}
@@ -421,12 +589,18 @@ func (sd *StatusDetector) GetPatternNames(status DetectedStatus) []string {
 		patterns = sd.patterns.Processing
 	case StatusNeedsApproval:
 		patterns = sd.patterns.NeedsApproval
+	case StatusInputRequired:
+		patterns = sd.patterns.InputRequired
 	case StatusError:
 		patterns = sd.patterns.Error
+	case StatusTestsFailing:
+		patterns = sd.patterns.TestsFailing
 	case StatusIdle:
 		patterns = sd.patterns.Idle
 	case StatusActive:
 		patterns = sd.patterns.Active
+	case StatusSuccess:
+		patterns = sd.patterns.Success
 	default:
 		return nil
 	}

@@ -19,6 +19,7 @@ interface LogEntry {
 export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Filter states
@@ -26,7 +27,13 @@ export default function LogsPage() {
   const [levelFilter, setLevelFilter] = useState<string>("");
   const [limit, setLimit] = useState(100);
 
+  // Pagination states
+  const [offset, setOffset] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  const [totalCount, setTotalCount] = useState(0);
+
   const clientRef = useRef<any>(null);
+  const logsContainerRef = useRef<HTMLDivElement>(null);
 
   // Initialize ConnectRPC client
   useEffect(() => {
@@ -37,21 +44,33 @@ export default function LogsPage() {
     clientRef.current = createPromiseClient(SessionService, transport);
   }, []);
 
-  // Fetch logs from API
-  const fetchLogs = async () => {
+  // Fetch logs from API (initial load or filter change)
+  const fetchLogs = async (resetOffset = true) => {
     if (!clientRef.current) return;
 
     setLoading(true);
     setError(null);
+
+    const newOffset = resetOffset ? 0 : offset;
 
     try {
       const response = await clientRef.current.getLogs({
         searchQuery: searchQuery || undefined,
         level: levelFilter || undefined,
         limit: limit,
+        offset: newOffset,
       });
 
-      setLogs(response.entries || []);
+      if (resetOffset) {
+        setLogs(response.entries || []);
+        setOffset(response.entries?.length || 0);
+      } else {
+        setLogs((prev) => [...prev, ...(response.entries || [])]);
+        setOffset((prev) => prev + (response.entries?.length || 0));
+      }
+
+      setHasMore(response.hasMore || false);
+      setTotalCount(response.totalCount || 0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch logs");
       console.error("Failed to fetch logs:", err);
@@ -60,14 +79,57 @@ export default function LogsPage() {
     }
   };
 
+  // Load more logs when scrolling to bottom
+  const loadMoreLogs = async () => {
+    if (!clientRef.current || loadingMore || !hasMore) return;
+
+    setLoadingMore(true);
+
+    try {
+      const response = await clientRef.current.getLogs({
+        searchQuery: searchQuery || undefined,
+        level: levelFilter || undefined,
+        limit: limit,
+        offset: offset,
+      });
+
+      setLogs((prev) => [...prev, ...(response.entries || [])]);
+      setOffset((prev) => prev + (response.entries?.length || 0));
+      setHasMore(response.hasMore || false);
+      setTotalCount(response.totalCount || 0);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load more logs");
+      console.error("Failed to load more logs:", err);
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   // Fetch logs on mount and when filters change
   useEffect(() => {
-    fetchLogs();
+    fetchLogs(true);
   }, [levelFilter, limit]);
+
+  // Infinite scroll: load more when scrolling to bottom
+  useEffect(() => {
+    const container = logsContainerRef.current;
+    if (!container) return;
+
+    const handleScroll = () => {
+      const { scrollTop, scrollHeight, clientHeight } = container;
+      // Load more when within 100px of bottom
+      if (scrollHeight - scrollTop - clientHeight < 100 && hasMore && !loadingMore) {
+        loadMoreLogs();
+      }
+    };
+
+    container.addEventListener("scroll", handleScroll);
+    return () => container.removeEventListener("scroll", handleScroll);
+  }, [hasMore, loadingMore, offset]);
 
   // Manual search (triggered by button)
   const handleSearch = () => {
-    fetchLogs();
+    fetchLogs(true);
   };
 
   // Get CSS class for log level
@@ -97,7 +159,7 @@ export default function LogsPage() {
           <span className={styles.timezone} title="Your local timezone">
             🕐 {getUserTimezone()}
           </span>
-          <button onClick={fetchLogs} className={styles.refreshButton}>
+          <button onClick={() => fetchLogs(true)} className={styles.refreshButton}>
             🔄 Refresh
           </button>
         </div>
@@ -163,7 +225,7 @@ export default function LogsPage() {
       )}
 
       {!loading && !error && logs.length > 0 && (
-        <div className={styles.logsContainer}>
+        <div className={styles.logsContainer} ref={logsContainerRef}>
           <table className={styles.logsTable}>
             <thead>
               <tr>
@@ -190,11 +252,22 @@ export default function LogsPage() {
               ))}
             </tbody>
           </table>
+
+          {loadingMore && (
+            <div className={styles.loadingMore}>Loading more logs...</div>
+          )}
+
+          {!hasMore && logs.length > 0 && (
+            <div className={styles.endOfLogs}>
+              End of logs (showing all {totalCount} entries)
+            </div>
+          )}
         </div>
       )}
 
       <footer className={styles.footer}>
-        Showing {logs.length} log entries
+        Showing {logs.length} of {totalCount} log entries
+        {hasMore && " (scroll for more)"}
       </footer>
     </div>
   );

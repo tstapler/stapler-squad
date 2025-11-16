@@ -67,6 +67,9 @@ service SessionService {
 
   // GetClaudeHistoryDetail retrieves detailed information for a specific history entry.
   rpc GetClaudeHistoryDetail(GetClaudeHistoryDetailRequest) returns (GetClaudeHistoryDetailResponse) {}
+
+  // GetClaudeHistoryMessages retrieves messages from a specific conversation.
+  rpc GetClaudeHistoryMessages(GetClaudeHistoryMessagesRequest) returns (GetClaudeHistoryMessagesResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -223,11 +226,20 @@ message GetLogsRequest {
 
   // Optional: Maximum number of log entries to return (default: 100).
   optional int32 limit = 5;
+
+  // Optional: Number of entries to skip for pagination (default: 0).
+  optional int32 offset = 6;
 }
 
 message GetLogsResponse {
   // Log entries matching the filter criteria.
   repeated LogEntry entries = 1;
+
+  // Total number of log entries matching the filter (before limit/offset).
+  int32 total_count = 2;
+
+  // Whether there are more logs available to fetch.
+  bool has_more = 3;
 }
 
 message LogEntry {
@@ -377,4 +389,31 @@ message ClaudeHistoryEntry {
   string model = 6;
   // Number of messages in the conversation
   int32 message_count = 7;
+}
+
+message GetClaudeHistoryMessagesRequest {
+  // History entry ID (session ID)
+  string id = 1;
+  // Optional limit on number of messages to return
+  int32 limit = 2;
+  // Optional offset for pagination
+  int32 offset = 3;
+}
+
+message GetClaudeHistoryMessagesResponse {
+  // Messages from the conversation
+  repeated ClaudeMessage messages = 1;
+  // Total number of messages in the conversation
+  int32 total_count = 2;
+}
+
+message ClaudeMessage {
+  // Message role (user or assistant)
+  string role = 1;
+  // Message content (text or JSON string)
+  string content = 2;
+  // Message timestamp
+  google.protobuf.Timestamp timestamp = 3;
+  // Model used (for assistant messages)
+  string model = 4;
 }

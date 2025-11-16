@@ -19,14 +19,59 @@ go build .
 # Web development workflow
 make restart-web    # Build web UI and restart server (ALWAYS use this)
 
+# Enable profiling for web server (to diagnose lock-ups)
+make restart-web-profile  # Restart with --profile --trace enabled
+
+# Or enable profiling with regular restart:
+make restart-web PROFILE_FLAGS="--profile --trace"
+
+# Custom profiling port:
+make restart-web-profile PROFILE_PORT=8080
+
 # Auto-rebuild on file changes (recommended for development)
 # Install fswatch if not available: brew install fswatch
 fswatch -o web-app/src | xargs -n1 -I{} make restart-web
+
+# Auto-rebuild with profiling enabled:
+fswatch -o web-app/src | xargs -n1 -I{} make restart-web PROFILE_FLAGS="--profile"
 
 # Debug menu controls (available in web UI)
 # - Click 🛠️ button in header to access debug menu
 # - Toggle "Terminal Stream Logging" to enable/disable verbose terminal output
 # - Or use console: localStorage.setItem('debug-terminal', 'true')
+```
+
+### Profiling and Debugging Lock-Ups
+```bash
+# Quick diagnosis for lock-ups/freezes
+./claude-squad --profile --trace
+
+# When lock-up occurs (in another terminal):
+curl http://localhost:6060/debug/pprof/goroutine?debug=2 > goroutines.txt
+curl http://localhost:6060/debug/pprof/block?debug=1 > block.txt
+curl http://localhost:6060/debug/pprof/mutex?debug=1 > mutex.txt
+
+# After exiting, analyze trace:
+go tool trace /tmp/claude-squad-trace-<PID>.out
+
+# Profile specific aspects:
+./claude-squad --profile                    # Enable profiling HTTP server
+./claude-squad --profile --profile-port 8080  # Custom port
+./claude-squad --trace                      # Execution tracing only
+
+# CPU profiling (30 seconds)
+curl http://localhost:6060/debug/pprof/profile?seconds=30 > cpu.prof
+go tool pprof -http=:8081 cpu.prof
+
+# Memory profiling
+curl http://localhost:6060/debug/pprof/heap > heap.prof
+go tool pprof -http=:8081 heap.prof
+
+# Race detection (for data races)
+go build -race .
+./claude-squad --profile
+
+# See docs/PROFILING.md for comprehensive guide
 ```
 
 ### Testing

@@ -4,6 +4,7 @@ import (
 	"claude-squad/log"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
+	"context"
 	"path/filepath"
 
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
+	"github.com/spaolacci/murmur3"
 )
 
 type Status int
@@ -99,6 +101,13 @@ type Instance struct {
 	// LastMeaningfulOutput is the timestamp of the last meaningful output (excludes tmux status banners)
 	// This is used by the review queue to determine session staleness
 	LastMeaningfulOutput time.Time
+	// LastOutputSignature is a SHA256 hash of the terminal content, used to detect actual changes
+	// vs app restarts with unchanged content (prevents false "new activity" notifications)
+	LastOutputSignature string
+	// LastViewed tracks when the user last interacted with this session
+	// This includes viewing the terminal, attaching via tmux, or viewing session details
+	// Used for smarter review queue notifications (don't notify if just viewed)
+	LastViewed time.Time
 
 	// Status manager for idle detection and queue management
 	statusManager *InstanceStatusManager
@@ -152,7 +161,10 @@ func (i *Instance) ToInstanceData() InstanceData {
 		TmuxPrefix:           i.TmuxPrefix,
 		LastTerminalUpdate:   i.LastTerminalUpdate,
 		LastMeaningfulOutput: i.LastMeaningfulOutput,
+		LastOutputSignature:  i.LastOutputSignature,
 		LastAddedToQueue:     i.LastAddedToQueue,
+		LastViewed:           i.LastViewed,
+		LastAcknowledged:     i.LastAcknowledged,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -241,7 +253,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		TmuxPrefix:           data.TmuxPrefix,
 		LastTerminalUpdate:   data.LastTerminalUpdate,
 		LastMeaningfulOutput: data.LastMeaningfulOutput,
+		LastOutputSignature:  data.LastOutputSignature,
 		LastAddedToQueue:     data.LastAddedToQueue,
+		LastViewed:           data.LastViewed,
+		LastAcknowledged:     data.LastAcknowledged,
 		InstanceType:         InstanceTypeManaged, // Restored instances are always managed
 		IsManaged:            true,
 		ExternalMetadata:     nil, // External instances are not persisted
@@ -848,6 +863,11 @@ func (i *Instance) GetGitWorktree() (*git.GitWorktree, error) {
 		return nil, fmt.Errorf("cannot get git worktree for instance that has not been started")
 	}
 	return i.gitWorktree, nil
+}
+
+// HasGitWorktree returns true if the instance has a git worktree
+func (i *Instance) HasGitWorktree() bool {
+	return i.gitWorktree != nil
 }
 
 func (i *Instance) Started() bool {
@@ -1537,8 +1557,8 @@ func (i *Instance) GetStatusManager() *InstanceStatusManager {
 	return i.statusManager
 }
 
-// StartController creates and initializes a ClaudeController for this instance
-// The controller enables automated idle detection and queue management
+// StartController creates and starts a ClaudeController for this instance.
+// The controller enables automated idle detection and queue management.
 func (i *Instance) StartController() error {
 	// Check preconditions under lock
 	i.stateMutex.Lock()
@@ -1564,8 +1584,8 @@ func (i *Instance) StartController() error {
 		return nil
 	}
 
-	// Release lock before creating/initializing controller
-	// This prevents deadlock when Initialize() calls GetPTYReader() which acquires read lock
+	// Release lock before creating/starting controller
+	// This prevents deadlock when Start() calls GetPTYReader() which acquires read lock
 	i.stateMutex.Unlock()
 
 	// Create new controller (no lock needed - NewClaudeController doesn't access mutex-protected fields)
@@ -1574,9 +1594,10 @@ func (i *Instance) StartController() error {
 		return fmt.Errorf("failed to create controller: %w", err)
 	}
 
-	// Initialize the controller (calls GetPTYReader which needs to acquire read lock)
-	if err := controller.Initialize(); err != nil {
-		return fmt.Errorf("failed to initialize controller: %w", err)
+	// Start the controller - this initializes all components and begins background operations
+	// Single call replaces the old Initialize() + Start() pattern
+	if err := controller.Start(context.Background()); err != nil {
+		return fmt.Errorf("failed to start controller: %w", err)
 	}
 
 	// Re-acquire lock to update instance state
@@ -1664,6 +1685,11 @@ func (i *Instance) GetStatusIconForType() string {
 // This method checks for meaningful content (excluding tmux banners) and updates timestamps accordingly.
 // It should be called whenever terminal output is captured or processed.
 // The forceUpdate parameter bypasses meaningful content checking for user-initiated interactions.
+//
+// Content signatures are used to prevent false "new activity" notifications on app restarts:
+// - Computes SHA256 hash of terminal content
+// - Compares with stored LastOutputSignature
+// - Only updates LastMeaningfulOutput if content actually changed
 func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
@@ -1678,8 +1704,17 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 	// For user-initiated interactions (viewing/typing in web UI), always update LastMeaningfulOutput
 	// This ensures "Last Activity" reflects actual user engagement, not just terminal output content
 	if forceUpdate {
-		i.LastMeaningfulOutput = now
-		log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (user interaction - forced update)")
+		// Compute content signature to detect real changes vs restarts
+		signature := computeContentSignature(content)
+
+		// Only update timestamp if content has actually changed
+		if signature != i.LastOutputSignature {
+			i.LastMeaningfulOutput = now
+			i.LastOutputSignature = signature
+			log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (user interaction - content changed)")
+		} else {
+			log.LogForSession(i.Title, "debug", "Skipped LastMeaningfulOutput update (user interaction but content unchanged since last update)")
+		}
 		return
 	}
 
@@ -1689,8 +1724,17 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		hasMeaningful := i.tmuxSession.HasMeaningfulContent(content)
 		log.LogForSession(i.Title, "debug", "HasMeaningfulContent=%v for %d bytes: %q", hasMeaningful, len(content), content)
 		if hasMeaningful {
-			i.LastMeaningfulOutput = now
-			log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (detected non-banner output)")
+			// Compute content signature to detect real changes vs restarts
+			signature := computeContentSignature(content)
+
+			// Only update timestamp if content has actually changed
+			if signature != i.LastOutputSignature {
+				i.LastMeaningfulOutput = now
+				i.LastOutputSignature = signature
+				log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (detected non-banner output, content changed)")
+			} else {
+				log.LogForSession(i.Title, "debug", "Skipped LastMeaningfulOutput update (non-banner output but content unchanged since last update)")
+			}
 		} else {
 			log.LogForSession(i.Title, "debug", "NOT updating LastMeaningfulOutput - content classified as non-meaningful (banners only)")
 		}
@@ -1719,6 +1763,15 @@ func (i *Instance) GetTimeSinceLastTerminalUpdate() time.Duration {
 		return time.Since(i.CreatedAt)
 	}
 	return time.Since(i.LastTerminalUpdate)
+}
+
+// computeContentSignature computes a MurmurHash3 64-bit hash of terminal content.
+// This signature is used to detect actual content changes vs app restarts with unchanged content.
+// MurmurHash3 is significantly faster than SHA256 and perfect for non-cryptographic checksums.
+// Returns a hex-encoded string representation of the hash (16 characters for 64-bit hash).
+func computeContentSignature(content string) string {
+	hash := murmur3.Sum64([]byte(content))
+	return fmt.Sprintf("%016x", hash)
 }
 
 // Tag management methods

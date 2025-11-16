@@ -12,11 +12,13 @@ import (
 type AttentionReason string
 
 const (
-	ReasonApprovalPending AttentionReason = "approval_pending" // Waiting for approval dialog response
-	ReasonInputRequired   AttentionReason = "input_required"   // Waiting for user input
-	ReasonErrorState      AttentionReason = "error_state"      // Error occurred
-	ReasonIdleTimeout     AttentionReason = "idle_timeout"     // No activity for extended period
-	ReasonTaskComplete    AttentionReason = "task_complete"    // Task completed, waiting for next instruction
+	ReasonApprovalPending    AttentionReason = "approval_pending"     // Waiting for approval dialog response
+	ReasonInputRequired      AttentionReason = "input_required"       // Waiting for user input
+	ReasonErrorState         AttentionReason = "error_state"          // Error occurred
+	ReasonTestsFailing       AttentionReason = "tests_failing"        // Tests are failing
+	ReasonIdleTimeout        AttentionReason = "idle_timeout"         // No activity for extended period
+	ReasonTaskComplete       AttentionReason = "task_complete"        // Task completed, waiting for next instruction
+	ReasonUncommittedChanges AttentionReason = "uncommitted_changes"  // Uncommitted git changes ready to commit
 )
 
 // Priority defines the urgency level of a review item.
@@ -77,8 +79,8 @@ func NewReviewQueue() *ReviewQueue {
 // Add adds a session to the review queue or updates it if already present.
 // Returns true if this is a new item, false if it was updated.
 func (rq *ReviewQueue) Add(item *ReviewItem) bool {
+	// Prepare notification data while holding lock
 	rq.mu.Lock()
-	defer rq.mu.Unlock()
 
 	// Validate and fix invalid timestamps (per user requirement: reset to current time)
 	minValidTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -89,11 +91,16 @@ func (rq *ReviewQueue) Add(item *ReviewItem) bool {
 	existingItem, exists := rq.items[item.SessionID]
 	rq.items[item.SessionID] = item
 
-	// Notify observers
+	// Determine what notifications to send
+	var notifyAdded bool
+	var notifyUpdated bool
+	var sortedItems []*ReviewItem
+	var observersCopy []ReviewQueueObserver
+
 	if !exists {
-		for _, observer := range rq.observers {
-			observer.OnItemAdded(item)
-		}
+		notifyAdded = true
+		observersCopy = make([]ReviewQueueObserver, len(rq.observers))
+		copy(observersCopy, rq.observers)
 	} else {
 		// Only fire OnQueueUpdated if something meaningful changed
 		// This prevents spurious notifications when the poller preserves DetectedAt
@@ -103,9 +110,24 @@ func (rq *ReviewQueue) Add(item *ReviewItem) bool {
 			!existingItem.LastActivity.Equal(item.LastActivity)
 
 		if hasSignificantChange {
-			for _, observer := range rq.observers {
-				observer.OnQueueUpdated(rq.getSortedItemsUnsafe())
-			}
+			notifyUpdated = true
+			sortedItems = rq.getSortedItemsUnsafe()
+			observersCopy = make([]ReviewQueueObserver, len(rq.observers))
+			copy(observersCopy, rq.observers)
+		}
+	}
+
+	rq.mu.Unlock()
+
+	// Notify observers AFTER releasing lock to avoid re-entrancy deadlock
+	if notifyAdded {
+		for _, observer := range observersCopy {
+			observer.OnItemAdded(item)
+		}
+	}
+	if notifyUpdated {
+		for _, observer := range observersCopy {
+			observer.OnQueueUpdated(sortedItems)
 		}
 	}
 
@@ -116,16 +138,22 @@ func (rq *ReviewQueue) Add(item *ReviewItem) bool {
 // Returns true if the item was present and removed.
 func (rq *ReviewQueue) Remove(sessionID string) bool {
 	rq.mu.Lock()
-	defer rq.mu.Unlock()
 
 	if _, exists := rq.items[sessionID]; !exists {
+		rq.mu.Unlock()
 		return false
 	}
 
 	delete(rq.items, sessionID)
 
-	// Notify observers
-	for _, observer := range rq.observers {
+	// Copy observers list before releasing lock
+	observersCopy := make([]ReviewQueueObserver, len(rq.observers))
+	copy(observersCopy, rq.observers)
+
+	rq.mu.Unlock()
+
+	// Notify observers AFTER releasing lock to avoid re-entrancy deadlock
+	for _, observer := range observersCopy {
 		observer.OnItemRemoved(sessionID)
 	}
 
@@ -274,13 +302,19 @@ func (rq *ReviewQueue) Previous(currentSessionID string) (string, bool) {
 // Clear removes all items from the queue.
 func (rq *ReviewQueue) Clear() {
 	rq.mu.Lock()
-	defer rq.mu.Unlock()
 
 	rq.items = make(map[string]*ReviewItem)
 
-	// Notify observers
-	for _, observer := range rq.observers {
-		observer.OnQueueUpdated([]*ReviewItem{})
+	// Copy observers list before releasing lock
+	observersCopy := make([]ReviewQueueObserver, len(rq.observers))
+	copy(observersCopy, rq.observers)
+
+	rq.mu.Unlock()
+
+	// Notify observers AFTER releasing lock to avoid re-entrancy deadlock
+	emptyList := []*ReviewItem{}
+	for _, observer := range observersCopy {
+		observer.OnQueueUpdated(emptyList)
 	}
 }
 
@@ -388,11 +422,11 @@ func reasonToPriority(reason AttentionReason) Priority {
 	switch reason {
 	case ReasonErrorState:
 		return PriorityUrgent
-	case ReasonApprovalPending:
+	case ReasonApprovalPending, ReasonTestsFailing:
 		return PriorityHigh
 	case ReasonInputRequired:
 		return PriorityMedium
-	case ReasonTaskComplete, ReasonIdleTimeout:
+	case ReasonTaskComplete, ReasonIdleTimeout, ReasonUncommittedChanges:
 		return PriorityLow
 	default:
 		return PriorityMedium
@@ -408,10 +442,14 @@ func (r AttentionReason) String() string {
 		return "Input Required"
 	case ReasonErrorState:
 		return "Error State"
+	case ReasonTestsFailing:
+		return "Tests Failing"
 	case ReasonIdleTimeout:
 		return "Idle Timeout"
 	case ReasonTaskComplete:
 		return "Task Complete"
+	case ReasonUncommittedChanges:
+		return "Uncommitted Changes"
 	default:
 		return string(r)
 	}

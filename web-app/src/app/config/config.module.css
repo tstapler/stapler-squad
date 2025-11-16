@@ -1,0 +1,116 @@
+.container {
+  padding: 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.title {
+  margin-bottom: 20px;
+  font-size: 24px;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.content {
+  display: flex;
+  gap: 20px;
+}
+
+.fileList {
+  width: 250px;
+  flex-shrink: 0;
+}
+
+.sectionTitle {
+  margin-bottom: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.fileListItems {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.fileButton {
+  padding: 10px;
+  text-align: left;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background-color: var(--card-background);
+  cursor: pointer;
+  font-weight: normal;
+  color: var(--text-primary);
+  transition: background-color 0.2s;
+}
+
+.fileButton:hover {
+  background-color: var(--hover-background);
+}
+
+.fileButtonSelected {
+  background-color: var(--primary);
+  color: var(--primary-text);
+  font-weight: 600;
+  border-color: var(--primary);
+}
+
+.fileButtonSelected:hover {
+  background-color: var(--primary-hover);
+}
+
+.editor {
+  flex: 1;
+}
+
+.editorHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.editorTitle {
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.modifiedIndicator {
+  color: var(--warning);
+  margin-left: 10px;
+}
+
+.buttonGroup {
+  display: flex;
+  gap: 10px;
+}
+
+.textarea {
+  width: 100%;
+  height: 600px;
+  font-family: monospace;
+  font-size: 14px;
+  padding: 10px;
+  background-color: var(--input-background);
+  border: 1px solid var(--input-border);
+  border-radius: 4px;
+  color: var(--input-text);
+  resize: vertical;
+  transition: border-color 0.2s;
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--input-focus-border);
+}
+
+.emptyState {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-muted);
+  border: 2px dashed var(--border-color);
+  border-radius: 4px;
+}

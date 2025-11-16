@@ -93,7 +93,16 @@
       "Bash(/tmp/ws_new.go)",
       "SlashCommand(/plan:next-step)",
       "Bash(shasum:*)",
-      "Bash(/Users/tylerstapler/IdeaProjects/claude-squad/proto/session/v1/session.proto)"
+      "Bash(/Users/tylerstapler/IdeaProjects/claude-squad/proto/session/v1/session.proto)",
+      "Bash(/tmp/old-section.txt)",
+      "Bash(/tmp/old-complete-section.txt)",
+      "Bash(/tmp/todo-part1.txt)",
+      "Bash(/Users/tylerstapler/IdeaProjects/claude-squad/TODO.md)",
+      "Bash(pgrep:*)",
+      "Bash(tmux:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go generate:*)",
+      "Bash(/tmp/goroutines.txt)"
     ],
     "deny": [],
     "ask": [],

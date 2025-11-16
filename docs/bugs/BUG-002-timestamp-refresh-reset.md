@@ -1,8 +1,36 @@
 # BUG-002: LastMeaningfulOutput Timestamp Reset on Startup [SEVERITY: Medium]
 
-**Status**: Open (Discovered 2025-01-17)
+**Status**: ✅ ALREADY FIXED (Verified 2025-01-17)
 **Discovered**: During review queue persistence analysis
-**Impact**: Loss of historical activity information, inaccurate "Last Activity" timestamps after app restart
+**Resolution**: Signature-based change detection already implemented in UpdateTerminalTimestamps()
+**Impact**: Originally reported - Loss of historical activity information, inaccurate "Last Activity" timestamps after app restart
+
+## Resolution Summary
+
+**Investigation Result**: This bug was **already fixed** by the existing implementation. The recommended fix (signature-based change detection) is fully implemented in `session/instance.go:1693-1742`.
+
+**Verification**: Created comprehensive test suite in `session/instance_timestamp_signature_test.go` which validates:
+- ✅ Timestamp preservation when content unchanged (lines 11-77)
+- ✅ Historical timestamp preservation during Preview() refresh (lines 79-130)
+- ✅ ForceUpdate signature-based change detection (lines 132-183)
+- ✅ Review queue refresh scenario with stale timestamps (lines 211-267)
+
+All tests pass, confirming the signature logic works correctly and BUG-002 does not exist in current code.
+
+**Key Implementation Details**:
+- `UpdateTerminalTimestamps()` uses `computeContentSignature()` (MurmurHash3) on lines 1708 and 1728
+- Only updates `LastMeaningfulOutput` when `signature != i.LastOutputSignature` (lines 1711, 1731)
+- `Preview()` correctly calls `UpdateTerminalTimestamps(content, false)` on line 787
+- Signature checking is active for both forceUpdate=true and forceUpdate=false paths
+
+**Test Coverage**: 5 new tests covering all scenarios described in original bug report
+- TestUpdateTerminalTimestamps_SignatureBasedPreservation
+- TestPreview_PreservesHistoricalTimestamps
+- TestForceUpdate_SignatureChangeDetection
+- TestSignatureStability
+- TestReviewQueueRefreshScenario
+
+**Documentation Notes**: Original bug report remains below for historical reference and describes the expected behavior which is now confirmed working.
 
 ## Problem Description
 

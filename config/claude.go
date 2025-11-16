@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/xeipuuv/gojsonschema"
 )
@@ -80,6 +81,16 @@ func GetClaudeDir() (string, error) {
 	return filepath.Join(home, ".claude"), nil
 }
 
+// toValidUTF8 ensures the content is valid UTF-8 for protobuf marshaling.
+// Invalid UTF-8 sequences are replaced with the Unicode replacement character.
+func toValidUTF8(content []byte) string {
+	if utf8.Valid(content) {
+		return string(content)
+	}
+	// Replace invalid UTF-8 sequences with replacement character (U+FFFD)
+	return strings.ToValidUTF8(string(content), "�")
+}
+
 // GetConfig reads a specific Claude configuration file by name
 // Common file names include "CLAUDE.md", "settings.json", "agents.md"
 func (m *ClaudeConfigManager) GetConfig(filename string) (*ConfigFile, error) {
@@ -106,7 +117,7 @@ func (m *ClaudeConfigManager) GetConfig(filename string) (*ConfigFile, error) {
 	return &ConfigFile{
 		Name:    filename,
 		Path:    filePath,
-		Content: string(content),
+		Content: toValidUTF8(content),
 		ModTime: info.ModTime(),
 	}, nil
 }
@@ -152,7 +163,7 @@ func (m *ClaudeConfigManager) ListConfigs() ([]ConfigFile, error) {
 		configs = append(configs, ConfigFile{
 			Name:    entry.Name(),
 			Path:    filePath,
-			Content: string(content),
+			Content: toValidUTF8(content),
 			ModTime: info.ModTime(),
 		})
 	}

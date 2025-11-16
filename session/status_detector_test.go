@@ -30,11 +30,69 @@ func TestNewStatusDetector(t *testing.T) {
 func TestStatusDetector_DetectReady(t *testing.T) {
 	sd := NewStatusDetector()
 
-	// Any output should match the catch-all ready pattern if no other patterns match
-	output := []byte("$ ")
+	// Test catch-all ready pattern with generic output that doesn't match other patterns
+	// Note: "$ " matches StatusIdle (command_prompt pattern), not StatusReady
+	output := []byte("some generic terminal output")
 	status := sd.Detect(output)
 	if status != StatusReady {
 		t.Errorf("Detect() returned %v, expected StatusReady", status)
+	}
+}
+
+func TestStatusDetector_DetectIdle(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		"$ ",           // Shell command prompt
+		"— INSERT —",   // Vim INSERT mode
+		"— NORMAL —",   // Vim NORMAL mode
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusIdle {
+			t.Errorf("Detect(%q) returned %v, expected StatusIdle", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectActive(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		"(esc to interrupt)",
+		"Running...",
+		"⠋ Processing files...",
+		"Executing tests (esc to cancel)",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusActive {
+			t.Errorf("Detect(%q) returned %v, expected StatusActive", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectSuccess(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		"✓ Successfully completed the task",
+		"Task completed",
+		"I've completed the work",
+		"All done!",
+		"✓ Build complete",
+		"Finished successfully",
+		"All tests passed",
+		"Build succeeded",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusSuccess {
+			t.Errorf("Detect(%q) returned %v, expected StatusSuccess", output, status)
+		}
 	}
 }
 
@@ -84,11 +142,13 @@ func TestStatusDetector_DetectError(t *testing.T) {
 
 	testCases := []string{
 		"Error: file not found",
-		"Failed to connect",
-		"Exception occurred",
-		"Fatal error",
+		"ERROR: Something went wrong",
+		"Exception: NullPointerException",
+		"Fatal error: cannot continue",
 		"Connection refused",
 		"Network timeout",
+		"Traceback (most recent call last):",
+		"panic: runtime error",
 	}
 
 	for _, output := range testCases {
@@ -423,6 +483,9 @@ func TestStatusString(t *testing.T) {
 		{StatusProcessing, "Processing"},
 		{StatusNeedsApproval, "Needs Approval"},
 		{StatusError, "Error"},
+		{StatusIdle, "Idle"},
+		{StatusActive, "Active"},
+		{StatusSuccess, "Success"},
 		{StatusUnknown, "Unknown"},
 	}
 

@@ -251,3 +251,22 @@
   font-size: 0.85rem;
   color: #999;
 }
+
+.loadingMore {
+  padding: 1.5rem;
+  text-align: center;
+  color: #999;
+  font-size: 0.9rem;
+  background-color: #1a1a1a;
+  border-top: 1px solid #333;
+}
+
+.endOfLogs {
+  padding: 1.5rem;
+  text-align: center;
+  color: #666;
+  font-size: 0.85rem;
+  background-color: #0a0a0a;
+  border-top: 1px solid #333;
+  font-style: italic;
+}

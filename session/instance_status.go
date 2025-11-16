@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/log"
 	"fmt"
 	"sync"
 )
@@ -34,6 +35,7 @@ func (ism *InstanceStatusManager) RegisterController(instanceTitle string, contr
 	ism.mu.Lock()
 	defer ism.mu.Unlock()
 	ism.controllers[instanceTitle] = controller
+	log.DebugLog.Printf("[RegisterController] Registered controller for '%s' (total registered: %d)", instanceTitle, len(ism.controllers))
 }
 
 // UnregisterController removes a controller for an instance.
@@ -69,6 +71,10 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 	ism.mu.RLock()
 	controller, exists := ism.controllers[instance.Title]
 	ism.mu.RUnlock()
+
+	// Debug logging to diagnose controller detection issue
+	log.DebugLog.Printf("[GetStatus] Session '%s': exists=%v, controller!=nil=%v, IsStarted=%v",
+		instance.Title, exists, controller != nil, exists && controller != nil && controller.IsStarted())
 
 	info := InstanceStatusInfo{
 		BasicStatus:        instance.Status,

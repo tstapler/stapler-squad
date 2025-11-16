@@ -1,0 +1,133 @@
+.container {
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.title {
+  margin-bottom: 20px;
+  font-size: 24px;
+  font-weight: bold;
+  color: var(--text-primary);
+}
+
+.searchBar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.content {
+  display: flex;
+  gap: 20px;
+}
+
+.entryList {
+  flex: 1;
+}
+
+.sectionTitle {
+  margin-bottom: 10px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.loadingContainer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 60px 20px;
+  text-align: center;
+}
+
+.loadingTitle {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+  color: var(--text-primary);
+}
+
+.entryCards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 700px;
+  overflow-y: auto;
+}
+
+.entryName {
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: var(--text-primary);
+}
+
+.selected {
+  background-color: var(--primary) !important;
+  color: var(--primary-text) !important;
+}
+
+.selected .entryName,
+.selected div {
+  color: var(--primary-text) !important;
+}
+
+.detailPanel {
+  width: 400px;
+  flex-shrink: 0;
+}
+
+.detailFields {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.detailField {
+  /* Field container */
+}
+
+.fieldLabel {
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: var(--text-primary);
+}
+
+.emptyState {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-muted);
+  border: 2px dashed var(--border-color);
+  border-radius: 4px;
+}
+
+.messageUser {
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: var(--card-background);
+  border-radius: 8px;
+  border-left: 4px solid var(--primary);
+}
+
+.messageAssistant {
+  margin-bottom: 20px;
+  padding: 15px;
+  background-color: var(--card-background);
+  border-radius: 8px;
+  border-left: 4px solid var(--text-secondary);
+}
+
+.messageHeader {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.messageContent {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}

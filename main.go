@@ -7,6 +7,7 @@ import (
 	"claude-squad/daemon"
 	"claude-squad/executor"
 	"claude-squad/log"
+	"claude-squad/profiling"
 	"claude-squad/server"
 	"claude-squad/session"
 	"claude-squad/session/git"
@@ -18,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -32,6 +34,9 @@ var (
 	testDirFlag        string
 	discoveryModeFlag  string
 	discoverExtFlag    bool
+	profileFlag        bool
+	profilePortFlag    int
+	traceFlag          bool
 	rootCmd            = &cobra.Command{
 		Use:   "claude-squad",
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
@@ -95,6 +100,29 @@ var (
 				log.LogSessionPathsToStderr()
 				log.Close()
 			}()
+
+			// Start profiling if enabled
+			if profileFlag || traceFlag {
+				cleanup, err := profiling.StartProfiling(profiling.Config{
+					Enabled:      true,
+					HTTPPort:     profilePortFlag,
+					BlockProfile: true, // Enable block profiling for lock-up detection
+					MutexProfile: true, // Enable mutex profiling for lock contention
+					TraceEnabled: traceFlag,
+					TraceFile:    "", // Use default
+				})
+				if err != nil {
+					return fmt.Errorf("failed to start profiling: %w", err)
+				}
+				defer cleanup()
+
+				// Monitor goroutines periodically
+				if profileFlag {
+					ctx, cancel := context.WithCancel(context.Background())
+					defer cancel()
+					go profiling.MonitorGoroutines(ctx, 10*time.Second)
+				}
+			}
 
 			if daemonFlag {
 				err := daemon.RunDaemon(cfg)
@@ -480,6 +508,11 @@ func init() {
 		"Instance discovery mode: managed-only, external-only, or all (default: managed-only)")
 	rootCmd.Flags().BoolVar(&discoverExtFlag, "discover-external", false,
 		"Enable external instance discovery (shorthand for --discovery-mode=all with attach enabled)")
+
+	// Profiling flags
+	rootCmd.Flags().BoolVar(&profileFlag, "profile", false, "Enable runtime profiling (HTTP server + goroutine monitoring)")
+	rootCmd.Flags().IntVar(&profilePortFlag, "profile-port", 6060, "Port for pprof HTTP server (default: 6060)")
+	rootCmd.Flags().BoolVar(&traceFlag, "trace", false, "Enable execution tracing to /tmp/claude-squad-trace-<PID>.out")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")

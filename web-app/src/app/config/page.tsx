@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { SessionService } from "@/gen/proto/session/v1/session_connect";
-import { ClaudeConfigFile } from "@/gen/proto/session/v1/session_pb";
+import { useState, useEffect, useRef } from "react";
+import { SessionService } from "@/gen/session/v1/session_connect";
+import { ClaudeConfigFile } from "@/gen/session/v1/session_pb";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
+import styles from "./config.module.css";
 
 export default function ConfigEditorPage() {
   const [configs, setConfigs] = useState<ClaudeConfigFile[]>([]);
@@ -16,11 +17,15 @@ export default function ConfigEditorPage() {
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Create gRPC client
-  const transport = createConnectTransport({
-    baseUrl: window.location.origin,
-  });
-  const client = createPromiseClient(SessionService, transport);
+  const clientRef = useRef<any>(null);
+
+  // Initialize ConnectRPC client
+  useEffect(() => {
+    const transport = createConnectTransport({
+      baseUrl: window.location.origin,
+    });
+    clientRef.current = createPromiseClient(SessionService, transport);
+  }, []);
 
   // Load configs on mount
   useEffect(() => {
@@ -28,10 +33,12 @@ export default function ConfigEditorPage() {
   }, []);
 
   const loadConfigs = async () => {
+    if (!clientRef.current) return;
+
     try {
       setLoading(true);
       setError(null);
-      const response = await client.listClaudeConfigs({});
+      const response = await clientRef.current.listClaudeConfigs({});
       setConfigs(response.configs);
     } catch (err) {
       setError(`Failed to load configs: ${err}`);
@@ -41,9 +48,11 @@ export default function ConfigEditorPage() {
   };
 
   const loadConfig = async (filename: string) => {
+    if (!clientRef.current) return;
+
     try {
       setError(null);
-      const response = await client.getClaudeConfig({ filename });
+      const response = await clientRef.current.getClaudeConfig({ filename });
       if (response.config) {
         setSelectedConfig(response.config);
         setContent(response.config.content);
@@ -55,14 +64,14 @@ export default function ConfigEditorPage() {
   };
 
   const saveConfig = async () => {
-    if (!selectedConfig) return;
+    if (!selectedConfig || !clientRef.current) return;
 
     try {
       setSaving(true);
       setError(null);
       setSuccessMessage(null);
 
-      await client.updateClaudeConfig({
+      await clientRef.current.updateClaudeConfig({
         filename: selectedConfig.name,
         content: content,
       });
@@ -82,66 +91,40 @@ export default function ConfigEditorPage() {
   const hasUnsavedChanges = content !== originalContent;
 
   return (
-    <div style={{ padding: "20px", maxWidth: "1200px", margin: "0 auto" }}>
-      <h1 style={{ marginBottom: "20px", fontSize: "24px", fontWeight: "bold" }}>
+    <div className={styles.container}>
+      <h1 className={styles.title}>
         📝 Claude Config Editor
       </h1>
 
       {error && (
-        <div
-          style={{
-            padding: "10px",
-            marginBottom: "20px",
-            backgroundColor: "#fee",
-            border: "1px solid #f88",
-            borderRadius: "4px",
-            color: "#c00",
-          }}
-        >
+        <div className="alert alert-error">
           {error}
         </div>
       )}
 
       {successMessage && (
-        <div
-          style={{
-            padding: "10px",
-            marginBottom: "20px",
-            backgroundColor: "#efe",
-            border: "1px solid #8f8",
-            borderRadius: "4px",
-            color: "#060",
-          }}
-        >
+        <div className="alert alert-success">
           {successMessage}
         </div>
       )}
 
-      <div style={{ display: "flex", gap: "20px" }}>
+      <div className={styles.content}>
         {/* File list */}
-        <div style={{ width: "250px", flexShrink: 0 }}>
-          <h2 style={{ marginBottom: "10px", fontSize: "18px", fontWeight: "600" }}>
+        <div className={styles.fileList}>
+          <h2 className={styles.sectionTitle}>
             Config Files
           </h2>
           {loading ? (
             <div>Loading...</div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+            <div className={styles.fileListItems}>
               {configs.map((config) => (
                 <button
                   key={config.name}
                   onClick={() => loadConfig(config.name)}
-                  style={{
-                    padding: "10px",
-                    textAlign: "left",
-                    border: "1px solid #ccc",
-                    borderRadius: "4px",
-                    backgroundColor:
-                      selectedConfig?.name === config.name ? "#e0f0ff" : "#fff",
-                    cursor: "pointer",
-                    fontWeight:
-                      selectedConfig?.name === config.name ? "600" : "normal",
-                  }}
+                  className={`${styles.fileButton} ${
+                    selectedConfig?.name === config.name ? styles.fileButtonSelected : ""
+                  }`}
                 >
                   {config.name}
                 </button>
@@ -151,52 +134,30 @@ export default function ConfigEditorPage() {
         </div>
 
         {/* Editor */}
-        <div style={{ flex: 1 }}>
+        <div className={styles.editor}>
           {selectedConfig ? (
             <>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  marginBottom: "10px",
-                }}
-              >
-                <h2 style={{ fontSize: "18px", fontWeight: "600" }}>
+              <div className={styles.editorHeader}>
+                <h2 className={styles.editorTitle}>
                   {selectedConfig.name}
                   {hasUnsavedChanges && (
-                    <span style={{ color: "#f80", marginLeft: "10px" }}>
+                    <span className={styles.modifiedIndicator}>
                       [modified]
                     </span>
                   )}
                 </h2>
-                <div style={{ display: "flex", gap: "10px" }}>
+                <div className={styles.buttonGroup}>
                   <button
                     onClick={saveConfig}
                     disabled={!hasUnsavedChanges || saving}
-                    style={{
-                      padding: "8px 16px",
-                      backgroundColor: hasUnsavedChanges ? "#0070f3" : "#ccc",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "4px",
-                      cursor: hasUnsavedChanges ? "pointer" : "not-allowed",
-                      fontWeight: "600",
-                    }}
+                    className="btn btn-primary"
                   >
                     {saving ? "Saving..." : "Save"}
                   </button>
                   <button
                     onClick={() => setContent(originalContent)}
                     disabled={!hasUnsavedChanges}
-                    style={{
-                      padding: "8px 16px",
-                      backgroundColor: hasUnsavedChanges ? "#f44" : "#ccc",
-                      color: "#fff",
-                      border: "none",
-                      borderRadius: "4px",
-                      cursor: hasUnsavedChanges ? "pointer" : "not-allowed",
-                    }}
+                    className="btn btn-danger"
                   >
                     Discard
                   </button>
@@ -205,28 +166,11 @@ export default function ConfigEditorPage() {
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                style={{
-                  width: "100%",
-                  height: "600px",
-                  fontFamily: "monospace",
-                  fontSize: "14px",
-                  padding: "10px",
-                  border: "1px solid #ccc",
-                  borderRadius: "4px",
-                  resize: "vertical",
-                }}
+                className={styles.textarea}
               />
             </>
           ) : (
-            <div
-              style={{
-                padding: "40px",
-                textAlign: "center",
-                color: "#888",
-                border: "2px dashed #ddd",
-                borderRadius: "4px",
-              }}
-            >
+            <div className={styles.emptyState}>
               Select a config file to edit
             </div>
           )}

@@ -24,7 +24,6 @@ type ClaudeController struct {
 	mu             sync.RWMutex
 	ctx            context.Context
 	cancel         context.CancelFunc
-	started        bool
 }
 
 // NewClaudeController creates a new controller for the given instance.
@@ -44,13 +43,14 @@ func NewClaudeController(instance *Instance) (*ClaudeController, error) {
 	}, nil
 }
 
-// Initialize sets up all components and prepares the controller for use.
-func (cc *ClaudeController) Initialize() error {
+// Start initializes all components and begins background operations (streaming, command execution).
+// This is the single entry point for starting the controller - no separate Initialize() call needed.
+func (cc *ClaudeController) Start(ctx context.Context) error {
 	cc.mu.Lock()
 	defer cc.mu.Unlock()
 
-	if cc.started {
-		return fmt.Errorf("controller already initialized for session '%s'", cc.sessionName)
+	if cc.ctx != nil {
+		return fmt.Errorf("controller already started for session '%s'", cc.sessionName)
 	}
 
 	// Get PTY reader from instance
@@ -102,24 +102,7 @@ func (cc *ClaudeController) Initialize() error {
 		}
 	})
 
-	cc.started = true
-	log.InfoLog.Printf("Claude controller initialized for session '%s'", cc.sessionName)
-	return nil
-}
-
-// Start begins all background operations (streaming, command execution).
-func (cc *ClaudeController) Start(ctx context.Context) error {
-	cc.mu.Lock()
-	defer cc.mu.Unlock()
-
-	if !cc.started {
-		return fmt.Errorf("controller not initialized, call Initialize() first")
-	}
-
-	if cc.ctx != nil {
-		return fmt.Errorf("controller already started")
-	}
-
+	// Set up context for lifecycle management
 	cc.ctx, cc.cancel = context.WithCancel(ctx)
 
 	// Start response stream
