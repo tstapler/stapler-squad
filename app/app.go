@@ -1750,6 +1750,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, teaCmd tea.Cmd) {
 		return m.handleTagEditorState(msg)
 	}
 
+	if m.isInState(state.HistoryBrowser) {
+		return m.handleHistoryBrowserState(msg)
+	}
+
 	if m.isInState(state.New) {
 		// Handle quit commands first. Don't handle q because the user might want to type that.
 		if msg.String() == "ctrl+c" {
@@ -2321,6 +2325,25 @@ func (m *home) handleTagEditorState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if shouldClose {
 		m.transitionToDefault()
 		m.uiCoordinator.HideOverlay(appui.ComponentTagEditorOverlay)
+	}
+
+	return m, nil
+}
+
+func (m *home) handleHistoryBrowserState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	historyBrowserOverlay := m.uiCoordinator.GetHistoryBrowserOverlay()
+	if historyBrowserOverlay == nil {
+		// Overlay disappeared, return to default
+		m.transitionToDefault()
+		return m, nil
+	}
+
+	// Let overlay handle the key press
+	shouldClose := historyBrowserOverlay.HandleKeyPress(msg)
+	if shouldClose {
+		// Overlay requested close
+		m.uiCoordinator.HideOverlay(appui.ComponentHistoryBrowserOverlay)
+		m.transitionToDefault()
 	}
 
 	return m, nil
