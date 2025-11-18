@@ -10,9 +10,9 @@
 
 ## 🚧 IN PROGRESS: Web UI Implementation
 
-**Status**: Foundation complete (Stories 1-2), Session Creation pending
+**Status**: Stories 1-2 complete, Story 3.1 complete, remaining tasks ready
 **Priority**: P1 - Core user workflows, production deployment pending
-**Progress**: 40% complete (2 of 5 stories)
+**Progress**: 53% complete (2.3 of 5 stories - Story 3 is 33% complete)
 
 ### ✅ Completed Work:
 
@@ -37,45 +37,51 @@
 - [x] Diff visualization with unified/split views
 - [x] Session metadata display with comprehensive info
 
-### 🎯 Next Atomic Task: Story 3.1 - Session Creation Wizard
+#### ✅ Story 3.1 - Session Creation Wizard (COMPLETE)
+- [x] Multi-step wizard with validation (Zod + react-hook-form)
+- [x] Step 1: Basic Info (title, category)
+- [x] Step 2: Repository (path, workingDir, branch with autocomplete)
+- [x] Step 3: Configuration (program, prompt, autoYes)
+- [x] Step 4: Review and confirm
+- [x] Integration with useSessionService.createSession
+- [x] Success/error feedback with navigation to home
+- [x] Build verified: 164KB bundle size for /sessions/new route
 
-**Task**: Create Multi-Step Session Creation Form
-**Estimated Time**: 3 hours
-**Priority**: P1 - Unblocks core user workflow
-**Context Boundary**: 3 files (page.tsx, SessionWizard.tsx, sessionSchema.ts) ✅
+### 🎯 Next Atomic Task: BUG-001 - LastAcknowledged Persistence Fix
+
+**Task**: Add LastAcknowledged field to persistence layer
+**Estimated Time**: 1 hour
+**Priority**: P2 - High-severity bug, quick win before continuing Story 3
+**Context Boundary**: 3 files (storage.go, instance.go serialization/deserialization) ✅
 
 **Implementation Steps**:
-1. Install dependencies: `zod`, `react-hook-form`, `@hookform/resolvers`
-2. Create `web-app/src/app/sessions/new/page.tsx` - Creation page route
-3. Create `web-app/src/components/sessions/SessionWizard.tsx` - Multi-step wizard component
-4. Create `web-app/src/lib/validation/sessionSchema.ts` - Zod validation schema
-5. Implement three wizard steps:
-   - Step 1: Basic Info (title, category)
-   - Step 2: Repository (path, workingDir, branch)
-   - Step 3: Configuration (program, prompt, autoYes)
-6. Integrate with `useSessionService.createSession` hook
-7. Add success/error feedback with navigation
-8. Test complete session creation flow
+1. Add `LastAcknowledged time.Time` to `InstanceData` struct in `session/storage.go`
+2. Add field to `ToInstanceData()` serialization in `session/instance.go`
+3. Add field to `FromInstanceData()` deserialization in `session/instance.go`
+4. Verify backward compatibility (omitempty tag ensures old JSON loads correctly)
+5. Test: Create unit test for LastAcknowledged round-trip persistence
 
 **Context Files to Understand**:
-- `web-app/src/gen/session/v1/types_pb.ts` - CreateSessionRequest structure
-- `ui/overlay/sessionSetup.go` - TUI session creation reference
-- `web-app/src/lib/hooks/useSessionService.ts` - createSession implementation
+- `session/storage.go` - InstanceData struct definition
+- `session/instance.go` - Serialization methods (ToInstanceData, FromInstanceData)
+- `session/review_queue_poller.go` - Review queue snooze logic using LastAcknowledged
 
 **Success Criteria**:
-- ✅ Three-step wizard with progress indicator
-- ✅ Field validation prevents invalid data
-- ✅ Form state persists across steps
-- ✅ Success navigates to session list
-- ✅ Error handling with retry
+- ✅ LastAcknowledged field added to InstanceData with JSON tag
+- ✅ Serialization includes LastAcknowledged value
+- ✅ Deserialization restores LastAcknowledged value
+- ✅ Backward compatible (old JSON without field loads correctly)
+- ✅ Unit test verifies persistence survives save/load cycle
 
-**Dependencies**: Story 1 complete ✅
+**Impact**: Restores review queue snooze functionality broken across restarts
+
+**See**: [BUG-001 Documentation](docs/bugs/BUG-001-last-acknowledged-persistence.md)
 
 ### ⏸️ Pending Stories:
 
-#### Story 3 - Session Creation Wizard (NOT STARTED - 3 tasks, 7h)
-- [ ] Task 3.1: Multi-step form with validation (3h) **← NEXT**
-- [ ] Task 3.2: Path discovery and auto-fill (2h)
+#### Story 3 - Session Creation Wizard (IN PROGRESS - 1 of 3 tasks complete)
+- [x] Task 3.1: Multi-step form with validation (3h) ✅ COMPLETE
+- [ ] Task 3.2: Path discovery and auto-fill (2h) **← NEXT** (after BUG-001 fix)
 - [ ] Task 3.3: Session templates (2h)
 
 #### Story 4 - Bulk Operations (NOT STARTED - 3 tasks, 8h)
@@ -90,9 +96,9 @@
 
 ### Current Deployment:
 - **Web UI**: `http://localhost:8543`
-- **Build Status**: ✅ Builds successfully (~1.5s)
-- **Bundle Size**: 138KB (main), 153KB (wizard route)
-- **Routes**: Home (/), Review Queue (/review-queue), New Session (/sessions/new)
+- **Build Status**: ✅ Builds successfully (~5.0s)
+- **Bundle Size**: 147KB (main), 164KB (wizard route /sessions/new)
+- **Routes**: Home (/), Config (/config), History (/history), Logs (/logs), Review Queue (/review-queue), New Session (/sessions/new)
 
 ### Technical Debt:
 - [ ] **Zero test coverage** - No unit/integration tests yet
