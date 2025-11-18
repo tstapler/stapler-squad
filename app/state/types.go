@@ -26,6 +26,8 @@ const (
 	ZFSearch
 	// TagEditor is the state when the tag editor overlay is displayed
 	TagEditor
+	// HistoryBrowser is the state when the history browser overlay is displayed
+	HistoryBrowser
 )
 
 // String returns a human-readable string representation of the state
@@ -53,6 +55,8 @@ func (s State) String() string {
 		return "ZFSearch"
 	case TagEditor:
 		return "TagEditor"
+	case HistoryBrowser:
+		return "HistoryBrowser"
 	default:
 		return "Unknown"
 	}
@@ -60,13 +64,13 @@ func (s State) String() string {
 
 // IsValid returns true if the state is a valid state value
 func (s State) IsValid() bool {
-	return s >= Default && s <= TagEditor
+	return s >= Default && s <= HistoryBrowser
 }
 
 // IsOverlayState returns true if the state represents an overlay/modal state
 func (s State) IsOverlayState() bool {
 	switch s {
-	case New, Prompt, Help, Confirm, AdvancedNew, Git, ClaudeSettings, ZFSearch, TagEditor:
+	case New, Prompt, Help, Confirm, AdvancedNew, Git, ClaudeSettings, ZFSearch, TagEditor, HistoryBrowser:
 		return true
 	default:
 		return false
