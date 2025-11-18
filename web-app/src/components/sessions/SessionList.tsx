@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
+import { BulkActions } from "./BulkActions";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions, cycleGroupingStrategy } from "@/lib/grouping/strategies";
 import styles from "./SessionList.module.css";
 
@@ -74,6 +75,10 @@ export function SessionList({
   const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
     loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, GroupingStrategy.Category)
   );
+
+  // Multi-select state for bulk actions
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
 
   // Persist filter preferences to local storage whenever they change
   useEffect(() => {
@@ -174,15 +179,75 @@ export function SessionList({
     setGroupingStrategy(cycleGroupingStrategy(groupingStrategy));
   };
 
+  // Bulk actions handlers
+  const handleToggleSelectMode = () => {
+    setSelectMode(!selectMode);
+    if (selectMode) {
+      // Clear selections when exiting select mode
+      setSelectedSessions(new Set());
+    }
+  };
+
+  const handleToggleSession = (sessionId: string) => {
+    const newSelected = new Set(selectedSessions);
+    if (newSelected.has(sessionId)) {
+      newSelected.delete(sessionId);
+    } else {
+      newSelected.add(sessionId);
+    }
+    setSelectedSessions(newSelected);
+  };
+
+  const handleSelectAll = () => {
+    const allSessionIds = new Set(filteredSessions.map(s => s.id));
+    setSelectedSessions(allSessionIds);
+  };
+
+  const handleClearSelection = () => {
+    setSelectedSessions(new Set());
+  };
+
+  const handlePauseSelected = () => {
+    if (!onPauseSession) return;
+    selectedSessions.forEach(id => onPauseSession(id));
+    setSelectedSessions(new Set());
+    setSelectMode(false);
+  };
+
+  const handleResumeSelected = () => {
+    if (!onResumeSession) return;
+    selectedSessions.forEach(id => onResumeSession(id));
+    setSelectedSessions(new Set());
+    setSelectMode(false);
+  };
+
+  const handleDeleteSelected = () => {
+    if (!onDeleteSession) return;
+    if (window.confirm(`Are you sure you want to delete ${selectedSessions.size} session(s)?`)) {
+      selectedSessions.forEach(id => onDeleteSession(id));
+      setSelectedSessions(new Set());
+      setSelectMode(false);
+    }
+  };
+
   return (
     <div className={styles.container}>
       <div className={styles.header}>
         <div className={styles.headerTop}>
           <h2 className={styles.title}>Sessions ({filteredSessions.length})</h2>
-          <Link href="/sessions/new" className={styles.newSessionButton}>
-            <span className={styles.newSessionIcon}>+</span>
-            New Session
-          </Link>
+          <div className={styles.headerActions}>
+            <button
+              onClick={handleToggleSelectMode}
+              className={`${styles.selectModeButton} ${selectMode ? styles.active : ""}`}
+              aria-label={selectMode ? "Exit select mode" : "Enter select mode"}
+            >
+              {selectMode ? "Cancel" : "Select"}
+            </button>
+            <Link href="/sessions/new" className={styles.newSessionButton}>
+              <span className={styles.newSessionIcon}>+</span>
+              New Session
+            </Link>
+          </div>
         </div>
 
         <div className={styles.filters}>
@@ -269,6 +334,19 @@ export function SessionList({
         </div>
       </div>
 
+      {/* Bulk actions bar */}
+      {selectMode && selectedSessions.size > 0 && (
+        <BulkActions
+          selectedCount={selectedSessions.size}
+          totalCount={filteredSessions.length}
+          onPauseAll={handlePauseSelected}
+          onResumeAll={handleResumeSelected}
+          onDeleteAll={handleDeleteSelected}
+          onSelectAll={handleSelectAll}
+          onClearSelection={handleClearSelection}
+        />
+      )}
+
       {/* Session list */}
       {filteredSessions.length === 0 ? (
         <div className={styles.empty}>
@@ -319,6 +397,9 @@ export function SessionList({
                     onResume={() => onResumeSession?.(session.id)}
                     onDuplicate={() => onDuplicateSession?.(session.id)}
                     onUpdateTags={onUpdateTags}
+                    selectMode={selectMode}
+                    isSelected={selectedSessions.has(session.id)}
+                    onToggleSelect={() => handleToggleSession(session.id)}
                   />
                 ))}
               </div>

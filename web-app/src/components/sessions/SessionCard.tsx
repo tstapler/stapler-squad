@@ -97,6 +97,18 @@ export function SessionCard({
     }
   };
 
+  const handleCardKeyDown = (e: React.KeyboardEvent) => {
+    // Support keyboard navigation with Enter or Space
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (selectMode && onToggleSelect) {
+        onToggleSelect();
+      } else if (onClick) {
+        onClick();
+      }
+    }
+  };
+
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onToggleSelect) {
@@ -133,6 +145,11 @@ export function SessionCard({
     <div
       className={`${styles.card} ${selectMode ? styles.selectMode : ""} ${isSelected ? styles.selected : ""}`}
       onClick={handleCardClick}
+      onKeyDown={handleCardKeyDown}
+      role="button"
+      tabIndex={0}
+      aria-label={`Session ${session.title}, status: ${getStatusText(session.status)}, program: ${session.program}`}
+      aria-pressed={selectMode ? isSelected : undefined}
     >
       {selectMode && (
         <div className={styles.checkbox} onClick={handleCheckboxClick}>
@@ -155,7 +172,11 @@ export function SessionCard({
                 compact={true}
               />
             )}
-            <span className={`${styles.status} ${getStatusColor(session.status)}`}>
+            <span
+              className={`${styles.status} ${getStatusColor(session.status)}`}
+              role="status"
+              aria-label={`Session status: ${getStatusText(session.status)}`}
+            >
               {getStatusText(session.status)}
             </span>
           </div>
@@ -230,14 +251,14 @@ export function SessionCard({
       <div className={styles.footer}>
         <div className={styles.timestamps}>
           <span className={styles.timestamp}>
-            Created: {formatDate(session.createdAt)}
+            Created: <time dateTime={session.createdAt ? new Date(Number(session.createdAt.seconds) * 1000).toISOString() : ""}>{formatDate(session.createdAt)}</time>
           </span>
           <span className={styles.timestamp}>
-            Updated: {formatDate(session.updatedAt)}
+            Updated: <time dateTime={session.updatedAt ? new Date(Number(session.updatedAt.seconds) * 1000).toISOString() : ""}>{formatDate(session.updatedAt)}</time>
           </span>
           {session.lastMeaningfulOutput && (
             <span className={styles.timestamp} title="Last meaningful terminal output (excluding tmux banners)">
-              Last Activity: {formatTimeAgo(session.lastMeaningfulOutput)}
+              Last Activity: <time dateTime={new Date(Number(session.lastMeaningfulOutput.seconds) * 1000).toISOString()}>{formatTimeAgo(session.lastMeaningfulOutput)}</time>
             </span>
           )}
         </div>
@@ -250,6 +271,7 @@ export function SessionCard({
                 e.stopPropagation();
                 onResume?.();
               }}
+              aria-label={`Resume session ${session.title}`}
             >
               Resume
             </button>
@@ -260,6 +282,7 @@ export function SessionCard({
                 e.stopPropagation();
                 onPause?.();
               }}
+              aria-label={`Pause session ${session.title}`}
             >
               Pause
             </button>
@@ -271,6 +294,7 @@ export function SessionCard({
               onDuplicate?.();
             }}
             title="Duplicate this session with editable configuration"
+            aria-label={`Duplicate session ${session.title}`}
           >
             Duplicate
           </button>
@@ -280,6 +304,7 @@ export function SessionCard({
               e.stopPropagation();
               onDelete?.();
             }}
+            aria-label={`Delete session ${session.title}`}
           >
             Delete
           </button>

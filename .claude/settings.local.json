@@ -102,7 +102,8 @@
       "Bash(tmux:*)",
       "Bash(go mod tidy:*)",
       "Bash(go generate:*)",
-      "Bash(/tmp/goroutines.txt)"
+      "Bash(/tmp/goroutines.txt)",
+      "Bash(touch:*)"
     ],
     "deny": [],
     "ask": [],

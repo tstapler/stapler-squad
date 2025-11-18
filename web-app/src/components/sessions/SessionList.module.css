@@ -49,6 +49,36 @@
   transform: translateY(0);
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.selectModeButton {
+  padding: 10px 20px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--card-background);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.selectModeButton:hover {
+  background: var(--hover-background);
+  border-color: var(--primary-color, #0066cc);
+}
+
+.selectModeButton.active {
+  background: var(--primary-color, #0066cc);
+  color: white;
+  border-color: var(--primary-color, #0066cc);
+}
+
 .filters {
   display: flex;
   gap: 12px;
