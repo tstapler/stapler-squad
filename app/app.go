@@ -824,15 +824,44 @@ func (m *home) handleHistoryBrowser() (tea.Model, tea.Cmd) {
 	historyBrowserOverlay := m.uiCoordinator.GetHistoryBrowserOverlay()
 	if historyBrowserOverlay != nil {
 		historyBrowserOverlay.OnSelectEntry = func(entry session.ClaudeHistoryEntry) {
-			// TODO: Launch session from history entry
-			// This will be implemented in Story 2 (Phase 2)
-			// For now, just close the overlay
-			log.InfoLog.Printf("Selected history entry: %s (%s)", entry.Name, entry.Project)
+			// Launch a new session based on the history entry
+			log.InfoLog.Printf("Creating session from history entry: %s (%s)", entry.Name, entry.Project)
 
-			// Close the overlay using coordinator
+			// Check if we're already at the instance limit
+			if m.list.NumInstances() >= GlobalInstanceLimit {
+				m.handleError(fmt.Errorf("you can't create more than %d instances", GlobalInstanceLimit))
+				return
+			}
+
+			// Create InstanceOptions from history entry
+			cfg := config.LoadConfig()
+			options := session.InstanceOptions{
+				Title:       entry.Name,
+				Path:        entry.Project,
+				WorkingDir:  "",                    // Start at repository root
+				Program:     "claude",              // Default to claude
+				AutoYes:     false,                 // Don't auto-accept prompts
+				Prompt:      "",                    // No initial prompt
+				Category:    "History",             // Category for organization
+				Tags:        []string{"from-history"}, // Tag to indicate origin
+				SessionType: session.SessionTypeDirectory, // Use directory-based session
+				TmuxPrefix:  cfg.TmuxSessionPrefix,
+			}
+
+			// Create the instance
+			instance, err := session.NewInstance(options)
+			if err != nil {
+				m.handleError(fmt.Errorf("failed to create session from history: %w", err))
+				return
+			}
+
+			// Set pending session for async creation
+			m.pendingSessionInstance = instance
+			m.pendingAutoYes = false
+
+			// Hide the overlay and transition to creating session state
 			m.uiCoordinator.HideOverlay(appui.ComponentHistoryBrowserOverlay)
-			m.transitionToDefault()
-			m.menu.SetState(ui.StateDefault)
+			m.transitionToCreatingSession()
 		}
 
 		historyBrowserOverlay.OnCancel = func() {
