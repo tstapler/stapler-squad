@@ -2,8 +2,8 @@
 
 ## Priority Summary
 
-**P1** - Web UI Story 3 (Session Creation) - 7 hours - IN PROGRESS
-**P2** - Persistence Bug Fixes (BUG-001, BUG-002) - 3 hours - READY
+**P1** - Web UI Story 3 (Session Creation) - 4 hours remaining - IN PROGRESS (Story 3.1 complete ✅)
+**P2** - Persistence Bug Fixes - ✅ COMPLETE (BUG-001, BUG-002 already fixed and tested)
 **P3** - Test Stabilization & BUG-003 Investigation - Deferred
 
 ---
@@ -47,35 +47,39 @@
 - [x] Success/error feedback with navigation to home
 - [x] Build verified: 164KB bundle size for /sessions/new route
 
-### 🎯 Next Atomic Task: BUG-001 - LastAcknowledged Persistence Fix
+### 🎯 Next Atomic Task: Story 3.2 - Path Discovery and Auto-fill
 
-**Task**: Add LastAcknowledged field to persistence layer
-**Estimated Time**: 1 hour
-**Priority**: P2 - High-severity bug, quick win before continuing Story 3
-**Context Boundary**: 3 files (storage.go, instance.go serialization/deserialization) ✅
+**Task**: Implement intelligent repository path discovery and auto-fill
+**Estimated Time**: 2 hours
+**Priority**: P1 - Enhances session creation UX
+**Context Boundary**: 4 files (useRepositorySuggestions.ts, discovery logic, API endpoint, tests) ✅
 
 **Implementation Steps**:
-1. Add `LastAcknowledged time.Time` to `InstanceData` struct in `session/storage.go`
-2. Add field to `ToInstanceData()` serialization in `session/instance.go`
-3. Add field to `FromInstanceData()` deserialization in `session/instance.go`
-4. Verify backward compatibility (omitempty tag ensures old JSON loads correctly)
-5. Test: Create unit test for LastAcknowledged round-trip persistence
+1. Enhance `useRepositorySuggestions` hook with contextual discovery:
+   - Scan common development directories (~/Projects, ~/Code, ~/src, ~/dev)
+   - Check recently accessed git repositories from state file
+   - Detect parent repository if creating from subdirectory
+2. Add repository metadata caching for faster suggestions
+3. Implement smart branch name suggestions based on repository context
+4. Add keyboard shortcuts for quick repository selection (Recent, Favorites)
+5. Test autocomplete performance with 50+ repositories
 
 **Context Files to Understand**:
-- `session/storage.go` - InstanceData struct definition
-- `session/instance.go` - Serialization methods (ToInstanceData, FromInstanceData)
-- `session/review_queue_poller.go` - Review queue snooze logic using LastAcknowledged
+- `web-app/src/lib/hooks/useRepositorySuggestions.ts` - Current suggestion implementation
+- `web-app/src/lib/hooks/useBranchSuggestions.ts` - Branch autocomplete logic
+- `ui/overlay/sessionSetup.go` - TUI path discovery reference (git integration)
+- `web-app/src/components/ui/AutocompleteInput.tsx` - Autocomplete UI component
 
 **Success Criteria**:
-- ✅ LastAcknowledged field added to InstanceData with JSON tag
-- ✅ Serialization includes LastAcknowledged value
-- ✅ Deserialization restores LastAcknowledged value
-- ✅ Backward compatible (old JSON without field loads correctly)
-- ✅ Unit test verifies persistence survives save/load cycle
+- ✅ Common dev directories automatically scanned on first use
+- ✅ Recently used repositories appear at top of suggestions
+- ✅ Parent repository auto-detected from current directory
+- ✅ Branch suggestions contextual to selected repository
+- ✅ Autocomplete performs smoothly with 50+ repositories (<100ms)
 
-**Impact**: Restores review queue snooze functionality broken across restarts
+**Impact**: Dramatically reduces friction in session creation workflow
 
-**See**: [BUG-001 Documentation](docs/bugs/BUG-001-last-acknowledged-persistence.md)
+**See**: [Web UI Enhancement Epic](docs/tasks/web-ui-enhancements.md)
 
 ### ⏸️ Pending Stories:
 
@@ -112,25 +116,25 @@
 
 ---
 
-## CRITICAL: Data Loss Bugs in Persistence Layer
+## ✅ RESOLVED: Persistence Layer Bugs
 
-**Status**: DISCOVERED - Analysis complete, fixes documented
-**Priority**: P2 - Fix after Web UI Story 3, before Story 4
-**Estimated Effort**: 3 hours total (2 independent tasks)
+**Status**: FIXED - All high/medium severity bugs resolved
+**Resolution Date**: 2025-01-17
+**Total Effort**: ~3 hours (proactive fixes during development)
 
-### Bugs Discovered (2025-01-17)
+### Bugs Fixed (2025-01-17)
 
-**BUG-001** [HIGH]: LastAcknowledged Field Not Persisted
-- **Impact**: Review queue snooze functionality completely broken across restarts
-- **Root Cause**: Field exists in Instance but NOT in InstanceData serialization
-- **Fix**: Add field to persistence layer (1 hour, 3 files, trivial change)
-- **Status**: Open - ready to fix
+**BUG-001** [HIGH]: LastAcknowledged Field Not Persisted ✅ FIXED
+- **Impact**: Review queue snooze functionality broken across restarts
+- **Resolution**: Field added to InstanceData serialization in storage.go:63, instance.go:167, instance.go:259
+- **Tests**: Comprehensive test suite in instance_last_acknowledged_test.go (all passing)
+- **Status**: ✅ Fixed and verified
 
-**BUG-002** [MEDIUM]: LastMeaningfulOutput Timestamp Reset on Startup
-- **Impact**: Loss of historical activity information ("Last Activity" shows wrong time)
-- **Root Cause**: Preview() unconditionally overwrites timestamps on startup refresh
-- **Fix**: Content-based timestamp update logic (2 hours, 2 files)
-- **Status**: Open - ready to fix
+**BUG-002** [MEDIUM]: LastMeaningfulOutput Timestamp Reset ✅ FIXED
+- **Impact**: Historical activity timestamps incorrect after startup
+- **Resolution**: Signature-based change detection in UpdateTerminalTimestamps() (instance.go:1693-1742)
+- **Tests**: Test suite in instance_timestamp_signature_test.go (5 tests, all passing)
+- **Status**: ✅ Fixed and verified
 
 **BUG-003** [LOW]: Large State File Size (34MB JSON)
 - **Impact**: Scalability concern, no immediate functionality impact
