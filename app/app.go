@@ -483,6 +483,9 @@ func (m *home) initializeCommandBridge() {
 		OnTagEditor: func() (tea.Model, tea.Cmd) {
 			return m.handleTagEditor()
 		},
+		OnHistoryBrowser: func() (tea.Model, tea.Cmd) {
+			return m.handleHistoryBrowser()
+		},
 	}
 
 	// Set up git handlers

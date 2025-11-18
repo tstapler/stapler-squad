@@ -16,6 +16,7 @@ type SessionHandlers struct {
 	OnResume          func() (tea.Model, tea.Cmd)
 	OnClaudeSettings  func() (tea.Model, tea.Cmd)
 	OnTagEditor       func() (tea.Model, tea.Cmd)
+	OnHistoryBrowser  func() (tea.Model, tea.Cmd)
 }
 
 var sessionHandlers = &SessionHandlers{}
@@ -93,6 +94,16 @@ func ClaudeSettingsCommand(ctx *interfaces.CommandContext) error {
 func TagEditorCommand(ctx *interfaces.CommandContext) error {
 	if sessionHandlers.OnTagEditor != nil {
 		model, teaCmd := sessionHandlers.OnTagEditor()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// HistoryBrowserCommand opens the history browser overlay
+func HistoryBrowserCommand(ctx *interfaces.CommandContext) error {
+	if sessionHandlers.OnHistoryBrowser != nil {
+		model, teaCmd := sessionHandlers.OnHistoryBrowser()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
 	}

@@ -82,6 +82,15 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Contexts:    []ContextID{ContextList},
 	}).BindKey("T")
 
+	registry.Register(&Command{
+		ID:          "session.history_browser",
+		Name:        "History",
+		Description: "Browse Claude session history",
+		Category:    CategorySession,
+		Handler:     commands.HistoryBrowserCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("H")
+
 	// Register git integration commands
 	registry.Register(&Command{
 		ID:          "git.status",
