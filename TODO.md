@@ -165,13 +165,13 @@ Tests hang in `config.GetClaudeCommand()` which executes shell commands during s
 
 ---
 
-## ✅ COMPLETE: Session History Viewer Integration (TUI)
+## ✅ COMPLETE: Session History Viewer Integration (Full Feature)
 
-**Status**: TUI Integration Complete - Ready for Use!
-**Priority**: P2 - Story 1 Complete (8 hours)
+**Status**: Full Feature Complete - Launch from History Enabled!
+**Priority**: P2 - Stories 1 & 2 Complete (14 hours)
 **Epic ID**: FEATURE-002-Integration
 **Completion Date**: 2025-11-17
-**Progress**: Backend 100%, TUI Overlay 100%, TUI Integration 100%
+**Progress**: Backend 100%, TUI Overlay 100%, TUI Integration 100%, Launch from History 100%
 
 ### Implementation Status
 
@@ -193,16 +193,31 @@ Tests hang in `config.GetClaudeCommand()` which executes shell commands during s
 
 Press **H** key in the TUI to open the history browser:
 - **Arrow Keys / j/k**: Navigate through history entries
-- **Enter**: View entry details
+- **Enter**: Select entry to launch new session from that project
 - **/** : Search history
 - **ESC**: Close overlay and return to default state
 
-### Commits (Story 1 - TUI Integration)
+**Launching from History**:
+1. Press **H** to open history browser
+2. Navigate to desired past session
+3. Press **Enter** to create new session
+4. New session is created with:
+   - Same project path as historical session
+   - Title from history entry name
+   - "History" category
+   - "from-history" tag for easy filtering
+   - Default "claude" program
+
+### Commits
+**Story 1 - TUI Integration:**
 - e639870: feat: add HistoryBrowser state for history viewer integration
 - d2a11f2: feat: add UI coordinator methods for history browser overlay
 - d22364f: feat: add handleHistoryBrowser function to app
 - edc80d6: feat: add handleHistoryBrowserState key handler
 - 3360407: feat: add H key binding and menu integration for history browser
+
+**Story 2 - Launch from History:**
+- 1a33165: feat: implement session creation from history (Phase 2)
 
 ### Feature Overview
 
@@ -224,12 +239,12 @@ Browse and search Claude session history from ~/.claude/history.jsonl:
 - [x] ✅ Task 1.4: handleHistoryBrowserState Handler [2h]
 - [x] ✅ Task 1.5: Key Binding & Menu Integration [1h]
 
-**Story 2: Launch from History** (DEFERRED - Phase 2):
-- [ ] Task 2.1: Session creation from entry [3h]
-- [ ] Task 2.2: Worktree/branch setup [2h]
-- [ ] Task 2.3: Pre-populate fields [1h]
+### Story 2: Launch from History - ✅ COMPLETE (6 hours, 3 tasks)
+- [x] ✅ Task 2.1: Session creation from entry [3h]
+- [x] ✅ Task 2.2: Handle worktree/branch setup [2h] - Directory-based sessions
+- [x] ✅ Task 2.3: Pre-populate session fields [1h]
 
-**Status**: Story 1 complete. Story 2 deferred to future phase.
+**Status**: Stories 1 & 2 complete. Full feature ready for production!
 
 **See Full Details**:
 - [History Viewer Integration Plan](docs/tasks/history-viewer-integration.md) - Complete atomic task breakdown
