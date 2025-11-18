@@ -811,6 +811,41 @@ func (m *home) handleTagEditor() (tea.Model, tea.Cmd) {
 	return m, tea.WindowSize()
 }
 
+func (m *home) handleHistoryBrowser() (tea.Model, tea.Cmd) {
+	// Create history browser overlay using coordinator
+	if err := m.uiCoordinator.CreateHistoryBrowserOverlay(); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create history browser overlay: %w", err))
+	}
+
+	// Get the overlay and set up callbacks
+	historyBrowserOverlay := m.uiCoordinator.GetHistoryBrowserOverlay()
+	if historyBrowserOverlay != nil {
+		historyBrowserOverlay.OnSelectEntry = func(entry session.ClaudeHistoryEntry) {
+			// TODO: Launch session from history entry
+			// This will be implemented in Story 2 (Phase 2)
+			// For now, just close the overlay
+			log.InfoLog.Printf("Selected history entry: %s (%s)", entry.Name, entry.Project)
+
+			// Close the overlay using coordinator
+			m.uiCoordinator.HideOverlay(appui.ComponentHistoryBrowserOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+
+		historyBrowserOverlay.OnCancel = func() {
+			// Close the overlay without action using coordinator
+			m.uiCoordinator.HideOverlay(appui.ComponentHistoryBrowserOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+	}
+
+	// Change state
+	m.transitionToState(state.HistoryBrowser)
+
+	return m, tea.WindowSize()
+}
+
 func (m *home) handleNavigationUp() (tea.Model, tea.Cmd) {
 	// Handle PTY view navigation
 	if m.viewMode == ViewModePTYs {
