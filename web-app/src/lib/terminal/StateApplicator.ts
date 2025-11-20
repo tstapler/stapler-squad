@@ -32,6 +32,15 @@ export class StateApplicator {
   private lastAppliedState: TerminalState | null = null;
   private isApplyingState: boolean = false; // Flag to prevent scroll event handling during state application
 
+  // Incremental diff optimization: Track rendered lines to avoid full clear
+  private previousLines: Map<number, string> = new Map();
+  private previousDimensions: { cols: number; rows: number } | null = null;
+
+  // RAF batching: Group rapid updates into single frame (60fps target)
+  private pendingState: TerminalState | null = null;
+  private rafId: number | null = null;
+  private lastFrameTime: number = 0;
+
   constructor(terminal: Terminal) {
     this.terminal = terminal;
   }
@@ -39,9 +48,10 @@ export class StateApplicator {
   /**
    * Apply a complete terminal state to the terminal.
    * MOSH-inspired approach: Idempotent, out-of-order tolerant, self-healing.
+   * RAF batching: Groups rapid updates into single frames for 60fps target.
    *
    * @param state - The complete terminal state to apply
-   * @returns true if applied successfully, false if should be ignored
+   * @returns true if queued/applied successfully, false if should be ignored
    */
   applyState(state: TerminalState): boolean {
     const stateSequence = state.sequence;
@@ -68,7 +78,42 @@ export class StateApplicator {
       );
     }
 
-    console.log(`[StateApplicator] Applying state sequence ${stateSequence} (current: ${this.currentSequence})`);
+    console.log(`[StateApplicator] Queuing state sequence ${stateSequence} for RAF batch (current: ${this.currentSequence})`);
+
+    // RAF batching: Buffer state and apply on next animation frame
+    // This groups rapid updates (like Claude's fast status bar pulses) into single renders
+    this.pendingState = state;
+
+    if (this.rafId === null) {
+      // Schedule RAF callback if not already scheduled
+      this.rafId = requestAnimationFrame(this.applyPendingState.bind(this));
+    }
+
+    return true;
+  }
+
+  /**
+   * Apply pending state on animation frame (RAF callback).
+   * This is called once per browser frame (~16.67ms at 60fps).
+   */
+  private applyPendingState(timestamp: number): void {
+    this.rafId = null;
+
+    if (!this.pendingState) {
+      return; // No pending state
+    }
+
+    const state = this.pendingState;
+    this.pendingState = null;
+
+    // Calculate frame timing for monitoring
+    const frameDelta = timestamp - this.lastFrameTime;
+    this.lastFrameTime = timestamp;
+
+    console.log(
+      `[StateApplicator] Applying batched state sequence ${state.sequence} ` +
+      `(frame delta: ${frameDelta.toFixed(2)}ms)`
+    );
 
     // Set flag to prevent scroll event handling during state application
     this.isApplyingState = true;
@@ -102,47 +147,59 @@ export class StateApplicator {
         );
       }
 
-      // NOTE: Cursor position validation removed - we don't use explicit cursor positioning
-      // Content includes ANSI escape sequences that position cursor correctly
-
-      // Apply complete terminal state (includes cursor positioning via ANSI sequences)
-      this.applyCompleteState(state);
-
-      // NOTE: Don't explicitly position cursor - let ANSI escape sequences in content handle it
-      // Explicit cursor positioning conflicts with MOSH-style complete states and causes
-      // out-of-bounds errors when calculated position doesn't match terminal dimensions
-      //
-      // The terminal content from tmux includes cursor positioning escape sequences,
-      // so cursor will be positioned correctly by the content itself
+      // Apply incremental state update (only changed lines)
+      this.applyIncrementalState(state);
 
       // Update sequence tracking
-      this.currentSequence = stateSequence;
+      this.currentSequence = state.sequence;
       this.lastAppliedState = state;
 
       console.log(
-        `[StateApplicator] Successfully applied state sequence ${stateSequence} ` +
+        `[StateApplicator] Successfully applied state sequence ${state.sequence} ` +
         `(${lineCount} lines, cursor=(${state.cursor?.col},${state.cursor?.row}))`
       );
     } finally {
       // Always clear the flag, even if an error occurred
       this.isApplyingState = false;
     }
-
-    return true;
   }
 
   /**
-   * Apply complete terminal state (MOSH-style complete screen buffer).
-   * This replaces the entire terminal content with the new state.
+   * Apply incremental terminal state update (only changed lines).
+   * This is the key optimization that eliminates flickering:
+   * - Compares new state with previous rendered state
+   * - Only updates lines that have changed
+   * - No full terminal clear (prevents blank screen flicker)
+   * - Perfect for rapid animations like Claude's status bar pulses
    */
-  private applyCompleteState(state: TerminalState): void {
-    // MOSH-STYLE COMPLETE STATE: Clear terminal and write each line at its row position
-    // Server splits tmux output by newlines, so each line = one terminal row
-    // Each line contains text + ANSI styling codes, but NOT cursor positioning between lines
-    this.terminal.clear();
+  private applyIncrementalState(state: TerminalState): void {
+    const currentDims = { cols: this.terminal.cols, rows: this.terminal.rows };
+
+    // Check if dimensions changed - if so, need full redraw
+    const dimensionsChanged =
+      !this.previousDimensions ||
+      this.previousDimensions.cols !== currentDims.cols ||
+      this.previousDimensions.rows !== currentDims.rows;
+
+    if (dimensionsChanged) {
+      console.log(
+        `[StateApplicator] Terminal dimensions changed, performing full redraw ` +
+        `(${this.previousDimensions?.cols}x${this.previousDimensions?.rows} → ${currentDims.cols}x${currentDims.rows})`
+      );
+
+      // Dimension change requires full clear and redraw
+      this.terminal.clear();
+      this.previousLines.clear();
+      this.previousDimensions = currentDims;
+    }
+
+    // Hide cursor during update to prevent cursor jump flicker
     this.terminal.write(CURSOR_HIDE);
 
-    // Write each line at its specific row position
+    let changedLines = 0;
+    let unchangedLines = 0;
+
+    // Update only changed lines
     for (let i = 0; i < state.lines.length; i++) {
       const line = state.lines[i];
 
@@ -157,13 +214,33 @@ export class StateApplicator {
 
       // Decode raw content (preserves ANSI escape sequences for styling)
       const lineText = this.textDecoder.decode(line.content);
+      const previousLine = this.previousLines.get(i);
 
-      // Position at row (1-indexed), clear line, then write content
-      // This ensures each line is written at its correct row position
-      this.terminal.write(positionAndClearLine(i + 1) + lineText);
+      // Only update if line changed
+      if (lineText !== previousLine) {
+        // Position at row (1-indexed), clear line, then write content
+        this.terminal.write(positionAndClearLine(i + 1) + lineText);
+        this.previousLines.set(i, lineText);
+        changedLines++;
+      } else {
+        unchangedLines++;
+      }
     }
 
-    console.log(`[StateApplicator] Applied complete state (sequence ${state.sequence}, ${state.lines.length} lines)`);
+    // Clear lines that no longer exist (terminal shrunk or content removed)
+    const previousLineCount = this.previousLines.size;
+    if (state.lines.length < previousLineCount) {
+      for (let i = state.lines.length; i < previousLineCount; i++) {
+        this.terminal.write(positionAndClearLine(i + 1));
+        this.previousLines.delete(i);
+        changedLines++;
+      }
+    }
+
+    console.log(
+      `[StateApplicator] Applied incremental state (sequence ${state.sequence}, ` +
+      `${changedLines} changed, ${unchangedLines} unchanged, ${state.lines.length} total lines)`
+    );
 
     // Log compression statistics if available
     if (state.compression) {
@@ -175,6 +252,16 @@ export class StateApplicator {
         `${state.compression.uncompressedSize} → ${state.compression.compressedSize} bytes)`
       );
     }
+  }
+
+  /**
+   * Apply complete terminal state (MOSH-style complete screen buffer).
+   * Legacy method - kept for compatibility but now uses incremental approach.
+   * @deprecated Use applyIncrementalState instead
+   */
+  private applyCompleteState(state: TerminalState): void {
+    // Redirect to incremental implementation
+    this.applyIncrementalState(state);
   }
 
   /**
@@ -256,11 +343,25 @@ export class StateApplicator {
   /**
    * Reset sequence tracking (for connection recovery).
    * Call this when reconnecting or recovering from errors.
+   * Clears all caches and cancels pending RAF callbacks.
    */
   resetSequence(): void {
     this.currentSequence = BigInt(0);
     this.lastAppliedState = null;
-    console.log('[StateApplicator] Sequence tracking reset to 0');
+
+    // Clear incremental diff caches
+    this.previousLines.clear();
+    this.previousDimensions = null;
+
+    // Cancel pending RAF and clear pending state
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    this.pendingState = null;
+    this.lastFrameTime = 0;
+
+    console.log('[StateApplicator] Sequence tracking and caches reset to initial state');
   }
 
   /**

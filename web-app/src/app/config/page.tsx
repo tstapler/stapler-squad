@@ -5,7 +5,15 @@ import { SessionService } from "@/gen/session/v1/session_connect";
 import { ClaudeConfigFile } from "@/gen/session/v1/session_pb";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
+import Editor from "@monaco-editor/react";
 import styles from "./config.module.css";
+
+// Helper function to determine Monaco editor language from filename
+function getLanguageFromFilename(filename: string): string {
+  if (filename.endsWith('.json')) return 'json';
+  if (filename.endsWith('.md')) return 'markdown';
+  return 'plaintext';
+}
 
 export default function ConfigEditorPage() {
   const [configs, setConfigs] = useState<ClaudeConfigFile[]>([]);
@@ -163,10 +171,19 @@ export default function ConfigEditorPage() {
                   </button>
                 </div>
               </div>
-              <textarea
+              <Editor
+                height="600px"
+                language={getLanguageFromFilename(selectedConfig.name)}
+                theme="vs-dark"
                 value={content}
-                onChange={(e) => setContent(e.target.value)}
-                className={styles.textarea}
+                onChange={(value) => setContent(value || "")}
+                options={{
+                  minimap: { enabled: true },
+                  fontSize: 14,
+                  lineNumbers: 'on',
+                  scrollBeyondLastLine: false,
+                  automaticLayout: true,
+                }}
               />
             </>
           ) : (

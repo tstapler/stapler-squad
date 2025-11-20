@@ -91,11 +91,24 @@ export function ReviewQueuePanel({
     },
   });
 
-  const formatAge = (timestampSeconds: bigint): string => {
-    const timestamp = Number(timestampSeconds);
-    const now = Math.floor(Date.now() / 1000); // Current time in seconds
-    const age = now - timestamp; // Duration in seconds
+  // Format duration in seconds (e.g., averageAgeSeconds, oldestAgeSeconds)
+  const formatDuration = (durationSeconds: bigint): string => {
+    const duration = Number(durationSeconds);
+    if (duration < 60) return `${duration}s`;
+    if (duration < 3600) return `${Math.floor(duration / 60)}m`;
+    if (duration < 86400) return `${Math.floor(duration / 3600)}h`;
+    return `${Math.floor(duration / 86400)}d`;
+  };
 
+  // Format timestamp (seconds since epoch) as "time ago"
+  const formatTimestamp = (timestampSeconds: bigint): string => {
+    const timestamp = Number(timestampSeconds);
+    if (timestamp === 0) return "never";
+
+    const now = Math.floor(Date.now() / 1000);
+    const age = now - timestamp;
+
+    if (age < 0) return "in the future"; // Clock skew protection
     if (age < 60) return `${age}s`;
     if (age < 3600) return `${Math.floor(age / 60)}m`;
     if (age < 86400) return `${Math.floor(age / 3600)}h`;
@@ -180,11 +193,11 @@ export function ReviewQueuePanel({
         {totalItems > 0 && (
           <div className={styles.stats} data-testid="queue-statistics">
             <span className={styles.stat}>
-              Avg Age: {formatAge(averageAgeSeconds)}
+              Avg Age: {formatDuration(averageAgeSeconds)}
             </span>
             {oldestAgeSeconds > BigInt(0) && (
               <span className={styles.stat}>
-                Oldest: {formatAge(oldestAgeSeconds)}
+                Oldest: {formatDuration(oldestAgeSeconds)}
               </span>
             )}
             <span className={styles.stat} data-testid="total-items">
@@ -329,7 +342,7 @@ export function ReviewQueuePanel({
                   </div>
                   <div className={styles.itemFooter}>
                     <span className={styles.itemAge}>
-                      Last Activity: {formatAge(item.lastActivity?.seconds ?? BigInt(0))}{" "}
+                      Last Activity: {formatTimestamp(item.lastActivity?.seconds ?? BigInt(0))}{" "}
                       ago
                     </span>
                     {item.diffStats && (item.diffStats.added > 0 || item.diffStats.removed > 0) && (

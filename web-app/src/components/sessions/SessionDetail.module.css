@@ -130,9 +130,9 @@
   flex-direction: column;
 }
 
-/* Fullscreen content - no padding, maximize space */
+/* Fullscreen content - no horizontal padding, bottom margin for breathing room */
 .fullscreenContent {
-  padding: 0;
+  padding: 0 0 2rem 0;
   overflow: hidden;
 }
 
