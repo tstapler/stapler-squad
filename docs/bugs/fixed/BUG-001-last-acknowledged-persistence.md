@@ -1,8 +1,21 @@
 # BUG-001: LastAcknowledged Field Not Persisted [SEVERITY: High]
 
-**Status**: Open (Discovered 2025-01-17)
-**Discovered**: During review queue persistence analysis
-**Impact**: Snooze functionality completely broken across application restarts
+**Status**: ✅ FIXED (Discovered 2025-01-17, Fixed 2025-01-17)
+**Resolution**: Field was already properly persisted in storage.go:63, instance.go:167, instance.go:259
+**Original Report**: Review queue snooze functionality appeared broken
+**Actual Status**: Functionality working correctly, bug report was based on stale code analysis
+
+## Resolution Summary
+
+Investigation revealed this bug was **already fixed** in the current codebase. The `LastAcknowledged` field IS properly persisted:
+
+1. **storage.go:63**: `LastAcknowledged time.Time json:"last_acknowledged,omitempty"`
+2. **instance.go:167**: Field correctly serialized in `ToInstanceData()`
+3. **instance.go:259**: Field correctly deserialized in `FromInstanceData()`
+
+**Verification**: Comprehensive test suite created in `session/instance_last_acknowledged_test.go` confirms persistence works correctly across save/load cycles.
+
+**Conclusion**: No fix needed - feature already working as designed.
 
 ## Problem Description
 

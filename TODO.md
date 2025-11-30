@@ -2,9 +2,12 @@
 
 ## Priority Summary
 
-**P1** - Claude Config Editor (TASK-001.1) - 1 hour - READY TO START
-**P2** - BUG-003 Investigation - 1 hour investigation phase - Low priority
+**P1** - Claude Config Editor Phase 3 (Web UI) - 4 hours - IN PROGRESS (Monaco complete)
+**P2** - BUG-003 Resolution - 3 hours - INVESTIGATED (diff content removal)
 **P3** - Test Stabilization - Deferred until major features complete
+
+**Recent Completion**: BUG-003 Investigation ✅ (Root cause: 33MB diff_stats.content field)
+**Bug Status Update**: BUG-001 ✅ Already Fixed, BUG-002 ✅ Already Fixed, BUG-003 Investigated
 
 ---
 
@@ -77,33 +80,43 @@
 
 ## ✅ RESOLVED: Persistence Layer Bugs
 
-**Status**: FIXED - All high/medium severity bugs resolved
-**Resolution Date**: 2025-01-17
-**Total Effort**: ~3 hours (proactive fixes during development)
+**Status**: All bugs investigated and resolved or have clear fix path
+**Investigation Date**: 2025-11-30
+**Total Effort**: BUG-001/002 already fixed, BUG-003 investigated (3 hour fix ready)
 
-### Bugs Fixed (2025-01-17)
+### Bugs Fixed (Already Resolved in Codebase)
 
-**BUG-001** [HIGH]: LastAcknowledged Field Not Persisted ✅ FIXED
-- **Impact**: Review queue snooze functionality broken across restarts
-- **Resolution**: Field added to InstanceData serialization in storage.go:63, instance.go:167, instance.go:259
+**BUG-001** [HIGH]: LastAcknowledged Field Not Persisted ✅ ALREADY FIXED
+- **Original Report**: Review queue snooze functionality appeared broken
+- **Investigation Result**: Field IS properly persisted in storage.go:63, instance.go:167, instance.go:259
 - **Tests**: Comprehensive test suite in instance_last_acknowledged_test.go (all passing)
-- **Status**: ✅ Fixed and verified
+- **Status**: ✅ No fix needed - functionality working correctly
+- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-001-last-acknowledged-persistence.md`
 
-**BUG-002** [MEDIUM]: LastMeaningfulOutput Timestamp Reset ✅ FIXED
-- **Impact**: Historical activity timestamps incorrect after startup
-- **Resolution**: Signature-based change detection in UpdateTerminalTimestamps() (instance.go:1693-1742)
+**BUG-002** [MEDIUM]: LastMeaningfulOutput Timestamp Reset ✅ ALREADY FIXED
+- **Original Report**: Historical activity timestamps appeared to reset on startup
+- **Investigation Result**: Signature-based change detection already implemented in UpdateTerminalTimestamps()
 - **Tests**: Test suite in instance_timestamp_signature_test.go (5 tests, all passing)
-- **Status**: ✅ Fixed and verified
+- **Status**: ✅ No fix needed - signature logic working correctly
+- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-002-timestamp-refresh-reset.md`
 
-**BUG-003** [LOW]: Large State File Size (34MB JSON)
-- **Impact**: Scalability concern, no immediate functionality impact
-- **Root Cause**: Unknown - investigation required (session count vs embedded data)
-- **Fix**: Investigation phase (1 hour), then targeted fix (2-4 hours)
-- **Status**: Open - investigation ready, low priority
+**BUG-003** [LOW]: Large State File Size (34MB JSON) 🔍 INVESTIGATED
+- **Impact**: Scalability concern - slow startup (500ms), high memory (70MB)
+- **Root Cause**: **IDENTIFIED** - `diff_stats.content` field stores full git diffs (33MB of 34MB file)
+  - 40 sessions with average 821 KB diff content each
+  - Largest single diff: 25.7 MB in "load-restrictions" session
+  - **97.6% of file size** is unnecessary diff content
+- **Fix Ready**: Remove `diff_stats.content` from serialization (3 hours, 4 files)
+  - Keep metadata (`added`, `removed` counts)
+  - Generate diffs on-demand via GetSessionDiff RPC
+  - **Expected impact**: 34 MB → 800 KB (42x reduction!)
+- **Status**: 🟡 Investigation complete, fix ready to implement (P2 priority)
+- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-003-large-state-file-size.md`
+- **Task Doc**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/tasks/bug-003-diff-content-removal.md`
 
 **See**:
-- [Persistence Quick Wins Task](docs/tasks/persistence-quick-wins.md) - Detailed atomic task breakdown
-- [Bug Reports](docs/bugs/) - BUG-001, BUG-002, BUG-003 detailed analysis
+- [BUG-003 Resolution Task](docs/tasks/bug-003-diff-content-removal.md) - Atomic task breakdown (2 stories, 4 tasks, 3 hours)
+- [Bug Reports](docs/bugs/) - Organized by status (open/, fixed/, in-progress/, obsolete/)
 
 ---
 
@@ -243,13 +256,13 @@ Browse and search Claude session history from ~/.claude/history.jsonl:
 
 ---
 
-## PLANNED: Claude Config Editor
+## IN PROGRESS: Claude Config Editor
 
-**Status**: Planning Complete - Ready for Implementation
-**Priority**: P2 - After History Viewer Integration
+**Status**: Phase 1 ✅ Complete, Phase 2 ✅ Complete, Phase 2.5 ✅ Complete, Phase 3 Ready
+**Priority**: P1 - Active development
 **Epic ID**: FEATURE-001
 **Estimated Effort**: 3-4 weeks (1 engineer)
-**Progress**: 0% (Planning phase)
+**Progress**: 75% (Phase 1, 2, and 2.5 complete - TUI fully integrated)
 
 ### Overview
 
@@ -264,87 +277,94 @@ Add comprehensive Claude Code configuration management to Claude Squad:
 - **Workflow Integration**: Tight Claude Code + Claude Squad integration
 - **Developer Experience**: In-app config management
 
-### 🎯 Recommended First Task: TASK-001.1 - Backend Config Foundation
+### ✅ Phase 1 Complete: Backend Config Foundation
 
-**Task**: Create config/claude.go File Structure
-**Estimated Time**: 1 hour
-**Priority**: P2 - Foundation for all config features
-**Context Boundary**: 1 file (config/claude.go) ✅
+**Implementation**: config/claude.go (7657 bytes)
+**Completion Date**: 2025-11-12
+**All Tasks Complete**: TASK-001.1 through TASK-001.4
 
-**Why This Task First?**:
-1. **Zero Dependencies**: No prerequisites, can start immediately
-2. **Architectural Foundation**: Establishes patterns for entire feature
-3. **Minimal Context**: Single file, clear scope, fast validation
-4. **Enables Parallel Work**: Unblocks TASK-001.2, 001.3, 001.4
-5. **AIC Framework Perfect Fit**: 1h task, 1 file, atomic scope
+**Implemented Features**:
+- ✅ ClaudeConfigManager struct with thread-safe operations (sync.RWMutex)
+- ✅ GetConfig() method - reads config files from ~/.claude
+- ✅ ListConfigs() method - returns all available config files
+- ✅ UpdateConfig() method - atomic write with .bak backup
+- ✅ ValidateJSON() method - JSON schema validation for settings.json
+- ✅ UpdateConfigWithValidation() - combined validation and update
+- ✅ toValidUTF8() helper - UTF-8 validation for protobuf safety
+- ✅ Error types: ErrConfigNotFound, ErrInvalidConfig, ErrInvalidJSON
+- ✅ Comprehensive GoDoc comments
 
-**Implementation Steps**:
-1. Create `config/claude.go` with ClaudeConfigManager struct
-2. Add GetClaudeDir() helper method
-3. Define ConfigFile struct (Name, Path, Content, ModTime)
-4. Add basic error types (ErrConfigNotFound, ErrInvalidConfig)
-5. Export manager constructor: NewClaudeConfigManager()
-6. Add comprehensive GoDoc comments
-7. Compile and validate: `go build ./config`
+**Protocol Buffer Integration** (TASK-003.1):
+- ✅ GetClaudeConfig RPC in session.proto
+- ✅ ListClaudeConfigs RPC in session.proto
+- ✅ UpdateClaudeConfig RPC in session.proto
+- ✅ All three RPC handlers in session_service.go
 
-**Context Files to Understand**:
-- `config/config.go` - Existing config patterns and conventions
-- `config/state.go` - State management patterns
-- `~/.claude/` - Target directory structure (CLAUDE.md, settings.json, agents.md)
-
-**Success Criteria**:
-- ✅ File compiles without errors
-- ✅ Exports ClaudeConfigManager struct
-- ✅ GetClaudeDir() returns ~/.claude path
-- ✅ ConfigFile struct properly defined
-- ✅ GoDoc comments complete
-- ✅ Follows existing config package patterns
-
-**Next Tasks After This**:
-- TASK-001.2: Implement GetConfig() method (2h)
-- TASK-001.3: Add JSON validation (2h)
-- TASK-001.4: Atomic write with backup (3h)
+**Validation**: `go build ./config` ✅ Passes
 
 ### Implementation Phases
 
-#### Phase 1: Foundation (Week 1) - NEXT
-**Goal**: Backend infrastructure for config management
+#### ✅ Phase 1: Backend Foundation - COMPLETE
+**Goal**: Backend infrastructure for config management ✅
 
 **Stories**:
-1. **STORY-001: Backend Config Management** [2 days]
-   - TASK-001.1: Create config/claude.go structure [1h] **← RECOMMENDED START**
-   - TASK-001.2: Implement GetConfig() method [2h]
-   - TASK-001.3: Add JSON validation support [2h]
-   - TASK-001.4: Implement atomic write with backup [3h]
+1. **STORY-001: Backend Config Management** ✅ [Complete]
+   - ✅ TASK-001.1: Create config/claude.go structure
+   - ✅ TASK-001.2: Implement GetConfig() method
+   - ✅ TASK-001.3: Add JSON validation support
+   - ✅ TASK-001.4: Implement atomic write with backup
 
-2. **STORY-003: Protocol Buffer Definitions** [1 day]
-   - TASK-003.1: Add config RPCs to session.proto [2h]
-   - TASK-003.3: Generate Go and TypeScript bindings [1h]
+2. **STORY-003: Protocol Buffer Definitions** ✅ [Complete]
+   - ✅ TASK-003.1: Add config RPCs to session.proto
+   - ✅ TASK-003.3: Generate Go and TypeScript bindings
 
-**Milestone 1**: Backend Complete - Can read/write configs programmatically
+**Milestone 1**: ✅ Backend Complete - Can read/write configs programmatically
 
-#### Phase 2: TUI Implementation (Week 2)
-**Goal**: Build overlay components for config editing
+#### ✅ Phase 2: TUI Implementation - COMPLETE (Needs Integration)
+**Goal**: Build overlay components for config editing ✅
 
 **Stories**:
-3. **STORY-004: Config Editor Overlay** [3 days]
-   - Create ui/overlay/configEditorOverlay.go
-   - Implement syntax highlighting (Markdown/JSON)
-   - Add edit mode with validation
-   - Wire up save/cancel actions
+3. **STORY-004: Config Editor Overlay** ✅ [Complete]
+   - ✅ Create ui/overlay/configEditorOverlay.go (7455 bytes)
+   - ✅ Implement list mode (file selection with j/k navigation)
+   - ✅ Implement edit mode (bubbles/textarea with line numbers)
+   - ✅ Add validation (JSON schema for settings.json)
+   - ✅ Wire up save/cancel actions (Ctrl+S to save, Ctrl+Q to exit)
+   - ✅ Unsaved changes detection and warnings
 
-**Milestone 2**: TUI MVP - Can view/edit configs in TUI
+**Milestone 2**: ✅ TUI Overlay Complete - Needs command integration
+
+#### ✅ Phase 2.5: TUI Integration - COMPLETE
+**Goal**: Wire config editor overlay into main app command system ✅
+
+**Completed Tasks**:
+- [x] ✅ Register config editor command in cmd/init.go with key binding ('E' key)
+- [x] ✅ Add OnConfigEditor to SessionHandlers in cmd/commands/session.go
+- [x] ✅ Add handleConfigEditor() in app/app.go
+- [x] ✅ Add handleConfigEditorState() key handler in app/app.go
+- [x] ✅ Add ConfigEditor state to app/state/types.go
+- [x] ✅ Add coordinator methods: CreateConfigEditorOverlay(), GetConfigEditorOverlay()
+- [x] ✅ Add ComponentConfigEditorOverlay to app/ui/types.go
+
+**Status**: ✅ Integration Complete - Press 'E' key to open config editor overlay in TUI
 
 #### Phase 3: Web UI Implementation (Week 3)
 **Goal**: Build web components with feature parity to TUI
 
 **Stories**:
 4. **STORY-006: Config Editor Web Component** [3 days]
-   - Monaco editor integration
-   - Syntax highlighting and validation
-   - Real-time error feedback
+   - ✅ TASK-006.1: Monaco editor integration [2 hours] - COMPLETE
+     - ✅ Keyboard shortcuts (Ctrl+S/Cmd+S to save)
+     - ✅ JSON syntax highlighting with dark theme (vs-dark)
+     - ✅ Line numbers and minimap
+     - ✅ Code folding and bracket pair colorization
+     - ✅ Auto-formatting on paste/type
+     - ✅ Word wrap and tab size: 2 spaces
+     - ✅ Read-only mode during save operations
+   - [ ] TASK-006.2: Real-time validation feedback [2 hours]
+   - [ ] TASK-006.3: Multi-file navigation improvements [2 hours]
 
-**Milestone 3**: Web UI Complete - Feature parity with TUI
+**Milestone 3**: Web UI In Progress - Monaco editor complete
 
 #### Phase 4: Integration & Polish (Week 4)
 **Goal**: Complete feature integration and testing
@@ -370,20 +390,37 @@ Add comprehensive Claude Code configuration management to Claude Squad:
 
 ## Context Notes
 
-**Last Updated**: 2025-11-19
-**Current Phase**: Feature complete - Claude Config Editor ready to start
-**Next Milestone**: Claude Config Editor backend foundation
+**Last Updated**: 2025-11-30
+**Current Phase**: Claude Config Editor - Phase 3 Web UI Implementation (Monaco Complete)
+**Next Milestone**: Either Phase 3 Web UI completion OR BUG-003 resolution (both P1/P2)
 
 **Completed Projects**:
 1. **Web UI Implementation** - ✅ 100% complete (all 5 stories)
 2. **Session History Viewer Integration** - ✅ 100% complete (TUI + launch from history)
-3. **Persistence Bug Fixes** - ✅ BUG-001 and BUG-002 fixed and verified
+3. **BUG-001 Investigation** - ✅ Already fixed in codebase
+4. **BUG-002 Investigation** - ✅ Already fixed in codebase
+5. **BUG-003 Investigation** - ✅ Root cause identified (diff_stats.content bloat)
+6. **Claude Config Editor Phase 1** - ✅ Backend foundation complete
+7. **Claude Config Editor Phase 2** - ✅ TUI overlay complete
+8. **Claude Config Editor Phase 2.5** - ✅ TUI integration complete (E key binding)
 
-**Next Project**:
-1. **Claude Config Editor** (P1 - Ready to start, TASK-001.1 recommended)
+**Active Projects**:
+1. **Claude Config Editor Phase 3** (P1 - 4 hours remaining, Monaco editor complete)
+   - Task 006.2: Real-time validation feedback [2h]
+   - Task 006.3: Multi-file navigation improvements [2h]
+2. **BUG-003 Resolution** (P2 - 3 hours, investigation complete, fix ready)
+   - Remove diff_stats.content from serialization
+   - Expected: 34 MB → 800 KB state file (42x reduction)
 
 **Current Status**:
 - All major MVP features complete and production-ready
-- Zero critical or high-severity bugs blocking work
-- BUG-003 is low-priority investigation task
+- Zero critical or high-severity bugs found (BUG-001/002 already fixed)
+- BUG-003 has clear fix path ready to implement (P2 priority)
 - Test stabilization deferred until major features complete
+
+**Next Steps**:
+1. **Option A**: Complete Config Editor Phase 3 (P1, 4 hours) - Web UI feature parity
+2. **Option B**: Fix BUG-003 (P2, 3 hours) - Performance improvement, production readiness
+3. **Option C**: Test stabilization (P3, deferred) - Only after features complete
+
+**Recommendation**: BUG-003 fix (Option B) provides high impact (42x performance improvement) with low risk and fits within one work session. Config Editor Phase 3 can follow immediately after.

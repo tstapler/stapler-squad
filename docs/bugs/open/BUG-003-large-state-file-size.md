@@ -220,14 +220,69 @@ Before determining fix approach, need to **analyze state file contents**:
 - Investigation required before committing to fix approach
 - Not blocking any current work, but should be addressed before production release
 
-## Investigation Results (To Be Filled In)
+## Investigation Results (Completed 2025-11-30)
 
-**Date Investigated**: _TBD_
-**Session Count**: _TBD_
-**Average Session Size**: _TBD_
-**Largest Fields**: _TBD_
-**Root Cause**: _TBD_
-**Recommended Fix**: _TBD_
+**Date Investigated**: 2025-11-30
+**Session Count**: 40 sessions
+**Average Session Size**: 840,867 bytes (821.2 KB per session)
+**File Size**: 34,476,797 bytes (33.6 MB total)
+**Largest Fields**: `diff_stats.content` (stores full git diffs)
+**Largest Single Diff**: 26,294,403 bytes (25.7 MB) in session "load-restrictions"
+
+### Root Cause Identified
+
+**PRIMARY CULPRIT**: The `diff_stats.content` field stores **complete git diff output** for every session.
+
+**Analysis**:
+- Total `diff_stats` size across 40 sessions: 33,634,676 bytes (32.8 MB)
+- This accounts for **97.6%** of the total file size
+- One session alone contains a 25.7 MB diff (likely a large file or binary data)
+- Average diff size: 821 KB per session (far too large for metadata)
+
+**Example from state.json**:
+```json
+"diff_stats": {
+  "added": 224,
+  "removed": 26,
+  "content": "diff --git a/.claude/settings.local.json b/.claude/settings.local.json\n..."
+}
+```
+
+The `content` field stores the **entire diff output** including:
+- All changed file contents
+- Binary file differences
+- Large generated files (builds, lockfiles, etc.)
+
+### Recommended Fix: Option 2 (Separate Large Data)
+
+**Approach**: Stop storing `diff_stats.content` in state.json
+
+**Implementation Strategy**:
+1. **Remove `diff_stats.content` from serialization** (1 hour, 2 files)
+   - Keep `added` and `removed` counts in state.json for metadata
+   - Remove the `content` field from `InstanceData` struct
+   - Generate diffs on-demand when needed (via `GetSessionDiff` RPC)
+
+2. **Update diff generation to be on-demand** (1 hour, 2 files)
+   - Compute diff when user requests it (Web UI, TUI preview)
+   - Cache in memory if needed for performance
+   - Never persist full diff content to disk
+
+**Files to Modify**:
+- `session/storage.go` - Remove `content` from `DiffStats` serialization
+- `session/instance.go` - Update `ToInstanceData()` to exclude diff content
+- `server/services/session_service.go` - Ensure `GetSessionDiff` computes on-demand
+- `proto/session/v1/session.proto` - Update `DiffStats` message (if needed)
+
+**Expected Impact**:
+- State file size: 34 MB → ~800 KB (42x reduction!)
+- Load time: ~500ms → <50ms
+- Memory footprint: ~70 MB → ~5 MB
+- Save time: ~500ms → <50ms
+
+**Estimated Effort**: 2-3 hours (4 files, fits context boundary)
+**Risk**: Low - diff content not needed for session restoration
+**Backward Compatibility**: Old state files will load correctly (content field ignored if present)
 
 ---
 
