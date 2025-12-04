@@ -5,6 +5,7 @@ import { SessionService } from "@/gen/session/v1/session_connect";
 import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
+import { getApiBaseUrl } from "@/lib/config";
 import styles from "./history.module.css";
 
 export default function HistoryBrowserPage() {
@@ -22,7 +23,7 @@ export default function HistoryBrowserPage() {
   // Initialize ConnectRPC client
   useEffect(() => {
     const transport = createConnectTransport({
-      baseUrl: window.location.origin,
+      baseUrl: getApiBaseUrl(),
     });
     clientRef.current = createPromiseClient(SessionService, transport);
   }, []);
