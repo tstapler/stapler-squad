@@ -529,6 +529,86 @@ Comprehensive search and sort functionality for session management:
 
 ---
 
+## READY: Full-Text Search for History Browser
+
+**Status**: Planning Complete, Ready for Implementation
+**Priority**: P2 - User Experience and Knowledge Discovery
+**Epic ID**: EPIC-SEARCH-002
+**Estimated Effort**: 3-4 weeks (1 engineer)
+**Progress**: 0% (Planning 100%, Implementation 0%)
+
+### Overview
+
+Implement full-text search across Claude conversation history with context-aware snippet highlighting:
+- Search all message content (user and assistant messages), not just session names
+- Context-aware snippets with 20-30 words surrounding matches
+- BM25 relevance ranking for optimal results
+- Hybrid search combining metadata and content
+- Performance target: < 500ms for 10,000+ messages
+
+**Strategic Value**:
+- **Time Savings**: Reduce search time from 5-10 minutes to 5-10 seconds (>90% improvement)
+- **Knowledge Discovery**: Surface relevant past conversations users forgot existed
+- **Better Decisions**: Quick access to past reasoning and solutions
+- **Improved Workflow**: Seamless history exploration without breaking concentration
+
+### Implementation Plan
+
+#### Story 1: Backend Search Engine Foundation (4-5 days) - ⏳ READY
+**Goal**: Build inverted index with tokenization, stemming, and BM25 ranking
+
+- [ ] Task 1.1: Implement Tokenizer (session/tokenizer.go) [3h] - NEXT ACTION
+- [ ] Task 1.2: Build Inverted Index (session/inverted_index.go) [3h]
+- [ ] Task 1.3: Implement BM25 Scoring (session/search_engine.go) [4h]
+- [ ] Task 1.4: Add Index Persistence (Gob encoding) [3h]
+
+#### Story 2: Snippet Generation (2-3 days) - 🔒 BLOCKED by Story 1
+**Goal**: Extract and highlight relevant text snippets from search results
+
+- [ ] Task 2.1: Implement snippet extraction with context window [2h]
+- [ ] Task 2.2: Add multi-match snippet generation [2h]
+- [ ] Task 2.3: Add highlight position tracking [2h]
+
+#### Story 3: Backend gRPC API (2 days) - 🔒 BLOCKED by Stories 1, 2
+**Goal**: Expose search via ConnectRPC for web UI
+
+- [ ] Task 3.1: Add SearchClaudeHistory RPC to proto definitions [2h]
+- [ ] Task 3.2: Implement RPC handler in SessionService [3h]
+- [ ] Task 3.3: Add search integration tests [2h]
+
+#### Story 4: Frontend UI (3 days) - 🔒 BLOCKED by Story 3
+**Goal**: Build search UI with instant results and snippet display
+
+- [ ] Task 4.1: Add search input with live results [2h]
+- [ ] Task 4.2: Create snippet display component [2h]
+- [ ] Task 4.3: Add filter integration (date, model, project) [2h]
+
+#### Story 5: Modal Message Highlighting (2 days) - 🔒 BLOCKED by Story 4
+**Goal**: Jump to and highlight matched messages in conversation modal
+
+- [ ] Task 5.1: Add highlight parameters to GetClaudeHistoryMessages [2h]
+- [ ] Task 5.2: Implement in-message highlighting [2h]
+- [ ] Task 5.3: Add next/previous match navigation [2h]
+
+### Success Metrics
+
+**Performance Targets**:
+- Search response time: < 500ms (p95), < 200ms (p50)
+- Index build time: < 30 seconds for 50,000 messages
+- Index update latency: < 100ms per new message
+- Memory footprint: < 50MB for index metadata
+
+**Quality Targets**:
+- Search precision: > 90% of top 10 results relevant
+- Snippet quality: 95%+ contain query terms
+- User adoption: 60%+ perform content search weekly
+
+**See Full Details**: [Full-Text Search Feature Plan](docs/tasks/full-text-search-history.md)
+
+**Next Action**: Task 1.1 - Implement Tokenizer (3 hours)
+
+---
+
 ## READY: History Page UX Improvements
 
 **Status**: Planning Complete, Ready for Implementation
