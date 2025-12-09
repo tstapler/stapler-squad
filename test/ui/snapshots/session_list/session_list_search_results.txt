@@ -1,6 +1,6 @@
                                                                                 
                                                                                 
- Instances (🔍 session-3)  [1/4]                                                
+ Instances (🔍 session-3 | Sort: Activity ↓)  [1/4]                             
                                                                                 
                                                                                 
   3.  test-session-3                                                   ●        

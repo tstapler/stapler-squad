@@ -87,7 +87,7 @@ export function useReviewQueue(
   options: UseReviewQueueOptions = {}
 ): UseReviewQueueReturn {
   const {
-    baseUrl = "http://localhost:8543",
+    baseUrl = "http://localhost:8543/api",
     autoRefresh = false,
     refreshInterval = 5000,
     priorityFilter,

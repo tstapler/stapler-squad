@@ -76,6 +76,29 @@ message Session {
   // Tags for flexible multi-dimensional organization.
   // Replaces single-category hierarchy with tag-based grouping.
   repeated string tags = 24;
+
+  // GitHub integration fields for PR/URL-based session creation.
+  // These fields track sessions created from GitHub PRs or repository URLs.
+
+  // GitHub pull request number (0 if not created from PR).
+  int32 github_pr_number = 25;
+
+  // Full URL to the GitHub pull request.
+  string github_pr_url = 26;
+
+  // Repository owner (GitHub user or organization).
+  string github_owner = 27;
+
+  // Repository name.
+  string github_repo = 28;
+
+  // Original URL or reference used to create this session.
+  // Could be a PR URL, repository URL, or git URL.
+  string github_source_ref = 29;
+
+  // Path where repository was cloned (for URL-based sessions).
+  // Empty if session uses existing repository.
+  string cloned_repo_path = 30;
 }
 
 // SessionStatus represents the current state of a session.
@@ -263,6 +286,82 @@ enum AttentionReason {
   ATTENTION_REASON_TASK_COMPLETE = 5;
 }
 
+// PRInfo contains metadata about a GitHub pull request.
+// Used when creating sessions from PR URLs to provide rich context.
+message PRInfo {
+  // Pull request number.
+  int32 number = 1;
+
+  // PR title.
+  string title = 2;
+
+  // PR description/body.
+  string body = 3;
+
+  // Head branch reference (source branch).
+  string head_ref = 4;
+
+  // Base branch reference (target branch).
+  string base_ref = 5;
+
+  // Current PR state (open, closed, merged).
+  string state = 6;
+
+  // PR author username.
+  string author = 7;
+
+  // Labels applied to PR.
+  repeated string labels = 8;
+
+  // HTML URL to view PR on GitHub.
+  string html_url = 9;
+
+  // Whether PR is marked as draft.
+  bool is_draft = 10;
+
+  // Mergeable status (mergeable, conflicting, unknown).
+  string mergeable = 11;
+
+  // Number of lines added.
+  int32 additions = 12;
+
+  // Number of lines deleted.
+  int32 deletions = 13;
+
+  // Number of files changed.
+  int32 changed_files = 14;
+
+  // PR creation timestamp.
+  google.protobuf.Timestamp created_at = 15;
+
+  // PR last updated timestamp.
+  google.protobuf.Timestamp updated_at = 16;
+}
+
+// PRComment represents a comment on a GitHub pull request.
+message PRComment {
+  // Comment ID.
+  int32 id = 1;
+
+  // Comment author username.
+  string author = 2;
+
+  // Comment body text.
+  string body = 3;
+
+  // Comment creation timestamp.
+  google.protobuf.Timestamp created_at = 4;
+
+  // File path (for review comments only).
+  optional string path = 5;
+
+  // Line number (for review comments only).
+  optional int32 line = 6;
+
+  // Whether this is a review comment (vs general comment).
+  bool is_review = 7;
+}
+
 // ReviewQueue contains statistics and items needing attention.
 message ReviewQueue {
   // Total number of items in queue.
@@ -285,4 +384,77 @@ message ReviewQueue {
 
   // Age of oldest item (seconds).
   int64 oldest_age_seconds = 7;
+}
+
+// ============================================================================
+// Notification Types for Cross-Process Event Broadcasting
+// ============================================================================
+
+// NotificationType categorizes the type of notification being sent.
+// Different types have different default UI treatments.
+enum NotificationType {
+  NOTIFICATION_TYPE_UNSPECIFIED = 0;
+
+  // User Action Required (High Priority by default)
+  NOTIFICATION_TYPE_APPROVAL_NEEDED = 1;    // User approval dialog waiting
+  NOTIFICATION_TYPE_INPUT_REQUIRED = 2;     // Waiting for user input
+  NOTIFICATION_TYPE_CONFIRMATION_NEEDED = 3; // Confirmation prompt waiting
+
+  // Status Updates (Medium Priority by default)
+  NOTIFICATION_TYPE_TASK_COMPLETE = 4;      // Task finished successfully
+  NOTIFICATION_TYPE_PROCESS_STARTED = 5;    // Long-running process started
+  NOTIFICATION_TYPE_PROCESS_FINISHED = 6;   // Long-running process finished
+
+  // Errors and Warnings (High/Urgent Priority by default)
+  NOTIFICATION_TYPE_ERROR = 7;              // Error occurred
+  NOTIFICATION_TYPE_WARNING = 8;            // Warning condition
+  NOTIFICATION_TYPE_FAILURE = 9;            // Operation failed
+
+  // Informational (Low Priority by default)
+  NOTIFICATION_TYPE_INFO = 10;              // General information
+  NOTIFICATION_TYPE_DEBUG = 11;             // Debug information
+  NOTIFICATION_TYPE_STATUS_CHANGE = 12;     // Session status changed
+
+  // Custom (Medium Priority by default)
+  NOTIFICATION_TYPE_CUSTOM = 100;           // Custom notification type
+}
+
+// NotificationPriority determines UI treatment for notifications.
+// Maps to different audio, visual styling, and auto-dismiss behavior.
+enum NotificationPriority {
+  NOTIFICATION_PRIORITY_UNSPECIFIED = 0;
+  NOTIFICATION_PRIORITY_LOW = 1;       // Info, auto-dismiss after 5s
+  NOTIFICATION_PRIORITY_MEDIUM = 2;    // Normal, auto-dismiss after 10s
+  NOTIFICATION_PRIORITY_HIGH = 3;      // Important, requires acknowledgment
+  NOTIFICATION_PRIORITY_URGENT = 4;    // Critical, blocking action required
+}
+
+// Notification represents a notification sent from a tmux session to the server.
+message Notification {
+  // Unique notification identifier (server-generated)
+  string id = 1;
+
+  // Session identifier that sent the notification
+  string session_id = 2;
+
+  // Session name for display
+  string session_name = 3;
+
+  // Type of notification
+  NotificationType notification_type = 4;
+
+  // Priority level (determines UI treatment)
+  NotificationPriority priority = 5;
+
+  // Human-readable title
+  string title = 6;
+
+  // Detailed message
+  string message = 7;
+
+  // When the notification was created
+  google.protobuf.Timestamp timestamp = 8;
+
+  // Optional metadata (key-value pairs for additional context)
+  map<string, string> metadata = 9;
 }

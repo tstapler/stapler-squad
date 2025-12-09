@@ -200,6 +200,18 @@
   white-space: nowrap;
 }
 
+.githubLink {
+  color: #0969da;
+  text-decoration: none;
+  font-weight: 500;
+  transition: color 0.2s ease;
+}
+
+.githubLink:hover {
+  color: #0550ae;
+  text-decoration: underline;
+}
+
 .diffStats {
   display: flex;
   gap: 12px;
@@ -333,6 +345,14 @@
   .editTagsButton:hover {
     background: #1e40af;
     color: #dbeafe;
+  }
+
+  .githubLink {
+    color: #58a6ff;
+  }
+
+  .githubLink:hover {
+    color: #79c0ff;
   }
 }
 

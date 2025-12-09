@@ -609,6 +609,845 @@ Implement full-text search across Claude conversation history with context-aware
 
 ---
 
+## READY: Logs Page UX Improvements
+
+**Status**: Planning Complete, Ready for Implementation
+**Priority**: P2 - User Experience and Production Quality
+**Epic ID**: EPIC-LOGS-UX-001
+**Estimated Effort**: 5-6 weeks (1 engineer, ~100 hours development + testing)
+**Progress**: 0% (Planning 100%, Implementation 0%)
+
+### Overview
+
+Comprehensive UX overhaul of the Logs page (`/logs`) to achieve Datadog/Grafana-level production quality for log analysis and monitoring workflows.
+
+**Key Problems**:
+- **No time range filtering** - Users cannot filter logs by time period (CRITICAL)
+- **Missing accessibility** - No ARIA labels, screen reader support incomplete (CRITICAL)
+- **No live tail** - Cannot stream logs in real-time for monitoring (HIGH)
+- **Limited filtering** - Can only filter one log level at a time (HIGH)
+- **No log context** - Cannot expand logs to see full details, JSON payload (HIGH)
+- **Manual search** - Requires button click, no instant search (HIGH)
+- **No keyboard shortcuts** - Power users cannot use Cmd+K, R, L, Escape (HIGH)
+- **Performance issues** - No virtual scrolling, slows with 1000+ logs (MEDIUM)
+
+**Strategic Value**:
+- **Production Quality**: Match industry standards (Datadog, Grafana, Kibana)
+- **Debugging Efficiency**: Reduce time to find relevant logs from minutes to seconds
+- **Real-Time Monitoring**: Live tail enables proactive issue detection
+- **Accessibility**: WCAG 2.1 AA compliance for all users
+
+### Sprint Breakdown
+
+#### Sprint 1: Critical Foundations (2 weeks, 24h) - ⏳ READY
+**Goal**: Time filtering, accessibility, instant search
+
+**Story 1: Time Range Picker (CRITICAL)**
+**Priority**: Must-Have | **Effort**: 2-3 days (16h)
+
+- [ ] Task 1.1: Create TimeRangePicker component [4h] - NEXT ACTION
+  - **Scope**: Reusable component with presets and custom range
+  - **Files**:
+    - `web-app/src/components/TimeRangePicker.tsx` (create)
+    - `web-app/src/components/TimeRangePicker.module.css` (create)
+  - **Implementation**:
+    - Preset buttons: Last 5m, 15m, 1h, 4h, 1d, 7d
+    - Custom range picker with date/time inputs
+    - "Apply" and "Clear" buttons
+    - Dropdown positioning with portal support
+  - **Success Criteria**:
+    - Clicking preset updates time range immediately
+    - Custom range picker supports date and time selection
+    - "Apply" button updates logs list
+    - "Clear" removes time filter
+    - Keyboard accessible (Tab, Enter, Escape)
+  - **Testing**: Unit tests for preset clicks, custom range validation
+
+- [ ] Task 1.2: Wire time range to GetLogsRequest [3h]
+  - **Scope**: Connect time picker to backend RPC
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+    - `proto/session/v1/session.proto` (verify start_time/end_time)
+  - **Implementation**:
+    - Add state: `timeRange: {start: Date | null, end: Date | null}`
+    - Convert Date to Timestamp protobuf message
+    - Include start_time/end_time in GetLogsRequest
+    - Handle timezone conversion (UTC)
+  - **Success Criteria**:
+    - Time filter applied to backend requests
+    - Logs filtered correctly by time range
+    - Timezone handling correct (display local, send UTC)
+  - **Testing**: Integration test with mock RPC
+
+- [ ] Task 1.3: Add time range display and persistence [2h]
+  - **Scope**: Show active time filter, persist in localStorage
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Display current time range as "Last 1h" or "Dec 5, 2:30 PM - Dec 5, 3:45 PM"
+    - Persist selected preset/custom range in localStorage
+    - Restore time range on page load
+  - **Success Criteria**:
+    - Active time range shown above logs table
+    - Time range persists across page reloads
+    - Clear button removes time filter
+  - **Testing**: localStorage persistence tests
+
+- [ ] Task 1.4: Add relative time display format [2h]
+  - **Scope**: Show "5m ago" instead of full timestamps
+  - **Files**:
+    - `web-app/src/lib/utils/time.ts` (create)
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - formatRelativeTime() function: "5m ago", "2h ago", "3d ago"
+    - Toggle between relative and absolute time display
+    - Hover tooltip shows full timestamp
+  - **Success Criteria**:
+    - Timestamps show relative format by default
+    - Hover displays full ISO timestamp
+    - Toggle button switches formats
+  - **Testing**: Time formatting unit tests (seconds, minutes, hours, days)
+
+**Story 2: Accessibility ARIA Labels (CRITICAL)**
+**Priority**: Must-Have | **Effort**: <1 day (6h)
+
+- [ ] Task 2.1: Add ARIA labels to interactive elements [3h]
+  - **Scope**: Annotate buttons, inputs, table headers with ARIA
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - aria-label on search input: "Search logs"
+    - aria-label on filter buttons: "Filter by Error level"
+    - aria-label on refresh button: "Refresh logs"
+    - aria-label on time picker: "Select time range"
+    - table headers with scope="col"
+  - **Success Criteria**:
+    - Screen reader announces all interactive elements correctly
+    - Tab navigation order is logical
+    - ARIA landmark roles present (main, navigation, search)
+  - **Testing**: axe DevTools scan, manual screen reader testing
+
+- [ ] Task 2.2: Add live region for log updates [2h]
+  - **Scope**: Announce new logs to screen readers
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - aria-live="polite" region for new log count
+    - Announce: "5 new logs loaded"
+    - Only announce when live tail enabled
+  - **Success Criteria**:
+    - Screen reader announces new logs arriving
+    - Announcements don't interrupt user actions (polite)
+    - Works with live tail enabled
+  - **Testing**: Screen reader testing with live tail
+
+- [ ] Task 2.3: Keyboard navigation for log rows [1h]
+  - **Scope**: Arrow keys navigate log entries
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Arrow up/down navigate rows
+    - Enter expands/collapses selected log
+    - Focus visible indicator on selected row
+  - **Success Criteria**:
+    - Arrow keys navigate log list
+    - Enter key expands log detail
+    - Focus indicator visible and accessible
+  - **Testing**: Keyboard-only navigation test
+
+**Story 3: Instant Search with Debouncing (HIGH)**
+**Priority**: Significant UX Improvement | **Effort**: <1 day (4h)
+
+- [ ] Task 3.1: Create useDebounce hook [1h]
+  - **Scope**: Reusable debouncing hook for search input
+  - **Files**:
+    - `web-app/src/lib/hooks/useDebounce.ts` (create)
+  - **Implementation**:
+    - Generic useDebounce<T>(value: T, delay: number)
+    - 300ms default delay
+    - Clear timeout on unmount
+  - **Success Criteria**:
+    - Debounces rapid input changes
+    - Delays callback by specified ms
+    - Works with any value type
+  - **Testing**: Unit tests with fake timers
+
+- [ ] Task 3.2: Wire debounced search to logs query [2h]
+  - **Scope**: Auto-search 300ms after typing stops
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Remove "Search" button
+    - useDebounce(searchQuery, 300)
+    - Trigger GetLogsRequest on debounced value change
+    - Show loading spinner during search
+  - **Success Criteria**:
+    - Search triggers 300ms after typing stops
+    - No search button required
+    - Loading indicator shown during search
+  - **Testing**: Integration test with timer mocks
+
+- [ ] Task 3.3: Add search result count and clear button [1h]
+  - **Scope**: Show "X results" and clear search
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Display "42 results" above logs table
+    - "Clear search" button next to input
+    - Empty state: "No logs found for 'query'"
+  - **Success Criteria**:
+    - Result count updates with search
+    - Clear button resets search input
+    - Empty state shown for no results
+  - **Testing**: Search result count validation
+
+**Deliverables**:
+- Time range picker with presets and custom range
+- Full WCAG 2.1 AA accessibility compliance
+- Instant debounced search (no button click)
+- Relative time display ("5m ago")
+- localStorage persistence for time range
+
+---
+
+#### Sprint 2: Advanced Filtering (2 weeks, 18h) - 🔒 BLOCKED by Sprint 1
+**Goal**: Multi-select log levels, contextual filtering, sticky headers
+
+**Story 4: Multi-Select Log Levels (HIGH)**
+**Priority**: Significant UX Improvement | **Effort**: 2 days (14h)
+
+- [ ] Task 4.1: Create MultiSelect component [4h]
+  - **Scope**: Reusable multi-select with checkboxes
+  - **Files**:
+    - `web-app/src/components/MultiSelect.tsx` (create)
+    - `web-app/src/components/MultiSelect.module.css` (create)
+  - **Implementation**:
+    - Dropdown with checkbox list
+    - "Select All" / "Clear All" buttons
+    - Chip display for selected items
+    - Keyboard navigation (Space to toggle)
+  - **Success Criteria**:
+    - Can select multiple log levels simultaneously
+    - Selected levels shown as chips
+    - "Select All" checks all levels
+    - Keyboard accessible
+  - **Testing**: Unit tests for selection state
+
+- [ ] Task 4.2: Integrate multi-select into logs page [3h]
+  - **Scope**: Replace single log level filter with multi-select
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - State: `logLevels: string[]` (e.g., ["ERROR", "WARN"])
+    - Include all selected levels in GetLogsRequest
+    - Backend modification if needed (OR logic for levels)
+  - **Success Criteria**:
+    - Logs filtered by multiple levels simultaneously
+    - Filter applied to backend requests
+    - State persists in localStorage
+  - **Testing**: Integration test with multiple level selections
+
+- [ ] Task 4.3: Add filter pills component [2h]
+  - **Scope**: Visual pills showing active filters
+  - **Files**:
+    - `web-app/src/components/FilterPill.tsx` (create)
+    - `web-app/src/components/FilterPill.module.css` (create)
+  - **Implementation**:
+    - Pill component with "X" close button
+    - Pills for log levels, time range, search
+    - "Clear all filters" button
+  - **Success Criteria**:
+    - Pills display active filters
+    - Clicking "X" removes individual filter
+    - "Clear all" removes all filters
+  - **Testing**: Filter pill interaction tests
+
+**Story 5: Log Detail Expansion (HIGH)**
+**Priority**: Significant UX Improvement | **Effort**: 2-3 days (16h)
+
+- [ ] Task 5.1: Create expandable log row component [4h]
+  - **Scope**: Expand row to show full log context
+  - **Files**:
+    - `web-app/src/components/LogDetail.tsx` (create)
+    - `web-app/src/components/LogDetail.module.css` (create)
+  - **Implementation**:
+    - Expandable row with slide-down animation
+    - Show full log message (not truncated)
+    - Display JSON payload if available
+    - Copy button for full log
+  - **Success Criteria**:
+    - Clicking log row expands detail panel
+    - Full log message visible
+    - Copy button copies entire log entry
+    - Smooth slide-down animation
+  - **Testing**: Unit tests for expand/collapse state
+
+- [ ] Task 5.2: Add JSON viewer for structured logs [4h]
+  - **Scope**: Pretty-print JSON payloads
+  - **Files**:
+    - `web-app/src/components/LogDetail.tsx` (modify)
+  - **Implementation**:
+    - Detect JSON in log message
+    - Pretty-print with indentation
+    - Syntax highlighting (use react-json-view or custom)
+    - Collapsible nested objects
+  - **Success Criteria**:
+    - JSON payloads render as formatted, highlighted code
+    - Nested objects can be expanded/collapsed
+    - Copy button includes formatted JSON
+  - **Testing**: JSON parsing and rendering tests
+
+- [ ] Task 5.3: Add context lines (before/after log) [3h]
+  - **Scope**: Show N lines before/after selected log
+  - **Files**:
+    - `web-app/src/components/LogDetail.tsx` (modify)
+    - `proto/session/v1/session.proto` (add context_lines to GetLogsRequest)
+  - **Implementation**:
+    - Backend: Include 2-3 lines before/after log
+    - Frontend: Display context lines in muted color
+    - Highlight selected log entry
+  - **Success Criteria**:
+    - Expanded log shows 2-3 context lines before/after
+    - Context lines visually distinct (muted)
+    - Selected log highlighted
+  - **Testing**: Context line fetching and display tests
+
+**Story 6: Contextual Filtering (Click-to-Filter) (HIGH)**
+**Priority**: Significant UX Improvement | **Effort**: 1 day (6h)
+
+- [ ] Task 6.1: Add click-to-filter on field values [4h]
+  - **Scope**: Click field value to add filter
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Make field values clickable (cursor: pointer)
+    - Clicking "ERROR" adds error level filter
+    - Clicking session name filters by session
+    - Clicking timestamp opens time range picker
+  - **Success Criteria**:
+    - Clicking field value adds corresponding filter
+    - Filter pills update to show new filter
+    - Logs re-fetch with new filter applied
+  - **Testing**: Click-to-filter interaction tests
+
+- [ ] Task 6.2: Add "Show only this session" action [2h]
+  - **Scope**: Right-click menu for session-specific logs
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Right-click context menu on session column
+    - "Show only this session" option
+    - Adds session_name filter
+  - **Success Criteria**:
+    - Right-click shows context menu
+    - "Show only" filters to single session
+    - Works on mobile (long-press)
+  - **Testing**: Context menu interaction tests
+
+**Story 7: Sticky Table Headers (MEDIUM)**
+**Priority**: Technical Improvement | **Effort**: <1 day (3h)
+
+- [ ] Task 7.1: Implement sticky headers with CSS [2h]
+  - **Scope**: Table headers stick to top on scroll
+  - **Files**:
+    - `web-app/src/app/logs/page.module.css` (modify)
+  - **Implementation**:
+    - position: sticky on thead
+    - z-index to stay above rows
+    - Box shadow on scroll for depth
+  - **Success Criteria**:
+    - Headers remain visible while scrolling
+    - Box shadow indicates stickiness
+    - Works in all modern browsers
+  - **Testing**: Visual regression tests
+
+- [ ] Task 7.2: Add virtual scrolling for performance [4h]
+  - **Scope**: Virtualize log rows for 1000+ logs
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+    - `package.json` (add @tanstack/react-virtual)
+  - **Implementation**:
+    - Install @tanstack/react-virtual
+    - Wrap logs table in virtualizer
+    - Render only visible rows (~50 at a time)
+  - **Success Criteria**:
+    - Smooth scrolling with 1000+ logs
+    - Only visible rows in DOM
+    - No layout shift on scroll
+  - **Testing**: Performance benchmarks with large datasets
+
+**Deliverables**:
+- Multi-select log level filtering
+- Expandable log rows with JSON viewer
+- Click-to-filter on field values
+- Sticky table headers with virtual scrolling
+
+---
+
+#### Sprint 3: Real-Time and Keyboard (1.5 weeks, 28h) - 🔒 BLOCKED by Sprint 2
+**Goal**: Live tail, keyboard shortcuts, request debouncing
+
+**Story 8: Live Tail/Streaming (HIGH)**
+**Priority**: Significant UX Improvement | **Effort**: 1 week (24h)
+
+- [ ] Task 8.1: Add WebSocket log streaming endpoint [8h]
+  - **Scope**: Backend WebSocket handler for real-time logs
+  - **Files**:
+    - `server/services/log_stream.go` (create)
+    - `server/server.go` (modify - add WebSocket route)
+  - **Implementation**:
+    - WebSocket endpoint at `/api/logs/stream`
+    - Tail log file with fsnotify or similar
+    - Stream new log entries as JSON
+    - Handle client disconnects gracefully
+  - **Success Criteria**:
+    - WebSocket accepts connections at /api/logs/stream
+    - New logs broadcast to connected clients
+    - Connection closes cleanly on disconnect
+  - **Testing**: Integration tests with mock log file
+
+- [ ] Task 8.2: Add frontend WebSocket client [6h]
+  - **Scope**: React hook for WebSocket connection
+  - **Files**:
+    - `web-app/src/lib/hooks/useLogStream.ts` (create)
+  - **Implementation**:
+    - useLogStream() hook with auto-reconnect
+    - Buffer incoming logs to avoid UI thrashing
+    - Pause/resume streaming functionality
+    - Auto-scroll to bottom when tailing
+  - **Success Criteria**:
+    - WebSocket connects on component mount
+    - New logs append to list automatically
+    - Pause button stops auto-scroll
+    - Auto-reconnect on disconnect
+  - **Testing**: WebSocket connection and reconnection tests
+
+- [ ] Task 8.3: Add live tail toggle and pause button [3h]
+  - **Scope**: UI controls for live tail feature
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - "Live Tail" toggle button
+    - "Pause" button (only visible when tailing)
+    - Status indicator: "Live" badge with green dot
+    - Auto-pause on user scroll up
+  - **Success Criteria**:
+    - Toggle button starts/stops live tail
+    - Pause button freezes log stream
+    - Status badge shows "Live" or "Paused"
+    - Scrolling up auto-pauses tail
+  - **Testing**: Live tail UI interaction tests
+
+- [ ] Task 8.4: Add rate limiting and performance optimization [3h]
+  - **Scope**: Prevent UI thrashing with high-volume logs
+  - **Files**:
+    - `web-app/src/lib/hooks/useLogStream.ts` (modify)
+    - `server/services/log_stream.go` (modify)
+  - **Implementation**:
+    - Backend: Rate limit to 100 logs/second max
+    - Frontend: Buffer logs, flush every 500ms
+    - Drop old logs if buffer exceeds 1000 entries
+  - **Success Criteria**:
+    - UI remains responsive with 1000+ logs/second
+    - No dropped logs under normal load
+    - Smooth scrolling maintained
+  - **Testing**: Load tests with high-volume log generation
+
+**Story 9: Keyboard Shortcuts (HIGH)**
+**Priority**: Significant UX Improvement | **Effort**: 2 days (14h)
+
+- [ ] Task 9.1: Create useKeyboard hook [2h]
+  - **Scope**: Reusable keyboard shortcut manager
+  - **Files**:
+    - `web-app/src/lib/hooks/useKeyboard.ts` (create)
+  - **Implementation**:
+    - useKeyboard({ 'Cmd+K': handler, 'r': handler })
+    - Cross-platform (Cmd on Mac, Ctrl on Windows)
+    - Prevent defaults for captured keys
+    - Disable shortcuts when input focused
+  - **Success Criteria**:
+    - Shortcuts work on Mac (Cmd) and Windows/Linux (Ctrl)
+    - Shortcuts don't fire when typing in input
+    - Easy to add new shortcuts
+  - **Testing**: Keyboard event capture unit tests
+
+- [ ] Task 9.2: Implement shortcuts: Cmd+K, R, L, Escape [3h]
+  - **Scope**: Wire shortcuts to log actions
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Cmd+K: Focus search input
+    - R: Refresh logs
+    - L: Toggle live tail
+    - Escape: Clear search / close log detail
+  - **Success Criteria**:
+    - Cmd+K focuses search box
+    - R refreshes logs list
+    - L toggles live tail on/off
+    - Escape clears active search or closes expanded log
+  - **Testing**: Keyboard shortcut integration tests
+
+- [ ] Task 9.3: Add keyboard shortcuts help modal [2h]
+  - **Scope**: Display available shortcuts to users
+  - **Files**:
+    - `web-app/src/components/KeyboardShortcutsHelp.tsx` (create)
+  - **Implementation**:
+    - Modal showing all shortcuts
+    - Triggered by "?" key
+    - Grouped by category (Navigation, Actions, etc.)
+    - Platform-specific display (Cmd vs Ctrl)
+  - **Success Criteria**:
+    - "?" key opens help modal
+    - All shortcuts listed and categorized
+    - Modal closes with Escape
+  - **Testing**: Help modal display tests
+
+**Story 10: Request Debouncing and Optimization (MEDIUM)**
+**Priority**: Technical Improvement | **Effort**: <1 day (4h)
+
+- [ ] Task 10.1: Add AbortController for request cancellation [2h]
+  - **Scope**: Cancel in-flight requests on rapid filter changes
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Create AbortController per GetLogsRequest
+    - Abort previous request when new request starts
+    - Handle AbortError gracefully (no error toast)
+  - **Success Criteria**:
+    - Rapid filter changes don't create race conditions
+    - Only latest request updates UI
+    - No error messages for aborted requests
+  - **Testing**: Request cancellation unit tests
+
+- [ ] Task 10.2: Add request state indicators [2h]
+  - **Scope**: Show loading/error states clearly
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Skeleton loading state for log rows
+    - Loading spinner in header during fetch
+    - Error banner with retry button
+    - Stale data indicator (showing old logs while fetching)
+  - **Success Criteria**:
+    - Loading spinner visible during requests
+    - Skeleton rows shown for initial load
+    - Error banner has retry button
+  - **Testing**: Loading state visual regression tests
+
+**Deliverables**:
+- Real-time log streaming with WebSocket
+- Keyboard shortcuts (Cmd+K, R, L, Escape, ?)
+- Request cancellation and debouncing
+- Loading and error states
+
+---
+
+#### Sprint 4: Advanced Features (1.5 weeks, 22h) - 🔒 BLOCKED by Sprint 3
+**Goal**: Saved queries, export, recent history
+
+**Story 11: Saved Queries/Views (MEDIUM)**
+**Priority**: Nice-to-Have | **Effort**: 3 days (18h)
+
+- [ ] Task 11.1: Add saved query storage (localStorage) [3h]
+  - **Scope**: Persist named query configurations
+  - **Files**:
+    - `web-app/src/lib/hooks/useSavedQueries.ts` (create)
+  - **Implementation**:
+    - Store queries as JSON: {name, logLevels, search, timeRange}
+    - CRUD operations: create, list, delete saved queries
+    - Validate max 10 saved queries per user
+  - **Success Criteria**:
+    - Queries saved to localStorage
+    - Queries persist across page reloads
+    - Max 10 queries enforced
+  - **Testing**: localStorage persistence tests
+
+- [ ] Task 11.2: Add saved queries UI (sidebar or dropdown) [4h]
+  - **Scope**: UI to manage saved queries
+  - **Files**:
+    - `web-app/src/components/SavedQueries.tsx` (create)
+    - `web-app/src/components/SavedQueries.module.css` (create)
+  - **Implementation**:
+    - "Save current query" button
+    - Dropdown listing saved queries
+    - Click query to apply filters
+    - Delete button for each saved query
+  - **Success Criteria**:
+    - "Save" button saves current filter state
+    - Dropdown shows saved queries
+    - Clicking query applies filters
+    - Delete removes query
+  - **Testing**: Saved query interaction tests
+
+- [ ] Task 11.3: Add query sharing via URL [3h]
+  - **Scope**: Encode query in URL for sharing
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Encode filters in URL query params
+    - Decode URL params on page load
+    - "Copy link" button for current query
+  - **Success Criteria**:
+    - URL contains filter state
+    - Sharing URL restores exact filters
+    - "Copy link" copies shareable URL
+  - **Testing**: URL encoding/decoding tests
+
+**Story 12: Export and Download (MEDIUM)**
+**Priority**: Nice-to-Have | **Effort**: 1 day (6h)
+
+- [ ] Task 12.1: Add CSV export functionality [3h]
+  - **Scope**: Export logs as CSV file
+  - **Files**:
+    - `web-app/src/lib/utils/export.ts` (create)
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Generate CSV from log entries
+    - Include all columns (timestamp, level, session, message)
+    - Trigger browser download with correct filename
+    - "Export" button in toolbar
+  - **Success Criteria**:
+    - "Export" button downloads CSV file
+    - CSV includes all visible logs
+    - Filename includes timestamp: "logs-2025-12-08-14-30.csv"
+  - **Testing**: CSV generation unit tests
+
+- [ ] Task 12.2: Add JSON export option [2h]
+  - **Scope**: Export logs as JSON array
+  - **Files**:
+    - `web-app/src/lib/utils/export.ts` (modify)
+  - **Implementation**:
+    - Generate JSON array from log entries
+    - Pretty-print with 2-space indentation
+    - Export dropdown: "CSV" or "JSON"
+  - **Success Criteria**:
+    - Export dropdown shows CSV and JSON options
+    - JSON export downloads formatted JSON file
+    - Filename: "logs-2025-12-08-14-30.json"
+  - **Testing**: JSON export integration tests
+
+**Story 13: Recent Search History (MEDIUM)**
+**Priority**: Nice-to-Have | **Effort**: 1 day (6h)
+
+- [ ] Task 13.1: Store recent searches in localStorage [2h]
+  - **Scope**: Track last 10 search queries
+  - **Files**:
+    - `web-app/src/lib/hooks/useSearchHistory.ts` (create)
+  - **Implementation**:
+    - Store array of recent searches (max 10)
+    - Deduplicate searches (don't store duplicates)
+    - Order by recency (most recent first)
+  - **Success Criteria**:
+    - Last 10 searches persisted
+    - Duplicates not stored
+    - Most recent search at top
+  - **Testing**: Search history storage tests
+
+- [ ] Task 13.2: Add search history dropdown [3h]
+  - **Scope**: Dropdown showing recent searches
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Dropdown below search input when focused
+    - Show last 10 searches
+    - Click search to apply
+    - "Clear history" button at bottom
+  - **Success Criteria**:
+    - Dropdown shows on input focus
+    - Clicking search applies query
+    - "Clear history" empties list
+  - **Testing**: Search history interaction tests
+
+**Deliverables**:
+- Saved queries with localStorage persistence
+- CSV/JSON export functionality
+- Recent search history dropdown
+- Query sharing via URL
+
+---
+
+#### Sprint 5: Polish and UX (1 week, 14h) - 🔒 BLOCKED by Sprint 4
+**Goal**: Column customization, density toggle, query builder
+
+**Story 14: Column Customization (MEDIUM)**
+**Priority**: Nice-to-Have | **Effort**: 2 days (12h)
+
+- [ ] Task 14.1: Add column visibility toggle [4h]
+  - **Scope**: Show/hide table columns
+  - **Files**:
+    - `web-app/src/components/ColumnSettings.tsx` (create)
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Settings dropdown with column checkboxes
+    - Show/hide columns: Timestamp, Level, Session, Message
+    - Persist column visibility in localStorage
+  - **Success Criteria**:
+    - Settings dropdown lists all columns
+    - Toggling checkbox shows/hides column
+    - Visibility persists across reloads
+  - **Testing**: Column visibility toggle tests
+
+- [ ] Task 14.2: Add column reordering (drag-and-drop) [4h]
+  - **Scope**: Reorder columns via drag-and-drop
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+    - `package.json` (add @dnd-kit/core)
+  - **Implementation**:
+    - Install @dnd-kit/core for drag-and-drop
+    - Make table headers draggable
+    - Reorder columns on drop
+    - Persist order in localStorage
+  - **Success Criteria**:
+    - Columns can be dragged to reorder
+    - New order applied to table
+    - Order persists across reloads
+  - **Testing**: Drag-and-drop interaction tests
+
+**Story 15: Density Toggle (LOW)**
+**Priority**: Polish | **Effort**: 1 day (6h)
+
+- [ ] Task 15.1: Add density toggle (Compact/Default/Comfortable) [3h]
+  - **Scope**: Adjust row height and padding
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+    - `web-app/src/app/logs/page.module.css` (modify)
+  - **Implementation**:
+    - Density dropdown: Compact, Default, Comfortable
+    - CSS classes for each density level
+    - Persist density in localStorage
+  - **Success Criteria**:
+    - Compact: 32px row height, minimal padding
+    - Default: 48px row height, normal padding
+    - Comfortable: 64px row height, generous padding
+    - Density persists across reloads
+  - **Testing**: Visual regression tests for each density
+
+- [ ] Task 15.2: Add font size adjustment [2h]
+  - **Scope**: Increase/decrease font size
+  - **Files**:
+    - `web-app/src/app/logs/page.tsx` (modify)
+  - **Implementation**:
+    - Font size slider: 12px - 16px
+    - Apply to log message column only
+    - Persist in localStorage
+  - **Success Criteria**:
+    - Slider adjusts font size smoothly
+    - Font size persists
+    - Applies only to message column
+  - **Testing**: Font size adjustment tests
+
+**Story 16: Query Builder UI (HIGH - Deferred)**
+**Priority**: Significant UX Improvement (Deferred to Future Sprint) | **Effort**: 1 week (30h)
+
+- [ ] Task 16.1: Design query builder component [4h]
+  - **Scope**: Visual query builder for advanced filtering
+  - **Files**:
+    - `web-app/src/components/QueryBuilder.tsx` (create)
+    - `web-app/src/components/QueryBuilder.module.css` (create)
+  - **Implementation**:
+    - AND/OR logic selector
+    - Field selector (Level, Session, Message, Timestamp)
+    - Operator selector (equals, contains, greater than, etc.)
+    - Value input field
+    - Add/remove condition buttons
+  - **Success Criteria**:
+    - Builder supports multiple conditions
+    - AND/OR logic between conditions
+    - Operators appropriate for field type
+  - **Testing**: Query builder interaction tests
+
+- [ ] Task 16.2: Generate query from builder state [3h]
+  - **Scope**: Convert builder state to backend query
+  - **Files**:
+    - `web-app/src/lib/utils/queryBuilder.ts` (create)
+  - **Implementation**:
+    - Convert builder state to GetLogsRequest fields
+    - Support complex queries (AND/OR combinations)
+    - Validate query before sending
+  - **Success Criteria**:
+    - Builder state correctly maps to RPC request
+    - Complex queries supported
+    - Invalid queries show error message
+  - **Testing**: Query generation unit tests
+
+**Deliverables**:
+- Column visibility and reordering
+- Density toggle (Compact/Default/Comfortable)
+- Font size adjustment
+- (Query builder deferred to future sprint)
+
+---
+
+### Success Metrics
+
+**Performance Targets**:
+- Time range filtering: < 500ms response time (p95)
+- Live tail latency: < 100ms from log write to display
+- Virtual scrolling: 60fps with 10,000+ logs
+- Search response: < 200ms (p95)
+
+**Accessibility Targets**:
+- WCAG 2.1 AA compliance (100% axe DevTools score)
+- Keyboard navigation for all actions
+- Screen reader support (JAWS, NVDA, VoiceOver)
+
+**Usability Targets**:
+- Time to find specific log: < 10 seconds (from 2-5 minutes)
+- Keyboard shortcut adoption: 40%+ of users
+- Multi-level filter usage: 60%+ of users
+- Live tail usage: 30%+ of active monitoring sessions
+
+**Quality Targets**:
+- Zero race conditions from rapid filter changes
+- No UI freezes with 1000+ logs
+- Smooth animations (60fps)
+
+### Files to Create
+
+**New Components**:
+- `web-app/src/components/TimeRangePicker.tsx` - Time range selection
+- `web-app/src/components/MultiSelect.tsx` - Multi-select filter
+- `web-app/src/components/FilterPill.tsx` - Active filter pills
+- `web-app/src/components/LogDetail.tsx` - Expandable log row
+- `web-app/src/components/SavedQueries.tsx` - Saved query management
+- `web-app/src/components/ColumnSettings.tsx` - Column customization
+- `web-app/src/components/KeyboardShortcutsHelp.tsx` - Shortcuts help
+
+**New Hooks**:
+- `web-app/src/lib/hooks/useDebounce.ts` - Debouncing hook
+- `web-app/src/lib/hooks/useKeyboard.ts` - Keyboard shortcuts
+- `web-app/src/lib/hooks/useLogStream.ts` - WebSocket log streaming
+- `web-app/src/lib/hooks/useSavedQueries.ts` - Saved query management
+- `web-app/src/lib/hooks/useSearchHistory.ts` - Search history
+
+**New Utilities**:
+- `web-app/src/lib/utils/time.ts` - Time formatting helpers
+- `web-app/src/lib/utils/export.ts` - CSV/JSON export
+- `web-app/src/lib/utils/queryBuilder.ts` - Query builder logic
+
+**Backend**:
+- `server/services/log_stream.go` - WebSocket log streaming
+
+### Files to Modify
+
+- `web-app/src/app/logs/page.tsx` - Main logs page (all features)
+- `web-app/src/app/logs/page.module.css` - Styling updates
+- `proto/session/v1/session.proto` - Add context_lines, verify time fields
+- `server/server.go` - Add WebSocket route
+
+### Technical Debt
+
+- [ ] **No tests** - Zero test coverage for logs page (add during implementation)
+- [ ] **Query builder deferred** - Visual query builder (Story 16, 30h)
+- [ ] **Backend query optimization** - Index logs for faster time range queries
+- [ ] **Log retention policy** - Implement log rotation and archival
+
+**See Full Details**: No separate doc - all details in this TODO section
+
+**Next Action**: Task 1.1 - Create TimeRangePicker component (4 hours)
+
+---
+
 ## READY: History Page UX Improvements
 
 **Status**: Planning Complete, Ready for Implementation

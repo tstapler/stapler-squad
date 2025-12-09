@@ -22,7 +22,36 @@ func TestDebugCancelBehavior(t *testing.T) {
 	_ = appModel.list.AddInstance(session)
 	appModel.list.SetSelectedInstance(0)
 
+	// CRITICAL: Ensure category is expanded so session is visible
+	appModel.list.OrganizeByCategory()
+	// Note: "Uncategorized" sessions are transformed to "Squad Sessions" by OrganizeByStrategy
+	appModel.list.ExpandCategory("Squad Sessions")
+	// FORCE re-organization to ensure expansion state takes effect
+	appModel.list.OrganizeByCategory()
+
 	config := testutil.DefaultTUIConfig()
+
+	// PRE-CONFIGURE component dimensions BEFORE creating teatest model
+	// This ensures the first render uses correct dimensions instead of waiting for WindowSizeMsg
+	listWidth := int(float32(config.Width) * 0.3)
+	tabsWidth := config.Width - listWidth
+	menuHeight := 3
+	errorBoxHeight := 1
+	contentHeight := config.Height - menuHeight - errorBoxHeight
+
+	// Set component dimensions directly
+	appModel.list.SetSize(listWidth, contentHeight)
+	appModel.tabbedWindow.SetSize(tabsWidth, contentHeight)
+	appModel.menu.SetSize(config.Width, menuHeight)
+
+	// CRITICAL: Set termWidth and termHeight to ensure View() renders correctly
+	appModel.termWidth = config.Width
+	appModel.termHeight = config.Height
+
+	// CRITICAL FIX: Set terminalManager to nil to prevent Init() from sending 80x24 WindowSizeMsg
+	// This allows BubbleTea's teatest framework to control terminal dimensions
+	appModel.terminalManager = nil
+
 	tm := testutil.CreateTUITest(t, appModel, config)
 
 	// Step 1: Initial render

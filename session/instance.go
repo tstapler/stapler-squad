@@ -78,6 +78,20 @@ type Instance struct {
 	// Examples: ["frontend", "urgent", "client-work"]
 	Tags []string
 
+	// GitHub integration fields for PR/URL-based session creation
+	// GitHubPRNumber is the PR number if this session was created from a PR URL
+	GitHubPRNumber int `json:"github_pr_number,omitempty"`
+	// GitHubPRURL is the full URL to the PR on GitHub
+	GitHubPRURL string `json:"github_pr_url,omitempty"`
+	// GitHubOwner is the repository owner (user or organization)
+	GitHubOwner string `json:"github_owner,omitempty"`
+	// GitHubRepo is the repository name
+	GitHubRepo string `json:"github_repo,omitempty"`
+	// GitHubSourceRef is the original URL or reference used to create this session
+	GitHubSourceRef string `json:"github_source_ref,omitempty"`
+	// ClonedRepoPath is the path where we cloned the repo (if cloned)
+	ClonedRepoPath string `json:"cloned_repo_path,omitempty"`
+
 	// DiffStats stores the current git diff statistics
 	diffStats *git.DiffStats
 
@@ -165,6 +179,13 @@ func (i *Instance) ToInstanceData() InstanceData {
 		LastAddedToQueue:     i.LastAddedToQueue,
 		LastViewed:           i.LastViewed,
 		LastAcknowledged:     i.LastAcknowledged,
+		// GitHub integration fields
+		GitHubPRNumber:  i.GitHubPRNumber,
+		GitHubPRURL:     i.GitHubPRURL,
+		GitHubOwner:     i.GitHubOwner,
+		GitHubRepo:      i.GitHubRepo,
+		GitHubSourceRef: i.GitHubSourceRef,
+		ClonedRepoPath:  i.ClonedRepoPath,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -260,6 +281,13 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		InstanceType:         InstanceTypeManaged, // Restored instances are always managed
 		IsManaged:            true,
 		ExternalMetadata:     nil, // External instances are not persisted
+		// GitHub integration fields
+		GitHubPRNumber:  data.GitHubPRNumber,
+		GitHubPRURL:     data.GitHubPRURL,
+		GitHubOwner:     data.GitHubOwner,
+		GitHubRepo:      data.GitHubRepo,
+		GitHubSourceRef: data.GitHubSourceRef,
+		ClonedRepoPath:  data.ClonedRepoPath,
 		gitWorktree: git.NewGitWorktreeFromStorage(
 			data.Worktree.RepoPath,
 			data.Worktree.WorktreePath,
@@ -357,6 +385,13 @@ type InstanceOptions struct {
 	// If empty, uses the default tmux server. For complete isolation (e.g., testing),
 	// set to a unique value like "test" or "teatest_123" to create separate tmux servers.
 	TmuxServerSocket string
+	// GitHub integration fields for PR/URL-based session creation
+	GitHubPRNumber  int    // PR number if created from PR URL
+	GitHubPRURL     string // Full URL to the PR
+	GitHubOwner     string // Repository owner
+	GitHubRepo      string // Repository name
+	GitHubSourceRef string // Original URL/reference used to create session
+	ClonedRepoPath  string // Path where repo was cloned (if cloned)
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -415,6 +450,13 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		ExternalMetadata:     nil, // Only set for external instances
 		LastTerminalUpdate:   t,   // Initialize to creation time
 		LastMeaningfulOutput: t,   // Initialize to creation time
+		// GitHub integration fields
+		GitHubPRNumber:  opts.GitHubPRNumber,
+		GitHubPRURL:     opts.GitHubPRURL,
+		GitHubOwner:     opts.GitHubOwner,
+		GitHubRepo:      opts.GitHubRepo,
+		GitHubSourceRef: opts.GitHubSourceRef,
+		ClonedRepoPath:  opts.ClonedRepoPath,
 	}, nil
 }
 
@@ -1850,7 +1892,36 @@ func (i *Instance) GetTags() []string {
 func (i *Instance) SetTags(tags []string) {
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
-	
+
 	i.Tags = make([]string, len(tags))
 	copy(i.Tags, tags)
+}
+
+// GitHub integration helper methods
+
+// IsPRSession returns true if this session was created from a GitHub PR URL
+func (i *Instance) IsPRSession() bool {
+	return i.GitHubPRNumber > 0
+}
+
+// GetGitHubRepoFullName returns "owner/repo" format, or empty string if not a GitHub session
+func (i *Instance) GetGitHubRepoFullName() string {
+	if i.GitHubOwner == "" || i.GitHubRepo == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s", i.GitHubOwner, i.GitHubRepo)
+}
+
+// GetPRDisplayInfo returns a human-readable string describing the PR for display in UI
+// Returns empty string if not a PR session
+func (i *Instance) GetPRDisplayInfo() string {
+	if !i.IsPRSession() {
+		return ""
+	}
+	return fmt.Sprintf("PR #%d on %s", i.GitHubPRNumber, i.GetGitHubRepoFullName())
+}
+
+// IsGitHubSession returns true if this session has any GitHub metadata
+func (i *Instance) IsGitHubSession() bool {
+	return i.GitHubOwner != "" && i.GitHubRepo != ""
 }

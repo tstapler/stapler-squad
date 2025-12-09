@@ -333,6 +333,24 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Contexts:    []ContextID{ContextList},
 	}).BindKey("G")
 
+	registry.Register(&Command{
+		ID:          "org.cycle_sort",
+		Name:        "Cycle Sort",
+		Description: "Cycle through sort modes (Activity, Created, Title, Repo, Branch, Status)",
+		Category:    CategoryOrganization,
+		Handler:     commands.CycleSortModeCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("S")
+
+	registry.Register(&Command{
+		ID:          "org.toggle_sort_direction",
+		Name:        "Toggle Sort Direction",
+		Description: "Toggle sort direction (ascending/descending)",
+		Category:    CategoryOrganization,
+		Handler:     commands.ToggleSortDirectionCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("shift+S")
+
 	// System commands (available in most contexts)
 	registry.Register(&Command{
 		ID:          "sys.help",

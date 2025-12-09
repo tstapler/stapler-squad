@@ -194,7 +194,8 @@ export class StateApplicator {
     }
 
     // Hide cursor during update to prevent cursor jump flicker
-    this.terminal.write(CURSOR_HIDE);
+    // Accumulate all line updates into a single write buffer
+    let writeBuffer = CURSOR_HIDE;
 
     let changedLines = 0;
     let unchangedLines = 0;
@@ -218,8 +219,8 @@ export class StateApplicator {
 
       // Only update if line changed
       if (lineText !== previousLine) {
-        // Position at row (1-indexed), clear line, then write content
-        this.terminal.write(positionAndClearLine(i + 1) + lineText);
+        // Position at row (1-indexed), clear line, then append content to buffer
+        writeBuffer += positionAndClearLine(i + 1) + lineText;
         this.previousLines.set(i, lineText);
         changedLines++;
       } else {
@@ -231,10 +232,16 @@ export class StateApplicator {
     const previousLineCount = this.previousLines.size;
     if (state.lines.length < previousLineCount) {
       for (let i = state.lines.length; i < previousLineCount; i++) {
-        this.terminal.write(positionAndClearLine(i + 1));
+        writeBuffer += positionAndClearLine(i + 1);
         this.previousLines.delete(i);
         changedLines++;
       }
+    }
+
+    // CRITICAL: Write all line updates in a single terminal.write() call
+    // This eliminates the cascading visual effect where lines update one-by-one
+    if (writeBuffer.length > CURSOR_HIDE.length) {
+      this.terminal.write(writeBuffer);
     }
 
     console.log(

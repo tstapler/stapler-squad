@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Session, SessionStatus, ReviewItem } from "@/gen/session/v1/types_pb";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
+import { GitHubBadge } from "./GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import styles from "./SessionCard.module.css";
 
@@ -165,6 +166,14 @@ export function SessionCard({
         <div className={styles.titleRow}>
           <h3 className={styles.title}>{session.title}</h3>
           <div className={styles.badges}>
+            <GitHubBadge
+              prNumber={session.githubPrNumber}
+              prUrl={session.githubPrUrl}
+              owner={session.githubOwner}
+              repo={session.githubRepo}
+              sourceRef={session.githubSourceRef}
+              compact={true}
+            />
             {reviewItem && (
               <ReviewQueueBadge
                 priority={reviewItem.priority}
@@ -236,6 +245,46 @@ export function SessionCard({
             <div className={styles.infoRow}>
               <span className={styles.label}>Working Dir:</span>
               <span className={styles.value}>{session.workingDir}</span>
+            </div>
+          )}
+          {session.githubOwner && session.githubRepo && (
+            <div className={styles.infoRow}>
+              <span className={styles.label}>Repository:</span>
+              <span className={styles.value}>
+                <a
+                  href={`https://github.com/${session.githubOwner}/${session.githubRepo}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className={styles.githubLink}
+                >
+                  {session.githubOwner}/{session.githubRepo}
+                </a>
+              </span>
+            </div>
+          )}
+          {session.githubPrNumber > 0 && session.githubPrUrl && (
+            <div className={styles.infoRow}>
+              <span className={styles.label}>Pull Request:</span>
+              <span className={styles.value}>
+                <a
+                  href={session.githubPrUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className={styles.githubLink}
+                >
+                  #{session.githubPrNumber}
+                </a>
+              </span>
+            </div>
+          )}
+          {session.clonedRepoPath && (
+            <div className={styles.infoRow}>
+              <span className={styles.label}>Cloned To:</span>
+              <span className={styles.value} title={session.clonedRepoPath}>
+                {session.clonedRepoPath}
+              </span>
             </div>
           )}
         </div>

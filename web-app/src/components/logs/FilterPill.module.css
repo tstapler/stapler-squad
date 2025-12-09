@@ -1,0 +1,77 @@
+.container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  background-color: #1a1a1a;
+  border: 1px solid #444;
+  border-radius: 16px;
+  font-size: 0.8rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.label {
+  color: #999;
+}
+
+.value {
+  color: #e5e5e5;
+  font-weight: 500;
+}
+
+.removeButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 0.25rem;
+  padding: 0;
+  background: none;
+  border: none;
+  color: #666;
+  cursor: pointer;
+  border-radius: 50%;
+  font-size: 1rem;
+  line-height: 1;
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.removeButton:hover {
+  color: #ff6b6b;
+  background-color: rgba(255, 107, 107, 0.1);
+}
+
+.removeButton:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(23, 162, 184, 0.3);
+}
+
+.clearAllButton {
+  padding: 0.25rem 0.5rem;
+  background: none;
+  border: none;
+  color: #17a2b8;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: color 0.15s;
+}
+
+.clearAllButton:hover {
+  color: #1dc3d8;
+  text-decoration: underline;
+}
+
+.clearAllButton:focus {
+  outline: none;
+  text-decoration: underline;
+}

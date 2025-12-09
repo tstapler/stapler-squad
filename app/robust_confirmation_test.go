@@ -10,12 +10,12 @@ import (
 	"github.com/charmbracelet/x/exp/teatest"
 )
 
-// TestRobustConfirmationModalFlow - test confirmation modal with robust rendering approach
+// TestRobustConfirmationModalFlow - test confirmation modal with improved API
 func TestRobustConfirmationModalFlow(t *testing.T) {
-	// Create app model with session that can be killed
-	appModel := NewTestHomeBuilder().BuildWithMockDependenciesNoInit(t, func(mocks *MockDependencies) {
-		// Minimal setup
-	})
+	config := testutil.DefaultTUIConfig()
+
+	// Use improved API - encapsulates all viewport fix steps
+	appModel := SetupTeatestApp(t, config)
 
 	// Add test session
 	session := CreateTestSession(t, "test-session")
@@ -30,11 +30,7 @@ func TestRobustConfirmationModalFlow(t *testing.T) {
 		t.Logf("No selected session")
 	}
 
-	// CRITICAL FIX: Ensure the Uncategorized category is expanded in tests
-	// This prevents the issue where state persistence loads collapsed state
-	appModel.list.ExpandCategory("Uncategorized")
-
-	config := testutil.DefaultTUIConfig()
+	// Create teatest AFTER app configuration is complete
 	tm := testutil.CreateTUITest(t, appModel, config)
 
 	// Wait for initial render and verify session is visible
@@ -71,7 +67,7 @@ func TestRobustConfirmationModalFlow(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// CRITICAL: Force a window resize to ensure UI refresh (workaround for teatest timing)
-	tm.Send(tea.WindowSizeMsg{Width: 80, Height: 24})
+	tm.Send(tea.WindowSizeMsg{Width: config.Width, Height: config.Height})
 	time.Sleep(100 * time.Millisecond)
 
 	// Now check that modal is closed and session still exists

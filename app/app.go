@@ -562,6 +562,12 @@ func (m *home) initializeCommandBridge() {
 		OnCycleGroupingMode: func() (tea.Model, tea.Cmd) {
 			return m.handleCycleGroupingMode()
 		},
+		OnCycleSortMode: func() (tea.Model, tea.Cmd) {
+			return m.handleCycleSortMode()
+		},
+		OnToggleSortDirection: func() (tea.Model, tea.Cmd) {
+			return m.handleToggleSortDirection()
+		},
 	}
 
 	// Set up system handlers
@@ -1109,6 +1115,16 @@ func (m *home) handleClearFilters() (tea.Model, tea.Cmd) {
 
 func (m *home) handleCycleGroupingMode() (tea.Model, tea.Cmd) {
 	m.list.CycleGroupingStrategy()
+	return m, nil
+}
+
+func (m *home) handleCycleSortMode() (tea.Model, tea.Cmd) {
+	m.list.CycleSortMode()
+	return m, nil
+}
+
+func (m *home) handleToggleSortDirection() (tea.Model, tea.Cmd) {
+	m.list.ToggleSortDirection()
 	return m, nil
 }
 

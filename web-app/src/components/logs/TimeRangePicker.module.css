@@ -1,0 +1,198 @@
+.container {
+  position: relative;
+  display: inline-block;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  color: #e5e5e5;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.trigger:hover {
+  background-color: #2a2a2a;
+  border-color: #444;
+}
+
+.trigger:focus {
+  outline: none;
+  border-color: #17a2b8;
+  box-shadow: 0 0 0 2px rgba(23, 162, 184, 0.2);
+}
+
+.icon {
+  font-size: 1rem;
+}
+
+.label {
+  flex: 1;
+  text-align: left;
+  min-width: 120px;
+}
+
+.chevron {
+  font-size: 0.7rem;
+  color: #666;
+}
+
+.dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  min-width: 200px;
+  overflow: hidden;
+}
+
+.presets {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+}
+
+.presetButton {
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  color: #e5e5e5;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: background-color 0.15s;
+}
+
+.presetButton:hover {
+  background-color: #2a2a2a;
+}
+
+.presetButton.active {
+  background-color: #17a2b8;
+  color: #fff;
+}
+
+.presetButton:focus {
+  outline: none;
+  box-shadow: inset 0 0 0 2px rgba(23, 162, 184, 0.5);
+}
+
+.divider {
+  height: 1px;
+  background-color: #333;
+  margin: 0.25rem 0;
+}
+
+.customButton {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  color: #17a2b8;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: background-color 0.15s;
+}
+
+.customButton:hover {
+  background-color: #2a2a2a;
+}
+
+.customRange {
+  padding: 0.75rem;
+}
+
+.customHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  color: #999;
+}
+
+.backButton {
+  background: none;
+  border: none;
+  color: #17a2b8;
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.backButton:hover {
+  text-decoration: underline;
+}
+
+.customInputs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.inputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.inputGroup span {
+  font-size: 0.75rem;
+  color: #999;
+}
+
+.dateInput {
+  padding: 0.5rem;
+  background-color: #0a0a0a;
+  border: 1px solid #444;
+  color: #e5e5e5;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.dateInput:focus {
+  outline: none;
+  border-color: #17a2b8;
+}
+
+.applyButton {
+  width: 100%;
+  padding: 0.5rem;
+  background-color: #17a2b8;
+  border: none;
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: background-color 0.2s;
+}
+
+.applyButton:hover:not(:disabled) {
+  background-color: #138496;
+}
+
+.applyButton:disabled {
+  background-color: #333;
+  color: #666;
+  cursor: not-allowed;
+}

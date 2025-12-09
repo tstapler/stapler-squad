@@ -6,6 +6,7 @@ import { Session } from "@/gen/session/v1/types_pb";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { getApiBaseUrl } from "@/lib/config";
 import styles from "./page.module.css";
 
 function ReviewQueueContent() {
@@ -17,7 +18,7 @@ function ReviewQueueContent() {
 
   // Use WebSocket streaming for real-time session updates
   const { sessions, loading, acknowledgeSession } = useSessionService({
-    baseUrl: "http://localhost:8543",
+    baseUrl: getApiBaseUrl(),
     autoWatch: true, // Enable WebSocket streaming for session list
   });
 

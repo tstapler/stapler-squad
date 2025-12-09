@@ -9,7 +9,9 @@ import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { KeyboardHints } from "@/components/ui/KeyboardHint";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
+import { getApiBaseUrl } from "@/lib/config";
 import styles from "./page.module.css";
 
 function HomeContent() {
@@ -18,6 +20,17 @@ function HomeContent() {
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [isSessionFullscreen, setIsSessionFullscreen] = useState(false);
+  const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+
+  // Notification handler for session events
+  const handleNotification = useSessionNotifications({
+    enableAudio: true,
+    onViewSession: (sessionId) => {
+      // Store the session ID to navigate to; we'll resolve it when sessions are available
+      setPendingSessionId(sessionId);
+    },
+  });
+
   const {
     sessions,
     loading,
@@ -27,9 +40,21 @@ function HomeContent() {
     resumeSession,
     listSessions,
   } = useSessionService({
-    baseUrl: "http://localhost:8543",
+    baseUrl: getApiBaseUrl(),
     autoWatch: true,
+    onNotification: handleNotification,
   });
+
+  // Handle pending session navigation from notification click
+  useEffect(() => {
+    if (pendingSessionId && sessions.length > 0) {
+      const session = sessions.find((s) => s.id === pendingSessionId);
+      if (session) {
+        setSelectedSession(session);
+      }
+      setPendingSessionId(null);
+    }
+  }, [pendingSessionId, sessions]);
 
   // Handle direct session selection from URL (e.g., from review queue)
   useEffect(() => {

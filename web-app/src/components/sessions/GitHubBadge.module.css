@@ -1,0 +1,135 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.badge:active {
+  transform: translateY(0);
+}
+
+.compact {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+/* PR Badge - Purple theme to match GitHub PR colors */
+.prBadge {
+  background: #8250df;
+  color: #ffffff;
+  border-color: #6e40c9;
+}
+
+.prBadge:hover {
+  background: #6e40c9;
+  box-shadow: 0 2px 6px rgba(130, 80, 223, 0.3);
+}
+
+/* Repository Badge - Gray theme for repository links */
+.repoBadge {
+  background: #f6f8fa;
+  color: #24292f;
+  border-color: #d0d7de;
+}
+
+.repoBadge:hover {
+  background: #eaeef2;
+  border-color: #afb8c1;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Icon styling */
+.icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.compact .icon {
+  width: 12px;
+  height: 12px;
+}
+
+/* Text styling */
+.text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.compact .text {
+  max-width: 100px;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .prBadge {
+    background: #8957e5;
+    color: #ffffff;
+    border-color: #7741d9;
+  }
+
+  .prBadge:hover {
+    background: #7741d9;
+    box-shadow: 0 2px 6px rgba(137, 87, 229, 0.4);
+  }
+
+  .repoBadge {
+    background: #21262d;
+    color: #c9d1d9;
+    border-color: #30363d;
+  }
+
+  .repoBadge:hover {
+    background: #30363d;
+    border-color: #484f58;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Focus state for accessibility */
+.badge:focus {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge:focus {
+    outline-color: #58a6ff;
+  }
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .badge {
+    font-size: 11px;
+    padding: 3px 8px;
+  }
+
+  .icon {
+    width: 12px;
+    height: 12px;
+  }
+
+  .text {
+    max-width: 150px;
+  }
+
+  .compact .text {
+    max-width: 80px;
+  }
+}

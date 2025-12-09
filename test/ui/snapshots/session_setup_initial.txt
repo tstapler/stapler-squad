@@ -27,8 +27,8 @@ Program:
 │                                            │
 │  Program                                   │
 │                                            │
-│  /Users/tylerstapler/.asdf/installs/nodej  │
-│  s/22.14.0/bin/claude                      │
+│  /Users/tylerstapler/.asdf/shims/claude    │
+│                                            │
 │                                            │
 │                                            │
 │                                            │

@@ -8,6 +8,7 @@ import { createConnectTransport } from "@connectrpc/connect-web";
 import Editor, { OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import styles from "./config.module.css";
+import { getApiBaseUrl } from "@/lib/config";
 
 // Helper function to determine Monaco editor language from filename
 function getLanguageFromFilename(filename: string): string {
@@ -64,7 +65,7 @@ export default function ConfigEditorPage() {
   // Initialize ConnectRPC client
   useEffect(() => {
     const transport = createConnectTransport({
-      baseUrl: window.location.origin,
+      baseUrl: getApiBaseUrl(),
     });
     clientRef.current = createPromiseClient(SessionService, transport);
   }, []);

@@ -2,6 +2,7 @@ package overlay
 
 import (
 	"claude-squad/config"
+	"claude-squad/github"
 	"claude-squad/log"
 	"claude-squad/session"
 	"claude-squad/ui/fuzzy"
@@ -77,6 +78,12 @@ type SessionSetupOverlay struct {
 	showAdvanced      bool // Whether to show advanced options
 	locationNavigator *NavigationHandler
 	branchNavigator   *NavigationHandler
+
+	// GitHub session detection
+	isGitHubSession   bool                     // True if a GitHub URL was detected
+	parsedGitHubRef   *github.ParsedGitHubRef  // Parsed GitHub reference
+	generatePRPrompt  bool                     // Whether to generate PR context prompt
+	cloningStatus     string                   // Status message during cloning
 
 	// Combined input state for basics step
 	basicsFocused string // "name" or "program"
@@ -320,12 +327,52 @@ func (s *SessionSetupOverlay) nextStep() {
 	switch s.step {
 	case StepBasics:
 		// Validate both name and program
-		s.sessionName = s.nameInput.GetValue()
-		if s.sessionName == "" {
+		input := s.nameInput.GetValue()
+		if input == "" {
 			s.error = "Session name cannot be empty"
 			s.basicsFocused = "name"
 			return
 		}
+
+		// If this is a GitHub session, handle cloning and setup
+		if s.isGitHubSession && s.parsedGitHubRef != nil {
+			// Clone or get the repository
+			s.cloningStatus = "Cloning repository..."
+			cloneOpts := github.CloneOptions{
+				Owner:  s.parsedGitHubRef.Owner,
+				Repo:   s.parsedGitHubRef.Repo,
+				Branch: s.parsedGitHubRef.Branch,
+			}
+
+			result, err := github.GetOrCloneRepository(cloneOpts)
+			if err != nil {
+				s.error = fmt.Sprintf("Failed to clone repository: %v", err)
+				s.cloningStatus = ""
+				return
+			}
+
+			// Set the repository path to the cloned location
+			s.repoPath = result.Path
+			s.cloningStatus = ""
+
+			// Use the suggested session name from the parsed ref
+			s.sessionName = s.parsedGitHubRef.SuggestedSessionName()
+
+			// If this is a PR, we might want to fetch the PR branch
+			if s.parsedGitHubRef.Type == github.RefTypePR {
+				// For PRs, the branch will be set later after fetching PR info
+				// For now, skip to confirm since we have all the info we need
+				s.step = StepConfirm
+				return
+			}
+
+			// For branch or repo refs, skip to confirm
+			s.step = StepConfirm
+			return
+		}
+
+		// Regular session (not GitHub)
+		s.sessionName = input
 
 		s.program = s.programInput.GetValue()
 		if s.program == "" {
@@ -424,23 +471,29 @@ func (s *SessionSetupOverlay) nextStep() {
 			}
 		}
 
-		// Determine session type based on location choice
+		// Determine session type based on location choice or GitHub session
 		var sessionType session.SessionType
-		switch s.locationChoice {
-		case "current", "different":
-			// For current directory or different directory, check if we're creating a new branch
-			if s.branchChoice == BranchChoiceNew {
-				sessionType = session.SessionTypeNewWorktree
-			} else {
+		if s.isGitHubSession {
+			// For GitHub sessions, we use directory type since we cloned to a specific path
+			sessionType = session.SessionTypeDirectory
+		} else {
+			switch s.locationChoice {
+			case "current", "different":
+				// For current directory or different directory, check if we're creating a new branch
+				if s.branchChoice == BranchChoiceNew {
+					sessionType = session.SessionTypeNewWorktree
+				} else {
+					sessionType = session.SessionTypeDirectory
+				}
+			case "existing":
+				sessionType = session.SessionTypeExistingWorktree
+			default:
+				// Default to directory session for backward compatibility
 				sessionType = session.SessionTypeDirectory
 			}
-		case "existing":
-			sessionType = session.SessionTypeExistingWorktree
-		default:
-			// Default to directory session for backward compatibility
-			sessionType = session.SessionTypeDirectory
 		}
 
+		// Build instance options
 		instance := session.InstanceOptions{
 			Title:            s.sessionName,
 			Path:             repoPath,
@@ -449,6 +502,28 @@ func (s *SessionSetupOverlay) nextStep() {
 			ExistingWorktree: existingWorktree,
 			Category:         s.category,
 			SessionType:      sessionType,
+		}
+
+		// Add GitHub metadata if this is a GitHub session
+		if s.isGitHubSession && s.parsedGitHubRef != nil {
+			instance.GitHubOwner = s.parsedGitHubRef.Owner
+			instance.GitHubRepo = s.parsedGitHubRef.Repo
+			instance.GitHubSourceRef = s.parsedGitHubRef.OriginalURL
+			instance.ClonedRepoPath = repoPath
+
+			// If this is a PR session, add PR-specific metadata
+			if s.parsedGitHubRef.Type == github.RefTypePR {
+				instance.GitHubPRNumber = s.parsedGitHubRef.PRNumber
+				instance.GitHubPRURL = s.parsedGitHubRef.HTMLURL()
+
+				// Generate PR context prompt if requested
+				if s.generatePRPrompt {
+					prInfo, err := github.GetPRInfo(s.parsedGitHubRef.Owner, s.parsedGitHubRef.Repo, s.parsedGitHubRef.PRNumber)
+					if err == nil {
+						instance.Prompt = github.GeneratePRPrompt(prInfo, true)
+					}
+				}
+			}
 		}
 
 		s.onComplete(instance)
@@ -809,6 +884,8 @@ func (s *SessionSetupOverlay) Update(msg tea.Msg) tea.Cmd {
 			// Forward to the focused input
 			if s.basicsFocused == "name" && s.nameInput != nil {
 				s.nameInput.HandleKeyPress(msg)
+				// Detect GitHub URLs as user types
+				s.detectGitHubURL()
 			} else if s.basicsFocused == "program" && s.programInput != nil {
 				s.programInput.HandleKeyPress(msg)
 			}
@@ -1029,7 +1106,48 @@ func (s *SessionSetupOverlay) renderBasicsStep() string {
 	sb.WriteString(s.infoStyle.Render(nameLabel))
 	sb.WriteString("\n")
 	sb.WriteString(s.nameInput.View())
-	sb.WriteString("\n\n")
+	sb.WriteString("\n")
+
+	// GitHub URL detection indicator
+	if s.isGitHubSession && s.parsedGitHubRef != nil {
+		githubStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#00FF00")).
+			Bold(true)
+
+		var indicator string
+		switch s.parsedGitHubRef.Type {
+		case github.RefTypePR:
+			indicator = fmt.Sprintf("✓ GitHub PR detected: %s/%s#%d",
+				s.parsedGitHubRef.Owner, s.parsedGitHubRef.Repo, s.parsedGitHubRef.PRNumber)
+		case github.RefTypeBranch:
+			indicator = fmt.Sprintf("✓ GitHub branch detected: %s/%s:%s",
+				s.parsedGitHubRef.Owner, s.parsedGitHubRef.Repo, s.parsedGitHubRef.Branch)
+		default:
+			indicator = fmt.Sprintf("✓ GitHub repo detected: %s/%s",
+				s.parsedGitHubRef.Owner, s.parsedGitHubRef.Repo)
+		}
+
+		sb.WriteString(githubStyle.Render(indicator))
+		sb.WriteString("\n")
+
+		// Show suggested session name
+		suggestedStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#AAAAAA")).
+			Italic(true)
+		sb.WriteString(suggestedStyle.Render(fmt.Sprintf("Suggested name: %s", s.parsedGitHubRef.SuggestedSessionName())))
+		sb.WriteString("\n")
+	}
+
+	// Show cloning status if in progress
+	if s.cloningStatus != "" {
+		cloningStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFCC00")).
+			Italic(true)
+		sb.WriteString(cloningStyle.Render(s.cloningStatus))
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("\n")
 
 	// Program input with focus indication
 	programLabel := "Program:"
@@ -1045,7 +1163,11 @@ func (s *SessionSetupOverlay) renderBasicsStep() string {
 	helpStyle := lipgloss.NewStyle().
 		Italic(true).
 		Foreground(lipgloss.Color("#AAAAAA"))
-	sb.WriteString(helpStyle.Render("💡 Tab to switch fields • Enter to continue"))
+	helpText := "💡 Tab to switch fields • Enter to continue"
+	if s.isGitHubSession {
+		helpText = "💡 GitHub URL detected! Press Enter to clone and set up"
+	}
+	sb.WriteString(helpStyle.Render(helpText))
 
 	return sb.String()
 }
@@ -1148,17 +1270,39 @@ func (s *SessionSetupOverlay) renderConfirmStep() string {
 		summary.WriteString(fmt.Sprintf("🏷️  Category: %s\n", s.category))
 	}
 
-	// Friendly location display
-	if s.locationChoice == "current" {
-		currentDir, _ := os.Getwd()
-		homeDir, _ := os.UserHomeDir()
-		displayPath := currentDir
-		if strings.HasPrefix(currentDir, homeDir) {
-			displayPath = "~" + currentDir[len(homeDir):]
+	// GitHub session information
+	if s.isGitHubSession && s.parsedGitHubRef != nil {
+		summary.WriteString(fmt.Sprintf("🐙 GitHub: %s\n", s.parsedGitHubRef.DisplayName()))
+
+		if s.parsedGitHubRef.Type == github.RefTypePR {
+			summary.WriteString(fmt.Sprintf("📝 PR #%d\n", s.parsedGitHubRef.PRNumber))
+			if s.generatePRPrompt {
+				summary.WriteString("✓ Will generate PR context prompt\n")
+			}
+		} else if s.parsedGitHubRef.Type == github.RefTypeBranch {
+			summary.WriteString(fmt.Sprintf("🌿 Branch: %s\n", s.parsedGitHubRef.Branch))
 		}
-		summary.WriteString(fmt.Sprintf("📍 Location: Current (%s)", filepath.Base(displayPath)))
+
+		// Show clone path
+		displayPath := s.repoPath
+		homeDir, _ := os.UserHomeDir()
+		if strings.HasPrefix(displayPath, homeDir) {
+			displayPath = "~" + displayPath[len(homeDir):]
+		}
+		summary.WriteString(fmt.Sprintf("📍 Clone path: %s\n", displayPath))
 	} else {
-		summary.WriteString(fmt.Sprintf("📍 Location: %s", s.locationChoice))
+		// Friendly location display for non-GitHub sessions
+		if s.locationChoice == "current" {
+			currentDir, _ := os.Getwd()
+			homeDir, _ := os.UserHomeDir()
+			displayPath := currentDir
+			if strings.HasPrefix(currentDir, homeDir) {
+				displayPath = "~" + currentDir[len(homeDir):]
+			}
+			summary.WriteString(fmt.Sprintf("📍 Location: Current (%s)", filepath.Base(displayPath)))
+		} else {
+			summary.WriteString(fmt.Sprintf("📍 Location: %s", s.locationChoice))
+		}
 	}
 
 	sb.WriteString(summaryStyle.Render(summary.String()))
@@ -1677,4 +1821,44 @@ func (s *SessionSetupOverlay) loadGitBranches(repoPath string) []fuzzy.SearchIte
 	}
 
 	return items
+}
+
+// detectGitHubURL checks if the current name input is a GitHub URL/ref and updates state accordingly
+func (s *SessionSetupOverlay) detectGitHubURL() {
+	input := strings.TrimSpace(s.nameInput.GetValue())
+
+	// Reset GitHub session state if input is empty or not a GitHub ref
+	if input == "" || !github.IsGitHubRef(input) {
+		s.isGitHubSession = false
+		s.parsedGitHubRef = nil
+		s.generatePRPrompt = false
+		s.cloningStatus = ""
+		return
+	}
+
+	// Try to parse the GitHub reference
+	parsed, err := github.ParseGitHubRef(input)
+	if err != nil {
+		// Invalid GitHub ref, reset state
+		s.isGitHubSession = false
+		s.parsedGitHubRef = nil
+		s.generatePRPrompt = false
+		s.cloningStatus = ""
+		return
+	}
+
+	// Valid GitHub reference detected
+	s.isGitHubSession = true
+	s.parsedGitHubRef = parsed
+
+	// Auto-suggest session name based on the reference
+	suggestedName := parsed.SuggestedSessionName()
+	if s.sessionName == "" || s.sessionName == input {
+		s.sessionName = suggestedName
+	}
+
+	// For PR sessions, default to generating PR prompt
+	if parsed.Type == github.RefTypePR {
+		s.generatePRPrompt = true
+	}
 }

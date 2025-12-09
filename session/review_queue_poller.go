@@ -540,8 +540,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		// CRITICAL: Persist LastAddedToQueue to database to prevent notification spam
 		// Without persistence, this timestamp resets on app restart or instance reload,
 		// causing the spam prevention check to fail and sessions to be re-added immediately
+		// NOTE: Use UpdateInstanceLastAddedToQueue instead of SaveInstances to avoid
+		// the merge logic which would restore deleted instances from disk.
 		if rqp.storage != nil {
-			if err := rqp.storage.SaveInstances([]*Instance{inst}); err != nil {
+			if err := rqp.storage.UpdateInstanceLastAddedToQueue(inst.Title, inst.LastAddedToQueue); err != nil {
 				log.ErrorLog.Printf("[ReviewQueue] Session '%s': Failed to persist LastAddedToQueue: %v", inst.Title, err)
 			} else {
 				log.DebugLog.Printf("[ReviewQueue] Session '%s': Successfully persisted LastAddedToQueue timestamp", inst.Title)

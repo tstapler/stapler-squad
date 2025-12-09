@@ -15,7 +15,7 @@ interface BranchSuggestionsOptions {
  * Returns a list of unique branch names from all sessions, optionally filtered by repository.
  */
 export function useBranchSuggestions(options: BranchSuggestionsOptions = {}) {
-  const { baseUrl = "http://localhost:8543" } = options;
+  const { baseUrl = "http://localhost:8543/api" } = options;
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 

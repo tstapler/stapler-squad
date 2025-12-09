@@ -1,0 +1,125 @@
+.container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #999;
+}
+
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  background-color: #0a0a0a;
+  border: 1px solid #444;
+  color: #e5e5e5;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: border-color 0.2s;
+  min-width: 120px;
+}
+
+.trigger:hover {
+  border-color: #666;
+}
+
+.trigger:focus {
+  outline: none;
+  border-color: #17a2b8;
+}
+
+.text {
+  flex: 1;
+  text-align: left;
+}
+
+.chevron {
+  font-size: 0.7rem;
+  color: #666;
+}
+
+.dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  min-width: 160px;
+  overflow: hidden;
+}
+
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem;
+}
+
+.actionButton {
+  flex: 1;
+  padding: 0.25rem 0.5rem;
+  background: none;
+  border: 1px solid #444;
+  color: #17a2b8;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: background-color 0.15s;
+}
+
+.actionButton:hover {
+  background-color: #2a2a2a;
+}
+
+.divider {
+  height: 1px;
+  background-color: #333;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.option:hover {
+  background-color: #2a2a2a;
+}
+
+.checkbox {
+  width: 16px;
+  height: 16px;
+  accent-color: #17a2b8;
+  cursor: pointer;
+}
+
+.optionLabel {
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}

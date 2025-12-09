@@ -146,13 +146,19 @@ func NewServer(addr string) *Server {
 		// Register ConnectRPC WebSocket handler FIRST for streaming RPCs
 		// This must come before the general ConnectRPC handler to avoid response writer wrapping
 		// Default to "raw" streaming mode (simplest, most reliable)
+		// Mount under /api/ prefix for cleaner URLs
 		wsHandler := services.NewConnectRPCWebSocketHandler(sessionService, scrollbackManager, "raw")
-		srv.mux.HandleFunc(sessionv1connect.SessionServiceStreamTerminalProcedure, wsHandler.HandleWebSocket)
-		log.InfoLog.Printf("Registered ConnectRPC WebSocket handler: %s", sessionv1connect.SessionServiceStreamTerminalProcedure)
+		wsPath := "/api" + sessionv1connect.SessionServiceStreamTerminalProcedure
+		srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)
+		log.InfoLog.Printf("Registered ConnectRPC WebSocket handler: %s", wsPath)
 
 		// Register general ConnectRPC handler (for unary calls)
+		// Mount under /api/ prefix for cleaner URLs and to prevent conflicts with static files
+		// Use StripPrefix to remove /api before requests reach the Connect handler
 		path, handler := sessionv1connect.NewSessionServiceHandler(sessionService, ConnectOptions()...)
-		srv.RegisterConnectHandler(path, handler)
+		apiPath := "/api" + path
+		wrappedHandler := http.StripPrefix("/api", handler)
+		srv.RegisterConnectHandler(apiPath, wrappedHandler)
 	}
 
 	// Serve web UI static files

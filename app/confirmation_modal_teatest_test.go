@@ -3,6 +3,7 @@ package app
 import (
 	"claude-squad/session"
 	"claude-squad/testutil"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,10 +115,19 @@ func TestConfirmationFlowSimulationTeatest(t *testing.T) {
 	// Wait for confirmation modal
 	testutil.WaitForOutputContains(t, tm, "[!] Kill session 'test-session'?", 300*time.Millisecond)
 
-	// Verify modal contains expected elements
-	testutil.AssertOutputContains(t, tm, "Kill session 'test-session'?")
-	testutil.AssertOutputContains(t, tm, "(y)es")
-	testutil.AssertOutputContains(t, tm, "(n)o")
+	// Verify modal contains expected elements by reading output once
+	time.Sleep(100 * time.Millisecond)
+	output := tm.Output()
+	outputStr := testutil.ReadOutput(t, output)
+	if !strings.Contains(outputStr, "Kill session 'test-session'?") {
+		t.Errorf("Expected modal to contain 'Kill session 'test-session'?'")
+	}
+	if !strings.Contains(outputStr, "(y)es") {
+		t.Errorf("Expected modal to contain '(y)es'")
+	}
+	if !strings.Contains(outputStr, "(n)o") {
+		t.Errorf("Expected modal to contain '(n)o'")
+	}
 
 	// Cancel the confirmation by pressing 'n'
 	tm.Type("n")
@@ -154,14 +164,20 @@ func TestConfirmationModalVisualAppearanceTeatest(t *testing.T) {
 	// Wait for modal to appear
 	testutil.WaitForOutputContains(t, tm, "Kill session", 300*time.Millisecond)
 
-	// Check visual elements are present
-	testutil.AssertOutputContains(t, tm, "[!] Kill session 'test-session'?")
-	testutil.AssertOutputContains(t, tm, "(y)es")
-	testutil.AssertOutputContains(t, tm, "(n)o")
-
-	// Test that modal overlays the main content
+	// Check visual elements are present - read output once
+	time.Sleep(100 * time.Millisecond)
 	output := tm.Output()
 	outputStr := testutil.ReadOutput(t, output)
+
+	if !strings.Contains(outputStr, "[!] Kill session 'test-session'?") {
+		t.Errorf("Expected modal to contain '[!] Kill session 'test-session'?'")
+	}
+	if !strings.Contains(outputStr, "(y)es") {
+		t.Errorf("Expected modal to contain '(y)es'")
+	}
+	if !strings.Contains(outputStr, "(n)o") {
+		t.Errorf("Expected modal to contain '(n)o'")
+	}
 
 	// Modal should be visible and contain specific styling patterns
 	assert.Contains(t, outputStr, "Kill session", "Modal should display kill message")
@@ -227,13 +243,44 @@ func TestMultipleConfirmationsTeatest(t *testing.T) {
 func createTestAppWithSession(t *testing.T) tea.Model {
 	t.Helper()
 
-	// Use minimal test setup to avoid JSON loading and external dependencies
-	appModel := SetupMinimalTestHome(t)
+	// Use NoInit version to prevent Init() from overriding dimensions
+	appModel := NewTestHomeBuilder().BuildWithMockDependenciesNoInit(t, func(mocks *MockDependencies) {
+		// Minimal setup
+	})
 
 	// Add test session
 	session := CreateTestSession(t, "test-session")
 	_ = appModel.list.AddInstance(session)
 	appModel.list.SetSelectedInstance(0)
+
+	// CRITICAL: Ensure category is expanded so session is visible
+	appModel.list.OrganizeByCategory()
+	// Note: "Uncategorized" sessions are transformed to "Squad Sessions" by OrganizeByStrategy
+	appModel.list.ExpandCategory("Squad Sessions")
+	// FORCE re-organization to ensure expansion state takes effect
+	appModel.list.OrganizeByCategory()
+
+	// PRE-CONFIGURE component dimensions BEFORE creating teatest model
+	// This ensures the first render uses correct dimensions instead of waiting for WindowSizeMsg
+	config := testutil.DefaultTUIConfig()
+	listWidth := int(float32(config.Width) * 0.3)
+	tabsWidth := config.Width - listWidth
+	menuHeight := 3
+	errorBoxHeight := 1
+	contentHeight := config.Height - menuHeight - errorBoxHeight
+
+	// Set component dimensions directly
+	appModel.list.SetSize(listWidth, contentHeight)
+	appModel.tabbedWindow.SetSize(tabsWidth, contentHeight)
+	appModel.menu.SetSize(config.Width, menuHeight)
+
+	// CRITICAL: Set termWidth and termHeight to ensure View() renders correctly
+	appModel.termWidth = config.Width
+	appModel.termHeight = config.Height
+
+	// CRITICAL FIX: Set terminalManager to nil to prevent Init() from sending 80x24 WindowSizeMsg
+	// This allows BubbleTea's teatest framework to control terminal dimensions
+	appModel.terminalManager = nil
 
 	return appModel
 }
@@ -242,8 +289,10 @@ func createTestAppWithSession(t *testing.T) tea.Model {
 func createTestAppWithMultipleSessions(t *testing.T) tea.Model {
 	t.Helper()
 
-	// Use minimal test setup to avoid JSON loading and external dependencies
-	appModel := SetupMinimalTestHome(t)
+	// Use NoInit version to prevent Init() from overriding dimensions
+	appModel := NewTestHomeBuilder().BuildWithMockDependenciesNoInit(t, func(mocks *MockDependencies) {
+		// Minimal setup
+	})
 
 	// Add test sessions with different programs
 	session1 := CreateTestSession(t, "session-1")
@@ -257,6 +306,35 @@ func createTestAppWithMultipleSessions(t *testing.T) tea.Model {
 	_ = appModel.list.AddInstance(session1)
 	_ = appModel.list.AddInstance(session2)
 	appModel.list.SetSelectedInstance(0)
+
+	// CRITICAL: Ensure category is expanded so sessions are visible
+	appModel.list.OrganizeByCategory()
+	// Note: "Uncategorized" sessions are transformed to "Squad Sessions" by OrganizeByStrategy
+	appModel.list.ExpandCategory("Squad Sessions")
+	// FORCE re-organization to ensure expansion state takes effect
+	appModel.list.OrganizeByCategory()
+
+	// PRE-CONFIGURE component dimensions BEFORE creating teatest model
+	// This ensures the first render uses correct dimensions instead of waiting for WindowSizeMsg
+	config := testutil.DefaultTUIConfig()
+	listWidth := int(float32(config.Width) * 0.3)
+	tabsWidth := config.Width - listWidth
+	menuHeight := 3
+	errorBoxHeight := 1
+	contentHeight := config.Height - menuHeight - errorBoxHeight
+
+	// Set component dimensions directly
+	appModel.list.SetSize(listWidth, contentHeight)
+	appModel.tabbedWindow.SetSize(tabsWidth, contentHeight)
+	appModel.menu.SetSize(config.Width, menuHeight)
+
+	// CRITICAL: Set termWidth and termHeight to ensure View() renders correctly
+	appModel.termWidth = config.Width
+	appModel.termHeight = config.Height
+
+	// CRITICAL FIX: Set terminalManager to nil to prevent Init() from sending 80x24 WindowSizeMsg
+	// This allows BubbleTea's teatest framework to control terminal dimensions
+	appModel.terminalManager = nil
 
 	return appModel
 }

@@ -12,18 +12,12 @@ import (
 
 // TestSessionCreationOverlayFix - verify that pressing 'n' properly activates the session setup overlay
 func TestSessionCreationOverlayFix(t *testing.T) {
-	// Create app model with full initialization including proper bridge handlers
-	// Use BuildWithMockDependencies instead of BuildWithMockDependenciesNoInit to get proper bridge setup
-	appModel := NewTestHomeBuilder().WithBridge().BuildWithMockDependencies(t, func(mocks *MockDependencies) {
-		// Mock dependencies for test environment
-	})
-
-	// Ensure categories are organized and expanded for proper rendering
-	appModel.list.OrganizeByCategory()
-	appModel.list.SetSize(80, 24)
-	appModel.list.ExpandCategory("Uncategorized")
-
 	config := testutil.DefaultTUIConfig()
+
+	// Use improved API with bridge enabled for command handling
+	appModel := SetupTeatestApp(t, config, WithBridge())
+
+	// Create teatest AFTER app configuration is complete
 	tm := testutil.CreateTUITest(t, appModel, config)
 
 	// Wait for initial render

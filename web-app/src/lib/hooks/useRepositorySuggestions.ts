@@ -14,7 +14,7 @@ interface RepositorySuggestionsOptions {
  * Returns a list of unique repository paths from all sessions.
  */
 export function useRepositorySuggestions(options: RepositorySuggestionsOptions = {}) {
-  const { baseUrl = "http://localhost:8543" } = options;
+  const { baseUrl = "http://localhost:8543/api" } = options;
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 

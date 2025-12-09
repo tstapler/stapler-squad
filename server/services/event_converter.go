@@ -47,6 +47,21 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 				NewStatus: adapters.StatusToProto(event.NewStatus),
 			},
 		}
+
+	case events.EventNotification:
+		protoEvent.Event = &sessionv1.SessionEvent_Notification{
+			Notification: &sessionv1.NotificationEvent{
+				SessionId:        event.SessionID,
+				SessionName:      event.Context, // SessionName stored in Context field
+				NotificationType: sessionv1.NotificationType(event.NotificationType),
+				Priority:         sessionv1.NotificationPriority(event.NotificationPriority),
+				Title:            event.NotificationTitle,
+				Message:          event.NotificationMessage,
+				Metadata:         event.NotificationMetadata,
+				Timestamp:        timestamppb.New(event.Timestamp),
+				NotificationId:   event.NotificationID,
+			},
+		}
 	}
 
 	return protoEvent

@@ -22,7 +22,32 @@ func TestStateTransitionDebug(t *testing.T) {
 	_ = appModel.list.AddInstance(session)
 	appModel.list.SetSelectedInstance(0)
 
+	// CRITICAL: Ensure category is expanded so session is visible
+	appModel.list.OrganizeByCategory()
+	appModel.list.ExpandCategory("Squad Sessions")
+	appModel.list.OrganizeByCategory()
+
 	config := testutil.DefaultTUIConfig()
+
+	// PRE-CONFIGURE component dimensions BEFORE creating teatest model
+	listWidth := int(float32(config.Width) * 0.3)
+	tabsWidth := config.Width - listWidth
+	menuHeight := 3
+	errorBoxHeight := 1
+	contentHeight := config.Height - menuHeight - errorBoxHeight
+
+	// Set component dimensions directly
+	appModel.list.SetSize(listWidth, contentHeight)
+	appModel.tabbedWindow.SetSize(tabsWidth, contentHeight)
+	appModel.menu.SetSize(config.Width, menuHeight)
+
+	// CRITICAL: Set termWidth and termHeight to ensure View() renders correctly
+	appModel.termWidth = config.Width
+	appModel.termHeight = config.Height
+
+	// CRITICAL FIX: Set terminalManager to nil to prevent Init() from sending 80x24 WindowSizeMsg
+	appModel.terminalManager = nil
+
 	tm := testutil.CreateTUITest(t, appModel, config)
 
 	// Step 1: Initial state check

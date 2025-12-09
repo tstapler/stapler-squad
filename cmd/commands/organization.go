@@ -7,10 +7,12 @@ import (
 
 // OrganizationHandlers contains handlers for organization/filtering commands
 type OrganizationHandlers struct {
-	OnFilterPaused      func() (tea.Model, tea.Cmd)
-	OnClearFilters      func() (tea.Model, tea.Cmd)
-	OnToggleGroup       func() (tea.Model, tea.Cmd)
-	OnCycleGroupingMode func() (tea.Model, tea.Cmd)
+	OnFilterPaused        func() (tea.Model, tea.Cmd)
+	OnClearFilters        func() (tea.Model, tea.Cmd)
+	OnToggleGroup         func() (tea.Model, tea.Cmd)
+	OnCycleGroupingMode   func() (tea.Model, tea.Cmd)
+	OnCycleSortMode       func() (tea.Model, tea.Cmd)
+	OnToggleSortDirection func() (tea.Model, tea.Cmd)
 }
 
 var organizationHandlers = &OrganizationHandlers{}
@@ -54,6 +56,27 @@ func ToggleGroupCommand(ctx *interfaces.CommandContext) error {
 func CycleGroupingModeCommand(ctx *interfaces.CommandContext) error {
 	if organizationHandlers.OnCycleGroupingMode != nil {
 		model, teaCmd := organizationHandlers.OnCycleGroupingMode()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// CycleSortModeCommand cycles through different sort modes
+// Sequence: LastActivity → CreationDate → TitleAZ → Repository → Branch → Status
+func CycleSortModeCommand(ctx *interfaces.CommandContext) error {
+	if organizationHandlers.OnCycleSortMode != nil {
+		model, teaCmd := organizationHandlers.OnCycleSortMode()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// ToggleSortDirectionCommand toggles between ascending and descending sort order
+func ToggleSortDirectionCommand(ctx *interfaces.CommandContext) error {
+	if organizationHandlers.OnToggleSortDirection != nil {
+		model, teaCmd := organizationHandlers.OnToggleSortDirection()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
 	}

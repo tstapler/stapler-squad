@@ -23,6 +23,8 @@ const (
 	EventSessionAcknowledged EventType = "session.acknowledged"
 	// EventApprovalResponse is emitted when user responds to an approval prompt
 	EventApprovalResponse EventType = "session.approval_response"
+	// EventNotification is emitted when a session sends a notification
+	EventNotification EventType = "session.notification"
 )
 
 // Event represents a session state change event.
@@ -48,6 +50,13 @@ type Event struct {
 	Approved bool
 	// Context provides additional context about the event
 	Context string
+	// Notification fields for notification events
+	NotificationID       string
+	NotificationType     int32 // Maps to sessionv1.NotificationType
+	NotificationPriority int32 // Maps to sessionv1.NotificationPriority
+	NotificationTitle    string
+	NotificationMessage  string
+	NotificationMetadata map[string]string
 }
 
 // NewSessionCreatedEvent creates an event for session creation.
@@ -119,5 +128,30 @@ func NewApprovalResponseEvent(sessionID string, approved bool, context string) *
 		SessionID: sessionID,
 		Approved:  approved,
 		Context:   context,
+	}
+}
+
+// NewNotificationEvent creates an event for session notifications.
+func NewNotificationEvent(
+	sessionID string,
+	sessionName string,
+	notificationID string,
+	notificationType int32,
+	priority int32,
+	title string,
+	message string,
+	metadata map[string]string,
+) *Event {
+	return &Event{
+		Type:                 EventNotification,
+		Timestamp:            time.Now(),
+		SessionID:            sessionID,
+		Context:              sessionName,
+		NotificationID:       notificationID,
+		NotificationType:     notificationType,
+		NotificationPriority: priority,
+		NotificationTitle:    title,
+		NotificationMessage:  message,
+		NotificationMetadata: metadata,
 	}
 }

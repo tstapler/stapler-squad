@@ -1,0 +1,292 @@
+#!/usr/bin/env bash
+#
+# cs-hooks-install - Install Claude Code hooks for Claude Squad notifications
+#
+# This script installs hook configurations into your Claude Code settings
+# to enable automatic notifications when Claude needs attention.
+#
+# Usage:
+#   cs-hooks-install [options]
+#
+# Options:
+#   --global        Install to ~/.claude/settings.json (default: ask)
+#   --project       Install to .claude/settings.json in current directory
+#   --uninstall     Remove Claude Squad hooks from settings
+#   --dry-run       Show what would be done without making changes
+#   --help, -h      Show this help message
+#
+# Examples:
+#   cs-hooks-install                  # Interactive installation
+#   cs-hooks-install --global         # Install globally
+#   cs-hooks-install --project        # Install for current project
+#   cs-hooks-install --uninstall      # Remove hooks
+#
+
+set -euo pipefail
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Find script directory for hook handler path
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HOOK_HANDLER="$SCRIPT_DIR/cs-hook-handler"
+
+# Default options
+SCOPE=""
+UNINSTALL=false
+DRY_RUN=false
+
+error() {
+    echo -e "${RED}Error:${NC} $1" >&2
+    exit 1
+}
+
+success() {
+    echo -e "${GREEN}✓${NC} $1"
+}
+
+info() {
+    echo -e "${BLUE}→${NC} $1"
+}
+
+warn() {
+    echo -e "${YELLOW}!${NC} $1"
+}
+
+usage() {
+    head -25 "$0" | tail -n +2 | sed 's/^#//' | sed 's/^ //'
+    exit 0
+}
+
+# Check dependencies
+check_deps() {
+    if ! command -v jq &>/dev/null; then
+        error "jq is required but not installed. Install with: brew install jq"
+    fi
+    
+    if [[ ! -x "$HOOK_HANDLER" ]]; then
+        error "Hook handler not found at: $HOOK_HANDLER"
+    fi
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --global)
+            SCOPE="global"
+            shift
+            ;;
+        --project)
+            SCOPE="project"
+            shift
+            ;;
+        --uninstall)
+            UNINSTALL=true
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            error "Unknown option: $1"
+            ;;
+    esac
+done
+
+check_deps
+
+# Determine settings file path
+get_settings_path() {
+    if [[ "$SCOPE" == "global" ]]; then
+        echo "$HOME/.claude/settings.json"
+    elif [[ "$SCOPE" == "project" ]]; then
+        echo ".claude/settings.json"
+    else
+        # Interactive selection
+        echo ""
+        echo "Where would you like to install Claude Squad hooks?"
+        echo ""
+        echo "  1) Global (~/.claude/settings.json)"
+        echo "     Applies to all Claude Code sessions"
+        echo ""
+        echo "  2) Project (.claude/settings.json)"
+        echo "     Only applies to current project"
+        echo ""
+        read -p "Selection [1/2]: " choice
+        echo ""
+        
+        case "$choice" in
+            1) echo "$HOME/.claude/settings.json" ;;
+            2) echo ".claude/settings.json" ;;
+            *) error "Invalid selection" ;;
+        esac
+    fi
+}
+
+SETTINGS_PATH=$(get_settings_path)
+SETTINGS_DIR=$(dirname "$SETTINGS_PATH")
+
+# Create hooks configuration JSON
+create_hooks_config() {
+    cat <<EOF
+{
+  "hooks": {
+    "Notification": [{
+      "hooks": [{
+        "type": "command",
+        "command": "$HOOK_HANDLER notification"
+      }]
+    }],
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "$HOOK_HANDLER stop"
+      }]
+    }],
+    "PermissionRequest": [{
+      "hooks": [{
+        "type": "command",
+        "command": "$HOOK_HANDLER permission"
+      }]
+    }],
+    "PostToolUse": [{
+      "matcher": ".*",
+      "hooks": [{
+        "type": "command",
+        "command": "$HOOK_HANDLER post-tool"
+      }]
+    }]
+  }
+}
+EOF
+}
+
+# Uninstall hooks
+uninstall_hooks() {
+    if [[ ! -f "$SETTINGS_PATH" ]]; then
+        warn "Settings file not found: $SETTINGS_PATH"
+        exit 0
+    fi
+    
+    info "Removing Claude Squad hooks from: $SETTINGS_PATH"
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Would remove hooks configuration containing: $HOOK_HANDLER"
+        exit 0
+    fi
+    
+    # Backup
+    cp "$SETTINGS_PATH" "${SETTINGS_PATH}.backup.$(date +%Y%m%d%H%M%S)"
+    success "Created backup"
+    
+    # Remove hooks that reference our handler
+    TEMP_FILE=$(mktemp)
+    jq --arg handler "$HOOK_HANDLER" '
+        .hooks |= (
+            if . then
+                with_entries(
+                    select(
+                        .value | 
+                        if type == "array" then
+                            all(
+                                .hooks | 
+                                if type == "array" then
+                                    all(.command | contains($handler) | not)
+                                else true end
+                            )
+                        else true end
+                    )
+                ) |
+                if . == {} then null else . end
+            else null end
+        ) |
+        if .hooks == null then del(.hooks) else . end
+    ' "$SETTINGS_PATH" > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_PATH"
+    
+    success "Removed Claude Squad hooks"
+}
+
+# Install hooks
+install_hooks() {
+    info "Installing Claude Squad hooks to: $SETTINGS_PATH"
+    
+    # Check if hook handler is accessible from the target location
+    if [[ "$SCOPE" == "global" ]] && [[ "$HOOK_HANDLER" == *"IdeaProjects"* ]]; then
+        warn "Hook handler path contains project-specific path."
+        warn "Consider moving scripts to a stable location like ~/bin/"
+    fi
+    
+    HOOKS_CONFIG=$(create_hooks_config)
+    
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "Would create/update: $SETTINGS_PATH"
+        echo ""
+        echo "Hooks configuration:"
+        echo "$HOOKS_CONFIG" | jq '.'
+        exit 0
+    fi
+    
+    # Create directory if needed
+    if [[ ! -d "$SETTINGS_DIR" ]]; then
+        mkdir -p "$SETTINGS_DIR"
+        success "Created directory: $SETTINGS_DIR"
+    fi
+    
+    # Create or merge settings
+    if [[ -f "$SETTINGS_PATH" ]]; then
+        # Backup existing
+        BACKUP_PATH="${SETTINGS_PATH}.backup.$(date +%Y%m%d%H%M%S)"
+        cp "$SETTINGS_PATH" "$BACKUP_PATH"
+        success "Created backup: $BACKUP_PATH"
+        
+        # Check if hooks already exist
+        EXISTING_HOOKS=$(jq '.hooks // {}' "$SETTINGS_PATH")
+        if echo "$EXISTING_HOOKS" | grep -q "$HOOK_HANDLER"; then
+            warn "Claude Squad hooks already installed. Use --uninstall first to reinstall."
+            exit 0
+        fi
+        
+        # Merge hooks into existing config
+        TEMP_FILE=$(mktemp)
+        jq -s '.[0] * .[1]' "$SETTINGS_PATH" <(echo "$HOOKS_CONFIG") > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_PATH"
+        success "Merged hooks into existing settings"
+    else
+        # Create new settings file
+        echo "$HOOKS_CONFIG" | jq '.' > "$SETTINGS_PATH"
+        success "Created new settings file"
+    fi
+    
+    # Verify installation
+    if jq -e '.hooks' "$SETTINGS_PATH" >/dev/null 2>&1; then
+        success "Installation complete!"
+        echo ""
+        info "Hooks will trigger notifications for:"
+        echo "    • Notification events (when Claude sends notifications)"
+        echo "    • Stop events (when Claude finishes tasks)"
+        echo "    • PermissionRequest events (when Claude needs approval)"
+        echo "    • PostToolUse errors (when tools fail)"
+        echo ""
+        info "To disable notifications temporarily:"
+        echo "    export CS_HOOKS_DISABLED=true"
+        echo ""
+        info "To uninstall:"
+        echo "    $0 --uninstall $(if [[ "$SCOPE" == "global" ]]; then echo "--global"; else echo "--project"; fi)"
+    else
+        error "Failed to verify installation"
+    fi
+}
+
+# Main
+if [[ "$UNINSTALL" == "true" ]]; then
+    uninstall_hooks
+else
+    install_hooks
+fi

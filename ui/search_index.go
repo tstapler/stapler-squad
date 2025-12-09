@@ -5,6 +5,7 @@ import (
 	"context"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,98 @@ import (
 	"github.com/sahilm/fuzzy"
 	"github.com/schollz/closestmatch"
 )
+
+// SortMode defines how sessions should be sorted
+type SortMode int
+
+const (
+	// SortByLastActivity sorts by LastMeaningfulOutput timestamp (default, most recent first)
+	SortByLastActivity SortMode = iota
+	// SortByCreationDate sorts by CreatedAt timestamp
+	SortByCreationDate
+	// SortByTitleAZ sorts alphabetically by session title
+	SortByTitleAZ
+	// SortByRepository sorts alphabetically by repository path
+	SortByRepository
+	// SortByBranch sorts alphabetically by branch name
+	SortByBranch
+	// SortByStatus sorts by session status (Running > Ready > NeedsApproval > Loading > Paused)
+	SortByStatus
+)
+
+// SortDirection defines ascending or descending sort order
+type SortDirection int
+
+const (
+	// SortDescending sorts from high to low (newest first for dates, Z-A for strings)
+	SortDescending SortDirection = iota
+	// SortAscending sorts from low to high (oldest first for dates, A-Z for strings)
+	SortAscending
+)
+
+// String returns the human-readable name for the sort mode
+func (s SortMode) String() string {
+	switch s {
+	case SortByLastActivity:
+		return "Last Activity"
+	case SortByCreationDate:
+		return "Creation Date"
+	case SortByTitleAZ:
+		return "Title"
+	case SortByRepository:
+		return "Repository"
+	case SortByBranch:
+		return "Branch"
+	case SortByStatus:
+		return "Status"
+	default:
+		return "Unknown"
+	}
+}
+
+// ShortName returns an abbreviated name for UI display
+func (s SortMode) ShortName() string {
+	switch s {
+	case SortByLastActivity:
+		return "Activity"
+	case SortByCreationDate:
+		return "Created"
+	case SortByTitleAZ:
+		return "Title"
+	case SortByRepository:
+		return "Repo"
+	case SortByBranch:
+		return "Branch"
+	case SortByStatus:
+		return "Status"
+	default:
+		return "?"
+	}
+}
+
+// String returns the human-readable name for the sort direction
+func (d SortDirection) String() string {
+	switch d {
+	case SortDescending:
+		return "Descending"
+	case SortAscending:
+		return "Ascending"
+	default:
+		return "Unknown"
+	}
+}
+
+// Icon returns an icon for the sort direction
+func (d SortDirection) Icon() string {
+	switch d {
+	case SortDescending:
+		return "↓"
+	case SortAscending:
+		return "↑"
+	default:
+		return ""
+	}
+}
 
 // SearchIndex provides optimized fuzzy search for sessions using hybrid indexing
 type SearchIndex struct {
@@ -33,6 +126,16 @@ type SearchIndex struct {
 	// All sessions for fallback sahilm/fuzzy search
 	allSessions []*session.Instance
 
+	// Sort configuration
+	sortMode      SortMode      // Current sort mode
+	sortDirection SortDirection // Current sort direction
+
+	// Sorted cache for performance optimization
+	sortedCache      []*session.Instance // Cached sorted results
+	sortedCacheValid bool                // Whether the sorted cache is valid
+	sortedCacheMode  SortMode            // Sort mode used for cache
+	sortedCacheDir   SortDirection       // Sort direction used for cache
+
 	// Index management
 	version      int
 	needsRebuild bool
@@ -42,12 +145,16 @@ type SearchIndex struct {
 // NewSearchIndex creates a new optimized search index
 func NewSearchIndex() *SearchIndex {
 	return &SearchIndex{
-		categoryIndex: make(map[string][]*session.Instance),
-		programIndex:  make(map[string][]*session.Instance),
-		tagIndex:      make(map[string][]*session.Instance),
-		sessionMap:    make(map[string]*session.Instance),
-		allSessions:   make([]*session.Instance, 0),
-		needsRebuild:  true,
+		categoryIndex:    make(map[string][]*session.Instance),
+		programIndex:     make(map[string][]*session.Instance),
+		tagIndex:         make(map[string][]*session.Instance),
+		sessionMap:       make(map[string]*session.Instance),
+		allSessions:      make([]*session.Instance, 0),
+		sortMode:         SortByLastActivity, // Default: most recently active first
+		sortDirection:    SortDescending,     // Default: newest/highest first
+		sortedCache:      make([]*session.Instance, 0),
+		sortedCacheValid: false,
+		needsRebuild:     true,
 	}
 }
 
@@ -108,6 +215,7 @@ func (idx *SearchIndex) RebuildIndex(sessions []*session.Instance) {
 
 	idx.version++
 	idx.needsRebuild = false
+	idx.sortedCacheValid = false // Invalidate sort cache on rebuild
 }
 
 // Search performs optimized hybrid fuzzy search
@@ -573,5 +681,345 @@ func (idx *SearchIndex) GetStats() map[string]interface{} {
 		"tag_entries":      tagCount,
 		"needs_rebuild":    idx.needsRebuild,
 		"index_valid":      idx.closestMatch != nil,
+		"sort_mode":        idx.sortMode.String(),
+		"sort_direction":   idx.sortDirection.String(),
+		"sort_cache_valid": idx.sortedCacheValid,
 	}
+}
+
+// =============================================================================
+// Sort Methods
+// =============================================================================
+
+// Sort returns a sorted copy of the provided sessions according to the current sort configuration.
+// Uses cached results when available for performance optimization.
+// Per ADR-3: Uses LastActivity as secondary sort for stability in non-activity sorts.
+func (idx *SearchIndex) Sort(sessions []*session.Instance) []*session.Instance {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+
+	if len(sessions) == 0 {
+		return sessions
+	}
+
+	// Check if we can use cached results
+	if idx.sortedCacheValid &&
+		idx.sortedCacheMode == idx.sortMode &&
+		idx.sortedCacheDir == idx.sortDirection &&
+		len(idx.sortedCache) == len(sessions) {
+		// Verify cache is for the same session set by checking first/last elements
+		if len(sessions) > 0 && len(idx.sortedCache) > 0 {
+			// Quick check: if sessions slice is exactly what we cached, return it
+			sameSet := true
+			sessionSet := make(map[*session.Instance]bool, len(sessions))
+			for _, s := range sessions {
+				sessionSet[s] = true
+			}
+			for _, s := range idx.sortedCache {
+				if !sessionSet[s] {
+					sameSet = false
+					break
+				}
+			}
+			if sameSet {
+				return idx.sortedCache
+			}
+		}
+	}
+
+	// Create a copy to avoid modifying the original slice
+	sorted := make([]*session.Instance, len(sessions))
+	copy(sorted, sessions)
+
+	// Sort based on current mode
+	idx.sortSessions(sorted)
+
+	// Cache the results
+	idx.sortedCache = sorted
+	idx.sortedCacheValid = true
+	idx.sortedCacheMode = idx.sortMode
+	idx.sortedCacheDir = idx.sortDirection
+
+	return sorted
+}
+
+// sortSessions performs the actual sorting based on current sort mode and direction
+func (idx *SearchIndex) sortSessions(sessions []*session.Instance) {
+	switch idx.sortMode {
+	case SortByLastActivity:
+		idx.sortByLastActivity(sessions)
+	case SortByCreationDate:
+		idx.sortByCreationDate(sessions)
+	case SortByTitleAZ:
+		idx.sortByTitle(sessions)
+	case SortByRepository:
+		idx.sortByRepository(sessions)
+	case SortByBranch:
+		idx.sortByBranch(sessions)
+	case SortByStatus:
+		idx.sortByStatus(sessions)
+	default:
+		idx.sortByLastActivity(sessions)
+	}
+}
+
+// sortByLastActivity sorts sessions by LastMeaningfulOutput timestamp
+// Falls back to CreatedAt if LastMeaningfulOutput is zero
+func (idx *SearchIndex) sortByLastActivity(sessions []*session.Instance) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		ti := sessions[i].LastMeaningfulOutput
+		if ti.IsZero() {
+			ti = sessions[i].CreatedAt
+		}
+		tj := sessions[j].LastMeaningfulOutput
+		if tj.IsZero() {
+			tj = sessions[j].CreatedAt
+		}
+
+		if idx.sortDirection == SortDescending {
+			return ti.After(tj) // Newest first
+		}
+		return ti.Before(tj) // Oldest first
+	})
+}
+
+// sortByCreationDate sorts sessions by CreatedAt timestamp
+// Uses LastActivity as secondary sort for stability (per ADR-3)
+func (idx *SearchIndex) sortByCreationDate(sessions []*session.Instance) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		ti := sessions[i].CreatedAt
+		tj := sessions[j].CreatedAt
+
+		if ti.Equal(tj) {
+			// Secondary sort by LastActivity for stability
+			ai := sessions[i].LastMeaningfulOutput
+			if ai.IsZero() {
+				ai = sessions[i].CreatedAt
+			}
+			aj := sessions[j].LastMeaningfulOutput
+			if aj.IsZero() {
+				aj = sessions[j].CreatedAt
+			}
+			return ai.After(aj) // Most recently active first for ties
+		}
+
+		if idx.sortDirection == SortDescending {
+			return ti.After(tj) // Newest first
+		}
+		return ti.Before(tj) // Oldest first
+	})
+}
+
+// sortByTitle sorts sessions alphabetically by Title
+// Uses LastActivity as secondary sort for stability (per ADR-3)
+func (idx *SearchIndex) sortByTitle(sessions []*session.Instance) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		titleI := strings.ToLower(sessions[i].Title)
+		titleJ := strings.ToLower(sessions[j].Title)
+
+		if titleI == titleJ {
+			// Secondary sort by LastActivity for stability
+			ai := sessions[i].LastMeaningfulOutput
+			if ai.IsZero() {
+				ai = sessions[i].CreatedAt
+			}
+			aj := sessions[j].LastMeaningfulOutput
+			if aj.IsZero() {
+				aj = sessions[j].CreatedAt
+			}
+			return ai.After(aj) // Most recently active first for ties
+		}
+
+		if idx.sortDirection == SortDescending {
+			return titleI > titleJ // Z-A
+		}
+		return titleI < titleJ // A-Z
+	})
+}
+
+// sortByRepository sorts sessions by repository path (basename)
+// Uses LastActivity as secondary sort for stability (per ADR-3)
+func (idx *SearchIndex) sortByRepository(sessions []*session.Instance) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		repoI := strings.ToLower(filepath.Base(sessions[i].Path))
+		repoJ := strings.ToLower(filepath.Base(sessions[j].Path))
+
+		if repoI == repoJ {
+			// Secondary sort by LastActivity for stability
+			ai := sessions[i].LastMeaningfulOutput
+			if ai.IsZero() {
+				ai = sessions[i].CreatedAt
+			}
+			aj := sessions[j].LastMeaningfulOutput
+			if aj.IsZero() {
+				aj = sessions[j].CreatedAt
+			}
+			return ai.After(aj) // Most recently active first for ties
+		}
+
+		if idx.sortDirection == SortDescending {
+			return repoI > repoJ // Z-A
+		}
+		return repoI < repoJ // A-Z
+	})
+}
+
+// sortByBranch sorts sessions by branch name
+// Uses LastActivity as secondary sort for stability (per ADR-3)
+func (idx *SearchIndex) sortByBranch(sessions []*session.Instance) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		branchI := strings.ToLower(sessions[i].Branch)
+		branchJ := strings.ToLower(sessions[j].Branch)
+
+		// Sessions without branches sort last
+		if branchI == "" && branchJ != "" {
+			return false
+		}
+		if branchI != "" && branchJ == "" {
+			return true
+		}
+
+		if branchI == branchJ {
+			// Secondary sort by LastActivity for stability
+			ai := sessions[i].LastMeaningfulOutput
+			if ai.IsZero() {
+				ai = sessions[i].CreatedAt
+			}
+			aj := sessions[j].LastMeaningfulOutput
+			if aj.IsZero() {
+				aj = sessions[j].CreatedAt
+			}
+			return ai.After(aj) // Most recently active first for ties
+		}
+
+		if idx.sortDirection == SortDescending {
+			return branchI > branchJ // Z-A
+		}
+		return branchI < branchJ // A-Z
+	})
+}
+
+// statusPriority returns the sort priority for a session status
+// Running has highest priority, Paused has lowest
+func statusPriority(status session.Status) int {
+	switch status {
+	case session.Running:
+		return 0
+	case session.Ready:
+		return 1
+	case session.NeedsApproval:
+		return 2
+	case session.Loading:
+		return 3
+	case session.Paused:
+		return 4
+	default:
+		return 5
+	}
+}
+
+// sortByStatus sorts sessions by status priority
+// Priority: Running > Ready > NeedsApproval > Loading > Paused
+// Uses LastActivity as secondary sort for stability (per ADR-3)
+func (idx *SearchIndex) sortByStatus(sessions []*session.Instance) {
+	sort.SliceStable(sessions, func(i, j int) bool {
+		priI := statusPriority(sessions[i].Status)
+		priJ := statusPriority(sessions[j].Status)
+
+		if priI == priJ {
+			// Secondary sort by LastActivity for stability
+			ai := sessions[i].LastMeaningfulOutput
+			if ai.IsZero() {
+				ai = sessions[i].CreatedAt
+			}
+			aj := sessions[j].LastMeaningfulOutput
+			if aj.IsZero() {
+				aj = sessions[j].CreatedAt
+			}
+			return ai.After(aj) // Most recently active first for ties
+		}
+
+		if idx.sortDirection == SortDescending {
+			return priI > priJ // Paused first (reverse priority)
+		}
+		return priI < priJ // Running first (normal priority)
+	})
+}
+
+// =============================================================================
+// Sort Configuration Methods
+// =============================================================================
+
+// SetSortMode sets the sort mode and invalidates the cache
+func (idx *SearchIndex) SetSortMode(mode SortMode) {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+
+	if idx.sortMode != mode {
+		idx.sortMode = mode
+		idx.sortedCacheValid = false
+	}
+}
+
+// GetSortMode returns the current sort mode
+func (idx *SearchIndex) GetSortMode() SortMode {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	return idx.sortMode
+}
+
+// SetSortDirection sets the sort direction and invalidates the cache
+func (idx *SearchIndex) SetSortDirection(dir SortDirection) {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+
+	if idx.sortDirection != dir {
+		idx.sortDirection = dir
+		idx.sortedCacheValid = false
+	}
+}
+
+// GetSortDirection returns the current sort direction
+func (idx *SearchIndex) GetSortDirection() SortDirection {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	return idx.sortDirection
+}
+
+// ToggleSortDirection toggles between ascending and descending
+func (idx *SearchIndex) ToggleSortDirection() {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+
+	if idx.sortDirection == SortDescending {
+		idx.sortDirection = SortAscending
+	} else {
+		idx.sortDirection = SortDescending
+	}
+	idx.sortedCacheValid = false
+}
+
+// CycleSortMode cycles to the next sort mode
+// Sequence: LastActivity → CreationDate → TitleAZ → Repository → Branch → Status → LastActivity
+func (idx *SearchIndex) CycleSortMode() {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+
+	idx.sortMode = (idx.sortMode + 1) % 6
+	idx.sortedCacheValid = false
+}
+
+// InvalidateSortCache marks the sort cache as invalid
+// Call this when session data changes but index doesn't need full rebuild
+func (idx *SearchIndex) InvalidateSortCache() {
+	idx.mutex.Lock()
+	defer idx.mutex.Unlock()
+	idx.sortedCacheValid = false
+}
+
+// GetSortDescription returns a human-readable description of current sort settings
+func (idx *SearchIndex) GetSortDescription() string {
+	idx.mutex.RLock()
+	defer idx.mutex.RUnlock()
+	return idx.sortMode.ShortName() + " " + idx.sortDirection.Icon()
 }

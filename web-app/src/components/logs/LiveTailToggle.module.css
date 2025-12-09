@@ -1,0 +1,162 @@
+.container {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  position: relative;
+}
+
+.toggleButton {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background-color: #1a1a1a;
+  border: 1px solid #444;
+  color: #999;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  transition: all 0.2s;
+}
+
+.toggleButton:hover {
+  background-color: #2a2a2a;
+  border-color: #666;
+  color: #e5e5e5;
+}
+
+.toggleButton.active {
+  background-color: rgba(23, 162, 184, 0.15);
+  border-color: #17a2b8;
+  color: #17a2b8;
+}
+
+.toggleButton.active:hover {
+  background-color: rgba(23, 162, 184, 0.25);
+}
+
+.indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #666;
+  transition: background-color 0.2s;
+}
+
+.toggleButton.active .indicator {
+  background-color: #17a2b8;
+}
+
+.indicator.pulse {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.2);
+  }
+}
+
+.label {
+  font-weight: 500;
+}
+
+.pauseButton,
+.settingsButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background-color: #1a1a1a;
+  border: 1px solid #444;
+  color: #999;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.pauseButton:hover,
+.settingsButton:hover {
+  background-color: #2a2a2a;
+  border-color: #666;
+  color: #e5e5e5;
+}
+
+.pauseButton:focus,
+.settingsButton:focus {
+  outline: none;
+  border-color: #17a2b8;
+}
+
+.dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 100;
+  min-width: 140px;
+  overflow: hidden;
+}
+
+.dropdownHeader {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  border-bottom: 1px solid #333;
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  padding: 0.25rem;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: none;
+  border: none;
+  color: #e5e5e5;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+  text-align: left;
+  width: 100%;
+}
+
+.option:hover {
+  background-color: #2a2a2a;
+}
+
+.option.selected {
+  color: #17a2b8;
+}
+
+.check {
+  font-size: 0.8rem;
+}
+
+.lastUpdate {
+  font-size: 0.75rem;
+  color: #666;
+  white-space: nowrap;
+}

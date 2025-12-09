@@ -34,6 +34,13 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 		// Terminal activity timestamps for staleness detection
 		LastTerminalUpdate:   timestamppb.New(inst.LastTerminalUpdate),
 		LastMeaningfulOutput: timestamppb.New(inst.LastMeaningfulOutput),
+		// GitHub integration fields
+		GithubPrNumber:  int32(inst.GitHubPRNumber),
+		GithubPrUrl:     inst.GitHubPRURL,
+		GithubOwner:     inst.GitHubOwner,
+		GithubRepo:      inst.GitHubRepo,
+		GithubSourceRef: inst.GitHubSourceRef,
+		ClonedRepoPath:  inst.ClonedRepoPath,
 	}
 
 	// Convert git worktree data if available

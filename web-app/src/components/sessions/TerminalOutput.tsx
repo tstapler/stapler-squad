@@ -63,6 +63,26 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
   // Streaming mode selection (per-session configuration)
   const [streamingMode, setStreamingMode] = useState<"raw" | "raw-compressed" | "state" | "hybrid">("raw");
 
+  // Detect and respond to color scheme changes
+  const [theme, setTheme] = useState<"light" | "dark">(() => {
+    if (typeof window !== "undefined") {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    }
+    return "dark";
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    const handleThemeChange = (e: MediaQueryListEvent) => {
+      setTheme(e.matches ? "dark" : "light");
+    };
+
+    mediaQuery.addEventListener("change", handleThemeChange);
+    return () => mediaQuery.removeEventListener("change", handleThemeChange);
+  }, []);
+
   // Callback to write initial pane content to terminal
   // Accepts initial pane content (no metadata) but rejects historical scrollback (with metadata)
   const handleScrollbackReceived = useCallback((scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => {
@@ -623,7 +643,7 @@ export function TerminalOutput({ sessionId, baseUrl }: TerminalOutputProps) {
           ref={xtermRef}
           onData={handleTerminalData}
           onResize={handleTerminalResize}
-          theme="dark"
+          theme={theme}
           fontSize={14}
           scrollback={10000}
         />

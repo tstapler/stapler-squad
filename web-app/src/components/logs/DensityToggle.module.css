@@ -1,0 +1,41 @@
+.container {
+  display: flex;
+  background-color: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-right: 1px solid #333;
+  color: #666;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: all 0.15s;
+}
+
+.option:last-child {
+  border-right: none;
+}
+
+.option:hover {
+  background-color: #2a2a2a;
+  color: #999;
+}
+
+.option.active {
+  background-color: #17a2b8;
+  color: #fff;
+}
+
+.option.active:hover {
+  background-color: #138496;
+}

@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+#
+# cs-hook-handler - Claude Code hook handler for Claude Squad notifications
+#
+# This script processes Claude Code hook events and sends notifications
+# to the Claude Squad server via cs-notify.
+#
+# Usage:
+#   echo '{"session_id": "...", ...}' | cs-hook-handler <hook-type>
+#
+# Hook Types:
+#   notification  - Handle Notification hook events
+#   stop          - Handle Stop hook events (task completion)
+#   permission    - Handle PermissionRequest hook events
+#   post-tool     - Handle PostToolUse hook events (errors only)
+#
+# Environment Variables:
+#   CS_SESSION_ID      - Override session ID detection
+#   CS_HOOKS_QUIET     - Set to "true" to suppress output
+#   CS_HOOKS_DISABLED  - Set to "true" to disable all notifications
+#
+
+set -euo pipefail
+
+# Find cs-notify script (look in same directory as this script)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CS_NOTIFY="${CS_NOTIFY:-$SCRIPT_DIR/cs-notify}"
+
+# Check if notifications are disabled
+if [[ "${CS_HOOKS_DISABLED:-false}" == "true" ]]; then
+    exit 0
+fi
+
+# Check cs-notify exists
+if [[ ! -x "$CS_NOTIFY" ]]; then
+    echo "Error: cs-notify not found at $CS_NOTIFY" >&2
+    exit 0  # Don't block Claude on hook errors
+fi
+
+# Read JSON input from stdin
+INPUT=$(cat)
+
+# Get hook type from argument
+HOOK_TYPE="${1:-}"
+
+if [[ -z "$HOOK_TYPE" ]]; then
+    echo "Usage: cs-hook-handler <hook-type>" >&2
+    echo "Hook types: notification, stop, permission, post-tool" >&2
+    exit 0
+fi
+
+# Helper to extract JSON field
+json_get() {
+    echo "$INPUT" | jq -r "$1 // empty" 2>/dev/null || echo ""
+}
+
+# Try to determine session ID
+# Priority: CS_SESSION_ID env var > hook input > cwd-based detection
+get_session_id() {
+    # Check environment variable first
+    if [[ -n "${CS_SESSION_ID:-}" ]]; then
+        echo "$CS_SESSION_ID"
+        return
+    fi
+    
+    # Try to get from hook input
+    local session_id=$(json_get '.session_id')
+    if [[ -n "$session_id" ]]; then
+        echo "$session_id"
+        return
+    fi
+    
+    # Try to detect from tmux session name
+    if [[ -n "${TMUX:-}" ]]; then
+        local tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
+        if [[ -n "$tmux_session" ]]; then
+            echo "$tmux_session"
+            return
+        fi
+    fi
+    
+    # Fallback: use current directory name
+    basename "$(pwd)"
+}
+
+SESSION_ID=$(get_session_id)
+
+# Build notification based on hook type
+case "$HOOK_TYPE" in
+    notification)
+        # Notification hook - Claude is sending a notification
+        TITLE=$(json_get '.notification.title // .title // "Claude Notification"')
+        MESSAGE=$(json_get '.notification.message // .message // ""')
+        PRIORITY=$(json_get '.notification.priority // "medium"')
+        
+        # Map notification level to priority if present
+        LEVEL=$(json_get '.notification.level // .level // ""')
+        case "$LEVEL" in
+            error|critical) PRIORITY="urgent" ;;
+            warning) PRIORITY="high" ;;
+            info) PRIORITY="medium" ;;
+            debug) PRIORITY="low" ;;
+        esac
+        
+        "$CS_NOTIFY" -s "$SESSION_ID" -t "$TITLE" -m "$MESSAGE" -p "$PRIORITY" --type info -q
+        ;;
+        
+    stop)
+        # Stop hook - Claude finished a task
+        REASON=$(json_get '.stop_reason // .reason // "Task completed"')
+        
+        # Check if it was an error stop
+        if echo "$REASON" | grep -qi "error\|fail\|abort"; then
+            "$CS_NOTIFY" -s "$SESSION_ID" -t "Task Failed" -m "$REASON" -p high --type task_failed -q
+        else
+            "$CS_NOTIFY" -s "$SESSION_ID" -t "Task Complete" -m "$REASON" -p low --type task_complete -q
+        fi
+        ;;
+        
+    permission)
+        # PermissionRequest hook - Claude needs user approval
+        TOOL=$(json_get '.tool_name // .tool // "unknown"')
+        COMMAND=$(json_get '.tool_input.command // .command // ""')
+        
+        if [[ -n "$COMMAND" ]]; then
+            TITLE="Permission Required: $TOOL"
+            MESSAGE="Command: $COMMAND"
+        else
+            TITLE="Permission Required"
+            MESSAGE="Claude needs approval for: $TOOL"
+        fi
+        
+        "$CS_NOTIFY" -s "$SESSION_ID" -t "$TITLE" -m "$MESSAGE" -p high --type approval_needed -q
+        ;;
+        
+    post-tool)
+        # PostToolUse hook - only notify on errors
+        TOOL=$(json_get '.tool_name // .tool // "unknown"')
+        ERROR=$(json_get '.tool_output.error // .error // ""')
+        
+        # Only send notification if there was an error
+        if [[ -n "$ERROR" ]]; then
+            "$CS_NOTIFY" -s "$SESSION_ID" -t "Tool Error: $TOOL" -m "$ERROR" -p high --type error -q
+        fi
+        ;;
+        
+    *)
+        echo "Unknown hook type: $HOOK_TYPE" >&2
+        exit 0
+        ;;
+esac
+
+# Always exit 0 to not block Claude
+exit 0

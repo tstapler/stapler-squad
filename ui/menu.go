@@ -93,7 +93,7 @@ func (m *Menu) SetAvailableCommands(availableCommands map[string]string) {
 
 	// For now, we'll use a simplified approach - just show the most common commands
 	// This will be improved when we have proper command priority/grouping
-	commonKeys := []string{"n", "D", "enter", "g", "c", "r", "/", "f", "G", "tab", "?", "q"}
+	commonKeys := []string{"n", "D", "enter", "g", "c", "r", "/", "f", "G", "S", "tab", "?", "q"}
 
 	for _, key := range commonKeys {
 		if desc, exists := availableCommands[key]; exists {

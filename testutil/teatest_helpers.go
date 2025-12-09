@@ -22,8 +22,8 @@ type TUITestConfig struct {
 // DefaultTUIConfig returns sensible defaults for TUI testing
 func DefaultTUIConfig() TUITestConfig {
 	return TUITestConfig{
-		Width:   80,
-		Height:  24,
+		Width:   200, // Increased from 80 to accommodate both list (30%=60 cols) and preview (70%=140 cols)
+		Height:  40,  // Increased from 24 to ensure session list has enough space
 		Timeout: 1 * time.Second,
 	}
 }

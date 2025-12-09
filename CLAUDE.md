@@ -18,6 +18,7 @@ go build .
 
 # Web development workflow
 make restart-web    # Build web UI and restart server (ALWAYS use this)
+                    # NOTE: Do NOT prefix with "pkill -9 -f claude-squad" - the Makefile already handles stopping gracefully
 
 # Enable profiling for web server (to diagnose lock-ups)
 make restart-web-profile  # Restart with --profile --trace enabled

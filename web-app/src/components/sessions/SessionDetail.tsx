@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { Session } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
+import { getApiBaseUrl } from "@/lib/config";
 import styles from "./SessionDetail.module.css";
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
@@ -107,12 +108,12 @@ export function SessionDetail({ session, onClose, onFullscreenChange, initialTab
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {activeTab === "terminal" && (
           <div className={styles.tabContent}>
-            <TerminalOutput sessionId={session.id} baseUrl="http://localhost:8543" />
+            <TerminalOutput sessionId={session.id} baseUrl={getApiBaseUrl()} />
           </div>
         )}
         {activeTab === "diff" && (
           <div className={styles.tabContent}>
-            <DiffViewer sessionId={session.id} baseUrl="http://localhost:8543" />
+            <DiffViewer sessionId={session.id} baseUrl={getApiBaseUrl()} />
           </div>
         )}
         {activeTab === "logs" && (

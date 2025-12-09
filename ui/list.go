@@ -707,6 +707,10 @@ func (l *List) String() string {
 		filters = append(filters, "Active Only")
 	}
 
+	// Add sort indicator (always show sort mode to help users understand ordering)
+	sortDesc := l.GetSortDescription()
+	filters = append(filters, fmt.Sprintf("Sort: %s", sortDesc))
+
 	// Construct title with filters
 	if len(filters) > 0 {
 		titleText += fmt.Sprintf(" (%s)", strings.Join(filters, " | "))
@@ -907,7 +911,7 @@ func (l *List) AddInstance(instance *session.Instance) (finalize func()) {
 		l.categoryGroups[category] = []*session.Instance{}
 
 		// Initialize expansion state if it doesn't exist
-		if _, expanded := l.groupExpanded[category]; !expanded {
+		if _, exists := l.groupExpanded[category]; !exists {
 			// Default to expanded for new categories
 			l.groupExpanded[category] = true
 		}
@@ -1076,10 +1080,10 @@ func (l *List) OrganizeByStrategy() {
 			if _, exists := l.categoryGroups[finalGroupKey]; !exists {
 				l.categoryGroups[finalGroupKey] = []*session.Instance{}
 
-				// Initialize expansion state if not already set
-				// Preserves user's expand/collapse preference if it exists
-				if _, expanded := l.groupExpanded[finalGroupKey]; !expanded {
-					// Default to expanded for new groups
+				// Initialize expansion state - default to expanded for new groups
+				// This ensures new groups are always visible by default
+				// User preferences are preserved if they explicitly collapsed/expanded
+				if !l.groupExpanded[finalGroupKey] {
 					l.groupExpanded[finalGroupKey] = true
 				}
 			}
@@ -1238,6 +1242,7 @@ func (l *List) TogglePausedFilter() {
 }
 
 // getVisibleItems returns the items that should be visible based on current filters
+// Items are sorted according to the current SearchIndex sort configuration
 func (l *List) getVisibleItems() []*session.Instance {
 	// Return cached result if valid
 	if l.visibleCacheValid && l.visibleItemsCache != nil {
@@ -1264,6 +1269,10 @@ func (l *List) getVisibleItems() []*session.Instance {
 			visible = append(visible, item)
 		}
 	}
+
+	// Apply sorting based on SearchIndex configuration
+	// This sorts the visible items according to the current sort mode and direction
+	visible = l.searchIndex.Sort(visible)
 
 	// Cache the result and build visible index map for O(1) lookups
 	l.visibleItemsCache = visible
@@ -1924,10 +1933,29 @@ func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.I
 	// Create a map to track which categories we need to show (items visible in window)
 	categoriesInWindow := make(map[string][]*session.Instance)
 	for _, item := range visibleWindow {
+		// Get the transformed category key (same logic as OrganizeByStrategy)
 		category := item.Category
 		if category == "" {
 			category = "Uncategorized"
 		}
+
+		// Apply GroupByCategory transformation if enabled
+		if l.groupingStrategy == GroupByCategory {
+			if item.IsManaged {
+				if category == "Uncategorized" {
+					category = "Squad Sessions"
+				} else {
+					category = "Squad Sessions/" + category
+				}
+			} else {
+				if category == "Uncategorized" {
+					category = "External Claude"
+				} else {
+					category = "External Claude/" + category
+				}
+			}
+		}
+
 		categoriesInWindow[category] = append(categoriesInWindow[category], item)
 	}
 
@@ -1978,6 +2006,24 @@ func (l *List) renderVisibleItems(b *strings.Builder, visibleWindow []*session.I
 			if selectedCategory == "" {
 				selectedCategory = "Uncategorized"
 			}
+
+			// Apply GroupByCategory transformation if enabled (same logic as above)
+			if l.groupingStrategy == GroupByCategory {
+				if selectedInstance.IsManaged {
+					if selectedCategory == "Uncategorized" {
+						selectedCategory = "Squad Sessions"
+					} else {
+						selectedCategory = "Squad Sessions/" + selectedCategory
+					}
+				} else {
+					if selectedCategory == "Uncategorized" {
+						selectedCategory = "External Claude"
+					} else {
+						selectedCategory = "External Claude/" + selectedCategory
+					}
+				}
+			}
+
 			if selectedCategory == category {
 				isSelectedCategory = true
 			}
@@ -2089,4 +2135,53 @@ func (l *List) SetReviewQueue(queue *session.ReviewQueue) {
 // GetReviewQueue returns the review queue
 func (l *List) GetReviewQueue() *session.ReviewQueue {
 	return l.reviewQueue
+}
+
+// =============================================================================
+// Sort Methods - Delegate to SearchIndex for consistent sort configuration
+// =============================================================================
+
+// CycleSortMode cycles to the next sort mode and invalidates caches
+// Sequence: LastActivity → CreationDate → TitleAZ → Repository → Branch → Status → LastActivity
+func (l *List) CycleSortMode() {
+	l.searchIndex.CycleSortMode()
+	l.invalidateVisibleCache() // Re-sort on next getVisibleItems() call
+	l.ensureSelectedVisible()
+}
+
+// ToggleSortDirection toggles between ascending and descending order
+func (l *List) ToggleSortDirection() {
+	l.searchIndex.ToggleSortDirection()
+	l.invalidateVisibleCache() // Re-sort on next getVisibleItems() call
+	l.ensureSelectedVisible()
+}
+
+// GetSortMode returns the current sort mode
+func (l *List) GetSortMode() SortMode {
+	return l.searchIndex.GetSortMode()
+}
+
+// GetSortDirection returns the current sort direction
+func (l *List) GetSortDirection() SortDirection {
+	return l.searchIndex.GetSortDirection()
+}
+
+// GetSortDescription returns a human-readable description of current sort settings
+// Format: "Activity ↓" or "Title ↑"
+func (l *List) GetSortDescription() string {
+	return l.searchIndex.GetSortDescription()
+}
+
+// SetSortMode sets a specific sort mode
+func (l *List) SetSortMode(mode SortMode) {
+	l.searchIndex.SetSortMode(mode)
+	l.invalidateVisibleCache()
+	l.ensureSelectedVisible()
+}
+
+// SetSortDirection sets a specific sort direction
+func (l *List) SetSortDirection(dir SortDirection) {
+	l.searchIndex.SetSortDirection(dir)
+	l.invalidateVisibleCache()
+	l.ensureSelectedVisible()
 }

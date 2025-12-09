@@ -35,6 +35,14 @@ type InstanceData struct {
 	// Session type determines the workflow (directory, new_worktree, existing_worktree)
 	SessionType SessionType `json:"session_type,omitempty"`
 
+	// GitHub integration fields for PR/URL-based session creation
+	GitHubPRNumber  int    `json:"github_pr_number,omitempty"`
+	GitHubPRURL     string `json:"github_pr_url,omitempty"`
+	GitHubOwner     string `json:"github_owner,omitempty"`
+	GitHubRepo      string `json:"github_repo,omitempty"`
+	GitHubSourceRef string `json:"github_source_ref,omitempty"`
+	ClonedRepoPath  string `json:"cloned_repo_path,omitempty"`
+
 	// Claude Code session persistence
 	ClaudeSession ClaudeSessionData `json:"claude_session,omitempty"`
 	// Tmux session prefix for isolation
@@ -300,19 +308,24 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	return instances, nil
 }
 
-// DeleteInstance removes an instance from storage
+// DeleteInstance removes an instance from storage.
+// This method directly manipulates the storage JSON to avoid the merge logic
+// in SaveInstances which would restore deleted instances from disk.
 func (s *Storage) DeleteInstance(title string) error {
-	instances, err := s.LoadInstances()
-	if err != nil {
-		return fmt.Errorf("failed to load instances: %w", err)
+	// Load raw JSON data from storage
+	jsonData := s.state.GetInstances()
+
+	var instancesData []InstanceData
+	if err := json.Unmarshal(jsonData, &instancesData); err != nil {
+		return fmt.Errorf("failed to unmarshal instances: %w", err)
 	}
 
+	// Filter out the instance to delete
 	found := false
-	newInstances := make([]*Instance, 0)
-	for _, instance := range instances {
-		data := instance.ToInstanceData()
+	newData := make([]InstanceData, 0, len(instancesData))
+	for _, data := range instancesData {
 		if data.Title != title {
-			newInstances = append(newInstances, instance)
+			newData = append(newData, data)
 		} else {
 			found = true
 		}
@@ -322,7 +335,17 @@ func (s *Storage) DeleteInstance(title string) error {
 		return fmt.Errorf("instance not found: %s", title)
 	}
 
-	return s.SaveInstances(newInstances)
+	// Marshal the filtered list back to JSON
+	newJsonData, err := json.Marshal(newData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+
+	// Save synchronously to ensure deletion is persisted before returning.
+	// This is critical because the server reloads instances immediately after
+	// deletion to update the ReviewQueuePoller. If we used SaveAsync, the poller
+	// might reload the old state that still contains the deleted session.
+	return s.state.SaveInstances(newJsonData)
 }
 
 // UpdateInstance updates an existing instance in storage
@@ -377,6 +400,49 @@ func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate,
 			instancesData[i].LastViewed = lastViewed
 			found = true
 			log.DebugLog.Printf("Updating timestamps in storage for session %s (no instance objects created)", title)
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("instance not found: %s", title)
+	}
+
+	// Marshal back to JSON
+	updatedJSON, err := json.Marshal(instancesData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+
+	// Use async save if available
+	if s.stateService != nil {
+		s.stateService.SaveAsync(updatedJSON)
+		return nil
+	}
+
+	// Fallback to synchronous save
+	return s.state.SaveInstances(updatedJSON)
+}
+
+// UpdateInstanceLastAddedToQueue updates ONLY the LastAddedToQueue field for a specific instance.
+// This method directly manipulates the storage JSON to avoid the merge logic in SaveInstances
+// which would restore deleted instances. This is critical for the ReviewQueuePoller.
+func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue time.Time) error {
+	// Load raw JSON data directly
+	jsonData := s.state.GetInstances()
+
+	var instancesData []InstanceData
+	if err := json.Unmarshal(jsonData, &instancesData); err != nil {
+		return fmt.Errorf("failed to unmarshal instances: %w", err)
+	}
+
+	// Find and update the matching instance data
+	found := false
+	for i, data := range instancesData {
+		if data.Title == title {
+			instancesData[i].LastAddedToQueue = lastAddedToQueue
+			found = true
+			log.DebugLog.Printf("Updating LastAddedToQueue in storage for session %s (no instance objects created)", title)
 			break
 		}
 	}

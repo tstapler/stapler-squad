@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+#
+# cs-notify - Send notifications from tmux sessions to Claude Squad
+#
+# This script allows Claude Code instances running in tmux sessions to send
+# notification chimes with metadata to the Claude Squad server, which broadcasts
+# them to all connected clients (web UI and TUI).
+#
+# Usage:
+#   cs-notify --session-id "my-session" --title "Task Complete" [options]
+#
+# Required:
+#   --session-id, -s    Session ID (must match active Claude Squad session)
+#   --title, -t         Notification title (required)
+#
+# Optional:
+#   --message, -m       Detailed message body
+#   --type              Notification type (see below)
+#   --priority, -p      Priority: urgent, high, medium, low (default: medium)
+#   --metadata, -d      Key=value pairs (can be specified multiple times)
+#   --port              Server port (default: 8484)
+#   --quiet, -q         Suppress output on success
+#   --help, -h          Show this help message
+#
+# Notification Types:
+#   info              - General information
+#   approval_needed   - Requires user approval
+#   error             - Error occurred
+#   warning           - Warning message
+#   task_complete     - Task finished successfully
+#   task_failed       - Task finished with errors
+#   progress          - Progress update
+#   question          - Question for user
+#   reminder          - Reminder notification
+#   system            - System notification
+#   custom            - Custom notification
+#
+# Examples:
+#   # Simple notification
+#   cs-notify -s "my-session" -t "Build Complete" -p low
+#
+#   # Error notification with message
+#   cs-notify -s "my-session" -t "Build Failed" -m "Error in main.go:42" --type error -p high
+#
+#   # Task completion with metadata
+#   cs-notify -s "my-session" -t "Tests Passed" --type task_complete \
+#     -d "tests=142" -d "duration=45s"
+#
+#   # Approval needed (urgent)
+#   cs-notify -s "my-session" -t "Permission Required" --type approval_needed \
+#     -m "Allow write access to /etc/hosts?" -p urgent
+#
+# Environment Variables:
+#   CS_SESSION_ID     - Default session ID (can be set in .bashrc/.zshrc)
+#   CS_SERVER_PORT    - Default server port
+#
+
+set -euo pipefail
+
+# Default values
+PORT="${CS_SERVER_PORT:-8484}"
+SESSION_ID="${CS_SESSION_ID:-}"
+TITLE=""
+MESSAGE=""
+TYPE="info"
+PRIORITY="medium"
+QUIET=false
+declare -a METADATA=()
+
+# Map priority names to protobuf enum values
+priority_to_enum() {
+    case "$1" in
+        low)    echo 1 ;;
+        medium) echo 2 ;;
+        high)   echo 3 ;;
+        urgent) echo 4 ;;
+        *)      echo 2 ;; # default to medium
+    esac
+}
+
+# Map type names to protobuf enum values
+type_to_enum() {
+    case "$1" in
+        info)            echo 1 ;;
+        approval_needed) echo 2 ;;
+        error)           echo 3 ;;
+        warning)         echo 4 ;;
+        task_complete)   echo 5 ;;
+        task_failed)     echo 6 ;;
+        progress)        echo 7 ;;
+        question)        echo 8 ;;
+        reminder)        echo 9 ;;
+        system)          echo 10 ;;
+        custom)          echo 11 ;;
+        *)               echo 1 ;; # default to info
+    esac
+}
+
+usage() {
+    head -60 "$0" | tail -n +2 | sed 's/^#//' | sed 's/^ //'
+    exit 0
+}
+
+error() {
+    echo "Error: $1" >&2
+    exit 1
+}
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --session-id|-s)
+            SESSION_ID="$2"
+            shift 2
+            ;;
+        --title|-t)
+            TITLE="$2"
+            shift 2
+            ;;
+        --message|-m)
+            MESSAGE="$2"
+            shift 2
+            ;;
+        --type)
+            TYPE="$2"
+            shift 2
+            ;;
+        --priority|-p)
+            PRIORITY="$2"
+            shift 2
+            ;;
+        --metadata|-d)
+            METADATA+=("$2")
+            shift 2
+            ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --quiet|-q)
+            QUIET=true
+            shift
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            error "Unknown option: $1"
+            ;;
+    esac
+done
+
+# Validate required arguments
+if [[ -z "$SESSION_ID" ]]; then
+    error "Session ID is required. Use --session-id or set CS_SESSION_ID environment variable."
+fi
+
+if [[ -z "$TITLE" ]]; then
+    error "Title is required. Use --title."
+fi
+
+# Build metadata JSON object
+metadata_json="{}"
+if [[ ${#METADATA[@]} -gt 0 ]]; then
+    for item in "${METADATA[@]}"; do
+        key="${item%%=*}"
+        value="${item#*=}"
+        value=$(echo "$value" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g; s/\n/\\n/g')
+        metadata_json=$(echo "$metadata_json" | jq --arg k "$key" --arg v "$value" '. + {($k): $v}')
+    done
+fi
+
+# Convert priority and type to enum values
+priority_enum=$(priority_to_enum "$PRIORITY")
+type_enum=$(type_to_enum "$TYPE")
+
+# Escape special JSON characters in title and message
+TITLE_ESCAPED=$(echo "$TITLE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g')
+MESSAGE_ESCAPED=$(echo "$MESSAGE" | sed 's/\\/\\\\/g; s/"/\\"/g; s/\t/\\t/g')
+
+# Build request JSON
+request_json=$(cat <<EOF
+{
+    "sessionId": "$SESSION_ID",
+    "notificationType": $type_enum,
+    "priority": $priority_enum,
+    "title": "$TITLE_ESCAPED",
+    "message": "$MESSAGE_ESCAPED",
+    "metadata": $metadata_json
+}
+EOF
+)
+
+# Send request to server using ConnectRPC JSON format
+response=$(curl -s -w "\n%{http_code}" \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "$request_json" \
+    "http://localhost:$PORT/session.v1.SessionService/SendNotification" \
+    2>&1) || {
+    error "Failed to connect to server at localhost:$PORT. Is Claude Squad running?"
+}
+
+# Split response into body and status code
+http_code=$(echo "$response" | tail -n 1)
+body=$(echo "$response" | head -n -1)
+
+# Check response
+if [[ "$http_code" == "200" ]]; then
+    if [[ "$QUIET" == "false" ]]; then
+        notification_id=$(echo "$body" | jq -r '.notificationId // "unknown"')
+        echo "Notification sent successfully (ID: $notification_id)"
+    fi
+    exit 0
+else
+    error_msg=$(echo "$body" | jq -r '.message // .error // "Unknown error"' 2>/dev/null || echo "$body")
+    error "Server returned $http_code: $error_msg"
+fi

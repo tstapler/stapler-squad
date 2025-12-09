@@ -10,6 +10,7 @@ import (
 	"claude-squad/session"
 	"claude-squad/session/tmux"
 	"claude-squad/terminal"
+	"claude-squad/testutil"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
 	"context"
@@ -244,6 +245,14 @@ func SetupTestHomeWithSession(t *testing.T, sessionTitle string) *home {
 	_ = h.list.AddInstance(session)
 	h.list.SetSelectedInstance(0)
 
+	// CRITICAL FIX: Ensure category is expanded in tests
+	// This prevents the issue where state persistence loads collapsed state
+	h.list.OrganizeByCategory()
+	// Note: "Uncategorized" sessions are transformed to "Squad Sessions" by OrganizeByStrategy
+	h.list.ExpandCategory("Squad Sessions")
+	// FORCE re-organization to ensure expansion state takes effect
+	h.list.OrganizeByCategory()
+
 	return h
 }
 
@@ -267,6 +276,12 @@ func SetupTestHomeWithMultipleSessions(t *testing.T, sessionTitles []string) *ho
 	if len(sessionTitles) > 0 {
 		h.list.SetSelectedInstance(0)
 	}
+
+	// CRITICAL FIX: Ensure category is expanded in tests
+	// This prevents the issue where state persistence loads collapsed state
+	h.list.OrganizeByCategory()
+	// Note: "Uncategorized" sessions are transformed to "Squad Sessions" by OrganizeByStrategy
+	h.list.ExpandCategory("Squad Sessions")
 
 	return h
 }
@@ -317,6 +332,91 @@ func SetupTestHomeWithMockedStorage(t *testing.T, mockStorage *session.Storage) 
 		mocks.stateManager = state.NewManager()
 		mocks.uiCoordinator = appui.NewCoordinator()
 	})
+}
+
+// SetupTeatestApp creates a fully configured test app with proper viewport dimensions
+// This function encapsulates the complete teatest viewport fix pattern to prevent
+// "No sessions available" issues caused by dimension override in Init()
+//
+// Usage:
+//   config := testutil.DefaultTUIConfig()
+//   appModel := SetupTeatestApp(t, config)
+//   // Add sessions and configure test-specific behavior
+//   session := CreateTestSession(t, "test-session")
+//   _ = appModel.list.AddInstance(session)
+//   appModel.list.SetSelectedInstance(0)
+//   // Create teatest AFTER app is configured
+//   tm := testutil.CreateTUITest(t, appModel, config)
+//
+// This helper applies all 8 steps of the viewport fix:
+// 1. Uses BuildWithMockDependenciesNoInit (prevents Init() dimension override)
+// 2. Pre-configures component dimensions before teatest creation
+// 3. Sets termWidth/termHeight for viewport-aware rendering
+// 4. Disables terminal manager to prevent 80x24 WindowSizeMsg
+// 5. Organizes categories and expands default category
+// 6. Forces re-organization to ensure expansion takes effect
+// 7. Initializes bridge if withBridge option is set
+// 8. Returns fully configured app ready for teatest creation
+func SetupTeatestApp(t *testing.T, config testutil.TUITestConfig, options ...TeatestAppOption) *home {
+	t.Helper()
+
+	// Parse options
+	opts := &teatestAppOptions{}
+	for _, opt := range options {
+		opt(opts)
+	}
+
+	// Step 1: Use NoInit to prevent Init() from sending 80x24 WindowSizeMsg
+	builder := NewTestHomeBuilder()
+	if opts.withBridge {
+		builder = builder.WithBridge()
+	}
+
+	appModel := builder.BuildWithMockDependenciesNoInit(t, func(mocks *MockDependencies) {
+		// Minimal setup - tests can customize further if needed
+	})
+
+	// Step 2: Calculate component dimensions based on config
+	listWidth := int(float32(config.Width) * 0.3)
+	tabsWidth := config.Width - listWidth
+	menuHeight := 3
+	errorBoxHeight := 1
+	contentHeight := config.Height - menuHeight - errorBoxHeight
+
+	// Step 3: Pre-configure ALL component dimensions
+	appModel.list.SetSize(listWidth, contentHeight)
+	appModel.tabbedWindow.SetSize(tabsWidth, contentHeight)
+	appModel.menu.SetSize(config.Width, menuHeight)
+
+	// Step 4: Set app-level dimensions for viewport-aware rendering
+	appModel.termWidth = config.Width
+	appModel.termHeight = config.Height
+
+	// Step 5: CRITICAL - Disable terminal manager to prevent dimension override
+	appModel.terminalManager = nil
+
+	// Step 6-8: Ensure categories are organized and expanded
+	// This prevents sessions from being hidden in collapsed categories
+	appModel.list.OrganizeByCategory()
+	appModel.list.ExpandCategory("Squad Sessions")
+	appModel.list.OrganizeByCategory() // Force re-organization
+
+	return appModel
+}
+
+// TeatestAppOption is a functional option for SetupTeatestApp
+type TeatestAppOption func(*teatestAppOptions)
+
+// teatestAppOptions holds configuration options for SetupTeatestApp
+type teatestAppOptions struct {
+	withBridge bool
+}
+
+// WithBridge enables bridge initialization for command handling tests
+func WithBridge() TeatestAppOption {
+	return func(opts *teatestAppOptions) {
+		opts.withBridge = true
+	}
 }
 
 // CleanupTestTmuxServer cleans up the isolated tmux server for a specific test

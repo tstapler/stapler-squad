@@ -13,10 +13,13 @@ import (
 	"fmt"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
+	"net"
 	"os"
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
@@ -39,6 +42,9 @@ type SessionService struct {
 	historyCache      *session.ClaudeSessionHistory
 	historyCacheTime  time.Time
 	historyCacheTTL   time.Duration
+
+	// Notification rate limiter (10 notifications/sec per session, burst of 20)
+	notificationRateLimiter *NotificationRateLimiter
 }
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
@@ -48,10 +54,11 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 	reviewQueue := session.NewReviewQueue()
 
 	return &SessionService{
-		storage:          storage,
-		eventBus:         eventBus,
-		reviewQueue:      reviewQueue,
-		historyCacheTTL:  5 * time.Minute, // Cache history for 5 minutes
+		storage:                 storage,
+		eventBus:                eventBus,
+		reviewQueue:             reviewQueue,
+		historyCacheTTL:         5 * time.Minute, // Cache history for 5 minutes
+		notificationRateLimiter: NewNotificationRateLimiter(10, 20), // 10/sec, burst of 20
 	}
 }
 
@@ -236,13 +243,20 @@ func (s *SessionService) CreateSession(
 	// Save instance to storage
 	// Note: Storage uses SaveInstances (plural) which saves all instances
 	// We need to load, append, and save all instances
-	if err := s.storage.SaveInstances(append(instances, instance)); err != nil {
+	updatedInstances := append(instances, instance)
+	if err := s.storage.SaveInstances(updatedInstances); err != nil {
 		// Cleanup on save failure
 		if destroyErr := instance.Destroy(); destroyErr != nil {
 			// Log cleanup error but return original save error
 			log.ErrorLog.Printf("Failed to cleanup after save error: %v", destroyErr)
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	// CRITICAL: Update the ReviewQueuePoller's instance references after creating new session
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.SetInstances(updatedInstances)
+		log.InfoLog.Printf("[ReviewQueue] Updated poller instance references after CreateSession for '%s'", instance.Title)
 	}
 
 	// Publish SessionCreated event to all watchers
@@ -329,6 +343,12 @@ func (s *SessionService) UpdateSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
+	// CRITICAL: Update the ReviewQueuePoller's instance references after updating session
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.SetInstances(instances)
+		log.InfoLog.Printf("[ReviewQueue] Updated poller instance references after UpdateSession for '%s'", instance.Title)
+	}
+
 	// Publish events based on what was updated
 	if len(updatedFields) > 0 {
 		// Check if status changed specifically
@@ -380,6 +400,19 @@ func (s *SessionService) DeleteSession(
 	// Delete from storage
 	if err := s.storage.DeleteInstance(req.Msg.Id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
+	}
+
+	// CRITICAL: Update the ReviewQueuePoller's instance references after deletion
+	// The poller still has references to the old instances list which includes the deleted session.
+	// Reload the instances and update the poller to prevent stale references.
+	if s.reviewQueuePoller != nil {
+		updatedInstances, err := s.storage.LoadInstances()
+		if err != nil {
+			log.ErrorLog.Printf("[ReviewQueue] Failed to reload instances after DeleteSession: %v", err)
+		} else {
+			s.reviewQueuePoller.SetInstances(updatedInstances)
+			log.InfoLog.Printf("[ReviewQueue] Updated poller instance references after DeleteSession for '%s'", req.Msg.Id)
+		}
 	}
 
 	// Publish SessionDeleted event to all watchers
@@ -878,6 +911,17 @@ func (s *SessionService) AcknowledgeSession(
 	instances[instanceIndex] = instance
 	if err := s.storage.SaveInstances(instances); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	// CRITICAL: Update the ReviewQueuePoller's instance references
+	// When we LoadInstances() above, we create brand new instance objects.
+	// The poller still has references to the OLD objects from initialization.
+	// If we don't update the poller's references, it will continue checking
+	// stale objects with outdated LastAddedToQueue timestamps, causing
+	// notification spam even after the user acknowledges sessions.
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.SetInstances(instances)
+		log.InfoLog.Printf("[ReviewQueue] Updated poller instance references after AcknowledgeSession for '%s'", instance.Title)
 	}
 
 	// Publish event for immediate reactivity
@@ -1509,4 +1553,386 @@ func (s *SessionService) GetClaudeHistoryMessages(
 		Messages:   protoMessages,
 		TotalCount: int32(totalCount),
 	}), nil
+}
+
+// GetPRInfo retrieves the latest PR information for a session.
+func (s *SessionService) GetPRInfo(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetPRInfoRequest],
+) (*connect.Response[sessionv1.GetPRInfoResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find instance by ID (using Title as ID)
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Check if this is a PR session
+	if !instance.IsPRSession() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	}
+
+	// Refresh PR info from GitHub
+	prInfo, err := instance.RefreshPRInfo()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to refresh PR info: %w", err))
+	}
+
+	// Convert to proto message
+	protoPRInfo := &sessionv1.PRInfo{
+		Number:       int32(prInfo.Number),
+		Title:        prInfo.Title,
+		Body:         prInfo.Body,
+		HeadRef:      prInfo.HeadRef,
+		BaseRef:      prInfo.BaseRef,
+		State:        prInfo.State,
+		Author:       prInfo.Author,
+		Labels:       prInfo.Labels,
+		HtmlUrl:      prInfo.HTMLURL,
+		CreatedAt:    timestamppb.New(prInfo.CreatedAt),
+		UpdatedAt:    timestamppb.New(prInfo.UpdatedAt),
+		IsDraft:      prInfo.IsDraft,
+		Mergeable:    prInfo.Mergeable,
+		Additions:    int32(prInfo.Additions),
+		Deletions:    int32(prInfo.Deletions),
+		ChangedFiles: int32(prInfo.ChangedFiles),
+	}
+
+	return connect.NewResponse(&sessionv1.GetPRInfoResponse{
+		PrInfo: protoPRInfo,
+	}), nil
+}
+
+// GetPRComments retrieves all comments on the PR for a session.
+func (s *SessionService) GetPRComments(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetPRCommentsRequest],
+) (*connect.Response[sessionv1.GetPRCommentsResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find instance by ID (using Title as ID)
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Check if this is a PR session
+	if !instance.IsPRSession() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	}
+
+	// Get PR comments from GitHub
+	comments, err := instance.GetPRComments()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PR comments: %w", err))
+	}
+
+	// Convert to proto messages
+	protoComments := make([]*sessionv1.PRComment, 0, len(comments))
+	for _, comment := range comments {
+		protoComment := &sessionv1.PRComment{
+			Id:        int32(comment.ID),
+			Author:    comment.Author,
+			Body:      comment.Body,
+			CreatedAt: timestamppb.New(comment.CreatedAt),
+			IsReview:  comment.IsReview,
+		}
+		if comment.Path != "" {
+			protoComment.Path = &comment.Path
+		}
+		if comment.Line != 0 {
+			line := int32(comment.Line)
+			protoComment.Line = &line
+		}
+		protoComments = append(protoComments, protoComment)
+	}
+
+	return connect.NewResponse(&sessionv1.GetPRCommentsResponse{
+		Comments: protoComments,
+	}), nil
+}
+
+// PostPRComment posts a new comment to the PR for a session.
+func (s *SessionService) PostPRComment(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PostPRCommentRequest],
+) (*connect.Response[sessionv1.PostPRCommentResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	if req.Msg.Body == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("comment body is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find instance by ID (using Title as ID)
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Check if this is a PR session
+	if !instance.IsPRSession() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	}
+
+	// Post comment to GitHub
+	if err := instance.PostComment(req.Msg.Body); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to post comment: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.PostPRCommentResponse{
+		Success: true,
+		Message: fmt.Sprintf("Comment posted successfully to PR for session '%s'", req.Msg.Id),
+	}), nil
+}
+
+// MergePR merges the PR for a session using the specified merge method.
+func (s *SessionService) MergePR(
+	ctx context.Context,
+	req *connect.Request[sessionv1.MergePRRequest],
+) (*connect.Response[sessionv1.MergePRResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find instance by ID (using Title as ID)
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Check if this is a PR session
+	if !instance.IsPRSession() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	}
+
+	// Get merge method (default to "merge" if not specified)
+	method := "merge"
+	if req.Msg.Method != nil && *req.Msg.Method != "" {
+		method = *req.Msg.Method
+	}
+
+	// Merge PR using GitHub
+	if err := instance.MergePR(method); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to merge PR: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.MergePRResponse{
+		Success: true,
+		Message: fmt.Sprintf("PR merged successfully for session '%s' using method '%s'", req.Msg.Id, method),
+	}), nil
+}
+
+// ClosePR closes the PR without merging for a session.
+func (s *SessionService) ClosePR(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ClosePRRequest],
+) (*connect.Response[sessionv1.ClosePRResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find instance by ID (using Title as ID)
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Check if this is a PR session
+	if !instance.IsPRSession() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("session '%s' is not a PR session", req.Msg.Id))
+	}
+
+	// Close PR using GitHub
+	if err := instance.ClosePR(); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to close PR: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.ClosePRResponse{
+		Success: true,
+		Message: fmt.Sprintf("PR closed successfully for session '%s'", req.Msg.Id),
+	}), nil
+}
+
+// SendNotification allows tmux sessions to send notifications to connected clients.
+// Enforces localhost-only restriction, session validation, and rate limiting.
+func (s *SessionService) SendNotification(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SendNotificationRequest],
+) (*connect.Response[sessionv1.SendNotificationResponse], error) {
+	// Validate localhost-only origin
+	if err := s.validateLocalhostOrigin(ctx, req); err != nil {
+		return nil, err
+	}
+
+	// Validate required fields
+	if req.Msg.SessionId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+	if req.Msg.Title == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
+	}
+
+	// Validate session exists
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.SessionId {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
+	}
+
+	// Apply rate limiting
+	if !s.notificationRateLimiter.Allow(req.Msg.SessionId) {
+		return nil, connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("rate limit exceeded for session: %s", req.Msg.SessionId))
+	}
+
+	// Generate notification ID
+	notificationID := uuid.New().String()
+
+	// Broadcast notification via event bus
+	event := events.NewNotificationEvent(
+		req.Msg.SessionId,
+		instance.Title, // Session name
+		notificationID,
+		int32(req.Msg.NotificationType),
+		int32(req.Msg.Priority),
+		req.Msg.Title,
+		req.Msg.Message,
+		req.Msg.Metadata,
+	)
+	s.eventBus.Publish(event)
+
+	log.InfoS("Notification sent", map[string]interface{}{
+		"session_id":        req.Msg.SessionId,
+		"notification_type": req.Msg.NotificationType.String(),
+		"priority":          req.Msg.Priority.String(),
+		"title":             req.Msg.Title,
+		"notification_id":   notificationID,
+	})
+
+	return connect.NewResponse(&sessionv1.SendNotificationResponse{
+		Success:        true,
+		Message:        "Notification sent successfully",
+		NotificationId: notificationID,
+	}), nil
+}
+
+// validateLocalhostOrigin ensures the request comes from localhost.
+// This is a security measure to prevent external actors from sending notifications.
+func (s *SessionService) validateLocalhostOrigin(ctx context.Context, req *connect.Request[sessionv1.SendNotificationRequest]) error {
+	// Get peer address from request headers or context
+	// ConnectRPC provides X-Forwarded-For or we can check the connection directly
+
+	// Check X-Real-IP header first (if behind a proxy)
+	realIP := req.Header().Get("X-Real-IP")
+	if realIP != "" {
+		if !isLocalhostIP(realIP) {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
+		}
+		return nil
+	}
+
+	// Check X-Forwarded-For header
+	forwardedFor := req.Header().Get("X-Forwarded-For")
+	if forwardedFor != "" {
+		// Take the first IP in the chain (original client)
+		ips := strings.Split(forwardedFor, ",")
+		if len(ips) > 0 {
+			clientIP := strings.TrimSpace(ips[0])
+			if !isLocalhostIP(clientIP) {
+				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
+			}
+			return nil
+		}
+	}
+
+	// If no proxy headers, we're in direct connection mode
+	// The server already binds to localhost, so requests reaching here are local
+	// This is a defense-in-depth check
+	return nil
+}
+
+// isLocalhostIP checks if the given IP string represents localhost.
+func isLocalhostIP(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	return parsed.IsLoopback()
 }

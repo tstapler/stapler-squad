@@ -70,6 +70,27 @@ service SessionService {
 
   // GetClaudeHistoryMessages retrieves messages from a specific conversation.
   rpc GetClaudeHistoryMessages(GetClaudeHistoryMessagesRequest) returns (GetClaudeHistoryMessagesResponse) {}
+
+  // GetPRInfo retrieves the latest PR information for a session.
+  rpc GetPRInfo(GetPRInfoRequest) returns (GetPRInfoResponse) {}
+
+  // GetPRComments retrieves all comments on the PR for a session.
+  rpc GetPRComments(GetPRCommentsRequest) returns (GetPRCommentsResponse) {}
+
+  // PostPRComment posts a new comment to the PR for a session.
+  rpc PostPRComment(PostPRCommentRequest) returns (PostPRCommentResponse) {}
+
+  // MergePR merges the PR for a session using the specified merge method.
+  rpc MergePR(MergePRRequest) returns (MergePRResponse) {}
+
+  // ClosePR closes the PR without merging for a session.
+  rpc ClosePR(ClosePRRequest) returns (ClosePRResponse) {}
+
+  // SendNotification allows tmux sessions to send notifications to the server.
+  // Notifications are broadcast to all connected clients (web UI and TUI).
+  // Requires session_id to identify the source session.
+  // Enforces localhost-only restriction and rate limiting (10/sec per session).
+  rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -416,4 +437,100 @@ message ClaudeMessage {
   google.protobuf.Timestamp timestamp = 3;
   // Model used (for assistant messages)
   string model = 4;
+}
+
+// PR Tracking Messages
+
+message GetPRInfoRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+}
+
+message GetPRInfoResponse {
+  // PR metadata
+  PRInfo pr_info = 1;
+}
+
+message GetPRCommentsRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+}
+
+message GetPRCommentsResponse {
+  // List of PR comments
+  repeated PRComment comments = 1;
+}
+
+message PostPRCommentRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+  // Comment body (required)
+  string body = 2;
+}
+
+message PostPRCommentResponse {
+  // Whether the comment was successfully posted
+  bool success = 1;
+  // Human-readable message
+  string message = 2;
+}
+
+message MergePRRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+  // Merge method: "merge", "squash", or "rebase" (default: "merge")
+  optional string method = 2;
+}
+
+message MergePRResponse {
+  // Whether the PR was successfully merged
+  bool success = 1;
+  // Human-readable message
+  string message = 2;
+}
+
+message ClosePRRequest {
+  // Session identifier (must be a PR session)
+  string id = 1;
+}
+
+message ClosePRResponse {
+  // Whether the PR was successfully closed
+  bool success = 1;
+  // Human-readable message
+  string message = 2;
+}
+
+// SendNotificationRequest allows tmux sessions to send notifications.
+message SendNotificationRequest {
+  // Session identifier sending the notification (required)
+  string session_id = 1;
+
+  // Type of notification (determines default priority and UI treatment)
+  NotificationType notification_type = 2;
+
+  // Priority level (optional, overrides default for notification type)
+  NotificationPriority priority = 3;
+
+  // Human-readable title (required)
+  string title = 4;
+
+  // Detailed message (optional)
+  string message = 5;
+
+  // Optional metadata (key-value pairs for additional context)
+  // Common keys: "command", "file", "duration", "error_code"
+  map<string, string> metadata = 6;
+}
+
+// SendNotificationResponse confirms notification was received.
+message SendNotificationResponse {
+  // Whether notification was accepted and broadcast
+  bool success = 1;
+
+  // Human-readable response message
+  string message = 2;
+
+  // Notification ID (for tracking/debugging)
+  string notification_id = 3;
 }

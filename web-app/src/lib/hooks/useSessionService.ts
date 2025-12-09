@@ -4,17 +4,18 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_connect";
-import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, NotificationPriority } from "@/gen/session/v1/types_pb";
 import {
   CreateSessionRequest,
   UpdateSessionRequest,
 } from "@/gen/session/v1/session_pb";
-import { SessionEvent } from "@/gen/session/v1/events_pb";
+import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl } from "@/lib/config";
 
 interface UseSessionServiceOptions {
   baseUrl?: string;
   autoWatch?: boolean;
+  onNotification?: (notification: NotificationEvent) => void;
 }
 
 interface UseSessionServiceReturn {
@@ -41,7 +42,13 @@ interface UseSessionServiceReturn {
 export function useSessionService(
   options: UseSessionServiceOptions = {}
 ): UseSessionServiceReturn {
-  const { baseUrl = getApiBaseUrl(), autoWatch = false } = options;
+  const { baseUrl = getApiBaseUrl(), autoWatch = false, onNotification } = options;
+  const onNotificationRef = useRef(onNotification);
+
+  // Keep ref updated for callback in streaming loop
+  useEffect(() => {
+    onNotificationRef.current = onNotification;
+  }, [onNotification]);
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(false);
@@ -272,6 +279,13 @@ export function useSessionService(
             return s;
           })
         );
+        break;
+      }
+      case "notification": {
+        // Route notification events to the callback
+        if (onNotificationRef.current) {
+          onNotificationRef.current(event.event.value);
+        }
         break;
       }
     }
