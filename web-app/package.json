@@ -8,7 +8,12 @@
     "start": "next start --port 3001",
     "lint": "next lint",
     "test": "jest",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "test:e2e": "playwright test",
+    "test:stress": "playwright test tests/e2e/terminal-stress",
+    "test:stress:headed": "playwright test tests/e2e/terminal-stress --headed",
+    "test:stress:debug": "playwright test tests/e2e/terminal-stress --debug",
+    "test:report": "playwright show-report"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^1.10.0",
@@ -31,6 +36,7 @@
     "zod": "^4.1.11"
   },
   "devDependencies": {
+    "@playwright/test": "^1.57.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
     "@types/jest": "^30.0.0",

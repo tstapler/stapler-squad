@@ -17,6 +17,13 @@ const nextConfig: NextConfig = {
   experimental: {
     // Optimize package imports to reduce CSS chunking and preload warnings
     optimizePackageImports: ['@/components', '@/lib'],
+    // Turbopack configuration for protobuf .js to .ts resolution
+    turbo: {
+      resolveAlias: {
+        // Note: Turbopack handles this differently - we need symlinks or alias in tsconfig
+      },
+      resolveExtensions: ['.ts', '.tsx', '.js', '.jsx', '.json'],
+    },
   },
   // Disable minification for development builds (better debugging)
   ...(isDevelopmentBuild ? {
@@ -24,7 +31,7 @@ const nextConfig: NextConfig = {
       removeConsole: false,
     },
   } : {}),
-  webpack: (config, { dev }) => {
+  webpack: (config, { dev, isServer }) => {
     // Handle .js imports for .ts files (for generated protobuf code)
     config.resolve.extensionAlias = {
       '.js': ['.js', '.ts', '.tsx'],
@@ -40,21 +47,23 @@ const nextConfig: NextConfig = {
       };
     }
 
-    // Only optimize CSS chunking in production to prevent preload warnings
-    if (!dev && !isDevelopmentBuild) {
+    // Consolidate CSS chunks to prevent preload warnings
+    // This forces all CSS into fewer chunks that load together
+    if (!isServer && !dev) {
+      const splitChunks = config.optimization?.splitChunks || {};
       config.optimization = {
         ...config.optimization,
         splitChunks: {
-          ...config.optimization?.splitChunks,
+          ...splitChunks,
           cacheGroups: {
-            ...(config.optimization?.splitChunks as any)?.cacheGroups,
-            // Combine all CSS into fewer chunks to reduce preload issues
+            ...(typeof splitChunks === 'object' ? splitChunks.cacheGroups : {}),
+            // Bundle all CSS modules together
             styles: {
               name: 'styles',
-              test: /\.css$/,
+              type: 'css/mini-extract',
               chunks: 'all',
               enforce: true,
-              priority: 10,
+              priority: 100,
             },
           },
         },
