@@ -1,378 +1,606 @@
-# SQLite Schema Normalization Feature Plan
+# SQLite Schema Normalization with Domain-Driven Design
 
 ## Executive Summary
 
-This document outlines a comprehensive plan to normalize the SQLite schema for claude-squad, extracting optional metadata into separate tables to eliminate NULL handling issues and improve database design. The current schema has nullable TEXT columns for GitHub integration, worktree detection, and other optional features that cause scanning errors when reading into Go string types.
+This document presents a revised domain-driven approach to normalizing the SQLite schema for claude-squad. The design separates the core Session entity (containing only universally required fields) from optional contexts that are attached based on deployment scenarios. This enables support for diverse environments including local git-based development, ephemeral containers, cloud instances, and headless API-driven sessions.
 
-## Problem Statement
+## Vision & Principles
 
-### Current Issues
-1. **Nullable Column Scanning Errors**: SQLite nullable TEXT columns cause errors when scanned into Go string types
-2. **Temporary COALESCE Workaround**: Current queries use `COALESCE(column, '')` as a band-aid solution
-3. **Schema Denormalization**: Optional metadata mixed with core session data violates normalization principles
-4. **Performance Impact**: Large sessions table with many nullable columns affects query performance
-5. **Maintenance Burden**: Adding new optional features requires modifying the core sessions table
+### Deployment Scenarios to Support
 
-### Affected Columns
-The following nullable columns in the sessions table need extraction:
-- **GitHub Integration**: github_pr_number, github_pr_url, github_owner, github_repo, github_source_ref, cloned_repo_path
-- **Worktree Detection**: main_repo_path, is_worktree
-- **Optional Paths**: working_dir, existing_worktree
-- **Optional Metadata**: prompt, category, session_type, tmux_prefix, last_output_signature
-- **Timestamp Fields**: last_terminal_update, last_meaningful_output, last_added_to_queue, last_viewed, last_acknowledged
+1. **Local Git Development** (Current primary use case)
+   - Full filesystem access with git worktrees
+   - TTY-based terminal sessions via tmux
+   - Rich UI with categorization and tags
 
-## Requirements
+2. **Ephemeral Containers**
+   - No persistent filesystem
+   - Session state stored centrally
+   - Minimal core requirements
 
-### Functional Requirements
-1. **FR1**: Extract GitHub-related columns into a separate `github_sessions` table
-2. **FR2**: Extract worktree detection fields into the existing `worktrees` table or new table
-3. **FR3**: Extract optional metadata into appropriate normalized tables
-4. **FR4**: Maintain backward compatibility with existing data
-5. **FR5**: Support atomic migrations with rollback capability
-6. **FR6**: Preserve all existing functionality without breaking changes
+3. **Cloud/Web Instances** (claude-web style)
+   - Browser-based interaction
+   - No local terminal or filesystem
+   - API-driven communication
 
-### Non-Functional Requirements
-1. **NFR1**: Query performance must not degrade (use appropriate indexes)
-2. **NFR2**: Migration must complete within 30 seconds for 10,000 sessions
-3. **NFR3**: Zero data loss during migration
-4. **NFR4**: Support concurrent reads during migration
-5. **NFR5**: Maintain referential integrity with foreign keys
+4. **Non-Git Projects**
+   - Simple directory-based sessions
+   - No version control integration
+   - Basic file editing capabilities
 
-## Architecture & Design
+5. **Headless/API Sessions**
+   - Programmatic interaction only
+   - No UI state or preferences
+   - Minimal metadata requirements
 
-### Normalized Schema Design
+### Design Principles
 
-#### Core Tables (Modified)
+1. **Core Minimalism**: The core session table contains only fields that EVERY session type requires
+2. **Context Separation**: Optional functionality lives in context tables with 1:1 relationships
+3. **Lazy Context Creation**: Context records are created only when needed for that session type
+4. **Query Optimization**: Use LEFT JOINs to load only relevant contexts
+5. **Extensibility**: New contexts can be added without modifying existing schema
+6. **Zero Null Fields**: Core table has no nullable columns; contexts handle optionality
 
-**sessions** (core data only)
+## Domain Model
+
+### Core Session Entity
+
+The `sessions` table contains only universally required fields:
+
 ```sql
 CREATE TABLE sessions (
+    -- Identity
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT UNIQUE NOT NULL,
-    path TEXT NOT NULL,
-    branch TEXT NOT NULL DEFAULT '',
-    status INTEGER NOT NULL,
-    height INTEGER NOT NULL DEFAULT 24,
-    width INTEGER NOT NULL DEFAULT 80,
+    title TEXT UNIQUE NOT NULL,          -- Human-readable unique identifier
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
-    auto_yes INTEGER NOT NULL DEFAULT 0,
-    program TEXT NOT NULL,
-    is_expanded INTEGER NOT NULL DEFAULT 1
+    
+    -- Process
+    status INTEGER NOT NULL,              -- Running/Paused/Stopped enum
+    program TEXT NOT NULL,                -- claude/aider/etc
+    
+    -- Configuration
+    auto_yes INTEGER NOT NULL DEFAULT 0,  -- Auto-confirm prompts
+    prompt TEXT NOT NULL DEFAULT ''       -- Initial prompt (empty string if none)
 );
 ```
 
-#### New Tables for Optional Data
+**Key Decisions:**
+- `title` serves as the primary human identifier (unique constraint)
+- `status` uses integer enum for efficiency
+- `prompt` defaults to empty string to avoid nulls
+- No path, branch, or terminal fields - these are context-specific
 
-**github_sessions** (GitHub PR integration)
+### Optional Context Tables
+
+#### 1. GitContext - Git Integration
+
+For sessions with version control:
+
 ```sql
-CREATE TABLE github_sessions (
+CREATE TABLE git_context (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
+    branch TEXT NOT NULL,
+    base_commit_sha TEXT NOT NULL DEFAULT '',
+    
+    -- Worktree information (if applicable)
+    worktree_id INTEGER,  -- FK to worktrees table
+    
+    -- GitHub PR integration (if applicable)
     pr_number INTEGER,
     pr_url TEXT,
-    owner TEXT NOT NULL,
-    repo TEXT NOT NULL,
+    owner TEXT,
+    repo TEXT,
     source_ref TEXT,
+    
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (worktree_id) REFERENCES worktrees(id) ON DELETE SET NULL
+);
+```
+
+#### 2. FilesystemContext - Local File Access
+
+For sessions with filesystem access:
+
+```sql
+CREATE TABLE filesystem_context (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL UNIQUE,
+    
+    -- Paths
+    project_path TEXT NOT NULL,        -- Root project/repo directory
+    working_dir TEXT NOT NULL,         -- Current working directory
+    
+    -- Worktree detection
+    is_worktree INTEGER NOT NULL DEFAULT 0,
+    main_repo_path TEXT,               -- Parent repo if this is a worktree
+    
+    -- Cloned repos (for external PRs)
     cloned_repo_path TEXT,
+    
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 ```
 
-**session_metadata** (optional configuration)
+#### 3. TerminalContext - TTY/Terminal State
+
+For sessions with terminal interfaces:
+
 ```sql
-CREATE TABLE session_metadata (
+CREATE TABLE terminal_context (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
-    working_dir TEXT,
-    existing_worktree TEXT,
-    prompt TEXT,
-    category TEXT,
-    session_type TEXT,
+    
+    -- Dimensions
+    height INTEGER NOT NULL DEFAULT 24,
+    width INTEGER NOT NULL DEFAULT 80,
+    
+    -- Tmux integration
+    tmux_session_name TEXT,
     tmux_prefix TEXT,
+    tmux_socket TEXT,  -- For isolated tmux servers
+    
+    -- Terminal type
+    terminal_type TEXT NOT NULL DEFAULT 'tmux',  -- tmux/mux/pty/web
+    
+    -- Scrollback reference (actual content in separate table)
+    last_scrollback_id INTEGER,
+    
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 ```
 
-**session_timestamps** (activity tracking)
+#### 4. UIPreferences - Client-Side Display
+
+For UI presentation (could eventually move client-side):
+
 ```sql
-CREATE TABLE session_timestamps (
+CREATE TABLE ui_preferences (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
+    
+    -- Organization
+    category TEXT,
+    is_expanded INTEGER NOT NULL DEFAULT 1,
+    
+    -- Display preferences
+    grouping_strategy TEXT,
+    sort_order TEXT,
+    
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
+```
+
+#### 5. ActivityTracking - Notification/Queue Features
+
+For review queue and activity monitoring:
+
+```sql
+CREATE TABLE activity_tracking (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL UNIQUE,
+    
+    -- Terminal activity
     last_terminal_update DATETIME,
     last_meaningful_output DATETIME,
-    last_output_signature TEXT,
+    last_output_signature TEXT,        -- Hash to detect actual changes
+    
+    -- Review queue
     last_added_to_queue DATETIME,
-    last_viewed DATETIME, 
+    last_viewed DATETIME,
     last_acknowledged DATETIME,
+    
+    -- Metrics
+    total_output_lines INTEGER DEFAULT 0,
+    session_duration_seconds INTEGER DEFAULT 0,
+    
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 ```
 
-**worktree_detection** (git worktree info)
+#### 6. CloudContext - Cloud/API Sessions
+
+For cloud-hosted or API-driven sessions:
+
 ```sql
-CREATE TABLE worktree_detection (
+CREATE TABLE cloud_context (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
-    main_repo_path TEXT NOT NULL,
-    is_worktree INTEGER NOT NULL DEFAULT 0,
+    
+    -- Cloud provider info
+    provider TEXT NOT NULL,            -- aws/gcp/azure/custom
+    region TEXT,
+    instance_id TEXT,
+    
+    -- API access
+    api_endpoint TEXT,
+    api_key_ref TEXT,                  -- Reference to secure key storage
+    
+    -- Session persistence
+    cloud_session_id TEXT,
+    conversation_id TEXT,
+    
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 ```
 
-### Migration Strategy
+### Existing Tables (Retained)
 
-#### Phase 1: Schema Version 3 - Add New Tables
-1. Create new normalized tables without dropping old columns
-2. Add indexes for foreign keys and common queries
-3. Implement dual-write mode in repository layer
+These tables already follow good normalization practices:
 
-#### Phase 2: Data Migration
-1. Copy existing data from sessions table to new tables
-2. Verify data integrity with checksums
-3. Run in transaction with savepoint for rollback
+- **worktrees** - Git worktree management (unchanged)
+- **tags** - Tag definitions (unchanged)
+- **session_tags** - Many-to-many tag relationships (unchanged)
+- **diff_stats** - Git diff statistics (unchanged)
+- **claude_sessions** - Claude-specific session data (unchanged)
+- **claude_metadata** - Key-value metadata (unchanged)
 
-#### Phase 3: Schema Version 4 - Drop Old Columns
-1. After verification period, drop deprecated columns
-2. Update all queries to use JOINs
-3. Remove dual-write code
+## Query Patterns
 
-### Query Patterns
+### Loading Sessions by Deployment Type
 
-#### Loading a Complete Session
+#### Local Git Development (Full Context)
 ```sql
 SELECT 
     s.*,
-    g.pr_number, g.pr_url, g.owner, g.repo, g.source_ref, g.cloned_repo_path,
-    m.working_dir, m.existing_worktree, m.prompt, m.category, m.session_type, m.tmux_prefix,
-    t.last_terminal_update, t.last_meaningful_output, t.last_output_signature,
-    t.last_added_to_queue, t.last_viewed, t.last_acknowledged,
-    w.main_repo_path, w.is_worktree
+    g.branch, g.pr_number,
+    f.project_path, f.working_dir,
+    t.height, t.width, t.tmux_session_name,
+    u.category, u.is_expanded,
+    a.last_meaningful_output
 FROM sessions s
-LEFT JOIN github_sessions g ON s.id = g.session_id
-LEFT JOIN session_metadata m ON s.id = m.session_id
-LEFT JOIN session_timestamps t ON s.id = t.session_id
-LEFT JOIN worktree_detection w ON s.id = w.session_id
+LEFT JOIN git_context g ON s.id = g.session_id
+LEFT JOIN filesystem_context f ON s.id = f.session_id
+LEFT JOIN terminal_context t ON s.id = t.session_id
+LEFT JOIN ui_preferences u ON s.id = u.session_id
+LEFT JOIN activity_tracking a ON s.id = a.session_id
 WHERE s.title = ?
 ```
 
-#### Optimized List Query (minimal joins)
+#### Cloud/API Session (Minimal Context)
 ```sql
-SELECT s.*, m.category
+SELECT 
+    s.*,
+    c.provider, c.api_endpoint, c.cloud_session_id
 FROM sessions s
-LEFT JOIN session_metadata m ON s.id = m.session_id
-ORDER BY s.created_at DESC
+LEFT JOIN cloud_context c ON s.id = c.session_id
+WHERE s.title = ?
 ```
 
-## Implementation Plan
+#### Ephemeral Container (Core Only)
+```sql
+SELECT * FROM sessions WHERE title = ?
+```
 
-### Phase 1: Preparation (Week 1)
+### Efficient List Queries
 
-#### Task 1.1: Create Migration Infrastructure
-- [ ] Add migration version tracking
-- [ ] Implement rollback mechanism
-- [ ] Create migration test framework
-- [ ] Add migration benchmarks
+#### List with Minimal Joins (UI Display)
+```sql
+SELECT s.*, u.category
+FROM sessions s
+LEFT JOIN ui_preferences u ON s.id = u.session_id
+WHERE s.status IN (?, ?)
+ORDER BY s.updated_at DESC
+LIMIT ?
+```
 
-#### Task 1.2: Design Repository Abstraction
-- [ ] Create `RepositoryV3` interface with new methods
-- [ ] Implement query builders for JOIN operations
+#### Activity-Based Queries (Review Queue)
+```sql
+SELECT s.*, a.last_meaningful_output
+FROM sessions s
+INNER JOIN activity_tracking a ON s.id = a.session_id
+WHERE a.last_meaningful_output > a.last_acknowledged
+  AND a.last_meaningful_output > datetime('now', '-1 hour')
+ORDER BY a.last_meaningful_output DESC
+```
+
+## Migration Strategy
+
+### Phase 1: Non-Breaking Addition (Week 1)
+
+1. **Create new context tables** alongside existing schema
+2. **Add migration infrastructure** with version tracking
+3. **Implement dual-write mode** in repository layer
+4. **Deploy with feature flag** for gradual rollout
+
+### Phase 2: Data Migration (Week 2)
+
+1. **Batch migration script** with progress tracking
+2. **Verification checksums** for data integrity
+3. **Parallel migration** of different contexts
+4. **Rollback savepoints** at each stage
+
+### Phase 3: Code Updates (Week 3)
+
+1. **Repository refactoring** to use context pattern
+2. **Query optimization** with selective JOINs
+3. **LoadOptions pattern** for context selection
+4. **Performance testing** with production data
+
+### Phase 4: Cleanup (Week 4)
+
+1. **Remove deprecated columns** from sessions table
+2. **Drop COALESCE workarounds** in queries
+3. **Remove dual-write code**
+4. **Update documentation**
+
+## Implementation Tasks
+
+### Core Infrastructure
+- [ ] Create context table schemas
+- [ ] Design ContextLoader interface
+- [ ] Implement LoadOptions for selective loading
 - [ ] Add connection pooling configuration
-- [ ] Design batch insert/update methods
+- [ ] Create migration framework with rollback
 
-### Phase 2: Schema Implementation (Week 2)
+### Context Implementations
+- [ ] GitContext with worktree integration
+- [ ] FilesystemContext with path validation
+- [ ] TerminalContext with tmux/mux support
+- [ ] UIPreferences with client-side sync
+- [ ] ActivityTracking with metrics
+- [ ] CloudContext for API sessions
 
-#### Task 2.1: Create New Tables
-- [ ] Write CREATE TABLE statements for all new tables
-- [ ] Add appropriate indexes
-- [ ] Configure foreign key constraints
-- [ ] Test referential integrity
+### Repository Updates
+- [ ] Refactor Create() to populate contexts
+- [ ] Update Get() with LoadOptions
+- [ ] Optimize List() with minimal joins
+- [ ] Add context-specific update methods
+- [ ] Implement batch operations
 
-#### Task 2.2: Implement Dual-Write Mode
-- [ ] Modify Create() to write to both old and new schema
-- [ ] Modify Update() to write to both schemas
-- [ ] Add feature flag for dual-write mode
-- [ ] Implement consistency checking
+### Migration Execution
+- [ ] Write migration scripts for each context
+- [ ] Create verification queries
+- [ ] Implement progress logging
+- [ ] Add dry-run mode
+- [ ] Create rollback procedures
 
-### Phase 3: Data Migration (Week 3)
+## Architecture Decision Records
 
-#### Task 3.1: Migration Script
-- [ ] Write migration function with transaction support
-- [ ] Implement batch processing for large datasets
-- [ ] Add progress logging
-- [ ] Create rollback savepoints
+### ADR-001: Separate Core from Contexts
 
-#### Task 3.2: Data Verification
-- [ ] Implement checksum verification
-- [ ] Create data comparison tool
-- [ ] Add migration dry-run mode
-- [ ] Write migration report generator
+**Status**: Accepted
 
-### Phase 4: Query Updates (Week 4)
+**Context**: The current schema mixes required and optional fields, causing null handling issues and limiting deployment flexibility.
 
-#### Task 4.1: Update Repository Methods
-- [ ] Rewrite GetWithOptions() to use JOINs
-- [ ] Update ListWithOptions() with selective JOINs
-- [ ] Optimize queries with EXPLAIN QUERY PLAN
-- [ ] Add query performance metrics
+**Decision**: Separate universally required fields into a minimal core table, with optional functionality in context tables.
 
-#### Task 4.2: Testing & Validation
-- [ ] Write comprehensive integration tests
-- [ ] Perform load testing with 10K+ sessions
-- [ ] Validate backward compatibility
-- [ ] Test concurrent access patterns
+**Consequences**:
+- ✅ Supports diverse deployment scenarios
+- ✅ Eliminates null handling in core fields
+- ✅ Enables lazy context creation
+- ⚠️ Requires JOIN operations for full data
+- ⚠️ More complex repository implementation
 
-### Phase 5: Cleanup (Week 5)
+### ADR-002: One-to-One Context Relationships
 
-#### Task 5.1: Remove Old Schema
-- [ ] Drop deprecated columns from sessions table
-- [ ] Remove COALESCE workarounds
-- [ ] Clean up dual-write code
-- [ ] Update documentation
+**Status**: Accepted
 
-#### Task 5.2: Performance Optimization
-- [ ] Analyze query patterns with production data
-- [ ] Add missing indexes based on usage
-- [ ] Optimize connection pool settings
-- [ ] Implement query result caching
+**Context**: Need to decide between embedding optional data vs normalizing into separate tables.
 
-## Known Issues & Mitigation
+**Decision**: Use 1:1 relationships with UNIQUE constraints on session_id in context tables.
 
-### Issue 1: Migration Performance
-**Risk**: Large databases may experience slow migration
-**Mitigation**: 
-- Batch processing with configurable batch size
-- Progress indicators for user feedback
-- Option to run migration in background
-- Support for resumable migrations
+**Consequences**:
+- ✅ Clear separation of concerns
+- ✅ Easy to add new contexts
+- ✅ Efficient storage (no empty columns)
+- ⚠️ Multiple JOINs for full session load
+- ⚠️ More tables to maintain
 
-### Issue 2: Concurrent Access During Migration
-**Risk**: Active sessions may fail during schema changes
+### ADR-003: LoadOptions Pattern
+
+**Status**: Accepted
+
+**Context**: Loading all contexts for every query would be inefficient.
+
+**Decision**: Implement LoadOptions to specify which contexts to fetch.
+
+**Consequences**:
+- ✅ Optimized queries for specific use cases
+- ✅ Reduced memory footprint
+- ✅ Better performance for list operations
+- ⚠️ More complex API
+- ⚠️ Risk of N+1 queries if misused
+
+### ADR-004: Keep Existing Specialized Tables
+
+**Status**: Accepted
+
+**Context**: Tables like worktrees, tags, and diff_stats are already well-normalized.
+
+**Decision**: Retain existing specialized tables, only refactor the main sessions table.
+
+**Consequences**:
+- ✅ Minimal migration effort for specialized data
+- ✅ Preserves existing relationships
+- ✅ Backward compatibility maintained
+- ⚠️ Mixed patterns (some data in contexts, some in specialized tables)
+
+## Performance Considerations
+
+### Query Optimization
+
+1. **Selective JOINs**: Only join tables needed for the specific operation
+2. **Index Strategy**: Create indexes on foreign keys and commonly queried fields
+3. **Connection Pooling**: Configure appropriate pool sizes for concurrent access
+4. **Query Caching**: Cache frequently accessed context combinations
+
+### Benchmarks
+
+**Target Performance** (for 10,000 sessions):
+- Core-only query: < 10ms
+- Single context join: < 20ms
+- Full context load: < 50ms
+- List with UI context: < 100ms
+- Migration completion: < 30 seconds
+
+## Risk Mitigation
+
+### Data Migration Risks
+
+**Risk**: Data corruption during migration
 **Mitigation**:
-- Use SQLite WAL mode for concurrent reads
-- Implement retry logic with exponential backoff
-- Dual-write mode ensures data availability
-- Graceful degradation to read-only mode
+- Transactional migration with savepoints
+- Pre-migration backup
+- Checksums at each stage
+- Dry-run mode for testing
 
-### Issue 3: Rollback Complexity
-**Risk**: Partial migration may leave inconsistent state
+### Performance Risks
+
+**Risk**: Query performance degradation
 **Mitigation**:
-- Transaction-based migration with savepoints
-- Pre-migration backup creation
-- Verification checksums at each step
-- Automated rollback on failure
+- Comprehensive indexing strategy
+- Query plan analysis
+- Performance benchmarks before/after
+- Caching layer for hot paths
 
-### Issue 4: Query Performance Regression
-**Risk**: JOINs may be slower than denormalized queries
+### Compatibility Risks
+
+**Risk**: Breaking existing functionality
 **Mitigation**:
-- Selective JOINs based on LoadOptions
-- Materialized views for common queries
-- Query result caching layer
-- Connection pooling optimization
-
-## Testing Strategy
-
-### Unit Tests
-- [ ] Test each migration step in isolation
-- [ ] Verify data integrity constraints
-- [ ] Test rollback scenarios
-- [ ] Validate NULL handling
-
-### Integration Tests
-- [ ] End-to-end migration testing
-- [ ] Concurrent access testing
-- [ ] Performance regression testing
-- [ ] Backward compatibility testing
-
-### Load Tests
-- [ ] Migration with 10K sessions
-- [ ] Query performance with normalized schema
-- [ ] Concurrent read/write operations
-- [ ] Memory usage profiling
-
-### Chaos Testing
-- [ ] Interrupt migration at various points
-- [ ] Simulate disk space issues
-- [ ] Test with corrupted data
-- [ ] Network interruption scenarios
+- Dual-write mode during transition
+- Feature flags for gradual rollout
+- Comprehensive test coverage
+- Rollback procedures
 
 ## Success Metrics
 
-1. **Migration Success Rate**: 100% successful migrations without data loss
-2. **Query Performance**: No more than 10% degradation in query latency
-3. **Migration Duration**: Complete within 30 seconds for 10K sessions
-4. **Zero Downtime**: Application remains available during migration
-5. **Code Quality**: Eliminate all COALESCE workarounds
+1. **Zero Data Loss**: All sessions migrated successfully
+2. **Performance**: No more than 10% latency increase
+3. **Flexibility**: Support for 3+ new deployment scenarios
+4. **Code Quality**: Elimination of all NULL-related workarounds
+5. **Maintainability**: 50% reduction in schema modification complexity
 
-## Rollback Plan
+## Next Steps
 
-### Immediate Rollback (During Migration)
-1. Transaction rollback to savepoint
-2. Restore from pre-migration backup
-3. Revert to previous schema version
-4. Clear migration status flags
+1. **Review & Approval**: Architecture team review of domain model
+2. **Prototype**: Build proof-of-concept with core + 2 contexts
+3. **Performance Testing**: Benchmark with production-like data
+4. **Migration Plan**: Detailed step-by-step migration runbook
+5. **Implementation**: Phased rollout with monitoring
 
-### Post-Migration Rollback
-1. Re-create dropped columns
-2. Copy data back from normalized tables
-3. Update repository to use old schema
-4. Deprecate new tables (keep for reference)
+## Appendix A: Context Loading Examples
 
-## Documentation Updates
+### LoadOptions Usage
 
-### Developer Documentation
-- [ ] Update schema documentation
-- [ ] Document new repository methods
-- [ ] Add migration guide
-- [ ] Update contribution guidelines
+```go
+// Load core only (ephemeral container)
+session, err := repo.Get(ctx, "my-session", LoadOptions{
+    LoadCore: true,
+})
 
-### Operational Documentation
-- [ ] Migration runbook
-- [ ] Troubleshooting guide
-- [ ] Performance tuning guide
-- [ ] Backup/restore procedures
+// Load for terminal attachment (local development)
+session, err := repo.Get(ctx, "my-session", LoadOptions{
+    LoadCore:       true,
+    LoadGit:        true,
+    LoadFilesystem: true,
+    LoadTerminal:   true,
+})
 
-## Appendix A: Migration SQL Scripts
+// Load for web UI display
+sessions, err := repo.List(ctx, LoadOptions{
+    LoadCore:         true,
+    LoadUIPreferences: true,
+    LoadActivity:     true,
+})
 
-### Create New Tables
+// Load for API access (cloud session)
+session, err := repo.Get(ctx, "api-session", LoadOptions{
+    LoadCore:  true,
+    LoadCloud: true,
+})
+```
+
+### Repository Interface
+
+```go
+type LoadOptions struct {
+    LoadCore         bool  // Always true (for clarity)
+    LoadGit          bool
+    LoadFilesystem   bool
+    LoadTerminal     bool
+    LoadUIPreferences bool
+    LoadActivity     bool
+    LoadCloud        bool
+    LoadTags         bool  // From session_tags join
+    LoadWorktree     bool  // From worktrees join
+}
+
+type Repository interface {
+    Create(ctx context.Context, session *Session, contexts ...Context) error
+    Get(ctx context.Context, title string, opts LoadOptions) (*Session, error)
+    List(ctx context.Context, filter Filter, opts LoadOptions) ([]*Session, error)
+    UpdateCore(ctx context.Context, title string, updates CoreUpdates) error
+    UpdateContext(ctx context.Context, title string, context Context) error
+    Delete(ctx context.Context, title string) error
+}
+```
+
+## Appendix B: Migration SQL
+
+### Create Context Tables
+
 ```sql
--- Schema Version 3: Add normalized tables
+-- Phase 1: Create new context tables
 BEGIN TRANSACTION;
 
--- GitHub integration table
-CREATE TABLE IF NOT EXISTS github_sessions (
+-- Git context for version control
+CREATE TABLE IF NOT EXISTS git_context (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
+    branch TEXT NOT NULL,
+    base_commit_sha TEXT NOT NULL DEFAULT '',
+    worktree_id INTEGER,
     pr_number INTEGER,
     pr_url TEXT,
-    owner TEXT NOT NULL,
-    repo TEXT NOT NULL,
+    owner TEXT,
+    repo TEXT,
     source_ref TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+    FOREIGN KEY (worktree_id) REFERENCES worktrees(id) ON DELETE SET NULL
+);
+
+-- Filesystem context for local file access
+CREATE TABLE IF NOT EXISTS filesystem_context (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL UNIQUE,
+    project_path TEXT NOT NULL,
+    working_dir TEXT NOT NULL,
+    is_worktree INTEGER NOT NULL DEFAULT 0,
+    main_repo_path TEXT,
     cloned_repo_path TEXT,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_github_sessions_session_id ON github_sessions(session_id);
-CREATE INDEX idx_github_sessions_owner_repo ON github_sessions(owner, repo);
-
--- Session metadata table
-CREATE TABLE IF NOT EXISTS session_metadata (
+-- Terminal context for TTY sessions
+CREATE TABLE IF NOT EXISTS terminal_context (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
-    working_dir TEXT,
-    existing_worktree TEXT,
-    prompt TEXT,
-    category TEXT,
-    session_type TEXT,
+    height INTEGER NOT NULL DEFAULT 24,
+    width INTEGER NOT NULL DEFAULT 80,
+    tmux_session_name TEXT,
     tmux_prefix TEXT,
+    tmux_socket TEXT,
+    terminal_type TEXT NOT NULL DEFAULT 'tmux',
+    last_scrollback_id INTEGER,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_session_metadata_session_id ON session_metadata(session_id);
-CREATE INDEX idx_session_metadata_category ON session_metadata(category);
+-- UI preferences for client display
+CREATE TABLE IF NOT EXISTS ui_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL UNIQUE,
+    category TEXT,
+    is_expanded INTEGER NOT NULL DEFAULT 1,
+    grouping_strategy TEXT,
+    sort_order TEXT,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+);
 
--- Timestamps table
-CREATE TABLE IF NOT EXISTS session_timestamps (
+-- Activity tracking for notifications
+CREATE TABLE IF NOT EXISTS activity_tracking (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
     last_terminal_update DATETIME,
@@ -381,101 +609,136 @@ CREATE TABLE IF NOT EXISTS session_timestamps (
     last_added_to_queue DATETIME,
     last_viewed DATETIME,
     last_acknowledged DATETIME,
+    total_output_lines INTEGER DEFAULT 0,
+    session_duration_seconds INTEGER DEFAULT 0,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_session_timestamps_session_id ON session_timestamps(session_id);
-CREATE INDEX idx_session_timestamps_meaningful_output ON session_timestamps(last_meaningful_output);
-
--- Worktree detection table
-CREATE TABLE IF NOT EXISTS worktree_detection (
+-- Cloud context for API sessions
+CREATE TABLE IF NOT EXISTS cloud_context (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL UNIQUE,
-    main_repo_path TEXT NOT NULL,
-    is_worktree INTEGER NOT NULL DEFAULT 0,
+    provider TEXT NOT NULL,
+    region TEXT,
+    instance_id TEXT,
+    api_endpoint TEXT,
+    api_key_ref TEXT,
+    cloud_session_id TEXT,
+    conversation_id TEXT,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_worktree_detection_session_id ON worktree_detection(session_id);
-
--- Update schema version
-INSERT INTO schema_version (version, applied_at) VALUES (3, datetime('now'));
+-- Create indexes for foreign keys and common queries
+CREATE INDEX IF NOT EXISTS idx_git_context_session_id ON git_context(session_id);
+CREATE INDEX IF NOT EXISTS idx_filesystem_context_session_id ON filesystem_context(session_id);
+CREATE INDEX IF NOT EXISTS idx_terminal_context_session_id ON terminal_context(session_id);
+CREATE INDEX IF NOT EXISTS idx_ui_preferences_session_id ON ui_preferences(session_id);
+CREATE INDEX IF NOT EXISTS idx_ui_preferences_category ON ui_preferences(category);
+CREATE INDEX IF NOT EXISTS idx_activity_tracking_session_id ON activity_tracking(session_id);
+CREATE INDEX IF NOT EXISTS idx_activity_tracking_meaningful ON activity_tracking(last_meaningful_output);
+CREATE INDEX IF NOT EXISTS idx_cloud_context_session_id ON cloud_context(session_id);
 
 COMMIT;
 ```
 
-### Migrate Data
+### Migrate Existing Data
+
 ```sql
--- Migrate existing data to new tables
+-- Phase 2: Migrate data to context tables
 BEGIN TRANSACTION;
 
--- Migrate GitHub data
-INSERT INTO github_sessions (session_id, pr_number, pr_url, owner, repo, source_ref, cloned_repo_path)
-SELECT id, github_pr_number, github_pr_url, 
-       COALESCE(github_owner, ''), COALESCE(github_repo, ''),
-       github_source_ref, cloned_repo_path
+-- Migrate git context
+INSERT INTO git_context (session_id, branch, pr_number, pr_url, owner, repo, source_ref)
+SELECT 
+    id,
+    COALESCE(branch, ''),
+    github_pr_number,
+    github_pr_url,
+    COALESCE(github_owner, ''),
+    COALESCE(github_repo, ''),
+    github_source_ref
 FROM sessions
-WHERE github_owner IS NOT NULL OR github_repo IS NOT NULL;
+WHERE branch IS NOT NULL 
+   OR github_pr_number IS NOT NULL 
+   OR github_owner IS NOT NULL;
 
--- Migrate metadata
-INSERT INTO session_metadata (session_id, working_dir, existing_worktree, prompt, category, session_type, tmux_prefix)
-SELECT id, working_dir, existing_worktree, prompt, category, session_type, tmux_prefix
-FROM sessions
-WHERE working_dir IS NOT NULL 
-   OR existing_worktree IS NOT NULL 
-   OR prompt IS NOT NULL 
-   OR category IS NOT NULL 
-   OR session_type IS NOT NULL 
-   OR tmux_prefix IS NOT NULL;
+-- Migrate filesystem context
+INSERT INTO filesystem_context (session_id, project_path, working_dir, is_worktree, main_repo_path, cloned_repo_path)
+SELECT 
+    id,
+    path,
+    COALESCE(working_dir, path),  -- Use path as working_dir if not specified
+    COALESCE(is_worktree, 0),
+    main_repo_path,
+    cloned_repo_path
+FROM sessions;
 
--- Migrate timestamps
-INSERT INTO session_timestamps (session_id, last_terminal_update, last_meaningful_output, 
-                                last_output_signature, last_added_to_queue, last_viewed, last_acknowledged)
-SELECT id, last_terminal_update, last_meaningful_output, last_output_signature,
-       last_added_to_queue, last_viewed, last_acknowledged
-FROM sessions
-WHERE last_terminal_update IS NOT NULL 
-   OR last_meaningful_output IS NOT NULL 
-   OR last_output_signature IS NOT NULL
-   OR last_added_to_queue IS NOT NULL
-   OR last_viewed IS NOT NULL
-   OR last_acknowledged IS NOT NULL;
+-- Migrate terminal context (for tmux sessions)
+INSERT INTO terminal_context (session_id, height, width, tmux_prefix, tmux_session_name)
+SELECT 
+    id,
+    COALESCE(height, 24),
+    COALESCE(width, 80),
+    tmux_prefix,
+    'claudesquad_' || title  -- Reconstruct tmux session name
+FROM sessions;
 
--- Migrate worktree detection
-INSERT INTO worktree_detection (session_id, main_repo_path, is_worktree)
-SELECT id, COALESCE(main_repo_path, ''), is_worktree
+-- Migrate UI preferences
+INSERT INTO ui_preferences (session_id, category, is_expanded)
+SELECT 
+    id,
+    category,
+    COALESCE(is_expanded, 1)
 FROM sessions
-WHERE main_repo_path IS NOT NULL OR is_worktree = 1;
+WHERE category IS NOT NULL;
+
+-- Migrate activity tracking
+INSERT INTO activity_tracking (
+    session_id,
+    last_terminal_update,
+    last_meaningful_output,
+    last_output_signature,
+    last_added_to_queue,
+    last_viewed,
+    last_acknowledged
+)
+SELECT 
+    id,
+    last_terminal_update,
+    last_meaningful_output,
+    last_output_signature,
+    last_added_to_queue,
+    last_viewed,
+    last_acknowledged
+FROM sessions
+WHERE last_terminal_update IS NOT NULL
+   OR last_meaningful_output IS NOT NULL
+   OR last_viewed IS NOT NULL;
 
 COMMIT;
 ```
 
-## Appendix B: Performance Benchmarks
+## Appendix C: Implementation Timeline
 
-### Current Schema (Baseline)
-- List all sessions: ~50ms for 1000 sessions
-- Get single session: ~5ms
-- Update timestamps: ~10ms
+### Week 1: Foundation
+- Day 1-2: Create context table schemas and migrations
+- Day 3-4: Implement LoadOptions and ContextLoader
+- Day 5: Set up dual-write mode and feature flags
 
-### Expected Performance (Normalized)
-- List all sessions (no joins): ~45ms for 1000 sessions
-- List with metadata (1 join): ~55ms for 1000 sessions  
-- Get single session (4 joins): ~8ms
-- Update timestamps: ~8ms (single table update)
+### Week 2: Migration
+- Day 1-2: Write and test migration scripts
+- Day 3: Implement verification and rollback
+- Day 4-5: Run migration on test data
 
-## Appendix C: Risk Matrix
+### Week 3: Integration
+- Day 1-2: Refactor repository with context pattern
+- Day 3-4: Update queries with LoadOptions
+- Day 5: Performance testing and optimization
 
-| Risk | Probability | Impact | Mitigation |
-|------|------------|--------|------------|
-| Data loss during migration | Low | Critical | Transactions, backups, verification |
-| Performance degradation | Medium | High | Selective JOINs, caching, indexes |
-| Migration failure | Low | High | Rollback mechanism, dry-run mode |
-| Concurrent access issues | Medium | Medium | WAL mode, retry logic |
-| Schema version conflicts | Low | Medium | Version tracking, compatibility checks |
+### Week 4: Deployment
+- Day 1: Deploy to staging environment
+- Day 2-3: Monitor and validate
+- Day 4: Production deployment
+- Day 5: Remove deprecated code
 
-## References
-
-- [SQLite Schema Design Best Practices](https://www.sqlite.org/lang.html)
-- [Database Normalization Forms](https://en.wikipedia.org/wiki/Database_normalization)
-- [Go database/sql Package](https://golang.org/pkg/database/sql/)
-- [SQLite Performance Tuning](https://www.sqlite.org/pragma.html)
+This domain-driven approach provides the flexibility to support diverse deployment scenarios while maintaining a clean, normalized schema that eliminates null handling issues and improves maintainability.
