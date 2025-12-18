@@ -2,10 +2,11 @@
 
 import { createPromiseClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_connect";
-import { TerminalData, TerminalInput, TerminalResize, ScrollbackRequest, CurrentPaneRequest, FlowControl } from "@/gen/session/v1/events_pb";
+import { TerminalData, TerminalInput, TerminalResize, ScrollbackRequest, CurrentPaneRequest, FlowControl, InputWithEcho, SSPNegotiation, SSPCapabilities } from "@/gen/session/v1/events_pb";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { StateApplicator } from "@/lib/terminal/StateApplicator";
+import { EchoOverlay } from "@/lib/terminal/EchoOverlay";
 import { decompressLZMA, isLZMACompressed } from "@/lib/compression/lzma";
 import type { Terminal } from '@xterm/xterm';
 
@@ -27,7 +28,10 @@ interface UseTerminalStreamOptions {
   autoConnect?: boolean; // If false, requires manual connect() call (default: true)
   initialCols?: number; // Initial terminal columns (prevents size mismatch on first load)
   initialRows?: number; // Initial terminal rows (prevents size mismatch on first load)
-  streamingMode?: "raw" | "raw-compressed" | "state" | "hybrid"; // Terminal streaming mode (default: "raw")
+  streamingMode?: "raw" | "raw-compressed" | "state" | "hybrid" | "ssp"; // Terminal streaming mode (default: "raw")
+  isExternal?: boolean; // Whether this is an external session (uses /ws/external endpoint)
+  enablePredictiveEcho?: boolean; // Enable Mosh-style predictive echo (default: false)
+  onEchoAck?: (echoNum: bigint, latencyMs: number) => void; // Callback when echo is acknowledged (for RTT stats)
 }
 
 interface TerminalStreamResult {
@@ -35,6 +39,7 @@ interface TerminalStreamResult {
   isConnected: boolean;
   error: Error | null;
   sendInput: (input: string) => void;
+  sendInputWithEcho: (input: string) => bigint; // SSP: Send input with predictive echo tracking, returns echo number
   resize: (cols: number, rows: number) => void;
   connect: (cols?: number, rows?: number) => void; // Optional dimensions to override initial values
   disconnect: () => void;
@@ -42,6 +47,9 @@ interface TerminalStreamResult {
   requestScrollback: (fromSequence: number, limit: number) => void; // Request historical scrollback
   sendFlowControl: (paused: boolean, watermark?: number) => void; // Send flow control signal to server
   getIsApplyingState: () => boolean; // Check if StateApplicator is currently applying a state (prevents scrollback auto-load)
+  sspNegotiated: boolean; // Whether SSP capabilities have been negotiated
+  startRecording: () => void; // Start recording WebSocket messages for debugging
+  stopRecording: () => void; // Stop recording and download recorded messages
 }
 
 // Queue to manage outgoing terminal messages
@@ -100,11 +108,14 @@ export function useTerminalStream({
   initialCols,
   initialRows,
   streamingMode = "raw",
+  enablePredictiveEcho = false,
+  onEchoAck,
 }: UseTerminalStreamOptions): TerminalStreamResult {
   const [output, setOutput] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [scrollbackLoaded, setScrollbackLoaded] = useState(false);
+  const [sspNegotiated, setSspNegotiated] = useState(false);
 
   const messageQueueRef = useRef<MessageQueue | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -116,6 +127,23 @@ export function useTerminalStream({
   const lastResyncTimeRef = useRef<number>(0); // Timestamp of last resync request
   const stateApplicatorRef = useRef<StateApplicator | null>(null);
   const dimensionSyncRef = useRef<{cols?: number, rows?: number}>({});
+
+  // WebSocket message recording for debugging terminal flickering
+  interface RecordedMessage {
+    timestamp: number;
+    type: 'raw' | 'state' | 'diff';
+    data: Uint8Array;
+    decoded: string;
+    sequenceNumber?: bigint;
+  }
+
+  const recordedMessagesRef = useRef<RecordedMessage[]>([]);
+  const isRecordingRef = useRef(false);
+
+  // SSP: Echo overlay and tracking refs
+  const echoOverlayRef = useRef<EchoOverlay | null>(null);
+  const echoCounterRef = useRef<bigint>(BigInt(0));
+  const echoTimestampsRef = useRef<Map<bigint, number>>(new Map()); // Track when echoes were sent for RTT calculation
   const clientRef = useRef(createPromiseClient(
     SessionService,
     createWebsocketBasedTransport({
@@ -171,6 +199,25 @@ export function useTerminalStream({
       pendingUpdateRef.current = requestAnimationFrame(flushOutputBuffer);
     }
   }, [flushOutputBuffer]);
+
+  // Recording functions for debugging terminal flickering
+  const startRecording = useCallback(() => {
+    recordedMessagesRef.current = [];
+    isRecordingRef.current = true;
+    console.log('[Recording] Started terminal output recording');
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    isRecordingRef.current = false;
+    const blob = new Blob([JSON.stringify(recordedMessagesRef.current, null, 2)],
+      { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `terminal-recording-${Date.now()}.json`;
+    a.click();
+    console.log('[Recording] Saved recording with', recordedMessagesRef.current.length, 'messages');
+  }, []);
 
   // Request full resync from server (used for desync recovery)
   // MUST be defined before connect() since it's called from within connect's async function
@@ -378,6 +425,75 @@ export function useTerminalStream({
                   );
                 }
               }
+            } else if (msg.data.case === "diff") {
+              // SSP: Handle terminal diff (Mosh-style minimal ANSI sequences)
+              // Initialize StateApplicator on first diff if terminal is now ready
+              if (!stateApplicatorRef.current) {
+                const currentTerminal = getTerminal?.();
+                if (currentTerminal) {
+                  stateApplicatorRef.current = new StateApplicator(currentTerminal);
+                  console.log('[useTerminalStream] State applicator lazily initialized on first diff');
+
+                  // Wire up echo overlay if predictive echo is enabled
+                  if (enablePredictiveEcho && echoOverlayRef.current) {
+                    stateApplicatorRef.current.setEchoOverlay(echoOverlayRef.current);
+                    stateApplicatorRef.current.setOnEchoAck((ack) => {
+                      // Calculate RTT from stored timestamp
+                      const sendTime = echoTimestampsRef.current.get(ack.echoAckNum);
+                      if (sendTime) {
+                        const latencyMs = Date.now() - sendTime;
+                        echoTimestampsRef.current.delete(ack.echoAckNum);
+                        console.log(`[useTerminalStream] Echo ack ${ack.echoAckNum}: RTT=${latencyMs}ms`);
+                        onEchoAck?.(ack.echoAckNum, latencyMs);
+                      }
+                    });
+                  }
+                } else {
+                  console.warn('[useTerminalStream] Received diff but terminal not ready yet');
+                  continue;
+                }
+              }
+
+              // Apply diff to terminal
+              const diff = msg.data.value;
+              const success = stateApplicatorRef.current.applyDiff(diff);
+
+              if (!success) {
+                // Sequence mismatch - need resync
+                console.warn(
+                  `[useTerminalStream] Diff sequence mismatch: ` +
+                  `diff.fromSequence=${diff.fromSequence}, ` +
+                  `current=${stateApplicatorRef.current.getCurrentSequence()}. ` +
+                  `Requesting resync.`
+                );
+                requestFullResync(true); // Urgent resync
+              } else {
+                console.log(
+                  `[useTerminalStream] Applied diff ${diff.fromSequence}→${diff.toSequence} ` +
+                  `(${diff.changedCells} cells changed, ${diff.diffBytes?.length || 0} bytes)`
+                );
+              }
+            } else if (msg.data.case === "sspNegotiation") {
+              // SSP: Handle capability negotiation response
+              const negotiation = msg.data.value;
+              if (!negotiation.isRequest && negotiation.negotiated) {
+                console.log('[useTerminalStream] SSP capabilities negotiated:', {
+                  predictiveEcho: negotiation.negotiated.supportsPredictiveEcho,
+                  diffUpdates: negotiation.negotiated.supportsDiffUpdates,
+                  compression: negotiation.negotiated.compressionAlgorithms,
+                });
+                setSspNegotiated(true);
+
+                // Initialize echo overlay if predictive echo is enabled
+                if (negotiation.negotiated.supportsPredictiveEcho && enablePredictiveEcho) {
+                  const currentTerminal = getTerminal?.();
+                  if (currentTerminal && !echoOverlayRef.current) {
+                    echoOverlayRef.current = new EchoOverlay({ debug: true });
+                    echoOverlayRef.current.attach(currentTerminal);
+                    console.log('[useTerminalStream] Echo overlay initialized after SSP negotiation');
+                  }
+                }
+              }
             } else if (msg.data.case === "output") {
               // Handle raw output (may be compressed in raw-compressed mode)
               const rawData = msg.data.value.data;
@@ -400,6 +516,16 @@ export function useTerminalStream({
               }
 
               const text = textDecoderRef.current.decode(decodedData, { stream: true });
+
+              // Record the message if recording is enabled
+              if (isRecordingRef.current) {
+                recordedMessagesRef.current.push({
+                  timestamp: Date.now(),
+                  type: 'raw',
+                  data: decodedData,
+                  decoded: text,
+                });
+              }
 
               // Only log if debug mode is enabled
               if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
@@ -564,6 +690,56 @@ export function useTerminalStream({
     [sessionId, onError]
   );
 
+  // SSP: Send input with predictive echo tracking
+  // Returns the echo number for tracking (can be used to correlate with acks)
+  const sendInputWithEcho = useCallback(
+    (input: string): bigint => {
+      if (!messageQueueRef.current || !isConnectedRef.current) {
+        return BigInt(0);
+      }
+
+      try {
+        // Increment echo counter
+        echoCounterRef.current = echoCounterRef.current + BigInt(1);
+        const echoNum = echoCounterRef.current;
+        const clientTimestamp = Date.now();
+
+        // Store timestamp for RTT calculation when ack arrives
+        echoTimestampsRef.current.set(echoNum, clientTimestamp);
+
+        // Show predictive echo immediately (if echo overlay is enabled)
+        if (echoOverlayRef.current && enablePredictiveEcho) {
+          echoOverlayRef.current.showPredictiveEcho(input);
+        }
+
+        const inputBytes = new TextEncoder().encode(input);
+
+        // Send input with echo tracking
+        messageQueueRef.current.push(
+          new TerminalData({
+            sessionId,
+            data: {
+              case: "inputEcho",
+              value: new InputWithEcho({
+                data: inputBytes,
+                echoNum: echoNum,
+                clientTimestampMs: BigInt(clientTimestamp),
+              }),
+            },
+          })
+        );
+
+        return echoNum;
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        setError(error);
+        onError?.(error);
+        return BigInt(0);
+      }
+    },
+    [sessionId, onError, enablePredictiveEcho]
+  );
+
   const resize = useCallback(
     (cols: number, rows: number) => {
       if (!messageQueueRef.current || !isConnectedRef.current) {
@@ -688,6 +864,13 @@ export function useTerminalStream({
         stateApplicatorRef.current = null;
       }
 
+      // SSP: Cleanup echo overlay
+      if (echoOverlayRef.current) {
+        echoOverlayRef.current.detach();
+        echoOverlayRef.current = null;
+      }
+      echoTimestampsRef.current.clear();
+
       disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -698,6 +881,7 @@ export function useTerminalStream({
     isConnected,
     error,
     sendInput,
+    sendInputWithEcho,
     resize,
     connect,
     disconnect,
@@ -705,5 +889,8 @@ export function useTerminalStream({
     requestScrollback,
     sendFlowControl,
     getIsApplyingState,
+    sspNegotiated,
+    startRecording,
+    stopRecording,
   };
 }
