@@ -135,6 +135,9 @@ func (r *ResponsiveNavigationManager) performExpensiveOperations(h *home, instan
 		// Log error but don't crash
 		log.WarningLog.Printf("UpdatePreview error: %v", err)
 	}
+
+	// 4. VC status (async internally - returns immediately)
+	h.tabbedWindow.UpdateVC(instance)
 }
 
 // OptimizedInstanceChanged replaces the current instanceChanged method

@@ -30,6 +30,8 @@ const (
 	HistoryBrowser
 	// ConfigEditor is the state when the config editor overlay is displayed
 	ConfigEditor
+	// Rename is the state when the rename overlay is displayed
+	Rename
 )
 
 // String returns a human-readable string representation of the state
@@ -61,6 +63,8 @@ func (s State) String() string {
 		return "HistoryBrowser"
 	case ConfigEditor:
 		return "ConfigEditor"
+	case Rename:
+		return "Rename"
 	default:
 		return "Unknown"
 	}
@@ -68,13 +72,13 @@ func (s State) String() string {
 
 // IsValid returns true if the state is a valid state value
 func (s State) IsValid() bool {
-	return s >= Default && s <= ConfigEditor
+	return s >= Default && s <= Rename
 }
 
 // IsOverlayState returns true if the state represents an overlay/modal state
 func (s State) IsOverlayState() bool {
 	switch s {
-	case New, Prompt, Help, Confirm, AdvancedNew, Git, ClaudeSettings, ZFSearch, TagEditor, HistoryBrowser, ConfigEditor:
+	case New, Prompt, Help, Confirm, AdvancedNew, Git, ClaudeSettings, ZFSearch, TagEditor, HistoryBrowser, ConfigEditor, Rename:
 		return true
 	default:
 		return false

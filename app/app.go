@@ -1,6 +1,7 @@
 package app
 
 import (
+	"claude-squad/app/services"
 	appsession "claude-squad/app/session"
 	"claude-squad/app/state"
 	appui "claude-squad/app/ui"
@@ -47,7 +48,6 @@ func Run(ctx context.Context, program string, autoYes bool) error {
 	return err
 }
 
-
 type home struct {
 	ctx        context.Context
 	cancelFunc context.CancelFunc
@@ -57,6 +57,13 @@ type home struct {
 	// deps stores the dependencies to allow updating shared state
 	// CRITICAL: Needed for spinner updates to propagate to List renderer
 	deps Dependencies
+
+	// -- Services Facade --
+
+	// services provides unified access to all application services
+	// This facade reduces coupling and simplifies testing
+	// TODO: Gradually migrate direct field access to use this facade
+	services services.Facade
 
 	// -- Storage and Configuration --
 
@@ -174,25 +181,25 @@ func newHomeWithDependencies(deps Dependencies) *home {
 
 	// Create home instance with injected dependencies
 	h := &home{
-		ctx:                  ctx,
-		cancelFunc:           nil, // Will be set by Run() for production use
-		deps:                 deps, // Store deps for accessing shared state
-		program:              deps.GetProgram(),
-		autoYes:              deps.GetAutoYes(),
-		storage:              deps.GetStorage(),
-		appConfig:            deps.GetAppConfig(),
-		appState:             deps.GetAppState(),
-		stateManager:         deps.GetStateManager(),
-		terminalManager:      deps.GetTerminalManager(),
-		signalManager:        deps.GetSignalManager(),
-		list:                 deps.GetList(),
-		menu:                 deps.GetMenu(),
-		tabbedWindow:         deps.GetTabbedWindow(),
-		errBox:               deps.GetErrBox(),
-		spinner:              deps.GetSpinner(),
-		statusBar:            deps.GetStatusBar(),
-		uiCoordinator:        deps.GetUICoordinator(),
-		bridge:               deps.GetBridge(),
+		ctx:             ctx,
+		cancelFunc:      nil,  // Will be set by Run() for production use
+		deps:            deps, // Store deps for accessing shared state
+		program:         deps.GetProgram(),
+		autoYes:         deps.GetAutoYes(),
+		storage:         deps.GetStorage(),
+		appConfig:       deps.GetAppConfig(),
+		appState:        deps.GetAppState(),
+		stateManager:    deps.GetStateManager(),
+		terminalManager: deps.GetTerminalManager(),
+		signalManager:   deps.GetSignalManager(),
+		list:            deps.GetList(),
+		menu:            deps.GetMenu(),
+		tabbedWindow:    deps.GetTabbedWindow(),
+		errBox:          deps.GetErrBox(),
+		spinner:         deps.GetSpinner(),
+		statusBar:       deps.GetStatusBar(),
+		uiCoordinator:   deps.GetUICoordinator(),
+		bridge:          deps.GetBridge(),
 
 		// Initialize PTY management
 		viewMode:     ViewModeSessions,
@@ -266,6 +273,20 @@ func newHomeWithDependencies(deps Dependencies) *home {
 			h.newInstanceFinalizer = f
 		},
 	})
+
+	// Initialize services facade for cleaner service access
+	// This provides a unified interface to all extracted services
+	h.services = services.NewFacade(
+		h.storage,
+		h.sessionController,
+		h.list,
+		h.menu,
+		h.statusBar,
+		h.errBox,
+		h.uiCoordinator,
+		h.handleError,
+		GlobalInstanceLimit,
+	)
 
 	// Initialize review queue and status management
 	h.reviewQueue = session.NewReviewQueue()
@@ -489,6 +510,12 @@ func (m *home) initializeCommandBridge() {
 		OnConfigEditor: func() (tea.Model, tea.Cmd) {
 			return m.handleConfigEditor()
 		},
+		OnRenameSession: func() (tea.Model, tea.Cmd) {
+			return m.handleRenameSession()
+		},
+		OnRestartSession: func() (tea.Model, tea.Cmd) {
+			return m.handleRestartSession()
+		},
 	}
 
 	// Set up git handlers
@@ -619,6 +646,38 @@ func (m *home) initializeCommandBridge() {
 
 	// Set PTY handlers separately (they have their own registration method)
 	commands.SetPTYHandlers(ptyHandlers)
+
+	// Set up VC handlers for the version control tab
+	vcHandlers := &commands.VCHandlers{
+		OnVCStageFile: func() (tea.Model, tea.Cmd) {
+			return m.handleVCStageFile()
+		},
+		OnVCUnstageFile: func() (tea.Model, tea.Cmd) {
+			return m.handleVCUnstageFile()
+		},
+		OnVCStageAll: func() (tea.Model, tea.Cmd) {
+			return m.handleVCStageAll()
+		},
+		OnVCUnstageAll: func() (tea.Model, tea.Cmd) {
+			return m.handleVCUnstageAll()
+		},
+		OnVCOpenTerminal: func() (tea.Model, tea.Cmd) {
+			return m.handleVCOpenTerminal()
+		},
+		OnVCToggleHelp: func() (tea.Model, tea.Cmd) {
+			return m.handleVCToggleHelp()
+		},
+		OnVCNavigateUp: func() (tea.Model, tea.Cmd) {
+			return m.handleVCNavigateUp()
+		},
+		OnVCNavigateDown: func() (tea.Model, tea.Cmd) {
+			return m.handleVCNavigateDown()
+		},
+		OnVCCommandPalette: func() (tea.Model, tea.Cmd) {
+			return m.handleVCCommandPalette()
+		},
+	}
+	commands.SetVCHandlers(vcHandlers)
 
 	// Start PTY discovery service
 	m.ptyDiscovery.Start()
@@ -847,12 +906,12 @@ func (m *home) handleHistoryBrowser() (tea.Model, tea.Cmd) {
 			options := session.InstanceOptions{
 				Title:       entry.Name,
 				Path:        entry.Project,
-				WorkingDir:  "",                    // Start at repository root
-				Program:     "claude",              // Default to claude
-				AutoYes:     false,                 // Don't auto-accept prompts
-				Prompt:      "",                    // No initial prompt
-				Category:    "History",             // Category for organization
-				Tags:        []string{"from-history"}, // Tag to indicate origin
+				WorkingDir:  "",                           // Start at repository root
+				Program:     "claude",                     // Default to claude
+				AutoYes:     false,                        // Don't auto-accept prompts
+				Prompt:      "",                           // No initial prompt
+				Category:    "History",                    // Category for organization
+				Tags:        []string{"from-history"},     // Tag to indicate origin
 				SessionType: session.SessionTypeDirectory, // Use directory-based session
 				TmuxPrefix:  cfg.TmuxSessionPrefix,
 			}
@@ -918,6 +977,104 @@ func (m *home) handleConfigEditor() (tea.Model, tea.Cmd) {
 	return m, tea.WindowSize()
 }
 
+func (m *home) handleRenameSession() (tea.Model, tea.Cmd) {
+	selected := m.getSelectedInstance()
+	if selected == nil {
+		return m, m.handleError(fmt.Errorf("no session selected for renaming"))
+	}
+
+	// Check if session is started - we can't rename started sessions
+	if selected.Started() {
+		m.statusBar.SetError("Cannot rename a started session. Please stop the session first.")
+		return m, nil
+	}
+
+	// Create the rename input overlay
+	if err := m.uiCoordinator.CreateRenameInputOverlay(selected.Title, nil); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create rename overlay: %w", err))
+	}
+
+	// Get the overlay and set up callbacks
+	renameOverlay := m.uiCoordinator.GetRenameInputOverlay()
+	if renameOverlay != nil {
+		renameOverlay.OnSubmit = func(newTitle string) {
+			// Update the session title
+			if err := selected.SetTitle(newTitle); err != nil {
+				m.statusBar.SetError(fmt.Sprintf("Failed to rename session: %v", err))
+			} else {
+				m.statusBar.SetInfo(fmt.Sprintf("Session renamed to: %s", newTitle))
+				// Save the updated state
+				if err := m.storage.SaveInstances(m.list.GetInstances()); err != nil {
+					log.ErrorLog.Printf("Failed to save renamed session: %v", err)
+				}
+			}
+			// Close the overlay
+			m.uiCoordinator.HideOverlay(appui.ComponentRenameInputOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+	}
+
+	// Change state to Rename
+	m.transitionToState(state.Rename)
+
+	return m, tea.WindowSize()
+}
+
+func (m *home) handleRestartSession() (tea.Model, tea.Cmd) {
+	selected := m.getSelectedInstance()
+	if selected == nil {
+		return m, m.handleError(fmt.Errorf("no session selected for restart"))
+	}
+
+	// Show confirmation dialog
+	message := fmt.Sprintf("Are you sure you want to restart '%s'?\nThis will kill the current session and start a new one.", selected.Title)
+	if err := m.uiCoordinator.CreateConfirmationOverlay(message); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create confirmation overlay: %w", err))
+	}
+
+	// Get the overlay and set up callbacks
+	confirmOverlay := m.uiCoordinator.GetConfirmationOverlay()
+	if confirmOverlay != nil {
+		confirmOverlay.OnConfirm = func() {
+			// Restart the session
+			m.statusBar.SetInfo(fmt.Sprintf("Restarting session: %s", selected.Title))
+
+			// First, kill the current session
+			if err := selected.Kill(); err != nil {
+				m.statusBar.SetError(fmt.Sprintf("Failed to stop session: %v", err))
+				m.uiCoordinator.HideOverlay(appui.ComponentConfirmationOverlay)
+				m.transitionToDefault()
+				return
+			}
+
+			// Then start it again
+			go func() {
+				if err := selected.Start(false); err != nil {
+					m.statusBar.SetError(fmt.Sprintf("Failed to restart session: %v", err))
+				} else {
+					m.statusBar.SetInfo(fmt.Sprintf("Session '%s' restarted successfully", selected.Title))
+				}
+			}()
+
+			// Close the overlay
+			m.uiCoordinator.HideOverlay(appui.ComponentConfirmationOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+
+			// Update the list to reflect the state change
+			m.instanceChanged()
+		}
+
+		// The overlay will handle cancel (n key) automatically by closing itself
+	}
+
+	// Change state to Confirm
+	m.transitionToState(state.Confirm)
+
+	return m, tea.WindowSize()
+}
+
 func (m *home) handleNavigationUp() (tea.Model, tea.Cmd) {
 	// Handle PTY view navigation
 	if m.viewMode == ViewModePTYs {
@@ -929,11 +1086,15 @@ func (m *home) handleNavigationUp() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Session view navigation
-	if m.isAtNavigationStart() {
+	// Session view navigation - use facade for cleaner service access
+	if m.services.Navigation().GetCurrentIndex() == 0 {
 		return m, nil
 	}
-	m.navigateUp()
+
+	if err := m.services.Navigation().NavigateUp(); err != nil {
+		return m, m.services.UICoordination().ShowError(err)
+	}
+
 	return m, m.instanceChanged()
 }
 
@@ -950,9 +1111,12 @@ func (m *home) handleNavigationDown() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Session view navigation - use facade method for navigation
-	m.navigateDown()
-	log.DebugLog.Printf("Called navigateDown(), triggering instance change")
+	// Session view navigation - use facade for cleaner service access
+	if err := m.services.Navigation().NavigateDown(); err != nil {
+		return m, m.services.UICoordination().ShowError(err)
+	}
+
+	log.DebugLog.Printf("Called NavigateDown via facade, triggering instance change")
 	return m, m.instanceChanged()
 }
 
@@ -1104,7 +1268,10 @@ func (m *home) handleSearch() (tea.Model, tea.Cmd) {
 }
 
 func (m *home) handleFilterPaused() (tea.Model, tea.Cmd) {
-	m.list.TogglePausedFilter()
+	// Use facade for cleaner service access
+	if err := m.services.Filtering().TogglePausedFilter(); err != nil {
+		return m, m.services.UICoordination().ShowError(err)
+	}
 	return m, nil
 }
 
@@ -1169,6 +1336,8 @@ func (m *home) handleEscape() (tea.Model, tea.Cmd) {
 func (m *home) handleTab() (tea.Model, tea.Cmd) {
 	m.tabbedWindow.Toggle()
 	m.menu.SetInDiffTab(m.tabbedWindow.IsInDiffTab())
+	// Update context based on active tab
+	m.updateVCContext()
 	return m, m.instanceChanged()
 }
 
@@ -1670,28 +1839,28 @@ func (m *home) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateHandleWindowSizeEvent(msg)
 		return m, nil
 	// case terminalSizeCheckMsg:
-		// Terminal size checking disabled - BubbleTea handles this naturally
-		// width, height, method := GetReliableTerminalSize()
-		// if override_width, override_height := getManualSizeOverride(); override_width > 0 && override_height > 0 {
-		//	width = override_width
-		//	height = override_height
-		// }
-		// if width != m.lastTerminalWidth || height != m.lastTerminalHeight {
-		//	m.lastTerminalWidth = width
-		//	m.lastTerminalHeight = height
-		//	return m, tea.Batch(
-		//		tickTerminalSizeCheckCmd(),
-		//		func() tea.Msg { return tea.WindowSizeMsg{Width: width, Height: height} },
-		//	)
-		// }
-		// return m, tickTerminalSizeCheckCmd()
+	// Terminal size checking disabled - BubbleTea handles this naturally
+	// width, height, method := GetReliableTerminalSize()
+	// if override_width, override_height := getManualSizeOverride(); override_width > 0 && override_height > 0 {
+	//	width = override_width
+	//	height = override_height
+	// }
+	// if width != m.lastTerminalWidth || height != m.lastTerminalHeight {
+	//	m.lastTerminalWidth = width
+	//	m.lastTerminalHeight = height
+	//	return m, tea.Batch(
+	//		tickTerminalSizeCheckCmd(),
+	//		func() tea.Msg { return tea.WindowSizeMsg{Width: width, Height: height} },
+	//	)
+	// }
+	// return m, tickTerminalSizeCheckCmd()
 	// case sigwinchMsg:
-		// SIGWINCH handling disabled - BubbleTea handles resize naturally
-		// log.InfoLog.Printf("Processing SIGWINCH resize event: %dx%d", msg.width, msg.height)
-		// return m, tea.Batch(
-		//	func() tea.Msg { return tea.WindowSizeMsg{Width: msg.width, Height: msg.height} },
-		//	setupSIGWINCHHandler(),
-		// )
+	// SIGWINCH handling disabled - BubbleTea handles resize naturally
+	// log.InfoLog.Printf("Processing SIGWINCH resize event: %dx%d", msg.width, msg.height)
+	// return m, tea.Batch(
+	//	func() tea.Msg { return tea.WindowSizeMsg{Width: msg.width, Height: msg.height} },
+	//	setupSIGWINCHHandler(),
+	// )
 	case terminal.ResizeMsg:
 		// Handle terminal resize messages from signal manager
 		log.InfoLog.Printf("Processing terminal resize event: %dx%d", msg.Width, msg.Height)
@@ -1842,6 +2011,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, teaCmd tea.Cmd) {
 		return m.handleConfigEditorState(msg)
 	}
 
+	if m.isInState(state.Rename) {
+		return m.handleRenameState(msg)
+	}
+
 	if m.isInState(state.New) {
 		// Handle quit commands first. Don't handle q because the user might want to type that.
 		if msg.String() == "ctrl+c" {
@@ -1938,30 +2111,30 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, teaCmd tea.Cmd) {
 					return m, tea.WindowSize()
 				}
 
-			// Regular prompt handling
-			selected := m.list.GetSelectedInstance()
-			// TODO: this should never happen since we set the instance in the previous state.
-			if selected == nil {
-				return m, nil
-			}
-			if textInputOverlay.IsSubmitted() {
-				if err := selected.SendPrompt(textInputOverlay.GetValue()); err != nil {
-					// TODO: we probably end up in a bad state here.
-					return m, m.handleError(err)
+				// Regular prompt handling
+				selected := m.list.GetSelectedInstance()
+				// TODO: this should never happen since we set the instance in the previous state.
+				if selected == nil {
+					return m, nil
 				}
-			}
+				if textInputOverlay.IsSubmitted() {
+					if err := selected.SendPrompt(textInputOverlay.GetValue()); err != nil {
+						// TODO: we probably end up in a bad state here.
+						return m, m.handleError(err)
+					}
+				}
 
-			// Close the overlay and reset state
-			m.uiCoordinator.HideOverlay(appui.ComponentTextInputOverlay)
-			m.transitionToDefault()
-			return m, tea.Sequence(
-				tea.WindowSize(),
-				func() tea.Msg {
-					m.menu.SetState(ui.StateDefault)
-					m.showHelpScreen(helpStart(selected), nil)
-					return nil
-				},
-			)
+				// Close the overlay and reset state
+				m.uiCoordinator.HideOverlay(appui.ComponentTextInputOverlay)
+				m.transitionToDefault()
+				return m, tea.Sequence(
+					tea.WindowSize(),
+					func() tea.Msg {
+						m.menu.SetState(ui.StateDefault)
+						m.showHelpScreen(helpStart(selected), nil)
+						return nil
+					},
+				)
 			}
 		}
 
@@ -2321,7 +2494,6 @@ func (m *home) handleGitStatus() (tea.Model, tea.Cmd) {
 	return m, m.loadGitStatus(selected)
 }
 
-
 // setupGitCallbacks configures the git operation callbacks for the overlay
 func (m *home) setupGitCallbacks(instance *session.Instance, gitStatusOverlay *overlay.GitStatusOverlay) {
 	gitStatusOverlay.OnCancel = func() {
@@ -2450,6 +2622,26 @@ func (m *home) handleConfigEditorState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if shouldClose {
 		// Overlay requested close
 		m.uiCoordinator.HideOverlay(appui.ComponentConfigEditorOverlay)
+		m.transitionToDefault()
+	}
+
+	return m, nil
+}
+
+// handleRenameState processes key events when in rename mode
+func (m *home) handleRenameState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	renameOverlay := m.uiCoordinator.GetRenameInputOverlay()
+	if renameOverlay == nil {
+		// Overlay disappeared, return to default
+		m.transitionToDefault()
+		return m, nil
+	}
+
+	// Let overlay handle the key press
+	shouldClose := renameOverlay.HandleKeyPress(msg)
+	if shouldClose {
+		// Overlay requested close
+		m.uiCoordinator.HideOverlay(appui.ComponentRenameInputOverlay)
 		m.transitionToDefault()
 	}
 
@@ -2734,7 +2926,6 @@ func (m *home) getState() state.State {
 	return m.stateManager.Current()
 }
 
-
 // transitionToState performs a simple state transition
 func (m *home) transitionToState(targetState state.State) error {
 	return m.stateManager.Transition(targetState)
@@ -2808,7 +2999,6 @@ func (m *home) clearOverlaysForState() {
 	m.messagesOverlay = nil
 	// Note: All other overlays now managed by coordinator.CloseAllOverlays()
 }
-
 
 // populateCoordinatorRegistry populates the coordinator registry with existing components
 // This enables gradual migration from direct component access to coordinator-based access

@@ -33,6 +33,8 @@ const (
 	ComponentTagEditorOverlay
 	ComponentHistoryBrowserOverlay
 	ComponentConfigEditorOverlay
+	ComponentOmnibarOverlay
+	ComponentRenameInputOverlay
 )
 
 // String returns the string representation of the component type
@@ -74,6 +76,10 @@ func (c ComponentType) String() string {
 		return "HistoryBrowserOverlay"
 	case ComponentConfigEditorOverlay:
 		return "ConfigEditorOverlay"
+	case ComponentOmnibarOverlay:
+		return "OmnibarOverlay"
+	case ComponentRenameInputOverlay:
+		return "RenameInputOverlay"
 	default:
 		return "Unknown"
 	}
@@ -85,7 +91,8 @@ func (c ComponentType) IsOverlay() bool {
 	case ComponentTextInputOverlay, ComponentLiveSearchOverlay, ComponentTextOverlay,
 		ComponentMessagesOverlay, ComponentConfirmationOverlay, ComponentSessionSetupOverlay,
 		ComponentGitStatusOverlay, ComponentClaudeSettingsOverlay, ComponentZFSearchOverlay,
-		ComponentTagEditorOverlay, ComponentHistoryBrowserOverlay, ComponentConfigEditorOverlay:
+		ComponentTagEditorOverlay, ComponentHistoryBrowserOverlay, ComponentConfigEditorOverlay,
+		ComponentOmnibarOverlay, ComponentRenameInputOverlay:
 		return true
 	default:
 		return false
@@ -125,6 +132,8 @@ type ComponentRegistry struct {
 	TagEditorOverlay        *overlay.TagEditorOverlay
 	HistoryBrowserOverlay   *overlay.HistoryBrowserOverlay
 	ConfigEditorOverlay     *overlay.ConfigEditorOverlay
+	OmnibarOverlay          interface{} // Uses omnibar.OmnibarOverlay (avoid circular import)
+	RenameInputOverlay      *overlay.RenameInputOverlay
 
 	// Component states
 	states map[ComponentType]*ComponentState

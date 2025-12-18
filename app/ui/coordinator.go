@@ -6,6 +6,7 @@ import (
 	"claude-squad/session"
 	"claude-squad/ui"
 	"claude-squad/ui/overlay"
+	"claude-squad/ui/overlay/omnibar"
 	"context"
 	"fmt"
 	"log"
@@ -48,6 +49,7 @@ type Coordinator interface {
 	CreateTagEditorOverlay(sessionTitle string, initialTags []string) error
 	CreateHistoryBrowserOverlay() error
 	CreateConfigEditorOverlay() error
+	CreateRenameInputOverlay(oldTitle string, validator func(string) error) error
 
 	// Overlay accessor methods
 	GetTextInputOverlay() *overlay.TextInputOverlay
@@ -61,6 +63,7 @@ type Coordinator interface {
 	GetTagEditorOverlay() *overlay.TagEditorOverlay
 	GetHistoryBrowserOverlay() *overlay.HistoryBrowserOverlay
 	GetConfigEditorOverlay() *overlay.ConfigEditorOverlay
+	GetRenameInputOverlay() *overlay.RenameInputOverlay
 }
 
 // coordinator implements the Coordinator interface
@@ -154,7 +157,7 @@ func (c *coordinator) InitializeComponents(autoYes bool, appState interface{}) e
 
 	// Initialize core components
 	c.registry.Menu = ui.NewMenu()
-	c.registry.TabbedWindow = ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane())
+	c.registry.TabbedWindow = ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewVCPane())
 	c.registry.ErrBox = ui.NewErrBox()
 	c.registry.StatusBar = ui.NewStatusBar()
 
@@ -283,6 +286,10 @@ func (c *coordinator) HideOverlay(componentType ComponentType) error {
 		c.registry.HistoryBrowserOverlay = nil
 	case ComponentConfigEditorOverlay:
 		c.registry.ConfigEditorOverlay = nil
+	case ComponentOmnibarOverlay:
+		c.registry.OmnibarOverlay = nil
+	case ComponentRenameInputOverlay:
+		c.registry.RenameInputOverlay = nil
 	}
 
 	if c.activeOverlay == componentType {
@@ -324,6 +331,10 @@ func (c *coordinator) CloseAllOverlays() error {
 		ComponentClaudeSettingsOverlay,
 		ComponentZFSearchOverlay,
 		ComponentTagEditorOverlay,
+		ComponentHistoryBrowserOverlay,
+		ComponentConfigEditorOverlay,
+		ComponentOmnibarOverlay,
+		ComponentRenameInputOverlay,
 	}
 
 	for _, component := range overlayComponents {
@@ -432,6 +443,21 @@ func (c *coordinator) CreateConfigEditorOverlay() error {
 	return c.ShowOverlay(ComponentConfigEditorOverlay)
 }
 
+// CreateRenameInputOverlay creates a new rename input overlay
+func (c *coordinator) CreateRenameInputOverlay(oldTitle string, validator func(string) error) error {
+	renameInputOverlay := overlay.NewRenameInputOverlay(oldTitle, validator)
+	c.registry.RenameInputOverlay = renameInputOverlay
+	return c.ShowOverlay(ComponentRenameInputOverlay)
+}
+
+// CreateOmnibarOverlay creates a new omnibar overlay with the given callbacks
+func (c *coordinator) CreateOmnibarOverlay(callbacks omnibar.OmnibarCallbacks) error {
+	omnibarOverlay := omnibar.NewOmnibarOverlay(callbacks)
+	c.registry.OmnibarOverlay = omnibarOverlay
+	c.InitializeComponent(ComponentOmnibarOverlay)
+	return c.ShowOverlay(ComponentOmnibarOverlay)
+}
+
 // GetTextInputOverlay returns the text input overlay if active
 func (c *coordinator) GetTextInputOverlay() *overlay.TextInputOverlay {
 	if c.IsOverlayVisible(ComponentTextInputOverlay) {
@@ -514,6 +540,24 @@ func (c *coordinator) GetHistoryBrowserOverlay() *overlay.HistoryBrowserOverlay 
 func (c *coordinator) GetConfigEditorOverlay() *overlay.ConfigEditorOverlay {
 	if c.IsOverlayVisible(ComponentConfigEditorOverlay) {
 		return c.registry.ConfigEditorOverlay
+	}
+	return nil
+}
+
+// GetRenameInputOverlay returns the rename input overlay if active
+func (c *coordinator) GetRenameInputOverlay() *overlay.RenameInputOverlay {
+	if c.IsOverlayVisible(ComponentRenameInputOverlay) {
+		return c.registry.RenameInputOverlay
+	}
+	return nil
+}
+
+// GetOmnibarOverlay returns the omnibar overlay if active
+func (c *coordinator) GetOmnibarOverlay() *omnibar.OmnibarOverlay {
+	if c.IsOverlayVisible(ComponentOmnibarOverlay) {
+		if omnibarOverlay, ok := c.registry.OmnibarOverlay.(*omnibar.OmnibarOverlay); ok {
+			return omnibarOverlay
+		}
 	}
 	return nil
 }
@@ -655,6 +699,16 @@ func (c *coordinator) RenderOverlay(componentType ComponentType) string {
 		if c.registry.ConfigEditorOverlay != nil {
 			return c.registry.ConfigEditorOverlay.View()
 		}
+	case ComponentOmnibarOverlay:
+		if c.registry.OmnibarOverlay != nil {
+			if omnibarOverlay, ok := c.registry.OmnibarOverlay.(*omnibar.OmnibarOverlay); ok {
+				return omnibarOverlay.View()
+			}
+		}
+	case ComponentRenameInputOverlay:
+		if c.registry.RenameInputOverlay != nil {
+			return c.registry.RenameInputOverlay.Render()
+		}
 	}
 
 	return ""
@@ -746,6 +800,20 @@ func (c *coordinator) routeToOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			shouldClose := c.registry.ConfigEditorOverlay.HandleKeyPress(msg)
 			if shouldClose {
 				c.HideOverlay(ComponentConfigEditorOverlay)
+			}
+		}
+	case ComponentOmnibarOverlay:
+		if c.registry.OmnibarOverlay != nil {
+			if omnibarOverlay, ok := c.registry.OmnibarOverlay.(*omnibar.OmnibarOverlay); ok {
+				// Omnibar uses BubbleTea Update method
+				omnibarOverlay.Update(msg)
+			}
+		}
+	case ComponentRenameInputOverlay:
+		if c.registry.RenameInputOverlay != nil {
+			shouldClose := c.registry.RenameInputOverlay.HandleKeyPress(msg)
+			if shouldClose {
+				c.HideOverlay(ComponentRenameInputOverlay)
 			}
 		}
 	}
@@ -853,6 +921,10 @@ func (c *coordinator) GetComponentByType(componentType ComponentType) interface{
 		return c.registry.HistoryBrowserOverlay
 	case ComponentConfigEditorOverlay:
 		return c.registry.ConfigEditorOverlay
+	case ComponentOmnibarOverlay:
+		return c.registry.OmnibarOverlay
+	case ComponentRenameInputOverlay:
+		return c.registry.RenameInputOverlay
 	default:
 		return nil
 	}
@@ -962,6 +1034,18 @@ func (c *coordinator) SetComponent(componentType ComponentType, component interf
 			c.registry.ConfigEditorOverlay = overlay
 		} else {
 			return fmt.Errorf("invalid component type for ConfigEditorOverlay")
+		}
+	case ComponentOmnibarOverlay:
+		if omnibarOverlay, ok := component.(*omnibar.OmnibarOverlay); ok {
+			c.registry.OmnibarOverlay = omnibarOverlay
+		} else {
+			return fmt.Errorf("invalid component type for OmnibarOverlay")
+		}
+	case ComponentRenameInputOverlay:
+		if overlay, ok := component.(*overlay.RenameInputOverlay); ok {
+			c.registry.RenameInputOverlay = overlay
+		} else {
+			return fmt.Errorf("invalid component type for RenameInputOverlay")
 		}
 	default:
 		return fmt.Errorf("unknown component type: %s", componentType.String())
