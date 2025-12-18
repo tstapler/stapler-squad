@@ -201,6 +201,26 @@ SessionService
 
 ## Epic-Level Analysis
 
+### Epic 0: Observability Infrastructure (Prerequisite)
+
+**Objective:** Establish comprehensive OpenTelemetry instrumentation to capture metrics and traces for data-driven performance optimization decisions.
+
+**Rationale:** Before optimizing, we need empirical data on actual bottlenecks. This epic instruments the backend to export telemetry to Datadog APM, enabling identification of real performance issues vs. theoretical concerns.
+
+**Success Metrics:**
+- Traces captured for all history-related RPC endpoints
+- Database query durations tracked with operation names
+- File system operation latencies measured
+- P50/P95/P99 latency baselines established
+- Datadog APM dashboards showing request flow
+
+**Dependencies:** None (must be completed first)
+
+**Risks:**
+- Minor performance overhead from instrumentation (~1-2%)
+- OTLP exporter configuration may vary by deployment environment
+
+
 ### Epic 1: Frontend List Virtualization
 
 **Objective:** Render only visible entry cards to improve scroll performance and reduce memory usage.
@@ -265,6 +285,100 @@ SessionService
 ---
 
 ## Story-Level Breakdown
+
+### Epic 0: Observability Infrastructure
+
+#### Story 0.1: OpenTelemetry SDK Setup
+
+**As a** developer,
+**I want** OpenTelemetry tracing and metrics configured in the server,
+**So that** I can capture performance data for analysis.
+
+**Acceptance Criteria:**
+- [ ] OpenTelemetry SDK initialized on server startup
+- [ ] OTLP exporter configured for Datadog Agent ingestion
+- [ ] Service name, version, and environment attributes set
+- [ ] Graceful shutdown flushes pending telemetry
+- [ ] Configuration via environment variables (OTEL_EXPORTER_OTLP_ENDPOINT, etc.)
+
+**Story Points:** 3
+
+#### Story 0.2: HTTP/ConnectRPC Endpoint Instrumentation
+
+**As a** developer,
+**I want** all RPC endpoints automatically instrumented,
+**So that** I can see request latencies and error rates in Datadog.
+
+**Acceptance Criteria:**
+- [ ] otelconnect middleware added to ConnectRPC handlers
+- [ ] HTTP server wrapped with otelhttp middleware
+- [ ] Span attributes include: method, path, status code, user agent
+- [ ] Error spans capture error messages
+- [ ] Request/response size metrics captured
+
+**Story Points:** 2
+
+#### Story 0.3: Database Query Instrumentation
+
+**As a** developer,
+**I want** SQLite query durations tracked with operation context,
+**So that** I can identify slow queries and N+1 patterns.
+
+**Acceptance Criteria:**
+- [ ] Custom spans created for SQLiteRepository operations
+- [ ] Span names reflect operation (e.g., "sqlite.ListSessions", "sqlite.GetSession")
+- [ ] Query durations recorded as span duration
+- [ ] Row counts captured as span attributes
+- [ ] Transaction boundaries visible in traces
+
+**Story Points:** 3
+
+#### Story 0.4: History Loading Instrumentation
+
+**As a** developer,
+**I want** Claude history loading operations traced,
+**So that** I can identify file system bottlenecks.
+
+**Acceptance Criteria:**
+- [ ] ClaudeSessionHistory.Refresh() creates parent span
+- [ ] Individual file parsing creates child spans
+- [ ] File path and size captured as attributes
+- [ ] Error files logged with span events
+- [ ] Directory walk duration measured
+
+**Story Points:** 3
+
+#### Story 0.5: Search Engine Instrumentation
+
+**As a** developer,
+**I want** search engine operations traced,
+**So that** I can measure index sync and query performance.
+
+**Acceptance Criteria:**
+- [ ] SearchEngine.Search() creates span with query info
+- [ ] IncrementalSync() captures sync duration and change counts
+- [ ] Index operations (BuildIndex, LoadIndex, SaveIndex) traced
+- [ ] BM25 scoring duration captured
+- [ ] Result counts and query time as span attributes
+
+**Story Points:** 2
+
+#### Story 0.6: Custom Metrics for Business KPIs
+
+**As a** developer,
+**I want** custom metrics for history browser operations,
+**So that** I can create Datadog dashboards with business-relevant data.
+
+**Acceptance Criteria:**
+- [ ] Histogram: history_entries_count (gauge of total entries)
+- [ ] Histogram: history_load_duration_ms
+- [ ] Histogram: search_query_duration_ms
+- [ ] Counter: search_queries_total (with result_count bucket)
+- [ ] Histogram: message_file_size_bytes
+- [ ] Gauge: search_index_document_count
+
+**Story Points:** 2
+
 
 ### Epic 1: Frontend List Virtualization
 
@@ -449,6 +563,173 @@ SessionService
 ---
 
 ## Atomic Task Decomposition
+
+### Epic 0: Observability Infrastructure
+
+#### Task 0.1.1: Add OpenTelemetry Dependencies
+**Duration:** 30 minutes
+**Files:** 
+- `go.mod`
+
+**Implementation:**
+1. Add direct dependencies:
+   ```
+   go.opentelemetry.io/otel
+   go.opentelemetry.io/otel/sdk
+   go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc
+   go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc
+   go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp
+   connectrpc.com/otelconnect
+   ```
+2. Run `go mod tidy`
+
+**Verification:** Dependencies resolve, `go build` succeeds
+
+#### Task 0.1.2: Create Telemetry Package
+**Duration:** 2 hours
+**Files:**
+- `server/telemetry/telemetry.go` (new)
+- `server/telemetry/config.go` (new)
+
+**Implementation:**
+1. Create TelemetryConfig struct with OTLP endpoint, service name, environment
+2. Create InitTelemetry() function that:
+   - Creates OTLP trace exporter
+   - Creates OTLP metric exporter
+   - Configures TracerProvider with batch processor
+   - Configures MeterProvider
+   - Sets global providers
+   - Returns shutdown function
+3. Support environment variable configuration:
+   - OTEL_EXPORTER_OTLP_ENDPOINT (default: localhost:4317)
+   - OTEL_SERVICE_NAME (default: claude-squad)
+   - OTEL_ENVIRONMENT (default: development)
+
+**Verification:** Telemetry initializes without error, shutdown works
+
+#### Task 0.1.3: Integrate Telemetry into Server Startup
+**Duration:** 1 hour
+**Files:**
+- `server/server.go`
+- `main.go`
+
+**Implementation:**
+1. Call InitTelemetry() early in server startup
+2. Store shutdown function for graceful cleanup
+3. Call shutdown in server Close() method
+4. Add startup log showing telemetry endpoint
+
+**Verification:** Server starts with telemetry, exports to local collector
+
+#### Task 0.2.1: Add otelconnect Middleware
+**Duration:** 1 hour
+**Files:**
+- `server/server.go`
+
+**Implementation:**
+1. Import connectrpc.com/otelconnect
+2. Create otelconnect.NewInterceptor()
+3. Add interceptor to ConnectRPC handler options
+4. Ensure interceptor captures both unary and streaming calls
+
+**Verification:** Traces appear for RPC calls in Datadog
+
+#### Task 0.2.2: Wrap HTTP Server with otelhttp
+**Duration:** 1 hour
+**Files:**
+- `server/server.go`
+
+**Implementation:**
+1. Import go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp
+2. Wrap main HTTP handler with otelhttp.NewHandler()
+3. Configure span naming convention
+4. Add request/response metrics
+
+**Verification:** HTTP middleware traces visible, includes non-RPC endpoints
+
+#### Task 0.3.1: Create Database Tracing Helper
+**Duration:** 1 hour
+**Files:**
+- `session/sqlite_tracing.go` (new)
+
+**Implementation:**
+1. Create tracedDB struct wrapping *sql.DB
+2. Implement QueryContext, ExecContext, BeginTx with span creation
+3. Add span attributes: operation, table (if parseable), row_count
+4. Use consistent naming: "sqlite.{operation}"
+
+**Verification:** Database operations create child spans
+
+#### Task 0.3.2: Instrument SQLiteRepository
+**Duration:** 2 hours
+**Files:**
+- `session/sqlite_repository.go`
+
+**Implementation:**
+1. Accept tracer in constructor or use global
+2. Wrap high-level methods (List, Get, Create, Update) with spans
+3. Add span events for significant operations
+4. Capture row counts in span attributes
+
+**Verification:** Repository traces show query hierarchy
+
+#### Task 0.4.1: Instrument History Loading
+**Duration:** 2 hours
+**Files:**
+- `session/history.go`
+
+**Implementation:**
+1. Add tracer to ClaudeSessionHistory struct
+2. Create span in Refresh() method
+3. Create child spans for directory walking
+4. Create child spans for file parsing
+5. Add attributes: file_count, total_size, error_count
+
+**Verification:** History loading shows file-level breakdown
+
+#### Task 0.5.1: Instrument Search Engine
+**Duration:** 1.5 hours
+**Files:**
+- `session/search_engine.go`
+
+**Implementation:**
+1. Add tracer to SearchEngine struct
+2. Instrument Search() with query and result count
+3. Instrument IncrementalSync() with change counts
+4. Instrument BuildIndex() with document counts
+5. Add query_time as span attribute (already computed)
+
+**Verification:** Search operations traced with details
+
+#### Task 0.6.1: Create Custom Metrics
+**Duration:** 2 hours
+**Files:**
+- `server/telemetry/metrics.go` (new)
+
+**Implementation:**
+1. Define meter and instruments on init
+2. Create histograms for duration measurements
+3. Create counters for operation counts
+4. Create gauges for current state (index size, entry count)
+5. Expose RecordHistoryLoad(), RecordSearch(), etc.
+
+**Verification:** Metrics visible in Datadog metrics explorer
+
+#### Task 0.6.2: Integrate Metrics Recording
+**Duration:** 1 hour
+**Files:**
+- `server/services/session_service.go`
+- `session/search_engine.go`
+- `session/history.go`
+
+**Implementation:**
+1. Import metrics package
+2. Record durations after operations complete
+3. Record counts and sizes as attributes
+4. Use defer for timing measurements
+
+**Verification:** Dashboard shows metric data
+
 
 ### Epic 1: Frontend List Virtualization
 
@@ -662,6 +943,59 @@ SessionService
 
 ## Testing Strategy
 
+### Testing for Epic 0: Observability Infrastructure
+
+| Component | Test Cases | Coverage Target |
+|-----------|------------|-----------------|
+| telemetry.InitTelemetry() | Init, shutdown, config | 90% |
+| otelconnect middleware | RPC tracing | Integration |
+| SQLite tracing | Query spans | 80% |
+| Search instrumentation | Search spans | 80% |
+| Custom metrics | Record functions | 85% |
+
+**Integration Testing:**
+
+1. **Local OTEL Collector Test:**
+   - Run `otel-collector` locally with debug exporter
+   - Verify spans and metrics exported correctly
+   - Check span hierarchy (parent-child relationships)
+
+2. **Datadog Agent Test:**
+   - Configure Datadog Agent with OTLP ingestion
+   - Verify traces appear in Datadog APM
+   - Verify metrics appear in Datadog Metrics Explorer
+
+**Configuration Reference:**
+
+```bash
+# OTLP Endpoint (Datadog Agent default)
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+
+# Service identification
+OTEL_SERVICE_NAME=claude-squad
+OTEL_SERVICE_VERSION=1.0.0
+
+# Environment tagging
+OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production,service.namespace=claude
+
+# Sampling (optional, for high-volume)
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
+```
+
+**Datadog Agent Configuration (datadog.yaml):**
+
+```yaml
+otlp_config:
+  receiver:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+```
+
+
 ### Unit Tests
 
 | Component | Test Cases | Coverage Target |
@@ -779,6 +1113,14 @@ SessionService
 
 ## Implementation Phases
 
+### Phase 0: Observability Infrastructure (2-3 days) [NEW - PREREQUISITE]
+- OpenTelemetry SDK setup (Task 0.1.1-0.1.3)
+- ConnectRPC/HTTP instrumentation (Task 0.2.1-0.2.2)
+- Database and service instrumentation (Task 0.3.1-0.5.1)
+- Custom metrics (Task 0.6.1-0.6.2)
+
+**Value:** Data-driven optimization decisions, baseline metrics established, Datadog APM integration
+
 ### Phase 1: Quick Wins (1-2 days)
 - Extract EntryCard component (Task 1.1.1, 1.1.2)
 - Define reducer types (Task 2.1.1)
@@ -819,19 +1161,29 @@ SessionService
 
 | Metric | Baseline | Target | Measurement Method |
 |--------|----------|--------|-------------------|
-| Initial load time | 3-5s | <1.5s | Lighthouse |
+| **Observability coverage** | 0% | 100% | Trace completeness |
+| **Trace latency overhead** | N/A | <5ms | Benchmark comparison |
+| Initial load time | 3-5s | <1.5s | Lighthouse + **APM** |
 | Scroll FPS | 30fps | 60fps | Chrome DevTools |
 | Memory usage | 150MB | <50MB | Chrome DevTools |
 | Filter response | 300ms | <100ms | React Profiler |
 | Re-renders per action | 5+ | 1-2 | React DevTools |
 | DOM node count | ~2000 | <200 | Chrome DevTools |
-| Backend search latency | 500ms | <200ms | Server metrics |
-| History reload | 2s | <500ms | Go benchmark |
+| Backend search latency | 500ms | <200ms | **APM P95 latency** |
+| History reload | 2s | <500ms | **APM trace duration** |
 
 ---
 
 ## References
 
+### OpenTelemetry & Observability
+- [OpenTelemetry Go SDK](https://opentelemetry.io/docs/languages/go/) - Official documentation
+- [OTLP Exporter Configuration](https://opentelemetry.io/docs/languages/sdk-configuration/otlp-exporter/) - Environment variables
+- [Datadog OTLP Ingestion](https://docs.datadoghq.com/opentelemetry/setup/otlp_ingest_in_the_agent/) - Agent setup
+- [otelconnect](https://pkg.go.dev/connectrpc.com/otelconnect) - ConnectRPC instrumentation
+- [otelhttp](https://pkg.go.dev/go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp) - HTTP instrumentation
+
+### Frontend Performance
 - [React Virtual](https://tanstack.com/virtual/latest) - List virtualization
 - [React Profiler](https://react.dev/reference/react/Profiler) - Performance measurement
 - [Lighthouse](https://developer.chrome.com/docs/lighthouse/) - Web performance auditing
