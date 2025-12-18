@@ -100,7 +100,6 @@ func (h helpTypeGeneral) toContentWithBridge(bridge *cmd.Bridge) string {
 	return content
 }
 
-
 func (h helpTypeInstanceStart) toContentWithBridge(bridge *cmd.Bridge) string {
 	return h.toContent() // Instance help doesn't need dynamic generation
 }
@@ -172,9 +171,6 @@ func (h helpTypeInstanceAttach) mask() uint32 {
 func (h helpTypeInstanceCheckout) mask() uint32 {
 	return 1 << 3
 }
-
-
-
 
 var (
 	titleStyle  = lipgloss.NewStyle().Bold(true).Underline(true).Foreground(lipgloss.Color("#7D56F4"))

@@ -164,17 +164,17 @@ func setupOptimizedBenchmarkHome(b *testing.B, sessionCount int) *home {
 
 	ctx := context.Background()
 	h := &home{
-		ctx:                  ctx,
-		spinner:              spinner.New(spinner.WithSpinner(spinner.MiniDot)),
-		menu:                 ui.NewMenu(),
-		tabbedWindow:         ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane()),
-		errBox:               ui.NewErrBox(),
-		storage:              storage,
-		appConfig:            appConfig,
-		program:              "echo",
-		autoYes:              true,
+		ctx:          ctx,
+		spinner:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
+		menu:         ui.NewMenu(),
+		tabbedWindow: ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewVCPane()),
+		errBox:       ui.NewErrBox(),
+		storage:      storage,
+		appConfig:    appConfig,
+		program:      "echo",
+		autoYes:      true,
 		stateManager: state.NewManager(),
-		appState:             appState,
+		appState:     appState,
 	}
 	h.list = ui.NewList(&h.spinner, true, appState)
 

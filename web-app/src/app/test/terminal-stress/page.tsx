@@ -13,15 +13,19 @@ import {
 // Dynamically import xterm to avoid SSR issues
 type TerminalType = import('@xterm/xterm').Terminal;
 type FitAddonType = import('@xterm/addon-fit').FitAddon;
+type WebglAddonType = import('@xterm/addon-webgl').WebglAddon;
 
 let Terminal: typeof import('@xterm/xterm').Terminal | undefined;
 let FitAddon: typeof import('@xterm/addon-fit').FitAddon | undefined;
+let WebglAddon: typeof import('@xterm/addon-webgl').WebglAddon | undefined;
 
 if (typeof window !== 'undefined') {
   const XTermModule = require('@xterm/xterm');
   const FitAddonModule = require('@xterm/addon-fit');
+  const WebglAddonModule = require('@xterm/addon-webgl');
   Terminal = XTermModule.Terminal;
   FitAddon = FitAddonModule.FitAddon;
+  WebglAddon = WebglAddonModule.WebglAddon;
   require('@xterm/xterm/css/xterm.css');
 }
 
@@ -39,6 +43,7 @@ export default function TerminalStressTestPage() {
   const terminalRef = useRef<HTMLDivElement>(null);
   const [terminal, setTerminal] = useState<TerminalType | null>(null);
   const [fitAddon, setFitAddon] = useState<FitAddonType | null>(null);
+  const [rendererType, setRendererType] = useState<'webgl' | 'canvas' | 'unknown'>('unknown');
 
   // Test state
   const [status, setStatus] = useState<TestStatus>('idle');
@@ -96,12 +101,36 @@ export default function TerminalStressTestPage() {
     term.open(terminalRef.current);
     fit.fit();
 
+    // Try to load WebGL addon for hardware-accelerated rendering
+    let webglLoaded = false;
+    if (WebglAddon) {
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          console.warn('WebGL context lost, falling back to canvas');
+          webgl.dispose();
+          setRendererType('canvas');
+        });
+        term.loadAddon(webgl);
+        webglLoaded = true;
+        setRendererType('webgl');
+        console.log('WebGL renderer loaded successfully');
+      } catch (e) {
+        console.warn('WebGL addon failed to load, using canvas renderer:', e);
+        setRendererType('canvas');
+      }
+    } else {
+      console.warn('WebGL addon not available, using canvas renderer');
+      setRendererType('canvas');
+    }
+
     setTerminal(term);
     setFitAddon(fit);
 
     // Expose for Playwright testing
     (window as any).stressTestTerminal = term;
     (window as any).stressTestMetrics = metricsRef;
+    (window as any).stressTestRendererType = webglLoaded ? 'webgl' : 'canvas';
 
     // Handle resize
     const resizeObserver = new ResizeObserver(() => {
@@ -229,38 +258,51 @@ export default function TerminalStressTestPage() {
     // For log flood, use batching
     const batchSize = config.type === 'log-flood' ? Math.ceil(config.rate / 100) : 1;
 
-    // Run test loop
-    const runLoop = () => {
+    // Track last frame time for throttling
+    let lastRenderTime = 0;
+    let totalBytesGenerated = 0;
+
+    // Use requestAnimationFrame for proper vsync and frame timing
+    const runLoop = (currentTime: number) => {
       if (abortControllerRef.current?.signal.aborted) {
         setStatus('completed');
         updateMetrics();
         return;
       }
 
-      const elapsed = performance.now() - startTime;
+      const elapsed = currentTime - startTime;
       if (elapsed >= durationMs) {
         setStatus('completed');
         updateMetrics();
         return;
       }
 
-      // Generate and render frame
-      const frame = generator.nextFrame(batchSize);
-      handleFrame(frame);
+      // Check if enough time has passed since last frame (throttle to target rate)
+      const timeSinceLastFrame = currentTime - lastRenderTime;
+      if (timeSinceLastFrame >= targetIntervalMs) {
+        lastRenderTime = currentTime;
 
-      // Update progress
-      setProgress({
-        elapsed,
-        framesGenerated: generator.getSequence(),
-        bytesGenerated: frame.content.length * generator.getSequence(),
-      });
+        // Generate and render frame
+        const frame = generator.nextFrame(batchSize);
+        handleFrame(frame);
+        totalBytesGenerated += frame.content.length;
 
-      // Schedule next frame
-      const nextDelay = Math.max(0, targetIntervalMs);
-      setTimeout(runLoop, nextDelay);
+        // Update progress (batch updates to reduce React overhead)
+        if (frameTimesRef.current.length % 5 === 0) {
+          setProgress({
+            elapsed,
+            framesGenerated: generator.getSequence(),
+            bytesGenerated: totalBytesGenerated,
+          });
+        }
+      }
+
+      // Schedule next frame using requestAnimationFrame for proper vsync
+      requestAnimationFrame(runLoop);
     };
 
-    runLoop();
+    // Start the animation loop
+    requestAnimationFrame(runLoop);
   }, [terminal, status, customConfig, selectedPreset, handleFrame, updateMetrics]);
 
   // Stop test
@@ -471,7 +513,7 @@ export default function TerminalStressTestPage() {
             border: '1px solid #e5e7eb',
           }}
         >
-          <h3 style={{ margin: '0 0 16px 0', display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <h3 style={{ margin: '0 0 16px 0', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
             Performance Metrics
             <span
               data-testid="test-status"
@@ -485,6 +527,19 @@ export default function TerminalStressTestPage() {
               }}
             >
               {status}
+            </span>
+            <span
+              data-testid="renderer-type"
+              style={{
+                fontSize: '12px',
+                padding: '2px 8px',
+                borderRadius: '9999px',
+                background: rendererType === 'webgl' ? '#10b981' : rendererType === 'canvas' ? '#f59e0b' : '#6b7280',
+                color: 'white',
+                textTransform: 'uppercase',
+              }}
+            >
+              {rendererType}
             </span>
           </h3>
 

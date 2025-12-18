@@ -24,7 +24,9 @@
 }
 
 .terminal :global(.xterm-viewport) {
-  overflow-y: auto;
+  /* Hide scrollbar when scrollback is disabled (tmux handles scrollback) */
+  overflow-y: hidden;
+  /* Keep scrollbar styles in case scrollback is re-enabled in the future */
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
 }

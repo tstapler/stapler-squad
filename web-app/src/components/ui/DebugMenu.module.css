@@ -209,6 +209,44 @@
   padding-left: 12px;
 }
 
+.debugLink {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+  background: var(--color-bg-secondary);
+  border-radius: 8px;
+  text-decoration: none;
+  transition: background 0.15s ease;
+  gap: 12px;
+}
+
+.debugLink:hover {
+  background: var(--color-bg-hover);
+}
+
+.debugLinkIcon {
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.debugLinkContent {
+  flex: 1;
+}
+
+.debugLinkName {
+  display: block;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--color-text);
+  margin-bottom: 4px;
+}
+
+.debugLinkDescription {
+  display: block;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
 .footer {
   padding: 16px 24px;
   border-top: 1px solid var(--color-border);

@@ -54,6 +54,25 @@ type Repository interface {
 
 	// Close performs cleanup and releases resources
 	Close() error
+
+	// --- New Session-based methods (Phase 2 of schema normalization) ---
+	// These methods use the new domain-driven Session type with optional contexts.
+	// They are preferred over InstanceData methods for new code.
+
+	// GetSession retrieves a session using the new Session domain model.
+	// Use ContextOptions to control which optional contexts are loaded.
+	// Returns nil if session not found.
+	GetSession(ctx context.Context, title string, opts ContextOptions) (*Session, error)
+
+	// ListSessions retrieves all sessions using the new Session domain model.
+	// Use ContextOptions to control which optional contexts are loaded.
+	ListSessions(ctx context.Context, opts ContextOptions) ([]*Session, error)
+
+	// CreateSession creates a new session from the Session domain model.
+	CreateSession(ctx context.Context, session *Session) error
+
+	// UpdateSession updates an existing session using the Session domain model.
+	UpdateSession(ctx context.Context, session *Session) error
 }
 
 // RepositoryOption is a function that configures a repository

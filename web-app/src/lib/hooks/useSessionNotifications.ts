@@ -1,9 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import { createPromiseClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { NotificationEvent } from "@/gen/session/v1/events_pb";
-import { NotificationPriority } from "@/gen/session/v1/types_pb";
+import { NotificationPriority, NotificationType } from "@/gen/session/v1/types_pb";
+import { SessionService } from "@/gen/session/v1/session_connect";
+import { NotificationData } from "@/components/ui/NotificationToast";
+import { getApiBaseUrl } from "@/lib/config";
 
 /**
  * Maps protobuf NotificationPriority enum to UI priority string
@@ -20,6 +25,61 @@ function mapPriority(priority: NotificationPriority): "urgent" | "high" | "mediu
       return "low";
     default:
       return "medium";
+  }
+}
+
+/**
+ * Maps protobuf NotificationType enum to UI notification type string
+ */
+function mapNotificationType(type: NotificationType): NotificationData["notificationType"] {
+  switch (type) {
+    case NotificationType.APPROVAL_NEEDED:
+    case NotificationType.CONFIRMATION_NEEDED:
+    case NotificationType.INPUT_REQUIRED:
+      return "approval_needed";
+    case NotificationType.ERROR:
+    case NotificationType.FAILURE:
+      return "error";
+    case NotificationType.WARNING:
+      return "warning";
+    case NotificationType.TASK_COMPLETE:
+    case NotificationType.PROCESS_FINISHED:
+      return "task_complete";
+    case NotificationType.PROCESS_STARTED:
+      return "progress";
+    case NotificationType.INFO:
+    case NotificationType.DEBUG:
+    case NotificationType.STATUS_CHANGE:
+      return "info";
+    case NotificationType.CUSTOM:
+      return "custom";
+    default:
+      return "info";
+  }
+}
+
+/**
+ * Calls the FocusWindow API to bring an application window to front
+ */
+async function focusWindow(bundleId?: string, appName?: string): Promise<void> {
+  if (!bundleId && !appName) return;
+
+  try {
+    const transport = createConnectTransport({
+      baseUrl: getApiBaseUrl(),
+    });
+    const client = createPromiseClient(SessionService, transport);
+    const response = await client.focusWindow({
+      bundleId: bundleId,
+      appName: appName,
+    });
+
+    // Check if the server reported a permissions issue
+    if (!response.success && response.message) {
+      console.warn("Focus window failed:", response.message);
+    }
+  } catch (error) {
+    console.warn("Failed to focus window:", error);
   }
 }
 
@@ -170,16 +230,39 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       playNotificationSound(event.priority);
     }
 
-    // Add visual notification
-    addNotification({
+    // Extract source app metadata from the event
+    const sourceApp = event.metadata?.["source_app"];
+    const sourceBundleId = event.metadata?.["source_bundle"];
+    const sourceWorkingDir = event.metadata?.["cwd"];
+    const sourceProject = event.metadata?.["source_project"];
+
+    // Check if this is an external session (has source app info)
+    const isExternal = sourceApp !== undefined || sourceBundleId !== undefined;
+
+    // Build the notification data with all available fields
+    const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
       sessionId: event.sessionId,
       sessionName: event.sessionName || "Unknown Session",
-      message: event.message || event.title,
+      title: event.title,
+      message: event.message,
       priority: mapPriority(event.priority),
+      notificationType: mapNotificationType(event.notificationType),
+      sourceApp: sourceApp,
+      sourceBundleId: sourceBundleId,
+      sourceWorkingDir: sourceWorkingDir,
+      sourceProject: sourceProject,
+      metadata: event.metadata,
       onView: onViewSessionRef.current
         ? () => onViewSessionRef.current?.(event.sessionId)
         : undefined,
-    });
+      // Add focus window handler if we have source app info
+      onFocusWindow: isExternal
+        ? () => focusWindow(sourceBundleId, sourceApp)
+        : undefined,
+    };
+
+    // Add visual notification
+    addNotification(notificationData);
   }, [addNotification]);
 
   return handleNotification;

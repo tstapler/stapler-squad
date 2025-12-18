@@ -23,6 +23,12 @@
   background: rgba(0, 112, 243, 0.05);
 }
 
+/* External session visual distinction */
+.card.external {
+  border-left: 4px solid #6366f1;
+  background: linear-gradient(to right, rgba(99, 102, 241, 0.05), var(--card-bg));
+}
+
 .checkbox {
   position: absolute;
   left: 16px;
@@ -58,6 +64,28 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* External session badge */
+.externalBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: #6366f1;
+  color: white;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid #4f46e5;
+}
+
+.muxIndicator {
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.3);
+  padding: 2px 4px;
+  border-radius: 4px;
+  margin-left: 4px;
 }
 
 .reviewInfo {
@@ -282,6 +310,169 @@
   border-color: #f87171;
 }
 
+.restartButton {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+.restartButton:hover {
+  background: #fcd34d;
+  border-color: #fbbf24;
+}
+
+/* Rename and Restart dialogs */
+.renameDialog,
+.confirmDialog {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.dialogContent {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  animation: slideUp 0.3s ease;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.dialogContent h3 {
+  margin: 0 0 16px 0;
+  color: var(--text-primary);
+  font-size: 20px;
+}
+
+.dialogContent p {
+  margin: 12px 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.warningText {
+  color: #ef4444 !important;
+  font-weight: 500;
+  font-size: 13px !important;
+}
+
+.renameInput {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 8px;
+  background: var(--button-bg);
+  color: var(--text-primary);
+  font-size: 14px;
+  margin-bottom: 8px;
+  transition: border-color 0.2s ease;
+}
+
+.renameInput:focus {
+  outline: none;
+  border-color: #0070f3;
+  box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.1);
+}
+
+.errorMessage {
+  display: block;
+  color: #ef4444;
+  font-size: 12px;
+  margin: 8px 0;
+}
+
+.dialogActions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  justify-content: flex-end;
+}
+
+.submitButton,
+.cancelButton,
+.dangerButton {
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.submitButton {
+  background: #0070f3;
+  color: white;
+  border-color: #0070f3;
+}
+
+.submitButton:hover:not(:disabled) {
+  background: #0051cc;
+  border-color: #0051cc;
+}
+
+.submitButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cancelButton {
+  background: var(--button-bg);
+  color: var(--button-text);
+  border: 1px solid var(--button-border);
+}
+
+.cancelButton:hover:not(:disabled) {
+  background: var(--button-bg-hover);
+  border-color: var(--button-border-hover);
+}
+
+.dangerButton {
+  background: #ef4444;
+  color: white;
+  border-color: #ef4444;
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: #dc2626;
+  border-color: #dc2626;
+}
+
+.dangerButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Dark mode support */
 @media (prefers-color-scheme: dark) {
   .card {
@@ -353,6 +544,32 @@
 
   .githubLink:hover {
     color: #79c0ff;
+  }
+
+  .restartButton {
+    background: #713f12;
+    color: #fef3c7;
+    border-color: #92400e;
+  }
+
+  .restartButton:hover {
+    background: #92400e;
+    border-color: #a16207;
+  }
+
+  .warningText {
+    color: #fca5a5 !important;
+  }
+
+  .dangerButton {
+    background: #991b1b;
+    color: #fecaca;
+    border-color: #b91c1c;
+  }
+
+  .dangerButton:hover:not(:disabled) {
+    background: #b91c1c;
+    border-color: #dc2626;
   }
 }
 

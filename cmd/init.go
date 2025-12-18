@@ -62,7 +62,25 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Category:    CategorySession,
 		Handler:     commands.ResumeCommand,
 		Contexts:    []ContextID{ContextList},
+	}).BindKey("e")
+
+	registry.Register(&Command{
+		ID:          "session.rename",
+		Name:        "Rename Session",
+		Description: "Rename the selected session",
+		Category:    CategorySession,
+		Handler:     commands.RenameSessionCommand,
+		Contexts:    []ContextID{ContextList},
 	}).BindKey("r")
+
+	registry.Register(&Command{
+		ID:          "session.restart",
+		Name:        "Restart Session",
+		Description: "Restart the selected session",
+		Category:    CategorySession,
+		Handler:     commands.RestartSessionCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("R")
 
 	registry.Register(&Command{
 		ID:          "session.claude_settings",
@@ -205,6 +223,70 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Contexts:    []ContextID{ContextGitStatus},
 	}).BindKey("P")
 
+	// VC tab commands (version control tab - Git/Jujutsu)
+	registry.Register(&Command{
+		ID:          "vc.stage_file",
+		Name:        "Stage File",
+		Description: "Stage the selected file",
+		Category:    CategoryVC,
+		Handler:     commands.VCStageFileCommand,
+		Contexts:    []ContextID{ContextVCTab},
+	}).BindKey("s")
+
+	registry.Register(&Command{
+		ID:          "vc.unstage_file",
+		Name:        "Unstage File",
+		Description: "Unstage the selected file",
+		Category:    CategoryVC,
+		Handler:     commands.VCUnstageFileCommand,
+		Contexts:    []ContextID{ContextVCTab},
+	}).BindKey("u")
+
+	registry.Register(&Command{
+		ID:          "vc.stage_all",
+		Name:        "Stage All",
+		Description: "Stage all changed files",
+		Category:    CategoryVC,
+		Handler:     commands.VCStageAllCommand,
+		Contexts:    []ContextID{ContextVCTab},
+	}).BindKey("S")
+
+	registry.Register(&Command{
+		ID:          "vc.unstage_all",
+		Name:        "Unstage All",
+		Description: "Unstage all staged files",
+		Category:    CategoryVC,
+		Handler:     commands.VCUnstageAllCommand,
+		Contexts:    []ContextID{ContextVCTab},
+	}).BindKey("U")
+
+	registry.Register(&Command{
+		ID:          "vc.open_terminal",
+		Name:        "Open Terminal",
+		Description: "Open interactive terminal for VCS operations",
+		Category:    CategoryVC,
+		Handler:     commands.VCOpenTerminalCommand,
+		Contexts:    []ContextID{ContextVCTab},
+	}).BindKey("t")
+
+	registry.Register(&Command{
+		ID:          "vc.toggle_help",
+		Name:        "Toggle Help",
+		Description: "Toggle help visibility",
+		Category:    CategoryVC,
+		Handler:     commands.VCToggleHelpCommand,
+		Contexts:    []ContextID{ContextVCTab},
+	}).BindKey("?")
+
+	registry.Register(&Command{
+		ID:          "vc.command_palette",
+		Name:        "Command Palette",
+		Description: "Open command palette for VCS operations",
+		Category:    CategoryVC,
+		Handler:     commands.VCCommandPaletteCommand,
+		Contexts:    []ContextID{ContextVCTab},
+	}).BindKey(":")
+
 	// Navigation commands
 	registry.Register(&Command{
 		ID:          "nav.up",
@@ -294,7 +376,7 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Category:    CategoryNavigation,
 		Handler:     commands.ToggleReviewQueueCommand,
 		Contexts:    []ContextID{ContextList},
-	}).BindKey("r")
+	}).BindKey("v")
 
 	// Organization commands
 	registry.Register(&Command{

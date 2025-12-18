@@ -815,3 +815,55 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 
 	return data
 }
+
+// --- New Session-based Repository methods ---
+// These are stub implementations for EntRepository.
+// The primary repository is SQLiteRepository; these methods exist for interface compliance.
+
+// GetSession retrieves a session using the new Session domain model.
+// EntRepository: Stub implementation that returns not implemented error.
+func (r *EntRepository) GetSession(ctx context.Context, title string, opts ContextOptions) (*Session, error) {
+	return nil, fmt.Errorf("GetSession not implemented for EntRepository - use SQLiteRepository")
+}
+
+// ListSessions retrieves all sessions using the new Session domain model.
+// EntRepository: Stub implementation that returns not implemented error.
+func (r *EntRepository) ListSessions(ctx context.Context, opts ContextOptions) ([]*Session, error) {
+	return nil, fmt.Errorf("ListSessions not implemented for EntRepository - use SQLiteRepository")
+}
+
+// CreateSession creates a new session from the Session domain model.
+// EntRepository: Stub implementation that returns not implemented error.
+func (r *EntRepository) CreateSession(ctx context.Context, session *Session) error {
+	return fmt.Errorf("CreateSession not implemented for EntRepository - use SQLiteRepository")
+}
+
+// UpdateSession updates an existing session using the Session domain model.
+// EntRepository: Stub implementation that returns not implemented error.
+func (r *EntRepository) UpdateSession(ctx context.Context, session *Session) error {
+	return fmt.Errorf("UpdateSession not implemented for EntRepository - use SQLiteRepository")
+}
+
+// GetWithOptions retrieves a single session with selective child data loading.
+// EntRepository: Delegates to Get with full loading.
+func (r *EntRepository) GetWithOptions(ctx context.Context, title string, options LoadOptions) (*InstanceData, error) {
+	return r.Get(ctx, title)
+}
+
+// ListWithOptions retrieves all sessions with selective child data loading.
+// EntRepository: Delegates to List with full loading.
+func (r *EntRepository) ListWithOptions(ctx context.Context, options LoadOptions) ([]InstanceData, error) {
+	return r.List(ctx)
+}
+
+// ListByStatusWithOptions retrieves sessions filtered by status with selective loading.
+// EntRepository: Delegates to ListByStatus with full loading.
+func (r *EntRepository) ListByStatusWithOptions(ctx context.Context, status Status, options LoadOptions) ([]InstanceData, error) {
+	return r.ListByStatus(ctx, status)
+}
+
+// ListByTagWithOptions retrieves sessions with a specific tag with selective loading.
+// EntRepository: Delegates to ListByTag with full loading.
+func (r *EntRepository) ListByTagWithOptions(ctx context.Context, tag string, options LoadOptions) ([]InstanceData, error) {
+	return r.ListByTag(ctx, tag)
+}

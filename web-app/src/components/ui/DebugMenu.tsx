@@ -153,6 +153,23 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
           </div>
 
           <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Debug Pages</h3>
+            <a
+              href="/debug/escape-codes"
+              className={styles.debugLink}
+              onClick={onClose}
+            >
+              <span className={styles.debugLinkIcon}>📊</span>
+              <div className={styles.debugLinkContent}>
+                <span className={styles.debugLinkName}>Escape Code Analytics</span>
+                <span className={styles.debugLinkDescription}>
+                  Track terminal escape sequences for debugging rendering issues
+                </span>
+              </div>
+            </a>
+          </div>
+
+          <div className={styles.section}>
             <h3 className={styles.sectionTitle}>Console Commands</h3>
             <div className={styles.commandList}>
               <code className={styles.command}>

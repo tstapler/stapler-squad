@@ -47,6 +47,14 @@ func TestSanitizeName(t *testing.T) {
 
 	session = NewTmuxSession("a sd f . . asdf", "program")
 	require.Equal(t, TmuxPrefix+"asdf__asdf", session.sanitizedName)
+
+	// Test colon sanitization - colons are special in tmux (session:window.pane)
+	session = NewTmuxSession("Resumed: test-session", "program")
+	require.Equal(t, TmuxPrefix+"Resumed_test-session", session.sanitizedName)
+
+	// Test combined special characters
+	session = NewTmuxSession("My: Session. Name", "program")
+	require.Equal(t, TmuxPrefix+"My_Session_Name", session.sanitizedName)
 }
 
 func TestStartTmuxSession(t *testing.T) {

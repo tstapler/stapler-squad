@@ -19,6 +19,29 @@
 #   CS_HOOKS_QUIET     - Set to "true" to suppress output
 #   CS_HOOKS_DISABLED  - Set to "true" to disable all notifications
 #
+# Metadata Sent with Notifications:
+#   Source App Context:
+#     source_app      - Application name (IntelliJ IDEA, VS Code, etc.)
+#     source_bundle   - macOS bundle ID for deep linking
+#     source_pid      - Process ID of source application
+#     source_project  - Project name from directory
+#     cwd             - Current working directory
+#
+#   Git Context (for session differentiation):
+#     git_branch      - Current git branch name
+#     git_repo        - Repository name
+#     git_remote      - Remote URL (origin)
+#     git_dirty       - "true" if uncommitted changes, "false" otherwise
+#     git_sha         - Short commit SHA
+#
+#   Terminal Context (for tab differentiation):
+#     tty             - TTY device name (e.g., "ttys003")
+#     terminal_id     - Terminal session ID (iTerm, Warp, etc.)
+#
+#   Environment Context:
+#     venv            - Python virtual environment name
+#     node_version    - Node.js version if using nvm
+#
 
 set -euo pipefail
 
@@ -55,22 +78,24 @@ json_get() {
 }
 
 # Try to determine session ID
-# Priority: CS_SESSION_ID env var > hook input > cwd-based detection
+# Priority: CS_SESSION_ID env var > CS_MUX_TMUX_SESSION > tmux session name > project name > cwd basename
+# NOTE: We do NOT use the .session_id from hook input because Claude sends its internal
+# session UUID which doesn't match Claude Squad session titles. Instead we prefer
+# identifiers that will match session titles/paths.
 get_session_id() {
-    # Check environment variable first
+    # Check environment variable first (explicit override from claude-mux)
     if [[ -n "${CS_SESSION_ID:-}" ]]; then
         echo "$CS_SESSION_ID"
         return
     fi
-    
-    # Try to get from hook input
-    local session_id=$(json_get '.session_id')
-    if [[ -n "$session_id" ]]; then
-        echo "$session_id"
+
+    # Check for mux-injected tmux session name (claude-mux integration)
+    if [[ -n "${CS_MUX_TMUX_SESSION:-}" ]]; then
+        echo "$CS_MUX_TMUX_SESSION"
         return
     fi
-    
-    # Try to detect from tmux session name
+
+    # Try to detect from tmux session name (claude-squad managed sessions)
     if [[ -n "${TMUX:-}" ]]; then
         local tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
         if [[ -n "$tmux_session" ]]; then
@@ -78,21 +103,306 @@ get_session_id() {
             return
         fi
     fi
-    
+
+    # For IDE sessions, try to get meaningful project name
+    # IntelliJ sets IDEA_INITIAL_DIRECTORY
+    if [[ -n "${IDEA_INITIAL_DIRECTORY:-}" ]]; then
+        basename "$IDEA_INITIAL_DIRECTORY"
+        return
+    fi
+
     # Fallback: use current directory name
+    # This matches how sessions are typically named/identified
     basename "$(pwd)"
 }
 
 SESSION_ID=$(get_session_id)
 
+# Detect source application (IDE/terminal) for deep linking
+# Returns: APP_NAME, APP_PID, APP_BUNDLE (macOS bundle ID)
+detect_source_app() {
+    APP_NAME=""
+    APP_PID=""
+    APP_BUNDLE=""
+    APP_PROJECT=""
+
+    # Check for IntelliJ IDEA (and JetBrains IDEs)
+    if [[ -n "${IDEA_INITIAL_DIRECTORY:-}" ]] || [[ -n "${TERMINAL_EMULATOR:-}" && "${TERMINAL_EMULATOR}" == *"JetBrains"* ]]; then
+        APP_NAME="IntelliJ IDEA"
+        APP_BUNDLE="com.jetbrains.intellij"
+        # Try to get project name from directory
+        APP_PROJECT="${IDEA_INITIAL_DIRECTORY:-$(pwd)}"
+        APP_PROJECT=$(basename "$APP_PROJECT")
+        # Find IntelliJ process - look for parent processes
+        local ppid=$$
+        while [[ $ppid -gt 1 ]]; do
+            local pname=$(ps -p "$ppid" -o comm= 2>/dev/null || echo "")
+            if [[ "$pname" == *"idea"* ]] || [[ "$pname" == *"java"* ]]; then
+                # Check if this java process is IntelliJ
+                local cmdline=$(ps -p "$ppid" -o args= 2>/dev/null || echo "")
+                if [[ "$cmdline" == *"idea"* ]] || [[ "$cmdline" == *"jetbrains"* ]]; then
+                    APP_PID="$ppid"
+                    break
+                fi
+            fi
+            ppid=$(ps -p "$ppid" -o ppid= 2>/dev/null | tr -d ' ' || echo "1")
+        done
+        return
+    fi
+
+    # Check for VS Code
+    if [[ "${TERM_PROGRAM:-}" == "vscode" ]] || [[ -n "${VSCODE_PID:-}" ]]; then
+        APP_NAME="Visual Studio Code"
+        APP_BUNDLE="com.microsoft.VSCode"
+        APP_PID="${VSCODE_PID:-}"
+        APP_PROJECT=$(basename "$(pwd)")
+        return
+    fi
+
+    # Check for Cursor (VS Code fork)
+    if [[ "${TERM_PROGRAM:-}" == "Cursor" ]] || [[ -n "${CURSOR_PID:-}" ]]; then
+        APP_NAME="Cursor"
+        APP_BUNDLE="com.todesktop.230313mzl4w4u92"
+        APP_PID="${CURSOR_PID:-}"
+        APP_PROJECT=$(basename "$(pwd)")
+        return
+    fi
+
+    # Check for iTerm2
+    if [[ "${TERM_PROGRAM:-}" == "iTerm.app" ]]; then
+        APP_NAME="iTerm2"
+        APP_BUNDLE="com.googlecode.iterm2"
+        APP_PROJECT=$(basename "$(pwd)")
+        return
+    fi
+
+    # Check for Apple Terminal
+    if [[ "${TERM_PROGRAM:-}" == "Apple_Terminal" ]]; then
+        APP_NAME="Terminal"
+        APP_BUNDLE="com.apple.Terminal"
+        APP_PROJECT=$(basename "$(pwd)")
+        return
+    fi
+
+    # Check for Warp
+    if [[ "${TERM_PROGRAM:-}" == "WarpTerminal" ]]; then
+        APP_NAME="Warp"
+        APP_BUNDLE="dev.warp.Warp-Stable"
+        APP_PROJECT=$(basename "$(pwd)")
+        return
+    fi
+
+    # Check for Alacritty
+    if [[ "${TERM_PROGRAM:-}" == "Alacritty" ]]; then
+        APP_NAME="Alacritty"
+        APP_BUNDLE="io.alacritty"
+        APP_PROJECT=$(basename "$(pwd)")
+        return
+    fi
+
+    # Check for tmux-managed session (Claude Squad)
+    if [[ -n "${TMUX:-}" ]]; then
+        APP_NAME="tmux"
+        APP_PROJECT=$(tmux display-message -p '#S' 2>/dev/null || basename "$(pwd)")
+        return
+    fi
+
+    # Fallback: try to detect from parent process
+    if [[ "$(uname)" == "Darwin" ]]; then
+        # macOS: use ps to get parent app
+        local ppid=$$
+        while [[ $ppid -gt 1 ]]; do
+            local pname=$(ps -p "$ppid" -o comm= 2>/dev/null || echo "")
+            case "$pname" in
+                *idea*|*jetbrains*)
+                    APP_NAME="IntelliJ IDEA"
+                    APP_BUNDLE="com.jetbrains.intellij"
+                    APP_PID="$ppid"
+                    break
+                    ;;
+                *Code*|*code*)
+                    APP_NAME="Visual Studio Code"
+                    APP_BUNDLE="com.microsoft.VSCode"
+                    APP_PID="$ppid"
+                    break
+                    ;;
+            esac
+            ppid=$(ps -p "$ppid" -o ppid= 2>/dev/null | tr -d ' ' || echo "1")
+        done
+    fi
+
+    # Default project name
+    if [[ -z "$APP_PROJECT" ]]; then
+        APP_PROJECT=$(basename "$(pwd)")
+    fi
+}
+
+# Detect source application
+detect_source_app
+
+# Detect git context for better session differentiation
+# Returns: GIT_BRANCH, GIT_REPO, GIT_REMOTE_URL, GIT_DIRTY
+detect_git_context() {
+    GIT_BRANCH=""
+    GIT_REPO=""
+    GIT_REMOTE_URL=""
+    GIT_DIRTY=""
+    GIT_SHORT_SHA=""
+
+    # Check if we're in a git repository
+    if ! git rev-parse --is-inside-work-tree &>/dev/null; then
+        return
+    fi
+
+    # Get current branch name
+    GIT_BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo "")
+
+    # Get repository name from remote URL or directory
+    GIT_REMOTE_URL=$(git config --get remote.origin.url 2>/dev/null || echo "")
+    if [[ -n "$GIT_REMOTE_URL" ]]; then
+        # Extract repo name from URL (handles both HTTPS and SSH)
+        GIT_REPO=$(basename -s .git "$GIT_REMOTE_URL" 2>/dev/null || echo "")
+    fi
+
+    # Fallback to directory name if no remote
+    if [[ -z "$GIT_REPO" ]]; then
+        local git_root=$(git rev-parse --show-toplevel 2>/dev/null)
+        if [[ -n "$git_root" ]]; then
+            GIT_REPO=$(basename "$git_root")
+        fi
+    fi
+
+    # Check if working directory is dirty (has uncommitted changes)
+    if ! git diff --quiet HEAD 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+        GIT_DIRTY="true"
+    else
+        GIT_DIRTY="false"
+    fi
+
+    # Get short commit SHA
+    GIT_SHORT_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "")
+}
+
+# Detect terminal context
+# Returns: TTY_NAME, TERMINAL_TITLE
+detect_terminal_context() {
+    TTY_NAME=""
+    TERMINAL_TITLE=""
+
+    # Get TTY device name (useful for differentiating terminal tabs)
+    TTY_NAME=$(tty 2>/dev/null | sed 's/\/dev\///' || echo "")
+
+    # Try to get terminal title from environment (some terminals set this)
+    # iTerm2 sets ITERM_SESSION_ID, which includes tab info
+    if [[ -n "${ITERM_SESSION_ID:-}" ]]; then
+        TERMINAL_TITLE="iTerm:${ITERM_SESSION_ID}"
+    elif [[ -n "${WARP_SESSION_ID:-}" ]]; then
+        TERMINAL_TITLE="Warp:${WARP_SESSION_ID}"
+    elif [[ -n "${TERM_SESSION_ID:-}" ]]; then
+        TERMINAL_TITLE="${TERM_SESSION_ID}"
+    fi
+}
+
+# Detect environment context
+# Returns: VENV_NAME, NODE_VERSION
+detect_env_context() {
+    VENV_NAME=""
+    NODE_VERSION=""
+
+    # Detect Python virtual environment
+    if [[ -n "${VIRTUAL_ENV:-}" ]]; then
+        VENV_NAME=$(basename "$VIRTUAL_ENV")
+    elif [[ -n "${CONDA_DEFAULT_ENV:-}" ]]; then
+        VENV_NAME="conda:${CONDA_DEFAULT_ENV}"
+    fi
+
+    # Detect Node version if nvm is in use
+    if [[ -n "${NVM_BIN:-}" ]]; then
+        NODE_VERSION=$(node --version 2>/dev/null || echo "")
+    fi
+}
+
+# Detect all contexts
+detect_git_context
+detect_terminal_context
+detect_env_context
+
 # Build notification based on hook type
+# Wrap notifications in a function that always succeeds
+# This ensures we never block Claude due to notification failures
+send_notification() {
+    local args=("$@")
+
+    # Add source app metadata if detected
+    if [[ -n "$APP_NAME" ]]; then
+        args+=(-d "source_app=$APP_NAME")
+    fi
+    if [[ -n "$APP_PID" ]]; then
+        args+=(-d "source_pid=$APP_PID")
+    fi
+    if [[ -n "$APP_BUNDLE" ]]; then
+        args+=(-d "source_bundle=$APP_BUNDLE")
+    fi
+    if [[ -n "$APP_PROJECT" ]]; then
+        args+=(-d "source_project=$APP_PROJECT")
+    fi
+    # Add current working directory for context
+    args+=(-d "cwd=$(pwd)")
+
+    # Add git context for session differentiation
+    if [[ -n "$GIT_BRANCH" ]]; then
+        args+=(-d "git_branch=$GIT_BRANCH")
+    fi
+    if [[ -n "$GIT_REPO" ]]; then
+        args+=(-d "git_repo=$GIT_REPO")
+    fi
+    if [[ -n "$GIT_REMOTE_URL" ]]; then
+        args+=(-d "git_remote=$GIT_REMOTE_URL")
+    fi
+    if [[ -n "$GIT_DIRTY" ]]; then
+        args+=(-d "git_dirty=$GIT_DIRTY")
+    fi
+    if [[ -n "$GIT_SHORT_SHA" ]]; then
+        args+=(-d "git_sha=$GIT_SHORT_SHA")
+    fi
+
+    # Add terminal context for tab differentiation
+    if [[ -n "$TTY_NAME" ]]; then
+        args+=(-d "tty=$TTY_NAME")
+    fi
+    if [[ -n "$TERMINAL_TITLE" ]]; then
+        args+=(-d "terminal_id=$TERMINAL_TITLE")
+    fi
+
+    # Add environment context
+    if [[ -n "$VENV_NAME" ]]; then
+        args+=(-d "venv=$VENV_NAME")
+    fi
+    if [[ -n "$NODE_VERSION" ]]; then
+        args+=(-d "node_version=$NODE_VERSION")
+    fi
+
+    # Add claude-mux context for deep linking and session correlation
+    if [[ -n "${CS_MUX_SOCKET_PATH:-}" ]]; then
+        args+=(-d "mux_socket=$CS_MUX_SOCKET_PATH")
+    fi
+    if [[ -n "${CS_MUX_TMUX_SESSION:-}" ]]; then
+        args+=(-d "mux_tmux_session=$CS_MUX_TMUX_SESSION")
+    fi
+    if [[ -n "${CS_MUX_PID:-}" ]]; then
+        args+=(-d "mux_pid=$CS_MUX_PID")
+    fi
+
+    "$CS_NOTIFY" "${args[@]}" 2>/dev/null || true
+}
+
 case "$HOOK_TYPE" in
     notification)
         # Notification hook - Claude is sending a notification
         TITLE=$(json_get '.notification.title // .title // "Claude Notification"')
         MESSAGE=$(json_get '.notification.message // .message // ""')
         PRIORITY=$(json_get '.notification.priority // "medium"')
-        
+
         # Map notification level to priority if present
         LEVEL=$(json_get '.notification.level // .level // ""')
         case "$LEVEL" in
@@ -101,27 +411,27 @@ case "$HOOK_TYPE" in
             info) PRIORITY="medium" ;;
             debug) PRIORITY="low" ;;
         esac
-        
-        "$CS_NOTIFY" -s "$SESSION_ID" -t "$TITLE" -m "$MESSAGE" -p "$PRIORITY" --type info -q
+
+        send_notification -s "$SESSION_ID" -t "$TITLE" -m "$MESSAGE" -p "$PRIORITY" --type info -q
         ;;
-        
+
     stop)
         # Stop hook - Claude finished a task
         REASON=$(json_get '.stop_reason // .reason // "Task completed"')
-        
+
         # Check if it was an error stop
         if echo "$REASON" | grep -qi "error\|fail\|abort"; then
-            "$CS_NOTIFY" -s "$SESSION_ID" -t "Task Failed" -m "$REASON" -p high --type task_failed -q
+            send_notification -s "$SESSION_ID" -t "Task Failed" -m "$REASON" -p high --type task_failed -q
         else
-            "$CS_NOTIFY" -s "$SESSION_ID" -t "Task Complete" -m "$REASON" -p low --type task_complete -q
+            send_notification -s "$SESSION_ID" -t "Task Complete" -m "$REASON" -p low --type task_complete -q
         fi
         ;;
-        
+
     permission)
         # PermissionRequest hook - Claude needs user approval
         TOOL=$(json_get '.tool_name // .tool // "unknown"')
         COMMAND=$(json_get '.tool_input.command // .command // ""')
-        
+
         if [[ -n "$COMMAND" ]]; then
             TITLE="Permission Required: $TOOL"
             MESSAGE="Command: $COMMAND"
@@ -129,24 +439,23 @@ case "$HOOK_TYPE" in
             TITLE="Permission Required"
             MESSAGE="Claude needs approval for: $TOOL"
         fi
-        
-        "$CS_NOTIFY" -s "$SESSION_ID" -t "$TITLE" -m "$MESSAGE" -p high --type approval_needed -q
+
+        send_notification -s "$SESSION_ID" -t "$TITLE" -m "$MESSAGE" -p high --type approval_needed -q
         ;;
-        
+
     post-tool)
         # PostToolUse hook - only notify on errors
         TOOL=$(json_get '.tool_name // .tool // "unknown"')
         ERROR=$(json_get '.tool_output.error // .error // ""')
-        
+
         # Only send notification if there was an error
         if [[ -n "$ERROR" ]]; then
-            "$CS_NOTIFY" -s "$SESSION_ID" -t "Tool Error: $TOOL" -m "$ERROR" -p high --type error -q
+            send_notification -s "$SESSION_ID" -t "Tool Error: $TOOL" -m "$ERROR" -p high --type error -q
         fi
         ;;
-        
+
     *)
         echo "Unknown hook type: $HOOK_TYPE" >&2
-        exit 0
         ;;
 esac
 

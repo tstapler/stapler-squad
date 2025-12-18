@@ -27,8 +27,8 @@ func TestNewResponseStream(t *testing.T) {
 		t.Errorf("Session name = %q, expected %q", rs.sessionName, "test-session")
 	}
 
-	if rs.bufferSize != 100 {
-		t.Errorf("Buffer size = %d, expected 100", rs.bufferSize)
+	if rs.bufferSize != 10000 {
+		t.Errorf("Buffer size = %d, expected 10000", rs.bufferSize)
 	}
 
 	if rs.IsStarted() {

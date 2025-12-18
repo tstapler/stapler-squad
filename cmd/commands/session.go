@@ -18,6 +18,8 @@ type SessionHandlers struct {
 	OnTagEditor       func() (tea.Model, tea.Cmd)
 	OnHistoryBrowser  func() (tea.Model, tea.Cmd)
 	OnConfigEditor    func() (tea.Model, tea.Cmd)
+	OnRenameSession   func() (tea.Model, tea.Cmd)
+	OnRestartSession  func() (tea.Model, tea.Cmd)
 }
 
 var sessionHandlers = &SessionHandlers{}
@@ -115,6 +117,26 @@ func HistoryBrowserCommand(ctx *interfaces.CommandContext) error {
 func ConfigEditorCommand(ctx *interfaces.CommandContext) error {
 	if sessionHandlers.OnConfigEditor != nil {
 		model, teaCmd := sessionHandlers.OnConfigEditor()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// RenameSessionCommand handles renaming a session
+func RenameSessionCommand(ctx *interfaces.CommandContext) error {
+	if sessionHandlers.OnRenameSession != nil {
+		model, teaCmd := sessionHandlers.OnRenameSession()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// RestartSessionCommand handles restarting a session
+func RestartSessionCommand(ctx *interfaces.CommandContext) error {
+	if sessionHandlers.OnRestartSession != nil {
+		model, teaCmd := sessionHandlers.OnRestartSession()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
 	}

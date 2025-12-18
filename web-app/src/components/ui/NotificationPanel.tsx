@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { formatRelativeTime } from "@/lib/utils/datetime";
+import { NotificationData } from "./NotificationToast";
 import styles from "./NotificationPanel.module.css";
 
 /**
@@ -48,6 +50,76 @@ export function NotificationPanel() {
       default:
         return "var(--color-primary, #0070f3)";
     }
+  };
+
+  const getTypeIcon = (notificationType?: NotificationData["notificationType"]) => {
+    switch (notificationType) {
+      case "approval_needed":
+        return "⚠️";
+      case "error":
+        return "❌";
+      case "warning":
+        return "⚠️";
+      case "task_complete":
+        return "✅";
+      case "task_failed":
+        return "💥";
+      case "progress":
+        return "⏳";
+      case "question":
+        return "❓";
+      case "reminder":
+        return "⏰";
+      case "system":
+        return "⚙️";
+      default:
+        return "🔔";
+    }
+  };
+
+  const getTypeLabel = (notificationType?: NotificationData["notificationType"]) => {
+    switch (notificationType) {
+      case "approval_needed":
+        return "Approval Needed";
+      case "error":
+        return "Error";
+      case "warning":
+        return "Warning";
+      case "task_complete":
+        return "Task Complete";
+      case "task_failed":
+        return "Task Failed";
+      case "progress":
+        return "Progress";
+      case "question":
+        return "Question";
+      case "reminder":
+        return "Reminder";
+      case "system":
+        return "System";
+      case "custom":
+        return "Custom";
+      default:
+        return "Info";
+    }
+  };
+
+  // Build context string for notification (project/directory via app)
+  const getContextString = (notification: NotificationData) => {
+    const projectName = notification.sourceProject;
+    const workingDirName = notification.sourceWorkingDir
+      ? notification.sourceWorkingDir.split('/').pop()
+      : null;
+    const contextName = projectName || workingDirName;
+
+    const parts: string[] = [];
+    if (contextName) {
+      parts.push(contextName);
+    }
+    if (notification.sourceApp) {
+      parts.push(`via ${notification.sourceApp}`);
+    }
+    return parts.join(' ');
   };
 
 
@@ -116,55 +188,90 @@ export function NotificationPanel() {
             </div>
           ) : (
             <div className={styles.list}>
-              {notificationHistory.map((notification) => (
-                <div
-                  key={notification.id}
-                  className={`${styles.item} ${notification.isRead ? styles.read : styles.unread}`}
-                  style={
-                    {
-                      "--priority-color": getPriorityColor(notification.priority),
-                    } as React.CSSProperties
-                  }
-                >
-                  <div className={styles.itemHeader}>
-                    <div className={styles.itemTitle}>
-                      {!notification.isRead && (
-                        <span className={styles.unreadDot} aria-label="Unread" />
-                      )}
-                      <strong>{notification.sessionName}</strong>
-                    </div>
-                    <button
-                      className={styles.removeButton}
-                      onClick={() => removeFromHistory(notification.id)}
-                      aria-label="Remove notification"
-                    >
-                      ✕
-                    </button>
-                  </div>
+              {notificationHistory.map((notification) => {
+                const displayTitle = notification.title || notification.sessionName;
+                const contextString = getContextString(notification);
+                const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
 
-                  <p className={styles.itemMessage}>{notification.message}</p>
-
-                  <div className={styles.itemFooter}>
-                    <span className={styles.timestamp}>
-                      {formatRelativeTime(notification.timestamp)}
-                    </span>
-                    {notification.onView && (
+                return (
+                  <div
+                    key={notification.id}
+                    className={`${styles.item} ${notification.isRead ? styles.read : styles.unread}`}
+                    style={
+                      {
+                        "--priority-color": getPriorityColor(notification.priority),
+                      } as React.CSSProperties
+                    }
+                  >
+                    <div className={styles.itemHeader}>
+                      <div className={styles.itemTitle}>
+                        {!notification.isRead && (
+                          <span className={styles.unreadDot} aria-label="Unread" />
+                        )}
+                        <span className={styles.typeIcon}>{getTypeIcon(notification.notificationType)}</span>
+                        <strong>{displayTitle}</strong>
+                        <span className={styles.typeLabel} style={{ backgroundColor: getPriorityColor(notification.priority) }}>
+                          {getTypeLabel(notification.notificationType)}
+                        </span>
+                      </div>
                       <button
-                        className={styles.viewButton}
-                        onClick={() =>
-                          handleNotificationClick(
-                            notification.id,
-                            notification.onView,
-                            notification.sessionId
-                          )
-                        }
+                        className={styles.removeButton}
+                        onClick={() => removeFromHistory(notification.id)}
+                        aria-label="Remove notification"
                       >
-                        View Session
+                        ✕
                       </button>
+                    </div>
+
+                    {contextString && (
+                      <div className={styles.itemContext}>
+                        {contextString}
+                      </div>
                     )}
+
+                    <p className={styles.itemMessage}>{notification.message}</p>
+
+                    {notification.sourceWorkingDir && (
+                      <div className={styles.itemWorkingDir} title={notification.sourceWorkingDir}>
+                        📁 {notification.sourceWorkingDir.split('/').slice(-2).join('/')}
+                      </div>
+                    )}
+
+                    <div className={styles.itemFooter}>
+                      <span className={styles.timestamp}>
+                        {formatRelativeTime(notification.timestamp)}
+                      </span>
+                      <div className={styles.itemActions}>
+                        {hasSourceApp && notification.onFocusWindow && (
+                          <button
+                            className={styles.focusButton}
+                            onClick={notification.onFocusWindow}
+                            title="Focus the source application window"
+                          >
+                            🔗 Focus
+                          </button>
+                        )}
+                        {notification.sessionId && (
+                          <Link
+                            href={`/?session=${encodeURIComponent(notification.sessionId)}`}
+                            className={styles.viewButton}
+                            onClick={() => {
+                              handleNotificationClick(
+                                notification.id,
+                                notification.onView,
+                                notification.sessionId
+                              );
+                              togglePanel(); // Close panel after clicking
+                            }}
+                          >
+                            View Session
+                          </Link>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

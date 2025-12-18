@@ -52,7 +52,7 @@ func TestPromptDetection(t *testing.T) {
 		{
 			name:     "Claude approval prompt - proceed dialog",
 			program:  ProgramClaude,
-			content:  "I'll help you with this task.\n\nDo you want to proceed?\n  1. Yes\n  2. No",
+			content:  "I'll help you with this task.\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No",
 			expected: true,
 		},
 		{
@@ -64,13 +64,13 @@ func TestPromptDetection(t *testing.T) {
 		{
 			name:     "Claude approval prompt - file write permission",
 			program:  ProgramClaude,
-			content:  "I need to modify some files.\n\nYes, allow writing to the project directory\n\nShall I proceed?",
+			content:  "I need to modify some files.\n\n❯ 1. Yes\n  2. Yes, allow writing to the project directory\n  3. No, and tell Claude what to do differently",
 			expected: true,
 		},
 		{
 			name:     "Claude approval prompt - generic allow once",
 			program:  ProgramClaude,
-			content:  "This operation requires permissions.\n\nYes, allow once\n\nContinue?",
+			content:  "This operation requires permissions.\n\n❯ 1. Yes, allow once\n  2. Yes, allow all edits during this session\n  3. No, and tell Claude what to do differently",
 			expected: true,
 		},
 

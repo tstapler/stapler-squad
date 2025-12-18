@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo, useEffect } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
 import { BulkActions } from "./BulkActions";
@@ -15,6 +15,8 @@ interface SessionListProps {
   onPauseSession?: (sessionId: string) => void;
   onResumeSession?: (sessionId: string) => void;
   onDuplicateSession?: (sessionId: string) => void;
+  onRenameSession?: (sessionId: string, newTitle: string) => Promise<boolean>;
+  onRestartSession?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
 }
 
@@ -56,6 +58,8 @@ export function SessionList({
   onPauseSession,
   onResumeSession,
   onDuplicateSession,
+  onRenameSession,
+  onRestartSession,
   onUpdateTags,
 }: SessionListProps) {
   // Initialize state from local storage
@@ -243,10 +247,6 @@ export function SessionList({
             >
               {selectMode ? "Cancel" : "Select"}
             </button>
-            <Link href="/sessions/new" className={styles.newSessionButton}>
-              <span className={styles.newSessionIcon}>+</span>
-              New Session
-            </Link>
           </div>
         </div>
 
@@ -372,10 +372,10 @@ export function SessionList({
               <p className={styles.emptyHint}>
                 Get started by creating your first AI coding session
               </p>
-              <Link href="/sessions/new" className={styles.newSessionButtonLarge}>
+              <AppLink href="/sessions/new" className={styles.newSessionButtonLarge}>
                 <span className={styles.newSessionIcon}>+</span>
                 Create Your First Session
-              </Link>
+              </AppLink>
             </div>
           )}
         </div>
@@ -396,6 +396,8 @@ export function SessionList({
                     onPause={() => onPauseSession?.(session.id)}
                     onResume={() => onResumeSession?.(session.id)}
                     onDuplicate={() => onDuplicateSession?.(session.id)}
+                    onRename={onRenameSession}
+                    onRestart={onRestartSession}
                     onUpdateTags={onUpdateTags}
                     selectMode={selectMode}
                     isSelected={selectedSessions.has(session.id)}

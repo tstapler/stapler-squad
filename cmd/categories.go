@@ -4,6 +4,7 @@ package cmd
 const (
 	CategorySession      Category = "Session Management"
 	CategoryGit          Category = "Git Integration"
+	CategoryVC           Category = "Version Control" // VC tab operations (Git/Jujutsu)
 	CategoryNavigation   Category = "Navigation"
 	CategoryOrganization Category = "Organization"
 	CategorySystem       Category = "System"
@@ -15,6 +16,7 @@ const (
 var CategoryOrder = []Category{
 	CategorySession,
 	CategoryGit,
+	CategoryVC,
 	CategoryOrganization,
 	CategoryNavigation,
 	CategorySystem,

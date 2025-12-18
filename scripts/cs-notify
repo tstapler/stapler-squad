@@ -18,7 +18,7 @@
 #   --type              Notification type (see below)
 #   --priority, -p      Priority: urgent, high, medium, low (default: medium)
 #   --metadata, -d      Key=value pairs (can be specified multiple times)
-#   --port              Server port (default: 8484)
+#   --port              Server port (default: 8543)
 #   --quiet, -q         Suppress output on success
 #   --help, -h          Show this help message
 #
@@ -58,7 +58,7 @@
 set -euo pipefail
 
 # Default values
-PORT="${CS_SERVER_PORT:-8484}"
+PORT="${CS_SERVER_PORT:-8543}"
 SESSION_ID="${CS_SESSION_ID:-}"
 TITLE=""
 MESSAGE=""
@@ -196,14 +196,15 @@ response=$(curl -s -w "\n%{http_code}" \
     -X POST \
     -H "Content-Type: application/json" \
     -d "$request_json" \
-    "http://localhost:$PORT/session.v1.SessionService/SendNotification" \
+    "http://localhost:$PORT/api/session.v1.SessionService/SendNotification" \
     2>&1) || {
     error "Failed to connect to server at localhost:$PORT. Is Claude Squad running?"
 }
 
 # Split response into body and status code
 http_code=$(echo "$response" | tail -n 1)
-body=$(echo "$response" | head -n -1)
+# Use sed to remove last line (cross-platform, macOS head doesn't support -n -1)
+body=$(echo "$response" | sed '$d')
 
 # Check response
 if [[ "$http_code" == "200" ]]; then

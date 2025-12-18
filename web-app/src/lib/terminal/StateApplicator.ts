@@ -18,8 +18,9 @@
  */
 
 import { Terminal } from '@xterm/xterm';
-import { TerminalState, TerminalLine, CursorPosition, TerminalDimensions } from '@/gen/session/v1/events_pb';
+import { TerminalState, TerminalLine, CursorPosition, TerminalDimensions, TerminalDiff, EchoAck } from '@/gen/session/v1/events_pb';
 import { positionAndClearLine, moveCursorTo, CURSOR_SHOW, CURSOR_HIDE, CLEAR_SCREEN, CLEAR_SCREEN_AND_SCROLLBACK, CURSOR_HOME } from './AnsiCodes';
+import type { EchoOverlay } from './EchoOverlay';
 
 /**
  * StateApplicator applies complete terminal states to xterm.js terminal.
@@ -38,11 +39,38 @@ export class StateApplicator {
 
   // RAF batching: Group rapid updates into single frame (60fps target)
   private pendingState: TerminalState | null = null;
+  private pendingDiff: TerminalDiff | null = null;
   private rafId: number | null = null;
   private lastFrameTime: number = 0;
 
+  // Status line buffering for Claude's rapid updates
+  private statusLineBuffer: Map<number, { content: string; timestamp: number }> = new Map();
+  private statusLineDebounceTimer: number | null = null;
+
+  // SSP: Optional echo overlay for predictive echo acknowledgment
+  private echoOverlay: EchoOverlay | null = null;
+
+  // SSP: Callback for echo acknowledgment (allows external handling)
+  private onEchoAck: ((ack: EchoAck) => void) | null = null;
+
   constructor(terminal: Terminal) {
     this.terminal = terminal;
+  }
+
+  /**
+   * Set the echo overlay for predictive echo acknowledgment.
+   * The EchoOverlay will receive clearAcked() calls when echo acks arrive.
+   */
+  setEchoOverlay(overlay: EchoOverlay | null): void {
+    this.echoOverlay = overlay;
+  }
+
+  /**
+   * Set a callback for echo acknowledgment events.
+   * Useful for external RTT tracking or statistics.
+   */
+  setOnEchoAck(callback: ((ack: EchoAck) => void) | null): void {
+    this.onEchoAck = callback;
   }
 
   /**
@@ -90,6 +118,160 @@ export class StateApplicator {
     }
 
     return true;
+  }
+
+  /**
+   * Apply a terminal diff (SSP mode - Mosh-style minimal ANSI sequences).
+   * This is the core of the State Synchronization Protocol optimization:
+   * - Server generates minimal ANSI escape sequences to transform old→new state
+   * - Client writes these directly to terminal (bypassing line-by-line updates)
+   * - Dramatically reduces bandwidth vs full state updates
+   *
+   * @param diff - The terminal diff containing ANSI escape sequences
+   * @returns true if applied successfully, false if sequence mismatch (needs resync)
+   */
+  applyDiff(diff: TerminalDiff): boolean {
+    const fromSeq = diff.fromSequence;
+    const toSeq = diff.toSequence;
+
+    // Sequence validation (unless it's a full redraw)
+    if (!diff.fullRedraw) {
+      // For incremental diffs, verify sequence continuity
+      if (fromSeq !== this.currentSequence) {
+        console.warn(
+          `[StateApplicator] Diff sequence mismatch: ` +
+          `diff.fromSequence=${fromSeq}, currentSequence=${this.currentSequence}. ` +
+          `Requesting resync.`
+        );
+        return false; // Caller should request full resync
+      }
+    } else {
+      // Full redraw - no sequence requirement, but log if there's a gap
+      if (fromSeq !== BigInt(0) && fromSeq !== this.currentSequence) {
+        console.log(
+          `[StateApplicator] Full redraw with sequence gap: ` +
+          `expected=${this.currentSequence}, received from=${fromSeq}. Accepting (full redraw is self-contained).`
+        );
+      }
+    }
+
+    console.log(
+      `[StateApplicator] Queuing diff for RAF batch: ` +
+      `seq ${fromSeq}→${toSeq}, fullRedraw=${diff.fullRedraw}, ` +
+      `${diff.changedCells} cells changed, ${diff.unchangedCells} unchanged`
+    );
+
+    // RAF batching: Buffer diff and apply on next animation frame
+    this.pendingDiff = diff;
+    this.pendingState = null; // Clear any pending state (diff takes priority)
+
+    if (this.rafId === null) {
+      this.rafId = requestAnimationFrame(this.applyPendingUpdates.bind(this));
+    }
+
+    return true;
+  }
+
+  /**
+   * Apply pending updates on animation frame (unified RAF callback).
+   * Handles both state and diff updates with RAF batching.
+   */
+  private applyPendingUpdates(timestamp: number): void {
+    this.rafId = null;
+
+    // Process diff if pending (takes priority over state)
+    if (this.pendingDiff) {
+      this.applyDiffImmediate(this.pendingDiff, timestamp);
+      this.pendingDiff = null;
+      return;
+    }
+
+    // Process state if pending
+    if (this.pendingState) {
+      this.applyPendingState(timestamp);
+      return;
+    }
+  }
+
+  /**
+   * Immediately apply a diff (called from RAF callback).
+   */
+  private applyDiffImmediate(diff: TerminalDiff, timestamp: number): void {
+    const frameDelta = timestamp - this.lastFrameTime;
+    this.lastFrameTime = timestamp;
+
+    this.isApplyingState = true;
+
+    try {
+      // Handle echo acknowledgment if present (piggy-backed on diff)
+      if (diff.echoAck) {
+        this.processEchoAck(diff.echoAck);
+      }
+
+      // For full redraw, clear line cache since we're getting complete new state
+      if (diff.fullRedraw) {
+        console.log('[StateApplicator] Full redraw - clearing line cache');
+        this.previousLines.clear();
+      }
+
+      // Write diff bytes directly to terminal
+      // These are pre-computed ANSI escape sequences from the server
+      if (diff.diffBytes && diff.diffBytes.length > 0) {
+        const diffStr = this.textDecoder.decode(diff.diffBytes);
+        this.terminal.write(diffStr);
+
+        console.log(
+          `[StateApplicator] Applied diff ${diff.fromSequence}→${diff.toSequence} ` +
+          `(${diff.diffBytes.length} bytes, ${diff.changedCells} cells, ` +
+          `frame delta: ${frameDelta.toFixed(2)}ms)`
+        );
+      } else {
+        console.log(
+          `[StateApplicator] Applied empty diff ${diff.fromSequence}→${diff.toSequence} ` +
+          `(no changes, frame delta: ${frameDelta.toFixed(2)}ms)`
+        );
+      }
+
+      // Log compression statistics if available
+      if (diff.compression) {
+        const ratio = diff.compression.compressionRatio;
+        const algorithm = diff.compression.algorithm;
+        console.log(
+          `[StateApplicator] Diff with ${algorithm} compression ` +
+          `(ratio: ${(ratio * 100).toFixed(1)}%, ` +
+          `${diff.compression.uncompressedSize} → ${diff.compression.compressedSize} bytes)`
+        );
+      }
+
+      // Update sequence tracking
+      this.currentSequence = diff.toSequence;
+
+    } finally {
+      this.isApplyingState = false;
+    }
+  }
+
+  /**
+   * Process an echo acknowledgment.
+   * Clears predictive echoes and notifies external handlers.
+   */
+  private processEchoAck(ack: EchoAck): void {
+    const echoNum = ack.echoAckNum;
+
+    console.log(
+      `[StateApplicator] Processing echo ack: echoNum=${echoNum}, ` +
+      `serverTimestamp=${ack.serverTimestampMs}`
+    );
+
+    // Clear acknowledged predictions in the echo overlay
+    if (this.echoOverlay) {
+      this.echoOverlay.clearAcked(echoNum);
+    }
+
+    // Notify external handler (for RTT tracking, statistics, etc.)
+    if (this.onEchoAck) {
+      this.onEchoAck(ack);
+    }
   }
 
   /**
@@ -165,6 +347,58 @@ export class StateApplicator {
   }
 
   /**
+   * Check if a line appears to be a Claude status line
+   */
+  private isClaudeStatusLine(content: string): boolean {
+    return content.includes('esc to interrupt') ||
+           (content.includes('↑') && content.includes('tokens')) ||
+           /·\s+\w+ing/.test(content);
+  }
+
+  /**
+   * Check if a status line appears to be complete
+   */
+  private isLineComplete(content: string): boolean {
+    if (content.includes('esc to interrupt')) {
+      return /tokens\)?\s*$/.test(content);
+    }
+    return !content.endsWith('...');
+  }
+
+  /**
+   * Schedule a debounced flush of buffered status lines
+   */
+  private scheduleStatusLineFlush(): void {
+    if (this.statusLineDebounceTimer) {
+      clearTimeout(this.statusLineDebounceTimer);
+    }
+
+    this.statusLineDebounceTimer = window.setTimeout(() => {
+      this.flushStatusLines();
+    }, 100);
+  }
+
+  /**
+   * Flush all buffered status lines to the terminal
+   */
+  private flushStatusLines(): void {
+    if (this.statusLineBuffer.size === 0) return;
+
+    let writeBuffer = '';
+    for (const [lineNum, state] of this.statusLineBuffer) {
+      writeBuffer += positionAndClearLine(lineNum + 1) + state.content;
+      this.previousLines.set(lineNum, state.content);
+    }
+
+    if (writeBuffer.length > 0) {
+      this.terminal.write(CURSOR_HIDE + writeBuffer + CURSOR_SHOW);
+    }
+
+    this.statusLineBuffer.clear();
+    this.statusLineDebounceTimer = null;
+  }
+
+  /**
    * Apply incremental terminal state update (only changed lines).
    * This is the key optimization that eliminates flickering:
    * - Compares new state with previous rendered state
@@ -219,7 +453,21 @@ export class StateApplicator {
 
       // Only update if line changed
       if (lineText !== previousLine) {
-        // Position at row (1-indexed), clear line, then append content to buffer
+        // Check if this is a Claude status line that might be incomplete
+        if (this.isClaudeStatusLine(lineText)) {
+          this.statusLineBuffer.set(i, {
+            content: lineText,
+            timestamp: Date.now()
+          });
+
+          // Only update immediately if the line appears complete
+          if (!this.isLineComplete(lineText)) {
+            this.scheduleStatusLineFlush();
+            continue; // Skip immediate update for incomplete status lines
+          }
+        }
+
+        // Regular line update or complete status line
         writeBuffer += positionAndClearLine(i + 1) + lineText;
         this.previousLines.set(i, lineText);
         changedLines++;
@@ -360,12 +608,13 @@ export class StateApplicator {
     this.previousLines.clear();
     this.previousDimensions = null;
 
-    // Cancel pending RAF and clear pending state
+    // Cancel pending RAF and clear pending state/diff
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
     this.pendingState = null;
+    this.pendingDiff = null;
     this.lastFrameTime = 0;
 
     console.log('[StateApplicator] Sequence tracking and caches reset to initial state');

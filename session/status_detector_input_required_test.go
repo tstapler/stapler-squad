@@ -1,11 +1,10 @@
 package session
 
 import (
-	"strings"
 	"testing"
 )
 
-// TestStatusDetector_DetectInputRequired verifies that explicit user input prompts are detected correctly.
+// TestStatusDetector_DetectInputRequired verifies that Claude Code's numbered selection prompts are detected.
 func TestStatusDetector_DetectInputRequired(t *testing.T) {
 	detector := NewStatusDetector()
 
@@ -14,64 +13,24 @@ func TestStatusDetector_DetectInputRequired(t *testing.T) {
 		output string
 	}{
 		{
-			name:   "explicit_input_prompt - enter",
-			output: "Please enter your name:",
+			name:   "numbered_option_with_arrow_selector",
+			output: " ❯ 1. Yes",
 		},
 		{
-			name:   "explicit_input_prompt - type",
-			output: "Type the API key:",
+			name:   "numbered_option_with_text",
+			output: " ❯ 1. Type here to tell Claude what to do differently",
 		},
 		{
-			name:   "explicit_input_prompt - provide",
-			output: "Provide your email address:",
+			name:   "ascii_arrow_selector",
+			output: " > 1. Yes",
 		},
 		{
-			name:   "explicit_input_prompt - input",
-			output: "Input the configuration value:",
+			name:   "three_options_with_selector",
+			output: " ❯ 1. Option A\n   2. Option B\n   3. Option C",
 		},
 		{
-			name:   "explicit_input_prompt - specify",
-			output: "Specify the port number:",
-		},
-		{
-			name:   "question_prompt - what",
-			output: "What database should I use?",
-		},
-		{
-			name:   "question_prompt - which",
-			output: "Which branch should I merge?",
-		},
-		{
-			name:   "question_prompt - how",
-			output: "How should I proceed?",
-		},
-		{
-			name:   "question_prompt - when",
-			output: "When should this run?",
-		},
-		{
-			name:   "question_prompt - where",
-			output: "Where should I save the file?",
-		},
-		{
-			name:   "please_provide - provide",
-			output: "Please provide the authentication token",
-		},
-		{
-			name:   "please_provide - enter",
-			output: "Please enter your credentials",
-		},
-		{
-			name:   "please_provide - type",
-			output: "Please type your password",
-		},
-		{
-			name:   "please_provide - specify",
-			output: "Please specify the configuration",
-		},
-		{
-			name:   "please_provide - give",
-			output: "Please give me the API endpoint",
+			name:   "question_with_selector",
+			output: "Which option?\n ❯ 1. First\n   2. Second",
 		},
 	}
 
@@ -85,29 +44,19 @@ func TestStatusDetector_DetectInputRequired(t *testing.T) {
 	}
 }
 
-// TestStatusDetector_DetectInputRequired_WithContext verifies context includes matched pattern.
+// TestStatusDetector_DetectInputRequired_WithContext verifies context includes matched pattern description.
 func TestStatusDetector_DetectInputRequired_WithContext(t *testing.T) {
 	detector := NewStatusDetector()
 
 	tests := []struct {
-		name            string
-		output          string
-		expectedPattern string
+		name                string
+		output              string
+		expectedDescription string
 	}{
 		{
-			name:            "explicit_input_prompt",
-			output:          "Please enter your username:",
-			expectedPattern: "explicit_input_prompt",
-		},
-		{
-			name:            "question_prompt",
-			output:          "Which file should I modify?",
-			expectedPattern: "question_prompt",
-		},
-		{
-			name:            "please_provide",
-			output:          "Please provide the configuration file path",
-			expectedPattern: "please_provide",
+			name:                "numbered_option_selector",
+			output:              " ❯ 1. Yes",
+			expectedDescription: "Selection prompt with numbered options",
 		},
 	}
 
@@ -120,35 +69,31 @@ func TestStatusDetector_DetectInputRequired_WithContext(t *testing.T) {
 			if context == "" {
 				t.Errorf("Expected non-empty context, got empty string")
 			}
-			// Context should mention the pattern name
-			if !strings.Contains(context, tt.expectedPattern) {
-				t.Errorf("Expected context to contain pattern name '%s', got: %s", tt.expectedPattern, context)
+			// Context should contain the pattern description
+			if context != tt.expectedDescription {
+				t.Errorf("Expected context '%s', got: %s", tt.expectedDescription, context)
 			}
 		})
 	}
 }
 
-// TestStatusDetector_InputRequired_CaseInsensitive verifies patterns are case-insensitive.
+// TestStatusDetector_InputRequired_CaseInsensitive verifies patterns work regardless of surrounding text.
 func TestStatusDetector_InputRequired_CaseInsensitive(t *testing.T) {
 	detector := NewStatusDetector()
 
 	tests := []string{
-		"ENTER YOUR NAME:",
-		"Enter Your Name:",
-		"enter your name:",
-		"WHAT DATABASE SHOULD I USE?",
-		"What Database Should I Use?",
-		"what database should i use?",
-		"PLEASE PROVIDE THE TOKEN",
-		"Please Provide The Token",
-		"please provide the token",
+		" ❯ 1. YES",
+		" ❯ 1. yes",
+		" ❯ 1. Yes",
+		" > 1. YES",
+		" > 1. yes",
 	}
 
 	for _, output := range tests {
 		t.Run(output, func(t *testing.T) {
 			status := detector.Detect([]byte(output))
 			if status != StatusInputRequired {
-				t.Errorf("Expected StatusInputRequired for case-insensitive match: %s, got %s", output, status.String())
+				t.Errorf("Expected StatusInputRequired for: %s, got %s", output, status.String())
 			}
 		})
 	}
@@ -162,6 +107,7 @@ func TestStatusDetector_InputRequired_NoFalsePositives(t *testing.T) {
 		name   string
 		output string
 	}{
+		// Generic text that should NOT match
 		{
 			name:   "narrative_text_with_question",
 			output: "I was wondering what you think about this approach?",
@@ -181,6 +127,106 @@ func TestStatusDetector_InputRequired_NoFalsePositives(t *testing.T) {
 		{
 			name:   "completion_message",
 			output: "Task completed successfully",
+		},
+		// Previously problematic false positives
+		{
+			name:   "content_type_header",
+			output: "Content type: markdown",
+		},
+		{
+			name:   "file_type_metadata",
+			output: "File type: go",
+		},
+		{
+			name:   "input_type_declaration",
+			output: "Input type: text",
+		},
+		{
+			name:   "session_type_info",
+			output: "Session type: worktree",
+		},
+		{
+			name:   "mime_type",
+			output: "mime-type: application/json",
+		},
+		{
+			name:   "http_content_type",
+			output: "Content-Type: text/html",
+		},
+		{
+			name:   "type_colon_error",
+			output: "type: error",
+		},
+		{
+			name:   "task_type_analysis",
+			output: "Task type: analysis",
+		},
+		{
+			name:   "data_type_colon",
+			output: "data type:",
+		},
+		{
+			name:   "input_file_log",
+			output: "Input file: test.go",
+		},
+		{
+			name:   "input_path_log",
+			output: "Input path: /home/user",
+		},
+		{
+			name:   "enter_key_pressed",
+			output: "enter: pressed",
+		},
+		{
+			name:   "provide_context",
+			output: "provide context:",
+		},
+		{
+			name:   "log_style_input",
+			output: "-- Input: /path/to/file",
+		},
+		{
+			name:   "agent_task_description",
+			output: "project-coordinator(Analyze TODO.md and recommend next step)",
+		},
+		{
+			name:   "slash_command_running",
+			output: "/plan:next-step is running...",
+		},
+		{
+			name:   "subagent_type_declaration",
+			output: "subagent_type=Explore",
+		},
+		// Generic question text (not numbered options)
+		{
+			name:   "question_what",
+			output: "What database should I use?",
+		},
+		{
+			name:   "question_which",
+			output: "Which branch should I merge?",
+		},
+		{
+			name:   "question_how",
+			output: "How should I proceed?",
+		},
+		// Numbered lists that are NOT selection prompts
+		{
+			name:   "numbered_list_no_selector",
+			output: "1. First item\n2. Second item",
+		},
+		{
+			name:   "numbered_list_with_period",
+			output: "Here are the steps:\n1. Do this\n2. Do that",
+		},
+		// Enter/type prompts without numbered options
+		{
+			name:   "enter_prompt_no_options",
+			output: "Please enter your name:",
+		},
+		{
+			name:   "type_prompt_no_options",
+			output: "Type the API key:",
 		},
 	}
 
@@ -206,25 +252,25 @@ func TestStatusDetector_InputRequired_Priority(t *testing.T) {
 	}{
 		{
 			name:           "error_overrides_input_required",
-			output:         "Error: connection failed. Please enter retry count:",
+			output:         "Error: connection failed.\n ❯ 1. Retry",
 			expectedStatus: StatusError,
 			description:    "Error has higher priority than InputRequired",
 		},
 		{
 			name:           "approval_overrides_input_required",
-			output:         "Yes, allow reading. Please provide file path:",
+			output:         "Yes, allow reading\n ❯ 1. Continue",
 			expectedStatus: StatusNeedsApproval,
 			description:    "NeedsApproval has higher priority than InputRequired",
 		},
 		{
 			name:           "input_required_overrides_active",
-			output:         "(esc to interrupt) Please enter your choice:",
+			output:         "(esc to interrupt)\n ❯ 1. Yes",
 			expectedStatus: StatusInputRequired,
 			description:    "InputRequired has higher priority than Active",
 		},
 		{
 			name:           "input_required_overrides_idle",
-			output:         "— INSERT — Please type your response:",
+			output:         "— INSERT —\n ❯ 1. Continue",
 			expectedStatus: StatusInputRequired,
 			description:    "InputRequired has higher priority than Idle",
 		},
@@ -249,7 +295,7 @@ func TestStatusDetector_InputRequired_GetPatternNames(t *testing.T) {
 		t.Error("Expected non-empty pattern names for StatusInputRequired")
 	}
 
-	expectedPatterns := []string{"explicit_input_prompt", "question_prompt", "please_provide"}
+	expectedPatterns := []string{"numbered_option_selector"}
 	for _, expected := range expectedPatterns {
 		found := false
 		for _, name := range names {
@@ -268,14 +314,19 @@ func TestStatusDetector_InputRequired_GetPatternNames(t *testing.T) {
 func TestStatusDetector_InputRequired_HasPattern(t *testing.T) {
 	detector := NewStatusDetector()
 
-	if !detector.HasPattern(StatusInputRequired, "explicit_input_prompt") {
-		t.Error("Expected 'explicit_input_prompt' pattern to exist for StatusInputRequired")
+	if !detector.HasPattern(StatusInputRequired, "numbered_option_selector") {
+		t.Error("Expected 'numbered_option_selector' pattern to exist for StatusInputRequired")
 	}
-	if !detector.HasPattern(StatusInputRequired, "question_prompt") {
-		t.Error("Expected 'question_prompt' pattern to exist for StatusInputRequired")
+
+	// Old patterns should NOT exist
+	if detector.HasPattern(StatusInputRequired, "explicit_input_prompt") {
+		t.Error("Old 'explicit_input_prompt' pattern should not exist")
 	}
-	if !detector.HasPattern(StatusInputRequired, "please_provide") {
-		t.Error("Expected 'please_provide' pattern to exist for StatusInputRequired")
+	if detector.HasPattern(StatusInputRequired, "question_prompt") {
+		t.Error("Old 'question_prompt' pattern should not exist")
+	}
+	if detector.HasPattern(StatusInputRequired, "please_provide") {
+		t.Error("Old 'please_provide' pattern should not exist")
 	}
 
 	if detector.HasPattern(StatusInputRequired, "nonexistent_pattern") {

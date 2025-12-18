@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Session, SessionStatus, ReviewItem } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, ReviewItem, InstanceType } from "@/gen/session/v1/types_pb";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { GitHubBadge } from "./GitHubBadge";
 import { TagEditor } from "./TagEditor";
@@ -14,6 +14,8 @@ interface SessionCardProps {
   onPause?: () => void;
   onResume?: () => void;
   onDuplicate?: () => void;
+  onRename?: (sessionId: string, newTitle: string) => Promise<boolean>;
+  onRestart?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   selectMode?: boolean;
   isSelected?: boolean;
@@ -28,6 +30,8 @@ export function SessionCard({
   onPause,
   onResume,
   onDuplicate,
+  onRename,
+  onRestart,
   onUpdateTags,
   selectMode = false,
   isSelected = false,
@@ -35,6 +39,12 @@ export function SessionCard({
   reviewItem,
 }: SessionCardProps) {
   const [showTagEditor, setShowTagEditor] = useState(false);
+  const [showRenameDialog, setShowRenameDialog] = useState(false);
+  const [newTitle, setNewTitle] = useState(session.title);
+  const [showRestartConfirm, setShowRestartConfirm] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
+  const [renameError, setRenameError] = useState("");
   const getStatusColor = (status: SessionStatus): string => {
     switch (status) {
       case SessionStatus.RUNNING:
@@ -88,6 +98,9 @@ export function SessionCard({
   };
 
   const isPaused = session.status === SessionStatus.PAUSED;
+  const isExternal = session.instanceType === InstanceType.EXTERNAL;
+  const sourceTerminal = session.externalMetadata?.sourceTerminal || "External";
+  const muxEnabled = session.externalMetadata?.muxEnabled || false;
 
   const handleCardClick = (e: React.MouseEvent) => {
     if (selectMode && onToggleSelect) {
@@ -133,6 +146,75 @@ export function SessionCard({
     setShowTagEditor(false);
   };
 
+  const handleRenameClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setNewTitle(session.title);
+    setRenameError("");
+    setShowRenameDialog(true);
+  };
+
+  const handleRenameSubmit = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    // Validation
+    if (!newTitle.trim()) {
+      setRenameError("Title cannot be empty");
+      return;
+    }
+
+    if (newTitle === session.title) {
+      setShowRenameDialog(false);
+      return;
+    }
+
+    setIsRenaming(true);
+    setRenameError("");
+
+    try {
+      const success = await onRename?.(session.id, newTitle.trim());
+      if (success) {
+        setShowRenameDialog(false);
+      } else {
+        setRenameError("Failed to rename session");
+      }
+    } catch (error) {
+      setRenameError(error instanceof Error ? error.message : "Failed to rename session");
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleRenameCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowRenameDialog(false);
+    setNewTitle(session.title);
+    setRenameError("");
+  };
+
+  const handleRestartClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowRestartConfirm(true);
+  };
+
+  const handleRestartConfirm = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsRestarting(true);
+
+    try {
+      await onRestart?.(session.id);
+      setShowRestartConfirm(false);
+    } catch (error) {
+      console.error("Failed to restart session:", error);
+    } finally {
+      setIsRestarting(false);
+    }
+  };
+
+  const handleRestartCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowRestartConfirm(false);
+  };
+
   return (
     <>
       {showTagEditor && (
@@ -143,8 +225,69 @@ export function SessionCard({
           sessionTitle={session.title}
         />
       )}
+      {showRenameDialog && (
+        <div className={styles.renameDialog} onClick={(e) => e.stopPropagation()}>
+          <div className={styles.dialogContent}>
+            <h3>Rename Session</h3>
+            <input
+              type="text"
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleRenameSubmit(e as any);
+                if (e.key === "Escape") handleRenameCancel(e as any);
+              }}
+              placeholder="Enter new title"
+              autoFocus
+              className={styles.renameInput}
+            />
+            {renameError && <span className={styles.errorMessage}>{renameError}</span>}
+            <div className={styles.dialogActions}>
+              <button
+                onClick={handleRenameSubmit}
+                disabled={isRenaming || !newTitle.trim()}
+                className={styles.submitButton}
+              >
+                {isRenaming ? "Renaming..." : "Rename"}
+              </button>
+              <button
+                onClick={handleRenameCancel}
+                disabled={isRenaming}
+                className={styles.cancelButton}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showRestartConfirm && (
+        <div className={styles.confirmDialog} onClick={(e) => e.stopPropagation()}>
+          <div className={styles.dialogContent}>
+            <h3>Restart Session</h3>
+            <p>Are you sure you want to restart &quot;{session.title}&quot;?</p>
+            <p className={styles.warningText}>This will terminate the current process and start a new one.</p>
+            <div className={styles.dialogActions}>
+              <button
+                onClick={handleRestartConfirm}
+                disabled={isRestarting}
+                className={styles.dangerButton}
+              >
+                {isRestarting ? "Restarting..." : "Restart"}
+              </button>
+              <button
+                onClick={handleRestartCancel}
+                disabled={isRestarting}
+                className={styles.cancelButton}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     <div
-      className={`${styles.card} ${selectMode ? styles.selectMode : ""} ${isSelected ? styles.selected : ""}`}
+      className={`${styles.card} ${selectMode ? styles.selectMode : ""} ${isSelected ? styles.selected : ""} ${isExternal ? styles.external : ""}`}
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       role="button"
@@ -166,6 +309,16 @@ export function SessionCard({
         <div className={styles.titleRow}>
           <h3 className={styles.title}>{session.title}</h3>
           <div className={styles.badges}>
+            {isExternal && (
+              <span
+                className={styles.externalBadge}
+                title={`External session from ${sourceTerminal}${muxEnabled ? " (mux-enabled)" : ""}`}
+                aria-label={`External session from ${sourceTerminal}`}
+              >
+                🔗 {sourceTerminal}
+                {muxEnabled && <span className={styles.muxIndicator}>✓</span>}
+              </span>
+            )}
             <GitHubBadge
               prNumber={session.githubPrNumber}
               prUrl={session.githubPrUrl}
@@ -321,8 +474,9 @@ export function SessionCard({
                 onResume?.();
               }}
               aria-label={`Resume session ${session.title}`}
+              title="Resume this session"
             >
-              Resume
+              ▶️ Resume
             </button>
           ) : (
             <button
@@ -332,10 +486,27 @@ export function SessionCard({
                 onPause?.();
               }}
               aria-label={`Pause session ${session.title}`}
+              title="Pause this session"
             >
-              Pause
+              ⏸️ Pause
             </button>
           )}
+          <button
+            className={styles.actionButton}
+            onClick={handleRenameClick}
+            title="Rename this session"
+            aria-label={`Rename session ${session.title}`}
+          >
+            ✏️ Rename
+          </button>
+          <button
+            className={`${styles.actionButton} ${styles.restartButton}`}
+            onClick={handleRestartClick}
+            title="Restart this session"
+            aria-label={`Restart session ${session.title}`}
+          >
+            🔄 Restart
+          </button>
           <button
             className={styles.actionButton}
             onClick={(e) => {
@@ -345,7 +516,7 @@ export function SessionCard({
             title="Duplicate this session with editable configuration"
             aria-label={`Duplicate session ${session.title}`}
           >
-            Duplicate
+            📋 Duplicate
           </button>
           <button
             className={`${styles.actionButton} ${styles.deleteButton}`}
@@ -354,8 +525,9 @@ export function SessionCard({
               onDelete?.();
             }}
             aria-label={`Delete session ${session.title}`}
+            title="Delete this session"
           >
-            Delete
+            🗑️ Delete
           </button>
         </div>
       </div>

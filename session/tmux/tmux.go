@@ -99,6 +99,7 @@ func toClaudeSquadTmuxName(str string) string {
 func toClaudeSquadTmuxNameWithPrefix(str string, prefix string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
 	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
+	str = strings.ReplaceAll(str, ":", "_") // colons are special in tmux (session:window.pane)
 	return fmt.Sprintf("%s%s", prefix, str)
 }
 
@@ -177,6 +178,49 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 		externalResizeCh: make(chan windowSize, 10), // Buffered channel for resize events
 		existsCacheTTL:   500 * time.Millisecond,    // Cache session existence for 500ms
 	}
+}
+
+// NewTmuxSessionFromExisting creates a TmuxSession that wraps an existing tmux session by its exact name.
+// Unlike other constructors, this does NOT add any prefix to the session name - it uses the name exactly as provided.
+// This is used for external sessions discovered via mux socket monitoring that already have tmux sessions.
+//
+// The session must already exist in tmux. Call AttachToExisting() after creation to establish the PTY connection.
+func NewTmuxSessionFromExisting(exactSessionName string) *TmuxSession {
+	return &TmuxSession{
+		sanitizedName:    exactSessionName, // Use exact name - no prefix transformation
+		program:          "",               // Unknown - external session
+		serverSocket:     "",               // Use default server
+		ptyFactory:       MakePtyFactory(),
+		cmdExec:          executor.MakeExecutor(),
+		bannerFilter:     NewBannerFilter(),
+		externalResizeCh: make(chan windowSize, 10),
+		existsCacheTTL:   500 * time.Millisecond,
+	}
+}
+
+// AttachToExisting connects to an already-running tmux session and establishes the PTY connection.
+// This is similar to RestoreWithWorkDir but assumes the session definitely exists.
+// Returns an error if the session doesn't exist or PTY connection fails.
+func (t *TmuxSession) AttachToExisting() error {
+	// Verify the session exists
+	if !t.DoesSessionExist() {
+		return fmt.Errorf("tmux session '%s' does not exist", t.sanitizedName)
+	}
+
+	// Create PTY connection via tmux attach-session
+	if t.ptmx == nil {
+		ptmx, _, err := t.ptyFactory.Start(t.buildAttachCommand())
+		if err != nil {
+			return fmt.Errorf("failed to attach PTY to session '%s': %w", t.sanitizedName, err)
+		}
+		t.ptmx = ptmx
+		log.InfoLog.Printf("Successfully attached PTY to existing tmux session '%s'", t.sanitizedName)
+	}
+
+	// Set up status monitor
+	t.monitor = newStatusMonitor()
+
+	return nil
 }
 
 // buildTmuxCommand creates a tmux command with proper server isolation.
@@ -326,10 +370,21 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 		cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
 		err := t.cmdExec.Run(cmd)
 		if err != nil {
-			return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
+			// Session creation failed - but it might be because the session already exists
+			// (DoesSessionExist may have timed out and returned false incorrectly)
+			// Invalidate cache and re-check before returning error
+			t.invalidateExistsCache()
+			if t.DoesSessionExist() {
+				// Session actually exists - the initial check was wrong (likely timeout)
+				// Continue with restore instead of returning error
+				log.InfoLog.Printf("Tmux session '%s' already exists (initial check was incorrect), continuing with restore", t.sanitizedName)
+			} else {
+				return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
+			}
+		} else {
+			log.InfoLog.Printf("Created new tmux session '%s' in directory '%s'", t.sanitizedName, workDir)
+			t.invalidateExistsCache() // Session was created, invalidate cache
 		}
-		log.InfoLog.Printf("Created new tmux session '%s' in directory '%s'", t.sanitizedName, workDir)
-		t.invalidateExistsCache() // Session was created, invalidate cache
 	}
 
 	// Session exists - create PTY connection for detached operations
@@ -905,7 +960,8 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	}
 
 	// Use list-sessions to get actual running sessions for reliable checking
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	// Use a 3 second timeout to be more resilient under high system load
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "tmux")

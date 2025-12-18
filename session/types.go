@@ -1,6 +1,10 @@
 package session
 
-import "time"
+import (
+	"errors"
+	"time"
+	"unicode"
+)
 
 // InstanceType represents the type of session instance
 type InstanceType int
@@ -43,6 +47,17 @@ type ExternalInstanceMetadata struct {
 
 	// OriginalPID is the process ID when first discovered
 	OriginalPID int
+
+	// MuxSocketPath is the path to a claude-mux Unix domain socket
+	// If set, this instance was discovered via claude-mux and supports
+	// full bidirectional terminal access
+	MuxSocketPath string
+
+	// MuxEnabled indicates whether this instance supports mux protocol
+	MuxEnabled bool
+
+	// SourceTerminal identifies the source (e.g., "IntelliJ", "Terminal", "tmux")
+	SourceTerminal string
 }
 
 // InstancePermissions defines what operations are allowed on an instance
@@ -113,6 +128,25 @@ func GetExternalPermissions(allowAttach bool) InstancePermissions {
 	}
 
 	return perms
+}
+
+// GetMuxExternalPermissions returns permissions for mux-enabled external instances.
+// Mux instances support full bidirectional terminal access and can be destroyed
+// since they're explicitly opted-in by launching through claude-mux with tmux session.
+func GetMuxExternalPermissions() InstancePermissions {
+	return InstancePermissions{
+		CanView:              true,
+		CanAttach:            true,
+		CanSendCommand:       true,
+		CanPause:             false, // Can't pause external process
+		CanResume:            false, // Can't resume external process
+		CanDestroy:           true,  // Can kill tmux session (unified architecture)
+		CanModifyGit:         false, // No git worktree management
+		CanAddToQueue:        true,  // Can add to review queue for approvals
+		RequiresConfirmation: map[string]bool{
+			"destroy": true, // Require confirmation for killing external sessions
+		},
+	}
 }
 
 // DiscoveryMode controls what instances are discovered and how they can be interacted with
@@ -215,4 +249,45 @@ func (c *PTYDiscoveryConfig) ShouldDiscoverExternal() bool {
 // CanAttachExternal returns true if attaching to external instances is allowed
 func (c *PTYDiscoveryConfig) CanAttachExternal() bool {
 	return c.AllowExternalAttach && c.Mode == DiscoveryModeFull
+}
+
+// Title validation constants
+const (
+	MinTitleLength = 1
+	MaxTitleLength = 32
+)
+
+// Title validation errors
+var (
+	ErrInvalidTitleLength = errors.New("title must be 1-32 characters")
+	ErrInvalidTitleChars  = errors.New("title contains invalid characters")
+	ErrDuplicateTitle     = errors.New("a session with this title already exists")
+	ErrCannotRestart      = errors.New("session cannot be restarted in current state")
+)
+
+// isValidTitle validates that a title contains only allowed characters:
+// alphanumeric, spaces, dashes, and underscores
+func isValidTitle(title string) bool {
+	for _, r := range title {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != ' ' && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+// RestartState holds the state needed to restart a session
+type RestartState struct {
+	// Working directory to restore
+	WorkingDir string
+	// Claude session ID for --resume flag
+	ClaudeSessionID string
+	// Environment variables to restore
+	Environment map[string]string
+	// Original command/program
+	Program string
+	// AutoYes flag
+	AutoYes bool
+	// Original prompt
+	Prompt string
 }

@@ -6,7 +6,7 @@ package session
 
 const (
 	// SchemaVersion tracks the database schema version for migrations
-	SchemaVersion = 1
+	SchemaVersion = 3
 
 	// CreateSessionsTable creates the main sessions table
 	CreateSessionsTable = `
@@ -34,7 +34,17 @@ const (
 		last_output_signature TEXT,
 		last_added_to_queue DATETIME,
 		last_viewed DATETIME,
-		last_acknowledged DATETIME
+		last_acknowledged DATETIME,
+		-- GitHub integration fields (added in schema v2)
+		github_pr_number INTEGER,
+		github_pr_url TEXT,
+		github_owner TEXT,
+		github_repo TEXT,
+		github_source_ref TEXT,
+		cloned_repo_path TEXT,
+		-- Worktree detection fields (added in schema v2)
+		main_repo_path TEXT,
+		is_worktree INTEGER DEFAULT 0
 	);`
 
 	// CreateWorktreesTable stores git worktree information
@@ -148,6 +158,134 @@ const (
 	IndexTagsName = `
 	CREATE INDEX IF NOT EXISTS idx_tags_name ON tags(name);`
 )
+
+// MigrateV1ToV2 adds GitHub integration and worktree detection fields
+var MigrateV1ToV2 = []string{
+	"ALTER TABLE sessions ADD COLUMN github_pr_number INTEGER;",
+	"ALTER TABLE sessions ADD COLUMN github_pr_url TEXT;",
+	"ALTER TABLE sessions ADD COLUMN github_owner TEXT;",
+	"ALTER TABLE sessions ADD COLUMN github_repo TEXT;",
+	"ALTER TABLE sessions ADD COLUMN github_source_ref TEXT;",
+	"ALTER TABLE sessions ADD COLUMN cloned_repo_path TEXT;",
+	"ALTER TABLE sessions ADD COLUMN main_repo_path TEXT;",
+	"ALTER TABLE sessions ADD COLUMN is_worktree INTEGER DEFAULT 0;",
+}
+
+// MigrateV2ToV3 normalizes context data into dedicated tables for better organization
+var MigrateV2ToV3 = []string{
+	// Create git_context table
+	`CREATE TABLE IF NOT EXISTS git_context (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id INTEGER NOT NULL UNIQUE,
+		branch TEXT,
+		base_commit_sha TEXT,
+		worktree_id INTEGER,
+		pr_number INTEGER,
+		pr_url TEXT,
+		owner TEXT,
+		repo TEXT,
+		source_ref TEXT,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+		FOREIGN KEY (worktree_id) REFERENCES worktrees(id) ON DELETE SET NULL
+	);`,
+
+	// Create filesystem_context table
+	`CREATE TABLE IF NOT EXISTS filesystem_context (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id INTEGER NOT NULL UNIQUE,
+		project_path TEXT,
+		working_dir TEXT,
+		is_worktree INTEGER DEFAULT 0,
+		main_repo_path TEXT,
+		cloned_repo_path TEXT,
+		existing_worktree TEXT,
+		session_type TEXT,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);`,
+
+	// Create terminal_context table
+	`CREATE TABLE IF NOT EXISTS terminal_context (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id INTEGER NOT NULL UNIQUE,
+		height INTEGER,
+		width INTEGER,
+		tmux_session_name TEXT,
+		tmux_prefix TEXT,
+		tmux_server_socket TEXT,
+		terminal_type TEXT,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);`,
+
+	// Create ui_preferences table
+	`CREATE TABLE IF NOT EXISTS ui_preferences (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id INTEGER NOT NULL UNIQUE,
+		category TEXT,
+		is_expanded INTEGER DEFAULT 1,
+		grouping_strategy TEXT,
+		sort_order TEXT,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);`,
+
+	// Create activity_tracking table
+	`CREATE TABLE IF NOT EXISTS activity_tracking (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id INTEGER NOT NULL UNIQUE,
+		last_terminal_update DATETIME,
+		last_meaningful_output DATETIME,
+		last_output_signature TEXT,
+		last_added_to_queue DATETIME,
+		last_viewed DATETIME,
+		last_acknowledged DATETIME,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);`,
+
+	// Create cloud_context table
+	`CREATE TABLE IF NOT EXISTS cloud_context (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		session_id INTEGER NOT NULL UNIQUE,
+		provider TEXT,
+		region TEXT,
+		instance_id TEXT,
+		api_endpoint TEXT,
+		api_key_ref TEXT,
+		cloud_session_id TEXT,
+		conversation_id TEXT,
+		FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+	);`,
+
+	// Create indexes for fast lookups
+	"CREATE INDEX IF NOT EXISTS idx_git_context_session_id ON git_context(session_id);",
+	"CREATE INDEX IF NOT EXISTS idx_filesystem_context_session_id ON filesystem_context(session_id);",
+	"CREATE INDEX IF NOT EXISTS idx_terminal_context_session_id ON terminal_context(session_id);",
+	"CREATE INDEX IF NOT EXISTS idx_ui_preferences_session_id ON ui_preferences(session_id);",
+	"CREATE INDEX IF NOT EXISTS idx_activity_tracking_session_id ON activity_tracking(session_id);",
+	"CREATE INDEX IF NOT EXISTS idx_cloud_context_session_id ON cloud_context(session_id);",
+
+	// Migrate existing data from sessions table to context tables
+	`INSERT INTO git_context (session_id, branch, pr_number, pr_url, owner, repo, source_ref)
+	SELECT id, branch, github_pr_number, github_pr_url, github_owner, github_repo, github_source_ref
+	FROM sessions
+	WHERE branch IS NOT NULL OR github_pr_number IS NOT NULL OR github_pr_url IS NOT NULL
+		OR github_owner IS NOT NULL OR github_repo IS NOT NULL OR github_source_ref IS NOT NULL;`,
+
+	`INSERT INTO filesystem_context (session_id, project_path, working_dir, is_worktree, main_repo_path, cloned_repo_path, existing_worktree, session_type)
+	SELECT id, path, working_dir, is_worktree, main_repo_path, cloned_repo_path, existing_worktree, session_type
+	FROM sessions;`,
+
+	`INSERT INTO terminal_context (session_id, height, width, tmux_prefix)
+	SELECT id, height, width, tmux_prefix
+	FROM sessions
+	WHERE height IS NOT NULL OR width IS NOT NULL OR tmux_prefix IS NOT NULL;`,
+
+	`INSERT INTO ui_preferences (session_id, category, is_expanded)
+	SELECT id, category, is_expanded
+	FROM sessions;`,
+
+	`INSERT INTO activity_tracking (session_id, last_terminal_update, last_meaningful_output, last_output_signature, last_added_to_queue, last_viewed, last_acknowledged)
+	SELECT id, last_terminal_update, last_meaningful_output, last_output_signature, last_added_to_queue, last_viewed, last_acknowledged
+	FROM sessions;`,
+}
 
 // InitializeSchema creates all tables and indexes for SQLite storage
 var InitializeSchema = []string{

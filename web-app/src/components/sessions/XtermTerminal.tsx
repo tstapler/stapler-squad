@@ -80,8 +80,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // Use props or config values
   const theme = themeProp ?? config?.theme ?? "dark";
   const fontSize = fontSizeProp ?? config?.fontSize ?? 14;
-  const scrollback = scrollbackProp ?? config?.scrollbackLines ?? 10000;
-  const enableWebGL = config?.enableWebGL ?? true;
+  const scrollback = scrollbackProp ?? config?.scrollbackLines ?? 0;
   const fontFamily = config?.fontFamily ?? 'Menlo, Monaco, "Courier New", monospace';
   const cursorStyle = config?.cursorStyle ?? "block";
   const cursorBlink = config?.cursorBlink ?? true;
@@ -131,15 +130,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     terminal.loadAddon(webLinksAddon);
     terminal.loadAddon(searchAddon);
 
-    // Try to enable WebGL renderer if enabled in config (fallback to canvas if unavailable)
-    if (enableWebGL) {
-      try {
-        const webglAddon = new WebglAddon();
-        terminal.loadAddon(webglAddon);
-        console.log("[XtermTerminal] WebGL renderer enabled");
-      } catch (e) {
-        console.warn("[XtermTerminal] WebGL not available, using canvas fallback:", e);
-      }
+    // Always enable WebGL renderer for best performance (falls back to canvas if unavailable)
+    try {
+      const webglAddon = new WebglAddon();
+      terminal.loadAddon(webglAddon);
+      console.log("[XtermTerminal] WebGL renderer enabled");
+    } catch (e) {
+      console.warn("[XtermTerminal] WebGL not available, using canvas fallback:", e);
     }
 
     // Open terminal in container with error boundary
@@ -243,9 +240,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       fitAddonRef.current = null;
       searchAddonRef.current = null;
     };
-    // Only recreate terminal if container changes or scrollback changes (requires full recreation)
+    // Only recreate terminal if scrollback changes (requires full recreation)
     // Other options can be updated dynamically below
-  }, [scrollback, enableWebGL]); // Reduced dependencies - only recreate when necessary
+  }, [scrollback]); // Reduced dependencies - only recreate when necessary
 
   // Update theme dynamically (no terminal recreation needed)
   useEffect(() => {

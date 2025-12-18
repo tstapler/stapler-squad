@@ -8,12 +8,10 @@
 export interface TerminalConfig {
   /**
    * Number of lines to keep in terminal scrollback buffer
-   * Higher values use more memory but preserve more history
    *
-   * Recommended values:
-   * - 1,000: Low memory (~5MB), basic usage
-   * - 10,000: Default (~50MB), most sessions
-   * - 50,000: High memory (~250MB), heavy debugging
+   * NOTE: Since we use tmux for session management, tmux handles scrollback.
+   * Setting this to 0 disables xterm.js scrollback to avoid duplicate buffering.
+   * If you need to scroll, use tmux's scroll mode (prefix + [) instead.
    */
   scrollbackLines: number;
 
@@ -31,12 +29,6 @@ export interface TerminalConfig {
    * Font family for terminal
    */
   fontFamily: string;
-
-  /**
-   * Enable WebGL renderer for better performance
-   * Falls back to canvas if WebGL unavailable
-   */
-  enableWebGL: boolean;
 
   /**
    * Enable terminal bell (audio feedback)
@@ -59,11 +51,10 @@ export interface TerminalConfig {
  * These values provide good performance and UX for most users
  */
 export const DEFAULT_TERMINAL_CONFIG: TerminalConfig = {
-  scrollbackLines: 10000,
+  scrollbackLines: 0, // tmux handles scrollback, no need for xterm.js buffer
   theme: "dark",
   fontSize: 14,
   fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-  enableWebGL: true,
   enableBell: false,
   cursorStyle: "block",
   cursorBlink: true,
@@ -73,19 +64,10 @@ export const DEFAULT_TERMINAL_CONFIG: TerminalConfig = {
  * Configuration presets for different use cases
  */
 export const TERMINAL_CONFIG_PRESETS: Record<string, Partial<TerminalConfig>> = {
-  "low-memory": {
-    scrollbackLines: 1000,
-    enableWebGL: true,
-  },
   "default": DEFAULT_TERMINAL_CONFIG,
   "high-performance": {
-    scrollbackLines: 5000,
-    enableWebGL: true,
+    scrollbackLines: 0,
     cursorBlink: false, // Reduce repaints
-  },
-  "debugging": {
-    scrollbackLines: 50000,
-    enableWebGL: true,
   },
   "accessibility": {
     fontSize: 16,
@@ -118,9 +100,9 @@ export function loadTerminalConfig(): TerminalConfig {
     return {
       ...DEFAULT_TERMINAL_CONFIG,
       ...config,
-      // Ensure scrollbackLines is within reasonable bounds
+      // Ensure scrollbackLines is within reasonable bounds (0 = disabled, tmux handles it)
       scrollbackLines: Math.max(
-        100,
+        0,
         Math.min(config.scrollbackLines ?? DEFAULT_TERMINAL_CONFIG.scrollbackLines, 100000)
       ),
       // Ensure fontSize is within reasonable bounds

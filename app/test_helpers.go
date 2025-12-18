@@ -2,8 +2,9 @@ package app
 
 import (
 	appsession "claude-squad/app/session"
-	appui "claude-squad/app/ui"
+	"claude-squad/app/services"
 	"claude-squad/app/state"
+	appui "claude-squad/app/ui"
 	"claude-squad/cmd"
 	"claude-squad/config"
 	"claude-squad/executor"
@@ -184,6 +185,20 @@ func (b *TestHomeBuilder) BuildWithMockDependenciesNoInit(t *testing.T, setupMoc
 			h.newInstanceFinalizer = f
 		},
 	})
+
+	// Initialize services facade for cleaner service access in tests
+	// This provides the same unified interface to extracted services as in production
+	h.services = services.NewFacade(
+		h.storage,
+		h.sessionController,
+		h.list,
+		h.menu,
+		h.statusBar,
+		h.errBox,
+		h.uiCoordinator,
+		h.handleError,
+		GlobalInstanceLimit,
+	)
 
 	// Initialize the command bridge in test mode (old command registry removed)
 	h.initializeCommandBridge()
@@ -455,7 +470,7 @@ func NewMockDependenciesWithIsolatedStorage(t *testing.T) *MockDependencies {
 	spinner := spinner.New(spinner.WithSpinner(spinner.MiniDot))
 	list := ui.NewList(&spinner, false, appState)
 	menu := ui.NewMenu()
-	tabbedWindow := ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane())
+	tabbedWindow := ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewVCPane())
 	errBox := ui.NewErrBox()
 	terminalManager := terminal.NewManager()
 	signalManager := terminal.NewSignalManager(terminalManager)

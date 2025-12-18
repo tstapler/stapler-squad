@@ -33,6 +33,7 @@ var (
 const (
 	PreviewTab int = iota
 	DiffTab
+	VCTab
 )
 
 type Tab struct {
@@ -51,17 +52,20 @@ type TabbedWindow struct {
 
 	preview  *PreviewPane
 	diff     *DiffPane
+	vc       *VCPane
 	instance *session.Instance
 }
 
-func NewTabbedWindow(preview *PreviewPane, diff *DiffPane) *TabbedWindow {
+func NewTabbedWindow(preview *PreviewPane, diff *DiffPane, vc *VCPane) *TabbedWindow {
 	return &TabbedWindow{
 		tabs: []string{
 			"Preview",
 			"Diff",
+			"VC",
 		},
 		preview: preview,
 		diff:    diff,
+		vc:      vc,
 	}
 }
 
@@ -72,6 +76,9 @@ func (w *TabbedWindow) Cleanup() {
 	}
 	if w.diff != nil {
 		w.diff.Cleanup()
+	}
+	if w.vc != nil {
+		w.vc.Cleanup()
 	}
 }
 
@@ -98,6 +105,9 @@ func (w *TabbedWindow) SetSize(width, height int) {
 
 	w.preview.SetSize(contentWidth, contentHeight)
 	w.diff.SetSize(contentWidth, contentHeight)
+	if w.vc != nil {
+		w.vc.SetSize(contentWidth, contentHeight)
+	}
 }
 
 func (w *TabbedWindow) GetPreviewSize() (width, height int) {
@@ -139,7 +149,7 @@ func (w *TabbedWindow) ProcessDiffResults() error {
 	return w.diff.ProcessResults()
 }
 
-// ProcessAllResults processes both preview and diff results
+// ProcessAllResults processes preview, diff, and VC results
 func (w *TabbedWindow) ProcessAllResults() error {
 	log.DebugLog.Printf("[TABBED] ProcessAllResults called by ticker")
 	if err := w.ProcessPreviewResults(); err != nil {
@@ -148,6 +158,10 @@ func (w *TabbedWindow) ProcessAllResults() error {
 	}
 	if err := w.ProcessDiffResults(); err != nil {
 		log.ErrorLog.Printf("[TABBED] ProcessDiffResults error: %v", err)
+		return err
+	}
+	if err := w.ProcessVCResults(); err != nil {
+		log.ErrorLog.Printf("[TABBED] ProcessVCResults error: %v", err)
 		return err
 	}
 	return nil
@@ -160,6 +174,32 @@ func (w *TabbedWindow) UpdateDiff(instance *session.Instance) {
 	log.InfoLog.Printf("UpdateDiff called for instance: %s", getInstanceName(instance))
 }
 
+// UpdateVC updates the content of the VC pane asynchronously
+func (w *TabbedWindow) UpdateVC(instance *session.Instance) {
+	if w.vc != nil {
+		w.vc.UpdateVCAsync(instance)
+		log.InfoLog.Printf("UpdateVC called for instance: %s", getInstanceName(instance))
+	}
+}
+
+// ProcessVCResults processes pending async VC results
+func (w *TabbedWindow) ProcessVCResults() error {
+	if w.vc == nil {
+		return nil
+	}
+	return w.vc.ProcessResults()
+}
+
+// GetVCPane returns the VC pane for direct manipulation
+func (w *TabbedWindow) GetVCPane() *VCPane {
+	return w.vc
+}
+
+// IsInVCTab returns true if the VC tab is currently active
+func (w *TabbedWindow) IsInVCTab() bool {
+	return w.activeTab == VCTab
+}
+
 // ResetPreviewToNormalMode resets the preview pane to normal mode
 func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) error {
 	return w.preview.ResetToNormalMode(instance)
@@ -167,24 +207,34 @@ func (w *TabbedWindow) ResetPreviewToNormalMode(instance *session.Instance) erro
 
 // Add these new methods for handling scroll events
 func (w *TabbedWindow) ScrollUp() {
-	if w.activeTab == PreviewTab {
+	switch w.activeTab {
+	case PreviewTab:
 		err := w.preview.ScrollUp(w.instance)
 		if err != nil {
 			log.InfoLog.Printf("tabbed window failed to scroll up: %v", err)
 		}
-	} else {
+	case DiffTab:
 		w.diff.ScrollUp()
+	case VCTab:
+		if w.vc != nil {
+			w.vc.ScrollUp()
+		}
 	}
 }
 
 func (w *TabbedWindow) ScrollDown() {
-	if w.activeTab == PreviewTab {
+	switch w.activeTab {
+	case PreviewTab:
 		err := w.preview.ScrollDown(w.instance)
 		if err != nil {
 			log.InfoLog.Printf("tabbed window failed to scroll down: %v", err)
 		}
-	} else {
+	case DiffTab:
 		w.diff.ScrollDown()
+	case VCTab:
+		if w.vc != nil {
+			w.vc.ScrollDown()
+		}
 	}
 }
 
@@ -239,10 +289,15 @@ func (w *TabbedWindow) String() string {
 
 	row := lipgloss.JoinHorizontal(lipgloss.Top, renderedTabs...)
 	var content string
-	if w.activeTab == 0 {
+	switch w.activeTab {
+	case PreviewTab:
 		content = w.preview.String()
-	} else {
+	case DiffTab:
 		content = w.diff.String()
+	case VCTab:
+		if w.vc != nil {
+			content = w.vc.String()
+		}
 	}
 	window := windowStyle.Render(
 		lipgloss.Place(

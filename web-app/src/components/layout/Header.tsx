@@ -1,17 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { DebugMenu } from "@/components/ui/DebugMenu";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import styles from "./Header.module.css";
 
 export function Header() {
   const pathname = usePathname();
   const [isDebugMenuOpen, setIsDebugMenuOpen] = useState(false);
   const { togglePanel, getUnreadCount } = useNotifications();
+  const { open: openOmnibar } = useOmnibar();
   const unreadCount = getUnreadCount();
 
   return (
@@ -24,49 +26,54 @@ export function Header() {
         </div>
 
         <nav className={styles.nav}>
-          <Link
+          <AppLink
             href="/"
             className={`${styles.navLink} ${pathname === "/" ? styles.active : ""}`}
             onClick={() => console.log("Sessions link clicked")}
           >
             Sessions
-          </Link>
-          <Link
+          </AppLink>
+          <AppLink
             href="/review-queue"
             className={`${styles.navLink} ${pathname === "/review-queue" ? styles.active : ""}`}
             onClick={() => console.log("Review Queue link clicked")}
           >
             <span className={styles.navLinkText}>Review Queue</span>
             <ReviewQueueNavBadge inline={true} />
-          </Link>
-          <Link
+          </AppLink>
+          <AppLink
             href="/logs"
             className={`${styles.navLink} ${pathname === "/logs" ? styles.active : ""}`}
             onClick={() => console.log("Logs link clicked")}
           >
             Logs
-          </Link>
-          <Link
+          </AppLink>
+          <AppLink
             href="/history"
             className={`${styles.navLink} ${pathname === "/history" ? styles.active : ""}`}
             onClick={() => console.log("History link clicked")}
           >
             History
-          </Link>
-          <Link
+          </AppLink>
+          <AppLink
             href="/config"
             className={`${styles.navLink} ${pathname === "/config" ? styles.active : ""}`}
             onClick={() => console.log("Config link clicked")}
           >
             Config
-          </Link>
+          </AppLink>
         </nav>
 
         <div className={styles.actions}>
-          <Link href="/sessions/new" className={styles.newSessionButton}>
+          <button
+            className={styles.newSessionButton}
+            onClick={openOmnibar}
+            aria-label="Create new session (⌘K)"
+            title="Create new session (⌘K)"
+          >
             <span className={styles.newSessionIcon}>+</span>
             New Session
-          </Link>
+          </button>
           <button
             className={styles.notificationButton}
             onClick={togglePanel}

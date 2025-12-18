@@ -382,47 +382,28 @@ func (cc *ClaudeController) GetCurrentStatus() (DetectedStatus, string) {
 	cc.mu.RLock()
 	defer cc.mu.RUnlock()
 
-	if cc.ptyAccess == nil {
-		return StatusUnknown, "PTY access not initialized"
+	// Use instance.Preview() to get actual terminal content instead of PTY buffer.
+	// The PTY buffer may contain incomplete data or just status bar updates,
+	// while Preview() captures the current visible terminal pane content.
+	if cc.instance == nil {
+		return StatusUnknown, "Instance not initialized"
 	}
 
-	output := cc.ptyAccess.GetBuffer()
-
-	// CRITICAL FIX: Filter tmux status bars before pattern matching to prevent false positives
-	// The PTY buffer contains full terminal output including tmux status bars and shell prompts
-	// which may include session names, directory paths, or other metadata containing keywords
-	// like "error", "fail", etc. We must filter these out before status detection.
-	//
-	// Example false positive: Session named "actions-build-errors-mvn" appears in:
-	// - tmux window title: "claudesquad_actions-build-errors-mvn"
-	// - shell prompt: "~/actions-build-errors-mvn $ "
-	// - tmux status bar showing session name
-	//
-	// By filtering banners, we ensure status patterns only match actual terminal output content,
-	// not metadata/UI elements that happen to contain keyword matches.
-	filteredOutput := output
-	if cc.instance != nil {
-		// Use instance's tmux session to filter banners if available
-		tmuxSession, err := cc.instance.GetPTYReader()
-		if err == nil && tmuxSession != nil {
-			// Get the tmux session from instance for banner filtering
-			// Note: We can't directly access tmuxSession.FilterBanners() here because
-			// GetPTYReader() returns *os.File, not *TmuxSession. We need to use the
-			// instance's methods that have access to the TmuxSession.
-			if cc.instance.TmuxAlive() {
-				// Convert bytes to string for filtering
-				content := string(output)
-				// Filter using instance's helper method (which has tmuxSession access)
-				// Since we don't have direct access to tmuxSession here, we'll use
-				// a simple heuristic: remove lines that look like tmux status bars
-				// (lines starting with "[" and containing session name patterns)
-				filtered, _ := filterTmuxMetadata(content)
-				filteredOutput = []byte(filtered)
-			}
-		}
+	content, err := cc.instance.Preview()
+	if err != nil {
+		log.DebugLog.Printf("[GetCurrentStatus] Session '%s': Preview() error: %v", cc.sessionName, err)
+		return StatusUnknown, "Failed to get terminal content"
 	}
 
-	return cc.statusDetector.DetectWithContext(filteredOutput)
+	if content == "" {
+		return StatusUnknown, "No terminal content"
+	}
+
+	// Filter tmux status bars before pattern matching to prevent false positives
+	// from session names containing keywords like "error", "fail", etc.
+	filtered, _ := filterTmuxMetadata(content)
+
+	return cc.statusDetector.DetectWithContext([]byte(filtered))
 }
 
 // filterTmuxMetadata removes common tmux UI elements from terminal output.
@@ -584,28 +565,16 @@ func (cc *ClaudeController) ClearQueue() error {
 // Helper functions
 
 // IsIdle returns whether the Claude instance is currently idle (waiting for input).
-// This uses pattern-based detection on recent PTY output.
+// This uses pattern-based detection on terminal content.
 func (cc *ClaudeController) IsIdle() bool {
-	cc.mu.RLock()
-	defer cc.mu.RUnlock()
-
-	if cc.idleDetector == nil {
-		return false
-	}
-
-	return cc.idleDetector.IsIdle()
+	state, _ := cc.GetIdleState()
+	return state == IdleStateWaiting || state == IdleStateTimeout
 }
 
 // IsActive returns whether the Claude instance is actively processing commands.
 func (cc *ClaudeController) IsActive() bool {
-	cc.mu.RLock()
-	defer cc.mu.RUnlock()
-
-	if cc.idleDetector == nil {
-		return false
-	}
-
-	return cc.idleDetector.IsActive()
+	state, _ := cc.GetIdleState()
+	return state == IdleStateActive
 }
 
 // GetIdleState returns the current idle state with timing information.
@@ -618,7 +587,29 @@ func (cc *ClaudeController) GetIdleState() (IdleState, time.Time) {
 		return IdleStateUnknown, time.Time{}
 	}
 
-	state := cc.idleDetector.DetectState()
+	// Use instance.Preview() to get actual terminal content instead of PTY buffer.
+	// The PTY buffer may contain incomplete data or just status bar updates,
+	// while Preview() captures the current visible terminal pane content.
+	var state IdleState
+	if cc.instance != nil {
+		content, err := cc.instance.Preview()
+		if err != nil {
+			log.DebugLog.Printf("[GetIdleState] Session '%s': Preview() error: %v, using fallback", cc.sessionName, err)
+			// Fallback to old method if Preview() fails
+			state = cc.idleDetector.DetectState()
+		} else if content != "" {
+			// Filter tmux status bars before pattern matching
+			filtered, _ := filterTmuxMetadata(content)
+			state = cc.idleDetector.DetectStateFromContent(filtered)
+		} else {
+			// Empty content - keep current state
+			state = cc.idleDetector.GetState()
+		}
+	} else {
+		// No instance - fallback to old method
+		state = cc.idleDetector.DetectState()
+	}
+
 	lastActivity := cc.idleDetector.GetLastActivity()
 
 	return state, lastActivity
@@ -626,6 +617,9 @@ func (cc *ClaudeController) GetIdleState() (IdleState, time.Time) {
 
 // GetIdleStateInfo returns comprehensive idle state information.
 func (cc *ClaudeController) GetIdleStateInfo() IdleStateInfo {
+	// Get the current state using the reliable detection method
+	state, lastActivity := cc.GetIdleState()
+
 	cc.mu.RLock()
 	defer cc.mu.RUnlock()
 
@@ -637,7 +631,14 @@ func (cc *ClaudeController) GetIdleStateInfo() IdleStateInfo {
 		}
 	}
 
-	return cc.idleDetector.GetStateInfo()
+	// Build the info using the reliably-detected state
+	return IdleStateInfo{
+		State:           state,
+		LastActivity:    lastActivity,
+		IdleDuration:    time.Since(lastActivity),
+		LastStateChange: cc.idleDetector.GetStateInfo().LastStateChange,
+		SessionName:     cc.sessionName,
+	}
 }
 
 // GetIdleDuration returns how long the session has been idle.

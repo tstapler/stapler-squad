@@ -34,6 +34,7 @@ const (
 	invertedIndexFile = "inverted_index.gob"
 	docStoreFile      = "doc_store.gob"
 	versionFile       = "index_version.json"
+	syncMetadataFile  = "sync_metadata.json"
 )
 
 // NewIndexStore creates a new IndexStore that persists to ~/.claude/search_index/
@@ -136,12 +137,12 @@ func (s *IndexStore) GetVersion() (*IndexVersion, error) {
 	return s.loadVersion()
 }
 
-// Delete removes all persisted index files.
+// Delete removes all persisted index files including sync metadata.
 func (s *IndexStore) Delete() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	files := []string{invertedIndexFile, docStoreFile, versionFile}
+	files := []string{invertedIndexFile, docStoreFile, versionFile, syncMetadataFile}
 	for _, file := range files {
 		path := filepath.Join(s.indexDir, file)
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -235,4 +236,78 @@ func (s *IndexStore) loadVersion() (*IndexVersion, error) {
 	}
 
 	return &version, nil
+}
+
+// SaveSyncMetadata persists the sync metadata to disk using atomic write.
+func (s *IndexStore) SaveSyncMetadata(meta *IndexSyncMetadata) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.indexDir, syncMetadataFile)
+	tempPath := path + ".tmp"
+
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal sync metadata: %w", err)
+	}
+
+	if err := os.WriteFile(tempPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write sync metadata temp file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, path); err != nil {
+		os.Remove(tempPath)
+		return fmt.Errorf("failed to rename sync metadata file: %w", err)
+	}
+
+	return nil
+}
+
+// LoadSyncMetadata reads the sync metadata from disk.
+// Returns nil, nil if metadata doesn't exist (fresh index).
+func (s *IndexStore) LoadSyncMetadata() (*IndexSyncMetadata, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.indexDir, syncMetadataFile)
+
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil // No metadata yet, this is fine
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to read sync metadata: %w", err)
+	}
+
+	var meta IndexSyncMetadata
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal sync metadata: %w", err)
+	}
+
+	// Validate version
+	if meta.Version != CurrentSyncMetadataVersion {
+		return nil, fmt.Errorf("incompatible sync metadata version: got %d, want %d",
+			meta.Version, CurrentSyncMetadataVersion)
+	}
+
+	return &meta, nil
+}
+
+// SyncMetadataExists returns true if sync metadata exists on disk.
+func (s *IndexStore) SyncMetadataExists() bool {
+	path := filepath.Join(s.indexDir, syncMetadataFile)
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// DeleteSyncMetadata removes the sync metadata file.
+func (s *IndexStore) DeleteSyncMetadata() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	path := filepath.Join(s.indexDir, syncMetadataFile)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to delete sync metadata: %w", err)
+	}
+	return nil
 }

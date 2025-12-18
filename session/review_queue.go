@@ -85,8 +85,12 @@ func (rq *ReviewQueue) Add(item *ReviewItem) bool {
 
 	// Validate and fix invalid timestamps (per user requirement: reset to current time)
 	minValidTime := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Now()
 	if item.DetectedAt.IsZero() || item.DetectedAt.Before(minValidTime) {
-		item.DetectedAt = time.Now()
+		item.DetectedAt = now
+	}
+	if item.LastActivity.IsZero() || item.LastActivity.Before(minValidTime) {
+		item.LastActivity = now
 	}
 
 	existingItem, exists := rq.items[item.SessionID]

@@ -31,6 +31,27 @@ export async function setupStressTestPage(page: Page): Promise<void> {
 }
 
 /**
+ * Get the current renderer type (webgl or canvas)
+ */
+export async function getRendererType(page: Page): Promise<'webgl' | 'canvas' | 'unknown'> {
+  // Try from exposed window variable first (most reliable)
+  const fromWindow = await page.evaluate(() => (window as any).stressTestRendererType);
+  if (fromWindow) return fromWindow;
+
+  // Fall back to reading from DOM
+  const text = await page.getByTestId('renderer-type').textContent();
+  return (text?.toLowerCase() as 'webgl' | 'canvas') || 'unknown';
+}
+
+/**
+ * Assert that WebGL renderer is active
+ */
+export async function assertWebGLActive(page: Page): Promise<void> {
+  const renderer = await getRendererType(page);
+  expect(renderer).toBe('webgl');
+}
+
+/**
  * Select a test preset
  */
 export async function selectPreset(page: Page, preset: string): Promise<void> {
@@ -43,16 +64,22 @@ export async function selectPreset(page: Page, preset: string): Promise<void> {
  */
 export async function startTest(page: Page): Promise<void> {
   await page.getByTestId('start-test').click();
-  await expect(page.getByTestId('test-status')).toHaveText('running', { timeout: 2000 });
+  // Wait for test to start or complete (may complete very quickly for some tests)
+  await expect(page.getByTestId('test-status')).not.toHaveText('idle', { timeout: 5000 });
 }
 
 /**
  * Stop the stress test
+ * Note: Uses force: true because WebGL canvas updates cause element instability
  */
 export async function stopTest(page: Page): Promise<void> {
   const stopButton = page.getByTestId('stop-test');
-  if (await stopButton.isEnabled()) {
-    await stopButton.click();
+  const status = await page.getByTestId('test-status').textContent();
+
+  // Only try to stop if still running
+  if (status === 'running') {
+    // Use force: true to click even during canvas animation
+    await stopButton.click({ force: true });
     await expect(page.getByTestId('test-status')).toHaveText('completed', { timeout: 5000 });
   }
 }
@@ -124,6 +151,9 @@ function parseTime(str: string): number {
 
 /**
  * Take screenshots at regular intervals during test
+ * Note: Uses page.screenshot() instead of element.screenshot() because
+ * xterm.js with WebGL causes continuous canvas updates that prevent
+ * element stability. Page screenshots don't have this limitation.
  */
 export async function captureTestScreenshots(
   page: Page,
@@ -133,7 +163,13 @@ export async function captureTestScreenshots(
   const screenshots: Buffer[] = [];
 
   for (let i = 0; i < count; i++) {
-    const screenshot = await page.getByTestId('terminal-container').screenshot();
+    // Use page screenshot - element screenshots wait for stability which
+    // never occurs with continuously updating WebGL canvas
+    // Set timeout to avoid hanging on font loading
+    const screenshot = await page.screenshot({
+      animations: 'disabled',
+      timeout: 5000,
+    });
     screenshots.push(screenshot);
     await page.waitForTimeout(intervalMs);
   }

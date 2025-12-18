@@ -6,6 +6,7 @@ import (
 
 // TestStatusDetector_TestsFailingDetection verifies that test failures are correctly detected
 func TestStatusDetector_TestsFailingDetection(t *testing.T) {
+	t.Skip("StatusTestsFailing patterns are disabled to prevent false positives - see status_detector.go:421")
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -188,6 +189,7 @@ func TestStatusDetector_TestsFailingDetection(t *testing.T) {
 
 // TestStatusDetector_TestsFailingWithContext verifies context reporting for test failures
 func TestStatusDetector_TestsFailingWithContext(t *testing.T) {
+	t.Skip("StatusTestsFailing patterns are disabled to prevent false positives - see status_detector.go:421")
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -246,6 +248,7 @@ func TestStatusDetector_TestsFailingWithContext(t *testing.T) {
 
 // TestStatusDetector_TestsFailingPriority verifies priority ordering
 func TestStatusDetector_TestsFailingPriority(t *testing.T) {
+	t.Skip("StatusTestsFailing patterns are disabled to prevent false positives - see status_detector.go:421")
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -294,6 +297,7 @@ func TestStatusDetector_TestsFailingPriority(t *testing.T) {
 
 // TestStatusDetector_TestsFailingMultiline verifies detection in multiline output
 func TestStatusDetector_TestsFailingMultiline(t *testing.T) {
+	t.Skip("StatusTestsFailing patterns are disabled to prevent false positives - see status_detector.go:421")
 	detector := NewStatusDetector()
 
 	output := `
@@ -319,6 +323,7 @@ Summary: 2 passed, 1 failed
 
 // TestStatusDetector_TestsFailingRealWorldExamples verifies real-world test output
 func TestStatusDetector_TestsFailingRealWorldExamples(t *testing.T) {
+	t.Skip("StatusTestsFailing patterns are disabled to prevent false positives - see status_detector.go:421")
 	detector := NewStatusDetector()
 
 	tests := []struct {
@@ -388,6 +393,7 @@ Tests:       1 failed, 15 passed, 16 total`,
 
 // TestStatusDetector_TestsFailingPatternNames verifies pattern names are available
 func TestStatusDetector_TestsFailingPatternNames(t *testing.T) {
+	t.Skip("StatusTestsFailing patterns are disabled to prevent false positives - see status_detector.go:421")
 	detector := NewStatusDetector()
 
 	patternNames := detector.GetPatternNames(StatusTestsFailing)

@@ -17,7 +17,7 @@ func TestLayoutDebug(t *testing.T) {
 	terminalHeight := 30
 
 	// Our current calculation
-	listWidth := int(float32(terminalWidth) * 0.3)  // 36
+	listWidth := int(float32(terminalWidth) * 0.3) // 36
 	contentHeight := terminalHeight - 3 - 1        // 26
 
 	t.Logf("Terminal: %dx%d", terminalWidth, terminalHeight)
@@ -26,8 +26,8 @@ func TestLayoutDebug(t *testing.T) {
 	// Test the calculateMaxVisibleItems logic with realistic assumptions
 	// Based on actual list rendering, each item likely takes 1 line
 	// and there may be minimal title/padding overhead
-	titleLines := 2  // Reduced from overly conservative 4
-	padding := 2     // Reduced from overly conservative 4
+	titleLines := 2 // Reduced from overly conservative 4
+	padding := 2    // Reduced from overly conservative 4
 	availableHeight := contentHeight - titleLines - padding
 	linesPerItem := 1 // Most realistic: 1 line per item for simple session list
 	maxItems := availableHeight / linesPerItem
@@ -61,4 +61,3 @@ func TestLayoutDebug(t *testing.T) {
 		t.Logf("This suggests the list calculation assumptions are wrong!")
 	}
 }
-

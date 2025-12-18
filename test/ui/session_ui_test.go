@@ -195,7 +195,8 @@ func TestSessionCategoriesRendering(t *testing.T) {
 	assert.Contains(t, withCategoriesOutput, "test-session-3")
 	assert.Contains(t, withCategoriesOutput, "Backend")
 	assert.Contains(t, withCategoriesOutput, "Frontend")
-	assert.Contains(t, withCategoriesOutput, "Uncategorized")
+	// Note: "Uncategorized" sessions are transformed to "Squad Sessions" by OrganizeByStrategy
+	assert.Contains(t, withCategoriesOutput, "Squad Sessions")
 
 	// Save list with categorized instances output
 	err = renderer.SaveComponentOutput(list, "session_list_with_categories.txt")

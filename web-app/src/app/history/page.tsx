@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { SessionService } from "@/gen/session/v1/session_connect";
 import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
+import { HistorySearchInput, HistorySearchResults } from "@/components/history";
+import { useHistoryFullTextSearch, SearchResultItem } from "@/lib/hooks/useHistoryFullTextSearch";
 import styles from "./history.module.css";
 
 // ============================================================================
@@ -15,6 +18,7 @@ import styles from "./history.module.css";
 type SortField = "updated" | "created" | "messages" | "name";
 type SortOrder = "asc" | "desc";
 type DateFilter = "all" | "today" | "week" | "month";
+type SearchMode = "metadata" | "fulltext";
 
 enum HistoryGroupingStrategy {
   None = "none",
@@ -38,6 +42,7 @@ const STORAGE_KEYS = {
   SORT_FIELD: 'claude-history-sort-field',
   SORT_ORDER: 'claude-history-sort-order',
   GROUPING_STRATEGY: 'claude-history-grouping-strategy',
+  SEARCH_MODE: 'claude-history-search-mode',
 };
 
 // ============================================================================
@@ -130,6 +135,9 @@ const isWithinDateFilter = (timestamp: any, filter: DateFilter): boolean => {
 // ============================================================================
 
 export default function HistoryBrowserPage() {
+  // Router for navigation after session creation
+  const router = useRouter();
+
   // Core state
   const [entries, setEntries] = useState<ClaudeHistoryEntry[]>([]);
   const [selectedEntry, setSelectedEntry] = useState<ClaudeHistoryEntry | null>(null);
@@ -137,32 +145,47 @@ export default function HistoryBrowserPage() {
   const [messages, setMessages] = useState<ClaudeMessage[]>([]);
   const [showMessages, setShowMessages] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [previewMessages, setPreviewMessages] = useState<ClaudeMessage[]>([]);
+  const [loadingPreview, setLoadingPreview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resuming, setResuming] = useState(false);
 
-  // Filter state (persisted)
-  const [searchQuery, setSearchQuery] = useState(() =>
-    loadFromStorage(STORAGE_KEYS.SEARCH_QUERY, "")
-  );
-  const [selectedModel, setSelectedModel] = useState<string>(() =>
-    loadFromStorage(STORAGE_KEYS.SELECTED_MODEL, "all")
-  );
-  const [dateFilter, setDateFilter] = useState<DateFilter>(() =>
-    loadFromStorage(STORAGE_KEYS.DATE_FILTER, "all")
-  );
-  const [sortField, setSortField] = useState<SortField>(() =>
-    loadFromStorage(STORAGE_KEYS.SORT_FIELD, "updated")
-  );
-  const [sortOrder, setSortOrder] = useState<SortOrder>(() =>
-    loadFromStorage(STORAGE_KEYS.SORT_ORDER, "desc")
-  );
-  const [groupingStrategy, setGroupingStrategy] = useState<HistoryGroupingStrategy>(() =>
-    loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, HistoryGroupingStrategy.Date)
-  );
+  // Filter state (persisted) - use defaults initially to avoid hydration mismatch
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedModel, setSelectedModel] = useState<string>("all");
+  const [dateFilter, setDateFilter] = useState<DateFilter>("all");
+  const [sortField, setSortField] = useState<SortField>("updated");
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
+  const [groupingStrategy, setGroupingStrategy] = useState<HistoryGroupingStrategy>(HistoryGroupingStrategy.Date);
 
   // Message search state
   const [messageSearchQuery, setMessageSearchQuery] = useState("");
+
+  // Full-text search mode state
+  const [searchMode, setSearchMode] = useState<SearchMode>("metadata");
+
+  // Hydration flag to track when client-side code has run
+  const [isHydrated, setIsHydrated] = useState(false);
+
+  // Load persisted state from localStorage after hydration (client-side only)
+  useEffect(() => {
+    setSearchQuery(loadFromStorage(STORAGE_KEYS.SEARCH_QUERY, ""));
+    setSelectedModel(loadFromStorage(STORAGE_KEYS.SELECTED_MODEL, "all"));
+    setDateFilter(loadFromStorage(STORAGE_KEYS.DATE_FILTER, "all"));
+    setSortField(loadFromStorage(STORAGE_KEYS.SORT_FIELD, "updated"));
+    setSortOrder(loadFromStorage(STORAGE_KEYS.SORT_ORDER, "desc"));
+    setGroupingStrategy(loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, HistoryGroupingStrategy.Date));
+    setSearchMode(loadFromStorage(STORAGE_KEYS.SEARCH_MODE, "metadata"));
+    setIsHydrated(true);
+  }, []);
+
+  // Full-text search hook
+  const fullTextSearch = useHistoryFullTextSearch({
+    debounceMs: 300,
+    autoSearch: true,
+  });
 
   // Refs
   const clientRef = useRef<any>(null);
@@ -177,6 +200,7 @@ export default function HistoryBrowserPage() {
   useEffect(() => { saveToStorage(STORAGE_KEYS.SORT_FIELD, sortField); }, [sortField]);
   useEffect(() => { saveToStorage(STORAGE_KEYS.SORT_ORDER, sortOrder); }, [sortOrder]);
   useEffect(() => { saveToStorage(STORAGE_KEYS.GROUPING_STRATEGY, groupingStrategy); }, [groupingStrategy]);
+  useEffect(() => { saveToStorage(STORAGE_KEYS.SEARCH_MODE, searchMode); }, [searchMode]);
 
   // Initialize ConnectRPC client
   useEffect(() => {
@@ -218,12 +242,28 @@ export default function HistoryBrowserPage() {
 
     try {
       setError(null);
-      const response = await clientRef.current.getClaudeHistoryDetail({ id });
-      if (response.entry) {
-        setSelectedEntry(response.entry);
+      setLoadingPreview(true);
+      setPreviewMessages([]);
+
+      // Load entry details and preview messages in parallel
+      const [detailResponse, messagesResponse] = await Promise.all([
+        clientRef.current.getClaudeHistoryDetail({ id }),
+        clientRef.current.getClaudeHistoryMessages({ id, limit: 5 }),
+      ]);
+
+      if (detailResponse.entry) {
+        setSelectedEntry(detailResponse.entry);
+      }
+
+      // Show the most recent messages (reverse to show oldest first in preview)
+      if (messagesResponse.messages) {
+        // Messages come newest-first, reverse for chronological display
+        setPreviewMessages([...messagesResponse.messages].reverse());
       }
     } catch (err) {
       setError(`Failed to load entry details: ${err}`);
+    } finally {
+      setLoadingPreview(false);
     }
   }, []);
 
@@ -397,6 +437,22 @@ export default function HistoryBrowserPage() {
     setGroupingStrategy(strategies[nextIndex]);
   }, [groupingStrategy]);
 
+  // Handle clicking on a full-text search result
+  const handleSearchResultClick = useCallback((result: SearchResultItem) => {
+    // Find the entry in the loaded entries or load it directly
+    const existingEntry = entries.find(e => e.id === result.sessionId);
+    if (existingEntry) {
+      const index = flatEntries.indexOf(existingEntry);
+      setSelectedIndex(index >= 0 ? index : 0);
+      loadEntryDetail(existingEntry.id);
+    } else {
+      // Entry not in current list, load it directly
+      loadEntryDetail(result.sessionId);
+    }
+    // Switch back to metadata mode to show the entry list
+    setSearchMode("metadata");
+  }, [entries, flatEntries, loadEntryDetail]);
+
   const handleCopyId = useCallback(async (id: string) => {
     try {
       await navigator.clipboard.writeText(id);
@@ -439,6 +495,38 @@ export default function HistoryBrowserPage() {
       setError(`Failed to export: ${err}`);
     }
   }, []);
+
+  const handleResumeSession = useCallback(async (entry: ClaudeHistoryEntry) => {
+    if (!clientRef.current || !entry.project) {
+      setError("Cannot resume: Project path is required");
+      return;
+    }
+
+    try {
+      setResuming(true);
+      setError(null);
+
+      // Generate a session title from the history entry
+      const sessionTitle = `Resumed: ${entry.name}`.substring(0, 50);
+
+      // Create a new session with the resume_id set to the history entry ID
+      const response = await clientRef.current.createSession({
+        title: sessionTitle,
+        path: entry.project,
+        resumeId: entry.id,
+        category: "Resumed",
+      });
+
+      if (response.session) {
+        // Navigate to the sessions page to see the new session
+        router.push("/");
+      }
+    } catch (err) {
+      setError(`Failed to resume session: ${err}`);
+    } finally {
+      setResuming(false);
+    }
+  }, [router]);
 
   // ============================================================================
   // Keyboard Navigation
@@ -602,40 +690,71 @@ export default function HistoryBrowserPage() {
 
       {/* Filter Bar */}
       <div className={styles.filterBar}>
-        {/* Search */}
-        <div className={styles.searchContainer}>
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="Search history... (Press /)"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className={styles.searchInput}
-          />
+        {/* Search Mode Toggle */}
+        <div className={styles.searchModeToggle}>
           <button
-            onClick={handleSearch}
-            disabled={searching}
-            className={`btn btn-primary ${styles.searchButton}`}
+            className={`${styles.searchModeButton} ${searchMode === "metadata" ? styles.active : ""}`}
+            onClick={() => setSearchMode("metadata")}
+            title="Search by name, project, model"
           >
-            {searching ? (
-              <>
-                <span className={styles.spinnerSmall} />
-                Searching...
-              </>
-            ) : (
-              "Search"
-            )}
+            📋 Metadata
           </button>
-          {(searchQuery || hasActiveFilters) && (
-            <button
-              onClick={clearFilters}
-              className="btn btn-secondary"
-            >
-              Clear
-            </button>
-          )}
+          <button
+            className={`${styles.searchModeButton} ${searchMode === "fulltext" ? styles.active : ""}`}
+            onClick={() => setSearchMode("fulltext")}
+            title="Search full conversation content"
+          >
+            🔍 Full-Text
+          </button>
         </div>
+
+        {/* Search - Conditional based on mode */}
+        {searchMode === "metadata" ? (
+          <div className={styles.searchContainer}>
+            <input
+              ref={searchInputRef}
+              type="text"
+              placeholder="Search history... (Press /)"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              className={styles.searchInput}
+            />
+            <button
+              onClick={handleSearch}
+              disabled={searching}
+              className={`btn btn-primary ${styles.searchButton}`}
+            >
+              {searching ? (
+                <>
+                  <span className={styles.spinnerSmall} />
+                  Searching...
+                </>
+              ) : (
+                "Search"
+              )}
+            </button>
+            {(searchQuery || hasActiveFilters) && (
+              <button
+                onClick={clearFilters}
+                className="btn btn-secondary"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className={styles.searchContainer}>
+            <HistorySearchInput
+              value={fullTextSearch.query}
+              onChange={fullTextSearch.setQuery}
+              onSubmit={(value: string) => fullTextSearch.search({ query: value })}
+              loading={fullTextSearch.loading}
+              placeholder="Search conversation content..."
+              className={styles.fullTextSearchInput}
+            />
+          </div>
+        )}
 
         {/* Filters */}
         <div className={styles.filters}>
@@ -695,13 +814,32 @@ export default function HistoryBrowserPage() {
       </div>
 
       <div className={styles.content}>
-        {/* Entry List */}
+        {/* Entry List or Full-Text Search Results */}
         <div className={styles.entryList} ref={entryListRef}>
-          <h2 className={styles.sectionTitle}>
-            History ({filteredEntries.length} of {entries.length} entries)
-          </h2>
+          {searchMode === "fulltext" ? (
+            <>
+              <h2 className={styles.sectionTitle}>
+                Full-Text Search
+              </h2>
+              <HistorySearchResults
+                results={fullTextSearch.results}
+                totalMatches={fullTextSearch.totalMatches}
+                queryTimeMs={fullTextSearch.queryTimeMs}
+                hasMore={fullTextSearch.hasMore}
+                loading={fullTextSearch.loading}
+                error={fullTextSearch.error}
+                query={fullTextSearch.query}
+                onResultClick={handleSearchResultClick}
+                onLoadMore={fullTextSearch.loadMore}
+              />
+            </>
+          ) : (
+            <>
+              <h2 className={styles.sectionTitle}>
+                History ({filteredEntries.length} of {entries.length} entries)
+              </h2>
 
-          {loading ? (
+              {loading ? (
             <div className={styles.loadingContainer}>
               <div className="spinner" />
               <div className={styles.loadingTitle}>Loading Claude History...</div>
@@ -796,6 +934,8 @@ export default function HistoryBrowserPage() {
               ))}
             </div>
           )}
+            </>
+          )}
         </div>
 
         {/* Detail Panel */}
@@ -850,12 +990,59 @@ export default function HistoryBrowserPage() {
                   </div>
                 </div>
 
+                {/* Message Preview */}
+                <div className={styles.messagePreview}>
+                  <div className={styles.previewHeader}>
+                    <span className={styles.fieldLabel}>Recent Messages</span>
+                    {loadingPreview && <span className="text-muted" style={{ fontSize: "12px" }}>Loading...</span>}
+                  </div>
+                  {previewMessages.length > 0 ? (
+                    <div className={styles.previewMessages}>
+                      {previewMessages.map((msg, idx) => (
+                        <div
+                          key={idx}
+                          className={`${styles.previewMessage} ${msg.role === "user" ? styles.userMessage : styles.assistantMessage}`}
+                        >
+                          <div className={styles.previewRole}>
+                            {msg.role === "user" ? "👤" : "🤖"}
+                          </div>
+                          <div className={styles.previewContent}>
+                            {msg.content.length > 200
+                              ? msg.content.substring(0, 200) + "..."
+                              : msg.content}
+                          </div>
+                        </div>
+                      ))}
+                      {selectedEntry.messageCount > 5 && (
+                        <button
+                          onClick={() => loadMessages(selectedEntry.id)}
+                          className={styles.viewMoreButton}
+                        >
+                          View all {selectedEntry.messageCount} messages →
+                        </button>
+                      )}
+                    </div>
+                  ) : !loadingPreview ? (
+                    <div className="text-muted" style={{ fontSize: "12px", fontStyle: "italic" }}>
+                      No messages available
+                    </div>
+                  ) : null}
+                </div>
+
                 {/* Action Buttons */}
                 <div className={styles.detailActions}>
                   <button
+                    onClick={() => handleResumeSession(selectedEntry)}
+                    disabled={resuming || !selectedEntry.project}
+                    className="btn btn-primary"
+                    title={selectedEntry.project ? "Start a new session resuming this conversation" : "Cannot resume: No project path"}
+                  >
+                    {resuming ? "Starting..." : "▶️ Resume Session"}
+                  </button>
+                  <button
                     onClick={() => loadMessages(selectedEntry.id)}
                     disabled={loadingMessages}
-                    className="btn btn-primary"
+                    className="btn btn-secondary"
                   >
                     {loadingMessages ? "Loading..." : "💬 View Messages"}
                   </button>

@@ -155,17 +155,10 @@ func (ce *CommandExecutor) executionLoop() {
 			// Try to get next command
 			cmd := ce.queue.Dequeue()
 			if cmd == nil {
-				// No commands available, wait for notification
-				select {
-				case <-ce.queue.NotifyChannel():
-					// New command available, continue loop
-					continue
-				case <-ce.ctx.Done():
-					return
-				case <-time.After(1 * time.Second):
-					// Timeout to check context periodically
-					continue
-				}
+				// No commands available, wait for notification while draining response channel
+				// to prevent "channel full" warnings when output arrives during idle periods
+				ce.waitForCommandOrDrain(responseCh)
+				continue
 			}
 
 			// Execute the command
@@ -191,6 +184,31 @@ func (ce *CommandExecutor) executionLoop() {
 			if ce.resultCallback != nil {
 				ce.resultCallback(result)
 			}
+		}
+	}
+}
+
+// waitForCommandOrDrain waits for a new command while draining the response channel
+// to prevent buffer overflow when output arrives during idle periods.
+func (ce *CommandExecutor) waitForCommandOrDrain(responseCh <-chan ResponseChunk) {
+	for {
+		select {
+		case <-ce.ctx.Done():
+			return
+		case <-ce.queue.NotifyChannel():
+			// New command available
+			return
+		case _, ok := <-responseCh:
+			// Drain response chunks while idle - we don't need the data,
+			// just preventing channel overflow
+			if !ok {
+				// Channel closed
+				return
+			}
+			// Continue draining
+		case <-time.After(1 * time.Second):
+			// Periodic check for context cancellation
+			return
 		}
 	}
 }

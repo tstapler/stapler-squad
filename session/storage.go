@@ -42,6 +42,9 @@ type InstanceData struct {
 	GitHubRepo      string `json:"github_repo,omitempty"`
 	GitHubSourceRef string `json:"github_source_ref,omitempty"`
 	ClonedRepoPath  string `json:"cloned_repo_path,omitempty"`
+	// Worktree detection fields
+	MainRepoPath string `json:"main_repo_path,omitempty"` // Path to main repo when this is a worktree
+	IsWorktree   bool   `json:"is_worktree,omitempty"`    // True if path is a git worktree
 
 	// Claude Code session persistence
 	ClaudeSession ClaudeSessionData `json:"claude_session,omitempty"`
@@ -193,6 +196,9 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 	// Convert merged instances to InstanceData
 	data := make([]InstanceData, 0, len(mergedInstances))
 	for _, instance := range mergedInstances {
+		// DEBUG: Log worktree info being persisted
+		log.InfoLog.Printf("[SaveInstances] Converting instance '%s': IsWorktree=%v, MainRepoPath=%s, GitHubOwner=%s, GitHubRepo=%s",
+			instance.Title, instance.IsWorktree, instance.MainRepoPath, instance.GitHubOwner, instance.GitHubRepo)
 		data = append(data, instance.ToInstanceData())
 	}
 
@@ -345,6 +351,41 @@ func (s *Storage) DeleteInstance(title string) error {
 	// This is critical because the server reloads instances immediately after
 	// deletion to update the ReviewQueuePoller. If we used SaveAsync, the poller
 	// might reload the old state that still contains the deleted session.
+	return s.state.SaveInstances(newJsonData)
+}
+
+// AddInstance adds a new instance to storage.
+// This method directly manipulates the storage JSON to add the instance.
+// Unlike SaveInstances, this does not require instance.Started() to be true.
+func (s *Storage) AddInstance(instance *Instance) error {
+	// Load raw JSON data from storage
+	jsonData := s.state.GetInstances()
+
+	var instancesData []InstanceData
+	if err := json.Unmarshal(jsonData, &instancesData); err != nil {
+		// If unmarshal fails, start with empty slice
+		instancesData = []InstanceData{}
+	}
+
+	// Check if instance already exists
+	data := instance.ToInstanceData()
+	for _, existing := range instancesData {
+		if existing.Title == data.Title {
+			// Already exists, update instead
+			return s.UpdateInstance(instance)
+		}
+	}
+
+	// Add the new instance
+	instancesData = append(instancesData, data)
+
+	// Marshal back to JSON
+	newJsonData, err := json.Marshal(instancesData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+
+	// Save synchronously to ensure persistence
 	return s.state.SaveInstances(newJsonData)
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { routes } from "@/lib/routes";
 import styles from "./Navigation.module.css";
@@ -17,15 +17,15 @@ export function Navigation() {
     <nav className={styles.nav} role="navigation" aria-label="Main navigation">
       <div className={styles.container}>
         <div className={styles.brand}>
-          <Link href={routes.home} aria-label="Claude Squad home">
+          <AppLink href={routes.home} aria-label="Claude Squad home">
             <h1 className={styles.title}>Claude Squad</h1>
-          </Link>
+          </AppLink>
         </div>
 
         <ul className={styles.menu} role="menubar">
           {navItems.map((item) => (
             <li key={item.href} role="none">
-              <Link
+              <AppLink
                 href={item.href}
                 role="menuitem"
                 aria-current={pathname === item.href ? "page" : undefined}
@@ -34,19 +34,19 @@ export function Navigation() {
                 }`}
               >
                 {item.label}
-              </Link>
+              </AppLink>
             </li>
           ))}
         </ul>
 
         <div className={styles.actions}>
-          <Link
+          <AppLink
             href={routes.sessionCreate}
             className={styles.createButton}
             aria-label="Create new session"
           >
             New Session
-          </Link>
+          </AppLink>
         </div>
       </div>
     </nav>

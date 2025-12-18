@@ -1,8 +1,8 @@
 package app
 
 import (
-	appui "claude-squad/app/ui"
 	"claude-squad/app/state"
+	appui "claude-squad/app/ui"
 	"claude-squad/cmd"
 	"claude-squad/config"
 	"claude-squad/session"
@@ -53,9 +53,9 @@ type Dependencies interface {
 // ProductionDependencies implements Dependencies for production use
 // This creates all real dependencies
 type ProductionDependencies struct {
-	ctx       context.Context
-	program   string
-	autoYes   bool
+	ctx     context.Context
+	program string
+	autoYes bool
 
 	// Lazy-initialized dependencies
 	appConfig       *config.Config
@@ -172,7 +172,7 @@ func (p *ProductionDependencies) GetMenu() *ui.Menu {
 // GetTabbedWindow returns the tabbed window component
 func (p *ProductionDependencies) GetTabbedWindow() *ui.TabbedWindow {
 	if p.tabbedWindow == nil {
-		p.tabbedWindow = ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane())
+		p.tabbedWindow = ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewVCPane())
 	}
 	return p.tabbedWindow
 }
@@ -316,22 +316,22 @@ func (m *MockDependencies) SetMockStorage(storage *session.Storage) *MockDepende
 }
 
 // Implementation of Dependencies interface for MockDependencies
-func (m *MockDependencies) GetContext() context.Context { return m.ctx }
-func (m *MockDependencies) GetProgram() string { return m.program }
-func (m *MockDependencies) GetAutoYes() bool { return m.autoYes }
-func (m *MockDependencies) GetAppConfig() *config.Config { return m.appConfig }
-func (m *MockDependencies) GetAppState() config.StateManager { return m.appState }
+func (m *MockDependencies) GetContext() context.Context                 { return m.ctx }
+func (m *MockDependencies) GetProgram() string                          { return m.program }
+func (m *MockDependencies) GetAutoYes() bool                            { return m.autoYes }
+func (m *MockDependencies) GetAppConfig() *config.Config                { return m.appConfig }
+func (m *MockDependencies) GetAppState() config.StateManager            { return m.appState }
 func (m *MockDependencies) GetDiscoveryConfig() *config.DiscoveryConfig { return m.discoveryConfig }
-func (m *MockDependencies) GetStorage() *session.Storage { return m.storage }
-func (m *MockDependencies) GetUICoordinator() appui.Coordinator { return m.uiCoordinator }
-func (m *MockDependencies) GetList() *ui.List { return m.list }
-func (m *MockDependencies) GetMenu() *ui.Menu { return m.menu }
-func (m *MockDependencies) GetTabbedWindow() *ui.TabbedWindow { return m.tabbedWindow }
-func (m *MockDependencies) GetErrBox() *ui.ErrBox { return m.errBox }
-func (m *MockDependencies) GetStatusBar() *ui.StatusBar { return m.statusBar }
-func (m *MockDependencies) GetSpinner() spinner.Model { return m.spinner }
-func (m *MockDependencies) UpdateSpinner(newSpinner spinner.Model) { m.spinner = newSpinner }
-func (m *MockDependencies) GetTerminalManager() *terminal.Manager { return m.terminalManager }
-func (m *MockDependencies) GetSignalManager() *terminal.SignalManager { return m.signalManager }
-func (m *MockDependencies) GetBridge() *cmd.Bridge { return m.bridge }
-func (m *MockDependencies) GetStateManager() state.Manager { return m.stateManager }
+func (m *MockDependencies) GetStorage() *session.Storage                { return m.storage }
+func (m *MockDependencies) GetUICoordinator() appui.Coordinator         { return m.uiCoordinator }
+func (m *MockDependencies) GetList() *ui.List                           { return m.list }
+func (m *MockDependencies) GetMenu() *ui.Menu                           { return m.menu }
+func (m *MockDependencies) GetTabbedWindow() *ui.TabbedWindow           { return m.tabbedWindow }
+func (m *MockDependencies) GetErrBox() *ui.ErrBox                       { return m.errBox }
+func (m *MockDependencies) GetStatusBar() *ui.StatusBar                 { return m.statusBar }
+func (m *MockDependencies) GetSpinner() spinner.Model                   { return m.spinner }
+func (m *MockDependencies) UpdateSpinner(newSpinner spinner.Model)      { m.spinner = newSpinner }
+func (m *MockDependencies) GetTerminalManager() *terminal.Manager       { return m.terminalManager }
+func (m *MockDependencies) GetSignalManager() *terminal.SignalManager   { return m.signalManager }
+func (m *MockDependencies) GetBridge() *cmd.Bridge                      { return m.bridge }
+func (m *MockDependencies) GetStateManager() state.Manager              { return m.stateManager }

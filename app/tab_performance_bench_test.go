@@ -186,7 +186,7 @@ func setupRealisticBenchmarkHome(b *testing.B, sessionCount int) *home {
 		ctx:                  ctx,
 		spinner:              spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:                 ui.NewMenu(),
-		tabbedWindow:         ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane()),
+		tabbedWindow:         ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewVCPane()),
 		errBox:               ui.NewErrBox(),
 		storage:              storage,
 		appConfig:            appConfig,

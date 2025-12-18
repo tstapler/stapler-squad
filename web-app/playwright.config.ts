@@ -19,14 +19,14 @@ const TEST_PORT = process.env.TEST_PORT || '3333';
 
 export default defineConfig({
   testDir: './tests/e2e',
-  /* Run tests in files in parallel */
-  fullyParallel: true,
+  /* Disable parallel execution for stress tests - they're resource intensive */
+  fullyParallel: false,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
   forbidOnly: !!process.env.CI,
   /* Retry on CI only */
   retries: process.env.CI ? 2 : 0,
-  /* Opt out of parallel tests on CI. */
-  workers: process.env.CI ? 1 : undefined,
+  /* Use 1 worker for stress tests to avoid overwhelming the server */
+  workers: 1,
   /* Reporter to use. See https://playwright.dev/docs/test-reporters */
   reporter: 'html',
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
@@ -58,9 +58,19 @@ export default defineConfig({
       name: 'chromium',
       use: {
         ...devices['Desktop Chrome'],
-        // Enable performance.memory API for memory tests
+        // Launch options for performance testing
         launchOptions: {
-          args: ['--enable-precise-memory-info'],
+          args: [
+            // Enable performance.memory API for memory tests
+            '--enable-precise-memory-info',
+            // Disable throttling for accurate frame rate testing
+            '--disable-background-timer-throttling',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-renderer-backgrounding',
+            // Ensure consistent frame rate in automation
+            '--disable-frame-rate-limit',
+            '--disable-gpu-vsync',
+          ],
         },
       },
     },

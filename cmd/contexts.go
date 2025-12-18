@@ -6,6 +6,7 @@ const (
 	ContextList      ContextID = "list"
 	ContextPTYList   ContextID = "pty-list"
 	ContextGitStatus ContextID = "git-status"
+	ContextVCTab     ContextID = "vc-tab"
 	ContextHelp      ContextID = "help"
 	ContextPrompt    ContextID = "prompt"
 	ContextSearch    ContextID = "search"
@@ -37,6 +38,12 @@ func InitializeContexts(registry *CommandRegistry) error {
 			Name:        "Git Status",
 			Parent:      ptr(ContextGlobal),
 			Description: "Commands available in the fugitive-style git status interface",
+		},
+		{
+			ID:          ContextVCTab,
+			Name:        "VC Tab",
+			Parent:      ptr(ContextList),
+			Description: "Commands available in the version control tab",
 		},
 		{
 			ID:          ContextHelp,

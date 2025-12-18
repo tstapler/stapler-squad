@@ -198,11 +198,21 @@ func (sd *StatusDetector) compilePatterns() error {
 	return nil
 }
 
+// ansiStripRegex matches ANSI escape sequences for stripping
+var ansiStripRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07`)
+
+// stripANSI removes ANSI escape codes from text for cleaner pattern matching
+func stripANSI(text string) string {
+	return ansiStripRegex.ReplaceAllString(text, "")
+}
+
 // Detect analyzes the provided PTY output and returns the detected status.
 // Patterns are checked in priority order: Error > TestsFailing > Success > NeedsApproval > InputRequired > Active > Processing > Idle > Ready.
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
-	text := string(output)
+	// Strip ANSI escape codes for cleaner pattern matching
+	// Terminal output often contains color codes like [38;5;153m that interrupt patterns
+	text := stripANSI(string(output))
 
 	// Check error patterns first (highest priority)
 	for _, regex := range sd.errorRegexes {
@@ -270,75 +280,77 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 	return StatusUnknown
 }
 
-// DetectWithContext returns the detected status along with the matching pattern context.
-// This is useful for debugging and understanding why a particular status was detected.
+// DetectWithContext returns the detected status along with a user-friendly context message.
+// Uses the pattern's Description field for human-readable messages instead of raw matched text.
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
-	text := string(output)
+	// Strip ANSI escape codes for cleaner pattern matching
+	// Terminal output often contains color codes like [38;5;153m that interrupt patterns
+	text := stripANSI(string(output))
 
 	// Check error patterns first (highest priority)
 	for i, regex := range sd.errorRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusError, fmt.Sprintf("Matched error pattern '%s': %s", sd.patterns.Error[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusError, sd.patterns.Error[i].Description
 		}
 	}
 
 	// Check tests failing patterns (high priority - actionable failures)
 	for i, regex := range sd.testsFailingRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusTestsFailing, fmt.Sprintf("Matched tests_failing pattern '%s': %s", sd.patterns.TestsFailing[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusTestsFailing, sd.patterns.TestsFailing[i].Description
 		}
 	}
 
 	// Check success patterns (task completion)
 	for i, regex := range sd.successRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusSuccess, fmt.Sprintf("Matched success pattern '%s': %s", sd.patterns.Success[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusSuccess, sd.patterns.Success[i].Description
 		}
 	}
 
 	// Check needs approval patterns
 	for i, regex := range sd.needsApprovalRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusNeedsApproval, fmt.Sprintf("Matched approval pattern '%s': %s", sd.patterns.NeedsApproval[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusNeedsApproval, sd.patterns.NeedsApproval[i].Description
 		}
 	}
 
 	// Check input required patterns
 	for i, regex := range sd.inputRequiredRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusInputRequired, fmt.Sprintf("Matched input_required pattern '%s': %s", sd.patterns.InputRequired[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusInputRequired, sd.patterns.InputRequired[i].Description
 		}
 	}
 
 	// Check active patterns
 	for i, regex := range sd.activeRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusActive, fmt.Sprintf("Matched active pattern '%s': %s", sd.patterns.Active[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusActive, sd.patterns.Active[i].Description
 		}
 	}
 
 	// Check processing patterns
 	for i, regex := range sd.processingRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusProcessing, fmt.Sprintf("Matched processing pattern '%s': %s", sd.patterns.Processing[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusProcessing, sd.patterns.Processing[i].Description
 		}
 	}
 
 	// Check idle patterns
 	for i, regex := range sd.idleRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusIdle, fmt.Sprintf("Matched idle pattern '%s': %s", sd.patterns.Idle[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusIdle, sd.patterns.Idle[i].Description
 		}
 	}
 
 	// Check ready patterns
 	for i, regex := range sd.readyRegexes {
-		if match := regex.FindString(text); match != "" {
-			return StatusReady, fmt.Sprintf("Matched ready pattern '%s': %s", sd.patterns.Ready[i].Name, match)
+		if regex.MatchString(text) {
+			return StatusReady, sd.patterns.Ready[i].Description
 		}
 	}
 
-	return StatusUnknown, "No patterns matched"
+	return StatusUnknown, ""
 }
 
 // getDefaultPatterns returns the default status detection patterns for Claude Code.
@@ -406,38 +418,11 @@ func getDefaultPatterns() StatusPatterns {
 				Priority:    29,
 			},
 		},
-		TestsFailing: []StatusPattern{
-			{
-				Name:        "go_test_fail",
-				Pattern:     `(?i)(FAIL|--- FAIL:|test.*failed)`,
-				Description: "Go test failures",
-				Priority:    28,
-			},
-			{
-				Name:        "pytest_fail",
-				Pattern:     `(?i)(FAILED.*test_|pytest.*failed|\d+ failed)`,
-				Description: "Python pytest failures",
-				Priority:    27,
-			},
-			{
-				Name:        "jest_fail",
-				Pattern:     `(?i)(FAIL.*\.test\.|Tests:.*failed|\d+ failing)`,
-				Description: "JavaScript Jest test failures",
-				Priority:    26,
-			},
-			{
-				Name:        "generic_test_fail",
-				Pattern:     `(?i)(\d+\s+(test|tests)\s+(failed|failing)|test suite failed|all tests? failed)`,
-				Description: "Generic test failure patterns",
-				Priority:    25,
-			},
-			{
-				Name:        "test_error_count",
-				Pattern:     `(?i)(Failures:\s*\d+|Errors:\s*\d+|Failed:\s*\d+)`,
-				Description: "Test error count indicators",
-				Priority:    24,
-			},
-		},
+		// TestsFailing: DISABLED - These patterns cause too many false positives.
+		// Test output varies wildly across languages/frameworks, and matching "FAIL"
+		// anywhere in output catches non-test-related content. Focus on Claude's
+		// actual status indicators (active, idle, approval, error) instead.
+		TestsFailing: []StatusPattern{},
 		Idle: []StatusPattern{
 			{
 				Name:        "insert_mode",
@@ -461,8 +446,14 @@ func getDefaultPatterns() StatusPatterns {
 		Active: []StatusPattern{
 			{
 				Name:        "esc_to_interrupt",
-				Pattern:     `\(esc to interrupt\)`,
+				Pattern:     `esc to interrupt`,
 				Description: "Active operation that can be interrupted",
+				Priority:    25,
+			},
+			{
+				Name:        "synthesizing",
+				Pattern:     `(?i)Synthesizing\.{0,3}`,
+				Description: "Claude is synthesizing a response",
 				Priority:    25,
 			},
 			{
@@ -473,7 +464,7 @@ func getDefaultPatterns() StatusPatterns {
 			},
 			{
 				Name:        "progress_indicators",
-				Pattern:     `[✓✔⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏].*(?:ing|Processing|Working|Executing|Verifying|Testing|Building)`,
+				Pattern:     `[✓✔⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏★].*(?:ing|Processing|Working|Executing|Verifying|Testing|Building|Synthesizing)`,
 				Description: "Progress indicators with action verbs",
 				Priority:    23,
 			},
@@ -517,23 +508,20 @@ func getDefaultPatterns() StatusPatterns {
 			},
 		},
 		InputRequired: []StatusPattern{
+			// Claude Code's AskUserQuestion prompts have a very specific format:
+			// "Do you want to proceed?"
+			// " ❯ 1. Yes"
+			// "   2. Type here to tell Claude what to do differently"
+			//
+			// We detect this by looking for the numbered option selector pattern.
+			// This is much more reliable than trying to match generic question text.
 			{
-				Name:        "explicit_input_prompt",
-				Pattern:     `(?i)(enter|type|provide|input|specify).*:`,
-				Description: "Explicit prompts asking for user input",
+				Name:        "numbered_option_selector",
+				// Matches Claude Code's numbered selection format with arrow selector
+				// Example: " ❯ 1. Yes" or "   2. No"
+				Pattern:     `[❯>]\s*\d+\.\s+\w`,
+				Description: "Selection prompt with numbered options",
 				Priority:    16,
-			},
-			{
-				Name:        "question_prompt",
-				Pattern:     `(?i)^\s*(what|which|how|when|where)\b.*\?`,
-				Description: "Questions waiting for user response",
-				Priority:    15,
-			},
-			{
-				Name:        "please_provide",
-				Pattern:     `(?i)please\s+(provide|enter|type|specify|give)`,
-				Description: "Polite input requests",
-				Priority:    14,
 			},
 		},
 	}

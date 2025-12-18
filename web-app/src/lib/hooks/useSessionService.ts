@@ -32,6 +32,8 @@ interface UseSessionServiceReturn {
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string) => Promise<Session | null>;
+  renameSession: (id: string, newTitle: string) => Promise<boolean>;
+  restartSession: (id: string) => Promise<boolean>;
   acknowledgeSession: (id: string) => Promise<boolean>;
 
   // Real-time updates
@@ -126,9 +128,14 @@ export function useSessionService(
           existingWorktree: request.existingWorktree,
         });
 
-        // Add to local state
+        // Add to local state (with duplicate check to handle race with watch stream)
         if (response.session) {
-          setSessions((prev) => [...prev, response.session!]);
+          setSessions((prev) => {
+            if (prev.some((s) => s.id === response.session!.id)) {
+              return prev;
+            }
+            return [...prev, response.session!];
+          });
         }
 
         return response.session ?? null;
@@ -216,6 +223,61 @@ export function useSessionService(
       });
     },
     [updateSession]
+  );
+
+  // Rename session
+  const renameSession = useCallback(
+    async (id: string, newTitle: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+
+      setError(null);
+
+      try {
+        const response = await clientRef.current.renameSession({
+          id,
+          title: newTitle
+        });
+
+        // Update local state
+        if (response.success && response.session) {
+          setSessions((prev) =>
+            prev.map((s) => (s.id === id ? response.session! : s))
+          );
+        }
+
+        return response.success;
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error("Failed to rename session"));
+        return false;
+      }
+    },
+    []
+  );
+
+  // Restart session
+  const restartSession = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+
+      setError(null);
+
+      try {
+        const response = await clientRef.current.restartSession({ id });
+
+        // Update local state
+        if (response.success && response.session) {
+          setSessions((prev) =>
+            prev.map((s) => (s.id === id ? response.session! : s))
+          );
+        }
+
+        return response.success;
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error("Failed to restart session"));
+        return false;
+      }
+    },
+    []
   );
 
   // Acknowledge session (skip from review queue)
@@ -362,6 +424,8 @@ export function useSessionService(
     deleteSession,
     pauseSession,
     resumeSession,
+    renameSession,
+    restartSession,
     acknowledgeSession,
     watchSessions,
     stopWatching,

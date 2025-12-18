@@ -120,8 +120,8 @@ func TestAppConfirmationModalTeatest(t *testing.T) {
 		func(bts []byte) bool {
 			content := string(bts)
 			return strings.Contains(content, "Delete session 'test'?") &&
-				   strings.Contains(content, "(y)es") &&
-				   strings.Contains(content, "(n)o")
+				strings.Contains(content, "(y)es") &&
+				strings.Contains(content, "(n)o")
 		},
 		teatest.WithCheckInterval(50*time.Millisecond),
 		teatest.WithDuration(1*time.Second),

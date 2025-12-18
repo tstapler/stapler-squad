@@ -70,6 +70,8 @@ func NewIdleDetectorWithConfig(sessionName string, ptyAccess *PTYAccess, config 
 
 // DetectState analyzes recent PTY output and returns the current idle state.
 // This method applies pattern matching and debouncing logic.
+// DEPRECATED: Use DetectStateFromContent for more reliable detection.
+// This method uses the PTY circular buffer which may contain incomplete data.
 func (id *IdleDetector) DetectState() IdleState {
 	id.mu.Lock()
 	defer id.mu.Unlock()
@@ -83,6 +85,40 @@ func (id *IdleDetector) DetectState() IdleState {
 
 	// Detect status from patterns
 	status := id.statusDetector.Detect(recentOutput)
+
+	// Map detected status to idle state
+	newState := id.mapStatusToIdleState(status)
+
+	// Apply debouncing to prevent rapid state changes
+	// BUT: if current state is Unknown, always transition immediately
+	if newState != id.currentState {
+		if id.currentState == IdleStateUnknown || time.Since(id.lastStateChange) >= id.config.DebounceDelay {
+			id.currentState = newState
+			id.lastStateChange = time.Now()
+		}
+		// If debouncing, keep current state
+	}
+
+	return id.currentState
+}
+
+// DetectStateFromContent analyzes provided terminal content and returns the current idle state.
+// This method should be preferred over DetectState() as it allows the caller to provide
+// reliable terminal content (e.g., from tmux capture-pane) instead of using the PTY circular buffer.
+func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
+	id.mu.Lock()
+	defer id.mu.Unlock()
+
+	if content == "" {
+		// No content, keep current state
+		return id.currentState
+	}
+
+	// Strip ANSI codes for cleaner pattern matching (same as status_detector.go)
+	cleanContent := stripANSI(content)
+
+	// Detect status from patterns
+	status := id.statusDetector.Detect([]byte(cleanContent))
 
 	// Map detected status to idle state
 	newState := id.mapStatusToIdleState(status)

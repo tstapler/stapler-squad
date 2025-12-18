@@ -35,12 +35,28 @@ function checksum(str: string): number {
 }
 
 /**
- * Generate bouncing ball animation frame
+ * State for bouncing ball partial redraws (per-generator instance)
+ */
+interface BouncingBallState {
+  prevX: number;
+  prevY: number;
+  initialized: boolean;
+}
+
+/**
+ * Generate bouncing ball animation frame using PARTIAL REDRAWS
+ * Instead of redrawing the entire screen, only update:
+ * 1. Erase previous ball position
+ * 2. Draw new ball position
+ * 3. Update footer line
+ *
+ * This reduces output from ~2000+ chars to ~50 chars per frame
  */
 function generateBouncingBall(
   sequence: number,
   width: number,
-  height: number
+  height: number,
+  state: BouncingBallState
 ): string {
   const ball = '\x1b[33m\x1b[1mO\x1b[0m'; // Yellow bold ball
   const period = 60; // frames per cycle
@@ -50,30 +66,45 @@ function generateBouncingBall(
   const x = Math.floor((Math.sin(t) + 1) / 2 * (width - 2));
   const y = Math.floor((Math.sin(t * 1.5 + 0.5) + 1) / 2 * (height - 3)) + 1;
 
-  const lines: string[] = [];
+  let output = '';
 
-  // Header
-  lines.push(`\x1b[36m${'='.repeat(width)}\x1b[0m`);
+  // First frame: draw full screen
+  if (!state.initialized) {
+    state.initialized = true;
+    state.prevX = -1;
+    state.prevY = -1;
 
-  // Body
-  for (let row = 1; row < height - 1; row++) {
-    let line = '';
-    for (let col = 0; col < width; col++) {
-      if (row === y && col === x) {
-        line += ball;
-      } else {
-        line += ' ';
-      }
+    const lines: string[] = [];
+    // Header
+    lines.push(`\x1b[36m${'='.repeat(width)}\x1b[0m`);
+    // Empty body
+    for (let row = 1; row < height - 1; row++) {
+      lines.push(' '.repeat(width));
     }
-    lines.push(line);
+    // Footer placeholder
+    lines.push(' '.repeat(width));
+
+    output = '\x1b[H' + lines.join('\n');
   }
 
-  // Footer with frame info
-  const footer = `Frame: ${sequence.toString().padStart(6, '0')} | Ball: (${x},${y})`;
-  lines.push(`\x1b[36m${footer.padEnd(width)}\x1b[0m`);
+  // Erase previous ball position (if it changed)
+  if (state.prevX >= 0 && state.prevY >= 0 && (state.prevX !== x || state.prevY !== y)) {
+    // Move to previous position and erase (row is 1-indexed in ANSI, +1 for header)
+    output += `\x1b[${state.prevY + 1};${state.prevX + 1}H `;
+  }
 
-  // Move cursor to home and output
-  return '\x1b[H' + lines.join('\n');
+  // Draw new ball position
+  output += `\x1b[${y + 1};${x + 1}H${ball}`;
+
+  // Update footer (only when sequence changes, which is always)
+  const footer = `Frame: ${sequence.toString().padStart(6, '0')} | Ball: (${x},${y})`;
+  output += `\x1b[${height};1H\x1b[36m${footer.padEnd(width)}\x1b[0m`;
+
+  // Store current position for next frame
+  state.prevX = x;
+  state.prevY = y;
+
+  return output;
 }
 
 /**
@@ -220,6 +251,7 @@ export class AsciiFrameGenerator {
   private config: AsciiFrameConfig;
   private rng: SeededRandom;
   private sequence: number = 0;
+  private bouncingBallState: BouncingBallState = { prevX: -1, prevY: -1, initialized: false };
 
   constructor(config: AsciiFrameConfig) {
     this.config = config;
@@ -238,7 +270,8 @@ export class AsciiFrameGenerator {
         content = generateBouncingBall(
           this.sequence,
           this.config.width,
-          this.config.height
+          this.config.height,
+          this.bouncingBallState
         );
         break;
       case 'scrolling-text':
@@ -267,7 +300,8 @@ export class AsciiFrameGenerator {
         content = generateBouncingBall(
           this.sequence,
           this.config.width,
-          this.config.height
+          this.config.height,
+          this.bouncingBallState
         );
     }
 
@@ -288,6 +322,8 @@ export class AsciiFrameGenerator {
   reset(): void {
     this.sequence = 0;
     this.rng = new SeededRandom(this.config.seed || Date.now());
+    // Reset pattern-specific state
+    this.bouncingBallState = { prevX: -1, prevY: -1, initialized: false };
   }
 
   /**

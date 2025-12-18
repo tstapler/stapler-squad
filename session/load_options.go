@@ -21,14 +21,23 @@ type LoadOptions struct {
 }
 
 // Common preset configurations for different use cases
+//
+// MIGRATION NOTE: These presets are for use with InstanceData operations.
+// For new code using the Session domain model, prefer ContextOptions presets
+// in context_options.go (e.g., ContextMinimal, ContextUIView, ContextFull).
+// See session.go for InstanceToSession and SessionToInstance adapters.
 
 // LoadMinimal loads only the core session fields without any child data.
 // Use this when you only need session metadata (title, path, status, etc.)
+//
+// Deprecated: For new code, use ContextMinimal with GetSession/ListSessions.
 var LoadMinimal = LoadOptions{}
 
 // LoadSummary loads lightweight child data suitable for list views.
 // This includes everything except the heavy diff content.
 // Memory usage: ~1-2 KB per session
+//
+// Deprecated: For new code, use ContextUIView with GetSession/ListSessions.
 var LoadSummary = LoadOptions{
 	LoadWorktree:      true,
 	LoadDiffStats:     true, // Only counts, not content
@@ -40,6 +49,8 @@ var LoadSummary = LoadOptions{
 // LoadFull loads all available data including full diff content.
 // Use this for detail views where you need complete information.
 // Memory usage: Can be 1-25 MB per session depending on diff size
+//
+// Deprecated: For new code, use ContextFull with GetSession/ListSessions.
 var LoadFull = LoadOptions{
 	LoadWorktree:      true,
 	LoadDiffStats:     true,
@@ -49,6 +60,8 @@ var LoadFull = LoadOptions{
 }
 
 // LoadDiffOnly loads only diff-related data, useful for preview panes.
+//
+// Deprecated: For new code, use ContextTerminalView.WithDiffContent() with GetSession/ListSessions.
 var LoadDiffOnly = LoadOptions{
 	LoadWorktree:    true, // Needed for diff context
 	LoadDiffStats:   true,
@@ -56,6 +69,8 @@ var LoadDiffOnly = LoadOptions{
 }
 
 // LoadForReviewQueue loads data needed for review queue operations.
+//
+// Deprecated: For new code, use ContextForReviewQueue with GetSession/ListSessions.
 var LoadForReviewQueue = LoadOptions{
 	LoadWorktree:      true, // For branch info
 	LoadDiffStats:     true, // For change indicators

@@ -1,6 +1,7 @@
 .idea
 .aider*
 claude-squad
+claude-mux
 **.DS_Store
 cs
 claude-squad-test
@@ -12,7 +13,7 @@ web/src/gen/
 /web-app/node_modules/
 /.playwright-mcp
 
-# Test outputs
+# outputs
 test-results/
 tests/playwright-report/
 tests/test-results/

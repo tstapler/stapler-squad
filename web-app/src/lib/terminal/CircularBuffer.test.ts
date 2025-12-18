@@ -280,7 +280,7 @@ describe('CircularBuffer', () => {
 
       lines.forEach(line => buffer.push(line));
 
-      const deployLines = buffer.filter(line => line.tags?.includes("deploy"));
+      const deployLines = buffer.filter(line => line.tags?.includes("deploy") ?? false);
       expect(deployLines).toHaveLength(2);
     });
   });

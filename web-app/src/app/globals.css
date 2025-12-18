@@ -12,6 +12,16 @@
   --text-muted: #6b6b6b;
   --text-disabled: #9a9a9a;
 
+  /* Terminal-specific colors (always dark, for terminal modals) */
+  --terminal-background: #1e1e1e;
+  --terminal-foreground: #d4d4d4;
+  --terminal-header-background: #2d2d30;
+  --terminal-header-foreground: #ffffff;
+  --terminal-border-color: #3e3e42;
+  --terminal-tabs-background: #252526;
+  --terminal-text-muted: #9ca3af;
+  --terminal-hover-background: #3e3e42;
+
   /* Interactive elements */
   --primary: #0070f3;
   --primary-hover: #0051cc;

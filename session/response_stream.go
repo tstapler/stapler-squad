@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/log"
+	"claude-squad/server/analytics"
 	"context"
 	"fmt"
 	"io"
@@ -27,37 +28,49 @@ type Subscriber struct {
 // ResponseStream manages real-time streaming of Claude instance responses to multiple subscribers.
 // It reads from the PTY access layer and broadcasts output to all active subscribers.
 type ResponseStream struct {
-	sessionName string
-	ptyAccess   *PTYAccess
-	subscribers map[string]*Subscriber
-	mu          sync.RWMutex
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	started     bool
-	bufferSize  int // Channel buffer size for each subscriber
+	sessionName  string
+	ptyAccess    *PTYAccess
+	subscribers  map[string]*Subscriber
+	mu           sync.RWMutex
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	started      bool
+	bufferSize   int // Channel buffer size for each subscriber
+	escapeParser *analytics.EscapeCodeParser // For escape code analytics
 }
 
 // NewResponseStream creates a new response stream for the given session.
 // The bufferSize parameter determines how many chunks can be buffered per subscriber.
 func NewResponseStream(sessionName string, ptyAccess *PTYAccess) *ResponseStream {
+	// Create escape code parser using global store
+	escapeParser := analytics.NewEscapeCodeParser(analytics.GetGlobalStore(), sessionName)
+	// Parser is enabled/disabled via the global store's enabled state
+	escapeParser.SetEnabled(true) // Always parse when store is enabled
+
 	return &ResponseStream{
-		sessionName: sessionName,
-		ptyAccess:   ptyAccess,
-		subscribers: make(map[string]*Subscriber),
-		bufferSize:  2000, // Increased from 100 to handle high-output scenarios (build errors, code generation)
-		started:     false,
+		sessionName:  sessionName,
+		ptyAccess:    ptyAccess,
+		subscribers:  make(map[string]*Subscriber),
+		bufferSize:   10000, // Large buffer to handle high-output scenarios (build errors, code generation)
+		started:      false,
+		escapeParser: escapeParser,
 	}
 }
 
 // NewResponseStreamWithBuffer creates a response stream with a custom buffer size.
 func NewResponseStreamWithBuffer(sessionName string, ptyAccess *PTYAccess, bufferSize int) *ResponseStream {
+	// Create escape code parser using global store
+	escapeParser := analytics.NewEscapeCodeParser(analytics.GetGlobalStore(), sessionName)
+	escapeParser.SetEnabled(true) // Always parse when store is enabled
+
 	return &ResponseStream{
-		sessionName: sessionName,
-		ptyAccess:   ptyAccess,
-		subscribers: make(map[string]*Subscriber),
-		bufferSize:  bufferSize,
-		started:     false,
+		sessionName:  sessionName,
+		ptyAccess:    ptyAccess,
+		subscribers:  make(map[string]*Subscriber),
+		bufferSize:   bufferSize,
+		started:      false,
+		escapeParser: escapeParser,
 	}
 }
 
@@ -154,6 +167,11 @@ func (rs *ResponseStream) streamLoop() {
 					Timestamp: time.Now(),
 				}
 				copy(chunk.Data, readBuf[:n])
+
+				// Parse escape codes for analytics (passthrough - doesn't modify data)
+				if rs.escapeParser != nil {
+					rs.escapeParser.Parse(chunk.Data)
+				}
 
 				// Also write to circular buffer for history
 				if rs.ptyAccess.buffer != nil {

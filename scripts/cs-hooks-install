@@ -110,19 +110,19 @@ get_settings_path() {
     elif [[ "$SCOPE" == "project" ]]; then
         echo ".claude/settings.json"
     else
-        # Interactive selection
-        echo ""
-        echo "Where would you like to install Claude Squad hooks?"
-        echo ""
-        echo "  1) Global (~/.claude/settings.json)"
-        echo "     Applies to all Claude Code sessions"
-        echo ""
-        echo "  2) Project (.claude/settings.json)"
-        echo "     Only applies to current project"
-        echo ""
+        # Interactive selection - display menu to stderr so it's visible
+        echo "" >&2
+        echo "Where would you like to install Claude Squad hooks?" >&2
+        echo "" >&2
+        echo "  1) Global (~/.claude/settings.json)" >&2
+        echo "     Applies to all Claude Code sessions" >&2
+        echo "" >&2
+        echo "  2) Project (.claude/settings.json)" >&2
+        echo "     Only applies to current project" >&2
+        echo "" >&2
         read -p "Selection [1/2]: " choice
-        echo ""
-        
+        echo "" >&2
+
         case "$choice" in
             1) echo "$HOME/.claude/settings.json" ;;
             2) echo ".claude/settings.json" ;;

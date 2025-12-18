@@ -29,11 +29,12 @@ func DefaultReviewQueuePollerConfig() ReviewQueuePollerConfig {
 // ReviewQueuePoller automatically monitors sessions and adds them to the review queue
 // when they become idle or need attention.
 type ReviewQueuePoller struct {
-	queue         *ReviewQueue
-	statusManager *InstanceStatusManager
-	storage       *Storage
-	instances     []*Instance
-	config        ReviewQueuePollerConfig
+	queue          *ReviewQueue
+	statusManager  *InstanceStatusManager
+	storage        *Storage
+	instances      []*Instance
+	config         ReviewQueuePollerConfig
+	statusDetector *StatusDetector // For detecting status in sessions without ClaudeController
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -51,11 +52,12 @@ func NewReviewQueuePoller(queue *ReviewQueue, statusManager *InstanceStatusManag
 // The storage parameter is optional (can be nil) but required for persisting LastAddedToQueue timestamps.
 func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager *InstanceStatusManager, storage *Storage, config ReviewQueuePollerConfig) *ReviewQueuePoller {
 	return &ReviewQueuePoller{
-		queue:         queue,
-		statusManager: statusManager,
-		storage:       storage,
-		instances:     make([]*Instance, 0),
-		config:        config,
+		queue:          queue,
+		statusManager:  statusManager,
+		storage:        storage,
+		instances:      make([]*Instance, 0),
+		config:         config,
+		statusDetector: NewStatusDetector(), // For detecting status in sessions without ClaudeController
 	}
 }
 
@@ -227,29 +229,12 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected idle state=%s, lastActivity=%s",
 				inst.Title, idleState.String(), formatDuration(time.Since(lastActivity)))
 
-			switch idleState {
-			case IdleStateActive:
-				// Actively working, remove from queue
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Active state - removing from queue", inst.Title)
-				rqp.queue.Remove(inst.Title)
-				return
+			// IMPORTANT: Check Claude status FIRST before idle state handling.
+			// Status-based conditions (approval, input required, error) take priority over
+			// idle state because they represent explicit user prompts that need attention,
+			// even if terminal activity makes the session appear "active".
 
-			case IdleStateWaiting:
-				// Normal idle state (e.g., INSERT mode) - don't add by default
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Waiting state - will check for specific issues", inst.Title)
-				shouldAdd = false
-
-			case IdleStateTimeout:
-				// Definite timeout - been idle too long
-				reason = ReasonIdleTimeout
-				priority = PriorityLow
-				shouldAdd = true
-				idleDuration := time.Since(lastActivity)
-				context = fmt.Sprintf("Timed out after %s of inactivity", formatDuration(idleDuration))
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Timeout detected - idle for %s", inst.Title, formatDuration(idleDuration))
-			}
-
-			// Check for approval needs (higher priority than idle)
+			// Check for approval needs (highest priority for user prompts)
 			if statusInfo.ClaudeStatus == StatusNeedsApproval || statusInfo.PendingApprovals > 0 {
 				reason = ReasonApprovalPending
 				priority = PriorityHigh
@@ -320,6 +305,32 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				log.InfoLog.Printf("[ReviewQueue] Session '%s': Task completion - %s", inst.Title, context)
 			}
 
+			// Now handle idle state - but only if no status-based condition was detected above.
+			// This ensures user prompts aren't hidden just because terminal is "active".
+			if !shouldAdd {
+				switch idleState {
+				case IdleStateActive:
+					// Actively working, remove from queue (but only if no prompt detected above)
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': Active state with no prompts - removing from queue", inst.Title)
+					rqp.queue.Remove(inst.Title)
+					return
+
+				case IdleStateWaiting:
+					// Normal idle state (e.g., INSERT mode) - don't add by default
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': Waiting state - will check for specific issues", inst.Title)
+					shouldAdd = false
+
+				case IdleStateTimeout:
+					// Definite timeout - been idle too long
+					reason = ReasonIdleTimeout
+					priority = PriorityLow
+					shouldAdd = true
+					idleDuration := time.Since(lastActivity)
+					context = fmt.Sprintf("Timed out after %s of inactivity", formatDuration(idleDuration))
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': Timeout detected - idle for %s", inst.Title, formatDuration(idleDuration))
+				}
+			}
+
 			// Check for uncommitted changes (informational - user may want to review and commit)
 			// Only check if we don't already have a higher-priority reason
 			if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
@@ -344,20 +355,81 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 		}
 	} else {
-		// No controller - use basic time-based detection
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': No active controller - using basic time-based checks", inst.Title)
+		// No controller - but we can still detect status from terminal content
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': No active controller - using terminal-based status detection", inst.Title)
 
-		// Check if session has been idle for a long time based on UpdatedAt
-		idleDuration := time.Since(inst.UpdatedAt)
-		const basicIdleThreshold = 5 * time.Second
+		// IMPORTANT: First check terminal content for approval/input prompts
+		// This enables status detection for external sessions (claude-mux) without ClaudeController
+		content, err := inst.Preview()
+		if err == nil && content != "" {
+			// Detect status from terminal content using the shared status detector
+			detectedStatus, statusContext := rqp.statusDetector.DetectWithContext([]byte(content))
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected status=%s from terminal content",
+				inst.Title, detectedStatus.String())
 
-		if idleDuration > basicIdleThreshold {
-			reason = ReasonIdleTimeout
-			priority = PriorityLow
-			shouldAdd = true
-			context = fmt.Sprintf("No controller activity for %s", formatDuration(idleDuration))
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Basic idle check - %s since UpdatedAt",
-				inst.Title, formatDuration(idleDuration))
+			// Check for approval needs (highest priority for user prompts)
+			if detectedStatus == StatusNeedsApproval {
+				reason = ReasonApprovalPending
+				priority = PriorityHigh
+				shouldAdd = true
+				if statusContext != "" {
+					context = statusContext
+				} else {
+					context = "Waiting for approval to proceed"
+				}
+				log.InfoLog.Printf("[ReviewQueue] Session '%s': Approval needed (no controller) - %s", inst.Title, context)
+			}
+
+			// Check for input required (explicit prompts asking for user input)
+			if detectedStatus == StatusInputRequired {
+				reason = ReasonInputRequired
+				priority = PriorityMedium
+				shouldAdd = true
+				if statusContext != "" {
+					context = statusContext
+				} else {
+					context = "Waiting for explicit user input"
+				}
+				log.InfoLog.Printf("[ReviewQueue] Session '%s': Input required (no controller) - %s", inst.Title, context)
+			}
+
+			// Check for errors (highest priority)
+			if detectedStatus == StatusError {
+				reason = ReasonErrorState
+				priority = PriorityUrgent
+				shouldAdd = true
+				if statusContext != "" {
+					context = statusContext
+				} else {
+					context = "Error state detected"
+				}
+				log.InfoLog.Printf("[ReviewQueue] Session '%s': Error detected (no controller) - %s", inst.Title, context)
+			}
+
+			// If actively processing, don't add to queue
+			if detectedStatus == StatusActive || detectedStatus == StatusProcessing {
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Active/processing state detected - not adding to queue", inst.Title)
+				rqp.queue.Remove(inst.Title)
+				return
+			}
+		} else if err != nil {
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get terminal content: %v", inst.Title, err)
+		}
+
+		// If no status-based condition was detected, fall back to time-based checks
+		if !shouldAdd {
+			// Check if session has been idle for a long time based on UpdatedAt
+			idleDuration := time.Since(inst.UpdatedAt)
+			const basicIdleThreshold = 5 * time.Second
+
+			if idleDuration > basicIdleThreshold {
+				reason = ReasonIdleTimeout
+				priority = PriorityLow
+				shouldAdd = true
+				context = fmt.Sprintf("No controller activity for %s", formatDuration(idleDuration))
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Basic idle check - %s since UpdatedAt",
+					inst.Title, formatDuration(idleDuration))
+			}
 		}
 
 		// Check for uncommitted changes (informational - user may want to review and commit)

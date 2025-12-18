@@ -12,6 +12,7 @@ import (
 	"claude-squad/session"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
+	"claude-squad/telemetry"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,19 +26,19 @@ import (
 )
 
 var (
-	version            = "1.0.12"
-	programFlag        string
-	autoYesFlag        bool
-	daemonFlag         bool
-	webFlag            bool
-	testModeFlag       bool
-	testDirFlag        string
-	discoveryModeFlag  string
-	discoverExtFlag    bool
-	profileFlag        bool
-	profilePortFlag    int
-	traceFlag          bool
-	rootCmd            = &cobra.Command{
+	version           = "1.0.12"
+	programFlag       string
+	autoYesFlag       bool
+	daemonFlag        bool
+	webFlag           bool
+	testModeFlag      bool
+	testDirFlag       string
+	discoveryModeFlag string
+	discoverExtFlag   bool
+	profileFlag       bool
+	profilePortFlag   int
+	traceFlag         bool
+	rootCmd           = &cobra.Command{
 		Use:   "claude-squad",
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -66,8 +67,8 @@ var (
 				mode := config.DiscoveryMode(discoveryModeFlag)
 				// Validate the mode
 				if mode != config.DiscoveryManagedOnly &&
-				   mode != config.DiscoveryExternalOnly &&
-				   mode != config.DiscoveryAll {
+					mode != config.DiscoveryExternalOnly &&
+					mode != config.DiscoveryAll {
 					return fmt.Errorf("invalid discovery mode '%s', must be one of: managed-only, external-only, all", discoveryModeFlag)
 				}
 				discoveryCfg.Mode = mode
@@ -132,6 +133,21 @@ var (
 
 			// Web server mode
 			if webFlag {
+				// Initialize OpenTelemetry for APM (Datadog, etc.)
+				telemetryCfg := telemetry.DefaultConfig()
+				telemetryProvider, err := telemetry.Initialize(ctx, telemetryCfg)
+				if err != nil {
+					log.WarningLog.Printf("Failed to initialize telemetry: %v", err)
+				} else {
+					defer func() {
+						shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer cancel()
+						if err := telemetryProvider.Shutdown(shutdownCtx); err != nil {
+							log.WarningLog.Printf("Failed to shutdown telemetry: %v", err)
+						}
+					}()
+				}
+
 				// Use PORT environment variable if set (for test mode), otherwise default to 8543
 				address := "localhost:8543"
 				if port := os.Getenv("PORT"); port != "" {

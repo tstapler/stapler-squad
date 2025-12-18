@@ -17,7 +17,7 @@ function ReviewQueueContent() {
   const [isSessionFullscreen, setIsSessionFullscreen] = useState(false);
 
   // Use WebSocket streaming for real-time session updates
-  const { sessions, loading, acknowledgeSession } = useSessionService({
+  const { sessions, loading } = useSessionService({
     baseUrl: getApiBaseUrl(),
     autoWatch: true, // Enable WebSocket streaming for session list
   });
@@ -43,10 +43,6 @@ function ReviewQueueContent() {
     }
   };
 
-  const handleSkipSession = async (sessionId: string) => {
-    await acknowledgeSession(sessionId);
-  };
-
   const handleCloseSessionDetail = () => {
     // Clear the session query parameter from the URL
     router.push("/review-queue");
@@ -59,7 +55,6 @@ function ReviewQueueContent() {
       <main className={styles.main}>
         <ReviewQueuePanel
           onSessionClick={handleSessionClick}
-          onSkipSession={handleSkipSession}
         />
       </main>
 

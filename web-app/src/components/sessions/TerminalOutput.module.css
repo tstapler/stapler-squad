@@ -43,6 +43,12 @@
   animation: none;
 }
 
+.statusIndicator.stabilizing {
+  background: #e5c07b;
+  box-shadow: 0 0 8px #e5c07b;
+  animation: pulse 0.8s infinite;
+}
+
 @keyframes pulse {
   0%, 100% {
     opacity: 1;
@@ -55,6 +61,16 @@
 .statusText {
   font-size: 0.875rem;
   color: #cccccc;
+}
+
+.externalLabel {
+  font-size: 12px;
+  font-weight: 600;
+  color: #6366f1;
+  padding: 2px 8px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 4px;
+  border: 1px solid rgba(99, 102, 241, 0.3);
 }
 
 .errorText {

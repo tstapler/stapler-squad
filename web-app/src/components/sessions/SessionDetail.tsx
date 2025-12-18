@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
-import { Session } from "@/gen/session/v1/types_pb";
+import { Session, InstanceType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
+import { VcsPanel } from "./VcsPanel";
 import { getApiBaseUrl } from "@/lib/config";
 import styles from "./SessionDetail.module.css";
 
@@ -20,18 +21,19 @@ const TerminalOutput = dynamic(
   }
 );
 
-export type SessionDetailTab = "terminal" | "diff" | "logs" | "info";
+export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info";
 
 interface SessionDetailProps {
   session: Session;
   onClose: () => void;
   onFullscreenChange?: (isFullscreen: boolean) => void;
+  onTabChange?: (tab: SessionDetailTab) => void;
   initialTab?: SessionDetailTab;
 }
 
-export function SessionDetail({ session, onClose, onFullscreenChange, initialTab = "info" }: SessionDetailProps) {
+export function SessionDetail({ session, onClose, onFullscreenChange, onTabChange, initialTab = "info" }: SessionDetailProps) {
   const [activeTab, setActiveTab] = useState<SessionDetailTab>(initialTab);
-  const [isFullscreen, setIsFullscreen] = useState(initialTab === "terminal" || initialTab === "diff");
+  const [isFullscreen, setIsFullscreen] = useState(initialTab === "terminal" || initialTab === "diff" || initialTab === "vcs");
 
   // Notify parent of fullscreen state changes
   useEffect(() => {
@@ -41,14 +43,16 @@ export function SessionDetail({ session, onClose, onFullscreenChange, initialTab
   const tabs: { id: SessionDetailTab; label: string; icon: string }[] = [
     { id: "terminal", label: "Terminal", icon: "⌨️" },
     { id: "diff", label: "Diff", icon: "📝" },
+    { id: "vcs", label: "VCS", icon: "🌿" },
     { id: "logs", label: "Logs", icon: "📋" },
     { id: "info", label: "Info", icon: "ℹ️" },
   ];
 
   const handleTabChange = (tabId: SessionDetailTab) => {
     setActiveTab(tabId);
-    // Automatically enter fullscreen for terminal and diff tabs
-    if (tabId === "terminal" || tabId === "diff") {
+    onTabChange?.(tabId);
+    // Automatically enter fullscreen for terminal, diff, and vcs tabs
+    if (tabId === "terminal" || tabId === "diff" || tabId === "vcs") {
       setIsFullscreen(true);
     } else {
       setIsFullscreen(false);
@@ -72,7 +76,7 @@ export function SessionDetail({ session, onClose, onFullscreenChange, initialTab
       <div className={styles.header}>
         <h2 className={styles.title}>{session.title}</h2>
         <div className={styles.headerActions}>
-          {(activeTab === "terminal" || activeTab === "diff") && (
+          {(activeTab === "terminal" || activeTab === "diff" || activeTab === "vcs") && (
             <button
               className={styles.fullscreenButton}
               onClick={() => setIsFullscreen(!isFullscreen)}
@@ -108,12 +112,26 @@ export function SessionDetail({ session, onClose, onFullscreenChange, initialTab
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {activeTab === "terminal" && (
           <div className={styles.tabContent}>
-            <TerminalOutput sessionId={session.id} baseUrl={getApiBaseUrl()} />
+            {session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
+              <TerminalOutput
+                sessionId={session.externalMetadata.muxSocketPath}
+                baseUrl={getApiBaseUrl()}
+                isExternal={true}
+                tmuxSessionName={session.externalMetadata?.tmuxSessionName}
+              />
+            ) : (
+              <TerminalOutput sessionId={session.id} baseUrl={getApiBaseUrl()} />
+            )}
           </div>
         )}
         {activeTab === "diff" && (
           <div className={styles.tabContent}>
             <DiffViewer sessionId={session.id} baseUrl={getApiBaseUrl()} />
+          </div>
+        )}
+        {activeTab === "vcs" && (
+          <div className={styles.tabContent}>
+            <VcsPanel sessionId={session.id} baseUrl={getApiBaseUrl()} />
           </div>
         )}
         {activeTab === "logs" && (
@@ -171,6 +189,32 @@ export function SessionDetail({ session, onClose, onFullscreenChange, initialTab
                   <span className={styles.infoLabel}>Program:</span>
                   <span className={styles.infoValue}>{session.program}</span>
                 </div>
+              )}
+              {session.instanceType === InstanceType.EXTERNAL && (
+                <>
+                  <div className={styles.infoItem}>
+                    <span className={styles.infoLabel}>Session Type:</span>
+                    <span className={styles.infoValue}>External</span>
+                  </div>
+                  {session.externalMetadata?.sourceTerminal && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Source:</span>
+                      <span className={styles.infoValue}>{session.externalMetadata.sourceTerminal}</span>
+                    </div>
+                  )}
+                  {session.externalMetadata?.muxEnabled && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Mux Enabled:</span>
+                      <span className={styles.infoValue}>✓ Yes</span>
+                    </div>
+                  )}
+                  {session.externalMetadata?.tmuxSessionName && (
+                    <div className={styles.infoItem}>
+                      <span className={styles.infoLabel}>Tmux Session:</span>
+                      <span className={styles.infoValue}>{session.externalMetadata.tmuxSessionName}</span>
+                    </div>
+                  )}
+                </>
               )}
               {session.prompt && (
                 <div className={styles.infoItem}>

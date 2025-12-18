@@ -1213,13 +1213,12 @@ func (l *List) TogglePausedFilter() {
 	// Re-organize to apply the filter
 	l.OrganizeByCategory()
 
-	// Reset scroll position when filter changes
-	l.scrollOffset = 0
-
 	// Ensure selection is valid for the new filtered view
 	visibleItems := l.getVisibleItems()
 	if len(visibleItems) == 0 {
 		l.selectedIdx = -1 // No valid selection when no visible items
+		l.scrollOffset = 0 // Reset scroll when no items
+		l.saveUIState()
 		return
 	}
 
@@ -1234,8 +1233,9 @@ func (l *List) TogglePausedFilter() {
 		}
 	}
 
-	// Ensure the selected item is visible after filter change
-	l.ensureSelectedVisible()
+	// Reset scroll position when filter changes
+	// This comes AFTER selection adjustment to always reset to top of list
+	l.scrollOffset = 0
 
 	// Persist the state change
 	l.saveUIState()
@@ -1252,8 +1252,8 @@ func (l *List) getVisibleItems() []*session.Instance {
 	// Rebuild cache
 	var visible []*session.Instance
 
-	// If in search mode, return search results (already filtered)
-	if l.searchMode && len(l.searchResults) > 0 {
+	// If in search mode, return search results (even if empty - no matches means no visible items)
+	if l.searchMode {
 		for _, item := range l.searchResults {
 			if l.hidePaused && item.Status == session.Paused {
 				continue
@@ -1507,6 +1507,9 @@ func (l *List) ExitSearchMode() {
 	l.searchLoading = false
 	l.searchStage = ""
 	l.scrollOffset = 0 // Reset scroll when exiting search
+
+	// Invalidate visible items cache to restore full list view
+	l.invalidateVisibleCache()
 
 	// Ensure the selected item is visible after exiting search
 	l.ensureSelectedVisible()

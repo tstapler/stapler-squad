@@ -9,11 +9,24 @@ export interface NotificationData {
   id: string;
   sessionId: string;
   sessionName: string;
+  title?: string;
   message: string;
   timestamp: number;
   priority?: "urgent" | "high" | "medium" | "low";
+  notificationType?: "info" | "approval_needed" | "error" | "warning" | "task_complete" | "task_failed" | "progress" | "question" | "reminder" | "system" | "custom";
+  /** Source app name (e.g., "IntelliJ IDEA", "Visual Studio Code") */
+  sourceApp?: string;
+  /** macOS bundle ID for window activation */
+  sourceBundleId?: string;
+  /** Working directory where the notification originated */
+  sourceWorkingDir?: string;
+  /** Project name for additional context */
+  sourceProject?: string;
+  /** Additional metadata key-value pairs */
+  metadata?: Record<string, string>;
   onView?: () => void;
   onDismiss?: () => void;
+  onFocusWindow?: () => void;
 }
 
 interface NotificationToastProps {
@@ -83,6 +96,83 @@ export function NotificationToast({
     }
   };
 
+  const getTypeIcon = () => {
+    switch (notification.notificationType) {
+      case "approval_needed":
+        return "⚠️";
+      case "error":
+        return "❌";
+      case "warning":
+        return "⚠️";
+      case "task_complete":
+        return "✅";
+      case "task_failed":
+        return "💥";
+      case "progress":
+        return "⏳";
+      case "question":
+        return "❓";
+      case "reminder":
+        return "⏰";
+      case "system":
+        return "⚙️";
+      default:
+        return "🔔";
+    }
+  };
+
+  const getTypeLabel = () => {
+    switch (notification.notificationType) {
+      case "approval_needed":
+        return "Approval Needed";
+      case "error":
+        return "Error";
+      case "warning":
+        return "Warning";
+      case "task_complete":
+        return "Task Complete";
+      case "task_failed":
+        return "Task Failed";
+      case "progress":
+        return "Progress";
+      case "question":
+        return "Question";
+      case "reminder":
+        return "Reminder";
+      case "system":
+        return "System";
+      case "custom":
+        return "Custom";
+      default:
+        return "Info";
+    }
+  };
+
+  const handleFocusWindow = () => {
+    notification.onFocusWindow?.();
+  };
+
+  // Determine the display title - use notification title if available, otherwise session name
+  const displayTitle = notification.title || notification.sessionName;
+  const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
+
+  // Build project/directory context string for better clarity
+  const projectName = notification.sourceProject;
+  const workingDirName = notification.sourceWorkingDir
+    ? notification.sourceWorkingDir.split('/').pop()
+    : null;
+  const contextName = projectName || workingDirName || notification.sessionName;
+
+  // Build subtitle: "ProjectName via SourceApp" or just "ProjectName" or "SessionName"
+  const subtitleParts: string[] = [];
+  if (contextName && contextName !== displayTitle) {
+    subtitleParts.push(contextName);
+  }
+  if (hasSourceApp && notification.sourceApp) {
+    subtitleParts.push(`via ${notification.sourceApp}`);
+  }
+  const subtitleText = subtitleParts.join(' ');
+
   return (
     <div
       className={`${styles.toast} ${isVisible ? styles.visible : ""} ${isExiting ? styles.exiting : ""}`}
@@ -91,12 +181,20 @@ export function NotificationToast({
       aria-live="assertive"
     >
       <div className={styles.header}>
-        <div className={styles.icon}>🔔</div>
+        <div className={styles.icon}>{getTypeIcon()}</div>
         <div className={styles.title}>
-          <strong>{notification.sessionName}</strong>
-          <span className={styles.timestamp}>
-            {new Date(notification.timestamp).toLocaleTimeString()}
-          </span>
+          <div className={styles.titleRow}>
+            <strong>{displayTitle}</strong>
+            <span className={styles.typeLabel}>{getTypeLabel()}</span>
+          </div>
+          <div className={styles.subtitleRow}>
+            {subtitleText && (
+              <span className={styles.sourceApp}>{subtitleText}</span>
+            )}
+            <span className={styles.timestamp}>
+              {new Date(notification.timestamp).toLocaleTimeString()}
+            </span>
+          </div>
         </div>
         <button
           className={styles.closeButton}
@@ -109,9 +207,19 @@ export function NotificationToast({
 
       <div className={styles.body}>
         <p className={styles.message}>{notification.message}</p>
+        {notification.sourceWorkingDir && (
+          <p className={styles.workingDir} title={notification.sourceWorkingDir}>
+            📁 {notification.sourceWorkingDir.split('/').slice(-2).join('/')}
+          </p>
+        )}
       </div>
 
       <div className={styles.actions}>
+        {hasSourceApp && notification.onFocusWindow && (
+          <button className={styles.focusButton} onClick={handleFocusWindow} title="Focus the source application window">
+            🔗 Focus Window
+          </button>
+        )}
         <button className={styles.viewButton} onClick={handleView}>
           View Session
         </button>

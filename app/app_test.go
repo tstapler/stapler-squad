@@ -1,8 +1,8 @@
 package app
 
 import (
-	appui "claude-squad/app/ui"
 	"claude-squad/app/state"
+	appui "claude-squad/app/ui"
 	"claude-squad/log"
 	"fmt"
 	"os"

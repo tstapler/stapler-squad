@@ -157,6 +157,12 @@ func (t *Tokenizer) IsStopWord(word string) bool {
 	return t.stopWords[strings.ToLower(word)]
 }
 
+// StemWord applies Porter stemming to a single word.
+// The word should be lowercase.
+func (t *Tokenizer) StemWord(word string) string {
+	return porterStem(strings.ToLower(word))
+}
+
 // porterStem applies a simplified Porter stemming algorithm.
 // This implements the core suffix stripping rules for English.
 func porterStem(word string) string {

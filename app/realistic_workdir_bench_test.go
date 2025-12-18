@@ -174,7 +174,7 @@ func setupHomeWithRealGitRepos(b *testing.B, gitRepoPath string, sessionCount in
 		ctx:                  ctx,
 		spinner:              spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		menu:                 ui.NewMenu(),
-		tabbedWindow:         ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane()),
+		tabbedWindow:         ui.NewTabbedWindow(ui.NewPreviewPane(), ui.NewDiffPane(), ui.NewVCPane()),
 		errBox:               ui.NewErrBox(),
 		storage:              storage,
 		appConfig:            appConfig,
