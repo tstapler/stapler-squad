@@ -99,6 +99,12 @@ message Session {
   // Path where repository was cloned (for URL-based sessions).
   // Empty if session uses existing repository.
   string cloned_repo_path = 30;
+
+  // Instance type - indicates whether this is a managed or external session
+  InstanceType instance_type = 31;
+
+  // External instance metadata (only populated for external sessions)
+  ExternalInstanceMetadata external_metadata = 32;
 }
 
 // SessionStatus represents the current state of a session.
@@ -126,6 +132,42 @@ enum SessionType {
   SESSION_TYPE_NEW_WORKTREE = 2;
   // Reuse existing git worktree.
   SESSION_TYPE_EXISTING_WORKTREE = 3;
+}
+
+// InstanceType indicates whether a session is managed by claude-squad or external.
+enum InstanceType {
+  INSTANCE_TYPE_UNSPECIFIED = 0;
+  // Session fully managed by claude-squad with complete lifecycle control.
+  INSTANCE_TYPE_MANAGED = 1;
+  // Session discovered externally (e.g., via claude-mux) with limited interaction.
+  INSTANCE_TYPE_EXTERNAL = 2;
+}
+
+// ExternalInstanceMetadata contains metadata for externally discovered sessions.
+message ExternalInstanceMetadata {
+  // Tmux server socket (empty = default tmux server)
+  string tmux_socket = 1;
+
+  // Full tmux session name
+  string tmux_session_name = 2;
+
+  // When this instance was first discovered
+  google.protobuf.Timestamp discovered_at = 3;
+
+  // When this instance was last seen during discovery
+  google.protobuf.Timestamp last_seen = 4;
+
+  // Original process ID when first discovered
+  int32 original_pid = 5;
+
+  // Path to claude-mux Unix domain socket (if mux-enabled)
+  string mux_socket_path = 6;
+
+  // Whether this instance supports mux protocol for bidirectional terminal access
+  bool mux_enabled = 7;
+
+  // Source terminal that spawned this Claude session (e.g., "IntelliJ", "VSCode", "Terminal")
+  string source_terminal = 8;
 }
 
 // DiffStats contains git diff statistics for a session.
@@ -457,4 +499,90 @@ message Notification {
 
   // Optional metadata (key-value pairs for additional context)
   map<string, string> metadata = 9;
+}
+
+// VCSType represents the type of version control system
+enum VCSType {
+  VCS_TYPE_UNSPECIFIED = 0;
+  VCS_TYPE_GIT = 1;
+  VCS_TYPE_JUJUTSU = 2;
+}
+
+// FileStatus represents the status of a file in version control
+enum FileStatus {
+  FILE_STATUS_UNSPECIFIED = 0;
+  FILE_STATUS_MODIFIED = 1;
+  FILE_STATUS_ADDED = 2;
+  FILE_STATUS_DELETED = 3;
+  FILE_STATUS_RENAMED = 4;
+  FILE_STATUS_COPIED = 5;
+  FILE_STATUS_UNTRACKED = 6;
+  FILE_STATUS_IGNORED = 7;
+  FILE_STATUS_CONFLICT = 8;
+}
+
+// FileChange represents a changed file in the working directory
+message FileChange {
+  // File path relative to repository root
+  string path = 1;
+
+  // Type of change
+  FileStatus status = 2;
+
+  // Whether the change is staged for commit
+  bool is_staged = 3;
+
+  // Original path for renames/copies
+  string old_path = 4;
+}
+
+// VCSStatus represents the current status of the version control system
+message VCSStatus {
+  // VCS type (git, jujutsu)
+  VCSType type = 1;
+
+  // Current branch name (Git) or bookmark (Jujutsu)
+  string branch = 2;
+
+  // Short SHA (Git) or change ID (Jujutsu)
+  string head_commit = 3;
+
+  // Commit message or change description
+  string description = 4;
+
+  // Commits ahead of upstream
+  int32 ahead_by = 5;
+
+  // Commits behind upstream
+  int32 behind_by = 6;
+
+  // Name of upstream branch/remote
+  string upstream = 7;
+
+  // Has staged changes
+  bool has_staged = 8;
+
+  // Has unstaged changes
+  bool has_unstaged = 9;
+
+  // Has untracked files
+  bool has_untracked = 10;
+
+  // Has merge/rebase conflicts
+  bool has_conflicts = 11;
+
+  // Working directory is clean
+  bool is_clean = 12;
+
+  // Staged files list
+  repeated FileChange staged_files = 13;
+
+  // Unstaged files list
+  repeated FileChange unstaged_files = 14;
+
+  // Untracked files list
+  repeated FileChange untracked_files = 15;
+
+  // Conflict files list
+  repeated FileChange conflict_files = 16;
 }

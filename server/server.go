@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"connectrpc.com/otelconnect"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 // Server manages the HTTP server with ConnectRPC handlers.
@@ -93,6 +95,20 @@ func NewServer(addr string) *Server {
 				}
 			}
 
+			// MIGRATION: Save instances back to disk to persist any auto-detected worktree info
+			// During LoadInstances(), FromInstanceData() calls DetectAndPopulateWorktreeInfo()
+			// which may discover IsWorktree, MainRepoPath, GitHubOwner, GitHubRepo for existing sessions.
+			// We need to save this migrated data back to state.json so it persists across restarts.
+			// CRITICAL: This must happen AFTER instances are started because SaveInstances()
+			// only saves instances where Started() == true.
+			if len(instances) > 0 {
+				if saveErr := storage.SaveInstances(instances); saveErr != nil {
+					log.WarningLog.Printf("Failed to persist migrated instance data: %v", saveErr)
+				} else {
+					log.InfoLog.Printf("Persisted migrated instance data for %d instances", len(instances))
+				}
+			}
+
 			// Start controllers for loaded instances that deferred startup
 			// Now that statusManager is wired, controller initialization can succeed
 			log.InfoLog.Printf("Attempting controller startup for %d loaded instances", len(instances))
@@ -159,6 +175,131 @@ func NewServer(addr string) *Server {
 		apiPath := "/api" + path
 		wrappedHandler := http.StripPrefix("/api", handler)
 		srv.RegisterConnectHandler(apiPath, wrappedHandler)
+
+		// Initialize External Session Discovery and Streaming (tmux-based)
+		externalDiscovery := session.NewExternalSessionDiscovery()
+		externalTmuxStreamerManager := session.NewExternalTmuxStreamerManager()
+		externalApprovalMonitor := session.NewExternalApprovalMonitor()
+
+		// Wire external discovery to session service for unified session listing
+		sessionService.SetExternalDiscovery(externalDiscovery)
+
+		// Wire external session persistence - save to storage when discovered, remove when gone
+		externalDiscovery.OnSessionAdded(func(instance *session.Instance) {
+			if err := storage.AddInstance(instance); err != nil {
+				log.ErrorLog.Printf("Failed to persist external session '%s': %v", instance.Title, err)
+			} else {
+				log.InfoLog.Printf("Persisted external session '%s' to storage", instance.Title)
+			}
+
+			// CRITICAL: Wire external session dependencies for review queue integration
+			// Without these, external sessions won't appear in the review queue
+			instance.SetReviewQueue(reviewQueue)
+			instance.SetStatusManager(statusManager)
+
+			// Add to review queue poller for monitoring
+			reviewQueuePoller.AddInstance(instance)
+			log.InfoLog.Printf("Added external session '%s' to review queue poller", instance.Title)
+		})
+		externalDiscovery.OnSessionRemoved(func(instance *session.Instance) {
+			// Remove from review queue poller first
+			reviewQueuePoller.RemoveInstance(instance.Title)
+			log.InfoLog.Printf("Removed external session '%s' from review queue poller", instance.Title)
+
+			// Remove from review queue (in case it has pending items)
+			reviewQueue.Remove(instance.Title)
+
+			if err := storage.DeleteInstance(instance.Title); err != nil {
+				log.WarningLog.Printf("Failed to remove external session '%s' from storage: %v", instance.Title, err)
+			} else {
+				log.InfoLog.Printf("Removed external session '%s' from storage", instance.Title)
+			}
+		})
+
+		// Start external session discovery
+		externalDiscovery.Start(5 * time.Second)
+		externalApprovalMonitor.Start()
+
+		// Auto-integrate approval monitor with discovery (using tmux session names)
+		externalApprovalMonitor.IntegrateWithDiscoveryTmux(externalDiscovery, externalTmuxStreamerManager)
+
+		// CRITICAL: Bridge approval monitor to review queue
+		// When an approval is detected in an external session, immediately add to review queue
+		// This ensures external sessions get the same review queue treatment as managed sessions
+		externalApprovalMonitor.OnApproval(func(event *session.ExternalApprovalEvent) {
+			if event == nil || event.Request == nil {
+				return
+			}
+
+			// Find the instance for this session
+			instance := externalDiscovery.GetSessionByTmux(event.SessionID)
+			if instance == nil {
+				// Try by socket path as fallback
+				instance = externalDiscovery.GetSession(event.SessionID)
+			}
+
+			// Build context string from the approval request
+			context := event.Request.DetectedText
+			if context == "" {
+				context = "Permission request detected"
+			}
+
+			// Create review item with high priority for approval requests
+			item := &session.ReviewItem{
+				SessionID:   event.SessionTitle,
+				SessionName: event.SessionTitle,
+				Reason:      session.ReasonApprovalPending,
+				Priority:    session.PriorityHigh,
+				DetectedAt:  event.Request.Timestamp,
+				Context:     context,
+			}
+
+			// Populate additional fields if we have the instance
+			if instance != nil {
+				item.Program = instance.Program
+				item.Branch = instance.Branch
+				item.Path = instance.Path
+				item.WorkingDir = instance.WorkingDir
+				item.Status = instance.Status
+				item.Tags = instance.Tags
+				item.Category = instance.Category
+				item.DiffStats = instance.GetDiffStats()
+				item.LastActivity = instance.LastMeaningfulOutput
+			}
+
+			// Add to review queue
+			reviewQueue.Add(item)
+			log.InfoLog.Printf("Added external session approval '%s' to review queue (type: %s, confidence: %.2f)",
+				event.SessionTitle, event.Request.Type, event.Request.Confidence)
+		})
+
+		// Wire external session support to unified ConnectRPC WebSocket handler
+		// This enables the unified handler to stream both managed and external sessions
+		// through the same /api/session.v1.SessionService/StreamTerminal endpoint
+		wsHandler.SetExternalSessionSupport(externalDiscovery, externalTmuxStreamerManager)
+		log.InfoLog.Printf("Unified WebSocket handler configured for external session support")
+
+		// Legacy external session endpoints removed - unified WebSocket streaming now handles both session types
+		// The following endpoints were removed as part of the Unified WebSocket Streaming Architecture:
+		// - /api/ws/external (replaced by /api/session.v1.SessionService/StreamTerminal)
+		// - /api/external/sessions (sessions now included in unified session listing)
+		// - /api/external/resize (resize handled via unified WebSocket protocol)
+		//
+		// Approval endpoints are still needed for external session approval monitoring
+		externalWsHandler := services.NewExternalWebSocketHandler(
+			externalDiscovery,
+			externalTmuxStreamerManager,
+			externalApprovalMonitor,
+			eventBus,
+		)
+		srv.mux.HandleFunc("/api/external/approvals", externalWsHandler.HandleApprovals)
+		srv.mux.HandleFunc("/api/external/approvals/respond", externalWsHandler.HandleApprovalResponse)
+		log.InfoLog.Printf("Registered External Session approval handlers at /api/external/approvals/*")
+
+		// Register Escape Code Analytics handler for debugging terminal rendering
+		escapeCodeHandler := services.NewEscapeCodeHandler()
+		escapeCodeHandler.RegisterRoutes(srv.mux)
+		log.InfoLog.Printf("Registered Escape Code Analytics handlers at /api/debug/escape-codes/*")
 	}
 
 	// Serve web UI static files
@@ -191,8 +332,14 @@ func (s *Server) RegisterHTTPHandler(pattern string, handler http.Handler) {
 // Start starts the HTTP server with middleware chain.
 // This is a blocking call. Use Start() in a goroutine for concurrent operation.
 func (s *Server) Start(ctx context.Context) error {
-	// Build middleware chain
-	handler := middleware.Logging(middleware.CORS(s.mux))
+	// Build middleware chain with OpenTelemetry HTTP instrumentation
+	// Order: otelhttp -> logging -> CORS -> handler
+	// otelhttp provides automatic span creation for all HTTP requests
+	handler := otelhttp.NewHandler(
+		middleware.Logging(middleware.CORS(s.mux)),
+		"claude-squad-http",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	)
 	s.httpServer.Handler = handler
 
 	// Register health check endpoint
@@ -243,10 +390,19 @@ func (s *Server) GetAddr() string {
 	return s.addr
 }
 
-// ConnectOptions returns standard ConnectRPC options.
-// These can be customized per-handler if needed.
+// ConnectOptions returns standard ConnectRPC options with OpenTelemetry instrumentation.
+// Traces are sent to the configured OTLP endpoint (e.g., Datadog Agent).
 func ConnectOptions() []connect.HandlerOption {
+	// Create otelconnect interceptor for automatic RPC tracing
+	otelInterceptor, err := otelconnect.NewInterceptor(
+		otelconnect.WithTrustRemote(), // Trust remote span context for distributed tracing
+	)
+	if err != nil {
+		log.WarningLog.Printf("Failed to create otelconnect interceptor: %v", err)
+		return []connect.HandlerOption{}
+	}
+
 	return []connect.HandlerOption{
-		connect.WithInterceptors(), // Add interceptors here as needed
+		connect.WithInterceptors(otelInterceptor),
 	}
 }

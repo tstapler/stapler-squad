@@ -8,6 +8,8 @@ import (
 	"claude-squad/server/adapters"
 	"claude-squad/server/events"
 	"claude-squad/session"
+	"claude-squad/session/vc"
+	"claude-squad/telemetry"
 	"connectrpc.com/connect"
 	"context"
 	"fmt"
@@ -15,11 +17,15 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
@@ -38,10 +44,17 @@ type SessionService struct {
 	reviewQueuePoller  *session.ReviewQueuePoller
 	reactiveQueueMgr   ReactiveQueueManager
 
+	// External session discovery (for mux-enabled sessions from external terminals)
+	externalDiscovery *session.ExternalSessionDiscovery
+
 	// History cache
 	historyCache      *session.ClaudeSessionHistory
 	historyCacheTime  time.Time
 	historyCacheTTL   time.Duration
+
+	// Full-text search engine
+	searchEngine     *session.SearchEngine
+	snippetGenerator *session.SnippetGenerator
 
 	// Notification rate limiter (10 notifications/sec per session, burst of 20)
 	notificationRateLimiter *NotificationRateLimiter
@@ -53,11 +66,32 @@ type SessionService struct {
 func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *SessionService {
 	reviewQueue := session.NewReviewQueue()
 
+	// Initialize search engine with disk persistence for incremental index updates
+	var searchEngine *session.SearchEngine
+	indexStore, err := session.NewIndexStore()
+	if err != nil {
+		// Log error but fall back to in-memory search (no persistence)
+		log.WarningLog.Printf("Failed to create index store, using in-memory search: %v", err)
+		searchEngine = session.NewSearchEngine()
+	} else {
+		searchEngine = session.NewSearchEngineWithPersistence(indexStore)
+		// Try to load persisted index from disk
+		if loadErr := searchEngine.LoadIndex(); loadErr != nil {
+			log.WarningLog.Printf("Failed to load persisted search index: %v", loadErr)
+		} else if searchEngine.GetSyncMetadata() != nil {
+			meta := searchEngine.GetSyncMetadata()
+			log.InfoLog.Printf("Loaded persisted search index: %d sessions, %d documents",
+				meta.TotalSessions, meta.TotalDocuments)
+		}
+	}
+
 	return &SessionService{
 		storage:                 storage,
 		eventBus:                eventBus,
 		reviewQueue:             reviewQueue,
 		historyCacheTTL:         5 * time.Minute, // Cache history for 5 minutes
+		searchEngine:            searchEngine,
+		snippetGenerator:        session.NewSnippetGenerator(),
 		notificationRateLimiter: NewNotificationRateLimiter(10, 20), // 10/sec, burst of 20
 	}
 }
@@ -117,7 +151,13 @@ func (s *SessionService) SetReactiveQueueManager(mgr ReactiveQueueManager) {
 	s.reactiveQueueMgr = mgr
 }
 
+// SetExternalDiscovery sets the external session discovery for accessing mux-enabled sessions.
+func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSessionDiscovery) {
+	s.externalDiscovery = discovery
+}
+
 // ListSessions returns all sessions with optional filtering.
+// This includes both managed sessions and external mux-enabled sessions.
 func (s *SessionService) ListSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListSessionsRequest],
@@ -144,6 +184,26 @@ func (s *SessionService) ListSessions(
 		}
 
 		sessions = append(sessions, adapters.InstanceToProto(inst))
+	}
+
+	// Include external sessions from mux discovery if available
+	if s.externalDiscovery != nil {
+		for _, extInst := range s.externalDiscovery.GetSessions() {
+			// Apply optional status filter (external sessions are always "running")
+			if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+				// External sessions are running
+				if *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_RUNNING {
+					continue
+				}
+			}
+
+			// Apply optional category filter
+			if req.Msg.Category != nil && *req.Msg.Category != "" && extInst.Category != *req.Msg.Category {
+				continue
+			}
+
+			sessions = append(sessions, adapters.InstanceToProto(extInst))
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.ListSessionsResponse{
@@ -201,6 +261,30 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
+	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.claude-squad/repos/github.com/owner/repo)
+	resolvedPath := req.Msg.Path
+	branch := req.Msg.Branch
+	var gitHubRef *session.GitHubRef
+	var clonedRepoPath string
+
+	if session.IsGitHubURL(req.Msg.Path) {
+		log.InfoLog.Printf("[CreateSession] Detected GitHub URL: %s", req.Msg.Path)
+		localPath, ref, err := session.ResolveGitHubInput(req.Msg.Path)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to resolve GitHub URL: %w", err))
+		}
+		resolvedPath = localPath
+		gitHubRef = ref
+		clonedRepoPath = localPath
+
+		// Use branch from GitHub URL if not explicitly provided
+		if branch == "" && ref.Branch != "" {
+			branch = ref.Branch
+		}
+
+		log.InfoLog.Printf("[CreateSession] Resolved to local path: %s (branch: %s)", resolvedPath, branch)
+	}
+
 	// Set default program if not specified
 	program := req.Msg.Program
 	if program == "" {
@@ -212,15 +296,15 @@ func (s *SessionService) CreateSession(
 	sessionType := session.SessionTypeDirectory
 	if req.Msg.ExistingWorktree != "" {
 		sessionType = session.SessionTypeExistingWorktree
-	} else if req.Msg.Branch != "" {
+	} else if branch != "" {
 		// If branch is specified, create a new worktree
 		sessionType = session.SessionTypeNewWorktree
 	}
 
-	// Create instance using NewInstance constructor
-	instance, err := session.NewInstance(session.InstanceOptions{
+	// Build instance options
+	instanceOpts := session.InstanceOptions{
 		Title:            req.Msg.Title,
-		Path:             req.Msg.Path,
+		Path:             resolvedPath,
 		WorkingDir:       req.Msg.WorkingDir,
 		Program:          program,
 		AutoYes:          req.Msg.AutoYes,
@@ -229,7 +313,22 @@ func (s *SessionService) CreateSession(
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
 		TmuxPrefix:       "", // Use default from config
-	})
+		ResumeId:         req.Msg.ResumeId,
+	}
+
+	// Add GitHub metadata if this was a GitHub URL
+	if gitHubRef != nil {
+		instanceOpts.GitHubOwner = gitHubRef.Owner
+		instanceOpts.GitHubRepo = gitHubRef.Repo
+		instanceOpts.GitHubSourceRef = req.Msg.Path
+		instanceOpts.ClonedRepoPath = clonedRepoPath
+		if gitHubRef.PRNumber > 0 {
+			instanceOpts.GitHubPRNumber = gitHubRef.PRNumber
+		}
+	}
+
+	// Create instance using NewInstance constructor
+	instance, err := session.NewInstance(instanceOpts)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to create instance: %w", err))
 	}
@@ -520,17 +619,26 @@ func (s *SessionService) StreamTerminal(
 		return connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
 	}
 
-	// Load the session instance with dependencies wired up
-	instances, err := s.loadInstancesWithWiring()
-	if err != nil {
-		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	// Get the session instance - CRITICAL: Use the poller's instance to ensure
+	// timestamp updates are visible to the review queue. Loading fresh from storage
+	// creates a separate object that the poller never sees.
+	var instance *session.Instance
+	if s.reviewQueuePoller != nil {
+		instance = s.reviewQueuePoller.FindInstance(initialMsg.SessionId)
 	}
 
-	var instance *session.Instance
-	for _, inst := range instances {
-		if inst.Title == initialMsg.SessionId {
-			instance = inst
-			break
+	// Fallback to storage if poller doesn't have it (shouldn't happen normally)
+	if instance == nil {
+		log.WarningLog.Printf("[StreamTerminal] Instance '%s' not found in poller, loading from storage (timestamps may desync)", initialMsg.SessionId)
+		instances, err := s.loadInstancesWithWiring()
+		if err != nil {
+			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+		}
+		for _, inst := range instances {
+			if inst.Title == initialMsg.SessionId {
+				instance = inst
+				break
+			}
 		}
 	}
 
@@ -803,6 +911,12 @@ func (s *SessionService) GetSessionDiff(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Update diff stats to get fresh data (the cached version may be stale or nil)
+	if err := instance.UpdateDiffStats(); err != nil {
+		log.WarningLog.Printf("Failed to update diff stats for session %s: %v", req.Msg.Id, err)
+		// Continue anyway - we'll return empty stats if unavailable
+	}
+
 	// Get diff stats from the instance
 	diffStats := instance.GetDiffStats()
 	if diffStats == nil {
@@ -1035,9 +1149,9 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 		source := matches[5]
 		message := matches[6]
 
-		// Parse timestamp
+		// Parse timestamp - use ParseInLocation with Local timezone since logs are written in local time
 		timestampStr := fmt.Sprintf("%s %s", dateStr, timeStr)
-		timestamp, err := time.Parse("2006/01/02 15:04:05", timestampStr)
+		timestamp, err := time.ParseInLocation("2006/01/02 15:04:05", timestampStr, time.Local)
 		if err != nil {
 			// Skip entries with invalid timestamps
 			continue
@@ -1404,25 +1518,52 @@ func (s *SessionService) UpdateClaudeConfig(
 }
 
 // getOrRefreshHistoryCache returns the cached history or refreshes it if stale
-func (s *SessionService) getOrRefreshHistoryCache() (*session.ClaudeSessionHistory, error) {
+func (s *SessionService) getOrRefreshHistoryCache(ctx context.Context) (*session.ClaudeSessionHistory, error) {
+	ctx, span := telemetry.StartSpan(ctx, "SessionService.getOrRefreshHistoryCache")
+	defer span.End()
+
 	now := time.Now()
 
 	// Check if cache is valid
 	if s.historyCache != nil && now.Sub(s.historyCacheTime) < s.historyCacheTTL {
+		span.SetAttributes(
+			attribute.Bool("cache.hit", true),
+			attribute.Int("history.entry_count", s.historyCache.Count()),
+		)
 		return s.historyCache, nil
 	}
 
 	// Cache is stale or doesn't exist - refresh it
+	span.SetAttributes(attribute.Bool("cache.hit", false))
+
+	// Create child span for disk loading
+	_, loadSpan := telemetry.StartSpan(ctx, "SessionService.loadHistoryFromDisk")
+	loadStart := time.Now()
+
 	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
+
+	loadDuration := time.Since(loadStart)
+	loadSpan.SetAttributes(
+		attribute.Int64("load.duration_ms", loadDuration.Milliseconds()),
+	)
 	if err != nil {
+		loadSpan.RecordError(err)
+		loadSpan.End()
 		return nil, fmt.Errorf("failed to create history manager: %w", err)
 	}
+	loadSpan.SetAttributes(attribute.Int("history.entry_count", hist.Count()))
+	loadSpan.End()
 
 	// Update cache
 	s.historyCache = hist
 	s.historyCacheTime = now
 
-	fmt.Printf("History cache refreshed: %d entries\n", hist.Count())
+	span.SetAttributes(
+		attribute.Int("history.entry_count", hist.Count()),
+		attribute.Int64("cache.refresh_duration_ms", time.Since(now).Milliseconds()),
+	)
+
+	log.InfoLog.Printf("History cache refreshed: %d entries in %v", hist.Count(), time.Since(now))
 	return hist, nil
 }
 
@@ -1432,7 +1573,7 @@ func (s *SessionService) ListClaudeHistory(
 	req *connect.Request[sessionv1.ListClaudeHistoryRequest],
 ) (*connect.Response[sessionv1.ListClaudeHistoryResponse], error) {
 	// Use cached history
-	hist, err := s.getOrRefreshHistoryCache()
+	hist, err := s.getOrRefreshHistoryCache(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
@@ -1480,7 +1621,7 @@ func (s *SessionService) GetClaudeHistoryDetail(
 	req *connect.Request[sessionv1.GetClaudeHistoryDetailRequest],
 ) (*connect.Response[sessionv1.GetClaudeHistoryDetailResponse], error) {
 	// Use cached history
-	hist, err := s.getOrRefreshHistoryCache()
+	hist, err := s.getOrRefreshHistoryCache(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
@@ -1509,7 +1650,7 @@ func (s *SessionService) GetClaudeHistoryMessages(
 	req *connect.Request[sessionv1.GetClaudeHistoryMessagesRequest],
 ) (*connect.Response[sessionv1.GetClaudeHistoryMessagesResponse], error) {
 	// Use cached history to validate session exists
-	hist, err := s.getOrRefreshHistoryCache()
+	hist, err := s.getOrRefreshHistoryCache(ctx)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
 	}
@@ -1552,6 +1693,162 @@ func (s *SessionService) GetClaudeHistoryMessages(
 	return connect.NewResponse(&sessionv1.GetClaudeHistoryMessagesResponse{
 		Messages:   protoMessages,
 		TotalCount: int32(totalCount),
+	}), nil
+}
+
+// SearchClaudeHistory performs full-text search across Claude conversation history
+func (s *SessionService) SearchClaudeHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SearchClaudeHistoryRequest],
+) (*connect.Response[sessionv1.SearchClaudeHistoryResponse], error) {
+	// Add search-specific attributes to the parent span (created by otelconnect)
+	span := trace.SpanFromContext(ctx)
+	span.SetAttributes(
+		attribute.String(telemetry.AttrSearchQuery, req.Msg.Query),
+		attribute.Int("search.limit", int(req.Msg.Limit)),
+		attribute.Int("search.offset", int(req.Msg.Offset)),
+	)
+
+	// Validate query
+	if req.Msg.Query == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("query is required"))
+	}
+
+	// Get history cache to build/update search index
+	hist, err := s.getOrRefreshHistoryCache(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load history: %w", err))
+	}
+
+	// Use incremental sync to update index (only indexes new/modified sessions)
+	_, syncSpan := telemetry.StartSpan(ctx, "SearchEngine.IncrementalSync")
+	syncStart := time.Now()
+	syncResult, err := s.searchEngine.IncrementalSync(hist)
+	syncDuration := time.Since(syncStart)
+	syncSpan.SetAttributes(
+		attribute.Int64("sync.duration_ms", syncDuration.Milliseconds()),
+		attribute.Bool("sync.was_full_rebuild", syncResult.WasFullRebuild),
+		attribute.Int("sync.sessions_added", syncResult.SessionsAdded),
+		attribute.Int("sync.sessions_updated", syncResult.SessionsUpdated),
+		attribute.Int("sync.sessions_removed", syncResult.SessionsRemoved),
+	)
+	if err != nil {
+		syncSpan.RecordError(err)
+		syncSpan.End()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to sync search index: %w", err))
+	}
+	syncSpan.End()
+
+	// Log sync results for debugging
+	if syncResult.HasChanges() || syncResult.WasFullRebuild {
+		log.InfoLog.Printf("Search index sync: %s", syncResult.String())
+	}
+
+	// Apply defaults for limit
+	limit := int(req.Msg.Limit)
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	offset := int(req.Msg.Offset)
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Build search options
+	searchOpts := session.SearchOptions{
+		Limit:  limit,
+		Offset: offset,
+	}
+
+	// Perform search with instrumentation
+	_, searchSpan := telemetry.StartSpan(ctx, "SearchEngine.Search")
+	searchStart := time.Now()
+	searchResults, err := s.searchEngine.Search(req.Msg.Query, searchOpts)
+	searchDuration := time.Since(searchStart)
+	searchSpan.SetAttributes(
+		attribute.Int64("search.duration_ms", searchDuration.Milliseconds()),
+		attribute.String("search.query", req.Msg.Query),
+	)
+	if err != nil {
+		searchSpan.RecordError(err)
+		searchSpan.End()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("search failed: %w", err))
+	}
+	searchSpan.SetAttributes(
+		attribute.Int("search.result_count", len(searchResults.Results)),
+		attribute.Int("search.total_matches", searchResults.TotalMatches),
+	)
+	searchSpan.End()
+
+	// Get query tokens for snippet generation
+	tokenizer := s.searchEngine.GetTokenizer()
+	queryTokens := tokenizer.Tokenize(req.Msg.Query)
+
+	// Convert results to proto format
+	protoResults := make([]*sessionv1.SearchResult, 0, len(searchResults.Results))
+	for _, result := range searchResults.Results {
+		// Get session info from history
+		entry, _ := hist.GetByID(result.SessionID)
+
+		// Generate snippets for this result
+		doc := s.searchEngine.GetDocument(result.DocID)
+		snippets := s.snippetGenerator.GenerateFromSearchResult(doc, queryTokens)
+
+		// Convert snippets to proto
+		protoSnippets := make([]*sessionv1.SearchSnippet, 0, len(snippets))
+		for _, snippet := range snippets {
+			highlightRanges := make([]*sessionv1.HighlightRange, 0, len(snippet.HighlightRanges))
+			for _, hr := range snippet.HighlightRanges {
+				highlightRanges = append(highlightRanges, &sessionv1.HighlightRange{
+					Start: int32(hr.Start),
+					End:   int32(hr.End),
+				})
+			}
+			protoSnippets = append(protoSnippets, &sessionv1.SearchSnippet{
+				Text:            snippet.Text,
+				HighlightRanges: highlightRanges,
+				MessageRole:     snippet.MessageRole,
+				MessageTime:     timestamppb.New(snippet.MessageTime),
+			})
+		}
+
+		// Build metadata
+		sessionName := result.SessionID
+		project := ""
+		model := ""
+		var createdAt time.Time
+		if entry != nil {
+			sessionName = entry.Name
+			project = entry.Project
+			model = entry.Model
+			createdAt = entry.CreatedAt
+		}
+
+		protoResults = append(protoResults, &sessionv1.SearchResult{
+			SessionId:    result.SessionID,
+			SessionName:  sessionName,
+			Project:      project,
+			MessageIndex: int32(result.MessageIndex),
+			Score:        float32(result.Score),
+			Snippets:     protoSnippets,
+			Metadata: &sessionv1.SearchResultMetadata{
+				IsMetadataMatch: false, // TODO: Support metadata matching
+				MatchSource:     "message_content",
+				Model:           model,
+				CreatedAt:       timestamppb.New(createdAt),
+			},
+		})
+	}
+
+	return connect.NewResponse(&sessionv1.SearchClaudeHistoryResponse{
+		Results:      protoResults,
+		TotalMatches: int32(searchResults.TotalMatches),
+		QueryTimeMs:  searchResults.QueryTime.Milliseconds(),
+		HasMore:      searchResults.TotalMatches > offset+len(protoResults),
 	}), nil
 }
 
@@ -1820,8 +2117,9 @@ func (s *SessionService) ClosePR(
 	}), nil
 }
 
-// SendNotification allows tmux sessions to send notifications to connected clients.
-// Enforces localhost-only restriction, session validation, and rate limiting.
+// SendNotification allows tmux sessions and external Claude processes to send notifications.
+// Enforces localhost-only restriction and rate limiting. Accepts both managed sessions
+// and external sessions (e.g., Claude running in IntelliJ, VS Code, or other terminals).
 func (s *SessionService) SendNotification(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SendNotificationRequest],
@@ -1839,25 +2137,20 @@ func (s *SessionService) SendNotification(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
 
-	// Validate session exists
+	// Try to find session in managed instances (optional - for better session name display)
+	// If not found, still allow notification (supports external Claude processes)
+	sessionName := req.Msg.SessionId // Default to session ID
 	instances, err := s.loadInstancesWithWiring()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
-	}
-
-	var instance *session.Instance
-	for _, inst := range instances {
-		if inst.Title == req.Msg.SessionId {
-			instance = inst
-			break
+	if err == nil {
+		for _, inst := range instances {
+			if inst.Title == req.Msg.SessionId {
+				sessionName = inst.Title
+				break
+			}
 		}
 	}
 
-	if instance == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
-	}
-
-	// Apply rate limiting
+	// Apply rate limiting (applies to both managed and external sessions)
 	if !s.notificationRateLimiter.Allow(req.Msg.SessionId) {
 		return nil, connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("rate limit exceeded for session: %s", req.Msg.SessionId))
 	}
@@ -1868,7 +2161,7 @@ func (s *SessionService) SendNotification(
 	// Broadcast notification via event bus
 	event := events.NewNotificationEvent(
 		req.Msg.SessionId,
-		instance.Title, // Session name
+		sessionName,
 		notificationID,
 		int32(req.Msg.NotificationType),
 		int32(req.Msg.Priority),
@@ -1880,6 +2173,7 @@ func (s *SessionService) SendNotification(
 
 	log.InfoS("Notification sent", map[string]interface{}{
 		"session_id":        req.Msg.SessionId,
+		"session_name":      sessionName,
 		"notification_type": req.Msg.NotificationType.String(),
 		"priority":          req.Msg.Priority.String(),
 		"title":             req.Msg.Title,
@@ -1935,4 +2229,421 @@ func isLocalhostIP(ip string) bool {
 		return false
 	}
 	return parsed.IsLoopback()
+}
+
+// FocusWindow activates a window for the specified application.
+// Uses AppleScript on macOS to bring the application to front.
+func (s *SessionService) FocusWindow(
+	ctx context.Context,
+	req *connect.Request[sessionv1.FocusWindowRequest],
+) (*connect.Response[sessionv1.FocusWindowResponse], error) {
+	// Validate localhost-only origin
+	if err := s.validateLocalhostOriginForFocus(ctx, req); err != nil {
+		return nil, err
+	}
+
+	platform := detectPlatform()
+
+	// Need at least bundle_id or app_name
+	bundleID := ""
+	if req.Msg.BundleId != nil {
+		bundleID = *req.Msg.BundleId
+	}
+	appName := ""
+	if req.Msg.AppName != nil {
+		appName = *req.Msg.AppName
+	}
+
+	if bundleID == "" && appName == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("bundle_id or app_name is required"))
+	}
+
+	// Only macOS is supported currently
+	if platform != "darwin" {
+		return connect.NewResponse(&sessionv1.FocusWindowResponse{
+			Success:  false,
+			Message:  fmt.Sprintf("window activation not supported on platform: %s", platform),
+			Platform: platform,
+		}), nil
+	}
+
+	// Try to activate the window using AppleScript
+	var script string
+	if bundleID != "" {
+		// Prefer bundle ID for more reliable activation
+		script = fmt.Sprintf(`tell application id "%s" to activate`, bundleID)
+	} else {
+		// Fallback to app name
+		script = fmt.Sprintf(`tell application "%s" to activate`, appName)
+	}
+
+	// Execute AppleScript
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	output, err := cmd.CombinedOutput()
+	outputStr := string(output)
+
+	if err != nil {
+		log.WarningLog.Printf("Failed to activate window (bundle=%s, app=%s): %v, output: %s",
+			bundleID, appName, err, outputStr)
+
+		// Check for common permission-related errors
+		message := fmt.Sprintf("failed to activate window: %v", err)
+		if strings.Contains(outputStr, "not allowed") ||
+			strings.Contains(outputStr, "permission") ||
+			strings.Contains(outputStr, "accessibility") ||
+			strings.Contains(outputStr, "System Events") {
+			message = "Permission denied. Please grant Accessibility permissions: " +
+				"System Preferences > Security & Privacy > Privacy > Accessibility. " +
+				"Add Terminal (or your terminal app) to the list."
+		} else if strings.Contains(outputStr, "Application isn't running") ||
+			strings.Contains(outputStr, "Can't get application") {
+			targetApp := bundleID
+			if targetApp == "" {
+				targetApp = appName
+			}
+			message = fmt.Sprintf("Application '%s' is not running", targetApp)
+		}
+
+		return connect.NewResponse(&sessionv1.FocusWindowResponse{
+			Success:  false,
+			Message:  message,
+			Platform: platform,
+		}), nil
+	}
+
+	log.InfoLog.Printf("Window activated successfully (bundle=%s, app=%s)", bundleID, appName)
+	return connect.NewResponse(&sessionv1.FocusWindowResponse{
+		Success:  true,
+		Message:  "Window activated successfully",
+		Platform: platform,
+	}), nil
+}
+
+// validateLocalhostOriginForFocus ensures FocusWindow requests come from localhost.
+func (s *SessionService) validateLocalhostOriginForFocus(ctx context.Context, req *connect.Request[sessionv1.FocusWindowRequest]) error {
+	// Check X-Real-IP header first (if behind a proxy)
+	realIP := req.Header().Get("X-Real-IP")
+	if realIP != "" {
+		if !isLocalhostIP(realIP) {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
+		}
+		return nil
+	}
+
+	// Check X-Forwarded-For header
+	forwardedFor := req.Header().Get("X-Forwarded-For")
+	if forwardedFor != "" {
+		ips := strings.Split(forwardedFor, ",")
+		if len(ips) > 0 {
+			clientIP := strings.TrimSpace(ips[0])
+			if !isLocalhostIP(clientIP) {
+				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
+			}
+			return nil
+		}
+	}
+
+	// Direct connection mode - server binds to localhost
+	return nil
+}
+
+// detectPlatform returns the current operating system.
+func detectPlatform() string {
+	switch os := os.Getenv("GOOS"); os {
+	case "":
+		// GOOS not set, use runtime detection
+		return runtime.GOOS
+	default:
+		return os
+	}
+}
+
+// RenameSession changes the title of an existing session.
+// Validates that the new title doesn't conflict with existing sessions.
+func (s *SessionService) RenameSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RenameSessionRequest],
+) (*connect.Response[sessionv1.RenameSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	if req.Msg.NewTitle == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("new title is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find the instance to rename
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Check if new title already exists (if different from current)
+	if req.Msg.NewTitle != instance.Title {
+		for _, inst := range instances {
+			if inst.Title == req.Msg.NewTitle {
+				return nil, connect.NewError(connect.CodeAlreadyExists,
+					fmt.Errorf("session with title '%s' already exists", req.Msg.NewTitle))
+			}
+		}
+	}
+
+	// Rename the instance
+	oldTitle := instance.Title
+	if err := instance.Rename(req.Msg.NewTitle); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to rename session: %w", err))
+	}
+
+	// Update the instance in the list and save
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		// Try to rollback the rename
+		instance.Title = oldTitle
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))
+	}
+
+	// Update the ReviewQueuePoller's instance references after renaming
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.SetInstances(instances)
+		log.InfoLog.Printf("[ReviewQueue] Updated poller instance references after RenameSession from '%s' to '%s'",
+			oldTitle, req.Msg.NewTitle)
+	}
+
+	// Publish SessionUpdated event
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"title"}))
+
+	log.InfoLog.Printf("Successfully renamed session from '%s' to '%s'", oldTitle, req.Msg.NewTitle)
+
+	return connect.NewResponse(&sessionv1.RenameSessionResponse{
+		Session: adapters.InstanceToProto(instance),
+	}), nil
+}
+
+// RestartSession restarts a session by killing and recreating the tmux session.
+// Optionally preserves terminal output for debugging purposes.
+func (s *SessionService) RestartSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RestartSessionRequest],
+) (*connect.Response[sessionv1.RestartSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find the instance to restart
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Restart the instance
+	if err := instance.Restart(req.Msg.PreserveOutput); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
+	}
+
+	// Update the instance in the list and save
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save restarted instance: %w", err))
+	}
+
+	// Update the ReviewQueuePoller's instance references after restart
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.SetInstances(instances)
+		log.InfoLog.Printf("[ReviewQueue] Updated poller instance references after RestartSession for '%s'", instance.Title)
+	}
+
+	// Publish SessionUpdated event
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "updated_at"}))
+
+	message := fmt.Sprintf("Session '%s' restarted successfully", instance.Title)
+	if req.Msg.PreserveOutput {
+		message += " (terminal output preserved)"
+	}
+
+	log.InfoLog.Printf("%s", message)
+
+	return connect.NewResponse(&sessionv1.RestartSessionResponse{
+		Session: adapters.InstanceToProto(instance),
+		Success: true,
+		Message: message,
+	}), nil
+}
+
+// GetVCSStatus retrieves the current version control status for a session.
+func (s *SessionService) GetVCSStatus(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetVCSStatusRequest],
+) (*connect.Response[sessionv1.GetVCSStatusResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.loadInstancesWithWiring()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	// Find instance by ID (using Title as ID)
+	var instance *session.Instance
+	for _, inst := range instances {
+		if inst.Title == req.Msg.Id {
+			instance = inst
+			break
+		}
+	}
+
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Get the working directory path
+	workDir := instance.Path
+	if workDir == "" {
+		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
+			Error: "session has no working directory",
+		}), nil
+	}
+
+	// Try to create a VCS provider for the path
+	var provider vc.VCSProvider
+	gitProvider, err := vc.NewGitProvider(workDir)
+	if err != nil {
+		// Try Jujutsu if Git fails
+		jjProvider, jjErr := vc.NewJujutsuProvider(workDir)
+		if jjErr != nil {
+			return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
+				Error: fmt.Sprintf("not a version-controlled directory: %s", workDir),
+			}), nil
+		}
+		provider = jjProvider
+	} else {
+		provider = gitProvider
+	}
+
+	// Get status from the provider
+	status, err := provider.GetStatus()
+	if err != nil {
+		return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
+			Error: fmt.Sprintf("failed to get VCS status: %v", err),
+		}), nil
+	}
+
+	// Convert to proto
+	protoStatus := vcsStatusToProto(status)
+
+	return connect.NewResponse(&sessionv1.GetVCSStatusResponse{
+		VcsStatus: protoStatus,
+	}), nil
+}
+
+// vcsStatusToProto converts a vc.VCSStatus to sessionv1.VCSStatus
+func vcsStatusToProto(status *vc.VCSStatus) *sessionv1.VCSStatus {
+	if status == nil {
+		return nil
+	}
+
+	protoStatus := &sessionv1.VCSStatus{
+		Type:         vcsTypeToProto(status.Type),
+		Branch:       status.Branch,
+		HeadCommit:   status.HeadCommit,
+		Description:  status.Description,
+		AheadBy:      int32(status.AheadBy),
+		BehindBy:     int32(status.BehindBy),
+		Upstream:     status.Upstream,
+		HasStaged:    status.HasStaged,
+		HasUnstaged:  status.HasUnstaged,
+		HasUntracked: status.HasUntracked,
+		HasConflicts: status.HasConflicts,
+		IsClean:      status.IsClean,
+	}
+
+	// Convert file lists
+	for _, f := range status.StagedFiles {
+		protoStatus.StagedFiles = append(protoStatus.StagedFiles, fileChangeToProto(f))
+	}
+	for _, f := range status.UnstagedFiles {
+		protoStatus.UnstagedFiles = append(protoStatus.UnstagedFiles, fileChangeToProto(f))
+	}
+	for _, f := range status.UntrackedFiles {
+		protoStatus.UntrackedFiles = append(protoStatus.UntrackedFiles, fileChangeToProto(f))
+	}
+	for _, f := range status.ConflictFiles {
+		protoStatus.ConflictFiles = append(protoStatus.ConflictFiles, fileChangeToProto(f))
+	}
+
+	return protoStatus
+}
+
+// vcsTypeToProto converts vc.VCSType to sessionv1.VCSType
+func vcsTypeToProto(t vc.VCSType) sessionv1.VCSType {
+	switch t {
+	case vc.VCSGit:
+		return sessionv1.VCSType_VCS_TYPE_GIT
+	case vc.VCSJujutsu:
+		return sessionv1.VCSType_VCS_TYPE_JUJUTSU
+	default:
+		return sessionv1.VCSType_VCS_TYPE_UNSPECIFIED
+	}
+}
+
+// fileStatusToProto converts vc.FileStatus to sessionv1.FileStatus
+func fileStatusToProto(s vc.FileStatus) sessionv1.FileStatus {
+	switch s {
+	case vc.FileModified:
+		return sessionv1.FileStatus_FILE_STATUS_MODIFIED
+	case vc.FileAdded:
+		return sessionv1.FileStatus_FILE_STATUS_ADDED
+	case vc.FileDeleted:
+		return sessionv1.FileStatus_FILE_STATUS_DELETED
+	case vc.FileRenamed:
+		return sessionv1.FileStatus_FILE_STATUS_RENAMED
+	case vc.FileCopied:
+		return sessionv1.FileStatus_FILE_STATUS_COPIED
+	case vc.FileUntracked:
+		return sessionv1.FileStatus_FILE_STATUS_UNTRACKED
+	case vc.FileIgnored:
+		return sessionv1.FileStatus_FILE_STATUS_IGNORED
+	case vc.FileConflict:
+		return sessionv1.FileStatus_FILE_STATUS_CONFLICT
+	default:
+		return sessionv1.FileStatus_FILE_STATUS_UNSPECIFIED
+	}
+}
+
+// fileChangeToProto converts vc.FileChange to sessionv1.FileChange
+func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
+	return &sessionv1.FileChange{
+		Path:     f.Path,
+		Status:   fileStatusToProto(f.Status),
+		IsStaged: f.IsStaged,
+		OldPath:  f.OldPath,
+	}
 }

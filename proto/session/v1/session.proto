@@ -35,6 +35,10 @@ service SessionService {
   // GetSessionDiff retrieves the current git diff for a session.
   rpc GetSessionDiff(GetSessionDiffRequest) returns (GetSessionDiffResponse) {}
 
+  // GetVCSStatus retrieves the current version control status for a session.
+  // Returns branch info, changed files, staged/unstaged status, and remote sync state.
+  rpc GetVCSStatus(GetVCSStatusRequest) returns (GetVCSStatusResponse) {}
+
   // GetReviewQueue returns sessions needing user attention with priority ordering.
   rpc GetReviewQueue(GetReviewQueueRequest) returns (GetReviewQueueResponse) {}
 
@@ -71,6 +75,10 @@ service SessionService {
   // GetClaudeHistoryMessages retrieves messages from a specific conversation.
   rpc GetClaudeHistoryMessages(GetClaudeHistoryMessagesRequest) returns (GetClaudeHistoryMessagesResponse) {}
 
+  // SearchClaudeHistory performs full-text search across Claude conversation history.
+  // Returns ranked results with contextual snippets showing where query terms appear.
+  rpc SearchClaudeHistory(SearchClaudeHistoryRequest) returns (SearchClaudeHistoryResponse) {}
+
   // GetPRInfo retrieves the latest PR information for a session.
   rpc GetPRInfo(GetPRInfoRequest) returns (GetPRInfoResponse) {}
 
@@ -91,6 +99,19 @@ service SessionService {
   // Requires session_id to identify the source session.
   // Enforces localhost-only restriction and rate limiting (10/sec per session).
   rpc SendNotification(SendNotificationRequest) returns (SendNotificationResponse) {}
+
+  // FocusWindow activates a window for the specified application.
+  // Used for deep linking from notifications to bring the source IDE/terminal to front.
+  // Only works on macOS via AppleScript. Requires localhost origin.
+  rpc FocusWindow(FocusWindowRequest) returns (FocusWindowResponse) {}
+
+  // RenameSession changes the title of an existing session.
+  // Validates that the new title doesn't conflict with existing sessions.
+  rpc RenameSession(RenameSessionRequest) returns (RenameSessionResponse) {}
+
+  // RestartSession restarts a session by killing and recreating the tmux session.
+  // Optionally preserves terminal output for debugging purposes.
+  rpc RestartSession(RestartSessionRequest) returns (RestartSessionResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -148,6 +169,10 @@ message CreateSessionRequest {
 
   // Optional: Reuse existing worktree at this path.
   string existing_worktree = 9;
+
+  // Optional: Resume an existing Claude conversation by ID.
+  // This ID comes from ClaudeHistoryEntry.id and will use Claude's --resume flag.
+  string resume_id = 10;
 }
 
 message CreateSessionResponse {
@@ -204,6 +229,19 @@ message GetSessionDiffRequest {
 message GetSessionDiffResponse {
   // Git diff statistics.
   DiffStats diff_stats = 1;
+}
+
+message GetVCSStatusRequest {
+  // Session identifier.
+  string id = 1;
+}
+
+message GetVCSStatusResponse {
+  // VCS status for the session's working directory.
+  VCSStatus vcs_status = 1;
+
+  // Error message if VCS status couldn't be retrieved.
+  string error = 2;
 }
 
 message GetReviewQueueRequest {
@@ -439,6 +477,82 @@ message ClaudeMessage {
   string model = 4;
 }
 
+// Full-Text Search Messages
+
+message SearchClaudeHistoryRequest {
+  // Search query (required). Supports natural language queries.
+  string query = 1;
+  // Optional project path filter.
+  optional string project = 2;
+  // Optional model filter (e.g., "claude-sonnet-4").
+  optional string model = 3;
+  // Optional start of date range filter.
+  optional google.protobuf.Timestamp start_time = 4;
+  // Optional end of date range filter.
+  optional google.protobuf.Timestamp end_time = 5;
+  // Maximum number of results to return (default: 20, max: 100).
+  int32 limit = 6;
+  // Number of results to skip for pagination (default: 0).
+  int32 offset = 7;
+}
+
+message SearchClaudeHistoryResponse {
+  // List of search results, ranked by relevance.
+  repeated SearchResult results = 1;
+  // Total number of matching documents (before pagination).
+  int32 total_matches = 2;
+  // Query execution time in milliseconds.
+  int64 query_time_ms = 3;
+  // Indicates if there are more results available.
+  bool has_more = 4;
+}
+
+message SearchResult {
+  // The conversation/session ID containing this match.
+  string session_id = 1;
+  // Conversation name/title.
+  string session_name = 2;
+  // Project/directory path.
+  string project = 3;
+  // Index of the matched message within the conversation.
+  int32 message_index = 4;
+  // BM25 relevance score (higher is more relevant).
+  float score = 5;
+  // Contextual snippets showing where the query terms appear.
+  repeated SearchSnippet snippets = 6;
+  // Metadata about the match source.
+  SearchResultMetadata metadata = 7;
+}
+
+message SearchSnippet {
+  // Snippet text with surrounding context.
+  string text = 1;
+  // Ranges within text that should be highlighted.
+  repeated HighlightRange highlight_ranges = 2;
+  // Role of the message (user, assistant, system).
+  string message_role = 3;
+  // When the message was created.
+  google.protobuf.Timestamp message_time = 4;
+}
+
+message HighlightRange {
+  // Start position in text (character offset).
+  int32 start = 1;
+  // End position in text (character offset).
+  int32 end = 2;
+}
+
+message SearchResultMetadata {
+  // True if match is in session name/project (vs message content).
+  bool is_metadata_match = 1;
+  // Source of the match: "session_name", "project", "message_content".
+  string match_source = 2;
+  // Claude model used in this conversation.
+  string model = 3;
+  // Conversation creation timestamp.
+  google.protobuf.Timestamp created_at = 4;
+}
+
 // PR Tracking Messages
 
 message GetPRInfoRequest {
@@ -533,4 +647,69 @@ message SendNotificationResponse {
 
   // Notification ID (for tracking/debugging)
   string notification_id = 3;
+}
+
+// FocusWindowRequest specifies which application window to bring to front.
+message FocusWindowRequest {
+  // macOS bundle identifier (e.g., "com.jetbrains.intellij", "com.microsoft.VSCode")
+  // This is the preferred method for window activation.
+  optional string bundle_id = 1;
+
+  // Application name (e.g., "IntelliJ IDEA", "Visual Studio Code")
+  // Used as fallback if bundle_id is not provided.
+  optional string app_name = 2;
+
+  // Process ID (optional, for more specific targeting)
+  optional int32 pid = 3;
+
+  // Project name/path (for IDEs that support project-specific activation)
+  optional string project = 4;
+}
+
+// FocusWindowResponse indicates whether window activation succeeded.
+message FocusWindowResponse {
+  // Whether the window was successfully activated
+  bool success = 1;
+
+  // Human-readable message (error details if failed)
+  string message = 2;
+
+  // Platform (e.g., "darwin", "linux", "windows")
+  string platform = 3;
+}
+
+// RenameSessionRequest changes the title of an existing session.
+message RenameSessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+
+  // New title for the session (must be unique).
+  string new_title = 2;
+}
+
+// RenameSessionResponse returns the updated session.
+message RenameSessionResponse {
+  // Updated session with new title.
+  Session session = 1;
+}
+
+// RestartSessionRequest restarts a session.
+message RestartSessionRequest {
+  // Session identifier (uses session title as ID).
+  string id = 1;
+
+  // Optional: preserve terminal output before restart (default: false).
+  bool preserve_output = 2;
+}
+
+// RestartSessionResponse indicates restart success.
+message RestartSessionResponse {
+  // Restarted session.
+  Session session = 1;
+
+  // Whether the restart was successful.
+  bool success = 2;
+
+  // Human-readable message (error details if failed).
+  string message = 3;
 }

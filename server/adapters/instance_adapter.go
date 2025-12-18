@@ -41,6 +41,9 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 		GithubRepo:      inst.GitHubRepo,
 		GithubSourceRef: inst.GitHubSourceRef,
 		ClonedRepoPath:  inst.ClonedRepoPath,
+		// Instance type and external metadata
+		InstanceType:     instanceTypeToProto(inst.InstanceType),
+		ExternalMetadata: externalMetadataToProto(inst.ExternalMetadata),
 	}
 
 	// Convert git worktree data if available
@@ -143,5 +146,35 @@ func ProtoToSessionType(sessionType sessionv1.SessionType) session.SessionType {
 		return session.SessionTypeExistingWorktree
 	default:
 		return session.SessionTypeDirectory // Default to Directory for unknown types
+	}
+}
+
+// instanceTypeToProto converts session.InstanceType to proto InstanceType enum.
+func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceType {
+	switch instanceType {
+	case session.InstanceTypeManaged:
+		return sessionv1.InstanceType_INSTANCE_TYPE_MANAGED
+	case session.InstanceTypeExternal:
+		return sessionv1.InstanceType_INSTANCE_TYPE_EXTERNAL
+	default:
+		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
+	}
+}
+
+// externalMetadataToProto converts session.ExternalInstanceMetadata to proto ExternalInstanceMetadata.
+func externalMetadataToProto(metadata *session.ExternalInstanceMetadata) *sessionv1.ExternalInstanceMetadata {
+	if metadata == nil {
+		return nil
+	}
+
+	return &sessionv1.ExternalInstanceMetadata{
+		TmuxSocket:        metadata.TmuxSocket,
+		TmuxSessionName:   metadata.TmuxSessionName,
+		DiscoveredAt:      timestamppb.New(metadata.DiscoveredAt),
+		LastSeen:          timestamppb.New(metadata.LastSeen),
+		OriginalPid:       int32(metadata.OriginalPID),
+		MuxSocketPath:     metadata.MuxSocketPath,
+		MuxEnabled:        metadata.MuxEnabled,
+		SourceTerminal:    metadata.SourceTerminal,
 	}
 }
