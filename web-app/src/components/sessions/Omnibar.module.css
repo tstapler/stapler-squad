@@ -1,0 +1,332 @@
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.modal {
+  background: var(--bg-secondary, #1a1a1a);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 600px;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: slideDown 0.2s ease-out;
+}
+
+@keyframes slideDown {
+  from {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.inputContainer {
+  display: flex;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid var(--border-color, #333);
+  gap: 12px;
+}
+
+.typeIndicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary, #fff);
+  font-size: 16px;
+  font-family: inherit;
+}
+
+.input::placeholder {
+  color: var(--text-muted, #666);
+}
+
+.detectionInfo {
+  padding: 12px 16px;
+  background: var(--bg-tertiary, #252525);
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.detectionBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--accent-bg, rgba(59, 130, 246, 0.2));
+  color: var(--accent-color, #60a5fa);
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.detectionBadge.unknown {
+  background: var(--warning-bg, rgba(234, 179, 8, 0.2));
+  color: var(--warning-color, #fbbf24);
+}
+
+.body {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, #999);
+}
+
+.fieldInput {
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.fieldInput:focus {
+  border-color: var(--accent-color, #3b82f6);
+}
+
+.fieldInput::placeholder {
+  color: var(--text-muted, #666);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--text-muted, #666);
+}
+
+.select {
+  background: var(--bg-tertiary, #252525);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--text-primary, #fff);
+  font-size: 14px;
+  outline: none;
+  cursor: pointer;
+}
+
+.select:focus {
+  border-color: var(--accent-color, #3b82f6);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-primary, #fff);
+}
+
+.checkbox input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.collapsible {
+  border-top: 1px solid var(--border-color, #333);
+  margin-top: 8px;
+  padding-top: 16px;
+}
+
+.collapsibleHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 12px;
+}
+
+.collapsibleTitle {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, #999);
+}
+
+.collapsibleIcon {
+  color: var(--text-muted, #666);
+  transition: transform 0.2s;
+}
+
+.collapsibleIcon.expanded {
+  transform: rotate(180deg);
+}
+
+.collapsibleContent {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--border-color, #333);
+  background: var(--bg-tertiary, #252525);
+}
+
+.button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+  border: none;
+}
+
+.buttonSecondary {
+  background: transparent;
+  color: var(--text-secondary, #999);
+  border: 1px solid var(--border-color, #333);
+}
+
+.buttonSecondary:hover {
+  background: var(--bg-tertiary, #252525);
+  color: var(--text-primary, #fff);
+}
+
+.buttonPrimary {
+  background: var(--accent-color, #3b82f6);
+  color: white;
+}
+
+.buttonPrimary:hover {
+  background: var(--accent-hover, #2563eb);
+}
+
+.buttonPrimary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  color: var(--error-color, #ef4444);
+  font-size: 13px;
+  padding: 8px 12px;
+  background: var(--error-bg, rgba(239, 68, 68, 0.1));
+  border-radius: 6px;
+  margin: 0 16px;
+}
+
+.shortcuts {
+  display: flex;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--bg-tertiary, #252525);
+  font-size: 12px;
+  color: var(--text-muted, #666);
+}
+
+.shortcut {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.shortcutKey {
+  background: var(--bg-secondary, #1a1a1a);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: light) {
+  .overlay {
+    background: rgba(0, 0, 0, 0.4);
+  }
+
+  .modal {
+    background: #fff;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  }
+
+  .inputContainer {
+    border-bottom-color: #e5e5e5;
+  }
+
+  .input {
+    color: #111;
+  }
+
+  .input::placeholder {
+    color: #999;
+  }
+
+  .detectionInfo {
+    background: #f5f5f5;
+    border-bottom-color: #e5e5e5;
+  }
+
+  .fieldInput,
+  .select {
+    background: #f5f5f5;
+    border-color: #e5e5e5;
+    color: #111;
+  }
+
+  .footer {
+    background: #f5f5f5;
+    border-top-color: #e5e5e5;
+  }
+
+  .shortcuts {
+    background: #f5f5f5;
+  }
+
+  .shortcutKey {
+    background: #e5e5e5;
+  }
+}

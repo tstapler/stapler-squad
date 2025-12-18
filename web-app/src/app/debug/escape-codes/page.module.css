@@ -1,0 +1,242 @@
+.page {
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.header {
+  margin-bottom: 2rem;
+}
+
+.header h1 {
+  font-size: 1.75rem;
+  margin: 0 0 0.5rem;
+}
+
+.subtitle {
+  color: var(--text-secondary, #888);
+  margin: 0;
+}
+
+.controls {
+  display: flex;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: all 0.15s ease;
+}
+
+.button:hover {
+  background: var(--hover-bg, #333);
+}
+
+.buttonActive {
+  background: #22c55e;
+  border-color: #22c55e;
+  color: white;
+}
+
+.buttonActive:hover {
+  background: #16a34a;
+}
+
+.buttonDanger {
+  border-color: #dc2626;
+  color: #dc2626;
+}
+
+.buttonDanger:hover {
+  background: #dc2626;
+  color: white;
+}
+
+.error {
+  padding: 1rem;
+  background: #7f1d1d;
+  border: 1px solid #dc2626;
+  border-radius: 6px;
+  color: #fecaca;
+  margin-bottom: 1.5rem;
+}
+
+.statsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.statCard {
+  background: var(--card-bg, #1a1a1a);
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  padding: 1rem;
+  text-align: center;
+}
+
+.statValue {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #60a5fa;
+}
+
+.statLabel {
+  font-size: 0.75rem;
+  color: var(--text-secondary, #888);
+  text-transform: uppercase;
+  margin-top: 0.25rem;
+}
+
+.filters {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.filters label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+}
+
+.select {
+  padding: 0.375rem 0.75rem;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 6px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 0.875rem;
+}
+
+.loading {
+  text-align: center;
+  padding: 3rem;
+  color: var(--text-secondary, #888);
+}
+
+.tableContainer {
+  border: 1px solid var(--border-color, #333);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.table th {
+  background: var(--card-bg, #1a1a1a);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border-color, #333);
+  white-space: nowrap;
+}
+
+.table td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--border-color, #222);
+  vertical-align: top;
+}
+
+.table tbody tr:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.02));
+}
+
+.hexCode {
+  font-family: monospace;
+  font-size: 0.8rem;
+  background: var(--code-bg, #1e1e1e);
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-block;
+  word-break: break-all;
+  max-width: 200px;
+}
+
+.hexCode:hover {
+  background: var(--code-hover-bg, #2a2a2a);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.badgeCSI { background: #3b82f6; color: white; }
+.badgeOSC { background: #8b5cf6; color: white; }
+.badgeDCS { background: #ec4899; color: white; }
+.badgeDECPriv { background: #f59e0b; color: black; }
+.badgeSGR { background: #10b981; color: white; }
+.badgeCursor { background: #06b6d4; color: white; }
+.badgeErase { background: #ef4444; color: white; }
+.badgeScroll { background: #84cc16; color: black; }
+.badgeSimple { background: #64748b; color: white; }
+.badgeCharset { background: #a855f7; color: white; }
+.badgeUnknown { background: #374151; color: white; }
+
+.countCell {
+  font-weight: 600;
+  text-align: right;
+  font-family: monospace;
+}
+
+.dateCell {
+  white-space: nowrap;
+  color: var(--text-secondary, #888);
+}
+
+.sessionsCell {
+  text-align: center;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 3rem;
+  color: var(--text-secondary, #888);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .page {
+    padding: 1rem;
+  }
+
+  .controls {
+    flex-direction: column;
+  }
+
+  .button {
+    width: 100%;
+  }
+
+  .statsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .tableContainer {
+    overflow-x: auto;
+  }
+}

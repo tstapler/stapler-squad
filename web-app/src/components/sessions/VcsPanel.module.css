@@ -1,0 +1,327 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 16px;
+  overflow-y: auto;
+  background: var(--bg-primary, #1a1a1a);
+  color: var(--text-primary, #e0e0e0);
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary, #888);
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background: rgba(255, 100, 100, 0.1);
+  border: 1px solid rgba(255, 100, 100, 0.3);
+  border-radius: 8px;
+  color: #ff6b6b;
+}
+
+.errorIcon {
+  font-size: 20px;
+}
+
+.retryButton {
+  margin-left: auto;
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.retryButton:hover {
+  background: rgba(255, 100, 100, 0.2);
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-secondary, #888);
+  text-align: center;
+}
+
+/* Header */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.vcsType {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.vcsIcon {
+  font-size: 20px;
+}
+
+.vcsName {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.refreshButton {
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--border-color, #333);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.refreshButton:hover {
+  background: var(--bg-hover, #333);
+  border-color: var(--border-hover, #555);
+}
+
+/* Branch info */
+.branchInfo {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--bg-secondary, #222);
+  border-radius: 8px;
+}
+
+.branchRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.branchIcon {
+  color: #7ee787;
+  font-weight: bold;
+}
+
+.branchName {
+  font-family: monospace;
+  font-size: 14px;
+  font-weight: 600;
+  color: #7ee787;
+}
+
+.commitHash {
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  background: var(--bg-primary, #1a1a1a);
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.commitMessage {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sync status */
+.syncStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  background: var(--bg-secondary, #222);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.syncIcon {
+  opacity: 0.7;
+}
+
+.upstream {
+  font-family: monospace;
+  color: var(--text-secondary, #888);
+}
+
+.ahead {
+  color: #7ee787;
+  font-weight: 500;
+}
+
+.behind {
+  color: #f97583;
+  font-weight: 500;
+}
+
+/* Working directory status */
+.workdirStatus {
+  margin-bottom: 16px;
+}
+
+.cleanStatus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: rgba(126, 231, 135, 0.1);
+  border: 1px solid rgba(126, 231, 135, 0.3);
+  border-radius: 8px;
+  color: #7ee787;
+}
+
+.cleanIcon {
+  font-weight: bold;
+}
+
+.dirtyStatus {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.conflictBadge,
+.stagedBadge,
+.unstagedBadge,
+.untrackedBadge {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.conflictBadge {
+  background: rgba(249, 117, 131, 0.2);
+  color: #f97583;
+  border: 1px solid rgba(249, 117, 131, 0.4);
+}
+
+.stagedBadge {
+  background: rgba(126, 231, 135, 0.2);
+  color: #7ee787;
+  border: 1px solid rgba(126, 231, 135, 0.4);
+}
+
+.unstagedBadge {
+  background: rgba(247, 203, 104, 0.2);
+  color: #f7cb68;
+  border: 1px solid rgba(247, 203, 104, 0.4);
+}
+
+.untrackedBadge {
+  background: rgba(136, 136, 136, 0.2);
+  color: #888;
+  border: 1px solid rgba(136, 136, 136, 0.4);
+}
+
+/* File lists */
+.fileLists {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.fileSection {
+  background: var(--bg-secondary, #222);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.fileSectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--bg-tertiary, #2a2a2a);
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.sectionIcon {
+  font-size: 14px;
+}
+
+.fileList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.fileItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-family: monospace;
+  font-size: 13px;
+  border-bottom: 1px solid var(--border-color, #333);
+}
+
+.fileItem:last-child {
+  border-bottom: none;
+}
+
+.fileStatus {
+  width: 16px;
+  text-align: center;
+  font-weight: bold;
+}
+
+.filePath {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* File status colors */
+.modified .fileStatus,
+.modified .filePath {
+  color: #f7cb68;
+}
+
+.added .fileStatus,
+.added .filePath {
+  color: #7ee787;
+}
+
+.deleted .fileStatus,
+.deleted .filePath {
+  color: #f97583;
+}
+
+.renamed .fileStatus,
+.renamed .filePath {
+  color: #d2a8ff;
+}
+
+.untracked .fileStatus,
+.untracked .filePath {
+  color: #888;
+}
+
+.conflict .fileStatus,
+.conflict .filePath {
+  color: #f97583;
+  font-weight: bold;
+}
