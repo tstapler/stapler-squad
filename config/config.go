@@ -199,6 +199,9 @@ type Config struct {
 	// TerminalStreamingMode controls how terminal output is streamed to the client
 	// Options: "raw" (direct PTY streaming), "state" (MOSH-style state sync), "hybrid" (both)
 	TerminalStreamingMode string `json:"terminal_streaming_mode"`
+	// VCSPreference controls which version control system to prefer when both are available
+	// Options: "auto" (prefer JJ if available), "jj" (always use JJ), "git" (always use Git)
+	VCSPreference string `json:"vcs_preference"`
 }
 
 // DefaultConfig returns the default configuration
@@ -234,7 +237,8 @@ func DefaultConfig() *Config {
 		TmuxSessionPrefix:             "claudesquad_", // Default prefix for backward compatibility
 		PerformBackgroundHealthChecks: true,            // Enabled by default for automated session maintenance
 		KeyCategories:                 getDefaultKeyCategories(),
-		TerminalStreamingMode:         "raw", // Default to raw streaming (simpler, more reliable)
+		TerminalStreamingMode:         "raw",  // Default to raw streaming (simpler, more reliable)
+		VCSPreference:                 "auto", // Default to auto-detection (prefer JJ if available)
 	}
 }
 
