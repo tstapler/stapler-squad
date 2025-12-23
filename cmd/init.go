@@ -118,6 +118,24 @@ func InitializeCommands(registry *CommandRegistry) error {
 		Contexts:    []ContextID{ContextList},
 	}).BindKey("E")
 
+	registry.Register(&Command{
+		ID:          "session.workspace_status",
+		Name:        "Workspace Status",
+		Description: "View workspace status across all sessions",
+		Category:    CategorySession,
+		Handler:     commands.WorkspaceStatusCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("W")
+
+	registry.Register(&Command{
+		ID:          "session.workspace_switch",
+		Name:        "Workspace Switch",
+		Description: "Switch session to a different branch, bookmark, or worktree",
+		Category:    CategorySession,
+		Handler:     commands.WorkspaceSwitchCommand,
+		Contexts:    []ContextID{ContextList},
+	}).BindKey("w")
+
 	// Register git integration commands
 	registry.Register(&Command{
 		ID:          "git.status",

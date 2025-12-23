@@ -153,6 +153,56 @@ func (m *manager) GetViewDirective() ViewDirective {
 			ShouldResetOnNil:  true,
 		}
 
+	case TagEditor:
+		return ViewDirective{
+			Type:              ViewOverlay,
+			OverlayComponent:  "tagEditorOverlay",
+			Centered:          true,
+			Bordered:          true,
+			ShouldResetOnNil:  true,
+		}
+
+	case HistoryBrowser:
+		return ViewDirective{
+			Type:              ViewOverlay,
+			OverlayComponent:  "historyBrowserOverlay",
+			Centered:          true,
+			Bordered:          true,
+			ShouldResetOnNil:  true,
+		}
+
+	case ConfigEditor:
+		return ViewDirective{
+			Type:              ViewOverlay,
+			OverlayComponent:  "configEditorOverlay",
+			Centered:          true,
+			Bordered:          true,
+			ShouldResetOnNil:  true,
+		}
+
+	case Rename:
+		return ViewDirective{
+			Type:              ViewOverlay,
+			OverlayComponent:  "renameInputOverlay",
+			Centered:          true,
+			Bordered:          true,
+			ShouldResetOnNil:  true,
+		}
+
+	case Workspace:
+		// Check context to determine which workspace overlay is being shown
+		overlayName := "workspaceSwitchOverlay"
+		if m.transitionContext.OverlayName == "workspaceStatus" {
+			overlayName = "workspaceStatusOverlay"
+		}
+		return ViewDirective{
+			Type:              ViewOverlay,
+			OverlayComponent:  overlayName,
+			Centered:          true,
+			Bordered:          true,
+			ShouldResetOnNil:  true,
+		}
+
 	default:
 		// Fallback to main view for unknown states
 		return ViewDirective{

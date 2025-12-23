@@ -10,6 +10,7 @@ import (
 	"claude-squad/config"
 	"claude-squad/log"
 	"claude-squad/session"
+	"claude-squad/session/vcs"
 	"claude-squad/terminal"
 	"claude-squad/ui"
 	"claude-squad/ui/fuzzy"
@@ -516,6 +517,12 @@ func (m *home) initializeCommandBridge() {
 		OnRestartSession: func() (tea.Model, tea.Cmd) {
 			return m.handleRestartSession()
 		},
+		OnWorkspaceStatus: func() (tea.Model, tea.Cmd) {
+			return m.handleWorkspaceStatus()
+		},
+		OnWorkspaceSwitch: func() (tea.Model, tea.Cmd) {
+			return m.handleWorkspaceSwitch()
+		},
 	}
 
 	// Set up git handlers
@@ -882,6 +889,75 @@ func (m *home) handleTagEditor() (tea.Model, tea.Cmd) {
 	return m, tea.WindowSize()
 }
 
+func (m *home) handleWorkspaceSwitch() (tea.Model, tea.Cmd) {
+	selected := m.getSelectedInstance()
+	if selected == nil {
+		return m, m.handleError(fmt.Errorf("no session selected for workspace switch"))
+	}
+
+	// Get the repository path from the session
+	repoPath := selected.Path
+	if selected.MainRepoPath != "" {
+		repoPath = selected.MainRepoPath
+	}
+
+	// Create the workspace switch overlay using coordinator
+	if err := m.uiCoordinator.CreateWorkspaceSwitchOverlay(selected.Title, repoPath); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create workspace switch overlay: %w", err))
+	}
+
+	// Get the overlay and set up callbacks
+	workspaceSwitchOverlay := m.uiCoordinator.GetWorkspaceSwitchOverlay()
+	if workspaceSwitchOverlay != nil {
+		workspaceSwitchOverlay.OnSwitch = func(target string, switchType int, strategy vcs.ChangeStrategy, createIfMissing bool) {
+			// Create the switch request
+			req := session.WorkspaceSwitchRequest{
+				Type:            session.WorkspaceSwitchType(switchType),
+				Target:          target,
+				ChangeStrategy:  strategy,
+				CreateIfMissing: createIfMissing,
+			}
+
+			log.InfoLog.Printf("Switching workspace for '%s': %s -> %s (strategy: %s)",
+				selected.Title, req.Type, target, strategy)
+
+			// Perform the switch
+			result, err := selected.SwitchWorkspace(req)
+			if err != nil {
+				m.handleError(fmt.Errorf("workspace switch failed: %w", err))
+				return
+			}
+
+			if result.Success {
+				log.InfoLog.Printf("Workspace switch successful: %s -> %s (changes: %s)",
+					result.PreviousRevision, result.CurrentRevision, result.ChangesHandled)
+			}
+
+			// Save updated instance state
+			if err := m.saveAllInstances(); err != nil {
+				m.handleError(fmt.Errorf("failed to save instance after workspace switch: %w", err))
+			}
+
+			// Close the overlay
+			m.uiCoordinator.HideOverlay(appui.ComponentWorkspaceSwitchOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+
+		workspaceSwitchOverlay.OnCancel = func() {
+			// Close the overlay without switching
+			m.uiCoordinator.HideOverlay(appui.ComponentWorkspaceSwitchOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+	}
+
+	// Change state
+	m.transitionToState(state.Workspace)
+
+	return m, tea.WindowSize()
+}
+
 func (m *home) handleHistoryBrowser() (tea.Model, tea.Cmd) {
 	// Create history browser overlay using coordinator
 	if err := m.uiCoordinator.CreateHistoryBrowserOverlay(); err != nil {
@@ -973,6 +1049,51 @@ func (m *home) handleConfigEditor() (tea.Model, tea.Cmd) {
 
 	// Change state
 	m.transitionToState(state.ConfigEditor)
+
+	return m, tea.WindowSize()
+}
+
+func (m *home) handleWorkspaceStatus() (tea.Model, tea.Cmd) {
+	// Create workspace status overlay using coordinator
+	if err := m.uiCoordinator.CreateWorkspaceStatusOverlay(); err != nil {
+		return m, m.handleError(fmt.Errorf("failed to create workspace status overlay: %w", err))
+	}
+
+	// Get the overlay and set up callbacks
+	workspaceStatusOverlay := m.uiCoordinator.GetWorkspaceStatusOverlay()
+	if workspaceStatusOverlay != nil {
+		workspaceStatusOverlay.OnDismiss = func() {
+			m.uiCoordinator.HideOverlay(appui.ComponentWorkspaceStatusOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+		}
+
+		workspaceStatusOverlay.OnNavigateToSession = func(sessionTitle string) {
+			// Navigate to the session in the list
+			m.uiCoordinator.HideOverlay(appui.ComponentWorkspaceStatusOverlay)
+			m.transitionToDefault()
+			m.menu.SetState(ui.StateDefault)
+
+			// Find and select the session
+			for i, inst := range m.list.GetInstances() {
+				if inst.Title == sessionTitle {
+					m.list.SetSelectedIdx(i)
+					break
+				}
+			}
+		}
+
+		workspaceStatusOverlay.OnRefresh = func() {
+			// Refresh workspace data from all sessions
+			m.populateWorkspaceStatus(workspaceStatusOverlay)
+		}
+
+		// Populate initial workspace data
+		m.populateWorkspaceStatus(workspaceStatusOverlay)
+	}
+
+	// Change state with overlay context
+	m.transitionToOverlay(state.Workspace, "Default", "workspaceStatus")
 
 	return m, tea.WindowSize()
 }
@@ -2003,6 +2124,10 @@ func (m *home) handleKeyPress(msg tea.KeyMsg) (mod tea.Model, teaCmd tea.Cmd) {
 		return m.handleTagEditorState(msg)
 	}
 
+	if m.isInState(state.Workspace) {
+		return m.handleWorkspaceState(msg)
+	}
+
 	if m.isInState(state.HistoryBrowser) {
 		return m.handleHistoryBrowserState(msg)
 	}
@@ -2590,6 +2715,36 @@ func (m *home) handleTagEditorState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleWorkspaceState processes key events when in workspace mode
+// This handles both the workspace switch overlay and workspace status overlay
+func (m *home) handleWorkspaceState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Check for workspace status overlay first
+	workspaceStatusOverlay := m.uiCoordinator.GetWorkspaceStatusOverlay()
+	if workspaceStatusOverlay != nil {
+		shouldClose := workspaceStatusOverlay.HandleKeyPress(msg)
+		if shouldClose {
+			m.transitionToDefault()
+			m.uiCoordinator.HideOverlay(appui.ComponentWorkspaceStatusOverlay)
+		}
+		return m, nil
+	}
+
+	// Fall back to workspace switch overlay
+	workspaceSwitchOverlay := m.uiCoordinator.GetWorkspaceSwitchOverlay()
+	if workspaceSwitchOverlay == nil {
+		m.transitionToDefault()
+		return m, nil
+	}
+
+	shouldClose := workspaceSwitchOverlay.HandleKeyPress(msg)
+	if shouldClose {
+		m.transitionToDefault()
+		m.uiCoordinator.HideOverlay(appui.ComponentWorkspaceSwitchOverlay)
+	}
+
+	return m, nil
+}
+
 func (m *home) handleHistoryBrowserState(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	historyBrowserOverlay := m.uiCoordinator.GetHistoryBrowserOverlay()
 	if historyBrowserOverlay == nil {
@@ -2858,6 +3013,24 @@ func (m *home) renderOverlay(directive state.ViewDirective, mainView string) str
 		validComponent = true
 	case "messagesOverlay":
 		componentType = appui.ComponentMessagesOverlay
+		validComponent = true
+	case "tagEditorOverlay":
+		componentType = appui.ComponentTagEditorOverlay
+		validComponent = true
+	case "historyBrowserOverlay":
+		componentType = appui.ComponentHistoryBrowserOverlay
+		validComponent = true
+	case "configEditorOverlay":
+		componentType = appui.ComponentConfigEditorOverlay
+		validComponent = true
+	case "renameInputOverlay":
+		componentType = appui.ComponentRenameInputOverlay
+		validComponent = true
+	case "workspaceSwitchOverlay":
+		componentType = appui.ComponentWorkspaceSwitchOverlay
+		validComponent = true
+	case "workspaceStatusOverlay":
+		componentType = appui.ComponentWorkspaceStatusOverlay
 		validComponent = true
 	default:
 		validComponent = false
@@ -3161,4 +3334,68 @@ func (h *home) isAtNavigationEnd() bool {
 // saveAllInstances saves all instances to storage using proper encapsulation
 func (h *home) saveAllInstances() error {
 	return h.storage.SaveInstances(h.getAllInstances())
+}
+
+// populateWorkspaceStatus populates the workspace status overlay with data from all sessions
+func (m *home) populateWorkspaceStatus(overlayRef *overlay.WorkspaceStatusOverlay) {
+	var workspaces []overlay.WorkspaceInfo
+	var summary overlay.WorkspaceSummary
+
+	sessions := m.getAllInstances()
+	repoSet := make(map[string]bool)
+
+	for _, inst := range sessions {
+		if inst == nil {
+			continue
+		}
+
+		// Get VCS info for the session
+		vcsInfo, err := inst.GetVCSInfo()
+		if err != nil {
+			log.WarningLog.Printf("Failed to get VCS info for session %s: %v", inst.Title, err)
+			continue
+		}
+
+		// Create workspace info from VCS info
+		info := overlay.WorkspaceInfo{
+			Path:           inst.Path,
+			SessionTitle:   inst.Title,
+			SessionStatus:  inst.Status,
+			IsWorktree:     inst.HasGitWorktree(),
+			Branch:         vcsInfo.CurrentBookmark,
+			ModifiedCount:  vcsInfo.ModifiedFileCount,
+			UntrackedCount: 0, // Not available from VCSInfo
+			StagedCount:    0, // Not available from VCSInfo
+			ConflictCount:  0, // Not available from VCSInfo
+			IsClean:        !vcsInfo.HasUncommittedChanges,
+			IsOrphaned:     false,
+			RepositoryRoot: vcsInfo.RepoPath,
+		}
+
+		workspaces = append(workspaces, info)
+
+		// Track unique repositories
+		repoRoot := info.RepositoryRoot
+		if repoRoot == "" {
+			repoRoot = inst.Path
+		}
+		repoSet[repoRoot] = true
+
+		// Update summary counts
+		summary.TotalUncommitted += info.ModifiedCount
+		summary.TotalUntracked += info.UntrackedCount
+		summary.TotalStaged += info.StagedCount
+		summary.TotalConflicts += info.ConflictCount
+		if !info.IsClean {
+			summary.WorkspacesWithWork++
+		}
+		if info.IsOrphaned {
+			summary.OrphanedWorkspaces++
+		}
+	}
+
+	summary.TotalRepositories = len(repoSet)
+	summary.TotalWorkspaces = len(workspaces)
+
+	overlayRef.SetWorkspaces(workspaces, summary)
 }

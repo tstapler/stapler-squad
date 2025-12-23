@@ -50,6 +50,8 @@ type Coordinator interface {
 	CreateHistoryBrowserOverlay() error
 	CreateConfigEditorOverlay() error
 	CreateRenameInputOverlay(oldTitle string, validator func(string) error) error
+	CreateWorkspaceSwitchOverlay(sessionTitle, repoPath string) error
+	CreateWorkspaceStatusOverlay() error
 
 	// Overlay accessor methods
 	GetTextInputOverlay() *overlay.TextInputOverlay
@@ -64,6 +66,8 @@ type Coordinator interface {
 	GetHistoryBrowserOverlay() *overlay.HistoryBrowserOverlay
 	GetConfigEditorOverlay() *overlay.ConfigEditorOverlay
 	GetRenameInputOverlay() *overlay.RenameInputOverlay
+	GetWorkspaceSwitchOverlay() *overlay.WorkspaceSwitchOverlay
+	GetWorkspaceStatusOverlay() *overlay.WorkspaceStatusOverlay
 }
 
 // coordinator implements the Coordinator interface
@@ -290,6 +294,10 @@ func (c *coordinator) HideOverlay(componentType ComponentType) error {
 		c.registry.OmnibarOverlay = nil
 	case ComponentRenameInputOverlay:
 		c.registry.RenameInputOverlay = nil
+	case ComponentWorkspaceSwitchOverlay:
+		c.registry.WorkspaceSwitchOverlay = nil
+	case ComponentWorkspaceStatusOverlay:
+		c.registry.WorkspaceStatusOverlay = nil
 	}
 
 	if c.activeOverlay == componentType {
@@ -335,6 +343,8 @@ func (c *coordinator) CloseAllOverlays() error {
 		ComponentConfigEditorOverlay,
 		ComponentOmnibarOverlay,
 		ComponentRenameInputOverlay,
+		ComponentWorkspaceSwitchOverlay,
+		ComponentWorkspaceStatusOverlay,
 	}
 
 	for _, component := range overlayComponents {
@@ -450,6 +460,23 @@ func (c *coordinator) CreateRenameInputOverlay(oldTitle string, validator func(s
 	return c.ShowOverlay(ComponentRenameInputOverlay)
 }
 
+// CreateWorkspaceSwitchOverlay creates a new workspace switch overlay
+func (c *coordinator) CreateWorkspaceSwitchOverlay(sessionTitle, repoPath string) error {
+	workspaceSwitchOverlay := overlay.NewWorkspaceSwitchOverlay(sessionTitle, repoPath)
+	workspaceSwitchOverlay.SetSize(c.width, c.height)
+	workspaceSwitchOverlay.LoadTargets()
+	c.registry.WorkspaceSwitchOverlay = workspaceSwitchOverlay
+	return c.ShowOverlay(ComponentWorkspaceSwitchOverlay)
+}
+
+// CreateWorkspaceStatusOverlay creates a new workspace status overlay
+func (c *coordinator) CreateWorkspaceStatusOverlay() error {
+	workspaceStatusOverlay := overlay.NewWorkspaceStatusOverlay()
+	workspaceStatusOverlay.SetSize(c.width, c.height)
+	c.registry.WorkspaceStatusOverlay = workspaceStatusOverlay
+	return c.ShowOverlay(ComponentWorkspaceStatusOverlay)
+}
+
 // CreateOmnibarOverlay creates a new omnibar overlay with the given callbacks
 func (c *coordinator) CreateOmnibarOverlay(callbacks omnibar.OmnibarCallbacks) error {
 	omnibarOverlay := omnibar.NewOmnibarOverlay(callbacks)
@@ -548,6 +575,22 @@ func (c *coordinator) GetConfigEditorOverlay() *overlay.ConfigEditorOverlay {
 func (c *coordinator) GetRenameInputOverlay() *overlay.RenameInputOverlay {
 	if c.IsOverlayVisible(ComponentRenameInputOverlay) {
 		return c.registry.RenameInputOverlay
+	}
+	return nil
+}
+
+// GetWorkspaceSwitchOverlay returns the workspace switch overlay if active
+func (c *coordinator) GetWorkspaceSwitchOverlay() *overlay.WorkspaceSwitchOverlay {
+	if c.IsOverlayVisible(ComponentWorkspaceSwitchOverlay) {
+		return c.registry.WorkspaceSwitchOverlay
+	}
+	return nil
+}
+
+// GetWorkspaceStatusOverlay returns the workspace status overlay if active
+func (c *coordinator) GetWorkspaceStatusOverlay() *overlay.WorkspaceStatusOverlay {
+	if c.IsOverlayVisible(ComponentWorkspaceStatusOverlay) {
+		return c.registry.WorkspaceStatusOverlay
 	}
 	return nil
 }
@@ -709,6 +752,14 @@ func (c *coordinator) RenderOverlay(componentType ComponentType) string {
 		if c.registry.RenameInputOverlay != nil {
 			return c.registry.RenameInputOverlay.Render()
 		}
+	case ComponentWorkspaceSwitchOverlay:
+		if c.registry.WorkspaceSwitchOverlay != nil {
+			return c.registry.WorkspaceSwitchOverlay.Render()
+		}
+	case ComponentWorkspaceStatusOverlay:
+		if c.registry.WorkspaceStatusOverlay != nil {
+			return c.registry.WorkspaceStatusOverlay.View()
+		}
 	}
 
 	return ""
@@ -814,6 +865,20 @@ func (c *coordinator) routeToOverlay(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			shouldClose := c.registry.RenameInputOverlay.HandleKeyPress(msg)
 			if shouldClose {
 				c.HideOverlay(ComponentRenameInputOverlay)
+			}
+		}
+	case ComponentWorkspaceSwitchOverlay:
+		if c.registry.WorkspaceSwitchOverlay != nil {
+			shouldClose := c.registry.WorkspaceSwitchOverlay.HandleKeyPress(msg)
+			if shouldClose {
+				c.HideOverlay(ComponentWorkspaceSwitchOverlay)
+			}
+		}
+	case ComponentWorkspaceStatusOverlay:
+		if c.registry.WorkspaceStatusOverlay != nil {
+			shouldClose := c.registry.WorkspaceStatusOverlay.HandleKeyPress(msg)
+			if shouldClose {
+				c.HideOverlay(ComponentWorkspaceStatusOverlay)
 			}
 		}
 	}
@@ -925,6 +990,10 @@ func (c *coordinator) GetComponentByType(componentType ComponentType) interface{
 		return c.registry.OmnibarOverlay
 	case ComponentRenameInputOverlay:
 		return c.registry.RenameInputOverlay
+	case ComponentWorkspaceSwitchOverlay:
+		return c.registry.WorkspaceSwitchOverlay
+	case ComponentWorkspaceStatusOverlay:
+		return c.registry.WorkspaceStatusOverlay
 	default:
 		return nil
 	}
@@ -1046,6 +1115,18 @@ func (c *coordinator) SetComponent(componentType ComponentType, component interf
 			c.registry.RenameInputOverlay = overlay
 		} else {
 			return fmt.Errorf("invalid component type for RenameInputOverlay")
+		}
+	case ComponentWorkspaceSwitchOverlay:
+		if overlay, ok := component.(*overlay.WorkspaceSwitchOverlay); ok {
+			c.registry.WorkspaceSwitchOverlay = overlay
+		} else {
+			return fmt.Errorf("invalid component type for WorkspaceSwitchOverlay")
+		}
+	case ComponentWorkspaceStatusOverlay:
+		if overlay, ok := component.(*overlay.WorkspaceStatusOverlay); ok {
+			c.registry.WorkspaceStatusOverlay = overlay
+		} else {
+			return fmt.Errorf("invalid component type for WorkspaceStatusOverlay")
 		}
 	default:
 		return fmt.Errorf("unknown component type: %s", componentType.String())

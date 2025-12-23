@@ -9,17 +9,19 @@ import (
 // SessionHandlers contains handlers for session management commands
 type SessionHandlers struct {
 	// These will be set by the application when integrating with the new system
-	OnNewSession      func() (tea.Model, tea.Cmd)
-	OnKillSession     func() (tea.Model, tea.Cmd)
-	OnAttachSession   func() (tea.Model, tea.Cmd)
-	OnCheckout        func() (tea.Model, tea.Cmd)
-	OnResume          func() (tea.Model, tea.Cmd)
-	OnClaudeSettings  func() (tea.Model, tea.Cmd)
-	OnTagEditor       func() (tea.Model, tea.Cmd)
-	OnHistoryBrowser  func() (tea.Model, tea.Cmd)
-	OnConfigEditor    func() (tea.Model, tea.Cmd)
-	OnRenameSession   func() (tea.Model, tea.Cmd)
-	OnRestartSession  func() (tea.Model, tea.Cmd)
+	OnNewSession       func() (tea.Model, tea.Cmd)
+	OnKillSession      func() (tea.Model, tea.Cmd)
+	OnAttachSession    func() (tea.Model, tea.Cmd)
+	OnCheckout         func() (tea.Model, tea.Cmd)
+	OnResume           func() (tea.Model, tea.Cmd)
+	OnClaudeSettings   func() (tea.Model, tea.Cmd)
+	OnTagEditor        func() (tea.Model, tea.Cmd)
+	OnHistoryBrowser   func() (tea.Model, tea.Cmd)
+	OnConfigEditor     func() (tea.Model, tea.Cmd)
+	OnRenameSession    func() (tea.Model, tea.Cmd)
+	OnRestartSession   func() (tea.Model, tea.Cmd)
+	OnWorkspaceStatus  func() (tea.Model, tea.Cmd)
+	OnWorkspaceSwitch  func() (tea.Model, tea.Cmd)
 }
 
 var sessionHandlers = &SessionHandlers{}
@@ -137,6 +139,26 @@ func RenameSessionCommand(ctx *interfaces.CommandContext) error {
 func RestartSessionCommand(ctx *interfaces.CommandContext) error {
 	if sessionHandlers.OnRestartSession != nil {
 		model, teaCmd := sessionHandlers.OnRestartSession()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// WorkspaceStatusCommand opens the workspace status overlay
+func WorkspaceStatusCommand(ctx *interfaces.CommandContext) error {
+	if sessionHandlers.OnWorkspaceStatus != nil {
+		model, teaCmd := sessionHandlers.OnWorkspaceStatus()
+		ctx.Args["model"] = model
+		ctx.Args["cmd"] = teaCmd
+	}
+	return nil
+}
+
+// WorkspaceSwitchCommand opens the workspace switch overlay
+func WorkspaceSwitchCommand(ctx *interfaces.CommandContext) error {
+	if sessionHandlers.OnWorkspaceSwitch != nil {
+		model, teaCmd := sessionHandlers.OnWorkspaceSwitch()
 		ctx.Args["model"] = model
 		ctx.Args["cmd"] = teaCmd
 	}

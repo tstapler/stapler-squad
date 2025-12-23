@@ -32,6 +32,8 @@ const (
 	ConfigEditor
 	// Rename is the state when the rename overlay is displayed
 	Rename
+	// Workspace is the state when the workspace status overlay is displayed
+	Workspace
 )
 
 // String returns a human-readable string representation of the state
@@ -65,6 +67,8 @@ func (s State) String() string {
 		return "ConfigEditor"
 	case Rename:
 		return "Rename"
+	case Workspace:
+		return "Workspace"
 	default:
 		return "Unknown"
 	}
@@ -72,13 +76,13 @@ func (s State) String() string {
 
 // IsValid returns true if the state is a valid state value
 func (s State) IsValid() bool {
-	return s >= Default && s <= Rename
+	return s >= Default && s <= Workspace
 }
 
 // IsOverlayState returns true if the state represents an overlay/modal state
 func (s State) IsOverlayState() bool {
 	switch s {
-	case New, Prompt, Help, Confirm, AdvancedNew, Git, ClaudeSettings, ZFSearch, TagEditor, HistoryBrowser, ConfigEditor, Rename:
+	case New, Prompt, Help, Confirm, AdvancedNew, Git, ClaudeSettings, ZFSearch, TagEditor, HistoryBrowser, ConfigEditor, Rename, Workspace:
 		return true
 	default:
 		return false
