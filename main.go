@@ -1,7 +1,6 @@
 package main
 
 import (
-	"claude-squad/app"
 	cmdbridge "claude-squad/cmd"
 	"claude-squad/config"
 	"claude-squad/daemon"
@@ -27,10 +26,7 @@ import (
 
 var (
 	version           = "1.0.12"
-	programFlag       string
-	autoYesFlag       bool
 	daemonFlag        bool
-	webFlag           bool
 	testModeFlag      bool
 	testDirFlag       string
 	discoveryModeFlag string
@@ -40,7 +36,7 @@ var (
 	traceFlag         bool
 	rootCmd           = &cobra.Command{
 		Use:   "claude-squad",
-		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp.",
+		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 
@@ -91,7 +87,6 @@ var (
 				LogMaxAge:      cfg.LogMaxAge,
 				LogCompress:    cfg.LogCompress,
 				UseSessionLogs: cfg.UseSessionLogs,
-				// Disable console output for TUI mode to prevent interfering with BubbleTea
 				ConsoleEnabled: false,
 				FileEnabled:    true,
 				FileLevel:      log.DEBUG,
@@ -131,58 +126,30 @@ var (
 				return err
 			}
 
-			// Web server mode
-			if webFlag {
-				// Initialize OpenTelemetry for APM (Datadog, etc.)
-				telemetryCfg := telemetry.DefaultConfig()
-				telemetryProvider, err := telemetry.Initialize(ctx, telemetryCfg)
-				if err != nil {
-					log.WarningLog.Printf("Failed to initialize telemetry: %v", err)
-				} else {
-					defer func() {
-						shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						defer cancel()
-						if err := telemetryProvider.Shutdown(shutdownCtx); err != nil {
-							log.WarningLog.Printf("Failed to shutdown telemetry: %v", err)
-						}
-					}()
-				}
-
-				// Use PORT environment variable if set (for test mode), otherwise default to 8543
-				address := "localhost:8543"
-				if port := os.Getenv("PORT"); port != "" {
-					address = "localhost:" + port
-				}
-				srv := server.NewServer(address)
-				log.InfoLog.Printf("Starting web server mode on %s", address)
-				return srv.Start(ctx)
-			}
-
-			// Note: No longer requiring git repository - contextual discovery allows running from anywhere
-
-			// Program flag overrides config
-			program := cfg.DefaultProgram
-			if programFlag != "" {
-				program = programFlag
-			}
-			// AutoYes flag overrides config
-			autoYes := cfg.AutoYes
-			if autoYesFlag {
-				autoYes = true
-			}
-			if autoYes {
+			// Web server mode (default and only mode)
+			// Initialize OpenTelemetry for APM (Datadog, etc.)
+			telemetryCfg := telemetry.DefaultConfig()
+			telemetryProvider, err := telemetry.Initialize(ctx, telemetryCfg)
+			if err != nil {
+				log.WarningLog.Printf("Failed to initialize telemetry: %v", err)
+			} else {
 				defer func() {
-					if err := daemon.LaunchDaemon(); err != nil {
-						log.ErrorLog.Printf("failed to launch daemon: %v", err)
+					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := telemetryProvider.Shutdown(shutdownCtx); err != nil {
+						log.WarningLog.Printf("Failed to shutdown telemetry: %v", err)
 					}
 				}()
 			}
-			// Kill any daemon that's running.
-			if err := daemon.StopDaemon(); err != nil {
-				log.ErrorLog.Printf("failed to stop daemon: %v", err)
-			}
 
-			return app.Run(ctx, program, autoYes)
+			// Use PORT environment variable if set (for test mode), otherwise default to 8543
+			address := "localhost:8543"
+			if port := os.Getenv("PORT"); port != "" {
+				address = "localhost:" + port
+			}
+			srv := server.NewServer(address)
+			log.InfoLog.Printf("Starting web server on %s", address)
+			return srv.Start(ctx)
 		},
 	}
 
@@ -290,53 +257,6 @@ var (
 				fmt.Println("✅ No key binding conflicts detected")
 			}
 
-			// Terminal size detection
-			fmt.Println("\n=== Terminal Size Detection ===")
-			sizeInfo := app.DetectTerminalSize()
-
-			fmt.Printf("PTY Size:        %dx%d\n", sizeInfo.PTYWidth, sizeInfo.PTYHeight)
-			fmt.Printf("Environment:     %dx%d", sizeInfo.EnvWidth, sizeInfo.EnvHeight)
-			if sizeInfo.EnvWidth == 0 && sizeInfo.EnvHeight == 0 {
-				fmt.Printf(" (not set)")
-			}
-			fmt.Printf("\n")
-
-			width, height, method := app.GetReliableTerminalSize()
-			fmt.Printf("Chosen Size:     %dx%d (method: %s)\n", width, height, method)
-			fmt.Printf("Reliability:     %v\n", sizeInfo.IsReliable)
-
-			if len(sizeInfo.Issues) > 0 {
-				fmt.Printf("\n⚠️  Detected Issues:\n")
-				for _, issue := range sizeInfo.Issues {
-					fmt.Printf("  - %s\n", issue)
-				}
-			} else {
-				fmt.Printf("✅ No terminal size issues detected\n")
-			}
-
-			// Show environment information that might affect terminal detection
-			fmt.Println("\n=== Environment Information ===")
-			env_vars := []string{"TERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION", "DESKTOP_SESSION", "XDG_SESSION_TYPE",
-				"COLUMNS", "LINES"}
-			for _, env := range env_vars {
-				if value := os.Getenv(env); value != "" {
-					fmt.Printf("%-30s %s\n", env+":", value)
-				}
-			}
-
-			// Show tiling window manager compatibility info
-			fmt.Println("\n=== Tiling Window Manager Compatibility ===")
-			fmt.Printf("Detected size: %dx%d (method: %s)\n", width, height, method)
-			fmt.Println("")
-			fmt.Println("For tiling window managers (like Amethyst):")
-			fmt.Println("- Alt screen buffer positions at PTY (0,0) not visible area (0,0)")
-			fmt.Println("- Working on automatic detection of actual visible area vs PTY size")
-			fmt.Println("- Currently investigating ANSI escape sequences for accurate detection")
-			fmt.Println("")
-			if width > 100 || height > 50 {
-				fmt.Printf("⚠️  Large PTY size detected (%dx%d) - likely indicates PTY/visible area mismatch in tiling WM\n", width, height)
-				fmt.Println("   Automatic detection of actual visible area is needed")
-			}
 
 			return nil
 		},
@@ -509,13 +429,8 @@ var (
 )
 
 func init() {
-	rootCmd.Flags().StringVarP(&programFlag, "program", "p", "",
-		"Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')")
-	rootCmd.Flags().BoolVarP(&autoYesFlag, "autoyes", "y", false,
-		"[experimental] If enabled, all instances will automatically accept prompts")
 	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
 		" and runs autoyes mode on them.")
-	rootCmd.Flags().BoolVar(&webFlag, "web", false, "Run HTTP server with ConnectRPC API on localhost:8543")
 	rootCmd.Flags().BoolVar(&testModeFlag, "test-mode", false, "Run in test mode with isolated data directory")
 	rootCmd.Flags().StringVar(&testDirFlag, "test-dir", "", "Custom test data directory (defaults to /tmp/claude-squad-test-<PID>)")
 
@@ -545,7 +460,6 @@ func init() {
 
 func main() {
 	// Set up signal handling for SIGTERM only (not SIGINT/Ctrl+C)
-	// BubbleTea handles Ctrl+C (SIGINT) internally for graceful shutdown
 	// We only intercept SIGTERM for forced termination (e.g., systemd, docker)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGTERM) // Only SIGTERM, not os.Interrupt

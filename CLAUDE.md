@@ -9,12 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Build the application
 go build .
 
-# Run the application
+# Run the application (web server mode on localhost:8543)
 ./claude-squad
-
-# Run with flags
-./claude-squad -y  # Auto-yes mode
-./claude-squad -p "aider --model ollama_chat/gemma3:1b"  # Custom program
 
 # Web development workflow
 make restart-web    # Build web UI and restart server (ALWAYS use this)
@@ -81,16 +77,16 @@ Claude Squad supports OpenTelemetry instrumentation for APM integration (Datadog
 
 ```bash
 # Enable telemetry (disabled by default)
-OTEL_ENABLED=true ./claude-squad --web
+OTEL_ENABLED=true ./claude-squad
 
 # Or use Datadog-specific flag
-DD_TRACE_ENABLED=true ./claude-squad --web
+DD_TRACE_ENABLED=true ./claude-squad
 
 # Configure OTLP endpoint (default: localhost:4317)
-OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 OTEL_ENABLED=true ./claude-squad --web
+OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 OTEL_ENABLED=true ./claude-squad
 
 # Set environment and version for trace metadata
-OTEL_SERVICE_ENVIRONMENT=production OTEL_SERVICE_VERSION=1.0.0 OTEL_ENABLED=true ./claude-squad --web
+OTEL_SERVICE_ENVIRONMENT=production OTEL_SERVICE_VERSION=1.0.0 OTEL_ENABLED=true ./claude-squad
 ```
 
 **Datadog Agent Configuration** (for OTLP ingestion):
@@ -172,87 +168,6 @@ go test -bench=BenchmarkAttachDetachPerformance -trace=trace.out ./app -timeout=
 go tool trace trace.out
 ```
 
-### Testing Interactive TUI Components
-
-**TTY Requirement**: Claude Squad is a terminal-based application that requires a TTY to run. This creates special considerations for testing interactive components.
-
-**Testing Strategies:**
-
-1. **Unit Tests for Business Logic** (Recommended)
-   ```bash
-   # Test core logic without TUI interaction
-   go test ./ui/overlay -run TestContextualDiscovery
-   go test ./ui/overlay -run TestSessionSetup
-   go test ./session -run TestInstance
-   ```
-
-2. **Mock TTY for Integration Tests**
-   ```bash
-   # For testing that requires terminal interaction, consider:
-   # - github.com/creack/pty (pseudo-terminal)
-   # - github.com/Netflix/go-expect (terminal automation)
-   # - Headless terminal testing with script automation
-   ```
-
-3. **Isolated Component Testing**
-   ```bash
-   # Test individual TUI components in isolation
-   go test ./ui -run TestFuzzyInputOverlay
-   go test ./ui -run TestMenuHandling
-   go test ./ui -run TestNavigationLogic
-   ```
-
-**Manual Testing Protocol:**
-```bash
-# Build and run for interactive testing
-go build .
-./claude-squad
-
-# Test specific flows:
-# 1. Session creation (n key) - test contextual path discovery
-# 2. Navigation (arrow keys) - test performance with multiple sessions
-# 3. Filtering (f key) - test session visibility
-# 4. Search (s key) - test fuzzy matching
-# 5. Menu shortcuts - verify bottom menu displays active key bindings
-```
-
-**Menu Shortcut Testing:**
-Since the menu shortcuts cannot be tested interactively in TTY-less environments, use integration tests:
-
-```bash
-# Test menu shortcut integration
-go test ./app -run TestMenuShortcutIntegration -v
-
-# Test menu context updates
-go test ./app -run TestUpdateMenuFromContext -v
-
-# Manual verification checklist:
-# - Bottom menu shows key shortcuts (n, D, g, q, etc.)
-# - Shortcuts correspond to actual available commands
-# - Menu updates when context changes (if applicable)
-# - All registered commands appear with correct descriptions
-```
-
-**TTY-Related Issue Debugging:**
-```bash
-# Common TTY issues and solutions:
-
-# Issue: "could not open a new TTY: open /dev/tty: device not configured"
-# Solution: Run in actual terminal, not programmatically
-
-# Issue: Menu shortcuts not displaying
-# Root cause: SetAvailableCommands not called with bridge commands
-# Fix: Ensure bridge.GetAvailableKeys() is passed to menu.SetAvailableCommands()
-
-# Issue: Terminal size detection problems
-# Solution: Use reliable terminal size detection methods (see app/app.go:791)
-```
-
-**CI/CD Considerations:**
-- Unit tests run in CI without TTY
-- Integration tests may need headless terminal or be run manually
-- Performance benchmarks should be run in background (`&`)
-- Menu functionality tested via integration tests, not manual interaction
 
 ### Code Quality and Analysis
 
@@ -652,66 +567,49 @@ CLAUDE_SQUAD_WORKSPACE_MODE=false ./claude-squad
 
 ## Architecture Overview
 
-Claude Squad is a terminal-based session management application built with Go and the BubbleTea TUI framework. It manages multiple AI agent sessions (Claude Code, Aider, etc.) in isolated tmux sessions with git worktrees.
+Claude Squad is a web-based session management application built with Go. It manages multiple AI agent sessions (Claude Code, Aider, etc.) in isolated tmux sessions with git worktrees. The application runs as a web server on localhost:8543 and provides a React-based web UI.
 
 ### Core Architecture Layers
 
-**1. Application Layer (`app/`)**
-- `app.go` - Main BubbleTea application state machine and event handling
-- `help.go` - Dynamic help system that pulls from centralized key definitions
-- `handleAdvancedSessionSetup.go` - Advanced session creation wizard
+**1. Web Server (`server/`)**
+- `server.go` - HTTP server with ConnectRPC handlers
+- `services/` - Session management and streaming services
+- `middleware/` - HTTP middleware (CORS, logging, etc.)
+- `web/` - Static file serving for web UI
 
-**2. UI Components (`ui/`)**
-- `list.go` - Main session list with filtering, search, and categorization
-- `menu.go` - Bottom command bar that shows context-aware key bindings  
-- `tabbed_window.go` - Preview/diff tab container
-- `overlay/` - Modal overlays for session creation, search, confirmations
-
-**3. Key Management (`keys/`)**
-- `keys.go` - Centralized key binding definitions and mappings
-- `help.go` - Key categorization system for dynamic help generation
-
-**4. Session Management (`session/`)**
+**2. Session Management (`session/`)**
 - `instance.go` - Session lifecycle management (create, start, pause, resume)
 - `storage.go` - Session persistence and state management
 - `tmux/` - tmux session integration
 - `git/` - Git worktree management for isolated branches
+- `scrollback/` - Terminal output buffering and streaming
 
-**5. Configuration (`config/`)**
+**3. Configuration (`config/`)**
 - JSON-based configuration with logging settings
-- State persistence for UI preferences
+- State persistence for session data
 
-### Key Design Patterns
+**4. Web UI (`web-app/`)**
+- React-based single-page application
+- Real-time terminal streaming via ConnectRPC
+- Session organization with tags and grouping
 
-**Event-Driven State Machine**: The app uses BubbleTea's event-driven pattern where user input generates messages that update the application state.
+### Key Features
 
-**Centralized Key Management**: All key bindings are defined in `keys/keys.go` with automatic help system integration. Adding new keys requires updating:
-1. `KeyName` enum in `keys.go`
-2. `GlobalKeyStringsMap` for key-to-enum mapping
-3. `GlobalkeyBindings` for display strings
-4. `KeyHelpMap` in `keys/help.go` for categorized help
+**Filtering**: Sessions can be filtered by status, tags, and category via the web UI.
 
-**View Model Pattern**: The `List` component separates data model (`items`) from view model (`getVisibleItems()`, `searchResults`, `categoryGroups`) for filtering and organization.
+**Search**: Full-text search across session titles, paths, branches, and tags.
 
-**Overlay System**: Modal dialogs use a consistent overlay pattern in `ui/overlay/` for session setup, confirmations, and text input.
+**Categorization**: Sessions are organized by category, tags, or other grouping strategies.
 
-### Session Organization Features
-
-**Filtering**: Sessions can be filtered by status (hide paused sessions with `f` key).
-
-**Search**: Full-text search across session titles (activated with `s` key).
-
-**Categorization**: Sessions are organized by category with expand/collapse functionality.
-
-**Navigation**: Smart navigation that respects filtered views and category boundaries.
+**Real-time Terminal**: Streaming terminal output with full ANSI support and scrollback.
 
 ## Tag-Based Session Organization
 
 Claude Squad supports flexible session organization through tags and dynamic grouping strategies, enabling multi-dimensional organization beyond traditional single-category hierarchies.
 
-### Grouping Modes (TUI)
+### Grouping Modes (Web UI)
 
-Press **G** to cycle through grouping strategies in the TUI:
+Use the "Group by" dropdown to switch between organizational views:
 
 - **Category** (Default): Organize by category field, supports nested categories (e.g., "Work/Frontend")
 - **Tag**: Multi-dimensional organization - sessions appear in multiple tag groups simultaneously
@@ -722,33 +620,15 @@ Press **G** to cycle through grouping strategies in the TUI:
 - **Session Type**: Group by session type (directory, worktree, etc.)
 - **None**: Flat list with no grouping
 
-The current grouping mode is shown in the title bar (e.g., "📊 Tag").
+Session counts are shown for each group.
 
-### Managing Tags (TUI)
-
-1. **Open Tag Editor**: Press **t** on a selected session to open the tag editor overlay
-2. **Navigate Tags**: Use arrow keys or `j`/`k` to navigate the tag list
-3. **Add New Tag**: Press **a** to enter input mode, type tag name, press Enter
-4. **Delete Tag**: Select a tag and press **d** or **x**
-5. **Save Changes**: Press Enter to save tags, Esc to cancel without saving
-6. **Duplicate Prevention**: The editor prevents adding duplicate tags automatically
-
-### Tag-Based Search (TUI & Web UI)
+### Tag-Based Search (Web UI)
 
 Tags are automatically indexed for instant search:
 - Search queries match against session tags with high-priority ranking
 - Tag matches provide instant results via optimized index (O(1) lookup)
 - Fuzzy search includes tags in the searchable content
 - Tag matches boost relevance scores in hybrid search results
-
-**TUI Search Examples:**
-```bash
-# Search sessions with "Frontend" tag
-s → type "Frontend" → instant tag-based results
-
-# Search combines tags with other fields
-s → type "React" → matches tags, titles, branches, paths
-```
 
 ### Tag Management (Web UI)
 
@@ -848,10 +728,10 @@ Example session tags: ["Frontend", "Urgent", "Client-Work", "React"]
 # Tag sessions by development phase
 tags: Planning, Development, Review, Done
 
-# Group by Tag to see all sessions in each phase
-G → select "Tag" grouping
+# Group by Tag to see all sessions in each phase (Web UI)
+Group By dropdown → select "Tag"
 
-# Filter to focus on "Development" phase only (Web UI)
+# Filter to focus on "Development" phase only
 Tag Filter dropdown → select "Development"
 ```
 
@@ -860,14 +740,14 @@ Tag Filter dropdown → select "Development"
 # Tag sessions with client and type
 tags: Client-A, Client-B, Internal, Frontend, Backend
 
-# View all Client-A work across tech stacks
-G → "Tag" grouping → see all Client-A sessions
+# View all Client-A work across tech stacks (Web UI)
+Group By → "Tag" → see all Client-A sessions
 
 # Switch to see tool distribution
-G → "Program" grouping → see claude vs aider usage
+Group By → "Program" → see claude vs aider usage
 
-# Search for specific combination
-s → "Client-A Frontend" → instant results
+# Search for specific combination in search bar
+Search → "Client-A Frontend" → instant results
 ```
 
 **Scenario 3: Priority Management**
@@ -875,13 +755,13 @@ s → "Client-A Frontend" → instant results
 # Tag sessions by priority
 tags: Urgent, High-Priority, Low-Priority, Backlog
 
-# Daily standup: view urgent items
-G → "Tag" grouping → focus on "Urgent" group
+# Daily standup: view urgent items (Web UI)
+Group By → "Tag" → focus on "Urgent" group
 
 # Check what's actively running
-G → "Status" grouping → see Running vs Paused
+Group By → "Status" → see Running vs Paused
 
-# Web UI: Filter to urgent only
+# Filter to urgent only
 Tag Filter → "Urgent" → clear view of critical work
 ```
 
@@ -911,64 +791,38 @@ Sessions run in isolated tmux sessions for:
 
 ## Adding New Features
 
-### New Key Bindings
-1. Add to `KeyName` enum in `keys/keys.go`
-2. Add mapping in `GlobalKeyStringsMap`
-3. Define binding in `GlobalkeyBindings`  
-4. Add help entry in `keys/help.go`
-5. Add to appropriate menu options in `ui/menu.go`
-6. Handle in `app/app.go` key switch statement
+### New Web UI Features
+1. Create React components in `web-app/src/components/`
+2. Add ConnectRPC endpoints in `server/services/`
+3. Update protobuf definitions in `proto/session/v1/` if needed
+4. Run `make generate-proto` to regenerate code
+5. Test with `make restart-web`
 
 ### New Session Filters
-1. Add filter field to `List` struct in `ui/list.go`
-2. Update `getVisibleItems()` method to apply filter
-3. Add toggle method similar to `TogglePausedFilter()`
-4. Wire up key binding following pattern above
+1. Add filter parameters to ConnectRPC service definitions
+2. Implement filter logic in `session/storage.go` or service layer
+3. Update web UI filter components
+4. Test filtering behavior
 
-### New Overlay Dialogs
-1. Create new overlay in `ui/overlay/`
-2. Follow existing patterns like `textInput.go`
-3. Implement `HandleKeyPress` and `View` methods
-4. Integrate with main app state machine
-
-## Important Implementation Notes
-
-**Navigation Consistency**: Always use `getVisibleItems()` for user-facing navigation and `getVisibleIndex()` to translate between filtered and global indices.
-
-**Key Handler Order**: Key handlers in `app.go` are processed in switch statement order - place more specific handlers before generic ones.
-
-**Help System**: The help system automatically discovers keys by category. Use appropriate `HelpCategory` values in `keys/help.go`.
-
-**Error Handling**: Use `handleError()` method in app for consistent error display.
-
-**State Validation**: Always validate selection indices after filter changes to prevent out-of-bounds access.
+### New API Endpoints
+1. Define new RPC methods in `proto/session/v1/session.proto`
+2. Implement handler in `server/services/`
+3. Register handler in `server/server.go`
+4. Generate client code with `make generate-proto`
+5. Call from web UI
 
 ## Performance Optimization
 
-### Navigation Performance
-The application implements several performance optimizations for smooth navigation:
+### Web UI Performance
+The web application implements several performance optimizations:
 
-**Debounced Updates**: Navigation operations use a 150ms debounce delay to batch rapid key presses and avoid expensive operations during fast scrolling.
+**Terminal Streaming**: Real-time terminal output via ConnectRPC streaming with efficient delta compression.
 
-**Smart Category Organization**: Category grouping only triggers when sessions are added/removed or filters change, not on every navigation.
+**Scrollback Buffering**: Circular buffer implementation for efficient terminal history management.
 
-**Repository Name Caching**: Git repository names are cached in the UI renderer to avoid repeated expensive git operations.
+**Search Indexing**: BM25-based search with inverted index for instant results.
 
-**Tab-Aware Updates**: Preview and diff panes skip expensive updates when not visible.
-
-### Performance Benchmarks
-Run benchmarks to measure navigation performance:
-
-```bash
-# Benchmark navigation with multiple sessions
-go test -bench=BenchmarkNavigationPerformance -benchmem ./app
-
-# Benchmark individual components
-go test -bench=BenchmarkInstanceChangedComponents -benchmem ./app
-
-# Benchmark list rendering
-go test -bench=BenchmarkListRendering -benchmem ./app
-```
+**Repository Name Caching**: Git repository names are cached to avoid repeated expensive git operations.
 
 ### Tmux Session Isolation
 Configure tmux session prefixes for process isolation:

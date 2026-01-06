@@ -38,10 +38,10 @@ build-all: build ## Build both web UI and Go application
 
 restart-web: build-all ## Rebuild and restart the web server
 	@echo "Stopping existing claude-squad processes..."
-	@-pkill -f "claude-squad.*--web" 2>/dev/null || true
+	@-pkill -f "claude-squad" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
-	@./claude-squad --web $(PROFILE_FLAGS) &
+	@./claude-squad $(PROFILE_FLAGS) &
 	@sleep 2
 	@echo "✅ Server restarted at http://localhost:8543"
 	@if [ -n "$(PROFILE_FLAGS)" ]; then \
@@ -61,10 +61,10 @@ restart-web-profile: ## Rebuild and restart web server with profiling enabled
 
 web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
 	@echo "Stopping existing claude-squad processes..."
-	@-pkill -f "claude-squad.*--web" 2>/dev/null || true
+	@-pkill -f "claude-squad" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
-	@./claude-squad --web $(PROFILE_FLAGS) &
+	@./claude-squad $(PROFILE_FLAGS) &
 	@sleep 2
 	@echo "✅ Server restarted at http://localhost:8543"
 	@if [ -n "$(PROFILE_FLAGS)" ]; then \
@@ -105,24 +105,10 @@ test-coverage: ## Run tests with coverage report
 	@echo "Coverage report generated: coverage.html"
 
 # Performance benchmarks
-benchmark: ## Run all benchmarks (runs in background due to long duration)
-	@echo "Running comprehensive benchmarks (this will take several minutes)..."
-	@echo "Use 'make benchmark-quick' for faster subset"
-	go test -bench=. -benchmem -timeout=10m ./app > benchmark_results.txt 2>&1 &
+benchmark: ## Run all benchmarks
+	@echo "Running comprehensive benchmarks..."
+	go test -bench=. -benchmem -timeout=10m ./... > benchmark_results.txt 2>&1 &
 	@echo "Benchmarks running in background. Results will be saved to benchmark_results.txt"
-
-benchmark-quick: ## Run quick benchmarks for basic performance validation
-	go test -bench=BenchmarkInstanceChanged -benchmem -timeout=30s ./app
-	go test -bench=BenchmarkListNavigation/List_Nav_10 -benchmem -timeout=30s ./app
-
-benchmark-navigation: ## Run navigation performance benchmarks
-	go test -bench=BenchmarkListNavigation -benchmem -timeout=2m ./app
-
-benchmark-tabs: ## Run tab switching performance benchmarks
-	go test -bench=BenchmarkTabSwitching -benchmem -timeout=2m ./app
-
-benchmark-attach: ## Run attach/detach performance benchmarks
-	go test -bench=BenchmarkAttachDetach -benchmem -timeout=5m ./app
 
 # Development tools installation
 install-tools: ## Install all development and analysis tools
@@ -220,11 +206,11 @@ pre-commit: format vet test lint ## Pre-commit validation
 
 # Debugging and profiling
 profile-cpu: ## Run benchmarks with CPU profiling
-	go test -bench=BenchmarkInstanceChanged -benchmem -cpuprofile=cpu.prof ./app
+	go test -bench=. -benchmem -cpuprofile=cpu.prof ./...
 	@echo "Run 'go tool pprof cpu.prof' to analyze CPU profile"
 
-profile-memory: ## Run benchmarks with memory profiling  
-	go test -bench=BenchmarkInstanceChanged -benchmem -memprofile=mem.prof ./app
+profile-memory: ## Run benchmarks with memory profiling
+	go test -bench=. -benchmem -memprofile=mem.prof ./...
 	@echo "Run 'go tool pprof mem.prof' to analyze memory profile"
 
 # Documentation
