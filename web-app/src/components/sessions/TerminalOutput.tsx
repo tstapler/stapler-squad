@@ -21,6 +21,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const [connectionAttempts, setConnectionAttempts] = useState(0);
   const [showReconnectButton, setShowReconnectButton] = useState(false);
   const [isWaitingForStableSize, setIsWaitingForStableSize] = useState(true); // Wait for stable size before connecting
+  const [isLoadingInitialContent, setIsLoadingInitialContent] = useState(true); // Loading overlay state
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousConnectionStateRef = useRef(false);
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null);
@@ -28,6 +29,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const isMountedRef = useRef(true); // Track component mount state for async operations
   const sizeStabilityTimeoutRef = useRef<NodeJS.Timeout | null>(null); // For size stability detection
   const hasInitiatedConnectionRef = useRef(false); // Prevent multiple connection attempts
+  const hasCachedDimensionsRef = useRef(false); // Track if we loaded cached dimensions
 
   // Terminal loading metrics - tracks time from component mount to first content display
   // This helps identify performance bottlenecks and regressions
@@ -88,6 +90,34 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }
     }
   }, [sessionId, tmuxSessionName, isExternal]);
+
+  // Dimension persistence helpers - cache terminal size per session for instant reconnection
+  const getCachedDimensions = useCallback((): { cols: number; rows: number } | null => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const key = `terminal-dimensions-${sessionId}`;
+      const cached = localStorage.getItem(key);
+      if (cached) {
+        const dims = JSON.parse(cached);
+        console.log(`[TerminalOutput] Loaded cached dimensions for ${sessionId}: ${dims.cols}x${dims.rows}`);
+        return dims;
+      }
+    } catch (err) {
+      console.warn('[TerminalOutput] Failed to load cached dimensions:', err);
+    }
+    return null;
+  }, [sessionId]);
+
+  const saveDimensions = useCallback((cols: number, rows: number) => {
+    if (typeof window === 'undefined') return;
+    try {
+      const key = `terminal-dimensions-${sessionId}`;
+      localStorage.setItem(key, JSON.stringify({ cols, rows }));
+      console.log(`[TerminalOutput] Saved dimensions for ${sessionId}: ${cols}x${rows}`);
+    } catch (err) {
+      console.warn('[TerminalOutput] Failed to save dimensions:', err);
+    }
+  }, [sessionId]);
 
   // Scrollback loading state - DISABLED (scrollback functionality removed)
   // const [isLoadingHistory, setIsLoadingHistory] = useState(false);
@@ -351,6 +381,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     // This writes data in CHUNK_SIZE pieces, yielding to the UI between chunks
     await enqueueWrite(scrollback);
 
+    // Hide loading overlay now that initial content is displayed
+    setIsLoadingInitialContent(false);
+
     // Write completed - scroll to bottom
     if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
       console.log('[FlowControl] Initial pane write completed (chunked)', {
@@ -528,6 +561,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       metricsRef.current.firstOutputTime = performance.now();
       // Log metrics now that we have the complete picture
       logTerminalMetrics();
+
+      // CRITICAL: Hide loading overlay now that we've received first output
+      // The initial content comes via state messages from currentPaneRequest,
+      // not via scrollback, so we can't wait for handleScrollbackReceived
+      setIsLoadingInitialContent(false);
     }
 
     // Initialize throttler if needed (lazy initialization)
@@ -710,11 +748,26 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       lastResizeRef.current = { cols, rows };
       console.log(`[TerminalOutput] Saved resize dimensions: ${cols}x${rows}`);
 
+      // Save dimensions to localStorage for instant future reconnections
+      saveDimensions(cols, rows);
+
       // Record metrics for first resize
       if (metricsRef.current.firstResizeTime === null) {
         metricsRef.current.firstResizeTime = performance.now();
       }
       metricsRef.current.resizeCount++;
+
+      // OPTIMIZED: Skip size stability wait if we have cached dimensions
+      // This dramatically speeds up reconnection to sessions with known sizes
+      if (hasCachedDimensionsRef.current && !hasInitiatedConnectionRef.current && !isConnected && !error && isMountedRef.current) {
+        console.log(`[TerminalOutput] Using cached dimensions, skipping stability wait`);
+        metricsRef.current.sizeStableTime = performance.now();
+        metricsRef.current.connectionInitTime = performance.now();
+        hasInitiatedConnectionRef.current = true;
+        setIsWaitingForStableSize(false);
+        connect(cols, rows);
+        return;
+      }
 
       // Event-driven size stability detection for initial connection:
       // Wait until no more resize events occur, then wait 2 animation frames to ensure
@@ -824,6 +877,25 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       return () => clearTimeout(timeout);
     }
   }, [isConnected, error, connectionAttempts, connect]);
+
+  // Initialize with cached dimensions on mount
+  useEffect(() => {
+    const cached = getCachedDimensions();
+    if (cached) {
+      hasCachedDimensionsRef.current = true;
+      lastResizeRef.current = cached;
+      console.log(`[TerminalOutput] Initialized with cached dimensions: ${cached.cols}x${cached.rows}`);
+    }
+  }, [getCachedDimensions]);
+
+  // Reset loading state when switching sessions
+  useEffect(() => {
+    setIsLoadingInitialContent(true);
+    hasInitiatedConnectionRef.current = false;
+    return () => {
+      setIsLoadingInitialContent(false);
+    };
+  }, [sessionId]);
 
   const handleManualReconnect = useCallback(() => {
     console.log("[TerminalOutput] Manual reconnect requested");
@@ -1054,6 +1126,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         </div>
       </div>
       <div className={styles.terminal}>
+        {isLoadingInitialContent && (
+          <div className={styles.loadingOverlay}>
+            <div className={styles.loadingSpinner} />
+            <div className={styles.loadingText}>
+              {isWaitingForStableSize ? "Initializing terminal..." : "Loading terminal content..."}
+            </div>
+          </div>
+        )}
         <XtermTerminal
           ref={xtermRef}
           onData={handleTerminalData}

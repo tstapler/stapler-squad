@@ -143,8 +143,54 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     try {
       terminal.open(containerRef.current);
 
-      // Fit terminal to container
-      fitAddon.fit();
+      // CRITICAL: Wait for browser to complete layout before fitting
+      // Use requestAnimationFrame to ensure DOM is rendered and measurements are accurate
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          // Double RAF ensures layout is stable before FitAddon measures dimensions
+          const containerEl = containerRef.current;
+          if (containerEl) {
+            const rect = containerEl.getBoundingClientRect();
+            console.log(`[XtermTerminal] Container size before fit: ${rect.width}px × ${rect.height}px`);
+          }
+
+          // Log what FitAddon will see
+          const proposedDims = fitAddon.proposeDimensions();
+          console.log(`[XtermTerminal] Proposed dimensions:`, proposedDims);
+
+          // Check if cell dimensions are available (via private API for debugging)
+          const dims = (terminal as any)._core?._renderService?.dimensions;
+          if (dims?.css?.cell) {
+            console.log(`[XtermTerminal] Cell dimensions: ${dims.css.cell.width}px × ${dims.css.cell.height}px`);
+          } else {
+            console.warn(`[XtermTerminal] Cell dimensions not available yet!`);
+          }
+
+          fitAddon.fit();
+
+          console.log(`[XtermTerminal] Initial fit complete: ${terminal.cols} cols × ${terminal.rows} rows`);
+
+          // Calculate actual pixels per column for verification
+          if (containerEl && terminal.cols > 0) {
+            const actualPixelsPerCol = containerEl.getBoundingClientRect().width / terminal.cols;
+            console.log(`[XtermTerminal] Actual pixels per column: ${actualPixelsPerCol.toFixed(2)}px`);
+            if (dims?.css?.cell) {
+              console.log(`[XtermTerminal] Expected pixels per column: ${dims.css.cell.width.toFixed(2)}px`);
+              if (Math.abs(actualPixelsPerCol - dims.css.cell.width) > 1) {
+                console.error(`[XtermTerminal] ⚠️ SIZING MISMATCH! Container width doesn't match cell width calculation`);
+              }
+            }
+          }
+
+          // Force one more fit after a short delay to ensure accurate sizing
+          setTimeout(() => {
+            const secondProposed = fitAddon.proposeDimensions();
+            console.log(`[XtermTerminal] Secondary proposed dimensions:`, secondProposed);
+            fitAddon.fit();
+            console.log(`[XtermTerminal] Secondary fit complete: ${terminal.cols} cols × ${terminal.rows} rows`);
+          }, 100);
+        });
+      });
     } catch (error) {
       console.error('[XtermTerminal] Terminal initialization failed:', error);
       // Notify parent via resize callback with error indicator (0x0 dimensions)

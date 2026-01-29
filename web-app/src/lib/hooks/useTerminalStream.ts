@@ -770,13 +770,37 @@ export function useTerminalStream({
             },
           })
         );
+
+        // After resizing, request fresh terminal content from tmux
+        // Add a small delay to allow tmux to reflow content at new dimensions
+        // Without this delay, we capture content at the old width
+        setTimeout(() => {
+          if (!messageQueueRef.current || !isConnectedRef.current) return;
+
+          console.log(`[useTerminalStream] Requesting fresh pane content after resize`);
+          messageQueueRef.current.push(
+            new TerminalData({
+              sessionId,
+              data: {
+                case: "currentPaneRequest",
+                value: new CurrentPaneRequest({
+                  lines: 50,
+                  includeEscapes: true,
+                  targetCols: cols,
+                  targetRows: rows,
+                  streamingMode: streamingMode || "raw-compressed",
+                }),
+              },
+            })
+          );
+        }, 100); // 100ms delay to allow tmux to reflow
       } catch (err) {
         const error = err instanceof Error ? err : new Error(String(err));
         setError(error);
         onError?.(error);
       }
     },
-    [sessionId, onError]
+    [sessionId, streamingMode, onError]
   );
 
   const requestScrollback = useCallback(
