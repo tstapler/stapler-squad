@@ -136,6 +136,7 @@ func NewServer(addr string) *Server {
 				reviewQueuePoller,
 				eventBus,
 				statusManager,
+				storage,
 			)
 
 			// Wire ReactiveQueueManager back to SessionService
@@ -161,9 +162,13 @@ func NewServer(addr string) *Server {
 
 		// Register ConnectRPC WebSocket handler FIRST for streaming RPCs
 		// This must come before the general ConnectRPC handler to avoid response writer wrapping
-		// Default to "raw" streaming mode (simplest, most reliable)
+		// Initialize tmux streamer manager first - needed for ALL sessions (managed + external)
+		// ALL sessions run in tmux and use capture-pane polling for terminal streaming
+		tmuxStreamerManager := session.NewExternalTmuxStreamerManager()
+
+		// Default to "raw-compressed" streaming mode (LZMA compression for reduced bandwidth)
 		// Mount under /api/ prefix for cleaner URLs
-		wsHandler := services.NewConnectRPCWebSocketHandler(sessionService, scrollbackManager, "raw")
+		wsHandler := services.NewConnectRPCWebSocketHandler(sessionService, scrollbackManager, tmuxStreamerManager, "raw-compressed")
 		wsPath := "/api" + sessionv1connect.SessionServiceStreamTerminalProcedure
 		srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)
 		log.InfoLog.Printf("Registered ConnectRPC WebSocket handler: %s", wsPath)
@@ -178,7 +183,6 @@ func NewServer(addr string) *Server {
 
 		// Initialize External Session Discovery and Streaming (tmux-based)
 		externalDiscovery := session.NewExternalSessionDiscovery()
-		externalTmuxStreamerManager := session.NewExternalTmuxStreamerManager()
 		externalApprovalMonitor := session.NewExternalApprovalMonitor()
 
 		// Wire external discovery to session service for unified session listing
@@ -221,7 +225,7 @@ func NewServer(addr string) *Server {
 		externalApprovalMonitor.Start()
 
 		// Auto-integrate approval monitor with discovery (using tmux session names)
-		externalApprovalMonitor.IntegrateWithDiscoveryTmux(externalDiscovery, externalTmuxStreamerManager)
+		externalApprovalMonitor.IntegrateWithDiscoveryTmux(externalDiscovery, tmuxStreamerManager)
 
 		// CRITICAL: Bridge approval monitor to review queue
 		// When an approval is detected in an external session, immediately add to review queue
@@ -276,7 +280,7 @@ func NewServer(addr string) *Server {
 		// Wire external session support to unified ConnectRPC WebSocket handler
 		// This enables the unified handler to stream both managed and external sessions
 		// through the same /api/session.v1.SessionService/StreamTerminal endpoint
-		wsHandler.SetExternalSessionSupport(externalDiscovery, externalTmuxStreamerManager)
+		wsHandler.SetExternalSessionSupport(externalDiscovery)
 		log.InfoLog.Printf("Unified WebSocket handler configured for external session support")
 
 		// Legacy external session endpoints removed - unified WebSocket streaming now handles both session types
@@ -288,7 +292,7 @@ func NewServer(addr string) *Server {
 		// Approval endpoints are still needed for external session approval monitoring
 		externalWsHandler := services.NewExternalWebSocketHandler(
 			externalDiscovery,
-			externalTmuxStreamerManager,
+			tmuxStreamerManager,
 			externalApprovalMonitor,
 			eventBus,
 		)

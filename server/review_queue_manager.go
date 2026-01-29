@@ -20,6 +20,7 @@ type ReactiveQueueManager struct {
 	poller        *session.ReviewQueuePoller
 	eventBus      *events.EventBus
 	statusManager *session.InstanceStatusManager
+	storage       *session.Storage // For persisting timestamps
 
 	// Streaming clients for WatchReviewQueue
 	streamClients     map[string]*reviewQueueStreamClient
@@ -60,12 +61,14 @@ func NewReactiveQueueManager(
 	poller *session.ReviewQueuePoller,
 	eventBus *events.EventBus,
 	statusManager *session.InstanceStatusManager,
+	storage *session.Storage,
 ) *ReactiveQueueManager {
 	return &ReactiveQueueManager{
 		queue:         queue,
 		poller:        poller,
 		eventBus:      eventBus,
 		statusManager: statusManager,
+		storage:       storage,
 		streamClients: make(map[string]*reviewQueueStreamClient),
 	}
 }
@@ -149,7 +152,7 @@ func (rqm *ReactiveQueueManager) handleUserInteraction(event *events.Event) {
 		return
 	}
 
-	log.DebugLog.Printf("[ReactiveQueueManager] User interaction on '%s' (type: %s) - immediate re-evaluation",
+	log.DebugLog.Printf("[ReactiveQueueManager] User interaction on '%s' (type: %s)",
 		sessionID, event.InteractionType)
 
 	// Find the instance
@@ -157,6 +160,18 @@ func (rqm *ReactiveQueueManager) handleUserInteraction(event *events.Event) {
 	if inst == nil {
 		log.DebugLog.Printf("[ReactiveQueueManager] Instance '%s' not found", sessionID)
 		return
+	}
+
+	// Update LastUserResponse timestamp
+	inst.LastUserResponse = time.Now()
+	log.InfoLog.Printf("[ReactiveQueueManager] Updated LastUserResponse for '%s' to %v",
+		sessionID, inst.LastUserResponse)
+
+	// Persist timestamp (critical for restart scenarios)
+	if rqm.storage != nil {
+		if err := rqm.storage.UpdateInstanceLastUserResponse(inst.Title, inst.LastUserResponse); err != nil {
+			log.ErrorLog.Printf("Failed to persist LastUserResponse for '%s': %v", sessionID, err)
+		}
 	}
 
 	// Immediate re-evaluation using exported method

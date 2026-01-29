@@ -872,6 +872,16 @@ func (s *SessionService) StreamTerminal(
 						}
 					}
 
+				case *sessionv1.TerminalData_CurrentPaneRequest:
+					// NOTE: This handler is currently unused - browser clients use the WebSocket handler
+					// (connectrpc_websocket.go) which intercepts streaming calls before they reach here.
+					// This handler exists to satisfy the protobuf interface contract and could be used
+					// by non-browser gRPC clients in the future.
+					//
+					// If this handler becomes active, the CurrentPaneRequest resize logic is implemented
+					// in connectrpc_websocket.go:524-550 and should be synchronized here.
+					log.WarningLog.Printf("[StreamTerminal] CurrentPaneRequest received (unexpected - WebSocket handler should intercept this)")
+
 				case *sessionv1.TerminalData_Error:
 					// Client sent an error, log it
 					log.ErrorLog.Printf("Client error: %s (%s)", data.Error.Message, data.Error.Code)
