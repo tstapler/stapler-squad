@@ -56,6 +56,13 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
   // Watch the repository path to update branch suggestions
   const repositoryPath = watch("path");
 
+  // Watch session type to show/hide conditional fields
+  const sessionType = watch("sessionType");
+
+  // Watch useTitleAsBranch to auto-populate branch
+  const useTitleAsBranch = watch("useTitleAsBranch");
+  const sessionTitle = watch("title");
+
   // Get autocomplete suggestions
   const { suggestions: repositorySuggestions, isLoading: isLoadingRepos } = useRepositorySuggestions();
   const { suggestions: branchSuggestions, isLoading: isLoadingBranches } = useBranchSuggestions({
@@ -66,7 +73,7 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
 
   const stepFields: Array<Array<keyof SessionFormData>> = [
     ["title", "category"],
-    ["path", "workingDir", "branch"],
+    ["path", "workingDir", "sessionType", "branch", "existingWorktree"],
     ["program", "prompt", "autoYes"],
     [], // Review step has no fields to validate
   ];
@@ -156,7 +163,7 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
           <div className={styles.step}>
             <h2>Repository Setup</h2>
             <p className={styles.description}>
-              Configure the git repository location. Claude Squad will create an isolated worktree for this session.
+              Configure the git repository location and worktree strategy.
             </p>
 
             <div className={styles.field}>
@@ -172,7 +179,7 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
                     value={field.value || ""}
                     onChange={field.onChange}
                     onBlur={field.onBlur}
-                    placeholder="/Users/username/projects/my-repo"
+                    placeholder="/Users/username/projects/my-repo or https://github.com/owner/repo"
                     suggestions={repositorySuggestions}
                     isLoading={isLoadingRepos}
                     error={!!errors.path}
@@ -184,7 +191,7 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
                 <span className={styles.errorMessage}>{errors.path.message}</span>
               )}
               <span className={styles.hint}>
-                Absolute path to your git repository root
+                Absolute path to your git repository root or GitHub URL
               </span>
             </div>
 
@@ -205,30 +212,84 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
             </div>
 
             <div className={styles.field}>
-              <label htmlFor="branch">Git Branch</label>
-              <Controller
-                name="branch"
-                control={control}
-                render={({ field }) => (
-                  <AutocompleteInput
-                    id="branch"
-                    value={field.value || ""}
-                    onChange={field.onChange}
-                    onBlur={field.onBlur}
-                    placeholder="feature/my-feature"
-                    suggestions={branchSuggestions}
-                    isLoading={isLoadingBranches}
-                    error={!!errors.branch}
-                  />
-                )}
-              />
-              {errors.branch && (
-                <span className={styles.errorMessage}>{errors.branch.message}</span>
-              )}
+              <label htmlFor="sessionType">Session Type</label>
+              <select id="sessionType" {...register("sessionType")}>
+                <option value="new_worktree">Create New Worktree</option>
+                <option value="existing_worktree">Use Existing Worktree</option>
+                <option value="directory">Directory Only (No Worktree)</option>
+              </select>
               <span className={styles.hint}>
-                Optional: Create/use a branch with isolated worktree
+                {sessionType === "new_worktree" && "Creates an isolated git worktree for this session"}
+                {sessionType === "existing_worktree" && "Uses an existing worktree at a specific path"}
+                {sessionType === "directory" && "Works directly in the repository without worktree isolation"}
               </span>
             </div>
+
+            {sessionType === "new_worktree" && (
+              <>
+                <div className={styles.field}>
+                  <label className={styles.checkbox}>
+                    <input type="checkbox" {...register("useTitleAsBranch")} />
+                    <span>Use session name as branch name</span>
+                  </label>
+                  <span className={styles.hint}>
+                    Automatically use the session title as the branch name
+                  </span>
+                </div>
+
+                <div className={styles.field}>
+                  <label htmlFor="branch">Git Branch</label>
+                  <Controller
+                    name="branch"
+                    control={control}
+                    render={({ field }) => (
+                      <AutocompleteInput
+                        id="branch"
+                        value={useTitleAsBranch ? sessionTitle : (field.value || "")}
+                        onChange={(value) => {
+                          if (!useTitleAsBranch) {
+                            field.onChange(value);
+                          }
+                        }}
+                        onBlur={field.onBlur}
+                        placeholder={useTitleAsBranch ? sessionTitle || "Enter session title first" : "feature/my-feature"}
+                        suggestions={branchSuggestions}
+                        isLoading={isLoadingBranches}
+                        error={!!errors.branch}
+                        disabled={useTitleAsBranch}
+                      />
+                    )}
+                  />
+                  {errors.branch && (
+                    <span className={styles.errorMessage}>{errors.branch.message}</span>
+                  )}
+                  <span className={styles.hint}>
+                    {useTitleAsBranch ? "Branch name will be: " + (sessionTitle || "(enter session title)") : "Branch to create for the new worktree"}
+                  </span>
+                </div>
+              </>
+            )}
+
+            {sessionType === "existing_worktree" && (
+              <div className={styles.field}>
+                <label htmlFor="existingWorktree">
+                  Existing Worktree Path <span className={styles.required}>*</span>
+                </label>
+                <input
+                  id="existingWorktree"
+                  type="text"
+                  {...register("existingWorktree")}
+                  placeholder="/path/to/existing/worktree"
+                  className={errors.existingWorktree ? styles.error : ""}
+                />
+                {errors.existingWorktree && (
+                  <span className={styles.errorMessage}>{errors.existingWorktree.message}</span>
+                )}
+                <span className={styles.hint}>
+                  Absolute path to an existing git worktree
+                </span>
+              </div>
+            )}
           </div>
         )}
 
@@ -336,11 +397,25 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
                   <span className={styles.reviewValue}>{formValues.workingDir}</span>
                 </div>
               )}
-              {formValues.branch && (
+              <div className={styles.reviewItem}>
+                <span className={styles.reviewLabel}>Session Type:</span>
+                <span className={styles.reviewValue}>
+                  {formValues.sessionType === "new_worktree" && "Create New Worktree"}
+                  {formValues.sessionType === "existing_worktree" && "Use Existing Worktree"}
+                  {formValues.sessionType === "directory" && "Directory Only"}
+                </span>
+              </div>
+              {formValues.sessionType === "new_worktree" && formValues.branch && (
                 <div className={styles.reviewItem}>
                   <span className={styles.reviewLabel}>Git Branch:</span>
                   <span className={styles.reviewValue}>{formValues.branch}</span>
                   <span className={styles.hint}>A new worktree will be created</span>
+                </div>
+              )}
+              {formValues.sessionType === "existing_worktree" && formValues.existingWorktree && (
+                <div className={styles.reviewItem}>
+                  <span className={styles.reviewLabel}>Existing Worktree:</span>
+                  <span className={styles.reviewValue}>{formValues.existingWorktree}</span>
                 </div>
               )}
             </div>

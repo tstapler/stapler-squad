@@ -55,7 +55,35 @@ export const sessionSchema = z.object({
   autoYes: z.boolean().optional(),
 
   existingWorktree: z.string().optional(),
-});
+
+  sessionType: z.enum(["directory", "new_worktree", "existing_worktree"]).optional(),
+
+  useTitleAsBranch: z.boolean().optional(),
+}).refine(
+  (data) => {
+    // If sessionType is existing_worktree, existingWorktree path is required
+    if (data.sessionType === "existing_worktree") {
+      return !!data.existingWorktree && data.existingWorktree.length > 0;
+    }
+    return true;
+  },
+  {
+    message: "Existing worktree path is required when using existing worktree",
+    path: ["existingWorktree"],
+  }
+).refine(
+  (data) => {
+    // If sessionType is new_worktree and not using title as branch, branch is required
+    if (data.sessionType === "new_worktree" && !data.useTitleAsBranch) {
+      return !!data.branch && data.branch.length > 0;
+    }
+    return true;
+  },
+  {
+    message: "Branch name is required when creating new worktree",
+    path: ["branch"],
+  }
+);
 
 export type SessionFormData = z.infer<typeof sessionSchema>;
 
@@ -69,4 +97,6 @@ export const defaultValues: Partial<SessionFormData> = {
   category: "",
   prompt: "",
   existingWorktree: "",
+  sessionType: "new_worktree",
+  useTitleAsBranch: true,
 };

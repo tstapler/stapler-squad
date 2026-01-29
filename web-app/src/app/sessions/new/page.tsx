@@ -48,11 +48,14 @@ function NewSessionContent() {
 
   const handleComplete = async (data: SessionFormData) => {
     try {
+      // If useTitleAsBranch is checked, use the session title as the branch name
+      const branchName = data.useTitleAsBranch ? data.title : (data.branch || "");
+
       await createSession({
         title: data.title,
         path: data.path,
         workingDir: data.workingDir || "",
-        branch: data.branch || "",
+        branch: branchName,
         program: data.program,
         category: data.category || "",
         prompt: data.prompt || "",
