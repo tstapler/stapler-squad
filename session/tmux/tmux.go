@@ -352,39 +352,69 @@ func (t *TmuxSession) Restore() error {
 
 func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 	// First check if the session actually exists
-	if !t.DoesSessionExist() {
-		// Session doesn't exist, we need to create it instead of trying to attach
-		log.WarningLog.Printf("Tmux session '%s' doesn't exist, creating new session instead of restoring", t.sanitizedName)
-
-		// Use the provided working directory, fall back to current directory if not provided
-		if workDir == "" {
-			var err error
-			workDir, err = os.Getwd()
-			if err != nil {
-				log.WarningLog.Printf("Could not get working directory for session '%s': %v", t.sanitizedName, err)
-				workDir = "."
-			}
+	// Try multiple times with increasing delays to handle slow tmux startup or temporary unavailability
+	const maxRetries = 5
+	sessionExists := false
+	for i := 0; i < maxRetries; i++ {
+		if t.DoesSessionExist() {
+			sessionExists = true
+			break
 		}
+		if i < maxRetries-1 {
+			// Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms)
+			delay := time.Duration(100*(1<<uint(i))) * time.Millisecond
+			log.InfoLog.Printf("Tmux session '%s' not found on attempt %d/%d, waiting %v before retry", t.sanitizedName, i+1, maxRetries, delay)
+			time.Sleep(delay)
+			t.invalidateExistsCache() // Clear cache before retry
+		}
+	}
 
-		// Create a new detached tmux session directly (avoid recursive call to Start)
-		cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
-		err := t.cmdExec.Run(cmd)
-		if err != nil {
-			// Session creation failed - but it might be because the session already exists
-			// (DoesSessionExist may have timed out and returned false incorrectly)
-			// Invalidate cache and re-check before returning error
-			t.invalidateExistsCache()
-			if t.DoesSessionExist() {
-				// Session actually exists - the initial check was wrong (likely timeout)
-				// Continue with restore instead of returning error
-				log.InfoLog.Printf("Tmux session '%s' already exists (initial check was incorrect), continuing with restore", t.sanitizedName)
-			} else {
-				return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
-			}
+	if !sessionExists {
+		// Session doesn't exist after multiple retries
+		// CRITICAL: One final check without cache before recreating to prevent accidental destruction
+		log.InfoLog.Printf("Tmux session '%s' not found after %d cached checks, performing final non-cached verification", t.sanitizedName, maxRetries)
+		finalCheck := t.DoesSessionExistNoCache()
+
+		if finalCheck {
+			// Session actually exists - cache was stale or timing issue
+			log.InfoLog.Printf("Found existing tmux session '%s' on final non-cached check (cache was stale), will reattach to preserve history", t.sanitizedName)
+			// Continue with PTY attachment below (session exists, just wasn't detected earlier)
 		} else {
-			log.InfoLog.Printf("Created new tmux session '%s' in directory '%s'", t.sanitizedName, workDir)
-			t.invalidateExistsCache() // Session was created, invalidate cache
+			// Session truly doesn't exist after all checks - safe to create new one
+			log.WarningLog.Printf("Tmux session '%s' doesn't exist after %d attempts plus final verification, creating new session instead of restoring", t.sanitizedName, maxRetries)
+
+			// Use the provided working directory, fall back to current directory if not provided
+			if workDir == "" {
+				var err error
+				workDir, err = os.Getwd()
+				if err != nil {
+					log.WarningLog.Printf("Could not get working directory for session '%s': %v", t.sanitizedName, err)
+					workDir = "."
+				}
+			}
+
+			// Create a new detached tmux session directly (avoid recursive call to Start)
+			cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+			err := t.cmdExec.Run(cmd)
+			if err != nil {
+				// Session creation failed - but it might be because the session already exists
+				// (DoesSessionExist may have timed out and returned false incorrectly)
+				// Invalidate cache and re-check before returning error
+				t.invalidateExistsCache()
+				if t.DoesSessionExist() {
+					// Session actually exists - the initial check was wrong (likely timeout)
+					// Continue with restore instead of returning error
+					log.InfoLog.Printf("Tmux session '%s' already exists (initial check was incorrect), continuing with restore", t.sanitizedName)
+				} else {
+					return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
+				}
+			} else {
+				log.InfoLog.Printf("Created new tmux session '%s' in directory '%s'", t.sanitizedName, workDir)
+				t.invalidateExistsCache() // Session was created, invalidate cache
+			}
 		}
+	} else {
+		log.InfoLog.Printf("Found existing tmux session '%s', will reattach to preserve history", t.sanitizedName)
 	}
 
 	// Session exists - create PTY connection for detached operations
@@ -1009,6 +1039,71 @@ func (t *TmuxSession) invalidateExistsCache() {
 	t.existsCacheMutex.Lock()
 	defer t.existsCacheMutex.Unlock()
 	t.existsCacheTime = time.Time{} // Zero time forces cache miss
+}
+
+// DoesSessionExistNoCache checks if session exists WITHOUT using cache
+// This is used for critical validation before session creation to ensure we have
+// the most up-to-date information about session existence.
+func (t *TmuxSession) DoesSessionExistNoCache() bool {
+	if t == nil {
+		return false
+	}
+
+	// Direct check without cache - for critical validation before session creation
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "tmux")
+	// Add server socket isolation if specified
+	if t.serverSocket != "" {
+		cmd = exec.CommandContext(ctx, "tmux", "-L", t.serverSocket, "list-sessions", "-F", "#{session_name}")
+	} else {
+		cmd = exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+	}
+	output, err := t.cmdExec.Output(cmd)
+
+	if err != nil {
+		log.WarningLog.Printf("DoesSessionExistNoCache: tmux list-sessions failed: %v", err)
+		return false
+	}
+
+	// Parse and log ALL sessions for debugging
+	sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
+	log.InfoLog.Printf("DoesSessionExistNoCache: checking for '%s' in tmux sessions: %v", t.sanitizedName, sessions)
+
+	for _, session := range sessions {
+		if session == t.sanitizedName {
+			return true
+		}
+	}
+
+	return false
+}
+
+// RefreshClient sends a refresh signal to the tmux client,
+// forcing the process running inside to redraw at current dimensions.
+// This is critical after resizing to update cursor positions and line wrapping.
+func (t *TmuxSession) RefreshClient() error {
+	// Method 1: Use refresh-client command (preferred)
+	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
+	if err := t.cmdExec.Run(cmd); err != nil {
+		log.WarningLog.Printf("refresh-client failed for '%s', trying alternative: %v", t.sanitizedName, err)
+
+		// Method 2: Send SIGWINCH via kill command
+		cmd = t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName, "#{pane_pid}")
+		output, err := t.cmdExec.Output(cmd)
+		if err != nil {
+			return fmt.Errorf("failed to get pane PID: %w", err)
+		}
+
+		panePID := strings.TrimSpace(string(output))
+		killCmd := exec.Command("kill", "-WINCH", panePID)
+		if err := killCmd.Run(); err != nil {
+			return fmt.Errorf("failed to send SIGWINCH: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // CapturePaneContent captures the content of the tmux pane
