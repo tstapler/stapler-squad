@@ -72,6 +72,12 @@ type InstanceData struct {
 	// LastAcknowledged tracks when the user last dismissed this session from review queue
 	// Sessions acknowledged after their last update won't appear in the queue until they update again
 	LastAcknowledged time.Time `json:"last_acknowledged,omitempty"`
+
+	// Prompt detection and interaction tracking for smart review queue behavior
+	LastPromptDetected   time.Time `json:"last_prompt_detected,omitempty"`
+	LastPromptSignature  string    `json:"last_prompt_signature,omitempty"`
+	LastUserResponse     time.Time `json:"last_user_response,omitempty"`
+	ProcessingGraceUntil time.Time `json:"processing_grace_until,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree
@@ -484,6 +490,90 @@ func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue 
 			instancesData[i].LastAddedToQueue = lastAddedToQueue
 			found = true
 			log.DebugLog.Printf("Updating LastAddedToQueue in storage for session %s (no instance objects created)", title)
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("instance not found: %s", title)
+	}
+
+	// Marshal back to JSON
+	updatedJSON, err := json.Marshal(instancesData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+
+	// Use async save if available
+	if s.stateService != nil {
+		s.stateService.SaveAsync(updatedJSON)
+		return nil
+	}
+
+	// Fallback to synchronous save
+	return s.state.SaveInstances(updatedJSON)
+}
+
+// UpdateInstanceLastUserResponse updates just the LastUserResponse timestamp for a specific instance.
+// This is a lightweight update that avoids loading/modifying all instance objects.
+func (s *Storage) UpdateInstanceLastUserResponse(title string, lastUserResponse time.Time) error {
+	// Load raw JSON data directly
+	jsonData := s.state.GetInstances()
+
+	var instancesData []InstanceData
+	if err := json.Unmarshal(jsonData, &instancesData); err != nil {
+		return fmt.Errorf("failed to unmarshal instances: %w", err)
+	}
+
+	// Find and update the matching instance data
+	found := false
+	for i, data := range instancesData {
+		if data.Title == title {
+			instancesData[i].LastUserResponse = lastUserResponse
+			found = true
+			log.DebugLog.Printf("Updating LastUserResponse in storage for session %s (no instance objects created)", title)
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("instance not found: %s", title)
+	}
+
+	// Marshal back to JSON
+	updatedJSON, err := json.Marshal(instancesData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal instances: %w", err)
+	}
+
+	// Use async save if available
+	if s.stateService != nil {
+		s.stateService.SaveAsync(updatedJSON)
+		return nil
+	}
+
+	// Fallback to synchronous save
+	return s.state.SaveInstances(updatedJSON)
+}
+
+// UpdateInstanceProcessingGrace updates just the ProcessingGraceUntil timestamp for a specific instance.
+// This is a lightweight update that avoids loading/modifying all instance objects.
+func (s *Storage) UpdateInstanceProcessingGrace(title string, processingGraceUntil time.Time) error {
+	// Load raw JSON data directly
+	jsonData := s.state.GetInstances()
+
+	var instancesData []InstanceData
+	if err := json.Unmarshal(jsonData, &instancesData); err != nil {
+		return fmt.Errorf("failed to unmarshal instances: %w", err)
+	}
+
+	// Find and update the matching instance data
+	found := false
+	for i, data := range instancesData {
+		if data.Title == title {
+			instancesData[i].ProcessingGraceUntil = processingGraceUntil
+			found = true
+			log.DebugLog.Printf("Updating ProcessingGraceUntil in storage for session %s (no instance objects created)", title)
 			break
 		}
 	}

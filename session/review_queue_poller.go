@@ -4,6 +4,7 @@ import (
 	"claude-squad/log"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -184,6 +185,54 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 	}
 }
 
+// detectProcessing checks if session is actively processing after user interaction.
+// Uses multiple signals to determine if the session is responding to user input.
+func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusInfo) bool {
+	// Signal 1: Status change from prompt state to active/processing
+	if statusInfo.ClaudeStatus == StatusActive ||
+		statusInfo.ClaudeStatus == StatusProcessing {
+		return true
+	}
+
+	// Signal 2: Idle detector shows Active state
+	if statusInfo.IdleState.State == IdleStateActive {
+		return true
+	}
+
+	// Signal 3: Recent terminal output (activity within 2 seconds)
+	if time.Since(inst.LastMeaningfulOutput) < 2*time.Second {
+		return true
+	}
+
+	// Signal 4: Processing patterns in recent content (last 50 lines)
+	processingPatterns := []string{
+		"Thinking...",
+		"Processing...",
+		"Executing...",
+		"Running...",
+		"Working...",
+		"Analyzing...",
+		"esc to interrupt",
+		"Synthesizing",
+	}
+
+	// Only check recent content (last ~50 lines) to avoid false positives from old output
+	lines := strings.Split(content, "\n")
+	recentLines := lines
+	if len(lines) > 50 {
+		recentLines = lines[len(lines)-50:]
+	}
+	recentContent := strings.Join(recentLines, "\n")
+
+	for _, pattern := range processingPatterns {
+		if strings.Contains(recentContent, pattern) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // checkSession checks a single session and adds/removes from queue as needed.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	log.InfoLog.Printf("[ReviewQueue] === CHECKING SESSION '%s' === (started=%v, paused=%v)",
@@ -211,6 +260,86 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 
 	// Get comprehensive status
 	statusInfo := rqp.statusManager.GetStatus(inst)
+
+	// STEP 1: Get terminal content for prompt detection
+	var content string
+	var err error
+	content, err = inst.Preview()
+	if err != nil {
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get terminal content: %v", inst.Title, err)
+		content = "" // Continue with empty content
+	}
+
+	// STEP 2: Detect and track prompts
+	isNewPrompt := inst.detectAndTrackPrompt(content, statusInfo)
+
+	// STEP 3: Check if user responded to current prompt
+	userRespondedToPrompt := !inst.LastUserResponse.IsZero() &&
+		!inst.LastPromptDetected.IsZero() &&
+		inst.LastUserResponse.After(inst.LastPromptDetected)
+
+	// STEP 4: Check if session is actively processing after user response
+	isProcessing := false
+	if userRespondedToPrompt && content != "" {
+		isProcessing = detectProcessing(inst, content, statusInfo)
+	}
+
+	// STEP 5: Check grace period for temporary removal
+	inGracePeriod := !inst.ProcessingGraceUntil.IsZero() &&
+		time.Now().Before(inst.ProcessingGraceUntil)
+
+	log.InfoLog.Printf("[ReviewQueue] Session '%s': isNewPrompt=%v, userResponded=%v, isProcessing=%v, gracePeriod=%v",
+		inst.Title, isNewPrompt, userRespondedToPrompt, isProcessing, inGracePeriod)
+
+	// DECISION LOGIC:
+
+	// If user responded and session is processing -> remove from queue
+	if userRespondedToPrompt && isProcessing {
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': User responded and processing - removing from queue", inst.Title)
+		rqp.queue.Remove(inst.Title)
+		inst.ProcessingGraceUntil = time.Time{} // Clear grace period
+		// Persist cleared grace period
+		if rqp.storage != nil {
+			if err := rqp.storage.UpdateInstanceProcessingGrace(inst.Title, inst.ProcessingGraceUntil); err != nil {
+				log.ErrorLog.Printf("Failed to persist cleared ProcessingGraceUntil: %v", err)
+			}
+		}
+		return
+	}
+
+	// If user responded but NOT processing yet -> grace period
+	if userRespondedToPrompt && !isProcessing {
+		if !inGracePeriod {
+			// Start grace period (10 seconds)
+			inst.ProcessingGraceUntil = time.Now().Add(10 * time.Second)
+			log.InfoLog.Printf("[ReviewQueue] Session '%s': User responded, starting grace period until %v",
+				inst.Title, inst.ProcessingGraceUntil)
+
+			// Persist grace period
+			if rqp.storage != nil {
+				if err := rqp.storage.UpdateInstanceProcessingGrace(inst.Title, inst.ProcessingGraceUntil); err != nil {
+					log.ErrorLog.Printf("Failed to persist ProcessingGraceUntil: %v", err)
+				}
+			}
+		}
+
+		// Remove from queue during grace period
+		if inGracePeriod {
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': In grace period, keeping off queue", inst.Title)
+			rqp.queue.Remove(inst.Title)
+			return
+		}
+
+		// Grace period expired and still not processing
+		// Clear grace period and fall through to add logic (will check if new prompt)
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': Grace period expired, session not responding", inst.Title)
+		inst.ProcessingGraceUntil = time.Time{}
+		if rqp.storage != nil {
+			if err := rqp.storage.UpdateInstanceProcessingGrace(inst.Title, inst.ProcessingGraceUntil); err != nil {
+				log.ErrorLog.Printf("Failed to persist cleared ProcessingGraceUntil: %v", err)
+			}
+		}
+	}
 
 	// Determine if needs attention and why
 	var reason AttentionReason
@@ -534,6 +663,13 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			rqp.queue.Remove(inst.Title)
 			return
 		}
+	}
+
+	// Prevent re-adding same prompt user already responded to
+	// Only add if this is a NEW prompt OR user hasn't responded yet
+	if shouldAdd && userRespondedToPrompt && !isNewPrompt {
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': User already responded to this prompt - skipping add", inst.Title)
+		return
 	}
 
 	// Spam prevention: Enforce minimum re-add interval to prevent notification spam

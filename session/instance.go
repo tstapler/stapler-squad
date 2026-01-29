@@ -128,6 +128,20 @@ type Instance struct {
 	// Used for smarter review queue notifications (don't notify if just viewed)
 	LastViewed time.Time
 
+	// Prompt detection and interaction tracking for smart review queue behavior
+	// LastPromptDetected is the timestamp when we last detected a prompt requiring user input
+	// Used to distinguish new prompts from the same prompt re-appearing
+	LastPromptDetected time.Time
+	// LastPromptSignature is a hash of the prompt content (last 10 lines before cursor)
+	// Used to determine if this is the same prompt or a new one
+	LastPromptSignature string
+	// LastUserResponse is the timestamp when the user last provided input/interaction
+	// Used to determine if user responded AFTER a prompt was detected
+	LastUserResponse time.Time
+	// ProcessingGraceUntil is the deadline for waiting for session to respond after user interaction
+	// If session shows no activity by this time, we assume it's stuck and may re-add to queue
+	ProcessingGraceUntil time.Time
+
 	// Status manager for idle detection and queue management
 	statusManager *InstanceStatusManager
 	// Claude controller for automated interaction and status monitoring
@@ -186,6 +200,11 @@ func (i *Instance) ToInstanceData() InstanceData {
 		LastAddedToQueue:     i.LastAddedToQueue,
 		LastViewed:           i.LastViewed,
 		LastAcknowledged:     i.LastAcknowledged,
+		// Prompt detection and interaction tracking
+		LastPromptDetected:   i.LastPromptDetected,
+		LastPromptSignature:  i.LastPromptSignature,
+		LastUserResponse:     i.LastUserResponse,
+		ProcessingGraceUntil: i.ProcessingGraceUntil,
 		// GitHub integration fields
 		GitHubPRNumber:  i.GitHubPRNumber,
 		GitHubPRURL:     i.GitHubPRURL,
@@ -288,9 +307,15 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		LastAddedToQueue:     data.LastAddedToQueue,
 		LastViewed:           data.LastViewed,
 		LastAcknowledged:     data.LastAcknowledged,
-		InstanceType:         InstanceTypeManaged, // Restored instances are always managed
+		// Prompt detection and interaction tracking
+		LastPromptDetected:   data.LastPromptDetected,
+		LastPromptSignature:  data.LastPromptSignature,
+		LastUserResponse:     data.LastUserResponse,
+		ProcessingGraceUntil: data.ProcessingGraceUntil,
+		InstanceType:         InstanceTypeManaged,     // Restored instances are always managed
 		IsManaged:            true,
-		ExternalMetadata:     nil, // External instances are not persisted
+		ExternalMetadata:     nil,                    // External instances are not persisted
+		Permissions:          GetManagedPermissions(), // Full permissions for managed instances
 		// GitHub integration fields
 		GitHubPRNumber:  data.GitHubPRNumber,
 		GitHubPRURL:     data.GitHubPRURL,
@@ -475,9 +500,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		IsExpanded:           true, // Default to expanded for newly created instances
 		InstanceType:         InstanceTypeManaged,
 		IsManaged:            true,
-		ExternalMetadata:     nil, // Only set for external instances
-		LastTerminalUpdate:   t,   // Initialize to creation time
-		LastMeaningfulOutput: t,   // Initialize to creation time
+		ExternalMetadata:     nil,                    // Only set for external instances
+		Permissions:          GetManagedPermissions(), // Full permissions for managed instances
+		LastTerminalUpdate:   t,                      // Initialize to creation time
+		LastMeaningfulOutput: t,                      // Initialize to creation time
 		// GitHub integration fields
 		GitHubPRNumber:  opts.GitHubPRNumber,
 		GitHubPRURL:     opts.GitHubPRURL,
@@ -1408,23 +1434,34 @@ func (i *Instance) GetCurrentPaneContent(lines int) (string, error) {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
 
-	// If lines is 0 or negative, capture entire visible pane
-	if lines <= 0 {
-		lines = 50 // Default to last 50 lines (typical terminal height)
-	}
-
-	// CRITICAL FIX: Use -S - to capture from start of history
-	// Previous approach used -S -50 which meant "start 50 lines BEFORE cursor"
-	// This failed for fresh panes because it skipped visible content above line 21
+	// OPTIMIZED: Only capture visible viewport (not all scrollback)
+	// This dramatically improves session switching performance by avoiding
+	// transfer of potentially thousands of lines of scrollback history
 	//
 	// -p: print to stdout
 	// -e: include escape sequences (colors, formatting)
 	// -J: join wrapped lines
-	// -S -: start at beginning of scrollback history (captures everything)
+	// -S {lines}: start N lines from the bottom (viewport only)
 	// -E -: end at current line (bottom of visible pane)
+
+	// If lines is 0 or negative, capture current viewport height only
+	if lines <= 0 {
+		// Get actual pane dimensions to capture exactly what's visible
+		_, height, err := i.tmuxSession.GetPaneDimensions()
+		if err != nil {
+			// Fallback to reasonable default if we can't get dimensions
+			lines = 40
+		} else {
+			lines = height
+		}
+	}
+
+	// Capture only the last N lines (viewport) instead of entire scrollback
+	// Format: -S -{lines} means "start {lines} lines from the bottom"
+	startLine := fmt.Sprintf("-%d", lines)
 	content, err := i.tmuxSession.CapturePaneContentWithOptions(
-		"-",  // Start at beginning of history (captures all visible content)
-		"-",  // End at current line (bottom)
+		startLine,  // Start N lines from bottom (viewport only)
+		"-",        // End at current line (bottom)
 	)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture current pane content: %w", err)
@@ -1599,6 +1636,16 @@ func (i *Instance) SetTmuxSession(session *tmux.TmuxSession) {
 func (i *Instance) SetWindowSize(cols, rows int) error {
 	if i.tmuxSession != nil {
 		return i.tmuxSession.SetWindowSize(cols, rows)
+	}
+	return nil
+}
+
+// RefreshTmuxClient forces the tmux client to refresh, triggering a redraw
+// of the process running inside. This is critical after resizing to ensure
+// cursor positions and line wrapping are recalculated for the new dimensions.
+func (i *Instance) RefreshTmuxClient() error {
+	if i.tmuxSession != nil {
+		return i.tmuxSession.RefreshClient()
 	}
 	return nil
 }
@@ -2205,4 +2252,62 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 	}
 
 	return nil
+}
+
+// detectAndTrackPrompt detects if current state is a prompt and tracks it for re-add prevention.
+// Returns true if this is a NEW prompt (different from the last detected prompt).
+func (i *Instance) detectAndTrackPrompt(content string, statusInfo InstanceStatusInfo) bool {
+	// Detect if current state is a prompt requiring user input
+	isPromptState := statusInfo.ClaudeStatus == StatusNeedsApproval ||
+		statusInfo.ClaudeStatus == StatusInputRequired
+
+	if !isPromptState {
+		return false
+	}
+
+	// Compute signature of prompt content (last 10 lines for identity)
+	promptSignature := i.computePromptSignature(content)
+
+	// Check if this is a NEW prompt (different signature OR first time)
+	isNewPrompt := promptSignature != i.LastPromptSignature ||
+		i.LastPromptSignature == ""
+
+	if isNewPrompt {
+		i.LastPromptDetected = time.Now()
+		i.LastPromptSignature = promptSignature
+		log.InfoLog.Printf("[Prompt] New prompt detected for '%s': signature=%s...",
+			i.Title, truncateString(promptSignature, 8))
+	}
+
+	return isNewPrompt
+}
+
+// computePromptSignature computes a hash of the prompt content for identity comparison.
+// Uses the last 10 lines to capture the prompt context without earlier output.
+func (i *Instance) computePromptSignature(content string) string {
+	if content == "" {
+		return ""
+	}
+
+	// Use last 10 lines for identity (captures prompt without earlier output)
+	lines := strings.Split(content, "\n")
+	const contextLines = 10
+	startIdx := len(lines) - contextLines
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	promptContext := strings.Join(lines[startIdx:], "\n")
+
+	// Compute hash using murmur3 (already imported, same as content signatures)
+	hash := murmur3.Sum64([]byte(promptContext))
+	return fmt.Sprintf("%016x", hash)
+}
+
+// truncateString truncates a string to maxLen characters.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
 }
