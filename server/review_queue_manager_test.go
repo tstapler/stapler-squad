@@ -2,20 +2,32 @@ package server
 
 import (
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
+	"claude-squad/config"
 	"claude-squad/server/events"
 	"claude-squad/session"
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow
 func TestReactiveQueueManagerIntegration(t *testing.T) {
+	// Setup test directory
+	testDir := filepath.Join(os.TempDir(), "claude-squad-test-reactive-queue")
+	defer os.RemoveAll(testDir)
+
 	// Setup components
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
+	testState := config.NewTestState(testDir)
+	storage, err := session.NewStorage(testState)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
 
 	// Create manager
 	reactiveQueueMgr := NewReactiveQueueManager(
@@ -23,6 +35,7 @@ func TestReactiveQueueManagerIntegration(t *testing.T) {
 		reviewQueuePoller,
 		eventBus,
 		statusManager,
+		storage,
 	)
 
 	// Start manager
@@ -143,17 +156,27 @@ func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 
 // TestReactiveQueueManagerMultipleClients tests multiple concurrent clients
 func TestReactiveQueueManagerMultipleClients(t *testing.T) {
+	// Setup test directory
+	testDir := filepath.Join(os.TempDir(), "claude-squad-test-multiple-clients")
+	defer os.RemoveAll(testDir)
+
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
+	testState := config.NewTestState(testDir)
+	storage, err := session.NewStorage(testState)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
 
 	reactiveQueueMgr := NewReactiveQueueManager(
 		queue,
 		reviewQueuePoller,
 		eventBus,
 		statusManager,
+		storage,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -224,17 +247,27 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 
 // TestReactiveQueueManagerFiltering tests client-side filtering
 func TestReactiveQueueManagerFiltering(t *testing.T) {
+	// Setup test directory
+	testDir := filepath.Join(os.TempDir(), "claude-squad-test-filtering")
+	defer os.RemoveAll(testDir)
+
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
+	testState := config.NewTestState(testDir)
+	storage, err := session.NewStorage(testState)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
 
 	reactiveQueueMgr := NewReactiveQueueManager(
 		queue,
 		reviewQueuePoller,
 		eventBus,
 		statusManager,
+		storage,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -293,17 +326,27 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 
 // TestReactiveQueueManagerEventTypes tests all event types
 func TestReactiveQueueManagerEventTypes(t *testing.T) {
+	// Setup test directory
+	testDir := filepath.Join(os.TempDir(), "claude-squad-test-event-types")
+	defer os.RemoveAll(testDir)
+
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
+	testState := config.NewTestState(testDir)
+	storage, err := session.NewStorage(testState)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
 
 	reactiveQueueMgr := NewReactiveQueueManager(
 		queue,
 		reviewQueuePoller,
 		eventBus,
 		statusManager,
+		storage,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -365,17 +408,27 @@ func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, even
 
 // BenchmarkReactiveQueueManagerThroughput measures event processing throughput
 func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
+	// Setup test directory
+	testDir := filepath.Join(os.TempDir(), "claude-squad-bench-throughput")
+	defer os.RemoveAll(testDir)
+
 	// Setup
 	queue := session.NewReviewQueue()
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(100)
+	testState := config.NewTestState(testDir)
+	storage, err := session.NewStorage(testState)
+	if err != nil {
+		b.Fatalf("Failed to create storage: %v", err)
+	}
 
 	reactiveQueueMgr := NewReactiveQueueManager(
 		queue,
 		reviewQueuePoller,
 		eventBus,
 		statusManager,
+		storage,
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
