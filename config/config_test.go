@@ -70,14 +70,20 @@ func newMockCommandExecutorWithClaudeFound(claudePath string) *mockCommandExecut
 // newMockCommandExecutorWithClaudeNotFound creates a mock that simulates claude not being found
 func newMockCommandExecutorWithClaudeNotFound() *mockCommandExecutor {
 	return &mockCommandExecutor{
+		CommandFunc: func(name string, args ...string) *exec.Cmd {
+			// Return a mock command that won't actually execute
+			return exec.Command("true")
+		},
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
-			return nil, exec.ErrNotFound
+			// Simulate command not found for both proxy-claude and claude
+			return []byte(""), exec.ErrNotFound
 		},
 		LookPathFunc: func(file string) (string, error) {
-			if file == "claude" {
+			// Return error for both claude and proxy-claude
+			if file == "claude" || file == "proxy-claude" {
 				return "", exec.ErrNotFound
 			}
-			return "/usr/local/bin/" + file, nil
+			return "", exec.ErrNotFound
 		},
 	}
 }

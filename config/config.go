@@ -276,8 +276,20 @@ func GetClaudeCommand() (string, error) {
 			result := strings.TrimSpace(string(output))
 			if result != "" {
 				// Check if it's an alias definition
-				// Formats: "alias proxy-claude='command'" or "proxy-claude='command'" or just a path
-				if strings.Contains(result, "alias ") {
+				// Formats:
+				// 1. "claude: aliased to /path/to/command" (zsh alias output)
+				// 2. "alias proxy-claude='command'" (bash/zsh alias definition)
+				// 3. "proxy-claude='command'" (simplified alias format)
+				// 4. "/path/to/command" (direct path from which)
+
+				if strings.Contains(result, "aliased to ") {
+					// Format: "name: aliased to /path/to/command"
+					// Extract everything after "aliased to "
+					parts := strings.SplitN(result, "aliased to ", 2)
+					if len(parts) == 2 {
+						return strings.TrimSpace(parts[1]), nil
+					}
+				} else if strings.Contains(result, "alias ") {
 					// Extract the command from alias definition
 					// Pattern: alias name='command' or alias name="command"
 					aliasRegex := regexp.MustCompile(`alias\s+\S+\s*=\s*['"](.+?)['"]`)
