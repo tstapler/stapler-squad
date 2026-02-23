@@ -314,18 +314,9 @@ export function useTerminalStream({
       abortControllerRef.current = new AbortController();
       messageQueueRef.current = new MessageQueue();
 
-      // Send initial handshake message
-      messageQueueRef.current.push(
-        new TerminalData({
-          sessionId,
-          data: { case: undefined }, // Initial handshake
-        })
-      );
-
-      // Request current pane content (what user would see if they attached to tmux)
-      // This gives us the current terminal state for fast initial load
-      // NOTE: This is NOT scrollback - it's just the visible pane content
-      // Include terminal dimensions to prevent size mismatch on first load
+      // IMPROVED: Send initial handshake WITH dimensions (single message)
+      // This eliminates the need for a separate CurrentPaneRequest message
+      // Server can resize tmux and capture content immediately with correct dimensions
       const currentPaneReq = new CurrentPaneRequest({
         lines: 50, // Get last 50 lines (typical terminal viewport)
         includeEscapes: true, // Preserve colors and formatting
@@ -337,11 +328,12 @@ export function useTerminalStream({
       if (targetCols !== undefined && targetRows !== undefined) {
         currentPaneReq.targetCols = targetCols;
         currentPaneReq.targetRows = targetRows;
-        console.log(`[useTerminalStream] Requesting initial pane content with target size: ${targetCols}x${targetRows}`);
+        console.log(`[useTerminalStream] Sending handshake with dimensions: ${targetCols}x${targetRows}`);
       } else {
-        console.warn(`[useTerminalStream] No terminal dimensions available for initial pane request`);
+        console.warn(`[useTerminalStream] No terminal dimensions available for handshake`);
       }
 
+      // Send as first and only handshake message
       messageQueueRef.current.push(
         new TerminalData({
           sessionId,
@@ -380,6 +372,24 @@ export function useTerminalStream({
                 if (currentTerminal) {
                   stateApplicatorRef.current = new StateApplicator(currentTerminal);
                   console.log('[useTerminalStream] State applicator lazily initialized on first state');
+
+                  // PHASE 1: Set up dimension mismatch handler
+                  stateApplicatorRef.current.setOnDimensionMismatch((expectedCols, expectedRows, actualCols, actualRows) => {
+                    console.warn(
+                      `[useTerminalStream] DIMENSION MISMATCH DETECTED: ` +
+                      `server sent ${expectedCols}x${expectedRows}, ` +
+                      `but terminal is ${actualCols}x${actualRows}. ` +
+                      `Requesting resync with correct dimensions...`
+                    );
+
+                    // Request immediate resync with correct terminal dimensions
+                    if (!isResyncingRef.current) {
+                      console.log(`[useTerminalStream] Triggering resync due to dimension mismatch`);
+                      requestFullResync(true); // Mark as urgent
+                    } else {
+                      console.log(`[useTerminalStream] Already resyncing, skipping duplicate resync request`);
+                    }
+                  });
                 } else {
                   console.warn('[useTerminalStream] Received state but terminal not ready yet');
                   continue; // Skip this state and wait for terminal to be ready
@@ -433,6 +443,24 @@ export function useTerminalStream({
                 if (currentTerminal) {
                   stateApplicatorRef.current = new StateApplicator(currentTerminal);
                   console.log('[useTerminalStream] State applicator lazily initialized on first diff');
+
+                  // PHASE 1: Set up dimension mismatch handler
+                  stateApplicatorRef.current.setOnDimensionMismatch((expectedCols, expectedRows, actualCols, actualRows) => {
+                    console.warn(
+                      `[useTerminalStream] DIMENSION MISMATCH DETECTED: ` +
+                      `server sent ${expectedCols}x${expectedRows}, ` +
+                      `but terminal is ${actualCols}x${actualRows}. ` +
+                      `Requesting resync with correct dimensions...`
+                    );
+
+                    // Request immediate resync with correct terminal dimensions
+                    if (!isResyncingRef.current) {
+                      console.log(`[useTerminalStream] Triggering resync due to dimension mismatch`);
+                      requestFullResync(true); // Mark as urgent
+                    } else {
+                      console.log(`[useTerminalStream] Already resyncing, skipping duplicate resync request`);
+                    }
+                  });
 
                   // Wire up echo overlay if predictive echo is enabled
                   if (enablePredictiveEcho && echoOverlayRef.current) {
@@ -557,6 +585,24 @@ export function useTerminalStream({
                 // Create fresh state applicator with proper terminal reference
                 stateApplicatorRef.current = new StateApplicator(currentTerminal);
                 console.log("[useTerminalStream] Created fresh state applicator after receiving current pane");
+
+                // PHASE 1: Set up dimension mismatch handler
+                stateApplicatorRef.current.setOnDimensionMismatch((expectedCols, expectedRows, actualCols, actualRows) => {
+                  console.warn(
+                    `[useTerminalStream] DIMENSION MISMATCH DETECTED: ` +
+                    `server sent ${expectedCols}x${expectedRows}, ` +
+                    `but terminal is ${actualCols}x${actualRows}. ` +
+                    `Requesting resync with correct dimensions...`
+                  );
+
+                  // Request immediate resync with correct terminal dimensions
+                  if (!isResyncingRef.current) {
+                    console.log(`[useTerminalStream] Triggering resync due to dimension mismatch`);
+                    requestFullResync(true); // Mark as urgent
+                  } else {
+                    console.log(`[useTerminalStream] Already resyncing, skipping duplicate resync request`);
+                  }
+                });
               }
 
               // Write current pane content to terminal (raw write - may cause parsing errors!)

@@ -53,8 +53,19 @@ export class StateApplicator {
   // SSP: Callback for echo acknowledgment (allows external handling)
   private onEchoAck: ((ack: EchoAck) => void) | null = null;
 
+  // PHASE 1: Callback for dimension mismatch detection
+  private onDimensionMismatch: ((expectedCols: number, expectedRows: number, actualCols: number, actualRows: number) => void) | null = null;
+
   constructor(terminal: Terminal) {
     this.terminal = terminal;
+  }
+
+  /**
+   * PHASE 1: Set a callback for dimension mismatch detection.
+   * Called when received state dimensions don't match terminal dimensions.
+   */
+  setOnDimensionMismatch(callback: ((expectedCols: number, expectedRows: number, actualCols: number, actualRows: number) => void) | null): void {
+    this.onDimensionMismatch = callback;
   }
 
   /**
@@ -306,15 +317,24 @@ export class StateApplicator {
         this.applyDimensionChange(state.dimensions);
       }
 
-      // Validate dimension synchronization (essential for correct rendering)
+      // PHASE 1: Enhanced dimension synchronization validation with callback
       const stateDims = state.dimensions;
       const terminalDims = { cols: this.terminal.cols, rows: this.terminal.rows };
       if (stateDims && (stateDims.cols !== terminalDims.cols || stateDims.rows !== terminalDims.rows)) {
         console.warn(
-          `[StateApplicator] DIMENSION MISMATCH: ` +
+          `[StateApplicator] DIMENSION MISMATCH DETECTED: ` +
           `state=${stateDims.cols}x${stateDims.rows}, ` +
-          `terminal=${terminalDims.cols}x${terminalDims.rows}`
+          `terminal=${terminalDims.cols}x${terminalDims.rows} ` +
+          `[This causes incorrect text positioning - checkboxes appear on right side instead of inline]`
         );
+
+        // PHASE 1: Notify external handler (e.g., to request resync with correct dimensions)
+        if (this.onDimensionMismatch) {
+          console.log(
+            `[StateApplicator] Calling dimension mismatch handler to request resync with correct dimensions`
+          );
+          this.onDimensionMismatch(stateDims.cols, stateDims.rows, terminalDims.cols, terminalDims.rows);
+        }
       }
 
       // Validate line count matches terminal rows
