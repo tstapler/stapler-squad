@@ -22,6 +22,9 @@ function ReviewQueueContent() {
     autoWatch: true, // Enable WebSocket streaming for session list
   });
 
+  // Get review queue items (sessions that need attention, sorted by priority)
+  const [reviewQueueItems, setReviewQueueItems] = useState<Session[]>([]);
+
   // Handle deep linking from notifications - auto-open session from URL
   useEffect(() => {
     const sessionId = searchParams.get("session");
@@ -35,12 +38,38 @@ function ReviewQueueContent() {
   }, [searchParams, sessions]);
 
   const handleSessionClick = (sessionId: string) => {
-    // Find the session in the list
+    // Try to open immediately if sessions are already loaded
     const session = sessions.find((s) => s.id === sessionId);
     if (session) {
       setSelectedSession(session);
       setSelectedTab("terminal"); // Always open to terminal tab for review queue
     }
+    // Always update URL - the useEffect will open the modal when sessions finish loading
+    router.push(`/review-queue?session=${sessionId}`);
+  };
+
+  // Navigate to next session in review queue
+  const handleNextSession = () => {
+    if (!selectedSession || reviewQueueItems.length === 0) return;
+
+    const currentIndex = reviewQueueItems.findIndex((s) => s.id === selectedSession.id);
+    const nextIndex = (currentIndex + 1) % reviewQueueItems.length;
+    const nextSession = reviewQueueItems[nextIndex];
+
+    setSelectedSession(nextSession);
+    router.push(`/review-queue?session=${nextSession.id}`);
+  };
+
+  // Navigate to previous session in review queue
+  const handlePreviousSession = () => {
+    if (!selectedSession || reviewQueueItems.length === 0) return;
+
+    const currentIndex = reviewQueueItems.findIndex((s) => s.id === selectedSession.id);
+    const previousIndex = currentIndex === 0 ? reviewQueueItems.length - 1 : currentIndex - 1;
+    const previousSession = reviewQueueItems[previousIndex];
+
+    setSelectedSession(previousSession);
+    router.push(`/review-queue?session=${previousSession.id}`);
   };
 
   const handleCloseSessionDetail = () => {
@@ -55,6 +84,13 @@ function ReviewQueueContent() {
       <main className={styles.main}>
         <ReviewQueuePanel
           onSessionClick={handleSessionClick}
+          onItemsChange={(sessionIds) => {
+            // Update the review queue items for navigation
+            const queueSessions = sessionIds
+              .map((id) => sessions.find((s) => s.id === id))
+              .filter((s): s is Session => s !== undefined);
+            setReviewQueueItems(queueSessions);
+          }}
         />
       </main>
 
@@ -70,6 +106,9 @@ function ReviewQueueContent() {
               onClose={handleCloseSessionDetail}
               onFullscreenChange={setIsSessionFullscreen}
               initialTab="terminal"
+              showNavigation={reviewQueueItems.length > 1}
+              onNext={handleNextSession}
+              onPrevious={handlePreviousSession}
             />
           </div>
         </div>

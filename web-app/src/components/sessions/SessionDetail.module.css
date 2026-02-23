@@ -84,6 +84,29 @@
   transform: translateY(0);
 }
 
+.navButton {
+  background: transparent;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: var(--terminal-text-muted);
+  padding: 0.5rem;
+  line-height: 1;
+  transition: color 0.2s, background 0.2s;
+  border-radius: 4px;
+  font-weight: bold;
+}
+
+.navButton:hover {
+  color: var(--terminal-header-foreground);
+  background: var(--terminal-hover-background);
+}
+
+.navButton:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 .closeButton {
   background: transparent;
   border: none;

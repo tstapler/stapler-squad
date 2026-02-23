@@ -31,6 +31,9 @@ interface SessionDetailProps {
   onFullscreenChange?: (isFullscreen: boolean) => void;
   onTabChange?: (tab: SessionDetailTab) => void;
   initialTab?: SessionDetailTab;
+  onNext?: () => void; // Navigate to next item in review queue
+  onPrevious?: () => void; // Navigate to previous item in review queue
+  showNavigation?: boolean; // Show navigation arrows (for review queue)
 }
 
 // Helper function to get program display name
@@ -46,7 +49,16 @@ function getProgramDisplay(program?: string): string {
   return program;
 }
 
-export function SessionDetail({ session, onClose, onFullscreenChange, onTabChange, initialTab = "info" }: SessionDetailProps) {
+export function SessionDetail({
+  session,
+  onClose,
+  onFullscreenChange,
+  onTabChange,
+  initialTab = "info",
+  onNext,
+  onPrevious,
+  showNavigation = false,
+}: SessionDetailProps) {
   const [activeTab, setActiveTab] = useState<SessionDetailTab>(initialTab);
   const [isFullscreen, setIsFullscreen] = useState(initialTab === "terminal" || initialTab === "diff" || initialTab === "vcs");
   const [showWorkspaceSwitchModal, setShowWorkspaceSwitchModal] = useState(false);
@@ -78,17 +90,28 @@ export function SessionDetail({ session, onClose, onFullscreenChange, onTabChang
     }
   };
 
-  // Keyboard shortcut: Escape to exit fullscreen
+  // Keyboard shortcuts: Escape to exit fullscreen, Shift+Arrow for navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isFullscreen) {
         setIsFullscreen(false);
       }
+
+      // Review queue navigation shortcuts (Shift+Arrow)
+      if (showNavigation && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        if (e.key === "ArrowRight" && onNext) {
+          e.preventDefault();
+          onNext();
+        } else if (e.key === "ArrowLeft" && onPrevious) {
+          e.preventDefault();
+          onPrevious();
+        }
+      }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isFullscreen]);
+  }, [isFullscreen, showNavigation, onNext, onPrevious]);
 
   // Handler for saving program change
   const handleSaveProgram = async () => {
@@ -128,6 +151,26 @@ export function SessionDetail({ session, onClose, onFullscreenChange, onTabChang
             >
               {isFullscreen ? "⊗" : "⛶"}
             </button>
+          )}
+          {showNavigation && (
+            <>
+              <button
+                className={styles.navButton}
+                onClick={onPrevious}
+                aria-label="Previous session"
+                title="Previous session (Shift+←)"
+              >
+                ←
+              </button>
+              <button
+                className={styles.navButton}
+                onClick={onNext}
+                aria-label="Next session"
+                title="Next session (Shift+→)"
+              >
+                →
+              </button>
+            </>
           )}
           <button
             className={styles.closeButton}

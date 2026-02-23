@@ -655,16 +655,26 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // For managed sessions: backend finds session via ReviewQueuePoller/Storage using sessionId
   const effectiveSessionId = isExternal && tmuxSessionName ? tmuxSessionName : sessionId;
 
+  // Stable callbacks - must not be inline arrow functions or they recreate on every render,
+  // causing connect() to change every render and triggering the auto-reconnect effect in a loop.
+  const getTerminal = useCallback(() => xtermRef.current?.terminal || null, []);
+  const handleStreamError = useCallback((err: Error) => {
+    console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
+    setConnectionAttempts((prev) => prev + 1);
+  }, [isExternal]);
+  const handleEchoAck = useCallback((_echoNum: bigint, latencyMs: number) => {
+    if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
+      console.log('[PredictiveEcho] Echo acknowledged:', { latencyMs });
+    }
+  }, []);
+
   const { isConnected, error, sendInput, sendInputWithEcho, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, getIsApplyingState, sspNegotiated, startRecording, stopRecording } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
-    getTerminal: () => xtermRef.current?.terminal || null,
+    getTerminal,
     scrollbackLines: 1000,
     autoConnect: false,
-    onError: (err) => {
-      console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
-      setConnectionAttempts((prev) => prev + 1);
-    },
+    onError: handleStreamError,
     onScrollbackReceived: handleScrollbackReceived,
     onOutput: handleOutput,
     initialCols: lastResizeRef.current?.cols,
@@ -672,12 +682,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     streamingMode: streamingMode,
     isExternal: isExternal, // Pass external flag to hook (for future optimizations)
     enablePredictiveEcho: true, // Enable Mosh-style predictive echo for better responsiveness
-    onEchoAck: (echoNum, latencyMs) => {
-      // Log echo acknowledgments in debug mode
-      if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-        console.log('[PredictiveEcho] Echo acknowledged:', { echoNum: echoNum.toString(), latencyMs });
-      }
-    },
+    onEchoAck: handleEchoAck,
   });
 
   // Update ref when sendFlowControl is available (allows use in callbacks defined earlier)

@@ -14,6 +14,7 @@ interface ReviewQueuePanelProps {
   onSkipSession?: (sessionId: string) => Promise<void>;
   autoRefresh?: boolean;
   refreshInterval?: number;
+  onItemsChange?: (sessionIds: string[]) => void; // Callback to expose queue items for navigation
 }
 
 /**
@@ -38,6 +39,7 @@ export function ReviewQueuePanel({
   onSkipSession,
   autoRefresh = true,
   refreshInterval = 5000,
+  onItemsChange,
 }: ReviewQueuePanelProps) {
   const [priorityFilter, setPriorityFilter] = useState<Priority | undefined>(
     undefined
@@ -95,6 +97,14 @@ export function ReviewQueuePanel({
       acknowledgeSession(sessionId);
     },
   });
+
+  // Notify parent component when queue items change (for navigation)
+  useEffect(() => {
+    if (onItemsChange) {
+      const sessionIds = items.map((item) => item.sessionId);
+      onItemsChange(sessionIds);
+    }
+  }, [items, onItemsChange]);
 
   // Format duration in seconds (e.g., averageAgeSeconds, oldestAgeSeconds)
   const formatDuration = (durationSeconds: bigint): string => {
