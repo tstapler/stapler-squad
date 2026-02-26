@@ -7,8 +7,10 @@ import (
 	"claude-squad/server/protocol"
 	"claude-squad/session"
 	"claude-squad/session/scrollback"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -24,11 +26,22 @@ import (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		// Allow all origins for development
-		// TODO: Restrict origins in production
-		return true
-	},
+	CheckOrigin:     isLocalhostOrigin,
+}
+
+// isLocalhostOrigin allows WebSocket upgrades only from localhost origins.
+// Requests without an Origin header (e.g., non-browser clients, CLI tools) are allowed.
+func isLocalhostOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true // non-browser client
+	}
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	host := parsed.Hostname()
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 // ConnectRPCWebSocketHandler handles ConnectRPC streaming calls over WebSocket
@@ -450,10 +463,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				if err != nil {
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 						log.InfoLog.Printf("[streamViaControlMode] WebSocket closed for session '%s'", sessionID)
+						errChan <- nil
 					} else {
 						log.ErrorLog.Printf("[streamViaControlMode] WebSocket read error for session '%s': %v", sessionID, err)
+						errChan <- err
 					}
-					errChan <- err
 					return
 				}
 
@@ -534,9 +548,15 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	select {
 	case err := <-errChan:
 		log.InfoLog.Printf("[streamViaControlMode] Streaming ended for session '%s': %v", sessionID, err)
+		if err != nil {
+			sendEndStreamError(stream, err)
+		} else {
+			sendEndStreamSuccess(stream)
+		}
 		return err
 	case <-doneChan:
 		log.InfoLog.Printf("[streamViaControlMode] Streaming completed for session '%s'", sessionID)
+		sendEndStreamSuccess(stream)
 		return nil
 	}
 }
@@ -1039,18 +1059,9 @@ func sendErrorResponse(conn *websocket.Conn, errorMsg string) {
 func sendEndStreamSuccess(stream *connectWebSocketStream) {
 	log.InfoLog.Printf("Sending EndStreamSuccess")
 
-	// Send empty TerminalData message with EndStream flag to signal completion
-	emptyTerminalData := &sessionv1.TerminalData{
-		SessionId: "",
-		Data:      nil,
-	}
-
-	dataBytes, err := proto.Marshal(emptyTerminalData)
-	if err != nil {
-		log.ErrorLog.Printf("Failed to marshal EndStream TerminalData: %v", err)
-		// Fallback to simple JSON
-		dataBytes = []byte(`{"metadata":{}}`)
-	}
+	// ConnectRPC protocol requires JSON-encoded EndStream payload (not protobuf)
+	// Success EndStream is an empty JSON object
+	dataBytes := []byte(`{}`)
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
 	if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
@@ -1060,23 +1071,10 @@ func sendEndStreamSuccess(stream *connectWebSocketStream) {
 
 // sendEndStreamError sends an error EndStream message
 func sendEndStreamError(stream *connectWebSocketStream, err error) {
-	// Send TerminalData with error info and EndStream flag
-	errorTerminalData := &sessionv1.TerminalData{
-		SessionId: "",
-		Data: &sessionv1.TerminalData_Error{
-			Error: &sessionv1.TerminalError{
-				Message: err.Error(),
-				Code:    "internal",
-			},
-		},
-	}
-
-	dataBytes, errMarshal := proto.Marshal(errorTerminalData)
-	if errMarshal != nil {
-		log.ErrorLog.Printf("Failed to marshal EndStream error TerminalData: %v", errMarshal)
-		// Fallback to simple JSON
-		dataBytes = []byte(fmt.Sprintf(`{"error":{"code":"internal","message":"%s"}}`, err.Error()))
-	}
+	// ConnectRPC protocol requires JSON-encoded EndStream payload (not protobuf)
+	// Error EndStream uses the ConnectRPC error JSON format
+	errMsg, _ := json.Marshal(err.Error())
+	dataBytes := fmt.Appendf(nil, `{"error":{"code":"internal","message":%s}}`, errMsg)
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
 	stream.WriteMessage(websocket.BinaryMessage, envelope)

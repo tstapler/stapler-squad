@@ -3,7 +3,6 @@ package adapters
 import (
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
 	"claude-squad/session"
-	"fmt"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -90,10 +89,6 @@ func ReviewQueueToProto(queue *session.ReviewQueue) *sessionv1.ReviewQueue {
 		OldestAgeSeconds:   int64(stats.OldestAge.Seconds()),
 	}
 
-	// DEBUG: Log serialized statistics to diagnose "20412d ago" UI issue
-	fmt.Printf("[ReviewQueueAdapter] Serializing statistics: AverageAge=%s (%d seconds), OldestAge=%s (%d seconds), TotalItems=%d\n",
-		stats.AverageAge, protoQueue.AverageAgeSeconds, stats.OldestAge, protoQueue.OldestAgeSeconds, stats.TotalItems)
-
 	return protoQueue
 }
 
@@ -126,6 +121,14 @@ func attentionReasonToProto(reason session.AttentionReason) sessionv1.AttentionR
 		return sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT
 	case session.ReasonTaskComplete:
 		return sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE
+	case session.ReasonUncommittedChanges:
+		return sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES
+	case session.ReasonIdle:
+		return sessionv1.AttentionReason_ATTENTION_REASON_IDLE
+	case session.ReasonStale:
+		return sessionv1.AttentionReason_ATTENTION_REASON_STALE
+	case session.ReasonWaitingForUser:
+		return sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER
 	default:
 		return sessionv1.AttentionReason_ATTENTION_REASON_UNSPECIFIED
 	}
@@ -160,6 +163,14 @@ func ProtoToAttentionReason(reason sessionv1.AttentionReason) session.AttentionR
 		return session.ReasonIdleTimeout
 	case sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE:
 		return session.ReasonTaskComplete
+	case sessionv1.AttentionReason_ATTENTION_REASON_UNCOMMITTED_CHANGES:
+		return session.ReasonUncommittedChanges
+	case sessionv1.AttentionReason_ATTENTION_REASON_IDLE:
+		return session.ReasonIdle
+	case sessionv1.AttentionReason_ATTENTION_REASON_STALE:
+		return session.ReasonStale
+	case sessionv1.AttentionReason_ATTENTION_REASON_WAITING_FOR_USER:
+		return session.ReasonWaitingForUser
 	default:
 		return session.ReasonInputRequired // Default to input required
 	}
