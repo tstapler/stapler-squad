@@ -108,10 +108,8 @@ type Instance struct {
 	// Protected by stateMutex.
 	ReviewState
 
-	// Status manager for idle detection and queue management
-	statusManager *InstanceStatusManager
-	// Claude controller for automated interaction and status monitoring
-	claudeController *ClaudeController
+	// controllerManager owns the ClaudeController and InstanceStatusManager references.
+	controllerManager ControllerManager
 
 	// Instance type and management metadata
 	// InstanceType indicates whether this is a squad-managed or external instance
@@ -1787,12 +1785,12 @@ func (i *Instance) GetReviewItem() (*ReviewItem, bool) {
 
 // SetStatusManager sets the status manager for idle detection
 func (i *Instance) SetStatusManager(manager *InstanceStatusManager) {
-	i.statusManager = manager
+	i.controllerManager.SetStatusManager(manager)
 }
 
 // GetStatusManager returns the status manager
 func (i *Instance) GetStatusManager() *InstanceStatusManager {
-	return i.statusManager
+	return i.controllerManager.GetStatusManager()
 }
 
 // StartController creates and starts a ClaudeController for this instance.
@@ -1802,7 +1800,7 @@ func (i *Instance) StartController() error {
 	i.stateMutex.Lock()
 
 	// Only start if we have a status manager
-	if i.statusManager == nil {
+	if i.controllerManager.statusManager == nil {
 		i.stateMutex.Unlock()
 		log.DebugLog.Printf("No status manager set for instance %s, skipping controller", i.Title)
 		return nil
@@ -1816,7 +1814,7 @@ func (i *Instance) StartController() error {
 	}
 
 	// Don't recreate if already exists
-	if i.claudeController != nil {
+	if i.controllerManager.controller != nil {
 		i.stateMutex.Unlock()
 		log.DebugLog.Printf("Controller already exists for instance %s", i.Title)
 		return nil
@@ -1843,14 +1841,14 @@ func (i *Instance) StartController() error {
 	defer i.stateMutex.Unlock()
 
 	// Double-check controller hasn't been set by another goroutine (defensive)
-	if i.claudeController != nil {
+	if i.controllerManager.controller != nil {
 		log.DebugLog.Printf("Controller already exists for instance %s (race detected)", i.Title)
 		return nil
 	}
 
 	// Register with status manager and store controller
-	i.statusManager.RegisterController(i.Title, controller)
-	i.claudeController = controller
+	i.controllerManager.statusManager.RegisterController(i.Title, controller)
+	i.controllerManager.controller = controller
 
 	log.InfoLog.Printf("Started ClaudeController for instance %s", i.Title)
 	return nil
@@ -1861,18 +1859,18 @@ func (i *Instance) StopController() {
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
 
-	if i.claudeController == nil {
+	if i.controllerManager.controller == nil {
 		return
 	}
 
 	// Unregister from status manager
-	if i.statusManager != nil {
-		i.statusManager.UnregisterController(i.Title)
+	if i.controllerManager.statusManager != nil {
+		i.controllerManager.statusManager.UnregisterController(i.Title)
 	}
 
 	// Stop the controller
-	i.claudeController.Stop()
-	i.claudeController = nil
+	i.controllerManager.controller.Stop()
+	i.controllerManager.controller = nil
 
 	log.InfoLog.Printf("Stopped ClaudeController for instance %s", i.Title)
 }
@@ -1881,7 +1879,7 @@ func (i *Instance) StopController() {
 func (i *Instance) GetController() *ClaudeController {
 	i.stateMutex.RLock()
 	defer i.stateMutex.RUnlock()
-	return i.claudeController
+	return i.controllerManager.GetController()
 }
 
 // GetPermissions returns the permissions for this instance based on its type
