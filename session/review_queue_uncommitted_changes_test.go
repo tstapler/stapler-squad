@@ -63,15 +63,15 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 	// Create test instance with worktree
 	now := time.Now()
 	instance := &Instance{
-		Title:                "test-uncommitted-changes",
-		Path:                 repoPath,
-		Branch:               branchName,
-		Status:               Running,
-		gitWorktree:          worktree,
-		started:              true,
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		LastMeaningfulOutput: now,
+		Title:       "test-uncommitted-changes",
+		Path:        repoPath,
+		Branch:      branchName,
+		Status:      Running,
+		gitWorktree: worktree,
+		started:     true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ReviewState: ReviewState{LastMeaningfulOutput: now},
 	}
 
 	// Create review queue infrastructure
@@ -220,15 +220,15 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 	// Create test instance WITHOUT worktree (directory session)
 	now := time.Now()
 	instance := &Instance{
-		Title:                "test-no-worktree",
-		Path:                 "/tmp/test-path",
-		Branch:               "",
-		Status:               Running,
-		gitWorktree:          nil, // No worktree
-		started:              true,
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		LastMeaningfulOutput: now,
+		Title:       "test-no-worktree",
+		Path:        "/tmp/test-path",
+		Branch:      "",
+		Status:      Running,
+		gitWorktree: nil, // No worktree
+		started:     true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ReviewState: ReviewState{LastMeaningfulOutput: now},
 	}
 
 	// Create review queue infrastructure
@@ -298,15 +298,15 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	// Create instance
 	now := time.Now()
 	instance := &Instance{
-		Title:                "integration-test",
-		Path:                 repoPath,
-		Branch:               branchName,
-		Status:               Running,
-		gitWorktree:          worktree,
-		started:              true,
-		CreatedAt:            now,
-		UpdatedAt:            now,
-		LastMeaningfulOutput: now,
+		Title:       "integration-test",
+		Path:        repoPath,
+		Branch:      branchName,
+		Status:      Running,
+		gitWorktree: worktree,
+		started:     true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+		ReviewState: ReviewState{LastMeaningfulOutput: now},
 	}
 
 	// Create review queue with poller

@@ -106,41 +106,10 @@ type Instance struct {
 	// Review queue integration for tracking sessions needing attention
 	reviewQueue *ReviewQueue
 
-	// LastAcknowledged tracks when the user last acknowledged this session in the review queue
-	// Sessions acknowledged after their last update won't appear in the queue until they update again
-	LastAcknowledged time.Time
-
-	// LastAddedToQueue tracks when this session was last added to the review queue
-	// Used to prevent notification spam by enforcing a minimum re-add interval
-	LastAddedToQueue time.Time
-
-	// Terminal update timestamps for tracking activity
-	// LastTerminalUpdate is the timestamp of the last output received from the terminal (any output)
-	LastTerminalUpdate time.Time
-	// LastMeaningfulOutput is the timestamp of the last meaningful output (excludes tmux status banners)
-	// This is used by the review queue to determine session staleness
-	LastMeaningfulOutput time.Time
-	// LastOutputSignature is a SHA256 hash of the terminal content, used to detect actual changes
-	// vs app restarts with unchanged content (prevents false "new activity" notifications)
-	LastOutputSignature string
-	// LastViewed tracks when the user last interacted with this session
-	// This includes viewing the terminal, attaching via tmux, or viewing session details
-	// Used for smarter review queue notifications (don't notify if just viewed)
-	LastViewed time.Time
-
-	// Prompt detection and interaction tracking for smart review queue behavior
-	// LastPromptDetected is the timestamp when we last detected a prompt requiring user input
-	// Used to distinguish new prompts from the same prompt re-appearing
-	LastPromptDetected time.Time
-	// LastPromptSignature is a hash of the prompt content (last 10 lines before cursor)
-	// Used to determine if this is the same prompt or a new one
-	LastPromptSignature string
-	// LastUserResponse is the timestamp when the user last provided input/interaction
-	// Used to determine if user responded AFTER a prompt was detected
-	LastUserResponse time.Time
-	// ProcessingGraceUntil is the deadline for waiting for session to respond after user interaction
-	// If session shows no activity by this time, we assume it's stuck and may re-add to queue
-	ProcessingGraceUntil time.Time
+	// ReviewState holds all review queue and terminal activity timestamps.
+	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
+	// Protected by stateMutex.
+	ReviewState
 
 	// Status manager for idle detection and queue management
 	statusManager *InstanceStatusManager
@@ -300,19 +269,20 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		IsExpanded:           data.IsExpanded,
 		Tags:                 tags, // Use migrated tags (includes category if needed)
 		SessionType:          data.SessionType,
-		TmuxPrefix:           data.TmuxPrefix,
-		LastTerminalUpdate:   data.LastTerminalUpdate,
-		LastMeaningfulOutput: data.LastMeaningfulOutput,
-		LastOutputSignature:  data.LastOutputSignature,
-		LastAddedToQueue:     data.LastAddedToQueue,
-		LastViewed:           data.LastViewed,
-		LastAcknowledged:     data.LastAcknowledged,
-		// Prompt detection and interaction tracking
-		LastPromptDetected:   data.LastPromptDetected,
-		LastPromptSignature:  data.LastPromptSignature,
-		LastUserResponse:     data.LastUserResponse,
-		ProcessingGraceUntil: data.ProcessingGraceUntil,
-		InstanceType:         InstanceTypeManaged,     // Restored instances are always managed
+		TmuxPrefix: data.TmuxPrefix,
+		ReviewState: ReviewState{
+			LastTerminalUpdate:   data.LastTerminalUpdate,
+			LastMeaningfulOutput: data.LastMeaningfulOutput,
+			LastOutputSignature:  data.LastOutputSignature,
+			LastAddedToQueue:     data.LastAddedToQueue,
+			LastViewed:           data.LastViewed,
+			LastAcknowledged:     data.LastAcknowledged,
+			LastPromptDetected:   data.LastPromptDetected,
+			LastPromptSignature:  data.LastPromptSignature,
+			LastUserResponse:     data.LastUserResponse,
+			ProcessingGraceUntil: data.ProcessingGraceUntil,
+		},
+		InstanceType: InstanceTypeManaged,     // Restored instances are always managed
 		IsManaged:            true,
 		ExternalMetadata:     nil,                    // External instances are not persisted
 		Permissions:          GetManagedPermissions(), // Full permissions for managed instances
@@ -415,6 +385,9 @@ type InstanceOptions struct {
 	// WorkingDir is the directory within the repository to start in.
 	// If empty, defaults to repository root.
 	WorkingDir string
+	// Branch is the git branch name to use when creating a new worktree.
+	// If empty and SessionType is SessionTypeNewWorktree, a branch name is derived from the title.
+	Branch string
 	// Program is the program to run in the instance (e.g. "claude", "aider --model ollama_chat/gemma3:1b")
 	Program string
 	// If AutoYes is true, automatically accept prompts
@@ -484,6 +457,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		Title:                opts.Title,
 		Status:               Ready,
 		Path:                 absPath,
+		Branch:               opts.Branch,
 		Program:              opts.Program,
 		Height:               0,
 		Width:                0,
@@ -501,9 +475,11 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		InstanceType:         InstanceTypeManaged,
 		IsManaged:            true,
 		ExternalMetadata:     nil,                    // Only set for external instances
-		Permissions:          GetManagedPermissions(), // Full permissions for managed instances
-		LastTerminalUpdate:   t,                      // Initialize to creation time
-		LastMeaningfulOutput: t,                      // Initialize to creation time
+		Permissions: GetManagedPermissions(), // Full permissions for managed instances
+		ReviewState: ReviewState{
+			LastTerminalUpdate:   t, // Initialize to creation time
+			LastMeaningfulOutput: t, // Initialize to creation time
+		},
 		// GitHub integration fields
 		GitHubPRNumber:  opts.GitHubPRNumber,
 		GitHubPRURL:     opts.GitHubPRURL,
@@ -2103,28 +2079,20 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 	}
 }
 
-// GetTimeSinceLastMeaningfulOutput returns the duration since the last meaningful terminal output
+// GetTimeSinceLastMeaningfulOutput returns the duration since the last meaningful terminal output.
+// Falls back to time since creation if no meaningful output has been recorded.
 func (i *Instance) GetTimeSinceLastMeaningfulOutput() time.Duration {
 	i.stateMutex.RLock()
 	defer i.stateMutex.RUnlock()
-
-	if i.LastMeaningfulOutput.IsZero() {
-		// If never updated, return time since creation
-		return time.Since(i.CreatedAt)
-	}
-	return time.Since(i.LastMeaningfulOutput)
+	return i.ReviewState.TimeSinceLastMeaningfulOutput(i.CreatedAt)
 }
 
-// GetTimeSinceLastTerminalUpdate returns the duration since any terminal activity
+// GetTimeSinceLastTerminalUpdate returns the duration since any terminal activity.
+// Falls back to time since creation if no terminal output has been recorded.
 func (i *Instance) GetTimeSinceLastTerminalUpdate() time.Duration {
 	i.stateMutex.RLock()
 	defer i.stateMutex.RUnlock()
-
-	if i.LastTerminalUpdate.IsZero() {
-		// If never updated, return time since creation
-		return time.Since(i.CreatedAt)
-	}
-	return time.Since(i.LastTerminalUpdate)
+	return i.ReviewState.TimeSinceLastTerminalUpdate(i.CreatedAt)
 }
 
 // computeContentSignature computes a MurmurHash3 64-bit hash of terminal content.

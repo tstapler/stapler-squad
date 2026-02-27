@@ -229,13 +229,15 @@ func TestInstanceToSessionConversion(t *testing.T) {
 		GitHubOwner:          "test",
 		GitHubRepo:           "repo",
 		GitHubSourceRef:      "refs/pull/42/head",
-		IsWorktree:           true,
-		MainRepoPath:         "/home/user/main",
-		LastTerminalUpdate:   now,
-		LastMeaningfulOutput: now.Add(-5 * time.Minute),
-		LastViewed:           now.Add(-10 * time.Minute),
-		LastAcknowledged:     now.Add(-15 * time.Minute),
-		LastOutputSignature:  "sig123",
+		IsWorktree:   true,
+		MainRepoPath: "/home/user/main",
+		ReviewState: ReviewState{
+			LastTerminalUpdate:   now,
+			LastMeaningfulOutput: now.Add(-5 * time.Minute),
+			LastViewed:           now.Add(-10 * time.Minute),
+			LastAcknowledged:     now.Add(-15 * time.Minute),
+			LastOutputSignature:  "sig123",
+		},
 	}
 
 	session := InstanceToSession(instance)
@@ -432,11 +434,13 @@ func TestRoundTripConversion(t *testing.T) {
 		GitHubPRURL:          "https://github.com/a/b/pull/7",
 		GitHubOwner:          "a",
 		GitHubRepo:           "b",
-		IsWorktree:           true,
-		MainRepoPath:         "/main/repo",
-		LastTerminalUpdate:   now,
-		LastMeaningfulOutput: now,
-		LastOutputSignature:  "roundtrip",
+		IsWorktree:   true,
+		MainRepoPath: "/main/repo",
+		ReviewState: ReviewState{
+			LastTerminalUpdate:   now,
+			LastMeaningfulOutput: now,
+			LastOutputSignature:  "roundtrip",
+		},
 	}
 
 	// Convert to Session and back

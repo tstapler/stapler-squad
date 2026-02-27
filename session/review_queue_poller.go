@@ -274,9 +274,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	isNewPrompt := inst.detectAndTrackPrompt(content, statusInfo)
 
 	// STEP 3: Check if user responded to current prompt
-	userRespondedToPrompt := !inst.LastUserResponse.IsZero() &&
-		!inst.LastPromptDetected.IsZero() &&
-		inst.LastUserResponse.After(inst.LastPromptDetected)
+	userRespondedToPrompt := inst.ReviewState.UserRespondedAfterPrompt()
 
 	// STEP 4: Check if session is actively processing after user response
 	isProcessing := false
@@ -285,8 +283,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	}
 
 	// STEP 5: Check grace period for temporary removal
-	inGracePeriod := !inst.ProcessingGraceUntil.IsZero() &&
-		time.Now().Before(inst.ProcessingGraceUntil)
+	inGracePeriod := inst.ReviewState.IsInProcessingGracePeriod()
 
 	log.InfoLog.Printf("[ReviewQueue] Session '%s': isNewPrompt=%v, userResponded=%v, isProcessing=%v, gracePeriod=%v",
 		inst.Title, isNewPrompt, userRespondedToPrompt, isProcessing, inGracePeriod)
@@ -309,8 +306,15 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 
 	// If user responded but NOT processing yet -> grace period
 	if userRespondedToPrompt && !isProcessing {
-		if !inGracePeriod {
-			// Start grace period (10 seconds)
+		if inGracePeriod {
+			// Already in grace period - keep off queue
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': In grace period, keeping off queue", inst.Title)
+			rqp.queue.Remove(inst.Title)
+			return
+		}
+
+		if inst.ProcessingGraceUntil.IsZero() {
+			// Fresh response - start grace period and remove from queue
 			inst.ProcessingGraceUntil = time.Now().Add(10 * time.Second)
 			log.InfoLog.Printf("[ReviewQueue] Session '%s': User responded, starting grace period until %v",
 				inst.Title, inst.ProcessingGraceUntil)
@@ -321,11 +325,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 					log.ErrorLog.Printf("Failed to persist ProcessingGraceUntil: %v", err)
 				}
 			}
-		}
-
-		// Remove from queue during grace period
-		if inGracePeriod {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': In grace period, keeping off queue", inst.Title)
 			rqp.queue.Remove(inst.Title)
 			return
 		}
@@ -611,7 +610,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 
 	// Check if user has acknowledged this session after it became stale
 	// If acknowledged after last output, don't re-flag as stale
-	alreadyAcknowledged := !inst.LastAcknowledged.IsZero() && inst.LastAcknowledged.After(inst.LastMeaningfulOutput)
+	alreadyAcknowledged := inst.ReviewState.IsAcknowledgedAfterOutput()
 
 	if timeSinceOutput > rqp.config.StalenessThreshold {
 		if alreadyAcknowledged {
@@ -621,8 +620,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			log.InfoLog.Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - time since output (%s) > threshold (%s)",
 				inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold))
 
-			// Only override if we don't already have a higher-priority reason
-			if !shouldAdd || priority < PriorityMedium {
+			// Only override if we don't already have a higher-priority reason.
+			// Only set stale if not already flagged with Medium priority or higher.
+			if !shouldAdd || priority.IsLowerThan(PriorityMedium) {
 				// Use semantic ReasonStale instead of deprecated ReasonIdleTimeout
 				reason = ReasonStale
 				priority = PriorityLow // Lower priority than approval/error, but should be reviewed
@@ -642,11 +642,11 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold))
 	}
 
-	// Check if user dismissed this session
-	// Sessions are dismissed (snoozed) when LastAcknowledged is newer than LastMeaningfulOutput
+	// Check if user dismissed this session.
+	// Sessions are snoozed when LastAcknowledged is newer than LastMeaningfulOutput.
 	// This ensures sessions stay snoozed until NEW terminal output appears
-	// (not just any save operation which updates UpdatedAt)
-	if !inst.LastAcknowledged.IsZero() && inst.LastAcknowledged.After(inst.LastMeaningfulOutput) {
+	// (not just any save operation which updates UpdatedAt).
+	if inst.ReviewState.IsAcknowledgedAfterOutput() {
 		log.DebugLog.Printf("[ReviewQueue] Session '%s': User acknowledged (snoozed until new output), removing from queue", inst.Title)
 		rqp.queue.Remove(inst.Title)
 		return
@@ -668,18 +668,32 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	// Prevent re-adding same prompt user already responded to
 	// Only add if this is a NEW prompt OR user hasn't responded yet
 	if shouldAdd && userRespondedToPrompt && !isNewPrompt {
-		log.InfoLog.Printf("[ReviewQueue] Session '%s': User already responded to this prompt - skipping add", inst.Title)
+		log.InfoLog.Printf("[ReviewQueue] Session '%s': User already responded to this prompt - removing from queue", inst.Title)
+		rqp.queue.Remove(inst.Title)
 		return
 	}
 
 	// Spam prevention: Enforce minimum re-add interval to prevent notification spam
 	// This prevents the same session from being added to the queue repeatedly every few seconds
+	// EXCEPTION: Always allow priority escalation (e.g., ReasonStale → ReasonErrorState) even within the interval
 	if shouldAdd {
 		minReAddInterval := 2 * time.Minute
 		if !inst.LastAddedToQueue.IsZero() && time.Since(inst.LastAddedToQueue) < minReAddInterval {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Skipping queue add (too soon - last added %v ago, minimum %v)",
-				inst.Title, time.Since(inst.LastAddedToQueue), minReAddInterval)
-			return
+			// Check if this is a priority escalation of an existing queue item
+			isEscalation := false
+			if existingItem, exists := rqp.queue.Get(inst.Title); exists {
+				// Lower priority number = higher priority (Urgent=1 > High=2 > Medium=3 > Low=4)
+				isEscalation = priority < existingItem.Priority
+				if isEscalation {
+					log.InfoLog.Printf("[ReviewQueue] Session '%s': Priority escalation (%s → %s) - bypassing rate limit",
+						inst.Title, existingItem.Priority.String(), priority.String())
+				}
+			}
+			if !isEscalation {
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Skipping queue add (too soon - last added %v ago, minimum %v)",
+					inst.Title, time.Since(inst.LastAddedToQueue), minReAddInterval)
+				return
+			}
 		}
 	}
 

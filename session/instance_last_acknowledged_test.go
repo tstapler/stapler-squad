@@ -14,16 +14,18 @@ func TestLastAcknowledgedPersistence(t *testing.T) {
 	lastAck := now.Add(-1 * time.Hour) // 1 hour ago
 
 	instance := &Instance{
-		Title:            "Test Instance",
-		Path:             "/path/to/repo",
-		Branch:           "test-branch",
-		Status:           Ready,
-		Height:           100,
-		Width:            200,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		Program:          "claude",
-		LastAcknowledged: lastAck,
+		Title:     "Test Instance",
+		Path:      "/path/to/repo",
+		Branch:    "test-branch",
+		Status:    Ready,
+		Height:    100,
+		Width:     200,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Program:   "claude",
+		ReviewState: ReviewState{
+			LastAcknowledged: lastAck,
+		},
 	}
 
 	// Convert to InstanceData (serialization)
@@ -64,16 +66,18 @@ func TestLastAcknowledgedZeroValue(t *testing.T) {
 	now := time.Now()
 
 	instance := &Instance{
-		Title:            "Test Instance",
-		Path:             "/path/to/repo",
-		Branch:           "test-branch",
-		Status:           Ready,
-		Height:           100,
-		Width:            200,
-		CreatedAt:        now,
-		UpdatedAt:        now,
-		Program:          "claude",
-		LastAcknowledged: time.Time{}, // Explicitly set to zero value
+		Title:     "Test Instance",
+		Path:      "/path/to/repo",
+		Branch:    "test-branch",
+		Status:    Ready,
+		Height:    100,
+		Width:     200,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Program:   "claude",
+		ReviewState: ReviewState{
+			LastAcknowledged: time.Time{}, // Explicitly set to zero value
+		},
 	}
 
 	// Convert to InstanceData and back
@@ -139,12 +143,14 @@ func TestLastAcknowledgedComparison(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			instance := &Instance{
-				Title:                "Test Instance",
-				Path:                 "/path/to/repo",
-				Branch:               "test-branch",
-				Status:               Ready,
-				LastAcknowledged:     tc.lastAcknowledged,
-				LastMeaningfulOutput: tc.lastMeaningfulOutput,
+				Title:  "Test Instance",
+				Path:   "/path/to/repo",
+				Branch: "test-branch",
+				Status: Ready,
+				ReviewState: ReviewState{
+					LastAcknowledged:     tc.lastAcknowledged,
+					LastMeaningfulOutput: tc.lastMeaningfulOutput,
+				},
 			}
 
 			// Review queue logic: session appears if LastAcknowledged is before LastMeaningfulOutput
