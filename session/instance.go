@@ -376,6 +376,16 @@ const (
 	SessionTypeExistingWorktree SessionType = "existing_worktree"
 )
 
+// IsValid reports whether st is a recognized session type.
+func (st SessionType) IsValid() bool {
+	switch st {
+	case SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree:
+		return true
+	default:
+		return false
+	}
+}
+
 // Options for creating a new instance
 type InstanceOptions struct {
 	// Title is the title of the instance.
@@ -451,6 +461,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	sessionType := opts.SessionType
 	if sessionType == "" {
 		sessionType = SessionTypeDirectory
+	}
+	if !sessionType.IsValid() {
+		return nil, fmt.Errorf("invalid session type %q: must be one of %q, %q, %q",
+			sessionType, SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree)
 	}
 
 	instance := &Instance{
