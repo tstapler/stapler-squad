@@ -88,7 +88,7 @@ export const sessionSchema = z.object({
 export type SessionFormData = z.infer<typeof sessionSchema>;
 
 export const defaultValues: Partial<SessionFormData> = {
-  program: "claude",
+  program: "env -u CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL=http://localhost:47000 claude",
   autoYes: false,
   title: "",
   path: "",

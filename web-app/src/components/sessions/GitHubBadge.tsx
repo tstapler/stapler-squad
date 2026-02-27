@@ -42,16 +42,21 @@ export function GitHubBadge({
 
   // PR Badge
   if (hasPR) {
+    // Construct URL from owner/repo when prUrl is missing (older sessions may not have it stored)
+    const resolvedPrUrl = prUrl || (owner && repo
+      ? `https://github.com/${owner}/${repo}/pull/${prNumber}`
+      : undefined);
+
     const handleClick = (e: React.MouseEvent) => {
       e.stopPropagation();
-      if (prUrl) {
-        window.open(prUrl, "_blank", "noopener,noreferrer");
+      if (resolvedPrUrl) {
+        window.open(resolvedPrUrl, "_blank", "noopener,noreferrer");
       }
     };
 
     return (
       <a
-        href={prUrl}
+        href={resolvedPrUrl}
         target="_blank"
         rel="noopener noreferrer"
         className={`${styles.badge} ${styles.prBadge} ${compact ? styles.compact : ""}`}

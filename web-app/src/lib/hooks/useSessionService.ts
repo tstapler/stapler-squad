@@ -140,8 +140,9 @@ export function useSessionService(
 
         return response.session ?? null;
       } catch (err) {
-        setError(err instanceof Error ? err : new Error("Failed to create session"));
-        return null;
+        const wrappedErr = err instanceof Error ? err : new Error("Failed to create session");
+        setError(wrappedErr);
+        throw wrappedErr;
       }
     },
     []

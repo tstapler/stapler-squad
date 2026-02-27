@@ -5,7 +5,7 @@ import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
 import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
-import { Priority, AttentionReason } from "@/gen/session/v1/types_pb";
+import { Priority, AttentionReason, ReviewItem } from "@/gen/session/v1/types_pb";
 import { NotificationSound } from "@/lib/utils/notifications";
 import styles from "./ReviewQueuePanel.module.css";
 
@@ -14,7 +14,7 @@ interface ReviewQueuePanelProps {
   onSkipSession?: (sessionId: string) => Promise<void>;
   autoRefresh?: boolean;
   refreshInterval?: number;
-  onItemsChange?: (sessionIds: string[]) => void; // Callback to expose queue items for navigation
+  onItemsChange?: (items: ReviewItem[]) => void; // Callback to expose queue items for navigation
 }
 
 /**
@@ -101,8 +101,7 @@ export function ReviewQueuePanel({
   // Notify parent component when queue items change (for navigation)
   useEffect(() => {
     if (onItemsChange) {
-      const sessionIds = items.map((item) => item.sessionId);
-      onItemsChange(sessionIds);
+      onItemsChange(items);
     }
   }, [items, onItemsChange]);
 
@@ -154,9 +153,12 @@ export function ReviewQueuePanel({
       case AttentionReason.ERROR_STATE:
         return "Error";
       case AttentionReason.IDLE_TIMEOUT:
+      case AttentionReason.IDLE:
         return "Idle";
       case AttentionReason.TASK_COMPLETE:
         return "Complete";
+      case AttentionReason.STALE:
+        return "Stale";
       default:
         return "All";
     }
@@ -264,6 +266,8 @@ export function ReviewQueuePanel({
               AttentionReason.INPUT_REQUIRED,
               AttentionReason.ERROR_STATE,
               AttentionReason.IDLE_TIMEOUT,
+              AttentionReason.IDLE,
+              AttentionReason.STALE,
               AttentionReason.TASK_COMPLETE,
             ].map((reason) => {
               const count = byReason.get(reason) ?? 0;

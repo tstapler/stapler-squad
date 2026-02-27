@@ -58,6 +58,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // Handle session creation
   const handleCreateSession = useCallback(
     async (data: OmnibarSessionData) => {
+      // createSession throws on error, so no null check needed
       const session = await createSession({
         title: data.title,
         path: data.path,
@@ -74,8 +75,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         // Navigate to the sessions list (home)
         router.push("/");
         router.refresh();
-      } else {
-        throw new Error("Failed to create session");
       }
     },
     [createSession, router]

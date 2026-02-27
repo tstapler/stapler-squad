@@ -2,12 +2,27 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Session } from "@/gen/session/v1/types_pb";
+import { Session, ReviewItem } from "@/gen/session/v1/types_pb";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { getApiBaseUrl } from "@/lib/config";
 import styles from "./page.module.css";
+
+// Construct a minimal Session from ReviewItem data for immediate modal opening
+// before useSessionService has finished loading.
+function sessionFromReviewItem(item: ReviewItem): Session {
+  return new Session({
+    id: item.sessionId,
+    title: item.sessionName,
+    path: item.path,
+    workingDir: item.workingDir,
+    branch: item.branch,
+    status: item.status,
+    program: item.program,
+    tags: item.tags,
+  });
+}
 
 function ReviewQueueContent() {
   const searchParams = useSearchParams();
@@ -17,34 +32,40 @@ function ReviewQueueContent() {
   const [isSessionFullscreen, setIsSessionFullscreen] = useState(false);
 
   // Use WebSocket streaming for real-time session updates
-  const { sessions, loading } = useSessionService({
+  const { sessions } = useSessionService({
     baseUrl: getApiBaseUrl(),
     autoWatch: true, // Enable WebSocket streaming for session list
   });
 
-  // Get review queue items (sessions that need attention, sorted by priority)
+  // Review queue items for navigation (next/previous)
   const [reviewQueueItems, setReviewQueueItems] = useState<Session[]>([]);
+  // Full ReviewItem data for fallback session construction before sessions load
+  const [queueItems, setQueueItems] = useState<ReviewItem[]>([]);
 
-  // Handle deep linking from notifications - auto-open session from URL
+  // Handle deep linking from notifications - auto-open session from URL.
+  // Uses queueItems as fallback so the modal opens even before useSessionService loads.
   useEffect(() => {
     const sessionId = searchParams.get("session");
-    if (sessionId && sessions.length > 0) {
-      const session = sessions.find((s) => s.id === sessionId);
-      if (session) {
-        setSelectedSession(session);
-        setSelectedTab("terminal"); // Always open to terminal for review queue
-      }
-    }
-  }, [searchParams, sessions]);
-
-  const handleSessionClick = (sessionId: string) => {
-    // Try to open immediately if sessions are already loaded
-    const session = sessions.find((s) => s.id === sessionId);
+    if (!sessionId) return;
+    const fromSessions = sessions.find((s) => s.id === sessionId);
+    const fromQueue = queueItems.find((i) => i.sessionId === sessionId);
+    const session = fromSessions ?? (fromQueue ? sessionFromReviewItem(fromQueue) : undefined);
     if (session) {
       setSelectedSession(session);
-      setSelectedTab("terminal"); // Always open to terminal tab for review queue
+      setSelectedTab("terminal");
     }
-    // Always update URL - the useEffect will open the modal when sessions finish loading
+  }, [searchParams, sessions, queueItems]);
+
+  const handleSessionClick = (sessionId: string) => {
+    // Try full session data first; fall back to queue item data so the modal
+    // always opens immediately regardless of whether useSessionService has loaded.
+    const fromSessions = sessions.find((s) => s.id === sessionId);
+    const fromQueue = queueItems.find((i) => i.sessionId === sessionId);
+    const session = fromSessions ?? (fromQueue ? sessionFromReviewItem(fromQueue) : undefined);
+    if (session) {
+      setSelectedSession(session);
+      setSelectedTab("terminal");
+    }
     router.push(`/review-queue?session=${sessionId}`);
   };
 
@@ -84,11 +105,13 @@ function ReviewQueueContent() {
       <main className={styles.main}>
         <ReviewQueuePanel
           onSessionClick={handleSessionClick}
-          onItemsChange={(sessionIds) => {
-            // Update the review queue items for navigation
-            const queueSessions = sessionIds
-              .map((id) => sessions.find((s) => s.id === id))
-              .filter((s): s is Session => s !== undefined);
+          onItemsChange={(items) => {
+            setQueueItems(items);
+            // Build navigation list using full session data when available,
+            // falling back to queue item data so navigation works before sessions load.
+            const queueSessions = items.map(
+              (item) => sessions.find((s) => s.id === item.sessionId) ?? sessionFromReviewItem(item)
+            );
             setReviewQueueItems(queueSessions);
           }}
         />
@@ -102,6 +125,7 @@ function ReviewQueueContent() {
             onClick={(e) => e.stopPropagation()}
           >
             <SessionDetail
+              key={selectedSession.id}
               session={selectedSession}
               onClose={handleCloseSessionDetail}
               onFullscreenChange={setIsSessionFullscreen}

@@ -73,9 +73,16 @@ export function ReviewQueueBadge({
       case AttentionReason.ERROR_STATE:
         return "Error";
       case AttentionReason.IDLE_TIMEOUT:
+      case AttentionReason.IDLE:
         return "Idle";
       case AttentionReason.TASK_COMPLETE:
         return "Complete";
+      case AttentionReason.UNCOMMITTED_CHANGES:
+        return "Uncommitted Changes";
+      case AttentionReason.STALE:
+        return "Stale";
+      case AttentionReason.WAITING_FOR_USER:
+        return "Waiting";
       default:
         return "Unknown";
     }
@@ -90,9 +97,16 @@ export function ReviewQueueBadge({
       case AttentionReason.ERROR_STATE:
         return styles.reasonError;
       case AttentionReason.IDLE_TIMEOUT:
+      case AttentionReason.IDLE:
         return styles.reasonIdle;
       case AttentionReason.TASK_COMPLETE:
         return styles.reasonComplete;
+      case AttentionReason.UNCOMMITTED_CHANGES:
+        return styles.reasonUnspecified;
+      case AttentionReason.STALE:
+        return styles.reasonUnspecified;
+      case AttentionReason.WAITING_FOR_USER:
+        return styles.reasonInput;
       default:
         return styles.reasonUnspecified;
     }
