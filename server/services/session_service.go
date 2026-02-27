@@ -116,18 +116,39 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 	return instances, nil
 }
 
-// NewSessionServiceFromConfig creates a SessionService using the default config and SQLite state.
+// NewSessionServiceFromConfig creates a SessionService using the default config.
+//
+// When CLAUDE_SQUAD_USE_ENT=true, uses EntRepository directly (bypasses JSON round-trip).
+// Default behavior uses SQLiteState (SQLite-backed JSON blob store) for backward compatibility.
 func NewSessionServiceFromConfig() (*SessionService, error) {
-	// Use SQLite-backed state for better performance and reliability
-	sqliteState, err := session.LoadSQLiteState()
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize SQLite state: %w", err)
+	var (
+		storage *session.Storage
+		err     error
+	)
+
+	if os.Getenv("CLAUDE_SQUAD_USE_ENT") == "true" {
+		log.InfoLog.Printf("CLAUDE_SQUAD_USE_ENT=true: using EntRepository as storage backend")
+		repo, repoErr := session.NewEntRepository()
+		if repoErr != nil {
+			return nil, fmt.Errorf("failed to initialize EntRepository: %w", repoErr)
+		}
+		storage, err = session.NewStorageWithRepository(repo)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize storage with EntRepository: %w", err)
+		}
+	} else {
+		var sqliteState *session.SQLiteState
+		sqliteState, err = session.LoadSQLiteState()
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize SQLite state: %w", err)
+		}
+		storage, err = session.NewStorage(sqliteState)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize storage: %w", err)
+		}
 	}
-	storage, err := session.NewStorage(sqliteState)
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize storage: %w", err)
-	}
-	eventBus := events.NewEventBus(100) // Buffer 100 events per subscriber
+
+	eventBus := events.NewEventBus(100)
 	return NewSessionService(storage, eventBus), nil
 }
 
@@ -307,6 +328,7 @@ func (s *SessionService) CreateSession(
 		Title:            req.Msg.Title,
 		Path:             resolvedPath,
 		WorkingDir:       req.Msg.WorkingDir,
+		Branch:           branch,
 		Program:          program,
 		AutoYes:          req.Msg.AutoYes,
 		Prompt:           req.Msg.Prompt,

@@ -3,6 +3,7 @@ package session
 import (
 	"claude-squad/config"
 	"claude-squad/log"
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -118,13 +119,19 @@ type ClaudeSettings struct {
 }
 
 // Storage handles saving and loading instances using the state interface
-// It manages async saves through a StateService to prevent UI blocking
+// It manages async saves through a StateService to prevent UI blocking.
+//
+// Two backends are supported:
+//   - JSON-based (default): wraps config.InstanceStorage, which is implemented by SQLiteState
+//   - Repository-based (CLAUDE_SQUAD_USE_ENT=true): uses Repository (EntRepository) directly,
+//     bypassing the JSON round-trip for significantly better performance.
 type Storage struct {
-	state        config.InstanceStorage
-	stateService *config.StateService
+	state        config.InstanceStorage // JSON-based state (nil when repo is set)
+	stateService *config.StateService   // Async JSON save (nil when repo is set)
+	repo         Repository             // Optional direct repository (set when CLAUDE_SQUAD_USE_ENT=true)
 }
 
-// NewStorage creates a new storage instance with async save capabilities.
+// NewStorage creates a new storage instance backed by config.InstanceStorage (JSON path).
 // Note: You must call Start() after wiring dependencies (statusManager, reviewQueue)
 // to load and start instances. This prevents initialization timing issues where
 // instances try to start controllers before statusManager is available.
@@ -134,13 +141,25 @@ func NewStorage(state config.InstanceStorage) (*Storage, error) {
 	var stateService *config.StateService
 	if concreteState, ok := state.(*config.State); ok {
 		stateService = config.NewStateService(concreteState)
-		// REMOVED: stateService.Start() - now called explicitly in server.go after wiring
 	}
 
 	return &Storage{
 		state:        state,
 		stateService: stateService,
 	}, nil
+}
+
+// NewStorageWithRepository creates a Storage backed directly by a Repository.
+// This bypasses the JSON round-trip of the default config.InstanceStorage path.
+// Use when CLAUDE_SQUAD_USE_ENT=true is set.
+func NewStorageWithRepository(repo Repository) (*Storage, error) {
+	return &Storage{repo: repo}, nil
+}
+
+// UseRepositoryBackend returns true if this Storage uses a Repository instead of
+// the config.InstanceStorage (JSON) path.
+func (s *Storage) UseRepositoryBackend() bool {
+	return s.repo != nil
 }
 
 // Start initializes the storage by starting the StateService, which loads
@@ -154,8 +173,11 @@ func (s *Storage) Start() error {
 }
 
 // SaveInstances saves the list of instances to disk
-// with built-in merging of any existing instances from other windows
+// with built-in merging of any existing instances from other windows.
 func (s *Storage) SaveInstances(instances []*Instance) error {
+	if s.repo != nil {
+		return s.saveInstancesToRepo(instances)
+	}
 	// First load existing instances from disk
 	existingInstances, err := s.LoadInstances()
 	if err != nil {
@@ -224,9 +246,32 @@ func (s *Storage) SaveInstances(instances []*Instance) error {
 	return s.state.SaveInstances(jsonData)
 }
 
+// saveInstancesToRepo upserts each started instance into the repository.
+// Unlike the JSON path, no merging is required — the DB handles concurrent writers.
+func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
+	ctx := context.Background()
+	for _, inst := range instances {
+		if !inst.Started() {
+			continue
+		}
+		data := inst.ToInstanceData()
+		if err := s.repo.Update(ctx, data); err != nil {
+			// Not found → create it
+			if createErr := s.repo.Create(ctx, data); createErr != nil {
+				log.ErrorLog.Printf("[SaveInstances] Failed to upsert instance '%s': update=%v, create=%v",
+					data.Title, err, createErr)
+			}
+		}
+	}
+	return nil
+}
+
 // SaveInstancesSync saves instances synchronously (blocks until complete)
 // Use this for critical operations like shutdown or CLI commands
 func (s *Storage) SaveInstancesSync(instances []*Instance) error {
+	if s.repo != nil {
+		return s.saveInstancesToRepo(instances)
+	}
 	// Perform the same merging logic as SaveInstances
 	existingInstances, err := s.LoadInstances()
 	if err != nil {
@@ -299,8 +344,12 @@ func (s *Storage) Close() error {
 	return nil
 }
 
-// LoadInstances loads the list of instances from disk
+// LoadInstances loads the list of instances from disk.
 func (s *Storage) LoadInstances() ([]*Instance, error) {
+	if s.repo != nil {
+		return s.loadInstancesFromRepo()
+	}
+
 	jsonData := s.state.GetInstances()
 
 	var instancesData []InstanceData
@@ -320,11 +369,30 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	return instances, nil
 }
 
+func (s *Storage) loadInstancesFromRepo() ([]*Instance, error) {
+	dataSlice, err := s.repo.List(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list instances from repository: %w", err)
+	}
+	instances := make([]*Instance, 0, len(dataSlice))
+	for _, data := range dataSlice {
+		inst, err := FromInstanceData(data)
+		if err != nil {
+			log.WarningLog.Printf("Skipping instance '%s' from repository: %v", data.Title, err)
+			continue
+		}
+		instances = append(instances, inst)
+	}
+	return instances, nil
+}
+
 // DeleteInstance removes an instance from storage.
-// This method directly manipulates the storage JSON to avoid the merge logic
-// in SaveInstances which would restore deleted instances from disk.
 func (s *Storage) DeleteInstance(title string) error {
-	// Load raw JSON data from storage
+	if s.repo != nil {
+		return s.repo.Delete(context.Background(), title)
+	}
+
+	// JSON path: directly manipulate to avoid merge logic restoring deleted instances
 	jsonData := s.state.GetInstances()
 
 	var instancesData []InstanceData
@@ -361,10 +429,19 @@ func (s *Storage) DeleteInstance(title string) error {
 }
 
 // AddInstance adds a new instance to storage.
-// This method directly manipulates the storage JSON to add the instance.
 // Unlike SaveInstances, this does not require instance.Started() to be true.
 func (s *Storage) AddInstance(instance *Instance) error {
-	// Load raw JSON data from storage
+	if s.repo != nil {
+		data := instance.ToInstanceData()
+		ctx := context.Background()
+		if err := s.repo.Create(ctx, data); err != nil {
+			// Already exists → update instead
+			return s.repo.Update(ctx, data)
+		}
+		return nil
+	}
+
+	// JSON path
 	jsonData := s.state.GetInstances()
 
 	var instancesData []InstanceData
@@ -395,8 +472,12 @@ func (s *Storage) AddInstance(instance *Instance) error {
 	return s.state.SaveInstances(newJsonData)
 }
 
-// UpdateInstance updates an existing instance in storage
+// UpdateInstance updates an existing instance in storage.
 func (s *Storage) UpdateInstance(instance *Instance) error {
+	if s.repo != nil {
+		return s.repo.Update(context.Background(), instance.ToInstanceData())
+	}
+
 	instances, err := s.LoadInstances()
 	if err != nil {
 		return fmt.Errorf("failed to load instances: %w", err)
@@ -420,16 +501,52 @@ func (s *Storage) UpdateInstance(instance *Instance) error {
 	return s.SaveInstances(instances)
 }
 
-// DeleteAllInstances removes all stored instances
+// DeleteAllInstances removes all stored instances.
 func (s *Storage) DeleteAllInstances() error {
+	if s.repo != nil {
+		ctx := context.Background()
+		dataSlice, err := s.repo.List(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to list instances for deletion: %w", err)
+		}
+		for _, data := range dataSlice {
+			if err := s.repo.Delete(ctx, data.Title); err != nil {
+				log.WarningLog.Printf("Failed to delete instance '%s': %v", data.Title, err)
+			}
+		}
+		return nil
+	}
 	return s.state.DeleteAllInstances()
+}
+
+// updateFieldInRepo loads the InstanceData for title, applies fn to it, then saves.
+// Used for partial-field updates when using the repository backend.
+func (s *Storage) updateFieldInRepo(title string, fn func(*InstanceData)) error {
+	ctx := context.Background()
+	data, err := s.repo.Get(ctx, title)
+	if err != nil {
+		return fmt.Errorf("failed to get instance '%s': %w", title, err)
+	}
+	fn(data)
+	return s.repo.Update(ctx, *data)
 }
 
 // UpdateInstanceTimestampsOnly updates ONLY the timestamp fields in storage without
 // creating Instance objects. This preserves in-memory state like controllers.
 // This is critical for WebSocket terminal streaming which updates timestamps frequently.
 func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate, lastMeaningfulOutput time.Time, lastOutputSignature string, lastViewed time.Time) error {
-	// Load raw JSON data directly
+	if s.repo != nil {
+		// Use the optimized UpdateTimestamps for the three core fields, then patch lastViewed
+		if err := s.repo.UpdateTimestamps(context.Background(), title, lastTerminalUpdate, lastMeaningfulOutput, lastOutputSignature); err != nil {
+			return err
+		}
+		if !lastViewed.IsZero() {
+			return s.updateFieldInRepo(title, func(d *InstanceData) { d.LastViewed = lastViewed })
+		}
+		return nil
+	}
+
+	// JSON path: load raw data directly
 	jsonData := s.state.GetInstances()
 
 	var instancesData []InstanceData
@@ -472,10 +589,11 @@ func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate,
 }
 
 // UpdateInstanceLastAddedToQueue updates ONLY the LastAddedToQueue field for a specific instance.
-// This method directly manipulates the storage JSON to avoid the merge logic in SaveInstances
-// which would restore deleted instances. This is critical for the ReviewQueuePoller.
 func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue time.Time) error {
-	// Load raw JSON data directly
+	if s.repo != nil {
+		return s.updateFieldInRepo(title, func(d *InstanceData) { d.LastAddedToQueue = lastAddedToQueue })
+	}
+
 	jsonData := s.state.GetInstances()
 
 	var instancesData []InstanceData
@@ -515,9 +633,11 @@ func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue 
 }
 
 // UpdateInstanceLastUserResponse updates just the LastUserResponse timestamp for a specific instance.
-// This is a lightweight update that avoids loading/modifying all instance objects.
 func (s *Storage) UpdateInstanceLastUserResponse(title string, lastUserResponse time.Time) error {
-	// Load raw JSON data directly
+	if s.repo != nil {
+		return s.updateFieldInRepo(title, func(d *InstanceData) { d.LastUserResponse = lastUserResponse })
+	}
+
 	jsonData := s.state.GetInstances()
 
 	var instancesData []InstanceData
@@ -557,9 +677,11 @@ func (s *Storage) UpdateInstanceLastUserResponse(title string, lastUserResponse 
 }
 
 // UpdateInstanceProcessingGrace updates just the ProcessingGraceUntil timestamp for a specific instance.
-// This is a lightweight update that avoids loading/modifying all instance objects.
 func (s *Storage) UpdateInstanceProcessingGrace(title string, processingGraceUntil time.Time) error {
-	// Load raw JSON data directly
+	if s.repo != nil {
+		return s.updateFieldInRepo(title, func(d *InstanceData) { d.ProcessingGraceUntil = processingGraceUntil })
+	}
+
 	jsonData := s.state.GetInstances()
 
 	var instancesData []InstanceData
