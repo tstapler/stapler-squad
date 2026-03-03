@@ -8,6 +8,7 @@ import (
 	"claude-squad/server/adapters"
 	"claude-squad/server/events"
 	"claude-squad/session"
+	"claude-squad/session/search"
 	"connectrpc.com/connect"
 	"context"
 	"fmt"
@@ -58,13 +59,13 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 	reviewQueue := session.NewReviewQueue()
 
 	// Initialize search engine with disk persistence for incremental index updates.
-	var searchEngine *session.SearchEngine
-	indexStore, err := session.NewIndexStore()
+	var searchEngine *search.SearchEngine
+	indexStore, err := search.NewIndexStore()
 	if err != nil {
 		log.WarningLog.Printf("Failed to create index store, using in-memory search: %v", err)
-		searchEngine = session.NewSearchEngine()
+		searchEngine = search.NewSearchEngine()
 	} else {
-		searchEngine = session.NewSearchEngineWithPersistence(indexStore)
+		searchEngine = search.NewSearchEngineWithPersistence(indexStore)
 		if loadErr := searchEngine.LoadIndex(); loadErr != nil {
 			log.WarningLog.Printf("Failed to load persisted search index: %v", loadErr)
 		} else if searchEngine.GetSyncMetadata() != nil {
@@ -78,7 +79,7 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 		storage:                 storage,
 		eventBus:                eventBus,
 		reviewQueueSvc:          NewReviewQueueService(reviewQueue, storage, eventBus),
-		searchSvc:               NewSearchService(searchEngine, session.NewSnippetGenerator(), 5*time.Minute),
+		searchSvc:               NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
 		githubSvc:               NewGitHubService(storage),
 		workspaceSvc:            NewWorkspaceService(storage, eventBus),
 		notificationRateLimiter: NewNotificationRateLimiter(10, 20),

@@ -250,6 +250,11 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 }
 
 // TestReviewQueue_UncommittedChanges_Integration verifies full integration
+// TODO(flaky): This test is timing-sensitive — it relies on a 3s sleep for the
+// poller to detect committed state, which races on slow CI. Replace the sleep
+// with a retry loop (e.g. poll every 100ms for up to 5s) and fix the poller
+// to immediately re-check after a git commit rather than waiting for the next
+// poll tick. Tracked: session/review_queue_uncommitted_changes_test.go:368
 func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	// Create temporary git repository
 	tempDir := t.TempDir()

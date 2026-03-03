@@ -1,8 +1,10 @@
-package session
+package search
 
 import (
 	"sync"
 	"time"
+
+	"claude-squad/session"
 )
 
 // SearchEngine is the main interface for full-text search over Claude history.
@@ -79,7 +81,7 @@ func NewSearchEngineWithPersistence(indexStore *IndexStore) *SearchEngine {
 
 // BuildIndex indexes all messages from the provided history.
 // This replaces any existing index.
-func (e *SearchEngine) BuildIndex(history *ClaudeSessionHistory) error {
+func (e *SearchEngine) BuildIndex(history *session.ClaudeSessionHistory) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -394,7 +396,7 @@ func (e *SearchEngine) GetTokenizer() *Tokenizer {
 // IncrementalSync synchronizes the index with current history state.
 // It only indexes new/modified sessions and removes deleted ones.
 // On first run or when metadata is missing, falls back to full rebuild.
-func (e *SearchEngine) IncrementalSync(history *ClaudeSessionHistory) (*SyncResult, error) {
+func (e *SearchEngine) IncrementalSync(history *session.ClaudeSessionHistory) (*SyncResult, error) {
 	startTime := time.Now()
 	result := &SyncResult{}
 
@@ -495,15 +497,15 @@ func (e *SearchEngine) IncrementalSync(history *ClaudeSessionHistory) (*SyncResu
 
 // computeChangesLocked analyzes history vs index state to determine what changed.
 // Must be called with lock held.
-func (e *SearchEngine) computeChangesLocked(history *ClaudeSessionHistory) (
-	added []ClaudeHistoryEntry,
-	updated []ClaudeHistoryEntry,
+func (e *SearchEngine) computeChangesLocked(history *session.ClaudeSessionHistory) (
+	added []session.ClaudeHistoryEntry,
+	updated []session.ClaudeHistoryEntry,
 	removed []string,
 ) {
 	entries := history.GetAll()
 
 	// Build map of current history
-	historyMap := make(map[string]ClaudeHistoryEntry, len(entries))
+	historyMap := make(map[string]session.ClaudeHistoryEntry, len(entries))
 	for _, entry := range entries {
 		historyMap[entry.ID] = entry
 	}
@@ -532,7 +534,7 @@ func (e *SearchEngine) computeChangesLocked(history *ClaudeSessionHistory) (
 
 // indexSessionLocked indexes all messages from a single session.
 // Must be called with lock held.
-func (e *SearchEngine) indexSessionLocked(history *ClaudeSessionHistory, entry ClaudeHistoryEntry) (int, error) {
+func (e *SearchEngine) indexSessionLocked(history *session.ClaudeSessionHistory, entry session.ClaudeHistoryEntry) (int, error) {
 	messages, err := history.GetMessagesFromConversationFile(entry.ID)
 	if err != nil {
 		return 0, err
@@ -602,7 +604,7 @@ func (e *SearchEngine) ShouldRebuildLocked() bool {
 
 // buildIndexLocked performs a full index build and initializes sync metadata.
 // Must be called with lock held.
-func (e *SearchEngine) buildIndexLocked(history *ClaudeSessionHistory) error {
+func (e *SearchEngine) buildIndexLocked(history *session.ClaudeSessionHistory) error {
 	// Clear existing index
 	e.index.Clear()
 	e.docStore.Clear()

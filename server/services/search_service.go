@@ -9,6 +9,7 @@ import (
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
 	"claude-squad/log"
 	"claude-squad/session"
+	"claude-squad/session/search"
 	"claude-squad/telemetry"
 
 	"connectrpc.com/connect"
@@ -26,8 +27,8 @@ import (
 // access. Without this, concurrent ListClaudeHistory calls would race on cache
 // refresh (previously unprotected on SessionService).
 type SearchService struct {
-	searchEngine     *session.SearchEngine
-	snippetGenerator *session.SnippetGenerator
+	searchEngine     *search.SearchEngine
+	snippetGenerator *search.SnippetGenerator
 
 	historyCacheMu   sync.RWMutex
 	historyCache     *session.ClaudeSessionHistory
@@ -37,8 +38,8 @@ type SearchService struct {
 
 // NewSearchService creates a SearchService with the given search components.
 func NewSearchService(
-	searchEngine *session.SearchEngine,
-	snippetGenerator *session.SnippetGenerator,
+	searchEngine *search.SearchEngine,
+	snippetGenerator *search.SnippetGenerator,
 	historyCacheTTL time.Duration,
 ) *SearchService {
 	return &SearchService{
@@ -282,7 +283,7 @@ func (ss *SearchService) SearchClaudeHistory(
 		offset = 0
 	}
 
-	searchOpts := session.SearchOptions{
+	searchOpts := search.SearchOptions{
 		Limit:  limit,
 		Offset: offset,
 	}

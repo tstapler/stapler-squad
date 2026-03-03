@@ -1,4 +1,4 @@
-package session
+package search
 
 import (
 	"sync"
