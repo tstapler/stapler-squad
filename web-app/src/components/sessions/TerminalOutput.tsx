@@ -897,7 +897,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   useEffect(() => {
     setIsLoadingInitialContent(true);
     hasInitiatedConnectionRef.current = false;
-    // Reset first-output tracking so the loading overlay can clear on the new session's output
+    // Reset timing metrics so "Terminal loaded in Xms" is relative to the session switch,
+    // not the original component mount time.
+    metricsRef.current.mountTime = performance.now();
     metricsRef.current.firstOutputTime = null;
     return () => {
       setIsLoadingInitialContent(false);

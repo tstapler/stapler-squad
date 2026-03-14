@@ -32,6 +32,10 @@ export interface NotificationData {
    * This should trigger the backend acknowledge API to prevent re-notification.
    */
   onAcknowledge?: () => void;
+  /** Called when user approves a pending tool-use request (approval_needed notifications only). */
+  onApprove?: () => void;
+  /** Called when user denies a pending tool-use request (approval_needed notifications only). */
+  onDeny?: () => void;
 }
 
 interface NotificationToastProps {
@@ -227,6 +231,24 @@ export function NotificationToast({
         {hasSourceApp && notification.onFocusWindow && (
           <button className={styles.focusButton} onClick={handleFocusWindow} title="Focus the source application window">
             🔗 Focus Window
+          </button>
+        )}
+        {notification.onApprove && (
+          <button
+            className={styles.approveButton}
+            onClick={() => { notification.onApprove?.(); handleClose(true); }}
+            title="Allow this tool use"
+          >
+            ✓ Approve
+          </button>
+        )}
+        {notification.onDeny && (
+          <button
+            className={styles.denyButton}
+            onClick={() => { notification.onDeny?.(); handleClose(true); }}
+            title="Deny this tool use"
+          >
+            ✗ Deny
           </button>
         )}
         <button className={styles.viewButton} onClick={handleView}>

@@ -6,6 +6,7 @@ import { Session, InstanceType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
 import { VcsPanel } from "./VcsPanel";
 import { WorkspaceSwitchModal } from "./WorkspaceSwitchModal";
+import { ApprovalPanel } from "./ApprovalPanel";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { getApiBaseUrl } from "@/lib/config";
 import styles from "./SessionDetail.module.css";
@@ -198,6 +199,7 @@ export function SessionDetail({
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {activeTab === "terminal" && (
           <div className={styles.tabContent}>
+            <ApprovalPanel sessionId={session.id} />
             {session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
               <TerminalOutput
                 sessionId={session.externalMetadata.muxSocketPath}

@@ -1,0 +1,38 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  padding: 0 0.375rem;
+  background: #f59e0b;
+  color: white;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  border-radius: 0.625rem;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.badge.inline {
+  margin-left: 0.375rem;
+  vertical-align: middle;
+}
+
+/* Pulse animation for pending approvals */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.badge:not(.empty) {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.empty {
+  display: none;
+}

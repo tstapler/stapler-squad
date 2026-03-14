@@ -11,6 +11,19 @@ import { NotificationData } from "@/components/ui/NotificationToast";
 import { getApiBaseUrl } from "@/lib/config";
 
 /**
+ * Calls resolveApproval RPC to allow or deny a pending tool use.
+ */
+async function resolveApproval(approvalId: string, decision: "allow" | "deny"): Promise<void> {
+  try {
+    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    const client = createPromiseClient(SessionService, transport);
+    await client.resolveApproval({ approvalId, decision });
+  } catch (error) {
+    console.error(`[resolveApproval] Failed to resolve approval ${approvalId}:`, error);
+  }
+}
+
+/**
  * Maps protobuf NotificationPriority enum to UI priority string
  */
 function mapPriority(priority: NotificationPriority): "urgent" | "high" | "medium" | "low" {
@@ -239,6 +252,9 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     // Check if this is an external session (has source app info)
     const isExternal = sourceApp !== undefined || sourceBundleId !== undefined;
 
+    // Detect approval requests (have an approval_id in metadata)
+    const approvalId = event.metadata?.["approval_id"];
+
     // Build the notification data with all available fields
     const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
       sessionId: event.sessionId,
@@ -259,6 +275,9 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       onFocusWindow: isExternal
         ? () => focusWindow(sourceBundleId, sourceApp)
         : undefined,
+      // Attach approve/deny callbacks for tool-use approval requests
+      onApprove: approvalId ? () => resolveApproval(approvalId, "allow") : undefined,
+      onDeny: approvalId ? () => resolveApproval(approvalId, "deny") : undefined,
     };
 
     // Add visual notification

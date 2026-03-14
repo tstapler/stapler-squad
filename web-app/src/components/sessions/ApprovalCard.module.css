@@ -1,0 +1,201 @@
+.card {
+  background: var(--item-bg);
+  border: 1px solid var(--item-border);
+  border-left: 3px solid #f59e0b;
+  border-radius: 8px;
+  padding: 16px;
+  transition: all 0.2s ease;
+}
+
+.card:hover {
+  border-color: var(--item-border-hover);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.toolName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.toolIcon {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.countdown {
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.countdownNormal {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #93c5fd;
+}
+
+.countdownWarning {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+}
+
+.countdownUrgent {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.detail {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 13px;
+}
+
+.detailLabel {
+  color: var(--text-secondary);
+  font-weight: 500;
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.detailValue {
+  color: var(--text-primary);
+  font-family: monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.toolInputPreview {
+  background: var(--code-bg, #f3f4f6);
+  border: 1px solid var(--item-border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 80px;
+  overflow-y: auto;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--item-border);
+}
+
+.approveButton,
+.denyButton {
+  flex: 1;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.approveButton {
+  background: #22c55e;
+  color: white;
+}
+
+.approveButton:hover {
+  background: #16a34a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.denyButton {
+  background: #ef4444;
+  color: white;
+}
+
+.denyButton:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .card {
+    --item-bg: #111827;
+    --item-border: #374151;
+    --item-border-hover: #4b5563;
+    --text-primary: #f9fafb;
+    --text-secondary: #9ca3af;
+    --code-bg: #1f2937;
+  }
+
+  .countdownNormal {
+    background: #1e3a8a;
+    color: #dbeafe;
+    border-color: #1e40af;
+  }
+
+  .countdownWarning {
+    background: #78350f;
+    color: #fef3c7;
+    border-color: #92400e;
+  }
+
+  .countdownUrgent {
+    background: #7f1d1d;
+    color: #fecaca;
+    border-color: #991b1b;
+  }
+}
+
+/* Light mode defaults */
+@media (prefers-color-scheme: light) {
+  .card {
+    --item-bg: #f9fafb;
+    --item-border: #e5e7eb;
+    --item-border-hover: #d1d5db;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --code-bg: #f3f4f6;
+  }
+}

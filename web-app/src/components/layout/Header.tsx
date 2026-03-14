@@ -4,6 +4,7 @@ import { useState } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
+import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
 import { DebugMenu } from "@/components/ui/DebugMenu";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
@@ -74,6 +75,7 @@ export function Header() {
             <span className={styles.newSessionIcon}>+</span>
             New Session
           </button>
+          <ApprovalNavBadge />
           <button
             className={styles.notificationButton}
             onClick={togglePanel}

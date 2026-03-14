@@ -170,7 +170,9 @@
 
 .viewButton,
 .dismissButton,
-.focusButton {
+.focusButton,
+.approveButton,
+.denyButton {
   flex: 1;
   padding: 10px 16px;
   border: none;
@@ -213,6 +215,28 @@
 .focusButton:hover {
   background: var(--color-primary, #0070f3);
   color: white;
+}
+
+.approveButton {
+  background: #22c55e;
+  color: white;
+}
+
+.approveButton:hover {
+  background: #16a34a;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+}
+
+.denyButton {
+  background: #ef4444;
+  color: white;
+}
+
+.denyButton:hover {
+  background: #dc2626;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
 }
 
 /* Stacking for multiple notifications */

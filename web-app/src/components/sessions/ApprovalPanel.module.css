@@ -1,0 +1,146 @@
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.countBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: #f59e0b;
+  color: white;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.refreshButton {
+  background: var(--button-bg);
+  border: 1px solid var(--button-border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--text-secondary);
+}
+
+.refreshButton:hover:not(:disabled) {
+  background: var(--button-bg-hover);
+  transform: rotate(180deg);
+}
+
+.refreshButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.error {
+  padding: 12px;
+  text-align: center;
+  color: var(--error-text, #dc2626);
+  font-size: 13px;
+}
+
+.retryButton {
+  margin-top: 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--button-border);
+  border-radius: 4px;
+  background: var(--button-bg);
+  color: var(--button-text);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.retryButton:hover {
+  background: var(--button-bg-hover);
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  .panel {
+    --panel-bg: #1f2937;
+    --panel-border: #374151;
+    --text-primary: #f9fafb;
+    --text-secondary: #9ca3af;
+    --button-bg: #374151;
+    --button-text: #f9fafb;
+    --button-border: #4b5563;
+    --button-bg-hover: #4b5563;
+    --error-text: #fca5a5;
+  }
+}
+
+/* Light mode */
+@media (prefers-color-scheme: light) {
+  .panel {
+    --panel-bg: #ffffff;
+    --panel-border: #e5e7eb;
+    --text-primary: #111827;
+    --text-secondary: #6b7280;
+    --button-bg: #ffffff;
+    --button-text: #111827;
+    --button-border: #d1d5db;
+    --button-bg-hover: #f9fafb;
+    --error-text: #dc2626;
+  }
+}
+
+/* Scrollbar styling */
+.list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.list::-webkit-scrollbar-track {
+  background: var(--panel-bg);
+}
+
+.list::-webkit-scrollbar-thumb {
+  background: var(--button-border);
+  border-radius: 3px;
+}
+
+.list::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
