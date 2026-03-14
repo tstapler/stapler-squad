@@ -132,6 +132,11 @@ service SessionService {
   // ListPendingApprovals returns all pending Claude Code tool approval requests.
   // Used by the web UI to populate the approval panel on initial load.
   rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprovalsResponse) {}
+
+  // CreateDebugSnapshot captures diagnostic information and writes it to a JSON file.
+  // Gathers session state, tmux info, pending approvals, and recent logs.
+  // The file is written to ~/.claude-squad/logs/debug-snapshot-{timestamp}.json.
+  rpc CreateDebugSnapshot(CreateDebugSnapshotRequest) returns (CreateDebugSnapshotResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -839,4 +844,28 @@ message SwitchWorkspaceResponse {
 
   // Updated session after the switch.
   Session session = 7;
+}
+
+// CreateDebugSnapshotRequest triggers a server-side diagnostic snapshot.
+message CreateDebugSnapshotRequest {
+  // Optional user note describing the issue being diagnosed.
+  optional string note = 1;
+
+  // Optional: Maximum number of recent log lines to include (default: 200).
+  optional int32 log_lines = 2;
+}
+
+// CreateDebugSnapshotResponse returns the path and summary of the written snapshot.
+message CreateDebugSnapshotResponse {
+  // Absolute path to the written snapshot JSON file.
+  string file_path = 1;
+
+  // Human-readable summary (e.g., "Captured 5 sessions, 2 pending approvals, 200 log lines").
+  string summary = 2;
+
+  // Timestamp when the snapshot was created (RFC3339).
+  string timestamp = 3;
+
+  // Size of the snapshot file in bytes.
+  int64 file_size_bytes = 4;
 }

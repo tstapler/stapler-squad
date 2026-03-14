@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
 import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
+import { useApprovals } from "@/lib/hooks/useApprovals";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { Priority, AttentionReason, ReviewItem } from "@/gen/session/v1/types_pb";
 import { NotificationSound } from "@/lib/utils/notifications";
@@ -15,6 +16,7 @@ interface ReviewQueuePanelProps {
   autoRefresh?: boolean;
   refreshInterval?: number;
   onItemsChange?: (items: ReviewItem[]) => void; // Callback to expose queue items for navigation
+  onAcknowledged?: (sessionId: string) => void; // Notifies parent when a session is acknowledged (for auto-advance)
 }
 
 /**
@@ -40,6 +42,7 @@ export function ReviewQueuePanel({
   autoRefresh = true,
   refreshInterval = 5000,
   onItemsChange,
+  onAcknowledged,
 }: ReviewQueuePanelProps) {
   const [priorityFilter, setPriorityFilter] = useState<Priority | undefined>(
     undefined
@@ -47,6 +50,8 @@ export function ReviewQueuePanel({
   const [reasonFilter, setReasonFilter] = useState<AttentionReason | undefined>(
     undefined
   );
+  // Track whether queue ever had items so we can show "all done" vs generic empty state
+  const [hadItems, setHadItems] = useState(false);
 
   const {
     items,
@@ -69,6 +74,9 @@ export function ReviewQueuePanel({
     autoRefresh: false, // Disable legacy polling in favor of WebSocket push
     refreshInterval,
   });
+
+  // Approval actions for APPROVAL_PENDING items
+  const { approve: approveRequest, deny: denyRequest } = useApprovals();
 
   // Keyboard navigation
   const { currentIndex, goToNext, goToPrevious } = useReviewQueueNavigation({
@@ -104,6 +112,13 @@ export function ReviewQueuePanel({
       onItemsChange(items);
     }
   }, [items, onItemsChange]);
+
+  // Track if queue ever had items (for "all done" vs generic empty state)
+  useEffect(() => {
+    if (items.length > 0) {
+      setHadItems(true);
+    }
+  }, [items.length]);
 
   // Format duration in seconds (e.g., averageAgeSeconds, oldestAgeSeconds)
   const formatDuration = (durationSeconds: bigint): string => {
@@ -209,17 +224,17 @@ export function ReviewQueuePanel({
 
         {totalItems > 0 && (
           <div className={styles.stats} data-testid="queue-statistics">
+            <span className={styles.stat} data-testid="total-items">
+              {totalItems} {totalItems === 1 ? "item" : "items"} need attention
+            </span>
             <span className={styles.stat}>
-              Avg Age: {formatDuration(averageAgeSeconds)}
+              Avg age: {formatDuration(averageAgeSeconds)}
             </span>
             {oldestAgeSeconds > BigInt(0) && (
               <span className={styles.stat}>
                 Oldest: {formatDuration(oldestAgeSeconds)}
               </span>
             )}
-            <span className={styles.stat} data-testid="total-items">
-              Total: {totalItems}
-            </span>
           </div>
         )}
       </div>
@@ -290,12 +305,22 @@ export function ReviewQueuePanel({
         {loading && items.length === 0 ? (
           <div className={styles.loading}>Loading review queue...</div>
         ) : items.length === 0 ? (
-          <div className={styles.empty}>
-            <p>🎉 No sessions need attention!</p>
-            <p className={styles.emptySubtext}>
-              All sessions are running smoothly.
-            </p>
-          </div>
+          hadItems ? (
+            <div className={`${styles.empty} ${styles.completionState}`}>
+              <p className={styles.completionIcon}>[✓]</p>
+              <p>All done! 0 items remaining.</p>
+              <p className={styles.emptySubtext}>
+                Queue cleared.
+              </p>
+            </div>
+          ) : (
+            <div className={styles.empty}>
+              <p>No sessions need attention!</p>
+              <p className={styles.emptySubtext}>
+                All sessions are running smoothly.
+              </p>
+            </div>
+          )
         ) : (
           <>
             {items.map((item, index) => (
@@ -373,18 +398,44 @@ export function ReviewQueuePanel({
                   </div>
                 </div>
                 <div className={styles.itemActions}>
+                  {item.metadata?.["pending_approval_id"] && (
+                    <>
+                      <button
+                        className={styles.approveButton}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          approveRequest(item.metadata!["pending_approval_id"]);
+                        }}
+                        title="Approve this tool-use request"
+                        aria-label="Approve"
+                        data-testid={`approve-${item.sessionId}`}
+                      >
+                        ✓
+                      </button>
+                      <button
+                        className={styles.denyButton}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          denyRequest(item.metadata!["pending_approval_id"]);
+                        }}
+                        title="Deny this tool-use request"
+                        aria-label="Deny"
+                        data-testid={`deny-${item.sessionId}`}
+                      >
+                        ✗
+                      </button>
+                    </>
+                  )}
                   <button
                     className={styles.skipButton}
                     onClick={(e) => {
                       e.stopPropagation();
-                      console.log('[ReviewQueue] Dismiss button clicked for session:', item.sessionId);
                       if (onSkipSession) {
-                        console.log('[ReviewQueue] Using onSkipSession callback');
                         onSkipSession(item.sessionId);
                       } else {
-                        console.log('[ReviewQueue] Using acknowledgeSession from hook');
                         acknowledgeSession(item.sessionId);
                       }
+                      onAcknowledged?.(item.sessionId);
                     }}
                     title="Acknowledge session (remove from queue)"
                     aria-label="Acknowledge session"

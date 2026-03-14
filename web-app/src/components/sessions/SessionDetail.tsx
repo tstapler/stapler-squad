@@ -35,6 +35,10 @@ interface SessionDetailProps {
   onNext?: () => void; // Navigate to next item in review queue
   onPrevious?: () => void; // Navigate to previous item in review queue
   showNavigation?: boolean; // Show navigation arrows (for review queue)
+  onApprovalResolved?: () => void; // Auto-advance callback when all approvals are resolved
+  onDismissFromQueue?: () => void; // Acknowledge current session and advance to next
+  queuePosition?: number; // 1-indexed position in the review queue (0 = not in queue)
+  queueTotal?: number; // Total items in the review queue
 }
 
 // Helper function to get program display name
@@ -59,6 +63,10 @@ export function SessionDetail({
   onNext,
   onPrevious,
   showNavigation = false,
+  onApprovalResolved,
+  onDismissFromQueue,
+  queuePosition,
+  queueTotal,
 }: SessionDetailProps) {
   const [activeTab, setActiveTab] = useState<SessionDetailTab>(initialTab);
   const [isFullscreen, setIsFullscreen] = useState(initialTab === "terminal" || initialTab === "diff" || initialTab === "vcs");
@@ -153,8 +161,23 @@ export function SessionDetail({
               {isFullscreen ? "⊗" : "⛶"}
             </button>
           )}
+          {onDismissFromQueue && (
+            <button
+              className={styles.navButton}
+              onClick={onDismissFromQueue}
+              aria-label="Clear from queue and advance"
+              title="Clear from queue and advance to next"
+            >
+              ⏭
+            </button>
+          )}
           {showNavigation && (
             <>
+              {queuePosition !== undefined && queuePosition > 0 && queueTotal !== undefined && queueTotal > 0 && (
+                <span className={styles.queuePosition} aria-live="polite">
+                  {queuePosition} of {queueTotal}
+                </span>
+              )}
               <button
                 className={styles.navButton}
                 onClick={onPrevious}
@@ -199,7 +222,7 @@ export function SessionDetail({
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
         {activeTab === "terminal" && (
           <div className={styles.tabContent}>
-            <ApprovalPanel sessionId={session.id} />
+            <ApprovalPanel sessionId={session.id} onResolved={onApprovalResolved} />
             {session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
               <TerminalOutput
                 sessionId={session.externalMetadata.muxSocketPath}

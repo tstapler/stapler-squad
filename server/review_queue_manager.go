@@ -2,6 +2,7 @@ package server
 
 import (
 	"claude-squad/log"
+	"claude-squad/server/adapters"
 	"claude-squad/server/events"
 	"claude-squad/session"
 	"context"
@@ -499,16 +500,7 @@ func (rqm *ReactiveQueueManager) generateClientID() string {
 // Helper methods to convert between internal types and proto types
 
 func (rqm *ReactiveQueueManager) reviewItemToProto(item *session.ReviewItem) *sessionv1.ReviewItem {
-	return &sessionv1.ReviewItem{
-		SessionId:   item.SessionID,
-		SessionName: item.SessionName,
-		Reason:      rqm.reasonToProto(item.Reason),
-		Priority:    rqm.priorityToProto(item.Priority),
-		DetectedAt:  timestamppb.New(item.DetectedAt),
-		Context:     item.Context,
-		PatternName: item.PatternName,
-		Metadata:    item.Metadata,
-	}
+	return adapters.ReviewItemToProto(item)
 }
 
 func (rqm *ReactiveQueueManager) priorityToProto(p session.Priority) sessionv1.Priority {

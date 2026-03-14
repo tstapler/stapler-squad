@@ -13,7 +13,13 @@ import { getApiBaseUrl } from "@/lib/config";
 
 interface UseApprovalsOptions {
   sessionId?: string;
-  pollInterval?: number; // in milliseconds, default 5000
+  pollInterval?: number; // in milliseconds, default 3000
+  /**
+   * Increment this counter externally to trigger an immediate refresh.
+   * Use when the parent receives an APPROVAL_NEEDED notification so the
+   * panel updates without waiting for the next poll cycle.
+   */
+  notificationTrigger?: number;
 }
 
 interface UseApprovalsReturn {
@@ -28,8 +34,11 @@ interface UseApprovalsReturn {
 /**
  * React hook for managing pending tool-use approval requests.
  *
- * Polls `listPendingApprovals` every 5 seconds and exposes approve/deny actions
+ * Polls `listPendingApprovals` every 3 seconds and exposes approve/deny actions
  * that call `resolveApproval` on the ConnectRPC SessionService.
+ *
+ * Pass `notificationTrigger` (increment it on APPROVAL_NEEDED events) to get
+ * near-instant updates without opening an additional streaming connection.
  *
  * @example
  * ```tsx
@@ -45,7 +54,7 @@ interface UseApprovalsReturn {
 export function useApprovals(
   options: UseApprovalsOptions = {}
 ): UseApprovalsReturn {
-  const { sessionId, pollInterval = 5000 } = options;
+  const { sessionId, pollInterval = 3000, notificationTrigger } = options;
 
   const [approvals, setApprovals] = useState<PendingApprovalProto[]>([]);
   const [loading, setLoading] = useState(false);
@@ -107,6 +116,12 @@ export function useApprovals(
       clearInterval(interval);
     };
   }, [pollInterval, refresh]);
+
+  // Immediate refresh when a notification arrives (via notificationTrigger counter)
+  useEffect(() => {
+    if (notificationTrigger === undefined || notificationTrigger === 0) return;
+    refresh();
+  }, [notificationTrigger, refresh]);
 
   // Approve a pending approval
   const approve = useCallback(

@@ -79,15 +79,19 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 		}
 	}
 
+	approvalStore := NewApprovalStore()
+	reviewQueueSvc := NewReviewQueueService(reviewQueue, storage, eventBus)
+	reviewQueueSvc.SetApprovalStore(approvalStore)
+
 	return &SessionService{
 		storage:                 storage,
 		eventBus:                eventBus,
-		reviewQueueSvc:          NewReviewQueueService(reviewQueue, storage, eventBus),
+		reviewQueueSvc:          reviewQueueSvc,
 		searchSvc:               NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
 		githubSvc:               NewGitHubService(storage),
 		workspaceSvc:            NewWorkspaceService(storage, eventBus),
 		notificationRateLimiter: NewNotificationRateLimiter(10, 20),
-		approvalStore:           NewApprovalStore(),
+		approvalStore:           approvalStore,
 	}
 }
 
@@ -1943,4 +1947,71 @@ func (s *SessionService) SwitchWorkspace(
 	req *connect.Request[sessionv1.SwitchWorkspaceRequest],
 ) (*connect.Response[sessionv1.SwitchWorkspaceResponse], error) {
 	return s.workspaceSvc.SwitchWorkspace(ctx, req)
+}
+
+// CreateDebugSnapshot captures diagnostic information and writes a JSON file to the log directory.
+func (s *SessionService) CreateDebugSnapshot(
+	ctx context.Context,
+	req *connect.Request[sessionv1.CreateDebugSnapshotRequest],
+) (*connect.Response[sessionv1.CreateDebugSnapshotResponse], error) {
+	snapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Collect live instances
+	var instances []*session.Instance
+	if s.reviewQueuePoller != nil {
+		instances = s.reviewQueuePoller.GetInstances()
+	}
+
+	// Determine log line count
+	logLines := int32(200)
+	if req.Msg.LogLines != nil && *req.Msg.LogLines > 0 {
+		logLines = *req.Msg.LogLines
+	}
+
+	note := ""
+	if req.Msg.Note != nil {
+		note = *req.Msg.Note
+	}
+
+	// Collect snapshot
+	snap := CollectSnapshot(snapCtx, note, instances, s.approvalStore, int(logLines))
+
+	// Get log directory for output
+	logDir, err := log.GetLogDir(log.ConfigToLogConfig(config.LoadConfig()))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get log directory: %w", err))
+	}
+
+	// Write snapshot to disk
+	filePath, err := WriteSnapshot(snap, logDir)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to write snapshot: %w", err))
+	}
+
+	// Get file size
+	var fileSizeBytes int64
+	if info, err := os.Stat(filePath); err == nil {
+		fileSizeBytes = info.Size()
+	}
+
+	// Build summary
+	pendingApprovals := 0
+	if s.approvalStore != nil {
+		pendingApprovals = len(s.approvalStore.ListAll())
+	}
+	summary := fmt.Sprintf("Captured %d sessions, %d pending approvals, %d log lines",
+		len(instances), pendingApprovals, snap.RecentLogs.LineCount)
+	if len(snap.Errors) > 0 {
+		summary += fmt.Sprintf(" (%d collection errors)", len(snap.Errors))
+	}
+
+	log.InfoLog.Printf("[DebugSnapshot] Written to %s (%d bytes)", filePath, fileSizeBytes)
+
+	return connect.NewResponse(&sessionv1.CreateDebugSnapshotResponse{
+		FilePath:      filePath,
+		Summary:       summary,
+		Timestamp:     snap.Timestamp.Format(time.RFC3339),
+		FileSizeBytes: fileSizeBytes,
+	}), nil
 }

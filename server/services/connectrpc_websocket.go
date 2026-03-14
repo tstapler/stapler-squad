@@ -47,6 +47,28 @@ func isLocalhostOrigin(r *http.Request) bool {
 // ConnectRPCWebSocketHandler handles ConnectRPC streaming calls over WebSocket
 // Supports both managed sessions (with direct PTY access) and external sessions
 // (discovered via mux socket monitoring, using tmux capture-pane for output)
+// rePositionCodes matches ANSI escape sequences that are context-dependent and cause
+// garbled rendering when tmux capture-pane output is replayed in a fresh xterm.js terminal.
+// These sequences (absolute cursor positioning, screen clears, alternate-screen switches)
+// assume a specific prior terminal state that doesn't exist on initial load.
+// SGR color sequences (ESC[nm) are intentionally NOT matched and are preserved.
+var rePositionCodes = regexp.MustCompile(
+	`\x1b\[\d*;?\d*[Hf]` + // Absolute cursor: ESC[H, ESC[n;mH, ESC[n;mf
+		`|\x1b\[\d*J` + // Screen clear: ESC[J, ESC[1J, ESC[2J, ESC[3J
+		`|\x1b\[\?\d+[hl]` + // Private mode: ESC[?1049h (alt screen), ESC[?25l, etc.
+		`|\x1b[78]` + // DEC save/restore cursor: ESC7, ESC8
+		`|\x1b\[[su]`, // CSI save/restore cursor: ESC[s, ESC[u
+)
+
+// sanitizeInitialContent removes cursor-positioning and screen-control escape sequences
+// from tmux capture-pane output before it is sent as the initial terminal snapshot.
+// Without this, the captured content's absolute cursor positions conflict with the
+// clear+home prefix we send, producing overlapping/garbled lines on first load.
+// New output (streaming after initial load) is unaffected and renders correctly.
+func sanitizeInitialContent(content string) string {
+	return rePositionCodes.ReplaceAllString(content, "")
+}
+
 type ConnectRPCWebSocketHandler struct {
 	sessionService    *SessionService
 	scrollbackManager *scrollback.ScrollbackManager
@@ -332,19 +354,32 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		return fmt.Errorf("handshake missing CurrentPaneRequest - client may need update")
 	}
 
-	// Resize tmux to match client dimensions BEFORE capturing
+	// Resize tmux to match client dimensions BEFORE capturing.
+	// We use a ±1 nudge to guarantee SIGWINCH even if tmux is already at the target size.
+	// Without the nudge, tmux resize-window is a no-op when dimensions match and the TUI
+	// never redraws, leaving capture-pane content from a prior mid-session state that
+	// produces garbled output in a fresh xterm.js terminal.
 	if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
 		targetCols := int(*currentPaneReq.TargetCols)
 		targetRows := int(*currentPaneReq.TargetRows)
 
-		log.InfoLog.Printf("[streamViaControlMode] Handshake dimensions: %dx%d, resizing tmux", targetCols, targetRows)
+		log.InfoLog.Printf("[streamViaControlMode] Handshake dimensions: %dx%d, forcing redraw via ±1 nudge", targetCols, targetRows)
+
+		// Nudge to (cols-1) so tmux always sends SIGWINCH regardless of current size
+		if targetCols > 1 {
+			if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr != nil {
+				log.WarningLog.Printf("[streamViaControlMode] Pre-nudge resize failed: %v", resizeErr)
+			} else {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}
 
 		if err := instance.ResizePTY(targetCols, targetRows); err != nil {
 			log.ErrorLog.Printf("[streamViaControlMode] Failed to resize: %v", err)
 		} else {
-			// Wait for tmux to reflow content at new dimensions
-			time.Sleep(150 * time.Millisecond)
-			log.InfoLog.Printf("[streamViaControlMode] Tmux resized to %dx%d", targetCols, targetRows)
+			// Wait for TUI to complete its full redraw at the correct dimensions
+			time.Sleep(200 * time.Millisecond)
+			log.InfoLog.Printf("[streamViaControlMode] Tmux resized to %dx%d, redraw complete", targetCols, targetRows)
 		}
 	} else {
 		log.WarningLog.Printf("[streamViaControlMode] Handshake missing dimensions, layout may be incorrect")
@@ -361,9 +396,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	}
 
 	if initialContent != "" {
-		// Prepend clear screen + home cursor for clean initial state
+		// Strip cursor-positioning codes before prepending clear+home.
+		// capture-pane -e preserves absolute cursor positions (ESC[n;mH) from the live
+		// session. Replaying these in a fresh xterm.js terminal causes garbled output
+		// because the positions assume a prior terminal state that no longer exists.
+		// Colors (SGR) are preserved; only context-dependent positioning is removed.
 		clearAndHome := "\x1b[2J\x1b[H"
-		fullContent := clearAndHome + initialContent
+		fullContent := clearAndHome + sanitizeInitialContent(initialContent)
 
 		terminalData := &sessionv1.TerminalData{
 			SessionId: sessionID,
@@ -601,12 +640,48 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	instance.LastViewed = time.Now()
 	log.InfoLog.Printf("Updated LastViewed timestamp for external session %s", sessionID)
 
+	// For managed sessions: parse handshake dimensions and force a TUI redraw via ±1 nudge
+	// so the initial capture-pane snapshot reflects a freshly-drawn terminal state.
+	if instance.IsManaged {
+		var handshakeCaptureData sessionv1.TerminalData
+		if parseErr := proto.Unmarshal(stream.requestMsg, &handshakeCaptureData); parseErr == nil {
+			if paneReq := handshakeCaptureData.GetCurrentPaneRequest(); paneReq != nil &&
+				paneReq.TargetCols != nil && paneReq.TargetRows != nil {
+				targetCols := int(*paneReq.TargetCols)
+				targetRows := int(*paneReq.TargetRows)
+				log.InfoLog.Printf("[streamViaTmuxCapture] Forcing redraw via ±1 nudge to %dx%d", targetCols, targetRows)
+				if targetCols > 1 {
+					if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr == nil {
+						time.Sleep(50 * time.Millisecond)
+					}
+				}
+				if resizeErr := instance.ResizePTY(targetCols, targetRows); resizeErr == nil {
+					time.Sleep(200 * time.Millisecond)
+					log.InfoLog.Printf("[streamViaTmuxCapture] Redraw complete at %dx%d", targetCols, targetRows)
+				}
+			}
+		}
+	}
+
 	// Send initial content to client
 	// Prepend clear-screen and cursor-home escape sequences since this is a full snapshot
 	// ESC[2J = Clear entire screen, ESC[H = Move cursor to home (1,1)
 	const clearAndHome = "\x1b[2J\x1b[H"
-	if initialContent := streamer.GetContent(); initialContent != "" {
-		fullContent := clearAndHome + initialContent
+	// For managed sessions that just had a forced redraw, capture fresh content directly.
+	// For external sessions, fall back to the streamer's cached snapshot.
+	var initialContent string
+	if instance.IsManaged {
+		if freshContent, captureErr := instance.CapturePaneContentRaw(); captureErr == nil {
+			initialContent = freshContent
+		} else {
+			log.InfoLog.Printf("[streamViaTmuxCapture] Fresh capture failed, falling back to cached: %v", captureErr)
+			initialContent = streamer.GetContent()
+		}
+	} else {
+		initialContent = streamer.GetContent()
+	}
+	if initialContent != "" {
+		fullContent := clearAndHome + sanitizeInitialContent(initialContent)
 		terminalData := &sessionv1.TerminalData{
 			SessionId: sessionID,
 			Data: &sessionv1.TerminalData_Output{

@@ -17,10 +17,9 @@ interface ReviewQueueNavBadgeProps {
  */
 export function ReviewQueueNavBadge({ inline = false }: ReviewQueueNavBadgeProps) {
   const router = useRouter();
-  const { items, loading } = useReviewQueue({
-    baseUrl: getApiBaseUrl(),
-    autoRefresh: true,
-    refreshInterval: 5000,
+  const { items } = useReviewQueue({
+    useWebSocketPush: true,
+    fallbackPollInterval: 30000,
   });
 
   // Play notification sound when new items are added to the queue

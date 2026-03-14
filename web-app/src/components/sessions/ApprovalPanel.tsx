@@ -1,11 +1,13 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useApprovals } from "@/lib/hooks/useApprovals";
 import { ApprovalCard } from "./ApprovalCard";
 import styles from "./ApprovalPanel.module.css";
 
 interface ApprovalPanelProps {
   sessionId?: string; // if provided, filter to this session
+  onResolved?: () => void; // fires when all approvals for this session are resolved
 }
 
 /**
@@ -23,10 +25,20 @@ interface ApprovalPanelProps {
  * <ApprovalPanel sessionId="session-123" />
  * ```
  */
-export function ApprovalPanel({ sessionId }: ApprovalPanelProps) {
+export function ApprovalPanel({ sessionId, onResolved }: ApprovalPanelProps) {
   const { approvals, loading, error, approve, deny, refresh } = useApprovals({
     sessionId,
   });
+
+  // Fire onResolved when approvals drain from >0 to 0 (last approval was resolved)
+  const prevCountRef = useRef<number | null>(null);
+  useEffect(() => {
+    const prevCount = prevCountRef.current;
+    prevCountRef.current = approvals.length;
+    if (prevCount !== null && prevCount > 0 && approvals.length === 0) {
+      onResolved?.();
+    }
+  }, [approvals, onResolved]);
 
   if (error) {
     return (

@@ -84,6 +84,16 @@
   transform: translateY(0);
 }
 
+.queuePosition {
+  font-size: 0.8rem;
+  color: var(--terminal-text-muted);
+  padding: 0.25rem 0.5rem;
+  background: var(--terminal-hover-background, rgba(255,255,255,0.08));
+  border-radius: 4px;
+  white-space: nowrap;
+  user-select: none;
+}
+
 .navButton {
   background: transparent;
   border: none;

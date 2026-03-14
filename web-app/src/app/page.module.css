@@ -41,6 +41,7 @@
   justify-content: center;
   z-index: 1000;
   padding: 1rem;
+  padding-top: calc(4rem + 0.5rem); /* Clear sticky header (4rem) with a small gap */
 }
 
 .modalContent {
@@ -62,8 +63,9 @@
 .modalContentFullscreen {
   max-width: 98vw !important;
   width: 98vw !important;
-  max-height: 92vh !important;
-  height: 92vh !important; /* Force height to actually use the space */
+  /* Use remaining space after header (4rem) and padding (0.5rem top + 1rem bottom) */
+  max-height: calc(100vh - 5.5rem) !important;
+  height: calc(100vh - 5.5rem) !important;
   border-radius: 8px;
   /* Aspect ratio constraint to prevent extreme portrait orientations */
   aspect-ratio: 16/9 auto; /* Prefer landscape, but allow flexibility */
@@ -148,6 +150,7 @@
 
   .modal {
     padding: 0;
+    padding-top: 3.5rem; /* Clear mobile sticky header (3.5rem) */
   }
 
   .modalContent {

@@ -158,6 +158,48 @@
   }
 }
 
+/* Mobile responsive */
+@media (max-width: 640px) {
+  .card {
+    padding: 12px;
+  }
+
+  .header {
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .toolName {
+    font-size: 14px;
+  }
+
+  .detail {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .detailLabel {
+    min-width: unset;
+  }
+
+  .toolInputPreview {
+    max-height: 60px;
+    font-size: 11px;
+  }
+
+  .actions {
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 10px;
+  }
+
+  .approveButton,
+  .denyButton {
+    padding: 10px 12px;
+  }
+}
+
 /* Dark mode support */
 @media (prefers-color-scheme: dark) {
   .card {

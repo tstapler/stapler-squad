@@ -33,6 +33,7 @@ type ReviewQueueService struct {
 	storage           *session.Storage
 	reviewQueuePoller *session.ReviewQueuePoller
 	eventBus          *events.EventBus
+	approvalStore     *ApprovalStore
 }
 
 // NewReviewQueueService creates a ReviewQueueService with the required state.
@@ -58,6 +59,12 @@ func (rqs *ReviewQueueService) SetReactiveQueueManager(mgr ReactiveQueueManager)
 // references after acknowledgement.
 func (rqs *ReviewQueueService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
 	rqs.reviewQueuePoller = poller
+}
+
+// SetApprovalStore injects the ApprovalStore for enriching APPROVAL_PENDING items
+// with their pending_approval_id metadata.
+func (rqs *ReviewQueueService) SetApprovalStore(store *ApprovalStore) {
+	rqs.approvalStore = store
 }
 
 // GetQueue returns the underlying ReviewQueue for wiring reactive components.
@@ -99,8 +106,26 @@ func (rqs *ReviewQueueService) GetReviewQueue(
 		queue.Add(item)
 	}
 
+	protoQueue := adapters.ReviewQueueToProto(queue)
+
+	// Enrich APPROVAL_PENDING items with their pending_approval_id so the
+	// frontend can show Approve/Deny buttons directly in the review queue.
+	if rqs.approvalStore != nil && protoQueue != nil {
+		for _, item := range protoQueue.Items {
+			if item.Reason == sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING {
+				approvals := rqs.approvalStore.GetBySession(item.SessionId)
+				if len(approvals) > 0 {
+					if item.Metadata == nil {
+						item.Metadata = make(map[string]string)
+					}
+					item.Metadata["pending_approval_id"] = approvals[0].ID
+				}
+			}
+		}
+	}
+
 	return connect.NewResponse(&sessionv1.GetReviewQueueResponse{
-		ReviewQueue: adapters.ReviewQueueToProto(queue),
+		ReviewQueue: protoQueue,
 	}), nil
 }
 

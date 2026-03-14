@@ -1,11 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   getNotificationPreference,
   setNotificationPreference,
   requestNotificationPermission,
 } from "@/lib/utils/notifications";
+import { createPromiseClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_connect";
+import { getApiBaseUrl } from "@/lib/config";
 import styles from "./DebugMenu.module.css";
 
 interface DebugMenuProps {
@@ -19,6 +23,21 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
   const [notificationPermission, setNotificationPermission] = useState<
     NotificationPermission | "unsupported"
   >("default");
+
+  const [snapshotNote, setSnapshotNote] = useState("");
+  const [isCapturing, setIsCapturing] = useState(false);
+  const [snapshotResult, setSnapshotResult] = useState<{
+    filePath: string;
+    summary: string;
+  } | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+
+  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+
+  useEffect(() => {
+    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    clientRef.current = createPromiseClient(SessionService, transport);
+  }, []);
 
   // Load initial state from localStorage
   useEffect(() => {
@@ -78,6 +97,30 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
       console.log("🔔 Notifications enabled");
     } else {
       console.log("🔕 Notifications disabled");
+    }
+  };
+
+  const handleCreateSnapshot = async () => {
+    if (!clientRef.current) return;
+    setIsCapturing(true);
+    setSnapshotError(null);
+    setSnapshotResult(null);
+
+    try {
+      const response = await clientRef.current.createDebugSnapshot({
+        note: snapshotNote || undefined,
+      });
+      setSnapshotResult({
+        filePath: response.filePath,
+        summary: response.summary,
+      });
+      setSnapshotNote("");
+    } catch (err) {
+      setSnapshotError(
+        err instanceof Error ? err.message : "Failed to capture snapshot"
+      );
+    } finally {
+      setIsCapturing(false);
     }
   };
 
@@ -167,6 +210,52 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
                 </span>
               </div>
             </a>
+          </div>
+
+          <div className={styles.section}>
+            <h3 className={styles.sectionTitle}>Diagnostics</h3>
+
+            <div className={styles.noteInputRow}>
+              <input
+                type="text"
+                className={styles.noteInput}
+                placeholder="Describe the issue (optional)..."
+                value={snapshotNote}
+                onChange={(e) => setSnapshotNote(e.target.value)}
+                maxLength={500}
+                aria-label="Snapshot note"
+              />
+            </div>
+
+            <button
+              className={styles.snapshotButton}
+              onClick={handleCreateSnapshot}
+              disabled={isCapturing}
+              aria-label="Capture debug snapshot"
+            >
+              {isCapturing ? (
+                <>
+                  <span className={styles.spinner} /> Capturing...
+                </>
+              ) : (
+                <>📸 Capture Debug Snapshot</>
+              )}
+            </button>
+
+            {snapshotResult && (
+              <div className={styles.snapshotResult}>
+                <div className={styles.snapshotResultText}>
+                  ✓ {snapshotResult.summary}
+                </div>
+                <code className={styles.snapshotFilePath}>
+                  {snapshotResult.filePath}
+                </code>
+              </div>
+            )}
+
+            {snapshotError && (
+              <div className={styles.snapshotError}>{snapshotError}</div>
+            )}
           </div>
 
           <div className={styles.section}>

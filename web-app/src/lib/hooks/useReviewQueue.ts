@@ -210,9 +210,15 @@ export function useReviewQueue(
           const item = event.event.value.item;
           if (!item) break;
 
-          // Add item to queue immediately (optimistic update)
+          // Add item to queue immediately (optimistic update), deduplicating by sessionId.
+          // This prevents double-entries when both the REST fallback poll and the WebSocket
+          // initial snapshot deliver the same item concurrently.
           setReviewQueue((prev) => {
             if (!prev) return prev;
+            const alreadyPresent = (prev.items ?? []).some(
+              (existing) => existing.sessionId === item.sessionId
+            );
+            if (alreadyPresent) return prev;
             const newItems = [...(prev.items ?? []), item];
             return new ReviewQueue({
               ...prev,

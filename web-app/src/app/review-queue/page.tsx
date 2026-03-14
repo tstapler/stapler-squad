@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session, ReviewItem } from "@/gen/session/v1/types_pb";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
 import { useSessionService } from "@/lib/hooks/useSessionService";
+import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
 import { getApiBaseUrl } from "@/lib/config";
 import styles from "./page.module.css";
 
@@ -37,10 +38,23 @@ function ReviewQueueContent() {
     autoWatch: true, // Enable WebSocket streaming for session list
   });
 
+  // Acknowledge function for dismissing sessions from the modal
+  const { acknowledgeSession } = useReviewQueue({
+    useWebSocketPush: false,
+    autoRefresh: false,
+  });
+
   // Review queue items for navigation (next/previous)
   const [reviewQueueItems, setReviewQueueItems] = useState<Session[]>([]);
   // Full ReviewItem data for fallback session construction before sessions load
   const [queueItems, setQueueItems] = useState<ReviewItem[]>([]);
+
+  // Refs to avoid stale closures inside setTimeout callbacks
+  const reviewQueueItemsRef = useRef<Session[]>([]);
+  const selectedSessionRef = useRef<Session | null>(null);
+
+  useEffect(() => { reviewQueueItemsRef.current = reviewQueueItems; }, [reviewQueueItems]);
+  useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
 
   // Handle deep linking from notifications - auto-open session from URL.
   // Uses queueItems as fallback so the modal opens even before useSessionService loads.
@@ -100,20 +114,96 @@ function ReviewQueueContent() {
     setSelectedSession(null);
   };
 
+  // Stable callback for ReviewQueuePanel to report items — avoids infinite render loop.
+  // Separating the queueSessions computation into its own effect prevents a re-render
+  // cycle where an inline onItemsChange reference change triggers the panel's useEffect,
+  // which calls setReviewQueueItems with a new array, which triggers a parent re-render,
+  // which creates a new onItemsChange reference… blocking Next.js navigation forever.
+  const handleItemsChange = useCallback((incomingItems: ReviewItem[]) => {
+    setQueueItems(incomingItems);
+  }, []);
+
+  // Recompute reviewQueueItems whenever queueItems or sessions change.
+  useEffect(() => {
+    const queueSessions = queueItems.map(
+      (item) => sessions.find((s) => s.id === item.sessionId) ?? sessionFromReviewItem(item)
+    );
+    setReviewQueueItems(queueSessions);
+  }, [queueItems, sessions]);
+
+  // Auto-advance to the next queue item after resolving the current one.
+  // resolvedSessionId: the session that was just resolved (exclude from next-item search
+  //   to handle the race where WebSocket hasn't removed it yet).
+  const handleAutoAdvance = useCallback((resolvedSessionId?: string) => {
+    setTimeout(() => {
+      const currentItems = reviewQueueItemsRef.current;
+      const currentSelected = selectedSessionRef.current;
+
+      // Exclude the just-resolved session to avoid advancing to it again
+      const remainingItems = resolvedSessionId
+        ? currentItems.filter((s) => s.id !== resolvedSessionId)
+        : currentItems;
+
+      if (remainingItems.length === 0) {
+        // Queue is empty — close modal and let the completion state show
+        router.push("/review-queue");
+        setSelectedSession(null);
+        return;
+      }
+
+      if (!currentSelected) return;
+
+      const currentIdx = remainingItems.findIndex((s) => s.id === currentSelected.id);
+
+      if (currentIdx !== -1) {
+        // Current session is still in the queue; advance to the next one (circular)
+        const nextIdx = (currentIdx + 1) % remainingItems.length;
+        const next = remainingItems[nextIdx];
+        setSelectedSession(next);
+        router.push(`/review-queue?session=${next.id}`);
+      } else {
+        // Current session was removed — navigate to the item at the same position
+        const resolvedIdx = resolvedSessionId
+          ? currentItems.findIndex((s) => s.id === resolvedSessionId)
+          : 0;
+        const targetIdx = Math.min(Math.max(resolvedIdx, 0), remainingItems.length - 1);
+        const next = remainingItems[targetIdx];
+        setSelectedSession(next);
+        router.push(`/review-queue?session=${next.id}`);
+      }
+    }, 300);
+  }, [router]);
+
+  // Called when the user acknowledges a session from the queue list while the modal is open.
+  // Only triggers auto-advance if it's the currently selected session being dismissed.
+  const handleAcknowledged = useCallback((sessionId: string) => {
+    if (selectedSessionRef.current?.id === sessionId) {
+      handleAutoAdvance(sessionId);
+    }
+  }, [handleAutoAdvance]);
+
+  // Called when the user clicks the dismiss button in the session detail modal.
+  // Acknowledges the current session and auto-advances to the next queue item.
+  const handleDismissFromQueue = useCallback(async () => {
+    const current = selectedSessionRef.current;
+    if (!current) return;
+    await acknowledgeSession(current.id);
+    handleAutoAdvance(current.id);
+  }, [acknowledgeSession, handleAutoAdvance]);
+
+  // Queue position for the header badge ("2 of 5")
+  const queuePosition = selectedSession
+    ? reviewQueueItems.findIndex((s) => s.id === selectedSession.id) + 1
+    : 0;
+  const queueTotal = reviewQueueItems.length;
+
   return (
     <div className={styles.page}>
       <main className={styles.main}>
         <ReviewQueuePanel
           onSessionClick={handleSessionClick}
-          onItemsChange={(items) => {
-            setQueueItems(items);
-            // Build navigation list using full session data when available,
-            // falling back to queue item data so navigation works before sessions load.
-            const queueSessions = items.map(
-              (item) => sessions.find((s) => s.id === item.sessionId) ?? sessionFromReviewItem(item)
-            );
-            setReviewQueueItems(queueSessions);
-          }}
+          onItemsChange={handleItemsChange}
+          onAcknowledged={handleAcknowledged}
         />
       </main>
 
@@ -133,6 +223,10 @@ function ReviewQueueContent() {
               showNavigation={reviewQueueItems.length > 1}
               onNext={handleNextSession}
               onPrevious={handlePreviousSession}
+              onApprovalResolved={() => handleAutoAdvance(selectedSession.id)}
+              onDismissFromQueue={handleDismissFromQueue}
+              queuePosition={queuePosition}
+              queueTotal={queueTotal}
             />
           </div>
         </div>
