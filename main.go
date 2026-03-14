@@ -8,6 +8,8 @@ import (
 	"claude-squad/log"
 	"claude-squad/profiling"
 	"claude-squad/server"
+	serverauth "claude-squad/server/auth"
+	"claude-squad/server/middleware"
 	"claude-squad/session"
 	"claude-squad/session/git"
 	"claude-squad/session/tmux"
@@ -15,9 +17,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +38,9 @@ var (
 	profileFlag       bool
 	profilePortFlag   int
 	traceFlag         bool
+	listenAddrFlag    string
+	remoteAccessFlag  bool
+	rpIDFlag          string
 	rootCmd           = &cobra.Command{
 		Use:   "claude-squad",
 		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
@@ -142,12 +149,50 @@ var (
 				}()
 			}
 
-			// Use PORT environment variable if set (for test mode), otherwise default to 8543
-			address := "localhost:8543"
+			// Determine listen address: flag > config > PORT env > default
+			address := cfg.ListenAddress
+			if address == "" {
+				address = "localhost:8543"
+			}
+			// PORT env var overrides for test mode
 			if port := os.Getenv("PORT"); port != "" {
 				address = "localhost:" + port
 			}
+			// --remote-access flag: bind to all interfaces
+			if remoteAccessFlag {
+				_, port, err := net.SplitHostPort(address)
+				if err != nil {
+					port = "8543"
+				}
+				address = "0.0.0.0:" + port
+			}
+			// --listen flag: explicit override (highest priority)
+			if listenAddrFlag != "" {
+				address = listenAddrFlag
+			}
+
+			// Warn when binding to non-localhost
+			host, _, _ := net.SplitHostPort(address)
+			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+				log.WarningLog.Printf("WARNING: Binding to non-localhost address %s. Ensure firewall rules are configured.", address)
+				fmt.Fprintf(os.Stderr, "\nWARNING: claude-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
+			}
+
+			// --rp-id flag overrides config
+			if rpIDFlag != "" {
+				cfg.PasskeyRPID = rpIDFlag
+			}
+
 			srv := server.NewServer(address)
+
+			// Set up passkey auth when remote access is enabled or explicitly configured.
+			isRemote := host != "localhost" && host != "127.0.0.1" && host != "::1"
+			if isRemote || cfg.PasskeyEnabled {
+				if err := setupPasskeyAuth(srv, address, cfg); err != nil {
+					return fmt.Errorf("setup passkey auth: %w", err)
+				}
+			}
+
 			log.InfoLog.Printf("Starting web server on %s", address)
 			return srv.Start(ctx)
 		},
@@ -445,6 +490,15 @@ func init() {
 	rootCmd.Flags().IntVar(&profilePortFlag, "profile-port", 6060, "Port for pprof HTTP server (default: 6060)")
 	rootCmd.Flags().BoolVar(&traceFlag, "trace", false, "Enable execution tracing to /tmp/claude-squad-trace-<PID>.out")
 
+	// Remote access and passkey flags
+	rootCmd.Flags().StringVar(&listenAddrFlag, "listen", "",
+		"Address to listen on (e.g. '0.0.0.0:8543'). Overrides config listen_address.")
+	rootCmd.Flags().BoolVar(&remoteAccessFlag, "remote-access", false,
+		"Enable remote access by binding to 0.0.0.0 (shorthand for --listen 0.0.0.0:<port>)")
+	rootCmd.Flags().StringVar(&rpIDFlag, "rp-id", "",
+		"WebAuthn Relying Party ID (your LAN IP or hostname, e.g. '192.168.1.42'). "+
+			"Required for passkey auth when using remote access.")
+
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")
 	if err != nil {
@@ -456,6 +510,110 @@ func init() {
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(testPtyCmd)
 	rootCmd.AddCommand(listSessionsCmd)
+}
+
+// setupPasskeyAuth initialises TLS + WebAuthn and wires them into srv.
+func setupPasskeyAuth(srv *server.Server, address string, cfg *config.Config) error {
+	// Determine the host for the TLS cert SANs and WebAuthn rpID.
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+		port = "8543"
+	}
+	if host == "0.0.0.0" || host == "::" {
+		// Listening on all interfaces; use localhost as fallback SAN.
+		// The user must also set cfg.PasskeyRPID to their LAN IP/hostname.
+		host = "localhost"
+	}
+
+	// Build SAN list for the TLS cert.
+	sans := []string{host, "localhost", "127.0.0.1"}
+
+	// Generate / reuse TLS certs.
+	tlsPaths, err := server.EnsureTLSCerts(sans)
+	if err != nil {
+		return fmt.Errorf("ensure TLS certs: %w", err)
+	}
+
+	tlsCfg, err := server.LoadTLSConfig(tlsPaths.CertFile, tlsPaths.KeyFile)
+	if err != nil {
+		return fmt.Errorf("load TLS config: %w", err)
+	}
+	srv.SetupTLS(tlsCfg)
+
+	// Determine rpID: config > flag > inferred host.
+	rpID := cfg.PasskeyRPID
+	if rpID == "" {
+		rpID = host
+	}
+	if rpID == "0.0.0.0" || rpID == "::" {
+		rpID = "localhost"
+	}
+
+	origin := fmt.Sprintf("https://%s:%s", rpID, port)
+	origins := []string{origin, "https://localhost:" + port}
+	// Deduplicate
+	seen := map[string]bool{}
+	unique := origins[:0]
+	for _, o := range origins {
+		if !seen[o] {
+			seen[o] = true
+			unique = append(unique, o)
+		}
+	}
+
+	// Initialise auth subsystem.
+	store, err := serverauth.NewCredentialStore()
+	if err != nil {
+		return fmt.Errorf("create credential store: %w", err)
+	}
+
+	sessions := serverauth.NewSessionManager()
+
+	waHandler, err := serverauth.NewHandler(rpID, unique, store, sessions)
+	if err != nil {
+		return fmt.Errorf("create webauthn handler: %w", err)
+	}
+
+	setupMgr := serverauth.NewSetupManager()
+
+	// Register auth routes on the server's mux.
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, tlsPaths.CAFile)
+
+	// Apply auth middleware (protects all non-exempt routes).
+	srv.SetupAuth(middleware.Auth(sessions))
+
+	// Bootstrap: if no passkeys are registered, generate a setup token and
+	// print it + a QR code to stderr so the operator can enroll the first device.
+	if !store.HasCredentials() {
+		token, tokenErr := setupMgr.Init()
+		if tokenErr != nil {
+			log.WarningLog.Printf("Failed to generate setup token: %v", tokenErr)
+		} else {
+			setupURL := fmt.Sprintf("https://%s:%s/login?setup_token=%s", rpID, port, token)
+			fmt.Fprintf(os.Stderr, "\n╔══════════════════════════════════════════════════════╗\n")
+			fmt.Fprintf(os.Stderr, "║  PASSKEY SETUP REQUIRED                              ║\n")
+			fmt.Fprintf(os.Stderr, "╠══════════════════════════════════════════════════════╣\n")
+			fmt.Fprintf(os.Stderr, "║  No passkeys registered. Scan the QR code or visit: ║\n")
+			fmt.Fprintf(os.Stderr, "║  %-52s ║\n", setupURL)
+			fmt.Fprintf(os.Stderr, "║  CA cert for phone trust: %s/auth/ca.pem%-10s ║\n",
+				fmt.Sprintf("https://%s:%s", rpID, port), "")
+			fmt.Fprintf(os.Stderr, "╚══════════════════════════════════════════════════════╝\n")
+			if qrErr := serverauth.PrintQRToTerminal(setupURL); qrErr != nil {
+				log.WarningLog.Printf("QR print failed: %v", qrErr)
+			}
+		}
+	}
+
+	// Warn if rpID looks misconfigured.
+	if strings.HasPrefix(rpID, "0.0.0.0") || rpID == "::" {
+		log.WarningLog.Printf("WARNING: PasskeyRPID=%q is a wildcard address. "+
+			"Passkeys will not work. Set --rp-id to your actual LAN IP or hostname.", rpID)
+	}
+
+	log.InfoLog.Printf("auth: passkey auth enabled – rpID=%s origin=%s", rpID, origin)
+	log.InfoLog.Printf("auth: TLS CA cert: %s", tlsPaths.CAFile)
+	return nil
 }
 
 func main() {

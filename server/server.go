@@ -9,6 +9,7 @@ import (
 	"claude-squad/session"
 	"claude-squad/session/scrollback"
 	"context"
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"os"
@@ -22,9 +23,11 @@ import (
 
 // Server manages the HTTP server with ConnectRPC handlers.
 type Server struct {
-	addr       string
+	addr      string
 	httpServer *http.Server
 	mux        *http.ServeMux
+	tlsConfig  *tls.Config          // non-nil when TLS is enabled
+	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
 }
 
 // NewServer creates a new HTTP server instance with SessionService registered.
@@ -319,6 +322,20 @@ func NewServer(addr string) *Server {
 	return srv
 }
 
+// SetupTLS configures the server to use TLS with the provided tls.Config.
+// Must be called before Start().
+func (s *Server) SetupTLS(cfg *tls.Config) {
+	s.tlsConfig = cfg
+	s.httpServer.TLSConfig = cfg
+	log.InfoLog.Printf("TLS enabled on %s", s.addr)
+}
+
+// SetupAuth installs authentication middleware.  Must be called before Start().
+// authMiddleware is a function that wraps an http.Handler; pass nil to disable.
+func (s *Server) SetupAuth(authMiddleware func(http.Handler) http.Handler) {
+	s.authMiddleware = authMiddleware
+}
+
 // RegisterConnectHandler registers a ConnectRPC service handler.
 // This should be called before Start().
 func (s *Server) RegisterConnectHandler(path string, handler http.Handler) {
@@ -336,31 +353,45 @@ func (s *Server) RegisterHTTPHandler(pattern string, handler http.Handler) {
 // Start starts the HTTP server with middleware chain.
 // This is a blocking call. Use Start() in a goroutine for concurrent operation.
 func (s *Server) Start(ctx context.Context) error {
-	// Build middleware chain with OpenTelemetry HTTP instrumentation
-	// Order: otelhttp -> logging -> CORS -> handler
-	// otelhttp provides automatic span creation for all HTTP requests
+	// Register health check endpoint
+	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok","service":"claude-squad-web"}`)) //nolint:errcheck
+	})
+
+	// Build middleware chain:
+	// otelhttp -> logging -> CORS -> [auth] -> mux
+	inner := http.Handler(s.mux)
+	if s.authMiddleware != nil {
+		inner = s.authMiddleware(inner)
+	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORS(s.mux)),
+		middleware.Logging(middleware.CORS(inner)),
 		"claude-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
 	s.httpServer.Handler = handler
 
-	// Register health check endpoint
-	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok","service":"claude-squad-web"}`))
-	})
-
-	log.InfoLog.Printf("Starting HTTP server on %s", s.addr)
-	log.InfoLog.Printf("Web UI: http://%s", s.addr)
-	log.InfoLog.Printf("Health check: http://%s/health", s.addr)
+	scheme := "http"
+	if s.tlsConfig != nil {
+		scheme = "https"
+	}
+	log.InfoLog.Printf("Starting %s server on %s", scheme, s.addr)
+	log.InfoLog.Printf("Web UI: %s://%s", scheme, s.addr)
+	log.InfoLog.Printf("Health check: %s://%s/health", scheme, s.addr)
 
 	// Start server in goroutine
 	errCh := make(chan error, 1)
 	go func() {
-		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if s.tlsConfig != nil {
+			// TLS mode: cert/key are already in TLSConfig.Certificates
+			err = s.httpServer.ListenAndServeTLS("", "")
+		} else {
+			err = s.httpServer.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()
@@ -392,6 +423,12 @@ func (s *Server) Shutdown() error {
 // GetAddr returns the server address.
 func (s *Server) GetAddr() string {
 	return s.addr
+}
+
+// Mux returns the HTTP request multiplexer so callers can register additional
+// routes before calling Start().
+func (s *Server) Mux() *http.ServeMux {
+	return s.mux
 }
 
 // ConnectOptions returns standard ConnectRPC options with OpenTelemetry instrumentation.

@@ -1,0 +1,84 @@
+.container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-background, #0d1117);
+  padding: 1rem;
+}
+
+.card {
+  background: var(--color-surface, #161b22);
+  border: 1px solid var(--color-border, #30363d);
+  border-radius: 12px;
+  padding: 2.5rem 2rem;
+  width: 100%;
+  max-width: 400px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.logo {
+  font-size: 3rem;
+  line-height: 1;
+  margin-bottom: 0.25rem;
+}
+
+.title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text-primary, #e6edf3);
+  margin: 0;
+}
+
+.subtitle {
+  font-size: 1rem;
+  color: var(--color-text-secondary, #8b949e);
+  margin: 0;
+}
+
+.hint {
+  font-size: 0.85rem;
+  color: var(--color-text-muted, #6e7681);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.button {
+  margin-top: 0.5rem;
+  width: 100%;
+  padding: 0.75rem 1.5rem;
+  background: var(--color-accent, #1f6feb);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.button:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error {
+  color: var(--color-danger, #f85149);
+  font-size: 0.85rem;
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
+  margin: 0;
+}

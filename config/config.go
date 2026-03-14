@@ -162,6 +162,16 @@ func GetConfigDir() (string, error) {
 
 // Config represents the application configuration
 type Config struct {
+	// ListenAddress is the address the HTTP server listens on.
+	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
+	ListenAddress string `json:"listen_address"`
+	// PasskeyRPID is the WebAuthn Relying Party ID (effective domain, no scheme/port).
+	// Example: "192.168.1.42" or "myhost.local". Must match the hostname clients use.
+	// Required when remote access is enabled.
+	PasskeyRPID string `json:"passkey_rp_id"`
+	// PasskeyEnabled controls whether passkey authentication is enforced.
+	// Automatically set to true when non-localhost listen address is used.
+	PasskeyEnabled bool `json:"passkey_enabled"`
 	// DefaultProgram is the default program to run in new instances
 	DefaultProgram string `json:"default_program"`
 	// AutoYes is a flag to automatically accept all prompts.
@@ -213,6 +223,7 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
+		ListenAddress:      "localhost:8543",
 		DefaultProgram:     program,
 		AutoYes:            false,
 		DaemonPollInterval: 1000,

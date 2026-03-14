@@ -3,6 +3,7 @@ import { Header } from "@/components/layout/Header";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { NotificationProvider } from "@/lib/contexts/NotificationContext";
 import { OmnibarProvider } from "@/lib/contexts/OmnibarContext";
+import { AuthProvider } from "@/lib/contexts/AuthContext";
 import { NotificationPanel } from "@/components/ui/NotificationPanel";
 import "./globals.css";
 
@@ -20,13 +21,15 @@ export default function RootLayout({
     <html lang="en">
       <body>
         <ErrorBoundary>
-          <NotificationProvider>
-            <OmnibarProvider>
-              <Header />
-              {children}
-              <NotificationPanel />
-            </OmnibarProvider>
-          </NotificationProvider>
+          <AuthProvider>
+            <NotificationProvider>
+              <OmnibarProvider>
+                <Header />
+                {children}
+                <NotificationPanel />
+              </OmnibarProvider>
+            </NotificationProvider>
+          </AuthProvider>
         </ErrorBoundary>
       </body>
     </html>

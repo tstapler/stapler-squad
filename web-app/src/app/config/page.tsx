@@ -9,6 +9,8 @@ import Editor, { OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
 import styles from "./config.module.css";
 import { getApiBaseUrl } from "@/lib/config";
+import { useAuth } from "@/lib/contexts/AuthContext";
+import { registerPasskey, logout as doLogout } from "@/lib/auth/passkey";
 
 // Helper function to determine Monaco editor language from filename
 function getLanguageFromFilename(filename: string): string {
@@ -281,6 +283,41 @@ export default function ConfigEditorPage() {
   // Count total unsaved files
   const unsavedFilesCount = configs.filter(c => fileHasUnsavedChanges(c.name)).length;
 
+  // Passkey management
+  const { authEnabled, authenticated, hasCredentials, refresh: refreshAuth } = useAuth();
+  const [passkeyStatus, setPasskeyStatus] = useState<"idle" | "working" | "success" | "error">("idle");
+  const [passkeyMsg, setPasskeyMsg] = useState("");
+
+  const handleRegisterPasskey = async () => {
+    setPasskeyStatus("working");
+    setPasskeyMsg("");
+    try {
+      await registerPasskey();
+      await refreshAuth();
+      setPasskeyStatus("success");
+      setPasskeyMsg("Passkey registered successfully.");
+      setTimeout(() => { setPasskeyStatus("idle"); setPasskeyMsg(""); }, 4000);
+    } catch (e) {
+      setPasskeyStatus("error");
+      setPasskeyMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleRevokeAll = async () => {
+    setPasskeyStatus("working");
+    setPasskeyMsg("");
+    try {
+      await doLogout();
+      await refreshAuth();
+      setPasskeyStatus("success");
+      setPasskeyMsg("All sessions revoked.");
+      setTimeout(() => { setPasskeyStatus("idle"); setPasskeyMsg(""); }, 4000);
+    } catch (e) {
+      setPasskeyStatus("error");
+      setPasskeyMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   // Handle keyboard shortcuts (Ctrl+S to save, Ctrl+1-9 for file switching)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -500,6 +537,46 @@ export default function ConfigEditorPage() {
           )}
         </div>
       </div>
+
+      {authEnabled && (
+        <div className={styles.securitySection}>
+          <h2 className={styles.sectionTitle}>🔐 Passkey Security</h2>
+          <div className={styles.securityCard}>
+            <div className={styles.securityRow}>
+              <span className={styles.securityLabel}>Authentication</span>
+              <span className={styles.statusEnabled}>Active</span>
+            </div>
+            <div className={styles.securityRow}>
+              <span className={styles.securityLabel}>Passkeys registered</span>
+              <span>{hasCredentials ? "✓ Yes" : "None"}</span>
+            </div>
+            <div className={styles.securityActions}>
+              {authenticated && (
+                <button
+                  onClick={handleRegisterPasskey}
+                  disabled={passkeyStatus === "working"}
+                  className="btn btn-primary"
+                >
+                  {passkeyStatus === "working" ? "Working…" : "Register New Passkey"}
+                </button>
+              )}
+              <button
+                onClick={handleRevokeAll}
+                disabled={passkeyStatus === "working" || !authenticated}
+                className="btn btn-danger"
+              >
+                Sign Out All Sessions
+              </button>
+            </div>
+            {passkeyStatus === "error" && (
+              <p className={styles.securityError}>{passkeyMsg}</p>
+            )}
+            {passkeyStatus === "success" && (
+              <p className={styles.securitySuccess}>{passkeyMsg}</p>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -297,3 +297,71 @@
   border-radius: 4px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
 }
+
+/* Passkey / Security Section */
+.securitySection {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color);
+}
+
+.securityCard {
+  background: var(--card-background);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 480px;
+}
+
+.securityRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.securityLabel {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.statusEnabled {
+  color: #28a745;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.statusDisabled {
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.securityActions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.securityError {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-danger, #f85149);
+  background: rgba(248, 81, 73, 0.1);
+  border: 1px solid rgba(248, 81, 73, 0.3);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}
+
+.securitySuccess {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #28a745;
+  background: rgba(40, 167, 69, 0.1);
+  border: 1px solid rgba(40, 167, 69, 0.3);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+}

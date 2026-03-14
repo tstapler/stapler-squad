@@ -4,23 +4,31 @@ import (
 	"net/http"
 )
 
+// allowedCORSHeaders are the headers permitted in CORS requests.
+const allowedCORSHeaders = "Content-Type, Connect-Protocol-Version, Connect-Timeout-Ms, Authorization"
+
 // CORS middleware adds Cross-Origin Resource Sharing headers.
-// Configured for local development with Next.js on localhost:3000.
+// Uses the request Origin so it works for both localhost development and
+// remote access (the client and server share the same origin in production).
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Allow requests from Next.js dev server
 		origin := r.Header.Get("Origin")
 		if origin == "" {
-			origin = "http://localhost:3000"
+			// Same-origin request or no browser – skip CORS headers.
+			next.ServeHTTP(w, r)
+			return
 		}
 
-		// Set CORS headers
+		// Echo the request origin back so credentials work correctly.
+		// Access-Control-Allow-Origin must be a specific origin (not "*") when
+		// Access-Control-Allow-Credentials is "true".
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Connect-Protocol-Version, Connect-Timeout-Ms")
+		w.Header().Set("Access-Control-Allow-Headers", allowedCORSHeaders)
 		w.Header().Set("Access-Control-Expose-Headers", "Connect-Protocol-Version, Connect-Timeout-Ms")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		w.Header().Set("Access-Control-Max-Age", "86400") // 24 hours
+		w.Header().Set("Vary", "Origin")
 
 		// Handle preflight OPTIONS request
 		if r.Method == "OPTIONS" {
