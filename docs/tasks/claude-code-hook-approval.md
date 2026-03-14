@@ -1,8 +1,61 @@
 # Feature Plan: Remote Hook Approval from Web UI
 
 **Date**: 2026-02-26
-**Status**: Draft
+**Updated**: 2026-03-13
+**Status**: In Progress — Stories 1-4 substantially complete; Stories 5-6 pending
 **Scope**: Enable users to approve/reject Claude Code tool use requests from the claude-squad web UI
+
+## Implementation Progress
+
+### Completed (Stories 1-4 core)
+
+**Story 1 — Backend Infrastructure**: COMPLETE
+- `server/services/approval_store.go`: ApprovalStore, PendingApproval, ApprovalDecision types; all CRUD, Resolve, CancelSession, CleanupExpired methods implemented with mutex protection.
+
+**Story 2 — Hook Endpoint and Session Injection**: COMPLETE
+- `server/services/approval_handler.go`: HandlePermissionRequest HTTP endpoint, mapSessionByCwd fallback, broadcastApprovalNotification, InjectHookConfig (merges .claude/settings.local.json), StartExpirationCleanup goroutine; wired in server.go at POST /api/hooks/permission-request.
+- InjectHookConfig is called from session_service.go during CreateSession.
+- Session mapper uses X-CS-Session-ID header first, then cwd prefix matching.
+
+**Story 3 — ConnectRPC API**: COMPLETE
+- proto/session/v1/session.proto: ResolveApproval and ListPendingApprovals RPCs defined.
+- proto/session/v1/types.proto: PendingApprovalProto message defined.
+- approval_handler.go: ResolveApproval and ListPendingApprovals handlers implemented on SessionService.
+- ApprovalStore wired to SessionService via approvalStore field and GetApprovalStore() accessor.
+- server.go wires handler, starts cleanup goroutine.
+
+**Story 4 — Web UI Components**: COMPLETE
+- `web-app/src/components/sessions/ApprovalCard.tsx`: countdown timer, tool input preview, Approve/Deny buttons with aria labels; used in SessionDetail and ApprovalPanel.
+- `web-app/src/components/sessions/ApprovalPanel.tsx`: list of ApprovalCards, count badge, refresh button, empty/error states; rendered inside SessionDetail for per-session view.
+- `web-app/src/components/sessions/ApprovalNavBadge.tsx`: global badge in header showing total pending count.
+- `web-app/src/lib/hooks/useApprovals.ts`: polls ListPendingApprovals every 5s, optimistic approve/deny, error rollback.
+- `web-app/src/lib/hooks/useSessionNotifications.ts`: approval_id extracted from notification metadata; onApprove/onDeny callbacks call resolveApproval; wired into NotificationToast.
+- `web-app/src/components/ui/NotificationToast.tsx`: shows Approve/Deny buttons for approval_needed notifications.
+- `web-app/src/components/layout/Header.tsx`: ApprovalNavBadge rendered in nav.
+
+### Known Gap — Proto Code Not Regenerated
+
+The proto definitions include ResolveApproval, ListPendingApprovals, and PendingApprovalProto, but `make proto-gen` has NOT been run. The generated Go and TypeScript bindings in gen/ may be stale. This means:
+- The Go build compiles (approval_handler.go directly accesses the store, not generated code).
+- The TypeScript client (useApprovals.ts) uses generated types — this needs verification.
+
+### Remaining Work
+
+**Story 5 — Review Queue Integration**: NOT STARTED
+- Enrich ReviewItem with pending_approval field when reason is APPROVAL_PENDING.
+- Add Approve/Deny buttons to ReviewQueuePanel items.
+- Optional: distinct approval notification sound.
+
+**Story 6 — Mobile UX**: NOT STARTED
+- Responsive ApprovalCard layout for mobile viewports.
+- Mobile banner (vs toast) for small screens.
+- Optional: vibration feedback.
+
+### Session Hook Injection — Worktree Gap
+
+InjectHookConfig is called in CreateSession, but its integration with worktree sessions needs validation. The function writes to `<rootDir>/.claude/settings.local.json` using `GetEffectiveRootDir()`. Worktree sessions should use the worktree directory. Needs a smoke test.
+
+---
 
 ---
 

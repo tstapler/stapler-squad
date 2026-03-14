@@ -1734,11 +1734,43 @@ Enable users to discover, monitor, and interact with external Claude Code proces
 
 ---
 
+## IN PROGRESS: Claude Code Hook Approval (Remote Approve/Reject)
+
+**Status**: Stories 1-4 substantially complete, Stories 5-6 pending
+**Priority**: P1 - Active development (closes the approval response loop)
+**Epic ID**: EPIC-APPROVAL-001
+**Feature Plan**: [docs/tasks/claude-code-hook-approval.md](docs/tasks/claude-code-hook-approval.md)
+**Updated**: 2026-03-13
+
+### What Is Complete
+
+- **Backend Store** (`server/services/approval_store.go`): Thread-safe ApprovalStore with Create, Resolve, CancelSession, CleanupExpired.
+- **HTTP Hook Endpoint** (`server/services/approval_handler.go`): POST /api/hooks/permission-request blocks until user decides; timeout at 4 min; wired in server.go.
+- **Session Hook Injection**: InjectHookConfig merges .claude/settings.local.json at session creation via session_service.go.
+- **ConnectRPC RPCs** (proto + handlers): ResolveApproval and ListPendingApprovals defined and wired.
+- **Web UI Components**: ApprovalCard, ApprovalPanel, ApprovalNavBadge, useApprovals hook.
+- **Notification Integration**: NotificationToast shows Approve/Deny for approval_needed; useSessionNotifications resolves approval via RPC.
+- **Navigation Badge**: ApprovalNavBadge rendered in Header showing live pending count.
+- **Go build**: Passes (go build ./... clean as of 2026-03-13).
+
+### What Remains
+
+1. **Run `make proto-gen`** — regenerate TypeScript bindings so PendingApprovalProto and the RPC stubs are up to date in the web app. (Critical — useApprovals.ts uses generated types.)
+2. **End-to-end smoke test** — create a session, trigger a Bash approval in Claude Code, verify the approval appears in the web UI and Approve works.
+3. **Story 5: Review Queue Integration** — Approve/Deny buttons on review queue items with pending_approval enrichment (2-3 tasks, ~5h).
+4. **Story 6: Mobile UX** — responsive layout, mobile banner (2-3 tasks, ~5h).
+
+### Highest-Priority Next Action
+
+Run `make proto-gen` then do an end-to-end smoke test. If the UI renders and approve/deny work, the core feature is shippable. Stories 5-6 are enhancements.
+
+---
+
 ## Context Notes
 
-**Last Updated**: 2025-12-05
-**Current Phase**: All P1/P2 features complete - Test stabilization in progress
-**Next Milestone**: Resolve BUG-008 (CRITICAL) then continue test stabilization
+**Last Updated**: 2026-03-13
+**Current Phase**: Approval feature (Stories 1-4) complete — needs proto regen + smoke test
+**Next Milestone**: Verify end-to-end approval flow works; then Stories 5-6 or ship Stories 1-4
 
 **Completed Projects**:
 1. **Web UI Implementation** - ✅ 100% complete (all 5 stories)
@@ -1751,40 +1783,11 @@ Enable users to discover, monitor, and interact with external Claude Code proces
 8. **Claude Config Editor Phase 2.5** - ✅ TUI integration complete (E key binding)
 9. **Claude Config Editor Phase 3** - ✅ Web UI complete (Monaco, validation, navigation)
 10. **Test Stabilization Bug Fixes** - ✅ 4 bugs fixed (BUG-004 through BUG-007) in 90 minutes
+11. **Hook Approval Stories 1-4** - ✅ Backend, HTTP endpoint, RPCs, web UI components all implemented
 
 **Current Status**:
-- All major MVP features complete and production-ready
+- Approval feature: Stories 1-4 complete, Stories 5-6 pending; needs proto regen + smoke test
 - 7 bugs fixed total (BUG-001 through BUG-007)
-- **1 CRITICAL bug blocking test development** (BUG-008 - sessions don't render in tests)
+- 1 CRITICAL bug blocking test development (BUG-008 - sessions don't render in tests)
 - 4 additional bugs require investigation (BUG-009 through BUG-012)
 - Config Editor fully functional in both TUI and Web UI
-- State file optimized from 34MB → ~800KB (97.6% reduction)
-
-**Test Stabilization Progress**:
-- ✅ Fixed: QueueView nil pointer (BUG-004)
-- ✅ Fixed: Category expansion wrong boolean (BUG-005)
-- ✅ Fixed: Category name transformation mismatch (BUG-006)
-- ✅ Fixed: Default category expansion not forced (BUG-007)
-- ❌ **CRITICAL**: Category rendering in tests - sessions don't render (BUG-008)
-- 🔍 Investigating: Session package test failures (BUG-009)
-- 🔍 Investigating: tmux banner/prompt detection (BUG-010)
-- 🔍 Investigating: UI category rendering tests (BUG-011)
-- 🔍 Investigating: Testutil package failures (BUG-012)
-
-**Next Steps** (Prioritized):
-1. **CRITICAL**: Fix BUG-008 (2.5-4.5 hours) - Blocks all UI test development
-2. **High Priority**: Investigate BUG-009, BUG-010, BUG-011 (11-18 hours combined)
-3. **Medium Priority**: Fix BUG-012 testutil infrastructure (4-6 hours)
-4. **Future**: Phase 4 Integration & Polish - Final testing and documentation
-5. **Future**: New feature development - Review medium/long term priorities
-
-**Recommendation**:
-- **Immediate**: Fix BUG-008 (CRITICAL) to unblock test development
-- **Short-term**: Investigate remaining high-severity bugs to assess production impact
-- **Medium-term**: Complete test stabilization (estimated 20-30 hours total)
-- **Long-term**: Project is production-ready for deployment, but test suite needs stabilization for maintainability
-
-**Risk Assessment**:
-- **Production risk**: LOW (bugs are test-specific, no known production issues)
-- **Development risk**: HIGH (broken tests prevent confident refactoring and feature development)
-- **Technical debt**: MEDIUM (test infrastructure needs investment, but doesn't affect current features)
