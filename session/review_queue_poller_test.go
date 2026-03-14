@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 	"time"
+
+	"claude-squad/session/detection"
 )
 
 // TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged verifies that
@@ -267,7 +269,7 @@ func TestReviewQueue_SortsByLastActivity(t *testing.T) {
 	}
 
 	t.Logf("✓ Review queue correctly sorted by LastActivity (most recent first)")
-	t.Logf("  1. %s - Last activity: %s ago", items[0].SessionID, formatDuration(time.Since(items[0].LastActivity)))
-	t.Logf("  2. %s - Last activity: %s ago", items[1].SessionID, formatDuration(time.Since(items[1].LastActivity)))
-	t.Logf("  3. %s - Last activity: %s ago", items[2].SessionID, formatDuration(time.Since(items[2].LastActivity)))
+	t.Logf("  1. %s - Last activity: %s ago", items[0].SessionID, detection.FormatDuration(time.Since(items[0].LastActivity)))
+	t.Logf("  2. %s - Last activity: %s ago", items[1].SessionID, detection.FormatDuration(time.Since(items[1].LastActivity)))
+	t.Logf("  3. %s - Last activity: %s ago", items[2].SessionID, detection.FormatDuration(time.Since(items[2].LastActivity)))
 }

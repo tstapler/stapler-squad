@@ -2,7 +2,6 @@ package server
 
 import (
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/config"
 	"claude-squad/server/events"
 	"claude-squad/session"
 	"context"
@@ -23,8 +22,12 @@ func TestReactiveQueueManagerIntegration(t *testing.T) {
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	testState := config.NewTestState(testDir)
-	storage, err := session.NewStorage(testState)
+	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
+	if err != nil {
+		t.Fatalf("Failed to create repository: %v", err)
+	}
+	defer repo.Close()
+	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -165,8 +168,12 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	testState := config.NewTestState(testDir)
-	storage, err := session.NewStorage(testState)
+	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
+	if err != nil {
+		t.Fatalf("Failed to create repository: %v", err)
+	}
+	defer repo.Close()
+	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -256,8 +263,12 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	testState := config.NewTestState(testDir)
-	storage, err := session.NewStorage(testState)
+	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
+	if err != nil {
+		t.Fatalf("Failed to create repository: %v", err)
+	}
+	defer repo.Close()
+	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -335,8 +346,12 @@ func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(10)
-	testState := config.NewTestState(testDir)
-	storage, err := session.NewStorage(testState)
+	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
+	if err != nil {
+		t.Fatalf("Failed to create repository: %v", err)
+	}
+	defer repo.Close()
+	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -417,8 +432,12 @@ func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(queue, statusManager, nil)
 	eventBus := events.NewEventBus(100)
-	testState := config.NewTestState(testDir)
-	storage, err := session.NewStorage(testState)
+	repo, err := session.NewEntRepository(session.WithDatabasePath(filepath.Join(testDir, "sessions.db")))
+	if err != nil {
+		b.Fatalf("Failed to create repository: %v", err)
+	}
+	defer repo.Close()
+	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		b.Fatalf("Failed to create storage: %v", err)
 	}

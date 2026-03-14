@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/session/detection"
 	"claude-squad/log"
 	"context"
 	"fmt"
@@ -35,7 +36,7 @@ type ReviewQueuePoller struct {
 	storage        *Storage
 	instances      []*Instance
 	config         ReviewQueuePollerConfig
-	statusDetector *StatusDetector // For detecting status in sessions without ClaudeController
+	statusDetector *detection.StatusDetector // For detecting status in sessions without ClaudeController
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -58,7 +59,7 @@ func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager *InstanceS
 		storage:        storage,
 		instances:      make([]*Instance, 0),
 		config:         config,
-		statusDetector: NewStatusDetector(), // For detecting status in sessions without ClaudeController
+		statusDetector: detection.NewStatusDetector(), // For detecting status in sessions without ClaudeController
 	}
 }
 
@@ -189,13 +190,13 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 // Uses multiple signals to determine if the session is responding to user input.
 func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusInfo) bool {
 	// Signal 1: Status change from prompt state to active/processing
-	if statusInfo.ClaudeStatus == StatusActive ||
-		statusInfo.ClaudeStatus == StatusProcessing {
+	if statusInfo.ClaudeStatus == detection.StatusActive ||
+		statusInfo.ClaudeStatus == detection.StatusProcessing {
 		return true
 	}
 
 	// Signal 2: Idle detector shows Active state
-	if statusInfo.IdleState.State == IdleStateActive {
+	if statusInfo.IdleState.State == detection.IdleStateActive {
 		return true
 	}
 
@@ -355,7 +356,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			// Get idle state from controller
 			idleState, lastActivity := controller.GetIdleState()
 			log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected idle state=%s, lastActivity=%s",
-				inst.Title, idleState.String(), formatDuration(time.Since(lastActivity)))
+				inst.Title, idleState.String(), detection.FormatDuration(time.Since(lastActivity)))
 
 			// IMPORTANT: Check Claude status FIRST before idle state handling.
 			// Status-based conditions (approval, input required, error) take priority over
@@ -363,7 +364,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			// even if terminal activity makes the session appear "active".
 
 			// Check for approval needs (highest priority for user prompts)
-			if statusInfo.ClaudeStatus == StatusNeedsApproval || statusInfo.PendingApprovals > 0 {
+			if statusInfo.ClaudeStatus == detection.StatusNeedsApproval || statusInfo.PendingApprovals > 0 {
 				reason = ReasonApprovalPending
 				priority = PriorityHigh
 				shouldAdd = true
@@ -378,7 +379,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 
 			// Check for input required (explicit prompts asking for user input)
-			if statusInfo.ClaudeStatus == StatusInputRequired {
+			if statusInfo.ClaudeStatus == detection.StatusInputRequired {
 				reason = ReasonInputRequired
 				priority = PriorityMedium
 				shouldAdd = true
@@ -392,7 +393,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 
 			// Check for errors (highest priority)
-			if statusInfo.ClaudeStatus == StatusError {
+			if statusInfo.ClaudeStatus == detection.StatusError {
 				reason = ReasonErrorState
 				priority = PriorityUrgent
 				shouldAdd = true
@@ -406,7 +407,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 
 			// Check for tests failing (high priority - actionable failures)
-			if statusInfo.ClaudeStatus == StatusTestsFailing {
+			if statusInfo.ClaudeStatus == detection.StatusTestsFailing {
 				reason = ReasonTestsFailing
 				priority = PriorityHigh
 				shouldAdd = true
@@ -420,7 +421,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 
 			// Check for task completion (high priority - user wants to know when work is done)
-			if statusInfo.ClaudeStatus == StatusSuccess {
+			if statusInfo.ClaudeStatus == detection.StatusSuccess {
 				reason = ReasonTaskComplete
 				priority = PriorityLow // Low priority since it's informational, not blocking
 				shouldAdd = true
@@ -437,18 +438,18 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			// This ensures user prompts aren't hidden just because terminal is "active".
 			if !shouldAdd {
 				switch idleState {
-				case IdleStateActive:
+				case detection.IdleStateActive:
 					// Actively working, remove from queue (but only if no prompt detected above)
 					log.DebugLog.Printf("[ReviewQueue] Session '%s': Active state with no prompts - removing from queue", inst.Title)
 					rqp.queue.Remove(inst.Title)
 					return
 
-				case IdleStateWaiting:
+				case detection.IdleStateWaiting:
 					// Normal idle state (e.g., INSERT mode) - don't add by default
 					log.DebugLog.Printf("[ReviewQueue] Session '%s': Waiting state - will check for specific issues", inst.Title)
 					shouldAdd = false
 
-				case IdleStateTimeout:
+				case detection.IdleStateTimeout:
 					// Definite timeout - been idle too long
 					// Use semantic ReasonIdle instead of deprecated ReasonIdleTimeout
 					reason = ReasonIdle
@@ -456,7 +457,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 					shouldAdd = true
 					idleDuration := time.Since(lastActivity)
 					context = "Session idle - ready for next task"
-					log.DebugLog.Printf("[ReviewQueue] Session '%s': Idle detected - idle for %s", inst.Title, formatDuration(idleDuration))
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': Idle detected - idle for %s", inst.Title, detection.FormatDuration(idleDuration))
 				}
 			}
 
@@ -497,7 +498,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				inst.Title, detectedStatus.String())
 
 			// Check for approval needs (highest priority for user prompts)
-			if detectedStatus == StatusNeedsApproval {
+			if detectedStatus == detection.StatusNeedsApproval {
 				reason = ReasonApprovalPending
 				priority = PriorityHigh
 				shouldAdd = true
@@ -510,7 +511,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 
 			// Check for input required (explicit prompts asking for user input)
-			if detectedStatus == StatusInputRequired {
+			if detectedStatus == detection.StatusInputRequired {
 				reason = ReasonInputRequired
 				priority = PriorityMedium
 				shouldAdd = true
@@ -523,7 +524,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 
 			// Check for errors (highest priority)
-			if detectedStatus == StatusError {
+			if detectedStatus == detection.StatusError {
 				reason = ReasonErrorState
 				priority = PriorityUrgent
 				shouldAdd = true
@@ -536,7 +537,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			}
 
 			// If actively processing, don't add to queue
-			if detectedStatus == StatusActive || detectedStatus == StatusProcessing {
+			if detectedStatus == detection.StatusActive || detectedStatus == detection.StatusProcessing {
 				log.DebugLog.Printf("[ReviewQueue] Session '%s': Active/processing state detected - not adding to queue", inst.Title)
 				rqp.queue.Remove(inst.Title)
 				return
@@ -558,7 +559,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				shouldAdd = true
 				context = "Session idle - ready for next task"
 				log.DebugLog.Printf("[ReviewQueue] Session '%s': Basic idle check - %s since UpdatedAt",
-					inst.Title, formatDuration(idleDuration))
+					inst.Title, detection.FormatDuration(idleDuration))
 			}
 		}
 
@@ -606,7 +607,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	// IMPORTANT: Respect acknowledgment - don't flag as stale if user already acknowledged
 	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
 	log.InfoLog.Printf("[ReviewQueue] Session '%s': Staleness check - %s since last meaningful output (threshold: %s, shouldAdd=%v, priority=%v)",
-		inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold), shouldAdd, priority)
+		inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold), shouldAdd, priority)
 
 	// Check if user has acknowledged this session after it became stale
 	// If acknowledged after last output, don't re-flag as stale
@@ -618,7 +619,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				inst.Title)
 		} else {
 			log.InfoLog.Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - time since output (%s) > threshold (%s)",
-				inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold))
+				inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold))
 
 			// Only override if we don't already have a higher-priority reason.
 			// Only set stale if not already flagged with Medium priority or higher.
@@ -628,10 +629,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				priority = PriorityLow // Lower priority than approval/error, but should be reviewed
 				shouldAdd = true
 				context = fmt.Sprintf("No activity for %s - session may be stuck or waiting",
-					formatDuration(timeSinceOutput))
+					detection.FormatDuration(timeSinceOutput))
 
 				log.InfoLog.Printf("[ReviewQueue] Session '%s': SETTING shouldAdd=true - flagged as stale - %s since last meaningful output",
-					inst.Title, formatDuration(timeSinceOutput))
+					inst.Title, detection.FormatDuration(timeSinceOutput))
 			} else {
 				log.InfoLog.Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
 					inst.Title, reason.String())
@@ -639,7 +640,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		}
 	} else {
 		log.InfoLog.Printf("[ReviewQueue] Session '%s': NOT STALE - time since output (%s) <= threshold (%s)",
-			inst.Title, formatDuration(timeSinceOutput), formatDuration(rqp.config.StalenessThreshold))
+			inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold))
 	}
 
 	// Check if user dismissed this session.
@@ -659,7 +660,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		timeSinceAck := time.Since(inst.LastAcknowledged)
 		if timeSinceAck < gracePeriod {
 			log.DebugLog.Printf("[ReviewQueue] Session '%s': Still in grace period (%s / %s since acknowledgment), skipping queue add",
-				inst.Title, formatDuration(timeSinceAck), formatDuration(gracePeriod))
+				inst.Title, detection.FormatDuration(timeSinceAck), detection.FormatDuration(gracePeriod))
 			rqp.queue.Remove(inst.Title)
 			return
 		}
@@ -747,7 +748,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			Branch:       inst.Branch,
 			Path:         inst.Path,
 			WorkingDir:   inst.WorkingDir,
-			Status:       inst.Status,
+			Status:       inst.Status.String(),
 			Tags:         inst.Tags,
 			Category:     inst.Category,
 			DiffStats:    inst.GetDiffStats(),
@@ -839,4 +840,15 @@ func (rqp *ReviewQueuePoller) FindInstance(sessionID string) *Instance {
 		}
 	}
 	return nil
+}
+
+// GetInstances returns a snapshot of all live in-memory instances held by the poller.
+// Use this instead of LoadInstances() for read-only operations to avoid the side effect
+// of FromInstanceData() calling Start() on every non-paused instance.
+func (rqp *ReviewQueuePoller) GetInstances() []*Instance {
+	rqp.mu.RLock()
+	defer rqp.mu.RUnlock()
+	result := make([]*Instance, len(rqp.instances))
+	copy(result, rqp.instances)
+	return result
 }

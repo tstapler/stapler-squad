@@ -1,6 +1,14 @@
 package session
 
-import "time"
+import (
+	"claude-squad/log"
+	"claude-squad/session/detection"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/spaolacci/murmur3"
+)
 
 // ReviewState holds all timestamps and state related to the review queue and terminal activity
 // tracking for a session. It is embedded in Instance so all field accesses remain unchanged.
@@ -51,6 +59,27 @@ type ReviewState struct {
 	ProcessingGraceUntil time.Time
 }
 
+// ---- Package-level helpers -----------------------------------------------
+
+// computeContentSignature computes a MurmurHash3 64-bit hash of terminal content.
+// This signature is used to detect actual content changes vs app restarts with unchanged content.
+// MurmurHash3 is significantly faster than SHA256 and perfect for non-cryptographic checksums.
+// Returns a hex-encoded string representation of the hash (16 characters for 64-bit hash).
+func computeContentSignature(content string) string {
+	hash := murmur3.Sum64([]byte(content))
+	return fmt.Sprintf("%016x", hash)
+}
+
+// truncateString truncates s to maxLen characters. Used for log messages.
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen]
+}
+
+// ---- ReviewState methods --------------------------------------------------
+
 // TimeSinceLastMeaningfulOutput returns how long ago meaningful terminal output was received.
 // If LastMeaningfulOutput is zero, returns the duration since the given createdAt time.
 // Caller must hold the relevant mutex if concurrent access is possible.
@@ -92,4 +121,72 @@ func (rs *ReviewState) UserRespondedAfterPrompt() bool {
 	return !rs.LastUserResponse.IsZero() &&
 		!rs.LastPromptDetected.IsZero() &&
 		rs.LastUserResponse.After(rs.LastPromptDetected)
+}
+
+// UpdateTimestamps updates terminal activity timestamps based on processed content.
+//   - rawContent: original captured output, used for the LastTerminalUpdate non-blank check.
+//   - filteredContent: rawContent with tmux banners stripped, used for signature computation.
+//   - shouldUpdateMeaningful: true when the content carries meaningful signal (not just banners).
+//   - sessionTitle: used only for structured debug logging.
+//
+// Caller must hold Instance.stateMutex.
+func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) {
+	now := time.Now()
+
+	// Always update LastTerminalUpdate for any non-blank raw output.
+	if len(strings.TrimSpace(rawContent)) > 0 {
+		rs.LastTerminalUpdate = now
+	}
+
+	if shouldUpdateMeaningful {
+		signature := computeContentSignature(filteredContent)
+		if signature != rs.LastOutputSignature {
+			rs.LastMeaningfulOutput = now
+			rs.LastOutputSignature = signature
+			log.LogForSession(sessionTitle, "debug", "Updated LastMeaningfulOutput timestamp")
+		} else {
+			log.LogForSession(sessionTitle, "debug", "Skipped LastMeaningfulOutput update (content unchanged since last update)")
+		}
+	} else {
+		log.LogForSession(sessionTitle, "debug", "NOT updating LastMeaningfulOutput - content classified as non-meaningful (banners only)")
+	}
+}
+
+// ComputePromptSignature computes a hash of the prompt content using the last 10 lines.
+// Returns "" if content is empty.
+// Caller may call this without holding any lock.
+func (rs *ReviewState) ComputePromptSignature(content string) string {
+	if content == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	const contextLines = 10
+	startIdx := len(lines) - contextLines
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	promptContext := strings.Join(lines[startIdx:], "\n")
+	hash := murmur3.Sum64([]byte(promptContext))
+	return fmt.Sprintf("%016x", hash)
+}
+
+// DetectAndTrackPrompt detects whether the current status represents a new user-facing prompt
+// and records it. Returns true only when a NEW prompt is detected (signature changed or first).
+// Caller must hold Instance.stateMutex when writing prompt fields.
+func (rs *ReviewState) DetectAndTrackPrompt(content string, statusInfo InstanceStatusInfo, sessionTitle string) bool {
+	isPromptState := statusInfo.ClaudeStatus == detection.StatusNeedsApproval ||
+		statusInfo.ClaudeStatus == detection.StatusInputRequired
+	if !isPromptState {
+		return false
+	}
+
+	promptSignature := rs.ComputePromptSignature(content)
+	isNewPrompt := promptSignature != rs.LastPromptSignature || rs.LastPromptSignature == ""
+	if isNewPrompt {
+		rs.LastPromptDetected = time.Now()
+		rs.LastPromptSignature = promptSignature
+		log.InfoLog.Printf("[Prompt] New prompt detected for '%s': signature=%s...",
+			sessionTitle, truncateString(promptSignature, 8))
+	}
+	return isNewPrompt
 }

@@ -3,6 +3,8 @@ package session
 import (
 	"testing"
 	"time"
+
+	"claude-squad/session/detection"
 )
 
 func TestReviewQueue_AddAndGet(t *testing.T) {
@@ -626,7 +628,7 @@ func TestDeterminePriority(t *testing.T) {
 	tests := []struct {
 		name        string
 		reason      AttentionReason
-		status      DetectedStatus
+		status      detection.DetectedStatus
 		age         time.Duration
 		expectedMin Priority
 		expectedMax Priority
@@ -634,7 +636,7 @@ func TestDeterminePriority(t *testing.T) {
 		{
 			name:        "error always urgent",
 			reason:      ReasonInputRequired,
-			status:      StatusError,
+			status:      detection.StatusError,
 			age:         0,
 			expectedMin: PriorityUrgent,
 			expectedMax: PriorityUrgent,
@@ -642,7 +644,7 @@ func TestDeterminePriority(t *testing.T) {
 		{
 			name:        "approval pending is high",
 			reason:      ReasonApprovalPending,
-			status:      StatusNeedsApproval,
+			status:      detection.StatusNeedsApproval,
 			age:         0,
 			expectedMin: PriorityHigh,
 			expectedMax: PriorityHigh,
@@ -650,7 +652,7 @@ func TestDeterminePriority(t *testing.T) {
 		{
 			name:        "old item gets elevated",
 			reason:      ReasonTaskComplete,
-			status:      StatusReady,
+			status:      detection.StatusReady,
 			age:         35 * time.Minute,
 			expectedMin: PriorityMedium,
 			expectedMax: PriorityLow,

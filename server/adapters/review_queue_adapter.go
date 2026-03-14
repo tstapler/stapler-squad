@@ -26,7 +26,7 @@ func ReviewItemToProto(item *session.ReviewItem) *sessionv1.ReviewItem {
 		Branch:       item.Branch,
 		Path:         item.Path,
 		WorkingDir:   item.WorkingDir,
-		Status:       StatusToProto(item.Status),
+		Status:       StatusStringToProto(item.Status),
 		Tags:         item.Tags,
 		Category:     item.Category,
 		LastActivity: timestamppb.New(item.LastActivity),
