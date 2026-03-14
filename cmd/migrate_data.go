@@ -73,7 +73,7 @@ func main() {
 
 	// Run migration
 	fmt.Println("\nStarting migration...")
-	result, err := session.MigrateJSONToSQLite(session.MigrationOptions{
+	result, err := session.MigrateJSONToEnt(session.MigrationOptions{
 		JSONPath:       tmpPath,
 		SQLitePath:     dbPath,
 		ForceOverwrite: true,
@@ -104,12 +104,12 @@ func main() {
 
 	// Validate migration
 	fmt.Println("\nValidating migration...")
-	if err := session.ValidateMigration(tmpPath, dbPath); err != nil {
+	if err := session.ValidateEntMigration(tmpPath, dbPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Validation failed: %v\n", err)
 		os.Exit(1)
 	}
 
 	fmt.Println("✓ Migration validated successfully!")
-	fmt.Println("\nAll session data has been migrated to SQLite.")
+	fmt.Println("\nAll session data has been migrated to Ent.")
 	fmt.Println("The original state.json has been backed up.")
 }

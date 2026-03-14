@@ -179,8 +179,12 @@ var (
 				log.Close()
 			}()
 
-			state := config.LoadState()
-			storage, err := session.NewStorage(state)
+			repo, err := session.NewEntRepository()
+			if err != nil {
+				return fmt.Errorf("failed to initialize repository: %w", err)
+			}
+			defer repo.Close()
+			storage, err := session.NewStorageWithRepository(repo)
 			if err != nil {
 				return fmt.Errorf("failed to initialize storage: %w", err)
 			}
@@ -295,8 +299,12 @@ var (
 			fmt.Println("=== PTY Initialization Test ===")
 
 			// Load existing sessions
-			state := config.LoadState()
-			storage, err := session.NewStorage(state)
+			repo, err := session.NewEntRepository()
+			if err != nil {
+				return fmt.Errorf("failed to initialize repository: %w", err)
+			}
+			defer repo.Close()
+			storage, err := session.NewStorageWithRepository(repo)
 			if err != nil {
 				return fmt.Errorf("failed to initialize storage: %w", err)
 			}
@@ -391,8 +399,12 @@ var (
 			log.InitializeWithConfig(false, logCfg)
 			defer log.Close()
 
-			state := config.LoadState()
-			storage, err := session.NewStorage(state)
+			repo, err := session.NewEntRepository()
+			if err != nil {
+				return fmt.Errorf("failed to initialize repository: %w", err)
+			}
+			defer repo.Close()
+			storage, err := session.NewStorageWithRepository(repo)
 			if err != nil {
 				return fmt.Errorf("failed to initialize storage: %w", err)
 			}

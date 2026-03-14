@@ -78,28 +78,13 @@ type Repository interface {
 // RepositoryOption is a function that configures a repository
 type RepositoryOption func(interface{}) error
 
-// WithDatabasePath sets the database file path for SQLite repositories
+// WithDatabasePath sets the database file path for the repository
 func WithDatabasePath(path string) RepositoryOption {
 	return func(r interface{}) error {
-		if sqliteRepo, ok := r.(*SQLiteRepository); ok {
-			sqliteRepo.dbPath = path
-			return nil
-		}
 		if entRepo, ok := r.(*EntRepository); ok {
 			entRepo.dbPath = path
 			return nil
 		}
 		return nil // No-op for unsupported repository types
-	}
-}
-
-// WithMigrationMode enables migration mode for dual-write scenarios
-func WithMigrationMode(enabled bool) RepositoryOption {
-	return func(r interface{}) error {
-		if sqliteRepo, ok := r.(*SQLiteRepository); ok {
-			sqliteRepo.migrationMode = enabled
-			return nil
-		}
-		return nil
 	}
 }

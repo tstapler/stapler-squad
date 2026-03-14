@@ -41,17 +41,16 @@ type MigrationResult struct {
 	SQLiteDatabasePath string
 }
 
-// MigrateJSONToSQLite migrates session data from JSON to SQLite storage
-// It creates a backup of the JSON file and validates the migration
-func MigrateJSONToSQLite(opts MigrationOptions) (*MigrationResult, error) {
+// MigrateJSONToEnt migrates session data from JSON to Ent ORM storage.
+func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 	startTime := time.Now()
 	result := &MigrationResult{
 		SQLiteDatabasePath: opts.SQLitePath,
 	}
 
-	log.InfoLog.Printf("Starting migration from JSON to SQLite")
+	log.InfoLog.Printf("Starting migration from JSON to Ent")
 	log.InfoLog.Printf("JSON source: %s", opts.JSONPath)
-	log.InfoLog.Printf("SQLite target: %s", opts.SQLitePath)
+	log.InfoLog.Printf("Ent DB target: %s", opts.SQLitePath)
 	log.InfoLog.Printf("Dry run: %v", opts.DryRun)
 
 	// Step 1: Validate JSON file exists and is readable
@@ -82,7 +81,6 @@ func MigrateJSONToSQLite(opts MigrationOptions) (*MigrationResult, error) {
 	if !opts.DryRun {
 		backupPath := opts.BackupPath
 		if backupPath == "" {
-			// Default backup path: original file with timestamp
 			timestamp := time.Now().Format("20060102_150405")
 			dir := filepath.Dir(opts.JSONPath)
 			base := filepath.Base(opts.JSONPath)
@@ -100,13 +98,13 @@ func MigrateJSONToSQLite(opts MigrationOptions) (*MigrationResult, error) {
 		log.InfoLog.Printf("Dry run: Backup creation skipped")
 	}
 
-	// Step 4: Check if SQLite database already exists
-	log.InfoLog.Printf("Step 4/6: Checking SQLite database...")
+	// Step 4: Check if Ent database already exists
+	log.InfoLog.Printf("Step 4/6: Checking Ent database...")
 	if _, err := os.Stat(opts.SQLitePath); err == nil {
 		if !opts.ForceOverwrite {
-			return nil, fmt.Errorf("SQLite database already exists at %s (use ForceOverwrite to overwrite)", opts.SQLitePath)
+			return nil, fmt.Errorf("Ent database already exists at %s (use ForceOverwrite to overwrite)", opts.SQLitePath)
 		}
-		log.WarningLog.Printf("SQLite database exists, will be overwritten (ForceOverwrite=true)")
+		log.WarningLog.Printf("Ent database exists, will be overwritten (ForceOverwrite=true)")
 
 		if !opts.DryRun {
 			if err := os.Remove(opts.SQLitePath); err != nil {
@@ -115,8 +113,8 @@ func MigrateJSONToSQLite(opts MigrationOptions) (*MigrationResult, error) {
 		}
 	}
 
-	// Step 5: Initialize SQLite repository
-	log.InfoLog.Printf("Step 5/6: Initializing SQLite repository...")
+	// Step 5: Initialize Ent repository
+	log.InfoLog.Printf("Step 5/6: Initializing Ent repository...")
 	if opts.DryRun {
 		log.InfoLog.Printf("Dry run: Database initialization skipped")
 	} else {
@@ -126,14 +124,14 @@ func MigrateJSONToSQLite(opts MigrationOptions) (*MigrationResult, error) {
 			return nil, fmt.Errorf("failed to create database directory: %w", err)
 		}
 
-		repo, err := NewSQLiteRepository(WithDatabasePath(opts.SQLitePath))
+		repo, err := NewEntRepository(WithDatabasePath(opts.SQLitePath))
 		if err != nil {
-			return nil, fmt.Errorf("failed to initialize SQLite repository: %w", err)
+			return nil, fmt.Errorf("failed to initialize Ent repository: %w", err)
 		}
 		defer repo.Close()
 
 		// Step 6: Migrate each session
-		log.InfoLog.Printf("Step 6/6: Migrating sessions to SQLite...")
+		log.InfoLog.Printf("Step 6/6: Migrating sessions to Ent...")
 		ctx := context.Background()
 
 		for i, instanceData := range instances {
@@ -153,7 +151,6 @@ func MigrateJSONToSQLite(opts MigrationOptions) (*MigrationResult, error) {
 
 	result.Duration = time.Since(startTime)
 
-	// Log final results
 	log.InfoLog.Printf("Migration completed in %v", result.Duration)
 	log.InfoLog.Printf("Total sessions: %d", result.TotalSessions)
 	log.InfoLog.Printf("Migrated: %d", result.MigratedSessions)
@@ -169,15 +166,15 @@ func MigrateJSONToSQLite(opts MigrationOptions) (*MigrationResult, error) {
 
 	if opts.DryRun {
 		log.InfoLog.Printf("Dry run completed - no changes made")
-		result.MigratedSessions = result.TotalSessions // In dry run, assume all would migrate
+		result.MigratedSessions = result.TotalSessions
 	}
 
 	return result, nil
 }
 
-// ValidateMigration verifies that all sessions from JSON were successfully migrated to SQLite
-func ValidateMigration(jsonPath, sqlitePath string) error {
-	log.InfoLog.Printf("Validating migration from %s to %s", jsonPath, sqlitePath)
+// ValidateEntMigration verifies that all sessions from JSON were successfully migrated to Ent
+func ValidateEntMigration(jsonPath, entDBPath string) error {
+	log.InfoLog.Printf("Validating Ent migration from %s to %s", jsonPath, entDBPath)
 
 	// Load JSON data
 	jsonData, err := os.ReadFile(jsonPath)
@@ -190,47 +187,46 @@ func ValidateMigration(jsonPath, sqlitePath string) error {
 		return fmt.Errorf("failed to unmarshal JSON data: %w", err)
 	}
 
-	// Load SQLite data
-	repo, err := NewSQLiteRepository(WithDatabasePath(sqlitePath))
+	// Load Ent data
+	repo, err := NewEntRepository(WithDatabasePath(entDBPath))
 	if err != nil {
-		return fmt.Errorf("failed to open SQLite database: %w", err)
+		return fmt.Errorf("failed to open Ent database: %w", err)
 	}
 	defer repo.Close()
 
 	ctx := context.Background()
-	sqliteInstances, err := repo.List(ctx)
+	entInstances, err := repo.List(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to list SQLite sessions: %w", err)
+		return fmt.Errorf("failed to list Ent sessions: %w", err)
 	}
 
 	// Compare counts
-	if len(jsonInstances) != len(sqliteInstances) {
-		return fmt.Errorf("session count mismatch: JSON has %d, SQLite has %d",
-			len(jsonInstances), len(sqliteInstances))
+	if len(jsonInstances) != len(entInstances) {
+		return fmt.Errorf("session count mismatch: JSON has %d, Ent has %d",
+			len(jsonInstances), len(entInstances))
 	}
 
-	// Create map of SQLite sessions by title for quick lookup
-	sqliteMap := make(map[string]InstanceData)
-	for _, inst := range sqliteInstances {
-		sqliteMap[inst.Title] = inst
+	// Create map of Ent sessions by title for quick lookup
+	entMap := make(map[string]InstanceData)
+	for _, inst := range entInstances {
+		entMap[inst.Title] = inst
 	}
 
-	// Verify each JSON session exists in SQLite
+	// Verify each JSON session exists in Ent
 	missingCount := 0
 	mismatchCount := 0
 	for _, jsonInst := range jsonInstances {
-		sqliteInst, exists := sqliteMap[jsonInst.Title]
+		entInst, exists := entMap[jsonInst.Title]
 		if !exists {
-			log.ErrorLog.Printf("Session missing in SQLite: %s", jsonInst.Title)
+			log.ErrorLog.Printf("Session missing in Ent: %s", jsonInst.Title)
 			missingCount++
 			continue
 		}
 
-		// Verify key fields match
-		if jsonInst.Path != sqliteInst.Path ||
-			jsonInst.Branch != sqliteInst.Branch ||
-			jsonInst.Status != sqliteInst.Status ||
-			jsonInst.Program != sqliteInst.Program {
+		if jsonInst.Path != entInst.Path ||
+			jsonInst.Branch != entInst.Branch ||
+			jsonInst.Status != entInst.Status ||
+			jsonInst.Program != entInst.Program {
 			log.ErrorLog.Printf("Session data mismatch for: %s", jsonInst.Title)
 			mismatchCount++
 		}
@@ -240,7 +236,7 @@ func ValidateMigration(jsonPath, sqlitePath string) error {
 		return fmt.Errorf("validation failed: %d missing, %d mismatched", missingCount, mismatchCount)
 	}
 
-	log.InfoLog.Printf("Migration validation successful: all %d sessions verified", len(jsonInstances))
+	log.InfoLog.Printf("Ent migration validation successful: all %d sessions verified", len(jsonInstances))
 	return nil
 }
 

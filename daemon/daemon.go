@@ -22,12 +22,13 @@ func RunDaemon(cfg *config.Config) error {
 	// Log initialization is done by the caller
 	log.InfoLog.Printf("starting daemon")
 
-	// Load state with built-in locking
-	state := config.LoadState()
-	// Ensure we release locks when done
-	defer state.Close()
+	repo, err := session.NewEntRepository()
+	if err != nil {
+		return fmt.Errorf("failed to initialize storage: %w", err)
+	}
+	defer repo.Close()
 
-	storage, err := session.NewStorage(state)
+	storage, err := session.NewStorageWithRepository(repo)
 	if err != nil {
 		return fmt.Errorf("failed to initialize storage: %w", err)
 	}

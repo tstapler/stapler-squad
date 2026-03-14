@@ -17,16 +17,6 @@ const (
 	InstancesFileName = "instances.json"
 )
 
-// InstanceStorage handles instance-related operations
-type InstanceStorage interface {
-	// SaveInstances saves the raw instance data
-	SaveInstances(instancesJSON json.RawMessage) error
-	// GetInstances returns the raw instance data
-	GetInstances() json.RawMessage
-	// DeleteAllInstances removes all stored instances
-	DeleteAllInstances() error
-}
-
 // AppState handles application-level state
 type AppState interface {
 	// GetHelpScreensSeen returns the bitmask of seen help screens
@@ -55,9 +45,8 @@ type UIStateAccess interface {
 	GetSelectedIndex() int
 }
 
-// StateManager combines instance storage and app state management
+// StateManager combines app state and UI state management
 type StateManager interface {
-	InstanceStorage
 	AppState
 	UIStateAccess
 
@@ -86,8 +75,6 @@ type UIState struct {
 type State struct {
 	// HelpScreensSeen is a bitmask tracking which help screens have been shown
 	HelpScreensSeen uint32 `json:"help_screens_seen"`
-	// Instances stores the serialized instance data as raw JSON
-	InstancesData json.RawMessage `json:"instances"`
 	// UI stores the UI preferences and state
 	UI UIState `json:"ui"`
 
@@ -111,7 +98,6 @@ func DefaultState() *State {
 		// Return a minimal state without locking if we can't get the config dir
 		return &State{
 			HelpScreensSeen: 0,
-			InstancesData:   json.RawMessage("[]"),
 			UI: UIState{
 				HidePaused:       false,
 				CategoryExpanded: make(map[string]bool),
@@ -128,7 +114,6 @@ func DefaultState() *State {
 
 	return &State{
 		HelpScreensSeen: 0,
-		InstancesData:   json.RawMessage("[]"),
 		UI: UIState{
 			HidePaused:       false,
 			CategoryExpanded: make(map[string]bool),
@@ -150,7 +135,6 @@ func NewTestState(testDir string) *State {
 		// Return a minimal state without locking if we can't create the test dir
 		return &State{
 			HelpScreensSeen: 0,
-			InstancesData:   json.RawMessage("[]"),
 			UI: UIState{
 				HidePaused:       false,
 				CategoryExpanded: make(map[string]bool),
@@ -167,7 +151,6 @@ func NewTestState(testDir string) *State {
 
 	return &State{
 		HelpScreensSeen: 0,
-		InstancesData:   json.RawMessage("[]"),
 		UI: UIState{
 			HidePaused:       false,
 			CategoryExpanded: make(map[string]bool),
@@ -245,7 +228,6 @@ func (s *State) loadFromDiskWithoutLocking() error {
 
 	// Update our fields but keep the lock file and timeout
 	s.HelpScreensSeen = newState.HelpScreensSeen
-	s.InstancesData = newState.InstancesData
 
 	// Update UI state, ensuring CategoryExpanded map is initialized
 	s.UI = newState.UI
@@ -256,210 +238,9 @@ func (s *State) loadFromDiskWithoutLocking() error {
 	return nil
 }
 
-// No longer needed as LoadState now includes locking
-
-// SaveState saves the state to disk with locking and timeout protection
+// SaveState saves the state to disk with locking.
 func SaveState(state *State) error {
-	// Try to merge with any existing state on disk before saving, with timeout protection
-	done := make(chan error, 1)
-	go func() {
-		done <- state.mergeWithExistingState()
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			log.WarningLog.Printf("failed to merge with existing state: %v", err)
-			// Continue with save anyway
-		}
-	case <-time.After(5 * time.Second):
-		log.WarningLog.Printf("state merge timed out after 5 seconds - skipping merge and proceeding with save")
-		// Continue with save anyway to prevent blocking the UI
-	}
-
 	return state.saveToDisk()
-}
-
-// loadInstancesDataFromDisk loads just the instances data from disk with a read lock
-// This is used by mergeWithExistingState to avoid creating a new State object
-func (s *State) loadInstancesDataFromDisk() (json.RawMessage, error) {
-	// Skip locking if we don't have a lock file initialized
-	if s.lockFile == nil {
-		log.WarningLog.Printf("lock file not initialized, loading instances without locking")
-		return s.loadInstancesDataWithoutLocking()
-	}
-
-	// Use a shorter timeout for merge operations to fail fast
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
-	// Try to acquire a shared read lock with retries
-	locked, err := s.lockFile.TryRLockContext(ctx, 100*time.Millisecond)
-	if err != nil {
-		return nil, fmt.Errorf("failed to acquire read lock for merge: %w", err)
-	}
-	if !locked {
-		return nil, fmt.Errorf("could not acquire read lock for merge within timeout")
-	}
-	defer s.lockFile.Unlock()
-
-	// Now that we have a lock, load the data
-	return s.loadInstancesDataWithoutLocking()
-}
-
-// loadInstancesDataWithoutLocking loads just the instances data from disk without locking
-func (s *State) loadInstancesDataWithoutLocking() (json.RawMessage, error) {
-	configDir, err := GetConfigDir()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get config directory: %w", err)
-	}
-
-	statePath := filepath.Join(configDir, StateFileName)
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// File doesn't exist yet - return empty JSON array
-			return json.RawMessage("[]"), nil
-		}
-		return nil, fmt.Errorf("failed to read state file: %w", err)
-	}
-
-	// Parse just to extract instances field
-	var diskState struct {
-		InstancesData json.RawMessage `json:"instances"`
-	}
-	if err := json.Unmarshal(data, &diskState); err != nil {
-		return nil, fmt.Errorf("failed to parse state file: %w", err)
-	}
-
-	return diskState.InstancesData, nil
-}
-
-// mergeWithExistingState loads existing state from disk and merges it with current state
-// This ensures we don't overwrite changes made by other processes
-// IMPORTANT: Uses existing lock instead of creating new State to avoid same-process lock contention
-func (s *State) mergeWithExistingState() error {
-	// Load disk data directly without creating a new State object
-	// This avoids same-process lock contention from multiple flock instances
-	diskInstancesData, err := s.loadInstancesDataFromDisk()
-	if err != nil {
-		return fmt.Errorf("failed to load existing state for merging: %w", err)
-	}
-
-	// Merge instances by deserializing both sets
-	var ourInstances []json.RawMessage
-	var diskInstances []json.RawMessage
-
-	// Deserialize our instances
-	if len(s.InstancesData) > 0 {
-		if err := json.Unmarshal(s.InstancesData, &ourInstances); err != nil {
-			return fmt.Errorf("failed to unmarshal our instances: %w", err)
-		}
-	}
-
-	// Deserialize disk instances
-	if len(diskInstancesData) > 0 {
-		if err := json.Unmarshal(diskInstancesData, &diskInstances); err != nil {
-			return fmt.Errorf("failed to unmarshal disk instances: %w", err)
-		}
-	}
-
-	// If we don't have any instances, just use the disk instances
-	if len(ourInstances) == 0 {
-		s.InstancesData = diskInstancesData
-		return nil
-	}
-
-	// If there are no disk instances, we don't need to merge
-	if len(diskInstances) == 0 {
-		return nil
-	}
-
-	// For merging, create maps to identify instances by "title" field
-	ourInstanceMap := make(map[string]json.RawMessage)
-	diskInstanceMap := make(map[string]json.RawMessage)
-
-	// Build map of our instances by title
-	for _, instance := range ourInstances {
-		// Parse instance to get title
-		var parsed struct {
-			Title string `json:"title"`
-		}
-		if err := json.Unmarshal(instance, &parsed); err != nil {
-			log.WarningLog.Printf("failed to parse instance: %v", err)
-			continue
-		}
-		if parsed.Title != "" {
-			ourInstanceMap[parsed.Title] = instance
-		}
-	}
-
-	// Build map of disk instances by title
-	for _, instance := range diskInstances {
-		// Parse instance to get title
-		var parsed struct {
-			Title string `json:"title"`
-		}
-		if err := json.Unmarshal(instance, &parsed); err != nil {
-			log.WarningLog.Printf("failed to parse disk instance: %v", err)
-			continue
-		}
-		if parsed.Title != "" && !containsInstance(ourInstances, parsed.Title) {
-			// Only add disk instances that aren't already in our instances
-			diskInstanceMap[parsed.Title] = instance
-		}
-	}
-
-	// Now create a merged list with both sets of instances
-	mergedInstances := ourInstances // Start with our instances
-
-	// Add disk instances that aren't in our instances
-	for title, instance := range diskInstanceMap {
-		if _, exists := ourInstanceMap[title]; !exists {
-			log.InfoLog.Printf("merging instance from disk: %s", title)
-			mergedInstances = append(mergedInstances, instance)
-		}
-	}
-
-	// Re-serialize the merged instances with timeout protection
-	marshalDone := make(chan []byte, 1)
-	marshalErr := make(chan error, 1)
-
-	go func() {
-		data, err := json.Marshal(mergedInstances)
-		if err != nil {
-			marshalErr <- err
-			return
-		}
-		marshalDone <- data
-	}()
-
-	select {
-	case mergedData := <-marshalDone:
-		// Update our instances
-		s.InstancesData = mergedData
-		return nil
-	case err := <-marshalErr:
-		return fmt.Errorf("failed to marshal merged instances: %w", err)
-	case <-time.After(1 * time.Second):
-		return fmt.Errorf("JSON marshaling timed out after 1 second - data may be too large or contain circular references")
-	}
-}
-
-// containsInstance checks if instances contains an instance with the given title
-func containsInstance(instances []json.RawMessage, title string) bool {
-	for _, instance := range instances {
-		var parsed struct {
-			Title string `json:"title"`
-		}
-		if err := json.Unmarshal(instance, &parsed); err != nil {
-			continue
-		}
-		if parsed.Title == title {
-			return true
-		}
-	}
-	return false
 }
 
 // saveToDisk saves state to disk with an exclusive write lock
@@ -519,30 +300,6 @@ func (s *State) saveToDiskWithoutLocking() error {
 	}
 
 	return nil
-}
-
-// InstanceStorage interface implementation
-
-// SaveInstances saves the raw instance data with locking and merging
-func (s *State) SaveInstances(instancesJSON json.RawMessage) error {
-	s.InstancesData = instancesJSON
-	return SaveState(s)
-}
-
-// GetInstances returns the raw instance data after refreshing from disk
-func (s *State) GetInstances() json.RawMessage {
-	// Refresh state from disk first to get latest changes
-	if err := s.RefreshState(); err != nil {
-		log.WarningLog.Printf("failed to refresh state: %v", err)
-		// Continue with current state
-	}
-	return s.InstancesData
-}
-
-// DeleteAllInstances removes all stored instances with locking
-func (s *State) DeleteAllInstances() error {
-	s.InstancesData = json.RawMessage("[]")
-	return SaveState(s)
 }
 
 // AppState interface implementation
