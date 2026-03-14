@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/session/detection"
 	"claude-squad/log"
 	"context"
 	"fmt"
@@ -16,8 +17,8 @@ type ClaudeController struct {
 	instance       *Instance
 	ptyAccess      *PTYAccess
 	responseStream *ResponseStream
-	statusDetector *StatusDetector
-	idleDetector   *IdleDetector // NEW: Idle state detection
+	statusDetector *detection.StatusDetector
+	idleDetector   *detection.IdleDetector // NEW: Idle state detection
 	queue          *CommandQueue
 	executor       *CommandExecutor
 	history        *CommandHistory
@@ -67,10 +68,10 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 	cc.responseStream = NewResponseStream(cc.sessionName, cc.ptyAccess)
 
 	// Create status detector
-	cc.statusDetector = NewStatusDetector()
+	cc.statusDetector = detection.NewStatusDetector()
 
 	// Create idle detector
-	cc.idleDetector = NewIdleDetector(cc.sessionName, cc.ptyAccess)
+	cc.idleDetector = detection.NewIdleDetector(cc.sessionName, cc.ptyAccess)
 
 	// CRITICAL FIX: Restore idle detector state from persisted timestamps
 	// This prevents false "timeout" detection after server restarts by maintaining
@@ -378,7 +379,7 @@ func (cc *ClaudeController) Unsubscribe(subscriberID string) error {
 }
 
 // GetCurrentStatus detects the current status of the Claude instance.
-func (cc *ClaudeController) GetCurrentStatus() (DetectedStatus, string) {
+func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string) {
 	cc.mu.RLock()
 	defer cc.mu.RUnlock()
 
@@ -386,17 +387,17 @@ func (cc *ClaudeController) GetCurrentStatus() (DetectedStatus, string) {
 	// The PTY buffer may contain incomplete data or just status bar updates,
 	// while Preview() captures the current visible terminal pane content.
 	if cc.instance == nil {
-		return StatusUnknown, "Instance not initialized"
+		return detection.StatusUnknown, "Instance not initialized"
 	}
 
 	content, err := cc.instance.Preview()
 	if err != nil {
 		log.DebugLog.Printf("[GetCurrentStatus] Session '%s': Preview() error: %v", cc.sessionName, err)
-		return StatusUnknown, "Failed to get terminal content"
+		return detection.StatusUnknown, "Failed to get terminal content"
 	}
 
 	if content == "" {
-		return StatusUnknown, "No terminal content"
+		return detection.StatusUnknown, "No terminal content"
 	}
 
 	// Filter tmux status bars before pattern matching to prevent false positives
@@ -568,29 +569,29 @@ func (cc *ClaudeController) ClearQueue() error {
 // This uses pattern-based detection on terminal content.
 func (cc *ClaudeController) IsIdle() bool {
 	state, _ := cc.GetIdleState()
-	return state == IdleStateWaiting || state == IdleStateTimeout
+	return state == detection.IdleStateWaiting || state == detection.IdleStateTimeout
 }
 
 // IsActive returns whether the Claude instance is actively processing commands.
 func (cc *ClaudeController) IsActive() bool {
 	state, _ := cc.GetIdleState()
-	return state == IdleStateActive
+	return state == detection.IdleStateActive
 }
 
 // GetIdleState returns the current idle state with timing information.
 // Returns the state and the timestamp of last activity.
-func (cc *ClaudeController) GetIdleState() (IdleState, time.Time) {
+func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 	cc.mu.RLock()
 	defer cc.mu.RUnlock()
 
 	if cc.idleDetector == nil {
-		return IdleStateUnknown, time.Time{}
+		return detection.IdleStateUnknown, time.Time{}
 	}
 
 	// Use instance.Preview() to get actual terminal content instead of PTY buffer.
 	// The PTY buffer may contain incomplete data or just status bar updates,
 	// while Preview() captures the current visible terminal pane content.
-	var state IdleState
+	var state detection.IdleState
 	if cc.instance != nil {
 		content, err := cc.instance.Preview()
 		if err != nil {
@@ -616,7 +617,7 @@ func (cc *ClaudeController) GetIdleState() (IdleState, time.Time) {
 }
 
 // GetIdleStateInfo returns comprehensive idle state information.
-func (cc *ClaudeController) GetIdleStateInfo() IdleStateInfo {
+func (cc *ClaudeController) GetIdleStateInfo() detection.IdleStateInfo {
 	// Get the current state using the reliable detection method
 	state, lastActivity := cc.GetIdleState()
 
@@ -624,15 +625,15 @@ func (cc *ClaudeController) GetIdleStateInfo() IdleStateInfo {
 	defer cc.mu.RUnlock()
 
 	if cc.idleDetector == nil {
-		return IdleStateInfo{
-			State:        IdleStateUnknown,
+		return detection.IdleStateInfo{
+			State:        detection.IdleStateUnknown,
 			SessionName:  cc.sessionName,
 			LastActivity: time.Now(),
 		}
 	}
 
 	// Build the info using the reliably-detected state
-	return IdleStateInfo{
+	return detection.IdleStateInfo{
 		State:           state,
 		LastActivity:    lastActivity,
 		IdleDuration:    time.Since(lastActivity),

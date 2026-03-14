@@ -696,3 +696,38 @@ message VCSInfo {
   // Count of modified/added/deleted files
   int32 modified_file_count = 9;
 }
+
+// ============================================================================
+// Hook Approval Types
+// ============================================================================
+
+// PendingApprovalProto represents a Claude Code tool use request awaiting user decision.
+// Created when Claude Code fires a PermissionRequest HTTP hook to claude-squad.
+message PendingApprovalProto {
+  // Unique approval identifier (UUID).
+  string id = 1;
+
+  // claude-squad session this approval belongs to (may be "unknown" for unmapped sessions).
+  string session_id = 2;
+
+  // Claude Code tool name (e.g., "Bash", "Edit", "Write").
+  string tool_name = 3;
+
+  // Tool input key-value pairs (e.g., {"command": "npm test"}).
+  map<string, string> tool_input = 4;
+
+  // Working directory where Claude Code is running.
+  string cwd = 5;
+
+  // Claude Code's permission mode (e.g., "default", "auto").
+  string permission_mode = 6;
+
+  // When this approval was created.
+  google.protobuf.Timestamp created_at = 7;
+
+  // When this approval expires (server-side cutoff before hook timeout).
+  google.protobuf.Timestamp expires_at = 8;
+
+  // Seconds remaining before expiry (convenience field for countdown timers).
+  int32 seconds_remaining = 9;
+}

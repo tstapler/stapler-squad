@@ -1,4 +1,4 @@
-package session
+package detection
 
 import (
 	"fmt"
@@ -231,12 +231,12 @@ func (ad *ApprovalDetector) Detect(output string) []*ApprovalRequest {
 }
 
 // DetectInChunk processes a single response chunk for approval patterns.
-func (ad *ApprovalDetector) DetectInChunk(chunk ResponseChunk) *ApprovalRequest {
-	if chunk.Error != nil {
+func (ad *ApprovalDetector) DetectInChunk(data []byte, err error) *ApprovalRequest {
+	if err != nil {
 		return nil
 	}
 
-	requests := ad.Detect(string(chunk.Data))
+	requests := ad.Detect(string(data))
 	if len(requests) > 0 {
 		return requests[0] // Return first detected request
 	}

@@ -28,12 +28,17 @@ type HookMatcher struct {
 }
 
 // HookCommand defines a command to execute when a hook triggers.
+// Supports both "command" hooks (shell execution) and "http" hooks (HTTP POST).
 type HookCommand struct {
-	// Type is always "command" for command hooks
+	// Type is "command" or "http"
 	Type string `json:"type"`
-	// Command is the shell command to execute
-	Command string `json:"command"`
-	// Timeout in milliseconds (optional)
+	// Command is the shell command to execute (command hooks only)
+	Command string `json:"command,omitempty"`
+	// URL is the HTTP endpoint to POST to (http hooks only)
+	URL string `json:"url,omitempty"`
+	// Headers are optional HTTP headers (http hooks only)
+	Headers map[string]string `json:"headers,omitempty"`
+	// Timeout in seconds for http hooks, milliseconds for command hooks (optional)
 	Timeout int `json:"timeout,omitempty"`
 }
 
@@ -96,12 +101,17 @@ func GenerateHooksFile(meta *HooksMetadata) (string, error) {
 				},
 			},
 			{
+				// HTTP hook blocks Claude Code until the user approves/denies in the web UI.
+				// Timeout 300s matches Claude Code's max hook timeout.
 				Matcher: HookMatcher{Event: "PermissionRequest"},
 				Hooks: []HookCommand{
 					{
-						Type:    "command",
-						Command: fmt.Sprintf("%s %s permission", envPrefix, hookHandler),
-						Timeout: 5000,
+						Type: "http",
+						URL:  "http://localhost:8543/api/hooks/permission-request",
+						Timeout: 300,
+						Headers: map[string]string{
+							"X-CS-Session-ID": meta.TmuxSession,
+						},
 					},
 				},
 			},

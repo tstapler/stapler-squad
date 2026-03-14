@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/session/detection"
 	"fmt"
 	"regexp"
 	"strings"
@@ -13,7 +14,7 @@ type ApprovalPolicy struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name"`
 	Description     string            `json:"description"`
-	ApprovalTypes   []ApprovalType    `json:"approval_types"` // Types this policy applies to
+	ApprovalTypes   []detection.ApprovalType    `json:"approval_types"` // Types this policy applies to
 	Enabled         bool              `json:"enabled"`
 	Priority        int               `json:"priority"`   // Higher priority policies checked first
 	Conditions      []PolicyCondition `json:"conditions"` // All must match
@@ -73,7 +74,7 @@ type PolicyAuditEntry struct {
 	PolicyID       string           `json:"policy_id"`
 	PolicyName     string           `json:"policy_name"`
 	Action         PolicyAction     `json:"action"`
-	MatchedRequest *ApprovalRequest `json:"matched_request"`
+	MatchedRequest *detection.ApprovalRequest `json:"matched_request"`
 	Reason         string           `json:"reason"`
 }
 
@@ -193,7 +194,7 @@ func (pe *PolicyEngine) ListPolicies() []*ApprovalPolicy {
 }
 
 // Evaluate evaluates an approval request against all policies.
-func (pe *PolicyEngine) Evaluate(request *ApprovalRequest) (*PolicyDecision, error) {
+func (pe *PolicyEngine) Evaluate(request *detection.ApprovalRequest) (*PolicyDecision, error) {
 	pe.mu.Lock()
 	defer pe.mu.Unlock()
 
@@ -256,7 +257,7 @@ func (pe *PolicyEngine) Evaluate(request *ApprovalRequest) (*PolicyDecision, err
 
 // PolicyDecision represents the result of policy evaluation.
 type PolicyDecision struct {
-	Request       *ApprovalRequest `json:"request"`
+	Request       *detection.ApprovalRequest `json:"request"`
 	Timestamp     time.Time        `json:"timestamp"`
 	Decision      PolicyAction     `json:"decision"`
 	Matched       bool             `json:"matched"`
@@ -265,7 +266,7 @@ type PolicyDecision struct {
 }
 
 // appliesToType checks if a policy applies to a given approval type.
-func (pe *PolicyEngine) appliesToType(policy *ApprovalPolicy, requestType ApprovalType) bool {
+func (pe *PolicyEngine) appliesToType(policy *ApprovalPolicy, requestType detection.ApprovalType) bool {
 	if len(policy.ApprovalTypes) == 0 {
 		return true // Empty list = applies to all types
 	}
@@ -333,7 +334,7 @@ func (pe *PolicyEngine) checkUsageLimit(policy *ApprovalPolicy) bool {
 }
 
 // matchesConditions checks if all policy conditions match the request.
-func (pe *PolicyEngine) matchesConditions(policy *ApprovalPolicy, request *ApprovalRequest) bool {
+func (pe *PolicyEngine) matchesConditions(policy *ApprovalPolicy, request *detection.ApprovalRequest) bool {
 	for _, condition := range policy.Conditions {
 		if !pe.evaluateCondition(&condition, request) {
 			return false
@@ -344,7 +345,7 @@ func (pe *PolicyEngine) matchesConditions(policy *ApprovalPolicy, request *Appro
 }
 
 // evaluateCondition evaluates a single condition against a request.
-func (pe *PolicyEngine) evaluateCondition(condition *PolicyCondition, request *ApprovalRequest) bool {
+func (pe *PolicyEngine) evaluateCondition(condition *PolicyCondition, request *detection.ApprovalRequest) bool {
 	// Get field value from request
 	fieldValue := pe.getFieldValue(condition.Field, request)
 
@@ -376,7 +377,7 @@ func (pe *PolicyEngine) evaluateCondition(condition *PolicyCondition, request *A
 }
 
 // getFieldValue extracts a field value from an approval request.
-func (pe *PolicyEngine) getFieldValue(field string, request *ApprovalRequest) string {
+func (pe *PolicyEngine) getFieldValue(field string, request *detection.ApprovalRequest) string {
 	switch field {
 	case "type":
 		return string(request.Type)
@@ -509,7 +510,7 @@ func CreateSafeCommandPolicy() *ApprovalPolicy {
 	return &ApprovalPolicy{
 		Name:          "Safe Commands",
 		Description:   "Auto-approve common read-only commands",
-		ApprovalTypes: []ApprovalType{ApprovalCommand},
+		ApprovalTypes: []detection.ApprovalType{detection.ApprovalCommand},
 		Enabled:       true,
 		Priority:      100,
 		Action:        ActionAutoApprove,
@@ -528,7 +529,7 @@ func CreateNoDestructivePolicy() *ApprovalPolicy {
 	return &ApprovalPolicy{
 		Name:          "Block Destructive Commands",
 		Description:   "Auto-reject potentially destructive operations",
-		ApprovalTypes: []ApprovalType{ApprovalCommand, ApprovalFileWrite},
+		ApprovalTypes: []detection.ApprovalType{detection.ApprovalCommand, detection.ApprovalFileWrite},
 		Enabled:       true,
 		Priority:      200, // Higher priority than safe commands
 		Action:        ActionAutoReject,
@@ -547,7 +548,7 @@ func CreateBusinessHoursPolicy() *ApprovalPolicy {
 	return &ApprovalPolicy{
 		Name:          "Business Hours Auto-Approve",
 		Description:   "Auto-approve during business hours only",
-		ApprovalTypes: []ApprovalType{ApprovalCommand, ApprovalFileWrite},
+		ApprovalTypes: []detection.ApprovalType{detection.ApprovalCommand, detection.ApprovalFileWrite},
 		Enabled:       true,
 		Priority:      50,
 		Action:        ActionAutoApprove,

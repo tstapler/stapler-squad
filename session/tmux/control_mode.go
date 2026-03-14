@@ -66,11 +66,12 @@ func (t *TmuxSession) StartControlMode() error {
 	t.controlModeStdin = stdin
 	t.controlModeDone = make(chan struct{})
 
-	// Initialize subscriber map
+	// Initialize subscriber map and reset exited flag
 	t.controlModeSubMu.Lock()
 	if t.controlModeSubscribers == nil {
 		t.controlModeSubscribers = make(map[string]chan []byte)
 	}
+	t.controlModeExited = false
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines for output processing and error monitoring
@@ -160,6 +161,18 @@ func (t *TmuxSession) readControlModeOutput() {
 	}
 
 	log.InfoLog.Printf("Control mode output reader finished for session '%s'", t.sanitizedName)
+
+	// Control mode process has exited. Close all subscriber channels so that waiting
+	// goroutines (e.g. streamViaControlMode) detect the end-of-stream and unblock.
+	// Using controlModeSubMu (write lock) ensures this is serialized with StopControlMode
+	// and SubscribeToControlModeUpdates, preventing double-close panics.
+	t.controlModeSubMu.Lock()
+	t.controlModeExited = true
+	for id, ch := range t.controlModeSubscribers {
+		close(ch)
+		delete(t.controlModeSubscribers, id)
+	}
+	t.controlModeSubMu.Unlock()
 }
 
 // monitorControlModeErrors monitors stderr for control mode errors.
@@ -330,6 +343,15 @@ func (t *TmuxSession) SubscribeToControlModeUpdates() (string, chan []byte) {
 
 	subscriberID := uuid.New().String()
 	ch := make(chan []byte, 100) // Buffered channel for burst handling
+
+	// If the control mode process already exited before we subscribed, return a
+	// pre-closed channel so the caller immediately sees end-of-stream.
+	if t.controlModeExited {
+		log.InfoLog.Printf("Control mode already exited for session '%s', returning pre-closed channel to subscriber %s",
+			t.sanitizedName, subscriberID)
+		close(ch)
+		return subscriberID, ch
+	}
 
 	if t.controlModeSubscribers == nil {
 		t.controlModeSubscribers = make(map[string]chan []byte)

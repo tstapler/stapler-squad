@@ -27,16 +27,15 @@ type Server struct {
 //
 // Initialization Order (dependencies flow downward):
 //
-//  1. SessionService      — creates Storage, EventBus, ReviewQueue
-//  2. StatusManager       — depends on nothing; created before storage starts
+//  1. SessionService      — creates Storage (Ent-backed), EventBus, ReviewQueue
+//  2. StatusManager       — depends on nothing; created before instances load
 //  3. ReviewQueuePoller   — depends on ReviewQueue, StatusManager, Storage
-//  4. Storage.Start()     — loads instances from disk; must happen after StatusManager is wired
-//  5. Instance wiring     — SetReviewQueue + SetStatusManager on each loaded instance
-//  6. Instance.Start()    — starts tmux sessions; requires wired dependencies
-//  7. Controller startup  — requires started instances and StatusManager
-//  8. ReactiveQueueMgr    — depends on ReviewQueue, Poller, EventBus, StatusManager, Storage
-//  9. ScrollbackManager   — independent; depends only on filesystem paths
-// 10. TmuxStreamerManager — independent
+//  4. Instance wiring     — LoadInstances, SetReviewQueue + SetStatusManager on each
+//  5. Instance.Start()    — starts tmux sessions; requires wired dependencies
+//  6. Controller startup  — requires started instances and StatusManager
+//  7. ReactiveQueueMgr    — depends on ReviewQueue, Poller, EventBus, StatusManager, Storage
+//  8. ScrollbackManager   — independent; depends only on filesystem paths
+//  9. TmuxStreamerManager — independent
 // 11. ExternalDiscovery   — depends on Storage, ReviewQueue, StatusManager, Poller (via callbacks)
 // 12. ExternalApprovalMonitor — depends on ExternalDiscovery
 //
@@ -102,6 +101,18 @@ func NewServer(addr string) *Server {
 		srv.mux.HandleFunc("/api/external/approvals", externalWsHandler.HandleApprovals)
 		srv.mux.HandleFunc("/api/external/approvals/respond", externalWsHandler.HandleApprovalResponse)
 		log.InfoLog.Printf("Registered External Session approval handlers at /api/external/approvals/*")
+
+		// Register Claude Code HTTP hook approval endpoint
+		approvalHandler := services.NewApprovalHandler(
+			deps.SessionService.GetApprovalStore(),
+			deps.Storage,
+			deps.EventBus,
+		)
+		srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
+		log.InfoLog.Printf("Registered Claude Code hook approval handler at /api/hooks/permission-request")
+
+		// Start background expiration cleanup for pending approvals
+		services.StartExpirationCleanup(context.Background(), deps.SessionService.GetApprovalStore())
 
 		// Register Escape Code Analytics handler for debugging terminal rendering
 		escapeCodeHandler := services.NewEscapeCodeHandler()

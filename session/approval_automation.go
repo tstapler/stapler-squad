@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/session/detection"
 	"context"
 	"fmt"
 	"sync"
@@ -10,7 +11,7 @@ import (
 // ApprovalAutomation orchestrates automatic approval handling.
 type ApprovalAutomation struct {
 	sessionName   string
-	detector      *ApprovalDetector
+	detector      *detection.ApprovalDetector
 	policyEngine  *PolicyEngine
 	controller    *ClaudeController
 	mu            sync.RWMutex
@@ -25,12 +26,12 @@ type ApprovalAutomation struct {
 
 // PendingApproval represents an approval request awaiting action.
 type PendingApproval struct {
-	Request      *ApprovalRequest
+	Request      *detection.ApprovalRequest
 	Decision     *PolicyDecision
 	ReceivedAt   time.Time
 	ExpiresAt    time.Time
 	Status       PendingApprovalStatus
-	UserResponse *ApprovalResponse
+	UserResponse *detection.ApprovalResponse
 }
 
 // PendingApprovalStatus tracks the state of a pending approval.
@@ -46,7 +47,7 @@ const (
 // ApprovalEvent represents an event in the approval automation system.
 type ApprovalEvent struct {
 	Type      ApprovalEventType
-	Request   *ApprovalRequest
+	Request   *detection.ApprovalRequest
 	Decision  *PolicyDecision
 	Timestamp time.Time
 	Details   string
@@ -91,7 +92,7 @@ func DefaultApprovalAutomationOptions() ApprovalAutomationOptions {
 func NewApprovalAutomation(sessionName string, controller *ClaudeController) *ApprovalAutomation {
 	return &ApprovalAutomation{
 		sessionName:   sessionName,
-		detector:      NewApprovalDetector(),
+		detector:      detection.NewApprovalDetector(),
 		policyEngine:  NewPolicyEngine(),
 		controller:    controller,
 		approvalQueue: make([]*PendingApproval, 0),
@@ -156,7 +157,7 @@ func (aa *ApprovalAutomation) processResponseStream(responseCh <-chan ResponseCh
 			}
 
 			// Detect approval requests in the chunk
-			request := aa.detector.DetectInChunk(chunk)
+			request := aa.detector.DetectInChunk(chunk.Data, chunk.Error)
 			if request == nil {
 				continue
 			}
@@ -183,7 +184,7 @@ func (aa *ApprovalAutomation) processResponseStream(responseCh <-chan ResponseCh
 }
 
 // handlePolicyDecision processes a policy decision for an approval request.
-func (aa *ApprovalAutomation) handlePolicyDecision(request *ApprovalRequest, decision *PolicyDecision, options ApprovalAutomationOptions) {
+func (aa *ApprovalAutomation) handlePolicyDecision(request *detection.ApprovalRequest, decision *PolicyDecision, options ApprovalAutomationOptions) {
 	switch decision.Decision {
 	case ActionAutoApprove:
 		aa.handleAutoApprove(request, decision, options)
@@ -207,14 +208,14 @@ func (aa *ApprovalAutomation) handlePolicyDecision(request *ApprovalRequest, dec
 }
 
 // handleAutoApprove automatically approves and optionally executes a request.
-func (aa *ApprovalAutomation) handleAutoApprove(request *ApprovalRequest, decision *PolicyDecision, options ApprovalAutomationOptions) {
+func (aa *ApprovalAutomation) handleAutoApprove(request *detection.ApprovalRequest, decision *PolicyDecision, options ApprovalAutomationOptions) {
 	// Update request status
-	response := &ApprovalResponse{
+	response := &detection.ApprovalResponse{
 		Approved:  true,
 		Timestamp: time.Now(),
 		UserInput: fmt.Sprintf("Auto-approved by policy: %s", decision.MatchedPolicy.Name),
 	}
-	aa.detector.UpdateRequestStatus(request.ID, ApprovalApproved, response)
+	aa.detector.UpdateRequestStatus(request.ID, detection.ApprovalApproved, response)
 
 	// Emit auto-approval event
 	aa.emitEvent(ApprovalEvent{
@@ -232,14 +233,14 @@ func (aa *ApprovalAutomation) handleAutoApprove(request *ApprovalRequest, decisi
 }
 
 // handleAutoReject automatically rejects a request.
-func (aa *ApprovalAutomation) handleAutoReject(request *ApprovalRequest, decision *PolicyDecision) {
+func (aa *ApprovalAutomation) handleAutoReject(request *detection.ApprovalRequest, decision *PolicyDecision) {
 	// Update request status
-	response := &ApprovalResponse{
+	response := &detection.ApprovalResponse{
 		Approved:  false,
 		Timestamp: time.Now(),
 		UserInput: fmt.Sprintf("Auto-rejected by policy: %s", decision.MatchedPolicy.Name),
 	}
-	aa.detector.UpdateRequestStatus(request.ID, ApprovalRejected, response)
+	aa.detector.UpdateRequestStatus(request.ID, detection.ApprovalRejected, response)
 
 	// Emit auto-rejection event
 	aa.emitEvent(ApprovalEvent{
@@ -252,7 +253,7 @@ func (aa *ApprovalAutomation) handleAutoReject(request *ApprovalRequest, decisio
 }
 
 // handlePromptUser adds a request to the queue for user action.
-func (aa *ApprovalAutomation) handlePromptUser(request *ApprovalRequest, decision *PolicyDecision, options ApprovalAutomationOptions) {
+func (aa *ApprovalAutomation) handlePromptUser(request *detection.ApprovalRequest, decision *PolicyDecision, options ApprovalAutomationOptions) {
 	pending := &PendingApproval{
 		Request:    request,
 		Decision:   decision,
@@ -314,7 +315,7 @@ func (aa *ApprovalAutomation) checkExpiredApprovals() {
 		if now.After(pending.ExpiresAt) {
 			// Mark as expired
 			pending.Status = PendingStatusExpired
-			aa.detector.UpdateRequestStatus(pending.Request.ID, ApprovalExpired, nil)
+			aa.detector.UpdateRequestStatus(pending.Request.ID, detection.ApprovalExpired, nil)
 
 			// Emit expired event
 			aa.emitEvent(ApprovalEvent{
@@ -340,7 +341,7 @@ func (aa *ApprovalAutomation) RespondToApproval(requestID string, approved bool,
 	for i, pending := range aa.approvalQueue {
 		if pending.Request.ID == requestID && pending.Status == PendingStatusAwaiting {
 			// Update response
-			pending.UserResponse = &ApprovalResponse{
+			pending.UserResponse = &detection.ApprovalResponse{
 				Approved:  approved,
 				Timestamp: time.Now(),
 				UserInput: userInput,
@@ -348,9 +349,9 @@ func (aa *ApprovalAutomation) RespondToApproval(requestID string, approved bool,
 			pending.Status = PendingStatusProcessed
 
 			// Update detector status
-			status := ApprovalApproved
+			status := detection.ApprovalApproved
 			if !approved {
-				status = ApprovalRejected
+				status = detection.ApprovalRejected
 			}
 			aa.detector.UpdateRequestStatus(requestID, status, pending.UserResponse)
 
@@ -383,13 +384,13 @@ func (aa *ApprovalAutomation) RespondToApproval(requestID string, approved bool,
 }
 
 // canExecute determines if an approval request can be executed.
-func (aa *ApprovalAutomation) canExecute(request *ApprovalRequest) bool {
+func (aa *ApprovalAutomation) canExecute(request *detection.ApprovalRequest) bool {
 	// Only command approvals can be executed
-	return request.Type == ApprovalCommand
+	return request.Type == detection.ApprovalCommand
 }
 
 // executeApproval executes an approved command.
-func (aa *ApprovalAutomation) executeApproval(request *ApprovalRequest, decision *PolicyDecision) {
+func (aa *ApprovalAutomation) executeApproval(request *detection.ApprovalRequest, decision *PolicyDecision) {
 	// Extract command from request
 	command, ok := request.ExtractedData["command"]
 	if !ok {
@@ -442,7 +443,7 @@ func (aa *ApprovalAutomation) GetPendingApprovals() []*PendingApproval {
 }
 
 // GetDetector returns the approval detector for configuration.
-func (aa *ApprovalAutomation) GetDetector() *ApprovalDetector {
+func (aa *ApprovalAutomation) GetDetector() *detection.ApprovalDetector {
 	return aa.detector
 }
 

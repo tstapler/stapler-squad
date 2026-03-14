@@ -84,7 +84,8 @@ type TmuxSession struct {
 	controlModeStdin     io.WriteCloser          // stdin pipe for control mode commands
 	controlModeDone      chan struct{}           // Signal channel for control mode termination
 	controlModeSubscribers map[string]chan []byte // WebSocket clients subscribed to control mode updates
-	controlModeSubMu     sync.RWMutex            // Protects controlModeSubscribers map
+	controlModeSubMu     sync.RWMutex            // Protects controlModeSubscribers map and controlModeExited
+	controlModeExited    bool                    // True after readControlModeOutput exits; new subscribers get pre-closed channel
 }
 
 // windowSize represents terminal dimensions from external sources (like BubbleTea)

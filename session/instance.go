@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/atotto/clipboard"
-	"github.com/spaolacci/murmur3"
 )
 
 type Status int
@@ -32,6 +31,24 @@ const (
 	// NeedsApproval is if the instance is waiting for user approval on a prompt.
 	NeedsApproval
 )
+
+// String returns a human-readable name for the status.
+func (s Status) String() string {
+	switch s {
+	case Running:
+		return "Running"
+	case Ready:
+		return "Ready"
+	case Loading:
+		return "Loading"
+	case Paused:
+		return "Paused"
+	case NeedsApproval:
+		return "NeedsApproval"
+	default:
+		return fmt.Sprintf("Status(%d)", int(s))
+	}
+}
 
 // Instance is a running instance of claude code.
 type Instance struct {
@@ -593,7 +610,7 @@ func (i *Instance) StartWithCleanup(firstTimeSetup bool) (tmux.CleanupFunc, erro
 	return cleanup, nil
 }
 
-// start is the internal implementation for Start and StartWithCleanup
+// start is the internal implementation for Start and StartWithCleanup.
 func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.CleanupFunc) error {
 	log.InfoLog.Printf("Starting instance '%s' (firstTimeSetup: %v)", i.Title, firstTimeSetup)
 
@@ -601,93 +618,21 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		return fmt.Errorf("instance title cannot be empty")
 	}
 
-	log.InfoLog.Printf("Initializing tmux session for instance '%s'", i.Title)
-	var tmuxSession *tmux.TmuxSession
-	if i.tmuxManager.HasSession() {
-		// Use existing tmux session (useful for testing)
-		log.InfoLog.Printf("Reusing existing tmux session for instance '%s'", i.Title)
-		tmuxSession = i.tmuxManager.session
-	} else {
-		// Build the command with session resumption support if applicable
-		// This enables conversation continuity when restarting Claude sessions
-		commandBuilder := NewClaudeCommandBuilder(i.Program, i.claudeSession)
-		enrichedProgram := commandBuilder.Build()
-
-		// Create new tmux session with enriched command
-		log.InfoLog.Printf("Creating new tmux session for instance '%s' with program '%s'", i.Title, enrichedProgram)
-		// Use configurable prefix or default
-		tmuxPrefix := i.TmuxPrefix
-		if tmuxPrefix == "" {
-			tmuxPrefix = "claudesquad_" // Default fallback
-		}
-
-		// Use server socket isolation if specified, otherwise use prefix-only isolation
-		if i.TmuxServerSocket != "" {
-			tmuxSession = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket)
-		} else {
-			tmuxSession = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
-		}
-	}
-	i.tmuxManager.SetSession(tmuxSession)
+	i.initTmuxSession()
 
 	if firstTimeSetup {
-		// Handle different session types
-		switch i.SessionType {
-		case SessionTypeNewWorktree:
-			log.InfoLog.Printf("Performing first-time setup: creating git worktree for instance '%s' at path '%s'", i.Title, i.Path)
-
-			// Use the existing Branch field if set for worktree creation
-			gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch)
-			if err != nil {
-				log.ErrorLog.Printf("Failed to create git worktree for instance '%s': %v", i.Title, err)
-				return fmt.Errorf("failed to create git worktree: %w", err)
-			}
-			log.InfoLog.Printf("Git worktree created successfully for instance '%s', branch: '%s'", i.Title, branchName)
-			i.gitManager.SetWorktree(gitWorktree)
-
-			// Only set the branch if it wasn't already set manually
-			if i.Branch == "" {
-				i.Branch = branchName
-			}
-		case SessionTypeExistingWorktree:
-			if i.ExistingWorktree != "" {
-				log.InfoLog.Printf("Using existing worktree for instance '%s' at path '%s'", i.Title, i.ExistingWorktree)
-
-				// Create GitWorktree from existing worktree path
-				gitWorktree, err := git.NewGitWorktreeFromExisting(i.ExistingWorktree, i.Title)
-				if err != nil {
-					log.ErrorLog.Printf("Failed to create GitWorktree from existing worktree for instance '%s': %v", i.Title, err)
-					return fmt.Errorf("failed to connect to existing worktree: %w", err)
-				}
-
-				log.InfoLog.Printf("Successfully connected to existing worktree for instance '%s', branch: '%s'", i.Title, gitWorktree.GetBranchName())
-				i.gitManager.SetWorktree(gitWorktree)
-				i.Branch = gitWorktree.GetBranchName()
-			} else {
-				log.WarningLog.Printf("SessionTypeExistingWorktree specified but no ExistingWorktree path provided for instance '%s'", i.Title)
-				return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
-			}
-		case SessionTypeDirectory:
-			log.InfoLog.Printf("Creating directory session for instance '%s' at path '%s' (no git worktree)", i.Title, i.Path)
-			// No git worktree creation - just a simple directory session
-			i.gitManager.SetWorktree(nil)
-			i.Branch = ""
-		default:
-			// Fallback to directory session for backward compatibility
-			log.InfoLog.Printf("Unknown session type '%s' for instance '%s', defaulting to directory session", i.SessionType, i.Title)
-			i.gitManager.SetWorktree(nil)
-			i.Branch = ""
+		if err := i.setupFirstTimeWorktree(); err != nil {
+			return err
 		}
 	}
 
-	// Setup error handler to cleanup resources on any error
+	// Cleanup on error: kill session and invalidate the caller's cleanup handle.
 	var setupErr error
 	defer func() {
 		if setupErr != nil {
 			if cleanupErr := i.Kill(); cleanupErr != nil {
 				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
 			}
-			// If we have a cleanup function pointer, set it to nil since startup failed
 			if setupCleanup && cleanup != nil {
 				*cleanup = func() error { return nil }
 			}
@@ -695,77 +640,28 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	}()
 
 	if !firstTimeSetup {
-		// Reuse existing session - use worktree path if available, otherwise use original path
-		var workDir string
+		workDir := i.Path
 		if i.gitManager.HasWorktree() {
 			workDir = i.gitManager.GetWorktreePath()
-		} else {
-			workDir = i.Path // For directory sessions
 		}
 		log.InfoLog.Printf("Restoring existing tmux session for instance '%s' with workDir '%s'", i.Title, workDir)
 		if err := i.tmuxManager.RestoreWithWorkDir(workDir); err != nil {
-			log.ErrorLog.Printf("Failed to restore tmux session for instance '%s': %v", i.Title, err)
 			setupErr = fmt.Errorf("failed to restore existing session: %w", err)
 			return setupErr
 		}
 		log.InfoLog.Printf("Successfully restored tmux session for instance '%s'", i.Title)
 	} else {
-		var startPath string
-
+		basePath := i.Path
 		if i.gitManager.HasWorktree() {
-			// Setup git worktree first
 			log.InfoLog.Printf("Setting up git worktree for instance '%s'", i.Title)
 			if err := i.gitManager.Setup(); err != nil {
-				log.ErrorLog.Printf("Failed to setup git worktree for instance '%s': %v", i.Title, err)
 				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 				return setupErr
 			}
-			log.InfoLog.Printf("Git worktree setup completed for instance '%s'", i.Title)
-
-			// Create new session with worktree path
-			worktreePath := i.gitManager.GetWorktreePath()
-			startPath = worktreePath
-
-			// Use the working directory if specified
-			if i.WorkingDir != "" {
-				// Calculate the full path combining worktree path with working dir
-				if !filepath.IsAbs(i.WorkingDir) {
-					startPath = filepath.Join(worktreePath, i.WorkingDir)
-				} else {
-					startPath = i.WorkingDir
-				}
-
-				// Verify the path exists
-				if _, err := os.Stat(startPath); os.IsNotExist(err) {
-					log.WarningLog.Printf("Working directory '%s' doesn't exist, using worktree root '%s' instead", startPath, worktreePath)
-					startPath = worktreePath
-				}
-			}
-		} else {
-			// Directory session - use the original path directly
-			startPath = i.Path
-
-			// Use the working directory if specified
-			if i.WorkingDir != "" {
-				// Calculate the full path combining base path with working dir
-				if !filepath.IsAbs(i.WorkingDir) {
-					startPath = filepath.Join(i.Path, i.WorkingDir)
-				} else {
-					startPath = i.WorkingDir
-				}
-
-				// Verify the path exists
-				if _, err := os.Stat(startPath); os.IsNotExist(err) {
-					log.WarningLog.Printf("Working directory '%s' doesn't exist, using base path '%s' instead", startPath, i.Path)
-					startPath = i.Path
-				}
-			}
-			log.InfoLog.Printf("Starting directory session for instance '%s' in path '%s'", i.Title, startPath)
+			basePath = i.gitManager.GetWorktreePath()
 		}
-
-		// Start the session in the specified directory
+		startPath := i.resolveStartPath(basePath)
 		if err := i.tmuxManager.Start(startPath); err != nil {
-			// Cleanup git worktree if tmux session creation fails (only if worktree exists)
 			if i.gitManager.HasWorktree() {
 				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
@@ -777,26 +673,105 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	}
 
 	i.SetStatus(Running)
-
-	// Mark instance as successfully started before returning
-	// This must happen before the function returns so that any finalizers
-	// that check Started() will see the correct state
 	i.started = true
 
-	// Start ClaudeController for idle detection and automation
-	// Only start controller for new sessions - loaded sessions get controllers started
-	// by server.go after wiring dependencies (statusManager, reviewQueue)
+	// Start controller for new sessions only; loaded sessions are wired later by server.go.
 	if firstTimeSetup {
-		// This is non-critical - we log errors but don't fail the instance startup
 		if err := i.StartController(); err != nil {
 			log.WarningLog.Printf("Failed to start controller for instance '%s': %v", i.Title, err)
-			// Continue - controller is optional functionality
 		}
 	} else {
 		log.DebugLog.Printf("Skipping controller startup for loaded instance '%s' (will be started after wiring)", i.Title)
 	}
 
 	return nil
+}
+
+// initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
+func (i *Instance) initTmuxSession() {
+	if i.tmuxManager.HasSession() {
+		log.InfoLog.Printf("Reusing existing tmux session for instance '%s'", i.Title)
+		return
+	}
+	commandBuilder := NewClaudeCommandBuilder(i.Program, i.claudeSession)
+	enrichedProgram := commandBuilder.Build()
+	log.InfoLog.Printf("Creating tmux session for instance '%s' with program '%s'", i.Title, enrichedProgram)
+
+	tmuxPrefix := i.TmuxPrefix
+	if tmuxPrefix == "" {
+		tmuxPrefix = "claudesquad_"
+	}
+
+	var session *tmux.TmuxSession
+	if i.TmuxServerSocket != "" {
+		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket)
+	} else {
+		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
+	}
+	i.tmuxManager.SetSession(session)
+}
+
+// setupFirstTimeWorktree creates or attaches to the git worktree based on session type.
+func (i *Instance) setupFirstTimeWorktree() error {
+	switch i.SessionType {
+	case SessionTypeNewWorktree:
+		log.InfoLog.Printf("Creating git worktree for instance '%s' at '%s'", i.Title, i.Path)
+		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch)
+		if err != nil {
+			return fmt.Errorf("failed to create git worktree: %w", err)
+		}
+		i.gitManager.SetWorktree(gitWorktree)
+		if i.Branch == "" {
+			i.Branch = branchName
+		}
+		log.InfoLog.Printf("Git worktree created for instance '%s', branch: '%s'", i.Title, i.Branch)
+	case SessionTypeExistingWorktree:
+		if i.ExistingWorktree == "" {
+			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
+		}
+		log.InfoLog.Printf("Connecting to existing worktree for instance '%s' at '%s'", i.Title, i.ExistingWorktree)
+		gitWorktree, err := git.NewGitWorktreeFromExisting(i.ExistingWorktree, i.Title)
+		if err != nil {
+			return fmt.Errorf("failed to connect to existing worktree: %w", err)
+		}
+		i.gitManager.SetWorktree(gitWorktree)
+		i.Branch = gitWorktree.GetBranchName()
+		log.InfoLog.Printf("Connected to existing worktree for instance '%s', branch: '%s'", i.Title, i.Branch)
+	default: // SessionTypeDirectory and unknown types → no worktree
+		log.InfoLog.Printf("Directory session for instance '%s' at '%s' (no git worktree)", i.Title, i.Path)
+		i.gitManager.SetWorktree(nil)
+		i.Branch = ""
+	}
+	return nil
+}
+
+// resolveStartPath returns the effective start directory, applying WorkingDir on top of basePath.
+// Falls back to basePath if the resolved directory does not exist.
+func (i *Instance) resolveStartPath(basePath string) string {
+	if i.WorkingDir == "" {
+		return basePath
+	}
+	startPath := i.WorkingDir
+	if !filepath.IsAbs(i.WorkingDir) {
+		startPath = filepath.Join(basePath, i.WorkingDir)
+	}
+	if _, err := os.Stat(startPath); os.IsNotExist(err) {
+		log.WarningLog.Printf("Working directory '%s' doesn't exist, using '%s' instead", startPath, basePath)
+		return basePath
+	}
+	return startPath
+}
+
+// GetEffectiveRootDir returns the root directory where this session operates.
+// For worktree sessions, this is the worktree path. For directory sessions, this is Path.
+// Used for injecting configuration files (e.g., .claude/settings.local.json).
+func (i *Instance) GetEffectiveRootDir() string {
+	if i.gitManager.HasWorktree() {
+		if p := i.gitManager.GetWorktreePath(); p != "" {
+			return p
+		}
+	}
+	return i.Path
 }
 
 // Kill terminates the instance and cleans up all resources
@@ -1910,74 +1885,30 @@ func (i *Instance) GetStatusIconForType() string {
 }
 
 // UpdateTerminalTimestamps updates the terminal activity timestamps based on captured output.
-// This method checks for meaningful content (excluding tmux banners) and updates timestamps accordingly.
-// It should be called whenever terminal output is captured or processed.
+// Pre-processes content via TmuxProcessManager (banner filtering, meaningful-content detection),
+// then delegates timestamp recording to ReviewState.UpdateTimestamps.
 // The forceUpdate parameter bypasses meaningful content checking for user-initiated interactions.
-//
-// Content signatures are used to prevent false "new activity" notifications on app restarts:
-// - Computes SHA256 hash of terminal content
-// - Compares with stored LastOutputSignature
-// - Only updates LastMeaningfulOutput if content actually changed
 func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
+	filteredContent := content
+	shouldUpdateMeaningful := false
+
+	if i.tmuxManager.HasSession() {
+		if forceUpdate {
+			shouldUpdateMeaningful = true
+			filteredContent, _ = i.tmuxManager.FilterBanners(content)
+		} else {
+			hasMeaningful := i.tmuxManager.HasMeaningfulContent(content)
+			log.LogForSession(i.Title, "debug", "HasMeaningfulContent=%v for %d bytes: %q", hasMeaningful, len(content), content)
+			if hasMeaningful {
+				shouldUpdateMeaningful = true
+				filteredContent, _ = i.tmuxManager.FilterBanners(content)
+			}
+		}
+	}
+
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
-
-	now := time.Now()
-
-	// Always update LastTerminalUpdate for any output (even if just banners)
-	if len(strings.TrimSpace(content)) > 0 {
-		i.LastTerminalUpdate = now
-	}
-
-	// For user-initiated interactions (viewing/typing in web UI), always update LastMeaningfulOutput
-	// This ensures "Last Activity" reflects actual user engagement, not just terminal output content
-	if forceUpdate {
-		// Filter out tmux status bar before computing signature to prevent false positives
-		// from timestamp updates in the status line
-		filteredContent := content
-		if i.tmuxManager.HasSession() {
-			filteredContent, _ = i.tmuxManager.FilterBanners(content)
-		}
-
-		// Compute content signature to detect real changes vs restarts
-		signature := computeContentSignature(filteredContent)
-
-		// Only update timestamp if content has actually changed
-		if signature != i.LastOutputSignature {
-			i.LastMeaningfulOutput = now
-			i.LastOutputSignature = signature
-			log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (user interaction - content changed)")
-		} else {
-			log.LogForSession(i.Title, "debug", "Skipped LastMeaningfulOutput update (user interaction but content unchanged since last update)")
-		}
-		return
-	}
-
-	// Check if the output contains meaningful content (not just tmux banners)
-	// This path is for automated checks where banner filtering makes sense
-	if i.tmuxManager.HasSession() {
-		hasMeaningful := i.tmuxManager.HasMeaningfulContent(content)
-		log.LogForSession(i.Title, "debug", "HasMeaningfulContent=%v for %d bytes: %q", hasMeaningful, len(content), content)
-		if hasMeaningful {
-			// Filter out tmux status bar before computing signature to prevent false positives
-			// from timestamp updates in the status line
-			filteredContent, _ := i.tmuxManager.FilterBanners(content)
-
-			// Compute content signature to detect real changes vs restarts
-			signature := computeContentSignature(filteredContent)
-
-			// Only update timestamp if content has actually changed
-			if signature != i.LastOutputSignature {
-				i.LastMeaningfulOutput = now
-				i.LastOutputSignature = signature
-				log.LogForSession(i.Title, "debug", "Updated LastMeaningfulOutput timestamp (detected non-banner output, content changed)")
-			} else {
-				log.LogForSession(i.Title, "debug", "Skipped LastMeaningfulOutput update (non-banner output but content unchanged since last update)")
-			}
-		} else {
-			log.LogForSession(i.Title, "debug", "NOT updating LastMeaningfulOutput - content classified as non-meaningful (banners only)")
-		}
-	}
+	i.ReviewState.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, i.Title)
 }
 
 // GetTimeSinceLastMeaningfulOutput returns the duration since the last meaningful terminal output.
@@ -1994,15 +1925,6 @@ func (i *Instance) GetTimeSinceLastTerminalUpdate() time.Duration {
 	i.stateMutex.RLock()
 	defer i.stateMutex.RUnlock()
 	return i.ReviewState.TimeSinceLastTerminalUpdate(i.CreatedAt)
-}
-
-// computeContentSignature computes a MurmurHash3 64-bit hash of terminal content.
-// This signature is used to detect actual content changes vs app restarts with unchanged content.
-// MurmurHash3 is significantly faster than SHA256 and perfect for non-cryptographic checksums.
-// Returns a hex-encoded string representation of the hash (16 characters for 64-bit hash).
-func computeContentSignature(content string) string {
-	hash := murmur3.Sum64([]byte(content))
-	return fmt.Sprintf("%016x", hash)
 }
 
 // Tag management methods
@@ -2148,60 +2070,8 @@ func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 	return nil
 }
 
-// detectAndTrackPrompt detects if current state is a prompt and tracks it for re-add prevention.
-// Returns true if this is a NEW prompt (different from the last detected prompt).
+// detectAndTrackPrompt detects if current state is a new prompt and tracks it.
+// Delegates to ReviewState.DetectAndTrackPrompt — caller must hold stateMutex.
 func (i *Instance) detectAndTrackPrompt(content string, statusInfo InstanceStatusInfo) bool {
-	// Detect if current state is a prompt requiring user input
-	isPromptState := statusInfo.ClaudeStatus == StatusNeedsApproval ||
-		statusInfo.ClaudeStatus == StatusInputRequired
-
-	if !isPromptState {
-		return false
-	}
-
-	// Compute signature of prompt content (last 10 lines for identity)
-	promptSignature := i.computePromptSignature(content)
-
-	// Check if this is a NEW prompt (different signature OR first time)
-	isNewPrompt := promptSignature != i.LastPromptSignature ||
-		i.LastPromptSignature == ""
-
-	if isNewPrompt {
-		i.LastPromptDetected = time.Now()
-		i.LastPromptSignature = promptSignature
-		log.InfoLog.Printf("[Prompt] New prompt detected for '%s': signature=%s...",
-			i.Title, truncateString(promptSignature, 8))
-	}
-
-	return isNewPrompt
-}
-
-// computePromptSignature computes a hash of the prompt content for identity comparison.
-// Uses the last 10 lines to capture the prompt context without earlier output.
-func (i *Instance) computePromptSignature(content string) string {
-	if content == "" {
-		return ""
-	}
-
-	// Use last 10 lines for identity (captures prompt without earlier output)
-	lines := strings.Split(content, "\n")
-	const contextLines = 10
-	startIdx := len(lines) - contextLines
-	if startIdx < 0 {
-		startIdx = 0
-	}
-
-	promptContext := strings.Join(lines[startIdx:], "\n")
-
-	// Compute hash using murmur3 (already imported, same as content signatures)
-	hash := murmur3.Sum64([]byte(promptContext))
-	return fmt.Sprintf("%016x", hash)
-}
-
-// truncateString truncates a string to maxLen characters.
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen]
+	return i.ReviewState.DetectAndTrackPrompt(content, statusInfo, i.Title)
 }

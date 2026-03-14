@@ -1,4 +1,4 @@
-package session
+package detection
 
 import (
 	"claude-squad/log"
@@ -33,12 +33,19 @@ func DefaultIdleDetectorConfig() IdleDetectorConfig {
 	}
 }
 
+// PTYReader provides access to recent terminal output.
+// Implemented by *session.PTYAccess; defined here as an interface to avoid
+// a circular import between session/detection and session.
+type PTYReader interface {
+	GetRecentOutput(n int) []byte
+}
+
 // IdleDetector monitors PTY output to determine if a Claude Code session is idle.
 // It uses pattern matching on recent output and tracks state transitions with debouncing.
 type IdleDetector struct {
 	sessionName    string
 	statusDetector *StatusDetector
-	ptyAccess      *PTYAccess
+	ptyAccess      PTYReader
 	config         IdleDetectorConfig
 
 	// State tracking
@@ -50,12 +57,12 @@ type IdleDetector struct {
 }
 
 // NewIdleDetector creates a new idle detector for a session.
-func NewIdleDetector(sessionName string, ptyAccess *PTYAccess) *IdleDetector {
+func NewIdleDetector(sessionName string, ptyAccess PTYReader) *IdleDetector {
 	return NewIdleDetectorWithConfig(sessionName, ptyAccess, DefaultIdleDetectorConfig())
 }
 
 // NewIdleDetectorWithConfig creates a new idle detector with custom configuration.
-func NewIdleDetectorWithConfig(sessionName string, ptyAccess *PTYAccess, config IdleDetectorConfig) *IdleDetector {
+func NewIdleDetectorWithConfig(sessionName string, ptyAccess PTYReader, config IdleDetectorConfig) *IdleDetector {
 	now := time.Now()
 	return &IdleDetector{
 		sessionName:     sessionName,
@@ -273,14 +280,14 @@ func (id *IdleDetector) InitializeFromTimestamp(timestamp time.Time) {
 	age := now.Sub(timestamp)
 	if age > maxRestorationAge {
 		log.InfoLog.Printf("[IdleDetector] Timestamp too old for '%s' (age: %s), using default",
-			id.sessionName, formatDuration(age))
+			id.sessionName, FormatDuration(age))
 		return
 	}
 
 	// Restore the historical timestamp
 	id.lastActivity = timestamp
 	log.DebugLog.Printf("[IdleDetector] Restored lastActivity for '%s' to %s (age: %s)",
-		id.sessionName, timestamp.Format(time.RFC3339), formatDuration(age))
+		id.sessionName, timestamp.Format(time.RFC3339), FormatDuration(age))
 }
 
 // UpdateConfig updates the idle detector configuration.
@@ -318,12 +325,12 @@ func (info IdleStateInfo) Description() string {
 	return fmt.Sprintf("Session '%s' is %s (idle for %s, last activity: %s)",
 		info.SessionName,
 		info.State.String(),
-		formatDuration(info.IdleDuration),
+		FormatDuration(info.IdleDuration),
 		info.LastActivity.Format("15:04:05"))
 }
 
-// formatDuration formats a duration in a human-readable way.
-func formatDuration(d time.Duration) string {
+// FormatDuration formats a duration in a human-readable way.
+func FormatDuration(d time.Duration) string {
 	if d < time.Second {
 		return "< 1s"
 	}

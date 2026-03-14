@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/session/detection"
 	"context"
 	"sync"
 	"time"
@@ -21,7 +22,7 @@ const (
 
 // ExternalApprovalEvent represents an approval detected in an external session.
 type ExternalApprovalEvent struct {
-	Request      *ApprovalRequest
+	Request      *detection.ApprovalRequest
 	SessionID    string // Socket path or unique identifier
 	SessionTitle string
 	Source       ExternalApprovalSource
@@ -34,7 +35,7 @@ type ExternalApprovalCallback func(*ExternalApprovalEvent)
 
 // ExternalApprovalMonitor monitors external sessions for approval requests.
 type ExternalApprovalMonitor struct {
-	detector *ApprovalDetector
+	detector *detection.ApprovalDetector
 
 	// Active monitoring sessions
 	sessions   map[string]*monitoredSession
@@ -58,13 +59,13 @@ type monitoredSession struct {
 	consumer     OutputConsumer         // For socket-based
 	tmuxConsumer func(content string)   // For tmux-based
 	lastDetect   time.Time
-	pending      []*ApprovalRequest
+	pending      []*detection.ApprovalRequest
 }
 
 // NewExternalApprovalMonitor creates a new external approval monitor.
 func NewExternalApprovalMonitor() *ExternalApprovalMonitor {
 	return &ExternalApprovalMonitor{
-		detector: NewApprovalDetector(),
+		detector: detection.NewApprovalDetector(),
 		sessions: make(map[string]*monitoredSession),
 	}
 }
@@ -122,7 +123,7 @@ func (m *ExternalApprovalMonitor) MonitorSession(
 		streamer: streamer,
 		title:    title,
 		source:   source,
-		pending:  make([]*ApprovalRequest, 0),
+		pending:  make([]*detection.ApprovalRequest, 0),
 	}
 
 	// Create consumer that processes output for approvals
@@ -154,12 +155,12 @@ func (m *ExternalApprovalMonitor) StopMonitoringSession(socketPath string) {
 }
 
 // GetPendingApprovals returns all pending approval requests for a session.
-func (m *ExternalApprovalMonitor) GetPendingApprovals(socketPath string) []*ApprovalRequest {
+func (m *ExternalApprovalMonitor) GetPendingApprovals(socketPath string) []*detection.ApprovalRequest {
 	m.sessionsMu.RLock()
 	defer m.sessionsMu.RUnlock()
 
 	if session, exists := m.sessions[socketPath]; exists {
-		result := make([]*ApprovalRequest, len(session.pending))
+		result := make([]*detection.ApprovalRequest, len(session.pending))
 		copy(result, session.pending)
 		return result
 	}
@@ -168,14 +169,14 @@ func (m *ExternalApprovalMonitor) GetPendingApprovals(socketPath string) []*Appr
 }
 
 // GetAllPendingApprovals returns pending approvals across all monitored sessions.
-func (m *ExternalApprovalMonitor) GetAllPendingApprovals() map[string][]*ApprovalRequest {
+func (m *ExternalApprovalMonitor) GetAllPendingApprovals() map[string][]*detection.ApprovalRequest {
 	m.sessionsMu.RLock()
 	defer m.sessionsMu.RUnlock()
 
-	result := make(map[string][]*ApprovalRequest)
+	result := make(map[string][]*detection.ApprovalRequest)
 	for socketPath, session := range m.sessions {
 		if len(session.pending) > 0 {
-			pending := make([]*ApprovalRequest, len(session.pending))
+			pending := make([]*detection.ApprovalRequest, len(session.pending))
 			copy(pending, session.pending)
 			result[socketPath] = pending
 		}
@@ -298,11 +299,11 @@ func (m *ExternalApprovalMonitor) MarkApprovalHandled(socketPath, requestID stri
 	for i, req := range session.pending {
 		if req.ID == requestID {
 			if approved {
-				req.Status = ApprovalApproved
+				req.Status = detection.ApprovalApproved
 			} else {
-				req.Status = ApprovalRejected
+				req.Status = detection.ApprovalRejected
 			}
-			req.Response = &ApprovalResponse{
+			req.Response = &detection.ApprovalResponse{
 				Approved:  approved,
 				Timestamp: time.Now(),
 			}
@@ -318,7 +319,7 @@ func (m *ExternalApprovalMonitor) MarkApprovalHandled(socketPath, requestID stri
 }
 
 // GetDetector returns the underlying approval detector for configuration.
-func (m *ExternalApprovalMonitor) GetDetector() *ApprovalDetector {
+func (m *ExternalApprovalMonitor) GetDetector() *detection.ApprovalDetector {
 	return m.detector
 }
 
@@ -437,7 +438,7 @@ func (m *ExternalApprovalMonitor) MonitorSessionTmux(
 		tmuxStreamer: streamer,
 		title:        title,
 		source:       source,
-		pending:      make([]*ApprovalRequest, 0),
+		pending:      make([]*detection.ApprovalRequest, 0),
 	}
 
 	// Create consumer that processes content for approvals

@@ -11,6 +11,7 @@ import (
 	"claude-squad/session/search"
 	"connectrpc.com/connect"
 	"context"
+	"encoding/json"
 	"fmt"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"io"
@@ -50,6 +51,9 @@ type SessionService struct {
 
 	// Notification rate limiter (10 notifications/sec per session, burst of 20)
 	notificationRateLimiter *NotificationRateLimiter
+
+	// approvalStore holds pending Claude Code hook approval requests.
+	approvalStore *ApprovalStore
 }
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
@@ -83,6 +87,7 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 		githubSvc:               NewGitHubService(storage),
 		workspaceSvc:            NewWorkspaceService(storage, eventBus),
 		notificationRateLimiter: NewNotificationRateLimiter(10, 20),
+		approvalStore:           NewApprovalStore(),
 	}
 }
 
@@ -105,36 +110,29 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 	return instances, nil
 }
 
-// NewSessionServiceFromConfig creates a SessionService using the default config.
-//
-// When CLAUDE_SQUAD_USE_ENT=true, uses EntRepository directly (bypasses JSON round-trip).
-// Default behavior uses SQLiteState (SQLite-backed JSON blob store) for backward compatibility.
+// NewSessionServiceFromConfig creates a SessionService using EntRepository as storage backend.
+// On first startup, if the legacy state.json exists and Ent DB is empty, sessions are
+// auto-migrated from JSON to Ent.
 func NewSessionServiceFromConfig() (*SessionService, error) {
-	var (
-		storage *session.Storage
-		err     error
-	)
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return nil, fmt.Errorf("failed to determine config directory: %w", err)
+	}
+	dbPath := configDir + "/sessions.db"
 
-	if os.Getenv("CLAUDE_SQUAD_USE_ENT") == "true" {
-		log.InfoLog.Printf("CLAUDE_SQUAD_USE_ENT=true: using EntRepository as storage backend")
-		repo, repoErr := session.NewEntRepository()
-		if repoErr != nil {
-			return nil, fmt.Errorf("failed to initialize EntRepository: %w", repoErr)
-		}
-		storage, err = session.NewStorageWithRepository(repo)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize storage with EntRepository: %w", err)
-		}
-	} else {
-		var sqliteState *session.SQLiteState
-		sqliteState, err = session.LoadSQLiteState()
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize SQLite state: %w", err)
-		}
-		storage, err = session.NewStorage(sqliteState)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize storage: %w", err)
-		}
+	repo, err := session.NewEntRepository(session.WithDatabasePath(dbPath))
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize EntRepository: %w", err)
+	}
+
+	// Auto-migrate from state.json if Ent DB is empty and legacy data exists
+	if migrateErr := maybeAutoMigrateToEnt(repo); migrateErr != nil {
+		log.WarningLog.Printf("auto-migration to Ent skipped or failed: %v", migrateErr)
+	}
+
+	storage, err := session.NewStorageWithRepository(repo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize storage with EntRepository: %w", err)
 	}
 
 	eventBus := events.NewEventBus(100)
@@ -144,6 +142,65 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 // GetStorage returns the storage instance for direct access (e.g., WebSocket handlers).
 func (s *SessionService) GetStorage() *session.Storage {
 	return s.storage
+}
+
+// GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
+func (s *SessionService) GetApprovalStore() *ApprovalStore {
+	return s.approvalStore
+}
+
+// maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the
+// Ent repository is empty. If both conditions hold, it migrates all sessions from state.json
+// to Ent automatically. This is a one-shot migration: once data is in Ent the check is a no-op.
+func maybeAutoMigrateToEnt(repo *session.EntRepository) error {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return fmt.Errorf("could not determine config dir: %w", err)
+	}
+
+	stateJSONPath := configDir + "/state.json"
+	if _, statErr := os.Stat(stateJSONPath); os.IsNotExist(statErr) {
+		return nil // nothing to migrate
+	}
+
+	// Check if Ent DB is already populated — skip migration if so
+	ctx := context.Background()
+	existing, listErr := repo.List(ctx)
+	if listErr != nil {
+		return fmt.Errorf("failed to list Ent sessions: %w", listErr)
+	}
+	if len(existing) > 0 {
+		return nil // already has data, skip
+	}
+
+	// state.json stores instances inside a wrapper: {"instances": [...], ...}
+	type stateFileFormat struct {
+		Instances []session.InstanceData `json:"instances"`
+	}
+	rawData, readErr := os.ReadFile(stateJSONPath)
+	if readErr != nil {
+		return fmt.Errorf("failed to read state.json: %w", readErr)
+	}
+
+	var stateFile stateFileFormat
+	if unmarshalErr := json.Unmarshal(rawData, &stateFile); unmarshalErr != nil {
+		return fmt.Errorf("failed to parse state.json: %w", unmarshalErr)
+	}
+
+	if len(stateFile.Instances) == 0 {
+		return nil // nothing to migrate
+	}
+
+	log.InfoLog.Printf("Auto-migrating %d sessions from state.json to Ent repository", len(stateFile.Instances))
+
+	for _, inst := range stateFile.Instances {
+		if createErr := repo.Create(ctx, inst); createErr != nil {
+			log.WarningLog.Printf("auto-migrate: failed to create session '%s': %v", inst.Title, createErr)
+		}
+	}
+
+	log.InfoLog.Printf("Auto-migration to Ent complete")
+	return nil
 }
 
 // GetEventBus returns the event bus instance for wiring up reactive components.
@@ -173,9 +230,17 @@ func (s *SessionService) ListSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListSessionsRequest],
 ) (*connect.Response[sessionv1.ListSessionsResponse], error) {
-	instances, err := s.loadInstancesWithWiring()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	// Use the poller's live in-memory instances to avoid the side effect of
+	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
+	var instances []*session.Instance
+	if s.reviewQueuePoller != nil {
+		instances = s.reviewQueuePoller.GetInstances()
+	} else {
+		var err error
+		instances, err = s.loadInstancesWithWiring()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+		}
 	}
 
 	// Convert instances to proto messages
@@ -231,6 +296,26 @@ func (s *SessionService) GetSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
+	// Use the poller's live in-memory instances to avoid the side effect of
+	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
+	if s.reviewQueuePoller != nil {
+		if inst := s.reviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
+			return connect.NewResponse(&sessionv1.GetSessionResponse{
+				Session: adapters.InstanceToProto(inst),
+			}), nil
+		}
+		// Not in poller — also check external sessions
+		if s.externalDiscovery != nil {
+			if inst := s.externalDiscovery.GetSession(req.Msg.Id); inst != nil {
+				return connect.NewResponse(&sessionv1.GetSessionResponse{
+					Session: adapters.InstanceToProto(inst),
+				}), nil
+			}
+		}
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Fallback: poller not available — load from storage (has Start() side effect)
 	instances, err := s.loadInstancesWithWiring()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
@@ -349,6 +434,12 @@ func (s *SessionService) CreateSession(
 	// Use Start(true) to indicate this is a first-time setup
 	if err := instance.Start(true); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to start session: %w", err))
+	}
+
+	// Inject Claude Code HTTP hook config for remote approval from the web UI.
+	// Non-fatal: session is fully functional even without this config.
+	if err := InjectHookConfig(instance.GetEffectiveRootDir(), instance.Title); err != nil {
+		log.WarningLog.Printf("[CreateSession] Failed to inject hook config for session '%s': %v", instance.Title, err)
 	}
 
 	// Save instance to storage
@@ -1464,16 +1555,14 @@ func (s *SessionService) SendNotification(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
 
-	// Try to find session in managed instances (optional - for better session name display)
-	// If not found, still allow notification (supports external Claude processes)
+	// Use the session ID as the display name. LoadInstances() cannot be used here because
+	// it calls FromInstanceData() which calls Start() on every non-paused session —
+	// a catastrophic side-effect that restarts all sessions on each notification.
+	// The poller holds live instances; if the session exists there, use its title.
 	sessionName := req.Msg.SessionId // Default to session ID
-	instances, err := s.loadInstancesWithWiring()
-	if err == nil {
-		for _, inst := range instances {
-			if inst.Title == req.Msg.SessionId {
-				sessionName = inst.Title
-				break
-			}
+	if s.reviewQueuePoller != nil {
+		if inst := s.reviewQueuePoller.FindInstance(req.Msg.SessionId); inst != nil {
+			sessionName = inst.Title
 		}
 	}
 

@@ -1,6 +1,7 @@
 package session
 
 import (
+	"claude-squad/session/detection"
 	"claude-squad/log"
 	"fmt"
 	"sync"
@@ -9,13 +10,13 @@ import (
 // InstanceStatusInfo provides extended status information for an instance.
 type InstanceStatusInfo struct {
 	BasicStatus        Status         // Running, Paused, Ready
-	ClaudeStatus       DetectedStatus // If ClaudeController is active
+	ClaudeStatus       detection.DetectedStatus // If ClaudeController is active
 	StatusContext      string         // Context/details about current status (e.g., error message)
 	PendingApprovals   int            // Number of pending approvals
 	QueuedCommands     int            // Number of queued commands
 	LastCommandStatus  string         // Status of last command
 	IsControllerActive bool           // Whether ClaudeController is running
-	IdleState          IdleStateInfo  // NEW: Idle state information
+	IdleState          detection.IdleStateInfo  // NEW: Idle state information
 }
 
 // InstanceStatusManager manages status information for instances.
@@ -122,13 +123,13 @@ func (info InstanceStatusInfo) GetStatusIcon() string {
 
 	// Controller active - use Claude status
 	switch info.ClaudeStatus {
-	case StatusReady:
+	case detection.StatusReady:
 		return "●" // Ready
-	case StatusProcessing:
+	case detection.StatusProcessing:
 		return "◐" // Working
-	case StatusNeedsApproval:
+	case detection.StatusNeedsApproval:
 		return "❗" // Needs attention
-	case StatusError:
+	case detection.StatusError:
 		return "✖" // Error
 	default:
 		return "●"
@@ -156,15 +157,15 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 
 	var desc string
 	switch info.ClaudeStatus {
-	case StatusReady:
+	case detection.StatusReady:
 		desc = "Ready"
-	case StatusProcessing:
+	case detection.StatusProcessing:
 		desc = "Processing"
-	case StatusNeedsApproval:
+	case detection.StatusNeedsApproval:
 		desc = "Needs Approval"
-	case StatusError:
+	case detection.StatusError:
 		desc = "Error"
-	case StatusUnknown:
+	case detection.StatusUnknown:
 		desc = "Unknown"
 	default:
 		desc = "Unknown"
@@ -188,18 +189,18 @@ func (info InstanceStatusInfo) HasPendingWork() bool {
 
 // IsWaitingForUser returns true if the instance is waiting for user input.
 func (info InstanceStatusInfo) IsWaitingForUser() bool {
-	return info.ClaudeStatus == StatusNeedsApproval ||
+	return info.ClaudeStatus == detection.StatusNeedsApproval ||
 		info.PendingApprovals > 0
 }
 
 // NeedsAttention returns true if the instance requires user attention.
 func (info InstanceStatusInfo) NeedsAttention() bool {
-	return info.IsWaitingForUser() || info.ClaudeStatus == StatusError
+	return info.IsWaitingForUser() || info.ClaudeStatus == detection.StatusError
 }
 
 // GetColorCode returns a color code for the status (for lipgloss styling).
 func (info InstanceStatusInfo) GetColorCode() string {
-	if info.ClaudeStatus == StatusError {
+	if info.ClaudeStatus == detection.StatusError {
 		return "196" // Red
 	}
 
@@ -207,7 +208,7 @@ func (info InstanceStatusInfo) GetColorCode() string {
 		return "214" // Orange
 	}
 
-	if info.ClaudeStatus == StatusProcessing {
+	if info.ClaudeStatus == detection.StatusProcessing {
 		return "39" // Blue
 	}
 

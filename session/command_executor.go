@@ -2,6 +2,7 @@ package session
 
 import (
 	"claude-squad/log"
+	"claude-squad/session/detection"
 	"context"
 	"fmt"
 	"sync"
@@ -16,14 +17,14 @@ type ExecutionResult struct {
 	Error         error
 	StartTime     time.Time
 	EndTime       time.Time
-	FinalStatus   DetectedStatus
+	FinalStatus   detection.DetectedStatus
 	StatusChanges []StatusChange
 }
 
 // StatusChange represents a change in detected status during execution.
 type StatusChange struct {
 	Timestamp time.Time
-	Status    DetectedStatus
+	Status    detection.DetectedStatus
 	Context   string
 }
 
@@ -36,7 +37,7 @@ type ExecutionOptions struct {
 	// StatusCheckInterval for polling status detector
 	StatusCheckInterval time.Duration
 	// TerminalStatuses are statuses that indicate command completion
-	TerminalStatuses []DetectedStatus
+	TerminalStatuses []detection.DetectedStatus
 }
 
 // DefaultExecutionOptions returns sensible defaults for command execution.
@@ -45,9 +46,9 @@ func DefaultExecutionOptions() ExecutionOptions {
 		Timeout:             5 * time.Minute,
 		MaxOutputSize:       1024 * 1024, // 1MB
 		StatusCheckInterval: 100 * time.Millisecond,
-		TerminalStatuses: []DetectedStatus{
-			StatusReady,
-			StatusError,
+		TerminalStatuses: []detection.DetectedStatus{
+			detection.StatusReady,
+			detection.StatusError,
 		},
 	}
 }
@@ -57,7 +58,7 @@ type CommandExecutor struct {
 	sessionName    string
 	ptyAccess      *PTYAccess
 	responseStream *ResponseStream
-	statusDetector *StatusDetector
+	statusDetector *detection.StatusDetector
 	queue          *CommandQueue
 	options        ExecutionOptions
 	mu             sync.RWMutex
@@ -75,7 +76,7 @@ func NewCommandExecutor(
 	sessionName string,
 	ptyAccess *PTYAccess,
 	responseStream *ResponseStream,
-	statusDetector *StatusDetector,
+	statusDetector *detection.StatusDetector,
 	queue *CommandQueue,
 ) *CommandExecutor {
 	return &CommandExecutor{
@@ -94,7 +95,7 @@ func NewCommandExecutorWithOptions(
 	sessionName string,
 	ptyAccess *PTYAccess,
 	responseStream *ResponseStream,
-	statusDetector *StatusDetector,
+	statusDetector *detection.StatusDetector,
 	queue *CommandQueue,
 	options ExecutionOptions,
 ) *CommandExecutor {
@@ -247,7 +248,7 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 
 	// Monitor response and detect status changes
 	var outputBuffer []byte
-	var lastStatus DetectedStatus = StatusUnknown
+	var lastStatus detection.DetectedStatus = detection.StatusUnknown
 	timeoutTimer := time.NewTimer(ce.options.Timeout)
 	defer timeoutTimer.Stop()
 
@@ -313,7 +314,7 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 
 					// Check if terminal status reached
 					if ce.isTerminalStatus(status) {
-						result.Success = (status == StatusReady)
+						result.Success = (status == detection.StatusReady)
 						result.EndTime = time.Now()
 						result.Output = string(outputBuffer)
 						result.FinalStatus = status
@@ -327,7 +328,7 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 }
 
 // isTerminalStatus checks if a status indicates command completion.
-func (ce *CommandExecutor) isTerminalStatus(status DetectedStatus) bool {
+func (ce *CommandExecutor) isTerminalStatus(status detection.DetectedStatus) bool {
 	for _, terminalStatus := range ce.options.TerminalStatuses {
 		if status == terminalStatus {
 			return true

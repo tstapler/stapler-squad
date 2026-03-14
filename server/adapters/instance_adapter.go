@@ -103,6 +103,25 @@ func statusToProto(status session.Status) sessionv1.SessionStatus {
 	return StatusToProto(status)
 }
 
+// StatusStringToProto converts a status string (from session.Status.String()) to proto SessionStatus.
+// Used when the status is stored as a string in ReviewItem rather than session.Status.
+func StatusStringToProto(status string) sessionv1.SessionStatus {
+	switch status {
+	case "Running":
+		return sessionv1.SessionStatus_SESSION_STATUS_RUNNING
+	case "Ready":
+		return sessionv1.SessionStatus_SESSION_STATUS_READY
+	case "Loading":
+		return sessionv1.SessionStatus_SESSION_STATUS_LOADING
+	case "Paused":
+		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED
+	case "NeedsApproval":
+		return sessionv1.SessionStatus_SESSION_STATUS_NEEDS_APPROVAL
+	default:
+		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+	}
+}
+
 // sessionTypeToProto converts session.SessionType to proto SessionType enum.
 func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
 	switch sessionType {

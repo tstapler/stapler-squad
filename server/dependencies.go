@@ -46,12 +46,6 @@ func BuildDependencies() (*ServerDependencies, error) {
 	statusManager := session.NewInstanceStatusManager()
 	reviewQueuePoller := session.NewReviewQueuePoller(reviewQueue, statusManager, storage)
 
-	// Step 4: start storage (loads instances from disk)
-	if err := storage.Start(); err != nil {
-		return nil, fmt.Errorf("start storage: %w", err)
-	}
-	log.InfoLog.Printf("Storage started — instances loaded and ready")
-
 	// Steps 5-7: load, wire, start instances and controllers
 	instances, err := storage.LoadInstances()
 	if err != nil {
@@ -176,7 +170,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 			item.Branch = inst.Branch
 			item.Path = inst.Path
 			item.WorkingDir = inst.WorkingDir
-			item.Status = inst.Status
+			item.Status = inst.Status.String()
 			item.Tags = inst.Tags
 			item.Category = inst.Category
 			item.DiffStats = inst.GetDiffStats()

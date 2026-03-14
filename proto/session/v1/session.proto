@@ -124,6 +124,14 @@ service SessionService {
   // SwitchWorkspace switches a session's workspace to a different branch, revision, or worktree.
   // The session is restarted with Claude --resume to preserve conversation context.
   rpc SwitchWorkspace(SwitchWorkspaceRequest) returns (SwitchWorkspaceResponse) {}
+
+  // ResolveApproval allows the web UI to approve or deny a pending Claude Code tool use request.
+  // This unblocks the HTTP hook handler that is waiting for the user's decision.
+  rpc ResolveApproval(ResolveApprovalRequest) returns (ResolveApprovalResponse) {}
+
+  // ListPendingApprovals returns all pending Claude Code tool approval requests.
+  // Used by the web UI to populate the approval panel on initial load.
+  rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprovalsResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -778,6 +786,35 @@ message SwitchWorkspaceRequest {
 
   // Base revision for new bookmark creation (empty = current).
   string base_revision = 6;
+}
+
+// ResolveApprovalRequest approves or denies a pending tool use request.
+message ResolveApprovalRequest {
+  // Unique approval ID (from notification metadata.approval_id).
+  string approval_id = 1;
+
+  // User's decision: "allow" or "deny".
+  string decision = 2;
+
+  // Optional reason shown to Claude when denying.
+  optional string message = 3;
+}
+
+// ResolveApprovalResponse confirms the decision was received.
+message ResolveApprovalResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// ListPendingApprovalsRequest filters pending approvals.
+message ListPendingApprovalsRequest {
+  // Optional: only return approvals for this session.
+  optional string session_id = 1;
+}
+
+// ListPendingApprovalsResponse returns pending approvals.
+message ListPendingApprovalsResponse {
+  repeated PendingApprovalProto approvals = 1;
 }
 
 // SwitchWorkspaceResponse returns the result of a workspace switch operation.
