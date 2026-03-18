@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Header } from "@/components/layout/Header";
+import { ConditionalHeader } from "@/components/layout/ConditionalHeader";
 import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import { NotificationProvider } from "@/lib/contexts/NotificationContext";
 import { OmnibarProvider } from "@/lib/contexts/OmnibarContext";
@@ -31,7 +31,7 @@ export default function RootLayout({
             <NotificationProvider>
               <OmnibarProvider>
                 <a href="#main-content" className="skip-link">Skip to main content</a>
-                <Header />
+                <ConditionalHeader />
                 {children}
                 <NotificationPanel />
               </OmnibarProvider>

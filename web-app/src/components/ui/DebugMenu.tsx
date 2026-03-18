@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import {
   getNotificationPreference,
   setNotificationPreference,
@@ -33,6 +34,8 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(menuRef, isOpen);
 
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
@@ -128,9 +131,16 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
 
   return (
     <div className={styles.overlay} onClick={onClose}>
-      <div className={styles.menu} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.menu}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="debug-menu-title"
+        ref={menuRef}
+      >
         <div className={styles.header}>
-          <h2 className={styles.title}>🛠️ Debug Menu</h2>
+          <h2 className={styles.title} id="debug-menu-title">🛠️ Debug Menu</h2>
           <button
             className={styles.closeButton}
             onClick={onClose}

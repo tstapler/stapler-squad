@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, KeyboardEvent } from "react";
+import { useState, KeyboardEvent, useRef } from "react";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import styles from "./TagEditor.module.css";
 
 interface TagEditorProps {
@@ -12,6 +13,8 @@ interface TagEditorProps {
 
 export function TagEditor({ tags, onSave, onCancel, sessionTitle }: TagEditorProps) {
   const [currentTags, setCurrentTags] = useState<string[]>([...tags]);
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, true);
   const [inputValue, setInputValue] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -53,9 +56,16 @@ export function TagEditor({ tags, onSave, onCancel, sessionTitle }: TagEditorPro
 
   return (
     <div className={styles.overlay} onClick={onCancel}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.modal}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tag-editor-title"
+        ref={modalRef}
+      >
         <div className={styles.header}>
-          <h2 className={styles.title}>Edit Tags</h2>
+          <h2 className={styles.title} id="tag-editor-title">Edit Tags</h2>
           <p className={styles.subtitle}>{sessionTitle}</p>
         </div>
 

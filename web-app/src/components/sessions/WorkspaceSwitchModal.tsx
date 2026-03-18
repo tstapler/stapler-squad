@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_connect";
@@ -82,6 +83,9 @@ export function WorkspaceSwitchModal({
   );
   const [isSwitching, setSwitching] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
+
+  const modalRef = useRef<HTMLDivElement>(null);
+  useFocusTrap(modalRef, true);
 
   const client = useMemo(
     () =>
@@ -453,10 +457,17 @@ export function WorkspaceSwitchModal({
 
   return (
     <div className={styles.modalOverlay} onClick={onClose}>
-      <div className={styles.modal} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={styles.modal}
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workspace-switch-title"
+        ref={modalRef}
+      >
         {/* Header */}
         <div className={styles.header}>
-          <h2 className={styles.headerTitle}>
+          <h2 className={styles.headerTitle} id="workspace-switch-title">
             <span className={styles.vcsIcon}>
               {getVcsIcon(targets?.vcsType ?? VCSType.VCS_TYPE_UNSPECIFIED)}
             </span>
