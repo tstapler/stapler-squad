@@ -406,14 +406,24 @@ func getDefaultPatterns() StatusPatterns {
 		},
 		Error: []StatusPattern{
 			{
-				Name:        "error_message",
-				Pattern:     `(?i)(^ERROR|Error:|Fatal error|Exception:|Traceback|panic:)`,
+				Name: "error_message",
+				// (?im) enables case-insensitive multiline matching.
+				// Anchors to start of line (^) OR after sentence-ending punctuation ([.!?]\s+)
+				// so that "Error:" in the middle of a paragraph (e.g. last N bytes of output)
+				// is still detected, while still avoiding false positives from indented
+				// shell/YAML content like `echo "ERROR: ..."` where ERROR is not at a
+				// line boundary or sentence boundary.
+				// error[\s:] matches "Error:" (colon) and "Error " (space) to catch
+				// variants like "Error occurred" and "Error while processing".
+				Pattern:     `(?im)(^|[.!?]\s+)(error[\s:]|fatal error|exception:|traceback|panic:)`,
 				Description: "Generic error indicators (not test failures)",
 				Priority:    30,
 			},
 			{
-				Name:        "connection_error",
-				Pattern:     `(?i)(connection refused|timeout|network error)`,
+				Name: "connection_error",
+				// (?im) case-insensitive multiline; require these to appear on their own
+				// line to avoid matching variable names or code paths that contain these words.
+				Pattern:     `(?im)^.*(connection refused|network timeout|network error)`,
 				Description: "Network and connection errors",
 				Priority:    29,
 			},

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_connect";
+import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import {
   ReviewQueue,
   ReviewItem,
@@ -87,7 +88,7 @@ export function useReviewQueue(
   options: UseReviewQueueOptions = {}
 ): UseReviewQueueReturn {
   const {
-    baseUrl = "http://localhost:8543/api",
+    baseUrl = getApiBaseUrl(),
     autoRefresh = false,
     refreshInterval = 5000,
     priorityFilter,
@@ -109,6 +110,7 @@ export function useReviewQueue(
   useEffect(() => {
     const transport = createConnectTransport({
       baseUrl,
+      interceptors: [createAuthInterceptor()],
     });
 
     clientRef.current = createPromiseClient(SessionService, transport);

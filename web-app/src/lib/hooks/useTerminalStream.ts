@@ -4,6 +4,7 @@ import { createPromiseClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_connect";
 import { TerminalData, TerminalInput, TerminalResize, ScrollbackRequest, CurrentPaneRequest, FlowControl, InputWithEcho, SSPNegotiation, SSPCapabilities } from "@/gen/session/v1/events_pb";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
+import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { StateApplicator } from "@/lib/terminal/StateApplicator";
 import { EchoOverlay } from "@/lib/terminal/EchoOverlay";
@@ -149,6 +150,7 @@ export function useTerminalStream({
     createWebsocketBasedTransport({
       baseUrl,
       useBinaryFormat: true, // WebSocket supports binary format
+      interceptors: [createAuthInterceptor()],
     })
   ));
 

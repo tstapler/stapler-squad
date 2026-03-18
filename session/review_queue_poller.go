@@ -264,16 +264,17 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	log.InfoLog.Printf("[ReviewQueue] === CHECKING SESSION '%s' === (started=%v, paused=%v)",
 		inst.Title, inst.Started(), inst.Paused())
 
-	// MIGRATION CLEANUP: Remove any existing queue item with zero LastMeaningfulOutput.
-	// This handles stale items that were added before the migration ran and never got cleaned up
-	// because they didn't meet the criteria for re-adding (e.g., in grace period).
+	// MIGRATION CLEANUP: Remove any stale queue items persisted before the
+	// LastMeaningfulOutput field was added. We no longer skip processing — sessions
+	// without a recorded output timestamp (new sessions, failed controllers) are still
+	// valid candidates for the review queue. GetTimeSinceLastMeaningfulOutput() and
+	// IsAcknowledgedAfterOutput() both handle the zero-value case safely.
 	if inst.LastMeaningfulOutput.IsZero() {
 		if rqp.queue.Has(inst.Title) {
 			log.InfoLog.Printf("[ReviewQueue] Session '%s': CLEANUP - Removing stale queue item with zero LastMeaningfulOutput", inst.Title)
 			rqp.queue.Remove(inst.Title)
 		}
-		// Don't process this session further if it hasn't been migrated yet
-		return
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': LastMeaningfulOutput is zero — processing without output timestamp", inst.Title)
 	}
 
 	// Skip paused or unstarted sessions
@@ -668,26 +669,30 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold))
 	}
 
-	// Check if user dismissed this session.
-	// Sessions are snoozed when LastAcknowledged is newer than LastMeaningfulOutput.
-	// This ensures sessions stay snoozed until NEW terminal output appears
-	// (not just any save operation which updates UpdatedAt).
-	if inst.ReviewState.IsAcknowledgedAfterOutput() {
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': User acknowledged (snoozed until new output), removing from queue", inst.Title)
-		rqp.queue.Remove(inst.Title)
-		return
-	}
-
-	// Grace period: Don't re-add for 5 minutes after acknowledgment, even with new output
-	// This prevents immediate re-notification after user dismisses a session
-	if !inst.LastAcknowledged.IsZero() {
-		gracePeriod := 5 * time.Minute
-		timeSinceAck := time.Since(inst.LastAcknowledged)
-		if timeSinceAck < gracePeriod {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Still in grace period (%s / %s since acknowledgment), skipping queue add",
-				inst.Title, detection.FormatDuration(timeSinceAck), detection.FormatDuration(gracePeriod))
+	// Acknowledgment snooze and grace-period checks only apply to low-priority informational
+	// states (idle, stale, uncommitted changes). For urgent/high/medium-priority states
+	// (approval pending, input required, error) the session MUST remain visible regardless
+	// of whether the user previously dismissed it — these require active user action.
+	if !shouldAdd || priority == PriorityLow {
+		// Check if user dismissed this session.
+		// Sessions are snoozed when LastAcknowledged is newer than LastMeaningfulOutput.
+		if inst.ReviewState.IsAcknowledgedAfterOutput() {
+			log.DebugLog.Printf("[ReviewQueue] Session '%s': User acknowledged (snoozed until new output), removing from queue", inst.Title)
 			rqp.queue.Remove(inst.Title)
 			return
+		}
+
+		// Grace period: Don't re-add for 5 minutes after acknowledgment, even with new output.
+		// This prevents immediate re-notification after user dismisses a session.
+		if !inst.LastAcknowledged.IsZero() {
+			gracePeriod := 5 * time.Minute
+			timeSinceAck := time.Since(inst.LastAcknowledged)
+			if timeSinceAck < gracePeriod {
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Still in grace period (%s / %s since acknowledgment), skipping queue add",
+					inst.Title, detection.FormatDuration(timeSinceAck), detection.FormatDuration(gracePeriod))
+				rqp.queue.Remove(inst.Title)
+				return
+			}
 		}
 	}
 
@@ -699,27 +704,27 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		return
 	}
 
-	// Spam prevention: Enforce minimum re-add interval to prevent notification spam
-	// This prevents the same session from being added to the queue repeatedly every few seconds
-	// EXCEPTION: Always allow priority escalation (e.g., ReasonStale → ReasonErrorState) even within the interval
+	// Spam prevention: Enforce minimum re-add interval to prevent notification spam.
+	// Only applies when the item is ALREADY in the queue (i.e., already visible to the user).
+	// After a server restart the queue is empty, so LastAddedToQueue from before the restart
+	// must not block urgent prompts from re-appearing — the session should always be re-added.
 	if shouldAdd {
 		minReAddInterval := 2 * time.Minute
 		if !inst.LastAddedToQueue.IsZero() && time.Since(inst.LastAddedToQueue) < minReAddInterval {
-			// Check if this is a priority escalation of an existing queue item
-			isEscalation := false
 			if existingItem, exists := rqp.queue.Get(inst.Title); exists {
 				// Lower priority number = higher priority (Urgent=1 > High=2 > Medium=3 > Low=4)
-				isEscalation = priority < existingItem.Priority
+				isEscalation := priority < existingItem.Priority
 				if isEscalation {
 					log.InfoLog.Printf("[ReviewQueue] Session '%s': Priority escalation (%s → %s) - bypassing rate limit",
 						inst.Title, existingItem.Priority.String(), priority.String())
+				} else {
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': Skipping queue add (too soon - last added %v ago, minimum %v)",
+						inst.Title, time.Since(inst.LastAddedToQueue), minReAddInterval)
+					return
 				}
 			}
-			if !isEscalation {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Skipping queue add (too soon - last added %v ago, minimum %v)",
-					inst.Title, time.Since(inst.LastAddedToQueue), minReAddInterval)
-				return
-			}
+			// Item not currently in queue (e.g., post-restart): bypass rate limit so the
+			// session re-appears without waiting up to 2 minutes.
 		}
 	}
 
@@ -748,17 +753,11 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		// DO NOT update LastMeaningfulOutput here - it must reflect actual terminal output time
 		// Updating it would defeat staleness detection by making the session appear fresh
 
-		// MIGRATION: Skip adding items with zero LastMeaningfulOutput timestamps.
-		// These are old sessions that haven't been migrated yet. They'll be re-added
-		// automatically once the migration runs and gives them valid timestamps.
-		if inst.LastMeaningfulOutput.IsZero() {
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': Skipping queue add - LastMeaningfulOutput is zero (needs migration)", inst.Title)
-			// Remove any existing stale item with zero timestamp
-			if rqp.queue.Has(inst.Title) {
-				rqp.queue.Remove(inst.Title)
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Removed stale queue item with zero timestamp", inst.Title)
-			}
-			return
+		// Use CreatedAt as fallback LastActivity when LastMeaningfulOutput hasn't been set yet
+		// (new sessions, sessions where StartController failed before the migration ran).
+		lastActivity := inst.LastMeaningfulOutput
+		if lastActivity.IsZero() {
+			lastActivity = inst.CreatedAt
 		}
 
 		item := &ReviewItem{
@@ -777,7 +776,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			Tags:         inst.Tags,
 			Category:     inst.Category,
 			DiffStats:    inst.GetDiffStats(),
-			LastActivity: inst.LastMeaningfulOutput,
+			LastActivity: lastActivity,
 		}
 
 		// Enrich approval items with hook metadata from ApprovalStore (Story 3, Task 3.2).

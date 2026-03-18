@@ -121,9 +121,10 @@ export function createWebsocketBasedTransport(
 
           // Check response status
           if (!response.ok) {
+            const code = response.status === 401 ? Code.Unauthenticated : Code.Unknown;
             throw new ConnectError(
               `HTTP ${response.status}: ${response.statusText}`,
-              Code.Unknown
+              code
             );
           }
 
@@ -327,9 +328,10 @@ export function createWebsocketBasedTransport(
           const statusCode = parseInt(status);
 
           if (statusCode !== 200) {
+            const code = statusCode === 401 ? Code.Unauthenticated : Code.Unknown;
             throw new ConnectError(
               `WebSocket response status: ${statusCode}`,
-              Code.Unknown
+              code
             );
           }
 

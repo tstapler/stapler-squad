@@ -103,8 +103,13 @@ func (rs *ReviewState) TimeSinceLastTerminalUpdate(createdAt time.Time) time.Dur
 // IsAcknowledgedAfterOutput returns true if the user acknowledged this session more recently
 // than the last meaningful terminal output — meaning no new output has occurred since the
 // user last dismissed the session from the review queue.
+// Returns false when LastMeaningfulOutput is zero: if no output has ever been recorded,
+// the acknowledgment cannot logically be "after" output, so the session is not snoozed.
 // Caller must hold the relevant mutex if concurrent access is possible.
 func (rs *ReviewState) IsAcknowledgedAfterOutput() bool {
+	if rs.LastMeaningfulOutput.IsZero() {
+		return false
+	}
 	return !rs.LastAcknowledged.IsZero() && rs.LastAcknowledged.After(rs.LastMeaningfulOutput)
 }
 

@@ -26,12 +26,14 @@ import (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     isLocalhostOrigin,
+	CheckOrigin:     isAllowedOrigin,
 }
 
-// isLocalhostOrigin allows WebSocket upgrades only from localhost origins.
+// isAllowedOrigin allows WebSocket upgrades from localhost and any HTTPS origin.
 // Requests without an Origin header (e.g., non-browser clients, CLI tools) are allowed.
-func isLocalhostOrigin(r *http.Request) bool {
+// Remote HTTPS access is secured by the auth middleware; the origin check here only
+// blocks plaintext HTTP origins from non-localhost hosts.
+func isAllowedOrigin(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
 		return true // non-browser client
@@ -41,7 +43,12 @@ func isLocalhostOrigin(r *http.Request) bool {
 		return false
 	}
 	host := parsed.Hostname()
-	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	// Always allow localhost origins
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return true
+	}
+	// Allow any HTTPS origin — auth is enforced by the middleware layer
+	return parsed.Scheme == "https"
 }
 
 // ConnectRPCWebSocketHandler handles ConnectRPC streaming calls over WebSocket
