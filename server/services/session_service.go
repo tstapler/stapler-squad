@@ -235,6 +235,21 @@ func (s *SessionService) SetReactiveQueueManager(mgr ReactiveQueueManager) {
 	s.reviewQueueSvc.SetReactiveQueueManager(mgr)
 }
 
+// SetReviewQueuePoller wires the ReviewQueuePoller so new/deleted sessions are
+// added/removed from the poller and AcknowledgeSession updates poller references.
+// Must be called during server startup before any session mutation RPCs are used.
+func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
+	s.reviewQueuePoller = poller
+	s.reviewQueueSvc.SetReviewQueuePoller(poller)
+}
+
+// SetStatusManager wires the InstanceStatusManager so that instances loaded via
+// loadInstancesWithWiring (e.g., fallback path in ListSessions) receive status tracking.
+// Must be called during server startup.
+func (s *SessionService) SetStatusManager(mgr *session.InstanceStatusManager) {
+	s.statusManager = mgr
+}
+
 // SetExternalDiscovery sets the external session discovery for accessing mux-enabled sessions.
 func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSessionDiscovery) {
 	s.externalDiscovery = discovery

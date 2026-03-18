@@ -1,15 +1,22 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useRef } from "react";
+import { createPromiseClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_connect";
+import { ResolveApprovalRequest } from "@/gen/session/v1/session_pb";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { formatRelativeTime } from "@/lib/utils/datetime";
+import { getApiBaseUrl } from "@/lib/config";
 import { NotificationData } from "./NotificationToast";
 import styles from "./NotificationPanel.module.css";
 
 /**
  * NotificationPanel - A sidebar that displays notification history
- * Similar to Android's notification panel, persists notifications for review
+ * Similar to Android's notification panel, persists notifications for review.
+ * Now backed by server-side persistent storage that survives page refreshes.
  */
 export function NotificationPanel() {
   const {
@@ -21,9 +28,32 @@ export function NotificationPanel() {
     removeFromHistory,
     clearHistory,
     getUnreadCount,
+    historyLoading,
+    historyHasMore,
+    loadMoreHistory,
   } = useNotifications();
 
   const auditLog = useAuditLog();
+
+  // Lightweight RPC client for resolving approvals directly from the panel
+  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const getClient = useCallback(() => {
+    if (!clientRef.current) {
+      const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+      clientRef.current = createPromiseClient(SessionService, transport);
+    }
+    return clientRef.current;
+  }, []);
+
+  const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationId: string) => {
+    try {
+      await getClient().resolveApproval(new ResolveApprovalRequest({ approvalId, decision }));
+      markAsRead(notificationId);
+    } catch (err) {
+      console.error("Failed to resolve approval:", err);
+      alert("Could not resolve approval — it may have already timed out. Please respond in the terminal.");
+    }
+  }, [getClient, markAsRead]);
   const unreadCount = getUnreadCount();
 
   const handleNotificationClick = (id: string, onView?: () => void, sessionId?: string) => {
@@ -178,7 +208,12 @@ export function NotificationPanel() {
 
         {/* Notification List */}
         <div className={styles.content}>
-          {notificationHistory.length === 0 ? (
+          {historyLoading && notificationHistory.length === 0 ? (
+            <div className={styles.empty}>
+              <div className={styles.emptyIcon}>⏳</div>
+              <p className={styles.emptyText}>Loading notifications...</p>
+            </div>
+          ) : notificationHistory.length === 0 ? (
             <div className={styles.empty}>
               <div className={styles.emptyIcon}>🔔</div>
               <p className={styles.emptyText}>No notifications yet</p>
@@ -189,9 +224,23 @@ export function NotificationPanel() {
           ) : (
             <div className={styles.list}>
               {notificationHistory.map((notification) => {
-                const displayTitle = notification.title || notification.sessionName;
                 const contextString = getContextString(notification);
                 const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
+
+                // Always show the session name as the primary title so users know
+                // which session generated the notification. If the stored title is a
+                // generic placeholder (e.g. "Claude Notification") or absent, fall
+                // back to the session name; otherwise show the specific title.
+                const GENERIC_TITLES = new Set([
+                  "Claude Notification", "Notification", "Alert", "claude notification"
+                ]);
+                const primaryTitle = notification.sessionName
+                  || (notification.title && !GENERIC_TITLES.has(notification.title) ? notification.title : null)
+                  || notification.sessionId
+                  || "Notification";
+                const subtitleText = notification.title && !GENERIC_TITLES.has(notification.title) && notification.title !== primaryTitle
+                  ? notification.title
+                  : null;
 
                 return (
                   <div
@@ -209,7 +258,7 @@ export function NotificationPanel() {
                           <span className={styles.unreadDot} aria-label="Unread" />
                         )}
                         <span className={styles.typeIcon}>{getTypeIcon(notification.notificationType)}</span>
-                        <strong>{displayTitle}</strong>
+                        <strong>{primaryTitle}</strong>
                         <span className={styles.typeLabel} style={{ backgroundColor: getPriorityColor(notification.priority) }}>
                           {getTypeLabel(notification.notificationType)}
                         </span>
@@ -223,6 +272,11 @@ export function NotificationPanel() {
                       </button>
                     </div>
 
+                    {/* Specific notification title (e.g. "Permission Required: Bash") */}
+                    {subtitleText && (
+                      <div className={styles.itemSubtitle}>{subtitleText}</div>
+                    )}
+
                     {contextString && (
                       <div className={styles.itemContext}>
                         {contextString}
@@ -230,6 +284,32 @@ export function NotificationPanel() {
                     )}
 
                     <p className={styles.itemMessage}>{notification.message}</p>
+
+                    {/* Approval metadata: tool name + command/file details */}
+                    {notification.notificationType === "approval_needed" && notification.metadata && (
+                      <div className={styles.approvalDetails}>
+                        {notification.metadata.tool_name && (
+                          <span className={styles.approvalTool}>
+                            🔧 {notification.metadata.tool_name}
+                          </span>
+                        )}
+                        {notification.metadata.tool_input_command && (
+                          <code className={styles.approvalCommand}>
+                            {notification.metadata.tool_input_command}
+                          </code>
+                        )}
+                        {notification.metadata.tool_input_file && !notification.metadata.tool_input_command && (
+                          <code className={styles.approvalCommand}>
+                            {notification.metadata.tool_input_file}
+                          </code>
+                        )}
+                        {notification.metadata.cwd && (
+                          <span className={styles.approvalCwd} title={notification.metadata.cwd}>
+                            📁 {notification.metadata.cwd.split('/').slice(-2).join('/')}
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {notification.sourceWorkingDir && (
                       <div className={styles.itemWorkingDir} title={notification.sourceWorkingDir}>
@@ -242,6 +322,25 @@ export function NotificationPanel() {
                         {formatRelativeTime(notification.timestamp)}
                       </span>
                       <div className={styles.itemActions}>
+                        {/* Approve/Deny for approval notifications that have a live approval_id */}
+                        {notification.notificationType === "approval_needed" && notification.metadata?.approval_id && (
+                          <>
+                            <button
+                              className={styles.approveButton}
+                              onClick={() => resolveApproval(notification.metadata!.approval_id, "allow", notification.id)}
+                              title="Approve this tool use"
+                            >
+                              ✓ Approve
+                            </button>
+                            <button
+                              className={styles.denyButton}
+                              onClick={() => resolveApproval(notification.metadata!.approval_id, "deny", notification.id)}
+                              title="Deny this tool use"
+                            >
+                              ✗ Deny
+                            </button>
+                          </>
+                        )}
                         {hasSourceApp && notification.onFocusWindow && (
                           <button
                             className={styles.focusButton}
@@ -272,6 +371,19 @@ export function NotificationPanel() {
                   </div>
                 );
               })}
+
+              {/* Load more button */}
+              {historyHasMore && (
+                <div className={styles.loadMore}>
+                  <button
+                    className={styles.loadMoreButton}
+                    onClick={loadMoreHistory}
+                    disabled={historyLoading}
+                  >
+                    {historyLoading ? "Loading..." : "Load more"}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

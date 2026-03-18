@@ -6,6 +6,7 @@ import (
 	"claude-squad/server/events"
 	"claude-squad/session"
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -114,6 +115,9 @@ func (rqm *ReactiveQueueManager) processEvents() {
 
 // handleEvent dispatches events to the appropriate handler.
 func (rqm *ReactiveQueueManager) handleEvent(event *events.Event) {
+	if event == nil {
+		return
+	}
 	switch event.Type {
 	case events.EventUserInteraction:
 		rqm.handleUserInteraction(event)
@@ -231,6 +235,30 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 		},
 	}
 	rqm.publishToClients(event)
+
+	// Also publish an EventNotification to the EventBus so the notification history
+	// store captures this event. This unifies all notification sources through the EventBus.
+	if rqm.eventBus != nil {
+		notifType, notifPriority := rqm.mapReviewItemToNotification(item)
+		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
+		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)
+		message := item.Context
+		if message == "" {
+			message = fmt.Sprintf("Session '%s' needs attention", item.SessionName)
+		}
+
+		notifEvent := events.NewNotificationEvent(
+			item.SessionID,
+			item.SessionName,
+			notifID,
+			notifType,
+			notifPriority,
+			title,
+			message,
+			item.Metadata,
+		)
+		rqm.eventBus.Publish(notifEvent)
+	}
 }
 
 // OnItemRemoved is called when an item is removed from the queue.
@@ -559,4 +587,44 @@ func (rqm *ReactiveQueueManager) reasonMapToProto(m map[session.AttentionReason]
 		result[int32(rqm.reasonToProto(k))] = int32(v)
 	}
 	return result
+}
+
+// mapReviewItemToNotification maps a review item's attention reason and priority
+// to notification type and priority int32 values (matching sessionv1 enums).
+func (rqm *ReactiveQueueManager) mapReviewItemToNotification(item *session.ReviewItem) (int32, int32) {
+	var notifType int32
+	switch item.Reason {
+	case session.ReasonApprovalPending:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED)
+	case session.ReasonInputRequired, session.ReasonWaitingForUser:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED)
+	case session.ReasonErrorState:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR)
+	case session.ReasonTestsFailing:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_FAILURE)
+	case session.ReasonTaskComplete:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_TASK_COMPLETE)
+	case session.ReasonUncommittedChanges:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE)
+	case session.ReasonIdle, session.ReasonStale, session.ReasonIdleTimeout:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO)
+	default:
+		notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INFO)
+	}
+
+	var notifPriority int32
+	switch item.Priority {
+	case session.PriorityUrgent:
+		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT)
+	case session.PriorityHigh:
+		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH)
+	case session.PriorityMedium:
+		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM)
+	case session.PriorityLow:
+		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_LOW)
+	default:
+		notifPriority = int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_MEDIUM)
+	}
+
+	return notifType, notifPriority
 }

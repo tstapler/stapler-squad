@@ -137,6 +137,18 @@ service SessionService {
   // Gathers session state, tmux info, pending approvals, and recent logs.
   // The file is written to ~/.claude-squad/logs/debug-snapshot-{timestamp}.json.
   rpc CreateDebugSnapshot(CreateDebugSnapshotRequest) returns (CreateDebugSnapshotResponse) {}
+
+  // GetNotificationHistory returns persisted notification history with optional filtering.
+  // Notifications survive server restarts and page refreshes.
+  rpc GetNotificationHistory(GetNotificationHistoryRequest) returns (GetNotificationHistoryResponse) {}
+
+  // MarkNotificationRead marks specific notifications as read.
+  // If notification_ids is empty, marks all notifications as read.
+  rpc MarkNotificationRead(MarkNotificationReadRequest) returns (MarkNotificationReadResponse) {}
+
+  // ClearNotificationHistory removes notifications from the history.
+  // Optionally filters by timestamp to only clear older notifications.
+  rpc ClearNotificationHistory(ClearNotificationHistoryRequest) returns (ClearNotificationHistoryResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -868,4 +880,64 @@ message CreateDebugSnapshotResponse {
 
   // Size of the snapshot file in bytes.
   int64 file_size_bytes = 4;
+}
+
+// ============================================================================
+// Notification History Messages
+// ============================================================================
+
+// NotificationHistoryRecord represents a persisted notification.
+message NotificationHistoryRecord {
+  string id = 1;
+  string session_id = 2;
+  string session_name = 3;
+  NotificationType notification_type = 4;
+  NotificationPriority priority = 5;
+  string title = 6;
+  string message = 7;
+  map<string, string> metadata = 8;
+  google.protobuf.Timestamp created_at = 9;
+  bool is_read = 10;
+  optional google.protobuf.Timestamp read_at = 11;
+}
+
+// GetNotificationHistoryRequest filters and paginates notification history.
+message GetNotificationHistoryRequest {
+  optional int32 limit = 1;
+  optional int32 offset = 2;
+  optional NotificationType type_filter = 3;
+  optional string session_id = 4;
+  optional bool unread_only = 5;
+}
+
+// GetNotificationHistoryResponse contains notification history results.
+message GetNotificationHistoryResponse {
+  repeated NotificationHistoryRecord notifications = 1;
+  int32 total_count = 2;
+  int32 unread_count = 3;
+  bool has_more = 4;
+}
+
+// MarkNotificationReadRequest marks notifications as read.
+// If notification_ids is empty, all notifications are marked as read.
+message MarkNotificationReadRequest {
+  repeated string notification_ids = 1;
+}
+
+// MarkNotificationReadResponse confirms how many notifications were marked.
+message MarkNotificationReadResponse {
+  bool success = 1;
+  int32 marked_count = 2;
+}
+
+// ClearNotificationHistoryRequest removes notifications from history.
+message ClearNotificationHistoryRequest {
+  // Optional: Clear notifications older than this timestamp (RFC3339 string).
+  optional string before_timestamp = 1;
+}
+
+// ClearNotificationHistoryResponse confirms how many notifications were cleared.
+message ClearNotificationHistoryResponse {
+  bool success = 1;
+  int32 cleared_count = 2;
 }

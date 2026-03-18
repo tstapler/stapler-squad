@@ -1,9 +1,11 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { NotificationData, NotificationToast } from "@/components/ui/NotificationToast";
 import { ReviewItem } from "@/gen/session/v1/types_pb";
+import { NotificationType, NotificationPriority } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
+import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
 
 export interface NotificationHistoryItem extends NotificationData {
   isRead: boolean;
@@ -33,9 +35,68 @@ interface NotificationContextValue {
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
   getUnreadCount: () => number;
+  /** Whether the initial history fetch is in progress */
+  historyLoading: boolean;
+  /** Whether there are more history entries to load */
+  historyHasMore: boolean;
+  /** Load more history entries (pagination) */
+  loadMoreHistory: () => Promise<void>;
 }
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
+
+/**
+ * Map a protobuf NotificationType to the frontend string union type.
+ */
+function mapNotificationType(
+  protoType: number
+): NotificationData["notificationType"] {
+  switch (protoType) {
+    case NotificationType.APPROVAL_NEEDED:
+      return "approval_needed";
+    case NotificationType.ERROR:
+    case NotificationType.FAILURE:
+      return "error";
+    case NotificationType.WARNING:
+      return "warning";
+    case NotificationType.TASK_COMPLETE:
+    case NotificationType.PROCESS_FINISHED:
+      return "task_complete";
+    case NotificationType.INFO:
+    case NotificationType.STATUS_CHANGE:
+    case NotificationType.DEBUG:
+      return "info";
+    case NotificationType.INPUT_REQUIRED:
+    case NotificationType.CONFIRMATION_NEEDED:
+      return "question";
+    case NotificationType.PROCESS_STARTED:
+      return "progress";
+    case NotificationType.CUSTOM:
+      return "custom";
+    default:
+      return "info";
+  }
+}
+
+/**
+ * Map a protobuf NotificationPriority to the frontend string union type.
+ */
+function mapPriority(
+  protoPriority: number
+): "urgent" | "high" | "medium" | "low" {
+  switch (protoPriority) {
+    case NotificationPriority.URGENT:
+      return "urgent";
+    case NotificationPriority.HIGH:
+      return "high";
+    case NotificationPriority.MEDIUM:
+      return "medium";
+    case NotificationPriority.LOW:
+      return "low";
+    default:
+      return "medium";
+  }
+}
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const [notifications, setNotifications] = useState<NotificationData[]>([]);
@@ -44,6 +105,36 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   // Initialize audit logging
   const auditLog = useAuditLog();
+
+  // Use the persistent notification history hook
+  const history = useNotificationHistory();
+
+  // Hydrate notificationHistory from the backend on initial load
+  useEffect(() => {
+    if (history.notifications.length > 0) {
+      const backendItems: NotificationHistoryItem[] = history.notifications.map((record) => ({
+        id: record.id,
+        sessionId: record.sessionId,
+        sessionName: record.sessionName,
+        title: record.title,
+        message: record.message,
+        timestamp: record.createdAt ? Number(record.createdAt.seconds) * 1000 : Date.now(),
+        priority: mapPriority(record.priority),
+        notificationType: mapNotificationType(record.notificationType),
+        metadata: record.metadata ? Object.fromEntries(Object.entries(record.metadata)) : undefined,
+        isRead: record.isRead,
+      }));
+
+      setNotificationHistory((prev) => {
+        // Merge backend records with any real-time notifications already in state.
+        // Deduplicate by ID, preferring existing (real-time) entries.
+        const existingIds = new Set(prev.map((n) => n.id));
+        const newFromBackend = backendItems.filter((n) => !existingIds.has(n.id));
+        // Combine: real-time items first (newest), then backend items
+        return [...prev, ...newFromBackend];
+      });
+    }
+  }, [history.notifications]);
 
   const addNotification = useCallback(
     (notification: Omit<NotificationData, "id" | "timestamp">) => {
@@ -57,14 +148,20 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       // Add to active toasts
       setNotifications((prev) => [...prev, newNotification]);
 
-      // Add to persistent history
-      setNotificationHistory((prev) => [
-        {
-          ...newNotification,
-          isRead: false,
-        },
-        ...prev, // Newest first
-      ]);
+      // Add to persistent history with deduplication
+      setNotificationHistory((prev) => {
+        // Deduplicate by ID
+        if (prev.some((n) => n.id === id)) {
+          return prev;
+        }
+        return [
+          {
+            ...newNotification,
+            isRead: false,
+          },
+          ...prev, // Newest first
+        ];
+      });
     },
     []
   );
@@ -119,7 +216,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
       return prev.map((n) => (n.id === id ? { ...n, isRead: true } : n));
     });
-  }, [auditLog]);
+    // Also persist to backend
+    history.markAsRead([id]);
+  }, [auditLog, history]);
 
   const markAllAsRead = useCallback(() => {
     setNotificationHistory((prev) => {
@@ -129,7 +228,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
       return prev.map((n) => ({ ...n, isRead: true }));
     });
-  }, [auditLog]);
+    // Also persist to backend
+    history.markAllAsRead();
+  }, [auditLog, history]);
 
   const removeFromHistory = useCallback((id: string) => {
     setNotificationHistory((prev) => {
@@ -148,7 +249,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       }
       return [];
     });
-  }, [auditLog]);
+    // Also persist to backend
+    history.clearHistory();
+  }, [auditLog, history]);
 
   const getUnreadCount = useCallback(() => {
     return notificationHistory.filter((n) => !n.isRead).length;
@@ -170,6 +273,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         removeFromHistory,
         clearHistory,
         getUnreadCount,
+        historyLoading: history.loading,
+        historyHasMore: history.hasMore,
+        loadMoreHistory: history.loadMore,
       }}
     >
       {children}
