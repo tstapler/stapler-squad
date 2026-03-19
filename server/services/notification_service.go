@@ -270,10 +270,15 @@ func recordToProto(r *notifications.NotificationRecord) *sessionv1.NotificationH
 		Metadata:         r.Metadata,
 		CreatedAt:        timestamppb.New(r.CreatedAt),
 		IsRead:           r.IsRead,
+		OccurrenceCount:  int32(r.OccurrenceCount),
 	}
 
 	if r.ReadAt != nil {
 		record.ReadAt = timestamppb.New(*r.ReadAt)
+	}
+
+	if r.LastOccurredAt != nil {
+		record.LastOccurredAt = timestamppb.New(*r.LastOccurredAt)
 	}
 
 	return record

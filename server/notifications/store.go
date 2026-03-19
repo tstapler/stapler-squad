@@ -30,6 +30,12 @@ type NotificationRecord struct {
 	CreatedAt        time.Time         `json:"created_at"`
 	IsRead           bool              `json:"is_read"`
 	ReadAt           *time.Time        `json:"read_at,omitempty"`
+	// OccurrenceCount tracks how many deduplicated occurrences this record represents.
+	// A value of 0 (zero-value from old JSON) should be treated as 1 by consumers.
+	OccurrenceCount int        `json:"occurrence_count,omitempty"`
+	// LastOccurredAt is the timestamp of the most recent occurrence. May differ from
+	// CreatedAt which tracks the first occurrence.
+	LastOccurredAt  *time.Time `json:"last_occurred_at,omitempty"`
 }
 
 // notificationsFile is the JSON file format for persisted notifications.
@@ -78,27 +84,79 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 	// Enforce retention limits on load in case file was manually edited
 	store.enforceRetention()
 
+	// Deduplicate existing records that were persisted before dedup logic was added.
+	// This consolidates unread duplicates into single records with accurate counts.
+	if err := store.deduplicateExisting(); err != nil {
+		log.WarningLog.Printf("[NotificationStore] Failed to deduplicate existing records: %v", err)
+	}
+
 	return store, nil
 }
 
 // Append adds a notification record, enforces retention limits, and persists to disk.
+// If an unread record with the same (sessionID, notificationType) already exists,
+// the existing record is updated in place (occurrence count incremented, metadata
+// refreshed, moved to front) instead of inserting a new record. Per ADR-003, if the
+// existing record is already read, a new unread record is created instead.
 func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Check for duplicates by ID
+	// Check for exact duplicates by ID (idempotency guard)
 	for _, existing := range s.records {
 		if existing.ID == record.ID {
 			return nil // Already exists, skip
 		}
 	}
 
-	// Prepend (newest first)
+	// Check for unread duplicate by (sessionID, notificationType)
+	if existing := s.findUnreadDuplicate(record.SessionID, record.NotificationType); existing != nil {
+		// Update existing record with latest data
+		existing.OccurrenceCount++
+		existing.LastOccurredAt = &record.CreatedAt
+		existing.Message = record.Message
+		existing.Metadata = record.Metadata
+		existing.Title = record.Title
+		// Move updated record to front (newest-first ordering)
+		s.moveToFront(existing)
+		return s.saveToDisk()
+	}
+
+	// No duplicate found -- insert as new record with count=1
+	record.OccurrenceCount = 1
+	now := record.CreatedAt
+	record.LastOccurredAt = &now
 	s.records = append([]*NotificationRecord{record}, s.records...)
 
 	s.enforceRetention()
 
 	return s.saveToDisk()
+}
+
+// findUnreadDuplicate scans s.records for an unread record matching the given
+// (sessionID, notificationType) key. Returns nil if no match is found.
+// Must be called with the write lock held.
+func (s *NotificationHistoryStore) findUnreadDuplicate(sessionID string, notifType int32) *NotificationRecord {
+	for _, r := range s.records {
+		if r.SessionID == sessionID && r.NotificationType == notifType && !r.IsRead {
+			return r
+		}
+	}
+	return nil
+}
+
+// moveToFront removes the given record from its current position in s.records
+// and prepends it to the front. Must be called with the write lock held.
+func (s *NotificationHistoryStore) moveToFront(record *NotificationRecord) {
+	for i, r := range s.records {
+		if r == record {
+			// Remove from current position
+			s.records = append(s.records[:i], s.records[i+1:]...)
+			// Prepend to front
+			s.records = append([]*NotificationRecord{record}, s.records...)
+			return
+		}
+	}
 }
 
 // List returns a paginated, filtered slice of notification records and the total count.
@@ -220,7 +278,10 @@ func (s *NotificationHistoryStore) Clear(before *time.Time) (int, error) {
 	return cleared, nil
 }
 
-// GetUnreadCount returns the number of unread notifications.
+// GetUnreadCount returns the number of unread notifications. After server-side
+// deduplication (Task 1.2), each unread record represents a distinct
+// (sessionID, notificationType) group, so this count reflects the number of
+// deduplicated unread groups -- not raw event occurrences.
 func (s *NotificationHistoryStore) GetUnreadCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -232,6 +293,72 @@ func (s *NotificationHistoryStore) GetUnreadCount() int {
 		}
 	}
 	return count
+}
+
+// deduplicateExisting consolidates unread records with the same (sessionID, notificationType)
+// into the newest one. This runs once on startup to clean up pre-dedup persisted data.
+// Read records are not touched. Idempotent -- safe to run multiple times.
+func (s *NotificationHistoryStore) deduplicateExisting() error {
+	// Group unread records by (sessionID, notificationType)
+	type dedupKey struct {
+		sessionID string
+		notifType int32
+	}
+	groups := make(map[dedupKey][]*NotificationRecord)
+	for _, r := range s.records {
+		if r.IsRead {
+			continue
+		}
+		key := dedupKey{sessionID: r.SessionID, notifType: r.NotificationType}
+		groups[key] = append(groups[key], r)
+	}
+
+	// Find groups with duplicates
+	needsSave := false
+	toRemove := make(map[*NotificationRecord]bool)
+	for _, group := range groups {
+		if len(group) <= 1 {
+			continue
+		}
+		needsSave = true
+		// Records are in newest-first order (from s.records). The first in the group
+		// is the newest -- keep it and merge the rest into it.
+		keeper := group[0]
+		totalCount := keeper.OccurrenceCount
+		if totalCount == 0 {
+			totalCount = 1 // Backward compat: old records with 0 count represent 1
+		}
+		for _, dup := range group[1:] {
+			dupCount := dup.OccurrenceCount
+			if dupCount == 0 {
+				dupCount = 1
+			}
+			totalCount += dupCount
+			toRemove[dup] = true
+		}
+		keeper.OccurrenceCount = totalCount
+		// LastOccurredAt is already correct on the newest record (or nil for old data).
+		// If nil, set it to CreatedAt.
+		if keeper.LastOccurredAt == nil {
+			t := keeper.CreatedAt
+			keeper.LastOccurredAt = &t
+		}
+	}
+
+	if !needsSave {
+		return nil
+	}
+
+	// Remove duplicates from s.records, preserving order
+	var cleaned []*NotificationRecord
+	for _, r := range s.records {
+		if !toRemove[r] {
+			cleaned = append(cleaned, r)
+		}
+	}
+	s.records = cleaned
+
+	return s.saveToDisk()
 }
 
 // enforceRetention trims records to MaxNotifications and prunes expired entries.

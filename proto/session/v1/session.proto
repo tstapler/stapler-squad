@@ -899,6 +899,14 @@ message NotificationHistoryRecord {
   google.protobuf.Timestamp created_at = 9;
   bool is_read = 10;
   optional google.protobuf.Timestamp read_at = 11;
+
+  // Number of deduplicated occurrences this record represents.
+  // Default 0 means "1 occurrence" (backward-compatible with old clients).
+  int32 occurrence_count = 12;
+
+  // Timestamp of the most recent occurrence (may differ from created_at
+  // which tracks the first occurrence).
+  optional google.protobuf.Timestamp last_occurred_at = 13;
 }
 
 // GetNotificationHistoryRequest filters and paginates notification history.
