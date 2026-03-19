@@ -1790,6 +1790,27 @@ Implement WebAuthn/FIDO2 passkey authentication with QR-code-based enrollment to
 
 ---
 
+## Planned
+
+### Notification De-Duplication and Aggregation
+
+**Status**: Planned (Feature Plan Complete)
+**Priority**: P1 -- User-facing annoyance; 58 duplicate notifications visible
+**Epic ID**: EPIC-NOTIF-DEDUP-001
+**Feature Plan**: [docs/tasks/notification-deduplication.md](docs/tasks/notification-deduplication.md)
+**Stories**: 3 (server-side dedup, frontend aggregation, toast coalescing)
+
+**Key Changes**:
+- Server-side dedup in `NotificationHistoryStore.Append()` by `(sessionId, notificationType)` key
+- Client-side grouping with "xN" count badge in NotificationPanel
+- Toast suppression for duplicate real-time events within 10s window
+- Proto: add `occurrence_count` and `last_occurred_at` fields to `NotificationHistoryRecord`
+- Startup migration to consolidate existing duplicates in JSON file
+
+**Next Action**: Task 1.1 -- Add dedup fields to NotificationRecord and proto
+
+---
+
 ## Future Priorities
 
 ### Medium Term (After Search & Sort):

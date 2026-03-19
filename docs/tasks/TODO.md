@@ -16,6 +16,7 @@ This file serves as a lightweight index of all feature plans in `docs/tasks/`.
 | [Domain Invariant Enforcement](domain-invariant-enforcement.md) | Draft | 4 stories | Medium |
 | [Circuit Breaker Executor](circuit-breaker-executor.md) | Draft | 4 stories | Medium |
 | [Frontend Quick Wins](frontend-quick-wins.md) | Draft | 5 atomic tasks | Low |
+| [Notification De-Duplication](notification-deduplication.md) | Draft | 3 stories, 12 tasks | High |
 
 ## Completed Plans
 
