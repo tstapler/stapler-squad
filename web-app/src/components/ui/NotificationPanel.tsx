@@ -9,6 +9,7 @@ import { ResolveApprovalRequest } from "@/gen/session/v1/session_pb";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { formatRelativeTime } from "@/lib/utils/datetime";
+import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { getApiBaseUrl } from "@/lib/config";
 import { NotificationData } from "./NotificationToast";
 import styles from "./NotificationPanel.module.css";
@@ -45,24 +46,25 @@ export function NotificationPanel() {
     return clientRef.current;
   }, []);
 
-  const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationId: string) => {
+  const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationIds: string | string[]) => {
     try {
       await getClient().resolveApproval(new ResolveApprovalRequest({ approvalId, decision }));
-      markAsRead(notificationId);
+      markAsRead(notificationIds);
     } catch (err) {
       console.error("Failed to resolve approval:", err);
-      alert("Could not resolve approval — it may have already timed out. Please respond in the terminal.");
+      alert("Could not resolve approval — it may have already timed out or been superseded. Check the session for the latest request.");
     }
   }, [getClient, markAsRead]);
   const unreadCount = getUnreadCount();
 
-  const handleNotificationClick = (id: string, onView?: () => void, sessionId?: string) => {
-    markAsRead(id);
+  const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
+    markAsRead(ids);
+    const primaryId = Array.isArray(ids) ? ids[0] : ids;
     if (onView && sessionId) {
-      auditLog.logNotificationSessionViewed(id, sessionId);
+      auditLog.logNotificationSessionViewed(primaryId, sessionId);
       onView();
     } else if (onView) {
-      auditLog.logNotificationViewed(id, sessionId);
+      auditLog.logNotificationViewed(primaryId, sessionId);
       onView();
     }
   };
@@ -223,7 +225,8 @@ export function NotificationPanel() {
             </div>
           ) : (
             <div className={styles.list}>
-              {notificationHistory.map((notification) => {
+              {groupNotifications(notificationHistory).map((group) => {
+                const notification = group.notification;
                 const contextString = getContextString(notification);
                 const hasSourceApp = notification.sourceApp || notification.sourceBundleId;
 
@@ -262,6 +265,11 @@ export function NotificationPanel() {
                         <span className={styles.typeLabel} style={{ backgroundColor: getPriorityColor(notification.priority) }}>
                           {getTypeLabel(notification.notificationType)}
                         </span>
+                        {group.count > 1 && (
+                          <span className={styles.countBadge} aria-label={`${group.count} occurrences`}>
+                            x{group.count}
+                          </span>
+                        )}
                       </div>
                       <button
                         className={styles.removeButton}
@@ -327,14 +335,14 @@ export function NotificationPanel() {
                           <>
                             <button
                               className={styles.approveButton}
-                              onClick={() => resolveApproval(notification.metadata!.approval_id, "allow", notification.id)}
+                              onClick={() => resolveApproval(notification.metadata!.approval_id, "allow", group.allIds)}
                               title="Approve this tool use"
                             >
                               ✓ Approve
                             </button>
                             <button
                               className={styles.denyButton}
-                              onClick={() => resolveApproval(notification.metadata!.approval_id, "deny", notification.id)}
+                              onClick={() => resolveApproval(notification.metadata!.approval_id, "deny", group.allIds)}
                               title="Deny this tool use"
                             >
                               ✗ Deny
@@ -356,7 +364,7 @@ export function NotificationPanel() {
                             className={styles.viewButton}
                             onClick={() => {
                               handleNotificationClick(
-                                notification.id,
+                                group.allIds,
                                 notification.onView,
                                 notification.sessionId
                               );

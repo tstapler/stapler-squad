@@ -229,6 +229,9 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
   const enableAudioRef = useRef(enableAudio);
   const onViewSessionRef = useRef(onViewSession);
 
+  // Dedup cache: maps "sessionId:notificationType" -> timestamp of last shown toast
+  const recentToastKeys = useRef<Map<string, number>>(new Map());
+
   useEffect(() => {
     enableAudioRef.current = enableAudio;
   }, [enableAudio]);
@@ -238,6 +241,28 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
   }, [onViewSession]);
 
   const handleNotification = useCallback((event: NotificationEvent) => {
+    // --- Toast deduplication ---
+    // Suppress duplicate toasts for the same (sessionId, notificationType)
+    // within a 10-second window. The server handles history-store dedup
+    // independently; this only prevents redundant UI toasts.
+    const DEDUP_WINDOW_MS = 10_000;
+    const dedupKey = `${event.sessionId}:${event.notificationType}`;
+    const now = Date.now();
+    const lastShown = recentToastKeys.current.get(dedupKey);
+
+    // Prune stale entries to prevent unbounded map growth
+    for (const [key, ts] of recentToastKeys.current) {
+      if (now - ts >= DEDUP_WINDOW_MS) {
+        recentToastKeys.current.delete(key);
+      }
+    }
+
+    if (lastShown && now - lastShown < DEDUP_WINDOW_MS) {
+      // Duplicate toast suppressed — event still reaches history store via server
+      return;
+    }
+    recentToastKeys.current.set(dedupKey, now);
+
     // Play audio chime based on priority
     if (enableAudioRef.current) {
       playNotificationSound(event.priority);

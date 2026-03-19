@@ -6,9 +6,12 @@ import { ReviewItem } from "@/gen/session/v1/types_pb";
 import { NotificationType, NotificationPriority } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
+import { groupNotifications } from "@/lib/utils/notificationGrouping";
 
 export interface NotificationHistoryItem extends NotificationData {
   isRead: boolean;
+  /** Server-provided occurrence count for deduplicated records. 0 means single/unknown (backward compat). */
+  occurrenceCount?: number;
 }
 
 interface NotificationContextValue {
@@ -30,7 +33,7 @@ interface NotificationContextValue {
     onAcknowledge?: () => void
   ) => void;
   togglePanel: () => void;
-  markAsRead: (id: string) => void;
+  markAsRead: (id: string | string[]) => void;
   markAllAsRead: () => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
@@ -123,13 +126,31 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         notificationType: mapNotificationType(record.notificationType),
         metadata: record.metadata ? Object.fromEntries(Object.entries(record.metadata)) : undefined,
         isRead: record.isRead,
+        occurrenceCount: record.occurrenceCount,
       }));
 
       setNotificationHistory((prev) => {
         // Merge backend records with any real-time notifications already in state.
-        // Deduplicate by ID, preferring existing (real-time) entries.
+        // Deduplicate by ID first, then by (sessionId, notificationType) key to
+        // prevent the same logical notification appearing twice during the window
+        // between a real-time arrival and the next history fetch.
         const existingIds = new Set(prev.map((n) => n.id));
-        const newFromBackend = backendItems.filter((n) => !existingIds.has(n.id));
+
+        // Build a set of dedup keys from existing real-time items
+        const existingDedupKeys = new Set(
+          prev.map((n) => `${n.sessionId ?? ""}:${n.notificationType ?? ""}`)
+        );
+
+        const newFromBackend = backendItems.filter((n) => {
+          // Skip if same ID already present
+          if (existingIds.has(n.id)) return false;
+          // Skip if a real-time item with same (sessionId, notificationType) exists
+          // (the real-time item is more current)
+          const dedupKey = `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
+          if (existingDedupKeys.has(dedupKey)) return false;
+          return true;
+        });
+
         // Combine: real-time items first (newest), then backend items
         return [...prev, ...newFromBackend];
       });
@@ -208,16 +229,19 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     });
   }, [auditLog]);
 
-  const markAsRead = useCallback((id: string) => {
+  const markAsRead = useCallback((id: string | string[]) => {
+    const ids = Array.isArray(id) ? id : [id];
+    const idSet = new Set(ids);
     setNotificationHistory((prev) => {
-      const notification = prev.find((n) => n.id === id);
-      if (notification) {
-        auditLog.logNotificationMarkedRead(notification.id, notification.sessionId);
+      for (const n of prev) {
+        if (idSet.has(n.id)) {
+          auditLog.logNotificationMarkedRead(n.id, n.sessionId);
+        }
       }
-      return prev.map((n) => (n.id === id ? { ...n, isRead: true } : n));
+      return prev.map((n) => (idSet.has(n.id) ? { ...n, isRead: true } : n));
     });
     // Also persist to backend
-    history.markAsRead([id]);
+    history.markAsRead(ids);
   }, [auditLog, history]);
 
   const markAllAsRead = useCallback(() => {
@@ -254,7 +278,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [auditLog, history]);
 
   const getUnreadCount = useCallback(() => {
-    return notificationHistory.filter((n) => !n.isRead).length;
+    // Return count of distinct unread (sessionId, notificationType) groups,
+    // not the raw number of unread records. This ensures the header badge
+    // reflects deduplicated groups even for stale pre-dedup data.
+    const unreadGroups = groupNotifications(
+      notificationHistory.filter((n) => !n.isRead)
+    );
+    return unreadGroups.length;
   }, [notificationHistory]);
 
   return (
