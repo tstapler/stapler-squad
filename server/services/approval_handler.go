@@ -4,19 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/log"
-	"claude-squad/server/events"
-	"claude-squad/session"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
+	sessionv1 "claude-squad/gen/proto/go/session/v1"
+	"claude-squad/log"
+	"claude-squad/server/events"
+	"claude-squad/session"
+
 	"github.com/google/uuid"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // hookDecisionResponse is the JSON response Claude Code expects from an HTTP hook.
@@ -261,87 +260,6 @@ func StartExpirationCleanup(ctx context.Context, store *ApprovalStore) {
 			}
 		}
 	}()
-}
-
-// ResolveApproval implements the SessionService ConnectRPC method.
-// It sends the user's decision to the blocked HTTP hook handler.
-func (s *SessionService) ResolveApproval(
-	ctx context.Context,
-	req *connect.Request[sessionv1.ResolveApprovalRequest],
-) (*connect.Response[sessionv1.ResolveApprovalResponse], error) {
-	if req.Msg.ApprovalId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("approval_id is required"))
-	}
-	if req.Msg.Decision != "allow" && req.Msg.Decision != "deny" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("decision must be 'allow' or 'deny'"))
-	}
-
-	message := ""
-	if req.Msg.Message != nil {
-		message = *req.Msg.Message
-	}
-
-	decision := ApprovalDecision{
-		Behavior: req.Msg.Decision,
-		Message:  message,
-	}
-
-	if err := s.approvalStore.Resolve(req.Msg.ApprovalId, decision); err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, err)
-	}
-
-	log.InfoLog.Printf("[SessionService] Resolved approval %s: %s", req.Msg.ApprovalId, req.Msg.Decision)
-
-	return connect.NewResponse(&sessionv1.ResolveApprovalResponse{
-		Success: true,
-		Message: fmt.Sprintf("Approval %s resolved: %s", req.Msg.ApprovalId, req.Msg.Decision),
-	}), nil
-}
-
-// ListPendingApprovals implements the SessionService ConnectRPC method.
-// Returns all pending approval requests, optionally filtered by session ID.
-func (s *SessionService) ListPendingApprovals(
-	ctx context.Context,
-	req *connect.Request[sessionv1.ListPendingApprovalsRequest],
-) (*connect.Response[sessionv1.ListPendingApprovalsResponse], error) {
-	var approvals []*PendingApproval
-	if req.Msg.SessionId != nil && *req.Msg.SessionId != "" {
-		approvals = s.approvalStore.GetBySession(*req.Msg.SessionId)
-	} else {
-		approvals = s.approvalStore.ListAll()
-	}
-
-	now := time.Now()
-	protos := make([]*sessionv1.PendingApprovalProto, 0, len(approvals))
-	for _, a := range approvals {
-		remaining := int32(a.ExpiresAt.Sub(now).Seconds())
-		if remaining < 0 {
-			remaining = 0
-		}
-		toolInput := make(map[string]string, len(a.ToolInput))
-		for k, v := range a.ToolInput {
-			if str, ok := v.(string); ok {
-				toolInput[k] = str
-			} else {
-				toolInput[k] = fmt.Sprintf("%v", v)
-			}
-		}
-		protos = append(protos, &sessionv1.PendingApprovalProto{
-			Id:               a.ID,
-			SessionId:        a.SessionID,
-			ToolName:         a.ToolName,
-			ToolInput:        toolInput,
-			Cwd:              a.Cwd,
-			PermissionMode:   a.PermissionMode,
-			CreatedAt:        timestamppb.New(a.CreatedAt),
-			ExpiresAt:        timestamppb.New(a.ExpiresAt),
-			SecondsRemaining: remaining,
-		})
-	}
-
-	return connect.NewResponse(&sessionv1.ListPendingApprovalsResponse{
-		Approvals: protos,
-	}), nil
 }
 
 // hookEntry is the individual hook definition within a matcher group.

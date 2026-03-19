@@ -268,3 +268,99 @@ func (rqs *ReviewQueueService) LogUserInteraction(
 		Success: true,
 	}), nil
 }
+
+// ---------------------------------------------------------------------------
+// Review queue filter types and helpers
+// ---------------------------------------------------------------------------
+
+// WatchReviewQueueFilters contains filters for review queue event streaming.
+type WatchReviewQueueFilters struct {
+	PriorityFilter    []session.Priority
+	ReasonFilter      []session.AttentionReason
+	SessionIDs        []string
+	IncludeStatistics bool
+	InitialSnapshot   bool
+}
+
+// Implement FilterProvider interface for type-safe conversion.
+func (f *WatchReviewQueueFilters) GetPriorityFilter() []session.Priority {
+	return f.PriorityFilter
+}
+
+func (f *WatchReviewQueueFilters) GetReasonFilter() []session.AttentionReason {
+	return f.ReasonFilter
+}
+
+func (f *WatchReviewQueueFilters) GetSessionIDs() []string {
+	return f.SessionIDs
+}
+
+func (f *WatchReviewQueueFilters) GetIncludeStatistics() bool {
+	return f.IncludeStatistics
+}
+
+func (f *WatchReviewQueueFilters) GetInitialSnapshot() bool {
+	return f.InitialSnapshot
+}
+
+// convertProtoPriorities converts proto Priority values to internal session.Priority.
+func convertProtoPriorities(protoPriorities []sessionv1.Priority) []session.Priority {
+	result := make([]session.Priority, 0, len(protoPriorities))
+	for _, p := range protoPriorities {
+		switch p {
+		case sessionv1.Priority_PRIORITY_URGENT:
+			result = append(result, session.PriorityUrgent)
+		case sessionv1.Priority_PRIORITY_HIGH:
+			result = append(result, session.PriorityHigh)
+		case sessionv1.Priority_PRIORITY_MEDIUM:
+			result = append(result, session.PriorityMedium)
+		case sessionv1.Priority_PRIORITY_LOW:
+			result = append(result, session.PriorityLow)
+		}
+	}
+	return result
+}
+
+// convertProtoReasons converts proto AttentionReason values to internal session.AttentionReason.
+func convertProtoReasons(protoReasons []sessionv1.AttentionReason) []session.AttentionReason {
+	result := make([]session.AttentionReason, 0, len(protoReasons))
+	for _, r := range protoReasons {
+		switch r {
+		case sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING:
+			result = append(result, session.ReasonApprovalPending)
+		case sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED:
+			result = append(result, session.ReasonInputRequired)
+		case sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE:
+			result = append(result, session.ReasonErrorState)
+		case sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT:
+			result = append(result, session.ReasonIdleTimeout)
+		case sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE:
+			result = append(result, session.ReasonTaskComplete)
+		}
+	}
+	return result
+}
+
+// formatDuration formats a time.Duration in a human-readable way.
+func formatDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		hours := int(d.Hours())
+		minutes := int(d.Minutes()) % 60
+		if minutes == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	}
+	days := int(d.Hours()) / 24
+	hours := int(d.Hours()) % 24
+	if hours == 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd%dh", days, hours)
+}

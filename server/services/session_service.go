@@ -1,31 +1,28 @@
 package services
 
 import (
-	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
 	"claude-squad/config"
 	sessionv1 "claude-squad/gen/proto/go/session/v1"
+	"claude-squad/gen/proto/go/session/v1/sessionv1connect"
 	"claude-squad/log"
 	"claude-squad/server/adapters"
 	"claude-squad/server/events"
 	"claude-squad/server/notifications"
 	"claude-squad/session"
 	"claude-squad/session/search"
-	"connectrpc.com/connect"
-	"context"
-	"encoding/json"
-	"fmt"
-	"google.golang.org/protobuf/types/known/timestamppb"
-	"io"
-	"net"
-	"os"
-	"os/exec"
-	"regexp"
-	"runtime"
-	"strings"
-	"time"
 
-	"github.com/google/uuid"
+	"connectrpc.com/connect"
 )
+
+// Compile-time interface check: SessionService must implement the full ConnectRPC handler.
+var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
 // The actual implementation is in server/review_queue_manager.go
@@ -42,22 +39,20 @@ type SessionService struct {
 	reviewQueuePoller *session.ReviewQueuePoller
 
 	// Extracted domain services.
-	reviewQueueSvc *ReviewQueueService
-	searchSvc      *SearchService
-	githubSvc      *GitHubService
-	workspaceSvc   *WorkspaceService
+	reviewQueueSvc  *ReviewQueueService
+	searchSvc       *SearchService
+	githubSvc       *GitHubService
+	workspaceSvc    *WorkspaceService
+	configSvc       *ConfigService
+	notificationSvc *NotificationService
+	approvalSvc     *ApprovalService
+	utilitySvc      *UtilityService
 
 	// External session discovery (for mux-enabled sessions from external terminals)
 	externalDiscovery *session.ExternalSessionDiscovery
 
-	// Notification rate limiter (10 notifications/sec per session, burst of 20)
-	notificationRateLimiter *NotificationRateLimiter
-
 	// approvalStore holds pending Claude Code hook approval requests.
 	approvalStore *ApprovalStore
-
-	// notificationStore persists notification history for the notification history RPCs.
-	notificationStore *notifications.NotificationHistoryStore
 }
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
@@ -95,15 +90,22 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 	reviewQueueSvc := NewReviewQueueService(reviewQueue, storage, eventBus)
 	reviewQueueSvc.SetApprovalStore(approvalStore)
 
+	notificationSvc := NewNotificationService(NewNotificationRateLimiter(10, 20), eventBus)
+	approvalSvc := NewApprovalService(approvalStore)
+	utilitySvc := NewUtilityService(approvalStore)
+
 	return &SessionService{
-		storage:                 storage,
-		eventBus:                eventBus,
-		reviewQueueSvc:          reviewQueueSvc,
-		searchSvc:               NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
-		githubSvc:               NewGitHubService(storage),
-		workspaceSvc:            NewWorkspaceService(storage, eventBus),
-		notificationRateLimiter: NewNotificationRateLimiter(10, 20),
-		approvalStore:           approvalStore,
+		storage:         storage,
+		eventBus:        eventBus,
+		reviewQueueSvc:  reviewQueueSvc,
+		searchSvc:       NewSearchService(searchEngine, search.NewSnippetGenerator(), 5*time.Minute),
+		githubSvc:       NewGitHubService(storage),
+		workspaceSvc:    NewWorkspaceService(storage, eventBus),
+		configSvc:       NewConfigService(),
+		notificationSvc: notificationSvc,
+		approvalSvc:     approvalSvc,
+		utilitySvc:      utilitySvc,
+		approvalStore:   approvalStore,
 	}
 }
 
@@ -241,6 +243,8 @@ func (s *SessionService) SetReactiveQueueManager(mgr ReactiveQueueManager) {
 func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
 	s.reviewQueuePoller = poller
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
+	s.notificationSvc.SetReviewQueuePoller(poller)
+	s.utilitySvc.SetReviewQueuePoller(poller)
 }
 
 // SetStatusManager wires the InstanceStatusManager so that instances loaded via
@@ -257,12 +261,17 @@ func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSession
 
 // SetNotificationStore sets the notification history store for the notification history RPCs.
 func (s *SessionService) SetNotificationStore(store *notifications.NotificationHistoryStore) {
-	s.notificationStore = store
+	s.notificationSvc.SetNotificationStore(store)
 }
 
 // GetNotificationStore returns the notification history store.
 func (s *SessionService) GetNotificationStore() *notifications.NotificationHistoryStore {
-	return s.notificationStore
+	return s.notificationSvc.GetNotificationStore()
+}
+
+// SetConfigService wires the ConfigService for delegating config RPCs.
+func (s *SessionService) SetConfigService(svc *ConfigService) {
+	s.configSvc = svc
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -1124,207 +1133,7 @@ func (s *SessionService) GetLogs(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetLogsRequest],
 ) (*connect.Response[sessionv1.GetLogsResponse], error) {
-	// Get log file path from config
-	cfg := log.ConfigToLogConfig(config.LoadConfig())
-	logFilePath, err := log.GetLogFilePath(cfg)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get log file path: %w", err))
-	}
-
-	// Read log file
-	file, err := os.Open(logFilePath)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open log file: %w", err))
-	}
-	defer file.Close()
-
-	// Parse logs with filters
-	result, err := parseLogs(file, req.Msg)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to parse logs: %w", err))
-	}
-
-	return connect.NewResponse(&sessionv1.GetLogsResponse{
-		Entries:    result.Entries,
-		TotalCount: int32(result.TotalCount),
-		HasMore:    result.HasMore,
-	}), nil
-}
-
-// parseLogsResult contains the result of parsing logs with pagination info
-type parseLogsResult struct {
-	Entries    []*sessionv1.LogEntry
-	TotalCount int
-	HasMore    bool
-}
-
-// parseLogs reads log file and applies filters to return matching entries
-func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResult, error) {
-	// Log line format: [instance] LEVEL:date time file:line: message
-	// Example: [pid-12345-timestamp] INFO:2025/10/17 14:23:45 app.go:123: Starting session
-	logLineRegex := regexp.MustCompile(`^\[([^\]]+)\]\s+(\w+):(\d{4}/\d{2}/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+([^:]+:\d+):\s+(.*)$`)
-
-	var entries []*sessionv1.LogEntry
-	scanner := bufio.NewScanner(reader)
-
-	// Default limit if not specified
-	limit := 100
-	if req.Limit != nil && *req.Limit > 0 {
-		limit = int(*req.Limit)
-	}
-
-	// Parse offset (default: 0)
-	offset := 0
-	if req.Offset != nil && *req.Offset > 0 {
-		offset = int(*req.Offset)
-	}
-
-	// Parse filters
-	var searchQuery string
-	if req.SearchQuery != nil {
-		searchQuery = strings.ToLower(*req.SearchQuery)
-	}
-
-	var levelFilter string
-	if req.Level != nil {
-		levelFilter = strings.ToUpper(*req.Level)
-	}
-
-	var startTime, endTime *time.Time
-	if req.StartTime != nil {
-		t := req.StartTime.AsTime()
-		startTime = &t
-	}
-	if req.EndTime != nil {
-		t := req.EndTime.AsTime()
-		endTime = &t
-	}
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		// Try to parse the log line
-		matches := logLineRegex.FindStringSubmatch(line)
-		if matches == nil || len(matches) < 7 {
-			// Skip lines that don't match expected format
-			continue
-		}
-
-		// Extract fields from regex match
-		// matches[1] = instance (ignored for API)
-		level := matches[2]
-		dateStr := matches[3]
-		timeStr := matches[4]
-		source := matches[5]
-		message := matches[6]
-
-		// Parse timestamp - use ParseInLocation with Local timezone since logs are written in local time
-		timestampStr := fmt.Sprintf("%s %s", dateStr, timeStr)
-		timestamp, err := time.ParseInLocation("2006/01/02 15:04:05", timestampStr, time.Local)
-		if err != nil {
-			// Skip entries with invalid timestamps
-			continue
-		}
-
-		// Apply level filter
-		if levelFilter != "" && level != levelFilter {
-			continue
-		}
-
-		// Apply time range filters
-		if startTime != nil && timestamp.Before(*startTime) {
-			continue
-		}
-		if endTime != nil && timestamp.After(*endTime) {
-			continue
-		}
-
-		// Apply search query filter (case-insensitive, searches message and source)
-		if searchQuery != "" {
-			messageAndSource := strings.ToLower(message + " " + source)
-			if !strings.Contains(messageAndSource, searchQuery) {
-				continue
-			}
-		}
-
-		// Create log entry
-		entry := &sessionv1.LogEntry{
-			Timestamp: timestamppb.New(timestamp),
-			Level:     level,
-			Message:   message,
-			Source:    &source,
-		}
-
-		entries = append(entries, entry)
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("error reading log file: %w", err)
-	}
-
-	// Reverse entries to show most recent first
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
-	}
-
-	// Store total count before pagination
-	totalCount := len(entries)
-
-	// Apply offset
-	if offset >= len(entries) {
-		// Offset beyond available entries, return empty result
-		return &parseLogsResult{
-			Entries:    []*sessionv1.LogEntry{},
-			TotalCount: totalCount,
-			HasMore:    false,
-		}, nil
-	}
-
-	// Apply offset and limit
-	start := offset
-	end := offset + limit
-	if end > len(entries) {
-		end = len(entries)
-	}
-
-	paginatedEntries := entries[start:end]
-	hasMore := end < len(entries)
-
-	return &parseLogsResult{
-		Entries:    paginatedEntries,
-		TotalCount: totalCount,
-		HasMore:    hasMore,
-	}, nil
-}
-
-// WatchReviewQueueFilters contains filters for review queue event streaming.
-type WatchReviewQueueFilters struct {
-	PriorityFilter    []session.Priority
-	ReasonFilter      []session.AttentionReason
-	SessionIDs        []string
-	IncludeStatistics bool
-	InitialSnapshot   bool
-}
-
-// Implement FilterProvider interface for type-safe conversion
-func (f *WatchReviewQueueFilters) GetPriorityFilter() []session.Priority {
-	return f.PriorityFilter
-}
-
-func (f *WatchReviewQueueFilters) GetReasonFilter() []session.AttentionReason {
-	return f.ReasonFilter
-}
-
-func (f *WatchReviewQueueFilters) GetSessionIDs() []string {
-	return f.SessionIDs
-}
-
-func (f *WatchReviewQueueFilters) GetIncludeStatistics() bool {
-	return f.IncludeStatistics
-}
-
-func (f *WatchReviewQueueFilters) GetInitialSnapshot() bool {
-	return f.InitialSnapshot
+	return s.utilitySvc.GetLogs(ctx, req)
 }
 
 // WatchReviewQueue streams real-time review queue events.
@@ -1336,68 +1145,6 @@ func (s *SessionService) WatchReviewQueue(
 	return s.reviewQueueSvc.WatchReviewQueue(ctx, req, stream)
 }
 
-// convertProtoPriorities converts proto Priority values to internal session.Priority
-func convertProtoPriorities(protoPriorities []sessionv1.Priority) []session.Priority {
-	result := make([]session.Priority, 0, len(protoPriorities))
-	for _, p := range protoPriorities {
-		switch p {
-		case sessionv1.Priority_PRIORITY_URGENT:
-			result = append(result, session.PriorityUrgent)
-		case sessionv1.Priority_PRIORITY_HIGH:
-			result = append(result, session.PriorityHigh)
-		case sessionv1.Priority_PRIORITY_MEDIUM:
-			result = append(result, session.PriorityMedium)
-		case sessionv1.Priority_PRIORITY_LOW:
-			result = append(result, session.PriorityLow)
-		}
-	}
-	return result
-}
-
-// convertProtoReasons converts proto AttentionReason values to internal session.AttentionReason
-func convertProtoReasons(protoReasons []sessionv1.AttentionReason) []session.AttentionReason {
-	result := make([]session.AttentionReason, 0, len(protoReasons))
-	for _, r := range protoReasons {
-		switch r {
-		case sessionv1.AttentionReason_ATTENTION_REASON_APPROVAL_PENDING:
-			result = append(result, session.ReasonApprovalPending)
-		case sessionv1.AttentionReason_ATTENTION_REASON_INPUT_REQUIRED:
-			result = append(result, session.ReasonInputRequired)
-		case sessionv1.AttentionReason_ATTENTION_REASON_ERROR_STATE:
-			result = append(result, session.ReasonErrorState)
-		case sessionv1.AttentionReason_ATTENTION_REASON_IDLE_TIMEOUT:
-			result = append(result, session.ReasonIdleTimeout)
-		case sessionv1.AttentionReason_ATTENTION_REASON_TASK_COMPLETE:
-			result = append(result, session.ReasonTaskComplete)
-		}
-	}
-	return result
-}
-
-// formatDuration formats a time.Duration in a human-readable way.
-func formatDuration(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	if d < 24*time.Hour {
-		hours := int(d.Hours())
-		minutes := int(d.Minutes()) % 60
-		if minutes == 0 {
-			return fmt.Sprintf("%dh", hours)
-		}
-		return fmt.Sprintf("%dh%dm", hours, minutes)
-	}
-	days := int(d.Hours()) / 24
-	hours := int(d.Hours()) % 24
-	if hours == 0 {
-		return fmt.Sprintf("%dd", days)
-	}
-	return fmt.Sprintf("%dd%dh", days, hours)
-}
-
 // LogUserInteraction logs a user interaction event for audit trail and analytics.
 func (s *SessionService) LogUserInteraction(
 	ctx context.Context,
@@ -1406,102 +1153,28 @@ func (s *SessionService) LogUserInteraction(
 	return s.reviewQueueSvc.LogUserInteraction(ctx, req)
 }
 
-// GetClaudeConfig retrieves a Claude configuration file by name
+// GetClaudeConfig retrieves a Claude configuration file by name.
 func (s *SessionService) GetClaudeConfig(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetClaudeConfigRequest],
 ) (*connect.Response[sessionv1.GetClaudeConfigResponse], error) {
-	mgr, err := config.NewClaudeConfigManager()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create config manager: %w", err))
-	}
-
-	configFile, err := mgr.GetConfig(req.Msg.Filename)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			return nil, connect.NewError(connect.CodeNotFound, err)
-		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	return connect.NewResponse(&sessionv1.GetClaudeConfigResponse{
-		Config: &sessionv1.ClaudeConfigFile{
-			Name:    configFile.Name,
-			Path:    configFile.Path,
-			Content: configFile.Content,
-			ModTime: timestamppb.New(configFile.ModTime),
-		},
-	}), nil
+	return s.configSvc.GetClaudeConfig(ctx, req)
 }
 
-// ListClaudeConfigs returns all configuration files in the ~/.claude directory
+// ListClaudeConfigs returns all configuration files in the ~/.claude directory.
 func (s *SessionService) ListClaudeConfigs(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListClaudeConfigsRequest],
 ) (*connect.Response[sessionv1.ListClaudeConfigsResponse], error) {
-	mgr, err := config.NewClaudeConfigManager()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create config manager: %w", err))
-	}
-
-	configs, err := mgr.ListConfigs()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	protoConfigs := make([]*sessionv1.ClaudeConfigFile, 0, len(configs))
-	for _, cfg := range configs {
-		protoConfigs = append(protoConfigs, &sessionv1.ClaudeConfigFile{
-			Name:    cfg.Name,
-			Path:    cfg.Path,
-			Content: cfg.Content,
-			ModTime: timestamppb.New(cfg.ModTime),
-		})
-	}
-
-	return connect.NewResponse(&sessionv1.ListClaudeConfigsResponse{
-		Configs: protoConfigs,
-	}), nil
+	return s.configSvc.ListClaudeConfigs(ctx, req)
 }
 
-// UpdateClaudeConfig updates a Claude configuration file with atomic write and backup
+// UpdateClaudeConfig updates a Claude configuration file with atomic write and backup.
 func (s *SessionService) UpdateClaudeConfig(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateClaudeConfigRequest],
 ) (*connect.Response[sessionv1.UpdateClaudeConfigResponse], error) {
-	mgr, err := config.NewClaudeConfigManager()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create config manager: %w", err))
-	}
-
-	// Use validation if requested
-	if req.Msg.Validate {
-		err = mgr.UpdateConfigWithValidation(req.Msg.Filename, req.Msg.Content)
-	} else {
-		err = mgr.UpdateConfig(req.Msg.Filename, req.Msg.Content)
-	}
-
-	if err != nil {
-		if strings.Contains(err.Error(), "validation failed") {
-			return nil, connect.NewError(connect.CodeInvalidArgument, err)
-		}
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-
-	// Read back the updated file
-	configFile, err := mgr.GetConfig(req.Msg.Filename)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to read updated config: %w", err))
-	}
-
-	return connect.NewResponse(&sessionv1.UpdateClaudeConfigResponse{
-		Config: &sessionv1.ClaudeConfigFile{
-			Name:    configFile.Name,
-			Path:    configFile.Path,
-			Content: configFile.Content,
-			ModTime: timestamppb.New(configFile.ModTime),
-		},
-	}), nil
+	return s.configSvc.UpdateClaudeConfig(ctx, req)
 }
 
 // ListClaudeHistory returns Claude session history entries with optional filtering.
@@ -1577,242 +1250,19 @@ func (s *SessionService) ClosePR(
 }
 
 // SendNotification allows tmux sessions and external Claude processes to send notifications.
-// Enforces localhost-only restriction and rate limiting. Accepts both managed sessions
-// and external sessions (e.g., Claude running in IntelliJ, VS Code, or other terminals).
 func (s *SessionService) SendNotification(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SendNotificationRequest],
 ) (*connect.Response[sessionv1.SendNotificationResponse], error) {
-	// Validate localhost-only origin
-	if err := s.validateLocalhostOrigin(ctx, req); err != nil {
-		return nil, err
-	}
-
-	// Validate required fields
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-	if req.Msg.Title == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
-	}
-
-	// Use the session ID as the display name. LoadInstances() cannot be used here because
-	// it calls FromInstanceData() which calls Start() on every non-paused session —
-	// a catastrophic side-effect that restarts all sessions on each notification.
-	// The poller holds live instances; if the session exists there, use its title.
-	sessionName := req.Msg.SessionId // Default to session ID
-	if s.reviewQueuePoller != nil {
-		if inst := s.reviewQueuePoller.FindInstance(req.Msg.SessionId); inst != nil {
-			sessionName = inst.Title
-		}
-	}
-
-	// Apply rate limiting (applies to both managed and external sessions)
-	if !s.notificationRateLimiter.Allow(req.Msg.SessionId) {
-		return nil, connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("rate limit exceeded for session: %s", req.Msg.SessionId))
-	}
-
-	// Generate notification ID
-	notificationID := uuid.New().String()
-
-	// Broadcast notification via event bus
-	event := events.NewNotificationEvent(
-		req.Msg.SessionId,
-		sessionName,
-		notificationID,
-		int32(req.Msg.NotificationType),
-		int32(req.Msg.Priority),
-		req.Msg.Title,
-		req.Msg.Message,
-		req.Msg.Metadata,
-	)
-	s.eventBus.Publish(event)
-
-	log.InfoS("Notification sent", map[string]interface{}{
-		"session_id":        req.Msg.SessionId,
-		"session_name":      sessionName,
-		"notification_type": req.Msg.NotificationType.String(),
-		"priority":          req.Msg.Priority.String(),
-		"title":             req.Msg.Title,
-		"notification_id":   notificationID,
-	})
-
-	return connect.NewResponse(&sessionv1.SendNotificationResponse{
-		Success:        true,
-		Message:        "Notification sent successfully",
-		NotificationId: notificationID,
-	}), nil
-}
-
-// validateLocalhostOrigin ensures the request comes from localhost.
-// This is a security measure to prevent external actors from sending notifications.
-func (s *SessionService) validateLocalhostOrigin(ctx context.Context, req *connect.Request[sessionv1.SendNotificationRequest]) error {
-	// Get peer address from request headers or context
-	// ConnectRPC provides X-Forwarded-For or we can check the connection directly
-
-	// Check X-Real-IP header first (if behind a proxy)
-	realIP := req.Header().Get("X-Real-IP")
-	if realIP != "" {
-		if !isLocalhostIP(realIP) {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
-		}
-		return nil
-	}
-
-	// Check X-Forwarded-For header
-	forwardedFor := req.Header().Get("X-Forwarded-For")
-	if forwardedFor != "" {
-		// Take the first IP in the chain (original client)
-		ips := strings.Split(forwardedFor, ",")
-		if len(ips) > 0 {
-			clientIP := strings.TrimSpace(ips[0])
-			if !isLocalhostIP(clientIP) {
-				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
-			}
-			return nil
-		}
-	}
-
-	// If no proxy headers, we're in direct connection mode
-	// The server already binds to localhost, so requests reaching here are local
-	// This is a defense-in-depth check
-	return nil
-}
-
-// isLocalhostIP checks if the given IP string represents localhost.
-func isLocalhostIP(ip string) bool {
-	parsed := net.ParseIP(ip)
-	if parsed == nil {
-		return false
-	}
-	return parsed.IsLoopback()
+	return s.notificationSvc.SendNotification(ctx, req)
 }
 
 // FocusWindow activates a window for the specified application.
-// Uses AppleScript on macOS to bring the application to front.
 func (s *SessionService) FocusWindow(
 	ctx context.Context,
 	req *connect.Request[sessionv1.FocusWindowRequest],
 ) (*connect.Response[sessionv1.FocusWindowResponse], error) {
-	// Validate localhost-only origin
-	if err := s.validateLocalhostOriginForFocus(ctx, req); err != nil {
-		return nil, err
-	}
-
-	platform := detectPlatform()
-
-	// Need at least bundle_id or app_name
-	bundleID := ""
-	if req.Msg.BundleId != nil {
-		bundleID = *req.Msg.BundleId
-	}
-	appName := ""
-	if req.Msg.AppName != nil {
-		appName = *req.Msg.AppName
-	}
-
-	if bundleID == "" && appName == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("bundle_id or app_name is required"))
-	}
-
-	// Only macOS is supported currently
-	if platform != "darwin" {
-		return connect.NewResponse(&sessionv1.FocusWindowResponse{
-			Success:  false,
-			Message:  fmt.Sprintf("window activation not supported on platform: %s", platform),
-			Platform: platform,
-		}), nil
-	}
-
-	// Try to activate the window using AppleScript
-	var script string
-	if bundleID != "" {
-		// Prefer bundle ID for more reliable activation
-		script = fmt.Sprintf(`tell application id "%s" to activate`, bundleID)
-	} else {
-		// Fallback to app name
-		script = fmt.Sprintf(`tell application "%s" to activate`, appName)
-	}
-
-	// Execute AppleScript
-	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
-	output, err := cmd.CombinedOutput()
-	outputStr := string(output)
-
-	if err != nil {
-		log.WarningLog.Printf("Failed to activate window (bundle=%s, app=%s): %v, output: %s",
-			bundleID, appName, err, outputStr)
-
-		// Check for common permission-related errors
-		message := fmt.Sprintf("failed to activate window: %v", err)
-		if strings.Contains(outputStr, "not allowed") ||
-			strings.Contains(outputStr, "permission") ||
-			strings.Contains(outputStr, "accessibility") ||
-			strings.Contains(outputStr, "System Events") {
-			message = "Permission denied. Please grant Accessibility permissions: " +
-				"System Preferences > Security & Privacy > Privacy > Accessibility. " +
-				"Add Terminal (or your terminal app) to the list."
-		} else if strings.Contains(outputStr, "Application isn't running") ||
-			strings.Contains(outputStr, "Can't get application") {
-			targetApp := bundleID
-			if targetApp == "" {
-				targetApp = appName
-			}
-			message = fmt.Sprintf("Application '%s' is not running", targetApp)
-		}
-
-		return connect.NewResponse(&sessionv1.FocusWindowResponse{
-			Success:  false,
-			Message:  message,
-			Platform: platform,
-		}), nil
-	}
-
-	log.InfoLog.Printf("Window activated successfully (bundle=%s, app=%s)", bundleID, appName)
-	return connect.NewResponse(&sessionv1.FocusWindowResponse{
-		Success:  true,
-		Message:  "Window activated successfully",
-		Platform: platform,
-	}), nil
-}
-
-// validateLocalhostOriginForFocus ensures FocusWindow requests come from localhost.
-func (s *SessionService) validateLocalhostOriginForFocus(ctx context.Context, req *connect.Request[sessionv1.FocusWindowRequest]) error {
-	// Check X-Real-IP header first (if behind a proxy)
-	realIP := req.Header().Get("X-Real-IP")
-	if realIP != "" {
-		if !isLocalhostIP(realIP) {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
-		}
-		return nil
-	}
-
-	// Check X-Forwarded-For header
-	forwardedFor := req.Header().Get("X-Forwarded-For")
-	if forwardedFor != "" {
-		ips := strings.Split(forwardedFor, ",")
-		if len(ips) > 0 {
-			clientIP := strings.TrimSpace(ips[0])
-			if !isLocalhostIP(clientIP) {
-				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("FocusWindow can only be called from localhost"))
-			}
-			return nil
-		}
-	}
-
-	// Direct connection mode - server binds to localhost
-	return nil
-}
-
-// detectPlatform returns the current operating system.
-func detectPlatform() string {
-	switch os := os.Getenv("GOOS"); os {
-	case "":
-		// GOOS not set, use runtime detection
-		return runtime.GOOS
-	default:
-		return os
-	}
+	return s.utilitySvc.FocusWindow(ctx, req)
 }
 
 // RenameSession changes the title of an existing session.
@@ -1991,64 +1441,45 @@ func (s *SessionService) CreateDebugSnapshot(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateDebugSnapshotRequest],
 ) (*connect.Response[sessionv1.CreateDebugSnapshotResponse], error) {
-	snapCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	return s.utilitySvc.CreateDebugSnapshot(ctx, req)
+}
 
-	// Collect live instances
-	var instances []*session.Instance
-	if s.reviewQueuePoller != nil {
-		instances = s.reviewQueuePoller.GetInstances()
-	}
+// GetNotificationHistory returns persisted notification history with optional filtering.
+func (s *SessionService) GetNotificationHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetNotificationHistoryRequest],
+) (*connect.Response[sessionv1.GetNotificationHistoryResponse], error) {
+	return s.notificationSvc.GetNotificationHistory(ctx, req)
+}
 
-	// Determine log line count
-	logLines := int32(200)
-	if req.Msg.LogLines != nil && *req.Msg.LogLines > 0 {
-		logLines = *req.Msg.LogLines
-	}
+// MarkNotificationRead marks specific notifications as read.
+func (s *SessionService) MarkNotificationRead(
+	ctx context.Context,
+	req *connect.Request[sessionv1.MarkNotificationReadRequest],
+) (*connect.Response[sessionv1.MarkNotificationReadResponse], error) {
+	return s.notificationSvc.MarkNotificationRead(ctx, req)
+}
 
-	note := ""
-	if req.Msg.Note != nil {
-		note = *req.Msg.Note
-	}
+// ClearNotificationHistory removes notifications from the history.
+func (s *SessionService) ClearNotificationHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ClearNotificationHistoryRequest],
+) (*connect.Response[sessionv1.ClearNotificationHistoryResponse], error) {
+	return s.notificationSvc.ClearNotificationHistory(ctx, req)
+}
 
-	// Collect snapshot
-	snap := CollectSnapshot(snapCtx, note, instances, s.approvalStore, int(logLines))
+// ResolveApproval allows the web UI to approve or deny a pending Claude Code tool use request.
+func (s *SessionService) ResolveApproval(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ResolveApprovalRequest],
+) (*connect.Response[sessionv1.ResolveApprovalResponse], error) {
+	return s.approvalSvc.ResolveApproval(ctx, req)
+}
 
-	// Get log directory for output
-	logDir, err := log.GetLogDir(log.ConfigToLogConfig(config.LoadConfig()))
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get log directory: %w", err))
-	}
-
-	// Write snapshot to disk
-	filePath, err := WriteSnapshot(snap, logDir)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to write snapshot: %w", err))
-	}
-
-	// Get file size
-	var fileSizeBytes int64
-	if info, err := os.Stat(filePath); err == nil {
-		fileSizeBytes = info.Size()
-	}
-
-	// Build summary
-	pendingApprovals := 0
-	if s.approvalStore != nil {
-		pendingApprovals = len(s.approvalStore.ListAll())
-	}
-	summary := fmt.Sprintf("Captured %d sessions, %d pending approvals, %d log lines",
-		len(instances), pendingApprovals, snap.RecentLogs.LineCount)
-	if len(snap.Errors) > 0 {
-		summary += fmt.Sprintf(" (%d collection errors)", len(snap.Errors))
-	}
-
-	log.InfoLog.Printf("[DebugSnapshot] Written to %s (%d bytes)", filePath, fileSizeBytes)
-
-	return connect.NewResponse(&sessionv1.CreateDebugSnapshotResponse{
-		FilePath:      filePath,
-		Summary:       summary,
-		Timestamp:     snap.Timestamp.Format(time.RFC3339),
-		FileSizeBytes: fileSizeBytes,
-	}), nil
+// ListPendingApprovals returns all pending Claude Code tool approval requests.
+func (s *SessionService) ListPendingApprovals(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListPendingApprovalsRequest],
+) (*connect.Response[sessionv1.ListPendingApprovalsResponse], error) {
+	return s.approvalSvc.ListPendingApprovals(ctx, req)
 }
