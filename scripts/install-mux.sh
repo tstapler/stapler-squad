@@ -35,6 +35,22 @@ log_error() {
     printf "${RED}✗${NC} %s\n" "$1"
 }
 
+# Check required dependencies
+check_dependencies() {
+    if ! command -v go >/dev/null 2>&1; then
+        log_error "Go is required but not installed"
+        log_info "Install Go from: https://go.dev/dl/"
+        exit 1
+    fi
+
+    if ! command -v tmux >/dev/null 2>&1; then
+        log_error "tmux is required but not installed"
+        log_info "Install with: brew install tmux  (macOS)"
+        log_info "         or: apt-get install tmux  (Debian/Ubuntu)"
+        exit 1
+    fi
+}
+
 # Check if running from project root
 check_project_root() {
     if [ ! -f "go.mod" ] || [ ! -d "cmd/claude-mux" ]; then
@@ -198,6 +214,7 @@ main() {
     echo ""
 
     # Check prerequisites
+    check_dependencies
     check_project_root
 
     # Build
