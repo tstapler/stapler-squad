@@ -1,8 +1,8 @@
 package services
 
 import (
-	"claude-squad/log"
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,7 +31,7 @@ type ApprovalDecision struct {
 // PendingApproval represents an in-flight hook approval waiting for a user decision.
 type PendingApproval struct {
 	ID              string
-	SessionID       string // claude-squad session title (mapped from hook)
+	SessionID       string // stapler-squad session title (mapped from hook)
 	ClaudeSessionID string // Claude Code's internal session_id
 	ToolName        string
 	ToolInput       map[string]interface{}

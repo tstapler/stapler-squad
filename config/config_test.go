@@ -1,7 +1,7 @@
 package config
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -281,9 +281,9 @@ func TestGetConfigDir(t *testing.T) {
 
 		assert.NoError(t, err)
 		assert.NotEmpty(t, configDir)
-		// With workspace isolation, path contains .claude-squad but may have subdirs
-		assert.True(t, strings.Contains(configDir, ".claude-squad"),
-			"config dir should contain .claude-squad: %s", configDir)
+		// With workspace isolation, path contains .stapler-squad but may have subdirs
+		assert.True(t, strings.Contains(configDir, ".stapler-squad"),
+			"config dir should contain .stapler-squad: %s", configDir)
 
 		// Verify it's an absolute path
 		assert.True(t, filepath.IsAbs(configDir))
@@ -303,7 +303,7 @@ func TestGetConfigDir(t *testing.T) {
 		configDir, err := GetConfigDir()
 
 		assert.NoError(t, err)
-		assert.True(t, strings.HasSuffix(configDir, ".claude-squad/instances/test-instance"),
+		assert.True(t, strings.HasSuffix(configDir, ".stapler-squad/instances/test-instance"),
 			"should use explicit instance ID: %s", configDir)
 	})
 
@@ -312,7 +312,7 @@ func TestGetConfigDir(t *testing.T) {
 		configDir, err := GetConfigDir()
 
 		assert.NoError(t, err)
-		assert.True(t, strings.Contains(configDir, ".claude-squad/test/test-"),
+		assert.True(t, strings.Contains(configDir, ".stapler-squad/test/test-"),
 			"test mode should use test directory: %s", configDir)
 	})
 
@@ -330,7 +330,7 @@ func TestGetConfigDir(t *testing.T) {
 		configDir, err := GetConfigDir()
 
 		assert.NoError(t, err)
-		assert.True(t, strings.HasSuffix(configDir, ".claude-squad"),
+		assert.True(t, strings.HasSuffix(configDir, ".stapler-squad"),
 			"shared mode should use base directory: %s", configDir)
 	})
 }
@@ -355,7 +355,7 @@ func TestLoadConfig(t *testing.T) {
 	t.Run("loads valid config file", func(t *testing.T) {
 		// Create a temporary config directory
 		tempHome := t.TempDir()
-		configDir := filepath.Join(tempHome, ".claude-squad")
+		configDir := filepath.Join(tempHome, ".stapler-squad")
 		err := os.MkdirAll(configDir, 0755)
 		require.NoError(t, err)
 
@@ -396,7 +396,7 @@ func TestLoadConfig(t *testing.T) {
 	t.Run("returns default config on invalid JSON", func(t *testing.T) {
 		// Create a temporary config directory
 		tempHome := t.TempDir()
-		configDir := filepath.Join(tempHome, ".claude-squad")
+		configDir := filepath.Join(tempHome, ".stapler-squad")
 		err := os.MkdirAll(configDir, 0755)
 		require.NoError(t, err)
 
@@ -452,7 +452,7 @@ func TestSaveConfig(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Verify the file was created
-		configDir := filepath.Join(tempHome, ".claude-squad")
+		configDir := filepath.Join(tempHome, ".stapler-squad")
 		configPath := filepath.Join(configDir, ConfigFileName)
 
 		assert.FileExists(t, configPath)

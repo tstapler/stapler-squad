@@ -1,16 +1,16 @@
 package server
 
 import (
-	"claude-squad/log"
-	"claude-squad/server/adapters"
-	"claude-squad/server/events"
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"context"
 	"fmt"
 	"sync"
 	"time"
 
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

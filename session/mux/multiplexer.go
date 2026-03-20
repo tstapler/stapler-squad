@@ -16,11 +16,12 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // Multiplexer handles PTY multiplexing for external Claude sessions.
-// It creates a tmux session with claude-squad's naming convention, allowing
-// claude-squad to discover and control the session (including killing it).
+// It creates a tmux session with stapler-squad's naming convention, allowing
+// stapler-squad to discover and control the session (including killing it).
 // Multiple clients can connect via Unix domain socket for bidirectional terminal access.
 type Multiplexer struct {
 	// Configuration
@@ -28,7 +29,7 @@ type Multiplexer struct {
 	args       []string
 	socketPath string
 
-	// tmux session (uses claude-squad naming convention for adoption)
+	// tmux session (uses stapler-squad naming convention for adoption)
 	tmuxSession string
 
 	// attachOnly indicates we're attaching to an existing tmux session
@@ -88,8 +89,8 @@ func NewMultiplexerAttach(tmuxSession string) *Multiplexer {
 }
 
 // GenerateSessionName creates a human-readable session name based on the current directory
-// and command. The name follows claude-squad's naming convention for external sessions.
-// Returns a name like "claudesquad_ext_myproject_claude_1234" where 1234 is the PID.
+// and command. The name follows stapler-squad's naming convention for external sessions.
+// Returns a name like "staplersquad_ext_myproject_claude_1234" where 1234 is the PID.
 // Uses PID instead of timestamp to guarantee uniqueness across concurrent sessions.
 func GenerateSessionName(command string) string {
 	// Get the current directory name as the project identifier
@@ -110,7 +111,7 @@ func GenerateSessionName(command string) string {
 	// This prevents collisions when starting multiple sessions in the same directory
 	pid := os.Getpid()
 
-	return fmt.Sprintf("claudesquad_ext_%s_%s_%d", projectName, cmdBase, pid)
+	return fmt.Sprintf("staplersquad_ext_%s_%s_%d", projectName, cmdBase, pid)
 }
 
 // sanitizeForTmux removes or replaces characters invalid for tmux session names.
@@ -151,8 +152,8 @@ func sanitizeForTmux(name string) string {
 }
 
 // Start launches the command in a tmux session and starts the socket server.
-// The tmux session uses claude-squad's naming convention (claudesquad_ext_<PID>)
-// so claude-squad can discover and control it.
+// The tmux session uses stapler-squad's naming convention (staplersquad_ext_<PID>)
+// so stapler-squad can discover and control it.
 func (m *Multiplexer) Start() error {
 	// Create context for coordination
 	m.ctx, m.cancel = context.WithCancel(context.Background())
@@ -196,7 +197,7 @@ func (m *Multiplexer) Start() error {
 			return fmt.Errorf("tmux session not found: %s", m.tmuxSession)
 		}
 	} else {
-		// Create tmux session with claude-squad naming convention
+		// Create tmux session with stapler-squad naming convention
 		// "ext_" distinguishes external sessions from squad-created ones
 		// Use pre-set name if provided, otherwise generate a descriptive one
 		if m.tmuxSession == "" {
@@ -204,7 +205,7 @@ func (m *Multiplexer) Start() error {
 		}
 
 		// Generate hooks configuration file for Claude Code integration
-		// This enables notifications to be sent to claude-squad with proper session context
+		// This enables notifications to be sent to stapler-squad with proper session context
 		hooksMeta := &HooksMetadata{
 			SocketPath:  m.socketPath,
 			TmuxSession: m.tmuxSession,
@@ -281,7 +282,7 @@ func (m *Multiplexer) Start() error {
 		SocketPath:  m.socketPath,
 		StartTime:   time.Now().Unix(),
 		Env:         getRelevantEnv(),
-		TmuxSession: m.tmuxSession, // Include tmux session name for claude-squad adoption
+		TmuxSession: m.tmuxSession, // Include tmux session name for stapler-squad adoption
 	}
 
 	// Start goroutines
@@ -378,7 +379,7 @@ func (m *Multiplexer) Shutdown() {
 }
 
 // TmuxSessionName returns the tmux session name for this multiplexer.
-// This allows claude-squad to adopt and control the session.
+// This allows stapler-squad to adopt and control the session.
 func (m *Multiplexer) TmuxSessionName() string {
 	return m.tmuxSession
 }
@@ -670,8 +671,8 @@ func RunWithName(command string, args []string, sessionName string) (int, error)
 	var m *Multiplexer
 	if sessionName != "" {
 		// Ensure the name follows our naming convention
-		if len(sessionName) < 15 || sessionName[:15] != "claudesquad_ext" {
-			sessionName = "claudesquad_ext_" + sanitizeForTmux(sessionName)
+		if len(sessionName) < 15 || sessionName[:16] != "staplersquad_ext" {
+			sessionName = "staplersquad_ext_" + sanitizeForTmux(sessionName)
 		}
 		m = NewMultiplexerWithName(command, args, sessionName)
 	} else {
@@ -766,9 +767,9 @@ func RunAttach(tmuxSession string) (int, error) {
 	return exitCode, err
 }
 
-// ListClaudeSquadSessions returns a list of tmux sessions that match the claude-squad naming convention.
+// ListStaplerSquadSessions returns a list of tmux sessions that match the stapler-squad naming convention.
 // These are sessions that can be attached to using RunAttach.
-func ListClaudeSquadSessions() ([]string, error) {
+func ListStaplerSquadSessions() ([]string, error) {
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 	output, err := cmd.Output()
 	if err != nil {
@@ -784,8 +785,8 @@ func ListClaudeSquadSessions() ([]string, error) {
 		if line == "" {
 			continue
 		}
-		// Only include sessions that match our naming convention
-		if strings.HasPrefix(line, "claudesquad_") {
+		// Include both new prefix (staplersquad_) and legacy prefix (claudesquad_) for migration compatibility
+		if strings.HasPrefix(line, tmux.TmuxPrefix) || strings.HasPrefix(line, tmux.LegacyTmuxPrefix) {
 			sessions = append(sessions, line)
 		}
 	}

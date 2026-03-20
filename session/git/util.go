@@ -1,7 +1,7 @@
 package git
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 	"os"
 	"os/exec"
@@ -182,7 +182,7 @@ func createInitialCommit(repo *git.Repository, repoPath string) error {
 	_, err = worktree.Commit("Initial commit", &git.CommitOptions{
 		Author: &object.Signature{
 			Name:  "Claude Squad",
-			Email: "claude-squad@localhost",
+			Email: "stapler-squad@localhost",
 			When:  time.Now(),
 		},
 	})

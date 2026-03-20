@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"claude-squad/log"
-	"claude-squad/session/git"
-	"claude-squad/session/vcs"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/vcs"
 )
 
 // WorkspaceSwitchType defines the type of workspace switch operation

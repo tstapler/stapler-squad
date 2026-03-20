@@ -201,7 +201,7 @@ func TestBannerFilter_RealWorldExamples(t *testing.T) {
 
 	// Real-world tmux status line examples
 	realBanners := []string{
-		`[claudesquad_test-session] 0:claude* "MacBook-Pro" 09:45 17-Oct-25`,
+		`[staplersquad_test-session] 0:claude* "MacBook-Pro" 09:45 17-Oct-25`,
 		`[work] 1:vim- 2:bash* "dev-server" 14:22 17-Oct-25`,
 		`14:23 5-Jan-24`,
 		`[session] | main | 16:45`,

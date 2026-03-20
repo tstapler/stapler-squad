@@ -24,8 +24,8 @@ func min(a, b int) int {
 	return b
 }
 
-// ClaudeSquadTester provides keyboard testing for claude-squad TUI
-type ClaudeSquadTester struct {
+// StaplerSquadTester provides keyboard testing for stapler-squad TUI
+type StaplerSquadTester struct {
 	t           *testing.T
 	cmd         *exec.Cmd
 	pty         *os.File
@@ -36,20 +36,20 @@ type ClaudeSquadTester struct {
 	snapshotNum int
 }
 
-// NewClaudeSquadTester creates a new tester for claude-squad keyboard interactions
-func NewClaudeSquadTester(t *testing.T, timeout time.Duration) (*ClaudeSquadTester, error) {
+// NewStaplerSquadTester creates a new tester for stapler-squad keyboard interactions
+func NewStaplerSquadTester(t *testing.T, timeout time.Duration) (*StaplerSquadTester, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
 
 	// Create command using go run
-	cmd, err := setupClaudeSquadCommand(t)
+	cmd, err := setupStaplerSquadCommand(t)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup claude-squad command: %w", err)
+		return nil, fmt.Errorf("failed to setup stapler-squad command: %w", err)
 	}
 
 	// Create snapshot directory
-	snapshotDir := filepath.Join(os.TempDir(), fmt.Sprintf("claude-squad-tui-test-%d", time.Now().Unix()))
+	snapshotDir := filepath.Join(os.TempDir(), fmt.Sprintf("stapler-squad-tui-test-%d", time.Now().Unix()))
 	err = os.MkdirAll(snapshotDir, 0755)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create snapshot directory: %w", err)
@@ -58,10 +58,10 @@ func NewClaudeSquadTester(t *testing.T, timeout time.Duration) (*ClaudeSquadTest
 	// Start with PTY
 	ptyFile, err := pty.Start(cmd)
 	if err != nil {
-		return nil, fmt.Errorf("failed to start claude-squad with PTY: %w", err)
+		return nil, fmt.Errorf("failed to start stapler-squad with PTY: %w", err)
 	}
 
-	tester := &ClaudeSquadTester{
+	tester := &StaplerSquadTester{
 		t:           t,
 		cmd:         cmd,
 		pty:         ptyFile,
@@ -88,7 +88,7 @@ func NewClaudeSquadTester(t *testing.T, timeout time.Duration) (*ClaudeSquadTest
 }
 
 // captureOutput continuously captures output from the PTY
-func (c *ClaudeSquadTester) captureOutput() {
+func (c *StaplerSquadTester) captureOutput() {
 	buffer := make([]byte, 1024)
 	for {
 		c.pty.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
@@ -107,8 +107,8 @@ func (c *ClaudeSquadTester) captureOutput() {
 	}
 }
 
-// SendKey sends a keyboard input to claude-squad
-func (c *ClaudeSquadTester) SendKey(key string) error {
+// SendKey sends a keyboard input to stapler-squad
+func (c *StaplerSquadTester) SendKey(key string) error {
 	c.t.Logf("Sending key: %s", key)
 
 	var keyBytes []byte
@@ -151,8 +151,8 @@ func (c *ClaudeSquadTester) SendKey(key string) error {
 	return nil
 }
 
-// SendText sends a string to claude-squad
-func (c *ClaudeSquadTester) SendText(text string) error {
+// SendText sends a string to stapler-squad
+func (c *StaplerSquadTester) SendText(text string) error {
 	c.t.Logf("Sending text: %s", text)
 	_, err := c.pty.WriteString(text)
 	if err != nil {
@@ -163,14 +163,14 @@ func (c *ClaudeSquadTester) SendText(text string) error {
 }
 
 // GetOutput returns the current accumulated output
-func (c *ClaudeSquadTester) GetOutput() string {
+func (c *StaplerSquadTester) GetOutput() string {
 	c.outputMux.Lock()
 	defer c.outputMux.Unlock()
 	return c.output.String()
 }
 
 // TakeSnapshot saves current output to a file and returns the filename
-func (c *ClaudeSquadTester) TakeSnapshot(name string) string {
+func (c *StaplerSquadTester) TakeSnapshot(name string) string {
 	c.snapshotNum++
 	filename := fmt.Sprintf("%03d-%s.txt", c.snapshotNum, name)
 	filepath := filepath.Join(c.snapshotDir, filename)
@@ -187,7 +187,7 @@ func (c *ClaudeSquadTester) TakeSnapshot(name string) string {
 }
 
 // SearchInSnapshots searches for text in all snapshot files
-func (c *ClaudeSquadTester) SearchInSnapshots(text string) []string {
+func (c *StaplerSquadTester) SearchInSnapshots(text string) []string {
 	var matches []string
 
 	files, err := os.ReadDir(c.snapshotDir)
@@ -215,7 +215,7 @@ func (c *ClaudeSquadTester) SearchInSnapshots(text string) []string {
 }
 
 // WaitForTextWithSnapshots waits for text, taking snapshots during the wait
-func (c *ClaudeSquadTester) WaitForTextWithSnapshots(text string, timeout time.Duration) error {
+func (c *StaplerSquadTester) WaitForTextWithSnapshots(text string, timeout time.Duration) error {
 	c.t.Logf("Waiting for text: %s", text)
 	deadline := time.Now().Add(timeout)
 	lastSnapshotTime := time.Now()
@@ -243,7 +243,7 @@ func (c *ClaudeSquadTester) WaitForTextWithSnapshots(text string, timeout time.D
 }
 
 // WaitForText waits for specific text to appear in output
-func (c *ClaudeSquadTester) WaitForText(text string, timeout time.Duration) error {
+func (c *StaplerSquadTester) WaitForText(text string, timeout time.Duration) error {
 	c.t.Logf("Waiting for text: %s", text)
 	deadline := time.Now().Add(timeout)
 
@@ -261,22 +261,22 @@ func (c *ClaudeSquadTester) WaitForText(text string, timeout time.Duration) erro
 }
 
 // AssertTextPresent asserts that text is present in output
-func (c *ClaudeSquadTester) AssertTextPresent(text string) {
+func (c *StaplerSquadTester) AssertTextPresent(text string) {
 	output := c.GetOutput()
 	assert.Contains(c.t, output, text, "Expected text not found in output")
 }
 
 // ClearOutput clears the output buffer
-func (c *ClaudeSquadTester) ClearOutput() {
+func (c *StaplerSquadTester) ClearOutput() {
 	c.outputMux.Lock()
 	defer c.outputMux.Unlock()
 	c.output.Reset()
 	c.t.Log("Output buffer cleared")
 }
 
-// Close terminates the claude-squad session
-func (c *ClaudeSquadTester) Close() error {
-	c.t.Log("Closing claude-squad test session")
+// Close terminates the stapler-squad session
+func (c *StaplerSquadTester) Close() error {
+	c.t.Log("Closing stapler-squad test session")
 
 	// Take final snapshot before closing
 	c.TakeSnapshot("final-state")
@@ -305,7 +305,7 @@ func (c *ClaudeSquadTester) Close() error {
 }
 
 // TestKeyboardShortcut tests a specific keyboard shortcut
-func (c *ClaudeSquadTester) TestKeyboardShortcut(key string, expectedBehavior string, timeout time.Duration) error {
+func (c *StaplerSquadTester) TestKeyboardShortcut(key string, expectedBehavior string, timeout time.Duration) error {
 	c.t.Logf("Testing keyboard shortcut: %s (expecting: %s)", key, expectedBehavior)
 
 	// Clear output before test
@@ -327,8 +327,8 @@ func (c *ClaudeSquadTester) TestKeyboardShortcut(key string, expectedBehavior st
 	return nil
 }
 
-// setupClaudeSquadCommand sets up the command to run claude-squad for testing
-func setupClaudeSquadCommand(t *testing.T) (*exec.Cmd, error) {
+// setupStaplerSquadCommand sets up the command to run stapler-squad for testing
+func setupStaplerSquadCommand(t *testing.T) (*exec.Cmd, error) {
 	// Get the absolute path to the project root
 	projectRoot := "../../../" // Go up from tuitest/integration/claude_squad to project root
 	absProjectRoot, err := filepath.Abs(projectRoot)
@@ -341,11 +341,11 @@ func setupClaudeSquadCommand(t *testing.T) (*exec.Cmd, error) {
 	cmd.Dir = absProjectRoot
 
 	// Create unique log directory for this test run
-	logDir := filepath.Join(os.TempDir(), fmt.Sprintf("claude-squad-test-logs-%d", time.Now().Unix()))
+	logDir := filepath.Join(os.TempDir(), fmt.Sprintf("stapler-squad-test-logs-%d", time.Now().Unix()))
 	os.MkdirAll(logDir, 0755)
 
 	// Create temporary config file to isolate logs
-	configDir := filepath.Join(os.TempDir(), fmt.Sprintf("claude-squad-test-config-%d", time.Now().Unix()))
+	configDir := filepath.Join(os.TempDir(), fmt.Sprintf("stapler-squad-test-config-%d", time.Now().Unix()))
 	os.MkdirAll(configDir, 0755)
 	configFile := filepath.Join(configDir, "config.json")
 
@@ -373,18 +373,18 @@ func setupClaudeSquadCommand(t *testing.T) (*exec.Cmd, error) {
 	t.Logf("Test logs will be written to: %s", logDir)
 	t.Logf("Test config file: %s", configFile)
 
-	t.Log("Using 'go run .' to execute claude-squad for testing")
+	t.Log("Using 'go run .' to execute stapler-squad for testing")
 	return cmd, nil
 }
 
-// TestClaudeSquadKeyboardShortcuts tests all keyboard shortcuts work
-func TestClaudeSquadKeyboardShortcuts(t *testing.T) {
+// TestStaplerSquadKeyboardShortcuts tests all keyboard shortcuts work
+func TestStaplerSquadKeyboardShortcuts(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping keyboard integration tests in short mode")
 	}
 
 	// Create tester
-	tester, err := NewClaudeSquadTester(t, 60*time.Second)
+	tester, err := NewStaplerSquadTester(t, 60*time.Second)
 	require.NoError(t, err)
 	defer tester.Close()
 
@@ -430,7 +430,7 @@ func TestNewSessionDialog(t *testing.T) {
 	}
 
 	// Create tester
-	tester, err := NewClaudeSquadTester(t, 60*time.Second)
+	tester, err := NewStaplerSquadTester(t, 60*time.Second)
 	require.NoError(t, err)
 	defer tester.Close()
 

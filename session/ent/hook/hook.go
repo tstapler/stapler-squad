@@ -3,7 +3,7 @@
 package hook
 
 import (
-	"claude-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent"
 	"context"
 	"fmt"
 )

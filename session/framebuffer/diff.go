@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // DiffResult contains the generated diff and metadata

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 func TestNewPolicyEngine(t *testing.T) {

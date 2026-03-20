@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // VCSPreference represents the user's preferred VCS

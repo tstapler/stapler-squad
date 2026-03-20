@@ -1,7 +1,7 @@
 package detection
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 	"sync"
 	"time"

@@ -1,7 +1,7 @@
 package tmux
 
 import (
-	"claude-squad/executor"
+	"github.com/tstapler/stapler-squad/executor"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,7 +26,7 @@ func TestRestoreWithExistingSession(t *testing.T) {
 			// Handle DoesSessionExist() which uses list-sessions
 			if strings.Contains(cmdStr, "list-sessions") && strings.Contains(cmdStr, "#{session_name}") {
 				// Session exists - return session name
-				return []byte("claudesquad_test-session"), nil
+				return []byte("staplersquad_test-session"), nil
 			}
 			return []byte("output"), nil
 		},

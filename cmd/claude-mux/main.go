@@ -19,13 +19,13 @@
 //	claude-mux -n "api-refactor" claude
 //	claude-mux --name "feature-xyz" aider --model gpt-4
 //	claude-mux --list                           # Show available sessions
-//	claude-mux --attach claudesquad_ext_12345   # Reattach to existing session
+//	claude-mux --attach staplersquad_ext_12345   # Reattach to existing session
 //
 // The multiplexer creates a Unix domain socket at /tmp/claude-mux-<PID>.sock
 // that claude-squad can discover and connect to for terminal streaming.
 //
 // Session names are automatically generated from the current directory, command, and PID,
-// e.g., "claudesquad_ext_myproject_claude_12345". The PID suffix ensures uniqueness when
+// e.g., "staplersquad_ext_myproject_claude_12345". The PID suffix ensures uniqueness when
 // running multiple sessions in the same directory. You can override this with -n/--name.
 //
 // Reattaching to sessions:
@@ -34,7 +34,7 @@
 // Use --list to see available sessions and --attach to reconnect:
 //
 //	claude-mux --list
-//	claude-mux --attach claudesquad_ext_myproject_claude_12345
+//	claude-mux --attach staplersquad_ext_myproject_claude_12345
 //
 // Setup for seamless use with IntelliJ:
 //
@@ -50,7 +50,7 @@ import (
 	"fmt"
 	"os"
 
-	"claude-squad/session/mux"
+	"github.com/tstapler/stapler-squad/session/mux"
 
 	"golang.org/x/term"
 )
@@ -104,7 +104,7 @@ func main() {
 
 	// Handle --list mode
 	if listSessions {
-		sessions, err := mux.ListClaudeSquadSessions()
+		sessions, err := mux.ListStaplerSquadSessions()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "claude-mux: %v\n", err)
 			os.Exit(1)
@@ -205,9 +205,9 @@ func printUsage() {
 	fmt.Fprintf(os.Stderr, "  claude-mux claude                           # Start new session\n")
 	fmt.Fprintf(os.Stderr, "  claude-mux -n \"api-refactor\" claude         # Custom session name\n")
 	fmt.Fprintf(os.Stderr, "  claude-mux --attach                         # Interactive session picker\n")
-	fmt.Fprintf(os.Stderr, "  claude-mux --attach claudesquad_ext_12345   # Attach to specific session\n")
+	fmt.Fprintf(os.Stderr, "  claude-mux --attach staplersquad_ext_12345   # Attach to specific session\n")
 	fmt.Fprintf(os.Stderr, "  claude-mux --list                           # List available sessions\n")
 	fmt.Fprintf(os.Stderr, "\nSession names are auto-generated based on directory and command,\n")
-	fmt.Fprintf(os.Stderr, "e.g., \"claudesquad_ext_myproject_claude_1234\".\n")
+	fmt.Fprintf(os.Stderr, "e.g., \"staplersquad_ext_myproject_claude_1234\".\n")
 	fmt.Fprintf(os.Stderr, "\nAfter a restart, use --attach to reconnect to orphaned sessions.\n")
 }

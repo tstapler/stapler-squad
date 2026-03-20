@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func TestNewRegistry(t *testing.T) {

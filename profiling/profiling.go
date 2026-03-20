@@ -10,7 +10,7 @@ import (
 	"runtime/trace"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // Config holds profiling configuration
@@ -54,7 +54,7 @@ func StartProfiling(cfg Config) (func(), error) {
 	if cfg.TraceEnabled {
 		traceFile := cfg.TraceFile
 		if traceFile == "" {
-			traceFile = fmt.Sprintf("/tmp/claude-squad-trace-%d.out", os.Getpid())
+			traceFile = fmt.Sprintf("/tmp/stapler-squad-trace-%d.out", os.Getpid())
 		}
 		f, err := os.Create(traceFile)
 		if err != nil {

@@ -5,11 +5,11 @@ package enttest
 import (
 	"context"
 
-	"claude-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent"
 	// required by schema hooks.
-	_ "claude-squad/session/ent/runtime"
+	_ "github.com/tstapler/stapler-squad/session/ent/runtime"
 
-	"claude-squad/session/ent/migrate"
+	"github.com/tstapler/stapler-squad/session/ent/migrate"
 
 	"entgo.io/ent/dialect/sql/schema"
 )

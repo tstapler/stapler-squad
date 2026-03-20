@@ -197,7 +197,7 @@ func testSessionRecoveryWithRealTmux(t *testing.T) {
 	require.NoError(t, err)
 
 	sessionName := "test-real-recovery"
-	tmuxSessionName := "claudesquad_" + sessionName
+	tmuxSessionName := "staplersquad_" + sessionName
 
 	// Clean up any existing session
 	killCmd := exec.Command("tmux", "kill-session", "-t", tmuxSessionName)
@@ -332,12 +332,12 @@ func createMockExecutorForMissingSession() (MockCmdExec, *[]string) {
 				if sessionCreated {
 					// Session exists after creation - return session name
 					// Extract session name from command for accurate response
-					if strings.Contains(cmdStr, "claudesquad_") {
+					if strings.Contains(cmdStr, "staplersquad_") {
 						// Parse the session name from the tmux command context
 						// For simplicity, return a generic session name
-						return []byte("claudesquad_test-session"), nil
+						return []byte("staplersquad_test-session"), nil
 					}
-					return []byte("claudesquad_test-session"), nil
+					return []byte("staplersquad_test-session"), nil
 				}
 				// No session initially
 				return nil, fmt.Errorf("no server running")

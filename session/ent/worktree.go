@@ -3,8 +3,8 @@
 package ent
 
 import (
-	"claude-squad/session/ent/session"
-	"claude-squad/session/ent/worktree"
+	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"fmt"
 	"strings"
 

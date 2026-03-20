@@ -5,8 +5,8 @@ import (
 	"strings"
 	"sync"
 
-	"claude-squad/cmd/interfaces"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/cmd/interfaces"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // Use types from interfaces package to avoid duplication

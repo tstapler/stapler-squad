@@ -1,15 +1,15 @@
-// Package workspace provides workspace tracking and status management for claude-squad sessions.
+// Package workspace provides workspace tracking and status management for stapler-squad sessions.
 // It supports multi-pod deployments via distributed locking and cache invalidation.
 package workspace
 
 import (
 	"time"
 
-	"claude-squad/session"
-	"claude-squad/session/vc"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/vc"
 )
 
-// TrackedWorkspace represents a directory tracked by claude-squad
+// TrackedWorkspace represents a directory tracked by stapler-squad
 type TrackedWorkspace struct {
 	// Identity
 	Path           string // Absolute path to workspace

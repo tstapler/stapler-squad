@@ -3,8 +3,8 @@
 package ent
 
 import (
-	"claude-squad/session/ent/predicate"
-	"claude-squad/session/ent/worktree"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"context"
 
 	"entgo.io/ent/dialect/sql"

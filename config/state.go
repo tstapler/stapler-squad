@@ -1,7 +1,7 @@
 package config
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"encoding/json"
 	"fmt"

@@ -1,9 +1,9 @@
-// Package telemetry provides OpenTelemetry instrumentation for claude-squad.
+// Package telemetry provides OpenTelemetry instrumentation for stapler-squad.
 // It initializes tracing and metrics exporters for APM integration (Datadog, etc.).
 package telemetry
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"os"
 	"time"
@@ -19,7 +19,7 @@ import (
 
 const (
 	// ServiceName is the name used in telemetry traces
-	ServiceName = "claude-squad"
+	ServiceName = "stapler-squad"
 
 	// DefaultOTLPEndpoint is the default endpoint for OTLP gRPC (Datadog Agent)
 	DefaultOTLPEndpoint = "localhost:4317"

@@ -2,10 +2,10 @@ package auth
 
 import "github.com/go-webauthn/webauthn/webauthn"
 
-// singleUser represents the single local user for claude-squad.
-// claude-squad is a single-user application; all registered passkeys belong
+// singleUser represents the single local user for stapler-squad.
+// stapler-squad is a single-user application; all registered passkeys belong
 // to the same implicit "owner" account.
-const ownerUserID = "claude-squad-owner"
+const ownerUserID = "stapler-squad-owner"
 
 // localUser implements webauthn.User for the single owner account.
 type localUser struct {

@@ -1,7 +1,7 @@
 package session
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 	"regexp"
 	"strings"

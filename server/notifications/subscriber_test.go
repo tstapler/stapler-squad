@@ -1,7 +1,7 @@
 package notifications
 
 import (
-	"claude-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/events"
 	"context"
 	"sync"
 	"testing"

@@ -8,8 +8,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"claude-squad/config"
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func main() {

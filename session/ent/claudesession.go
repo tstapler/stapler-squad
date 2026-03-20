@@ -3,8 +3,8 @@
 package ent
 
 import (
-	"claude-squad/session/ent/claudesession"
-	"claude-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/claudesession"
+	"github.com/tstapler/stapler-squad/session/ent/session"
 	"fmt"
 	"strings"
 	"time"

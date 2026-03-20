@@ -3,7 +3,7 @@ package tmux
 import (
 	"bufio"
 	"bytes"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 	"io"
 	"strconv"

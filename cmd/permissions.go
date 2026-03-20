@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // CommandPermissionRequirements maps command IDs to their required permissions

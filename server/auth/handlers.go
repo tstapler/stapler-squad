@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // RegisterRoutes registers all /auth/* endpoints on mux.
@@ -239,7 +239,7 @@ func (h *httpHandlers) serveCACert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Content-Disposition", `attachment; filename="claude-squad-ca.pem"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="stapler-squad-ca.pem"`)
 	http.ServeFile(w, r, h.caPath)
 }
 

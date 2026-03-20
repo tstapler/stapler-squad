@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 // TestReviewQueuePoller_PreservesTimestampWhenStatusUnchanged verifies that

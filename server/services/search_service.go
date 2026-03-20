@@ -6,11 +6,11 @@ import (
 	"sync"
 	"time"
 
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/log"
-	"claude-squad/session"
-	"claude-squad/session/search"
-	"claude-squad/telemetry"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/telemetry"
 
 	"connectrpc.com/connect"
 	"go.opentelemetry.io/otel/attribute"

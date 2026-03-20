@@ -54,8 +54,8 @@ func TestGetLogDir(t *testing.T) {
 		t.Errorf("GetLogDir failed with default log dir: %v", err)
 	}
 
-	// Should contain .claude-squad/logs
-	if !strings.Contains(dir, ".claude-squad"+string(filepath.Separator)+"logs") {
+	// Should contain .stapler-squad/logs
+	if !strings.Contains(dir, ".stapler-squad"+string(filepath.Separator)+"logs") {
 		t.Errorf("GetLogDir should return default log dir, got %s", dir)
 	}
 }
@@ -70,8 +70,8 @@ func TestGetLogFilePath(t *testing.T) {
 	if err != nil {
 		t.Errorf("GetLogFilePath failed with default config: %v", err)
 	}
-	if !strings.HasSuffix(path, "claudesquad.log") {
-		t.Errorf("GetLogFilePath should end with claudesquad.log, got %s", path)
+	if !strings.HasSuffix(path, "staplersquad.log") {
+		t.Errorf("GetLogFilePath should end with staplersquad.log, got %s", path)
 	}
 
 	// Test with custom log dir
@@ -83,7 +83,7 @@ func TestGetLogFilePath(t *testing.T) {
 	if err != nil {
 		t.Errorf("GetLogFilePath failed with custom log dir: %v", err)
 	}
-	if path != "/custom/log/dir/claudesquad.log" {
+	if path != "/custom/log/dir/staplersquad.log" {
 		t.Errorf("GetLogFilePath should return custom log path, got %s", path)
 	}
 }
@@ -126,7 +126,7 @@ func TestGetSessionLogFilePath(t *testing.T) {
 }
 
 func TestCreateRotatingWriter(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "claude-squad-log-test")
+	tempDir, err := os.MkdirTemp("", "stapler-squad-log-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestCreateRotatingWriter(t *testing.T) {
 
 func TestLogForSession(t *testing.T) {
 	// Create a temporary log directory
-	tempDir, err := os.MkdirTemp("", "claude-squad-log-test")
+	tempDir, err := os.MkdirTemp("", "stapler-squad-log-test")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestLogForSession(t *testing.T) {
 	globalConfig = cfg
 
 	// Initialize global loggers
-	logPath := filepath.Join(tempDir, "claudesquad.log")
+	logPath := filepath.Join(tempDir, "staplersquad.log")
 	file, _ := os.Create(logPath)
 	InfoLog = NewDummyLogger(file, "INFO: ")
 	WarningLog = NewDummyLogger(file, "WARNING: ")

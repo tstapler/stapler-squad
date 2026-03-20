@@ -9,7 +9,7 @@ import (
 	"time"
 	"unsafe"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"golang.org/x/term"

@@ -6,7 +6,7 @@ package session
 // The canonical implementations live in session/queue/queue.go.
 // This file is a thin compatibility shim using Go type aliases (=).
 
-import "claude-squad/session/queue"
+import "github.com/tstapler/stapler-squad/session/queue"
 
 // AttentionReason re-export
 type AttentionReason = queue.AttentionReason

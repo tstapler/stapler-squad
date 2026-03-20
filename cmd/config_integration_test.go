@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"claude-squad/cmd/interfaces"
-	"claude-squad/config"
+	"github.com/tstapler/stapler-squad/cmd/interfaces"
+	"github.com/tstapler/stapler-squad/config"
 	"testing"
 )
 

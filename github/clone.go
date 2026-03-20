@@ -9,7 +9,7 @@ import (
 
 const (
 	// DefaultCloneBase is the default base directory for cloned repositories
-	DefaultCloneBase = "~/.claude-squad/repos"
+	DefaultCloneBase = "~/.stapler-squad/repos"
 )
 
 // CloneOptions specifies options for cloning or accessing a repository
@@ -28,7 +28,7 @@ type CloneResult struct {
 }
 
 // GetClonePath returns the path where a repository would be cloned
-// Format: ~/.claude-squad/repos/{owner}/{repo}
+// Format: ~/.stapler-squad/repos/{owner}/{repo}
 func GetClonePath(owner, repo string) string {
 	base := expandPath(DefaultCloneBase)
 	return filepath.Join(base, owner, repo)

@@ -57,7 +57,7 @@ type HooksMetadata struct {
 }
 
 // GenerateHooksFile creates a temporary hooks configuration file for claude-mux.
-// The file enables Claude Code hooks to send notifications to claude-squad with
+// The file enables Claude Code hooks to send notifications to stapler-squad with
 // proper session context for correlation and deep linking.
 //
 // Returns the path to the generated hooks file, which should be set as
@@ -217,9 +217,9 @@ func findHooksHandler() (string, error) {
 		}
 	}
 
-	// Try claude-squad directory
+	// Try stapler-squad directory
 	if homeDir != "" {
-		csPath := filepath.Join(homeDir, ".claude-squad", "scripts", "cs-hook-handler")
+		csPath := filepath.Join(homeDir, ".stapler-squad", "scripts", "ssq-hook-handler")
 		if fileExists(csPath) {
 			return csPath, nil
 		}

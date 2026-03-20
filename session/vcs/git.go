@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // GitClient implements the VCS interface for Git
@@ -206,7 +206,7 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 		switch opts.ChangeStrategy {
 		case KeepAsWIP:
 			// Stash changes
-			_, err := g.run("stash", "push", "-m", "claude-squad: WIP before workspace switch")
+			_, err := g.run("stash", "push", "-m", "stapler-squad: WIP before workspace switch")
 			if err != nil {
 				return fmt.Errorf("failed to stash changes: %w", err)
 			}
@@ -214,7 +214,7 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 
 		case BringAlong:
 			// Stash changes to restore after switch
-			_, err := g.run("stash", "push", "-m", "claude-squad: bringing changes along")
+			_, err := g.run("stash", "push", "-m", "stapler-squad: bringing changes along")
 			if err != nil {
 				return fmt.Errorf("failed to stash changes: %w", err)
 			}

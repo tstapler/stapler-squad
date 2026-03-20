@@ -1,9 +1,9 @@
 package git
 
 import (
-	"claude-squad/config"
-	"claude-squad/executor"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 	"os/exec"
 	"path/filepath"

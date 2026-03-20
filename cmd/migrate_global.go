@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 func main() {
@@ -19,7 +19,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	configDir := filepath.Join(homeDir, ".claude-squad")
+	configDir := filepath.Join(homeDir, ".stapler-squad")
 	statePath := filepath.Join(configDir, "state.json")
 	dbPath := filepath.Join(configDir, "sessions.db")
 

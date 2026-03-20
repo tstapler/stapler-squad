@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 
-	"claude-squad/config"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/gofrs/flock"
@@ -18,7 +18,7 @@ const credentialFileName = "passkeys.json"
 
 // CredentialStore persists WebAuthn credentials to disk as JSON.
 // Thread-safe via a mutex for in-process coordination and a file lock for
-// multi-process safety (though claude-squad runs as a single process).
+// multi-process safety (though stapler-squad runs as a single process).
 type CredentialStore struct {
 	mu       sync.RWMutex
 	filePath string

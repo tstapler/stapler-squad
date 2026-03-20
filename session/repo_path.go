@@ -8,15 +8,15 @@ import (
 	"regexp"
 	"strings"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // RepoPathManager handles GOPATH-style repository path management.
 // Repositories are stored in a consistent location based on their URL:
-//   - ~/.claude-squad/repos/github.com/owner/repo (main clone)
+//   - ~/.stapler-squad/repos/github.com/owner/repo (main clone)
 //   - Worktrees are created relative to the main repo as needed
 type RepoPathManager struct {
-	baseDir string // Base directory for repos (default: ~/.claude-squad/repos)
+	baseDir string // Base directory for repos (default: ~/.stapler-squad/repos)
 }
 
 // NewRepoPathManager creates a new RepoPathManager with the default base directory.
@@ -26,7 +26,7 @@ func NewRepoPathManager() *RepoPathManager {
 		homeDir = os.TempDir()
 	}
 	return &RepoPathManager{
-		baseDir: filepath.Join(homeDir, ".claude-squad", "repos"),
+		baseDir: filepath.Join(homeDir, ".stapler-squad", "repos"),
 	}
 }
 
@@ -128,7 +128,7 @@ func IsGitHubURL(input string) bool {
 }
 
 // GetRepoPath returns the local path where a GitHub repo should be stored.
-// Format: ~/.claude-squad/repos/github.com/owner/repo
+// Format: ~/.stapler-squad/repos/github.com/owner/repo
 func (m *RepoPathManager) GetRepoPath(ref *GitHubRef) string {
 	return filepath.Join(m.baseDir, "github.com", ref.Owner, ref.Repo)
 }
@@ -204,7 +204,7 @@ type WorktreeInfo struct {
 	// IsWorktree is true if the path is a git worktree (not the main repo)
 	IsWorktree bool
 	// MainRepoPath is the path to the main repository's .git directory
-	// For a worktree at ~/.claude-squad/worktrees/foo, this might be /path/to/main/repo/.git
+	// For a worktree at ~/.stapler-squad/worktrees/foo, this might be /path/to/main/repo/.git
 	MainRepoPath string
 	// MainRepoRoot is the working directory root of the main repository
 	MainRepoRoot string

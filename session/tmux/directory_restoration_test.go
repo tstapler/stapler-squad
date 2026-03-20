@@ -1,7 +1,7 @@
 package tmux
 
 import (
-	"claude-squad/executor"
+	"github.com/tstapler/stapler-squad/executor"
 	"os"
 	"path/filepath"
 	"strings"

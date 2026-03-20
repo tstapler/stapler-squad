@@ -1,7 +1,7 @@
 package session
 
 import (
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"testing"
 )
 

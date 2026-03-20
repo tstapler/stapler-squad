@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"claude-squad/server/protocol"
+	"github.com/tstapler/stapler-squad/server/protocol"
 
 	"github.com/gorilla/websocket"
 )

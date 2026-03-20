@@ -68,7 +68,7 @@ func testRegularRepoSessionRestoration(t *testing.T) {
 		"new-session",
 		"-d",
 		"-s",
-		"claudesquad_main-project-session",
+		"staplersquad_main-project-session",
 		"-c",
 		repoDir,
 		"pwd",

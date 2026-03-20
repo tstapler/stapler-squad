@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"io/fs"
 	"net/http"
 	"path"

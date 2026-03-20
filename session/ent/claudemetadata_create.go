@@ -3,8 +3,8 @@
 package ent
 
 import (
-	"claude-squad/session/ent/claudemetadata"
-	"claude-squad/session/ent/claudesession"
+	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
+	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"context"
 	"errors"
 	"fmt"

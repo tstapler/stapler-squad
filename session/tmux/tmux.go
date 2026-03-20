@@ -2,8 +2,8 @@ package tmux
 
 import (
 	"bytes"
-	"claude-squad/executor"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -94,21 +94,22 @@ type windowSize struct {
 	rows int
 }
 
-const TmuxPrefix = "claudesquad_"
+const TmuxPrefix = "staplersquad_"
+const LegacyTmuxPrefix = "claudesquad_"
 
 var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 
-// ToClaudeSquadTmuxName converts a string to a valid tmux session name with the default prefix
-func ToClaudeSquadTmuxName(str string) string {
-	return toClaudeSquadTmuxNameWithPrefix(str, TmuxPrefix)
+// ToStaplerSquadTmuxName converts a string to a valid tmux session name with the default prefix
+func ToStaplerSquadTmuxName(str string) string {
+	return toStaplerSquadTmuxNameWithPrefix(str, TmuxPrefix)
 }
 
-// toClaudeSquadTmuxName is the internal version for backward compatibility
-func toClaudeSquadTmuxName(str string) string {
-	return ToClaudeSquadTmuxName(str)
+// toStaplerSquadTmuxName is the internal version for backward compatibility
+func toStaplerSquadTmuxName(str string) string {
+	return ToStaplerSquadTmuxName(str)
 }
 
-func toClaudeSquadTmuxNameWithPrefix(str string, prefix string) string {
+func toStaplerSquadTmuxNameWithPrefix(str string, prefix string) string {
 	str = whiteSpaceRegex.ReplaceAllString(str, "")
 	str = strings.ReplaceAll(str, ".", "_") // tmux replaces all . with _
 	str = strings.ReplaceAll(str, ":", "_") // colons are special in tmux (session:window.pane)
@@ -162,7 +163,7 @@ func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix stri
 // complete separation from production tmux sessions.
 //
 // serverSocket: unique socket name (e.g., "test", "teatest_123", "isolated")
-// prefix: session name prefix (e.g., "claudesquad_test_")
+// prefix: session name prefix (e.g., "staplersquad_test_")
 func NewTmuxSessionWithServerSocket(name string, program string, prefix string, serverSocket string) *TmuxSession {
 	baseExec := executor.MakeExecutor()
 	cbExec := executor.NewCircuitBreakerExecutor(baseExec, executor.DefaultCircuitBreakerConfig())
@@ -192,7 +193,7 @@ func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec 
 // newTmuxSessionWithSocket creates a TmuxSession with both prefix and server socket isolation
 func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string, serverSocket string) *TmuxSession {
 	return &TmuxSession{
-		sanitizedName:    toClaudeSquadTmuxNameWithPrefix(name, prefix),
+		sanitizedName:    toStaplerSquadTmuxNameWithPrefix(name, prefix),
 		program:          program,
 		serverSocket:     serverSocket,
 		ptyFactory:       ptyFactory,

@@ -1,7 +1,7 @@
 package session
 
 import (
-	"claude-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,7 +10,7 @@ import (
 
 func TestFromInstanceDataWithMissingWorktree(t *testing.T) {
 	// Create a temporary directory to simulate a worktree path
-	tempDir, err := os.MkdirTemp("", "claude-squad-test-*")
+	tempDir, err := os.MkdirTemp("", "stapler-squad-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}

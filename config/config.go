@@ -1,8 +1,8 @@
 package config
 
 import (
-	"claude-squad/executor"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/log"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -104,14 +104,14 @@ func isTestMode() bool {
 // with hierarchical isolation for safe multi-instance and test execution.
 //
 // Priority hierarchy:
-//  1. Test directory override via CLAUDE_SQUAD_TEST_DIR (for --test-mode flag)
-//  2. Explicit instance ID via CLAUDE_SQUAD_INSTANCE environment variable
+//  1. Test directory override via STAPLER_SQUAD_TEST_DIR (for --test-mode flag)
+//  2. Explicit instance ID via STAPLER_SQUAD_INSTANCE environment variable
 //  3. Test mode auto-detection (automatic isolation for tests/benchmarks)
 //  4. Workspace-based isolation (default for production, per-directory state)
 //  5. Global shared state (fallback, backward compatibility)
 func GetConfigDir() (string, error) {
 	// Priority 1: Test directory override (from --test-mode flag)
-	if testDir := os.Getenv("CLAUDE_SQUAD_TEST_DIR"); testDir != "" {
+	if testDir := os.Getenv("STAPLER_SQUAD_TEST_DIR"); testDir != "" {
 		// Create the test directory if it doesn't exist
 		if err := os.MkdirAll(testDir, 0755); err != nil {
 			return "", fmt.Errorf("failed to create test directory: %w", err)
@@ -124,10 +124,20 @@ func GetConfigDir() (string, error) {
 		return "", fmt.Errorf("failed to get config home directory: %w", err)
 	}
 
-	baseDir := filepath.Join(homeDir, ".claude-squad")
+	baseDir := filepath.Join(homeDir, ".stapler-squad")
+
+	// One-time migration: if ~/.stapler-squad doesn't exist but ~/.claude-squad does, migrate automatically
+	if _, err := os.Stat(baseDir); os.IsNotExist(err) {
+		legacyDir := filepath.Join(homeDir, ".claude-squad")
+		if _, legacyErr := os.Stat(legacyDir); legacyErr == nil {
+			if migrateErr := os.Rename(legacyDir, baseDir); migrateErr == nil {
+				fmt.Printf("Migrated data directory: %s → %s\n", legacyDir, baseDir)
+			}
+		}
+	}
 
 	// Priority 2: Explicit instance ID (tests, named instances, backward compat)
-	if instanceID := os.Getenv("CLAUDE_SQUAD_INSTANCE"); instanceID != "" {
+	if instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE"); instanceID != "" {
 		// Special value "shared" maintains backward compatibility
 		if instanceID == "shared" {
 			return baseDir, nil
@@ -143,8 +153,8 @@ func GetConfigDir() (string, error) {
 	}
 
 	// Priority 4: Workspace-based isolation (production default)
-	// Can be disabled with CLAUDE_SQUAD_WORKSPACE_MODE=false
-	if os.Getenv("CLAUDE_SQUAD_WORKSPACE_MODE") != "false" {
+	// Can be disabled with STAPLER_SQUAD_WORKSPACE_MODE=false
+	if os.Getenv("STAPLER_SQUAD_WORKSPACE_MODE") != "false" {
 		workDir, err := os.Getwd()
 		if err == nil {
 			// Hash the workspace path for a stable, filesystem-safe identifier
@@ -188,7 +198,7 @@ type Config struct {
 	StateRefreshInterval int `json:"state_refresh_interval"`
 	// LogsEnabled is a flag to enable logging to files
 	LogsEnabled bool `json:"logs_enabled"`
-	// LogsDir is the directory where logs are stored (defaults to ~/.claude-squad/logs)
+	// LogsDir is the directory where logs are stored (defaults to ~/.stapler-squad/logs)
 	LogsDir string `json:"logs_dir"`
 	// LogMaxSize is the maximum size of a log file in megabytes before it gets rotated
 	LogMaxSize int `json:"log_max_size"`
@@ -245,7 +255,7 @@ func DefaultConfig() *Config {
 		LogMaxAge:                30, // 30 days
 		LogCompress:              true,
 		UseSessionLogs:                true,
-		TmuxSessionPrefix:             "claudesquad_", // Default prefix for backward compatibility
+		TmuxSessionPrefix:             "staplersquad_", // Default prefix for backward compatibility
 		PerformBackgroundHealthChecks: true,            // Enabled by default for automated session maintenance
 		KeyCategories:                 getDefaultKeyCategories(),
 		TerminalStreamingMode:         "raw",  // Default to raw streaming (simpler, more reliable)

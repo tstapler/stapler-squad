@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
 // TestDeltaGenerator_BasicOperations tests core delta generation functionality

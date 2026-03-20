@@ -6,12 +6,12 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // ExternalTmuxStreamer provides terminal content streaming for external sessions
 // using tmux capture-pane instead of socket connections. This is more reliable
-// as it uses the same mechanism as native claude-squad sessions.
+// as it uses the same mechanism as native stapler-squad sessions.
 type ExternalTmuxStreamer struct {
 	tmuxSessionName string
 

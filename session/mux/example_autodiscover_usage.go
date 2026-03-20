@@ -9,7 +9,7 @@ import (
 	"log"
 	"time"
 
-	"claude-squad/session/mux"
+	"github.com/tstapler/stapler-squad/session/mux"
 )
 
 func main() {

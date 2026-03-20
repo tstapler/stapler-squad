@@ -1,8 +1,8 @@
 package terminal
 
 import (
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/log"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"bytes"
 	"hash/fnv"
 	"sync"

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/log"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"

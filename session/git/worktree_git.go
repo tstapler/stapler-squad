@@ -1,7 +1,7 @@
 package git
 
 import (
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 	"os/exec"
 	"strings"

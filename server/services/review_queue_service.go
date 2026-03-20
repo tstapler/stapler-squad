@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/log"
-	"claude-squad/server/adapters"
-	"claude-squad/server/events"
-	"claude-squad/session"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 
 	"connectrpc.com/connect"
 )

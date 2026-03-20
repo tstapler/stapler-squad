@@ -1,8 +1,8 @@
 package services
 
 import (
-	"claude-squad/executor"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/log"
 	"encoding/json"
 	"net/http"
 )

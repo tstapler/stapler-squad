@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/log"
-	"claude-squad/server/events"
-	"claude-squad/session"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 
 	"github.com/google/uuid"
 )
@@ -80,7 +80,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		return
 	}
 
-	// Map to a claude-squad session using the X-CS-Session-ID header first,
+	// Map to a stapler-squad session using the X-CS-Session-ID header first,
 	// then fall back to cwd prefix matching against session paths.
 	sessionID := r.Header.Get("X-CS-Session-ID")
 	if sessionID == "" {
@@ -143,7 +143,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		}
 		log.InfoLog.Printf("[ApprovalHandler] Approval %s timed out", approvalID)
 	case <-r.Context().Done():
-		// Claude Code disconnected (e.g., claude-squad restarted, network issue)
+		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
 		h.store.Remove(approvalID)
 		decision = ApprovalDecision{Behavior: "allow", Message: ""}
 		log.InfoLog.Printf("[ApprovalHandler] Approval %s context canceled", approvalID)
@@ -203,7 +203,7 @@ func buildApprovalMessage(approval *PendingApproval) string {
 	return fmt.Sprintf("Claude needs permission to use %s", approval.ToolName)
 }
 
-// mapSessionByCwd finds a claude-squad session by matching cwd against session paths.
+// mapSessionByCwd finds a stapler-squad session by matching cwd against session paths.
 // Returns the session title of the best (longest-prefix) match, or "" if no match.
 func (h *ApprovalHandler) mapSessionByCwd(cwd string) string {
 	if cwd == "" {
@@ -294,7 +294,7 @@ const (
 	hookTimeout     = 300 // seconds — must be ≤ Claude Code's 5-minute hook timeout
 )
 
-// InjectHookConfig writes (or merges) the claude-squad PermissionRequest HTTP hook
+// InjectHookConfig writes (or merges) the stapler-squad PermissionRequest HTTP hook
 // into <rootDir>/.claude/settings.local.json.
 //
 // If the file already contains a hook pointing to hookApprovalURL, it is left unchanged.

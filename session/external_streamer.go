@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/log"
-	"claude-squad/session/mux"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/mux"
 )
 
 // OutputConsumer is a callback that receives terminal output from external sessions.

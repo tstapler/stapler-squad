@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"claude-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // GitWorktreeManager owns the git worktree and diff-stats state that were
