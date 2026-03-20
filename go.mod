@@ -1,4 +1,4 @@
-module claude-squad
+module github.com/tstapler/stapler-squad
 
 go 1.25.0
 

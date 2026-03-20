@@ -3,7 +3,7 @@ managed:
   enabled: true
   override:
     - file_option: go_package_prefix
-      value: claude-squad/gen/proto/go
+      value: github.com/tstapler/stapler-squad/gen/proto/go
 plugins:
   # Go protobuf generation
   - remote: buf.build/protocolbuffers/go

@@ -1,4 +1,4 @@
-# Claude Squad Makefile
+# Stapler Squad Makefile
 # Comprehensive development and analysis toolchain
 
 # Variables
@@ -10,13 +10,13 @@ SERVER_FLAGS ?= --remote-access
 
 # Default target
 help: ## Show this help message
-	@echo "Claude Squad Development Makefile"
+	@echo "Stapler Squad Development Makefile"
 	@echo "================================="
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # Build targets
 build: server/web/dist ## Build the Go application (depends on web dist being ready)
-	go build -o claude-squad .
+	go build -o stapler-squad .
 
 # Build Next.js app to web-app/out (using development mode for unminified React)
 web-app/out: $(shell find web-app/src -type f) web-app/package.json web-app/next.config.ts
@@ -38,11 +38,11 @@ build-all: build ## Build both web UI and Go application
 	@echo "✅ Full build complete (web + server)"
 
 restart-web: build-all ## Rebuild and restart the web server
-	@echo "Stopping existing claude-squad processes..."
-	@-pkill -f "^\./claude-squad" 2>/dev/null || true
+	@echo "Stopping existing stapler-squad processes..."
+	@-pkill -f "^\./stapler-squad" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
-	@./claude-squad $(SERVER_FLAGS) $(PROFILE_FLAGS) &
+	@./stapler-squad $(SERVER_FLAGS) $(PROFILE_FLAGS) &
 	@sleep 2
 	@echo "✅ Server restarted at http://localhost:8543"
 	@if [ -n "$(PROFILE_FLAGS)" ]; then \
@@ -57,22 +57,22 @@ restart-web-profile: ## Rebuild and restart web server with profiling enabled
 	@echo "  Block:      http://localhost:$(PROFILE_PORT)/debug/pprof/block?debug=1"
 	@echo "  Mutex:      http://localhost:$(PROFILE_PORT)/debug/pprof/mutex?debug=1"
 	@echo ""
-	@echo "📝 Trace file will be saved to /tmp/claude-squad-trace-*.out on exit"
-	@echo "   Analyze with: go tool trace /tmp/claude-squad-trace-*.out"
+	@echo "📝 Trace file will be saved to /tmp/stapler-squad-trace-*.out on exit"
+	@echo "   Analyze with: go tool trace /tmp/stapler-squad-trace-*.out"
 
 web-dev: build-all ## Build web UI and server, then restart (detects file changes automatically)
-	@echo "Stopping existing claude-squad processes..."
-	@-pkill -f "^\./claude-squad" 2>/dev/null || true
+	@echo "Stopping existing stapler-squad processes..."
+	@-pkill -f "^\./stapler-squad" 2>/dev/null || true
 	@sleep 1
 	@echo "Starting server..."
-	@./claude-squad $(PROFILE_FLAGS) &
+	@./stapler-squad $(PROFILE_FLAGS) &
 	@sleep 2
 	@echo "✅ Server restarted at http://localhost:8543"
 	@if [ -n "$(PROFILE_FLAGS)" ]; then \
 		echo "📊 Profiling enabled at http://localhost:$(PROFILE_PORT)/debug/pprof/"; \
 	fi
 
-install: ## Install claude-squad locally
+install: ## Install stapler-squad locally
 	go install .
 
 # Protocol Buffer code generation
@@ -138,7 +138,7 @@ nil-safety: ## Run comprehensive nil safety analysis
 	@echo "🔍 Running nil safety analysis..."
 	@echo "================================"
 	@echo "1. NilAway (Advanced nil flow analysis):"
-	@-nilaway -include-pkgs="claude-squad" ./... 2>&1 | head -20
+	@-nilaway -include-pkgs="github.com/tstapler/stapler-squad" ./... 2>&1 | head -20
 	@echo ""
 	@echo "2. Built-in nilness analyzer:"
 	@-go vet -nilness ./... 2>&1 | head -10
@@ -151,7 +151,7 @@ nil-safety: ## Run comprehensive nil safety analysis
 	@echo "  make staticcheck" 
 
 nilaway: ## Run NilAway nil safety analyzer
-	nilaway -include-pkgs="claude-squad" ./...
+	nilaway -include-pkgs="github.com/tstapler/stapler-squad" ./...
 
 staticcheck: ## Run staticcheck comprehensive analysis
 	staticcheck ./...
@@ -180,7 +180,7 @@ tidy: ## Tidy and verify go modules
 # Cleanup
 clean: ## Clean build artifacts and temporary files
 	go clean
-	rm -f claude-squad coverage.out coverage.html benchmark_results.txt
+	rm -f stapler-squad coverage.out coverage.html benchmark_results.txt
 	rm -rf analysis_results/
 
 clean-tools: ## Remove all installed development tools (use with caution)

@@ -1,11 +1,11 @@
 .idea
 .aider*
 .claude/settings.local.json
-claude-squad
+stapler-squad
 claude-mux
 **.DS_Store
 cs
-claude-squad-test
+stapler-squad-test
 
 # Generated protocol buffer code
 gen/
