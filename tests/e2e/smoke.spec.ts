@@ -12,7 +12,7 @@ test.describe('Smoke Tests', () => {
     });
 
     // Check page title
-    await expect(page).toHaveTitle(/Claude Squad/);
+    await expect(page).toHaveTitle(/Stapler Squad/);
 
     // Check that review queue component is present with longer timeout for hydration
     await expect(page.locator('[data-testid="review-queue"]')).toBeVisible({ timeout: 10000 });
@@ -30,7 +30,7 @@ test.describe('Smoke Tests', () => {
   test('home page loads successfully', async ({ page }) => {
     await page.goto(BASE_URL);
 
-    await expect(page).toHaveTitle(/Claude Squad/);
+    await expect(page).toHaveTitle(/Stapler Squad/);
 
     console.log('✅ Home page loaded successfully');
   });

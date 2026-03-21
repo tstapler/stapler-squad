@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# cs-notify - Send notifications from tmux sessions to Claude Squad
+# ssq-notify - Send notifications from tmux sessions to Stapler Squad
 #
 # This script allows Claude Code instances running in tmux sessions to send
-# notification chimes with metadata to the Claude Squad server, which broadcasts
+# notification chimes with metadata to the Stapler Squad server, which broadcasts
 # them to all connected clients (web UI and TUI).
 #
 # Usage:
-#   cs-notify --session-id "my-session" --title "Task Complete" [options]
+#   ssq-notify --session-id "my-session" --title "Task Complete" [options]
 #
 # Required:
-#   --session-id, -s    Session ID (must match active Claude Squad session)
+#   --session-id, -s    Session ID (must match active Stapler Squad session)
 #   --title, -t         Notification title (required)
 #
 # Optional:
@@ -37,17 +37,17 @@
 #
 # Examples:
 #   # Simple notification
-#   cs-notify -s "my-session" -t "Build Complete" -p low
+#   ssq-notify -s "my-session" -t "Build Complete" -p low
 #
 #   # Error notification with message
-#   cs-notify -s "my-session" -t "Build Failed" -m "Error in main.go:42" --type error -p high
+#   ssq-notify -s "my-session" -t "Build Failed" -m "Error in main.go:42" --type error -p high
 #
 #   # Task completion with metadata
-#   cs-notify -s "my-session" -t "Tests Passed" --type task_complete \
+#   ssq-notify -s "my-session" -t "Tests Passed" --type task_complete \
 #     -d "tests=142" -d "duration=45s"
 #
 #   # Approval needed (urgent)
-#   cs-notify -s "my-session" -t "Permission Required" --type approval_needed \
+#   ssq-notify -s "my-session" -t "Permission Required" --type approval_needed \
 #     -m "Allow write access to /etc/hosts?" -p urgent
 #
 # Environment Variables:
@@ -198,7 +198,7 @@ response=$(curl -s -w "\n%{http_code}" \
     -d "$request_json" \
     "http://localhost:$PORT/api/session.v1.SessionService/SendNotification" \
     2>&1) || {
-    error "Failed to connect to server at localhost:$PORT. Is Claude Squad running?"
+    error "Failed to connect to server at localhost:$PORT. Is Stapler Squad running?"
 }
 
 # Split response into body and status code

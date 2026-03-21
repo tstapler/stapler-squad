@@ -25,14 +25,14 @@ type SortDir = 'asc' | 'desc';
 
 // Local storage keys for persisting UI preferences
 const STORAGE_KEYS = {
-  SEARCH_QUERY: 'claude-squad-search-query',
-  SELECTED_STATUS: 'claude-squad-selected-status',
-  SELECTED_CATEGORY: 'claude-squad-selected-category',
-  SELECTED_TAG: 'claude-squad-selected-tag',
-  HIDE_PAUSED: 'claude-squad-hide-paused',
-  GROUPING_STRATEGY: 'claude-squad-grouping-strategy',
-  SORT_FIELD: 'claude-squad-sort-field',
-  SORT_DIR: 'claude-squad-sort-dir',
+  SEARCH_QUERY: 'stapler-squad-search-query',
+  SELECTED_STATUS: 'stapler-squad-selected-status',
+  SELECTED_CATEGORY: 'stapler-squad-selected-category',
+  SELECTED_TAG: 'stapler-squad-selected-tag',
+  HIDE_PAUSED: 'stapler-squad-hide-paused',
+  GROUPING_STRATEGY: 'stapler-squad-grouping-strategy',
+  SORT_FIELD: 'stapler-squad-sort-field',
+  SORT_DIR: 'stapler-squad-sort-dir',
 };
 
 // Helper functions for local storage operations

@@ -1,7 +1,7 @@
 {
-  "name": "claude-squad-e2e-tests",
+  "name": "stapler-squad-e2e-tests",
   "version": "1.0.0",
-  "description": "End-to-end tests for claude-squad review queue",
+  "description": "End-to-end tests for stapler-squad review queue",
   "private": true,
   "scripts": {
     "test": "playwright test",

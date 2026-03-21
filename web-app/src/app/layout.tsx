@@ -8,7 +8,7 @@ import { NotificationPanel } from "@/components/ui/NotificationPanel";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Claude Squad Sessions",
+  title: "Stapler Squad Sessions",
   description: "Manage your AI agent sessions",
 };
 

@@ -38,7 +38,7 @@ log_error() {
 # Check if running from project root
 check_project_root() {
     if [ ! -f "go.mod" ] || [ ! -d "cmd/claude-mux" ]; then
-        log_error "Must run from claude-squad project root directory"
+        log_error "Must run from stapler-squad project root directory"
         log_info "Current directory: $(pwd)"
         exit 1
     fi

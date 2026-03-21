@@ -17,8 +17,8 @@ export function Navigation() {
     <nav className={styles.nav} role="navigation" aria-label="Main navigation">
       <div className={styles.container}>
         <div className={styles.brand}>
-          <AppLink href={routes.home} aria-label="Claude Squad home">
-            <h1 className={styles.title}>Claude Squad</h1>
+          <AppLink href={routes.home} aria-label="Stapler Squad home">
+            <h1 className={styles.title}>Stapler Squad</h1>
           </AppLink>
         </div>
 

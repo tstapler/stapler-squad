@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# cs-hook-handler - Claude Code hook handler for Claude Squad notifications
+# ssq-hook-handler - Claude Code hook handler for Stapler Squad notifications
 #
 # This script processes Claude Code hook events and sends notifications
-# to the Claude Squad server via cs-notify.
+# to the Stapler Squad server via ssq-notify.
 #
 # Usage:
-#   echo '{"session_id": "...", ...}' | cs-hook-handler <hook-type>
+#   echo '{"session_id": "...", ...}' | ssq-hook-handler <hook-type>
 #
 # Hook Types:
 #   notification  - Handle Notification hook events
@@ -45,18 +45,18 @@
 
 set -euo pipefail
 
-# Find cs-notify script (look in same directory as this script)
+# Find ssq-notify script (look in same directory as this script)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CS_NOTIFY="${CS_NOTIFY:-$SCRIPT_DIR/cs-notify}"
+CS_NOTIFY="${CS_NOTIFY:-$SCRIPT_DIR/ssq-notify}"
 
 # Check if notifications are disabled
 if [[ "${CS_HOOKS_DISABLED:-false}" == "true" ]]; then
     exit 0
 fi
 
-# Check cs-notify exists
+# Check ssq-notify exists
 if [[ ! -x "$CS_NOTIFY" ]]; then
-    echo "Error: cs-notify not found at $CS_NOTIFY" >&2
+    echo "Error: ssq-notify not found at $CS_NOTIFY" >&2
     exit 0  # Don't block Claude on hook errors
 fi
 
@@ -67,7 +67,7 @@ INPUT=$(cat)
 HOOK_TYPE="${1:-}"
 
 if [[ -z "$HOOK_TYPE" ]]; then
-    echo "Usage: cs-hook-handler <hook-type>" >&2
+    echo "Usage: ssq-hook-handler <hook-type>" >&2
     echo "Hook types: notification, stop, permission, post-tool" >&2
     exit 0
 fi
@@ -80,7 +80,7 @@ json_get() {
 # Try to determine session ID
 # Priority: CS_SESSION_ID env var > CS_MUX_TMUX_SESSION > tmux session name > project name > cwd basename
 # NOTE: We do NOT use the .session_id from hook input because Claude sends its internal
-# session UUID which doesn't match Claude Squad session titles. Instead we prefer
+# session UUID which doesn't match Stapler Squad session titles. Instead we prefer
 # identifiers that will match session titles/paths.
 get_session_id() {
     # Check environment variable first (explicit override from claude-mux)
@@ -95,7 +95,7 @@ get_session_id() {
         return
     fi
 
-    # Try to detect from tmux session name (claude-squad managed sessions)
+    # Try to detect from tmux session name (stapler-squad managed sessions)
     if [[ -n "${TMUX:-}" ]]; then
         local tmux_session=$(tmux display-message -p '#S' 2>/dev/null || echo "")
         if [[ -n "$tmux_session" ]]; then
@@ -200,7 +200,7 @@ detect_source_app() {
         return
     fi
 
-    # Check for tmux-managed session (Claude Squad)
+    # Check for tmux-managed session (Stapler Squad)
     if [[ -n "${TMUX:-}" ]]; then
         APP_NAME="tmux"
         APP_PROJECT=$(tmux display-message -p '#S' 2>/dev/null || basename "$(pwd)")
