@@ -56,6 +56,14 @@ type ReviewQueuePoller struct {
 	statusDetector   *detection.StatusDetector // For detecting status in sessions without ClaudeController
 	approvalProvider ApprovalMetadataProvider  // Optional: enriches approval items with hook metadata
 
+	// Content cache: avoids spawning a tmux capture-pane subprocess when the session
+	// has not produced new output since the last poll. For sessions with an active
+	// ClaudeController the idle detector's lastActivity timestamp (driven by PTY output
+	// reading, no subprocess) is used as a change signal.
+	cacheMu          sync.Mutex
+	lastSeenActivity map[string]time.Time // per-session: last IdleDetector.lastActivity seen
+	cachedContent    map[string]string    // per-session: content from last Preview() call
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -72,12 +80,14 @@ func NewReviewQueuePoller(queue *ReviewQueue, statusManager *InstanceStatusManag
 // The storage parameter is optional (can be nil) but required for persisting LastAddedToQueue timestamps.
 func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager *InstanceStatusManager, storage *Storage, config ReviewQueuePollerConfig) *ReviewQueuePoller {
 	return &ReviewQueuePoller{
-		queue:          queue,
-		statusManager:  statusManager,
-		storage:        storage,
-		instances:      make([]*Instance, 0),
-		config:         config,
-		statusDetector: detection.NewStatusDetector(), // For detecting status in sessions without ClaudeController
+		queue:            queue,
+		statusManager:    statusManager,
+		storage:          storage,
+		instances:        make([]*Instance, 0),
+		config:           config,
+		statusDetector:   detection.NewStatusDetector(), // For detecting status in sessions without ClaudeController
+		lastSeenActivity: make(map[string]time.Time),
+		cachedContent:    make(map[string]string),
 	}
 }
 
@@ -107,6 +117,12 @@ func (rqp *ReviewQueuePoller) RemoveInstance(instanceTitle string) {
 		}
 	}
 	rqp.instances = filtered
+
+	// Evict content cache for this session.
+	rqp.cacheMu.Lock()
+	delete(rqp.lastSeenActivity, instanceTitle)
+	delete(rqp.cachedContent, instanceTitle)
+	rqp.cacheMu.Unlock()
 }
 
 // SetApprovalProvider sets the approval metadata provider for enriching review queue items.
@@ -259,6 +275,56 @@ func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusI
 	return false
 }
 
+// getContent returns the terminal content for inst, using a cache to avoid
+// spawning a subprocess when no new output has arrived since the last poll.
+//
+// For sessions with an active ClaudeController: the idle detector's lastActivity
+// timestamp is used as a change signal. lastActivity is updated in real-time
+// via PTY output reading (no subprocess), so a zero-cost check tells us whether
+// any new bytes arrived. If nothing changed, the last captured content is returned
+// directly, saving one `tmux capture-pane` subprocess per idle session per tick.
+//
+// For sessions without a ClaudeController: Preview() is always called (no change
+// signal is available without the controller's PTY reader).
+//
+// The error case returns the last cached content (empty string on the first poll)
+// so callers can continue with empty content as before.
+func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStatusInfo) string {
+	if statusInfo.IsControllerActive {
+		lastActivity := statusInfo.IdleState.LastActivity
+		if !lastActivity.IsZero() {
+			rqp.cacheMu.Lock()
+			lastSeen := rqp.lastSeenActivity[inst.Title]
+			cached := rqp.cachedContent[inst.Title]
+			rqp.cacheMu.Unlock()
+
+			if lastActivity.Equal(lastSeen) {
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': content cache hit (lastActivity=%s, %d bytes)",
+					inst.Title, lastActivity.Format("15:04:05.000"), len(cached))
+				return cached
+			}
+		}
+	}
+
+	content, err := inst.Preview()
+	if err != nil {
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': Preview() error: %v", inst.Title, err)
+		rqp.cacheMu.Lock()
+		cached := rqp.cachedContent[inst.Title]
+		rqp.cacheMu.Unlock()
+		return cached
+	}
+
+	rqp.cacheMu.Lock()
+	rqp.cachedContent[inst.Title] = content
+	if statusInfo.IsControllerActive && !statusInfo.IdleState.LastActivity.IsZero() {
+		rqp.lastSeenActivity[inst.Title] = statusInfo.IdleState.LastActivity
+	}
+	rqp.cacheMu.Unlock()
+
+	return content
+}
+
 // checkSession checks a single session and adds/removes from queue as needed.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	log.InfoLog.Printf("[ReviewQueue] === CHECKING SESSION '%s' === (started=%v, paused=%v)",
@@ -288,14 +354,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	// Get comprehensive status
 	statusInfo := rqp.statusManager.GetStatus(inst)
 
-	// STEP 1: Get terminal content for prompt detection
-	var content string
-	var err error
-	content, err = inst.Preview()
-	if err != nil {
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get terminal content: %v", inst.Title, err)
-		content = "" // Continue with empty content
-	}
+	// STEP 1: Get terminal content for prompt detection.
+	// Uses cached content when the controller reports no new activity since the last
+	// poll — avoids a subprocess spawn on every tick for idle controller-managed sessions.
+	content := rqp.getContent(inst, statusInfo)
 
 	// STEP 2: Detect and track prompts
 	isNewPrompt := inst.detectAndTrackPrompt(content, statusInfo)
@@ -514,10 +576,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		// No controller - but we can still detect status from terminal content
 		log.DebugLog.Printf("[ReviewQueue] Session '%s': No active controller - using terminal-based status detection", inst.Title)
 
-		// IMPORTANT: First check terminal content for approval/input prompts
-		// This enables status detection for external sessions (claude-mux) without ClaudeController
-		content, err := inst.Preview()
-		if err == nil && content != "" {
+		// IMPORTANT: Check terminal content for approval/input prompts.
+		// 'content' was already fetched at STEP 1 via getContent(); for no-controller
+		// sessions getContent() always calls Preview(), so no extra subprocess needed.
+		if content != "" {
 			// Detect status from terminal content using the shared status detector
 			detectedStatus, statusContext := rqp.statusDetector.DetectWithContext([]byte(content))
 			log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected status=%s from terminal content",
@@ -568,8 +630,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				rqp.queue.Remove(inst.Title)
 				return
 			}
-		} else if err != nil {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get terminal content: %v", inst.Title, err)
 		}
 
 		// If no status-based condition was detected, fall back to time-based checks
