@@ -3,6 +3,7 @@ package services
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -53,7 +54,13 @@ func (us *UtilityService) GetLogs(
 ) (*connect.Response[sessionv1.GetLogsResponse], error) {
 	// Get log file path from config
 	cfg := log.ConfigToLogConfig(config.LoadConfig())
-	logFilePath, err := log.GetLogFilePath(cfg)
+	var logFilePath string
+	var err error
+	if sid := req.Msg.GetSessionId(); sid != "" {
+		logFilePath, err = log.GetSessionLogFilePath(cfg, sid)
+	} else {
+		logFilePath, err = log.GetLogFilePath(cfg)
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get log file path: %w", err))
 	}
@@ -61,6 +68,13 @@ func (us *UtilityService) GetLogs(
 	// Read log file
 	file, err := os.Open(logFilePath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return connect.NewResponse(&sessionv1.GetLogsResponse{
+				Entries:    []*sessionv1.LogEntry{},
+				TotalCount: 0,
+				HasMore:    false,
+			}), nil
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to open log file: %w", err))
 	}
 	defer file.Close()

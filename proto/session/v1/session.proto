@@ -328,6 +328,9 @@ message GetLogsRequest {
 
   // Optional: Number of entries to skip for pagination (default: 0).
   optional int32 offset = 6;
+
+  // Optional: Filter to a specific session's log file. Uses session title/id.
+  optional string session_id = 7;
 }
 
 message GetLogsResponse {

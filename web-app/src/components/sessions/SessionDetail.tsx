@@ -7,6 +7,7 @@ import { DiffViewer } from "./DiffViewer";
 import { VcsPanel } from "./VcsPanel";
 import { WorkspaceSwitchModal } from "./WorkspaceSwitchModal";
 import { ApprovalPanel } from "./ApprovalPanel";
+import { SessionLogsTab } from "./SessionLogsTab";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { getApiBaseUrl } from "@/lib/config";
 import styles from "./SessionDetail.module.css";
@@ -223,7 +224,15 @@ export function SessionDetail({
         {activeTab === "terminal" && (
           <div className={styles.tabContent}>
             <ApprovalPanel sessionId={session.id} onResolved={onApprovalResolved} />
-            {session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
+            {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
+              <div className={styles.noTerminalPlaceholder}>
+                <span className={styles.noTerminalIcon}>⛓️</span>
+                <p className={styles.noTerminalText}>Terminal not available</p>
+                <p className={styles.noTerminalSubtext}>
+                  This session is running in an external terminal. Use Approve / Deny above to respond to pending requests.
+                </p>
+              </div>
+            ) : session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
               <TerminalOutput
                 sessionId={session.externalMetadata.muxSocketPath}
                 baseUrl={getApiBaseUrl()}
@@ -247,9 +256,7 @@ export function SessionDetail({
         )}
         {activeTab === "logs" && (
           <div className={styles.tabContent}>
-            <p className={styles.placeholder}>
-              Session logs coming soon...
-            </p>
+            <SessionLogsTab sessionId={session.id} baseUrl={getApiBaseUrl()} />
           </div>
         )}
         {activeTab === "info" && (
