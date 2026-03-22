@@ -350,13 +350,31 @@ export function ReviewQueuePanel({
                       reason={item.reason}
                       compact={false}
                     />
-                    {item.context && (
+                    {item.context && !item.metadata?.["pending_approval_id"] && (
                       <p className={styles.itemContext}>{item.context}</p>
                     )}
                     {item.patternName && (
                       <span className={styles.itemPattern}>
                         Pattern: {item.patternName}
                       </span>
+                    )}
+                    {item.metadata?.["pending_approval_id"] && (
+                      <>
+                        {(item.metadata["tool_input_command"] || item.metadata["tool_input_file"]) && (
+                          <pre className={styles.commandPreview}>
+                            {item.metadata["tool_input_command"] || item.metadata["tool_input_file"]}
+                          </pre>
+                        )}
+                        {item.metadata["cwd"] && (
+                          <div className={styles.detailRow}>
+                            <span className={styles.detailLabel}>Directory:</span>
+                            <span className={styles.detailValue}>{item.metadata["cwd"]}</span>
+                          </div>
+                        )}
+                        {item.metadata["orphaned"] === "true" && (
+                          <span className={styles.expiredBadge}>Expired</span>
+                        )}
+                      </>
                     )}
                     {/* Session details */}
                     <div className={styles.sessionDetails}>
@@ -404,7 +422,10 @@ export function ReviewQueuePanel({
                         className={styles.approveButton}
                         onClick={(e) => {
                           e.stopPropagation();
-                          approveRequest(item.metadata!["pending_approval_id"]);
+                          approveRequest(item.metadata!["pending_approval_id"]).finally(() => {
+                            acknowledgeSession(item.sessionId);
+                            onAcknowledged?.(item.sessionId);
+                          });
                         }}
                         title="Approve this tool-use request"
                         aria-label="Approve"
@@ -416,7 +437,10 @@ export function ReviewQueuePanel({
                         className={styles.denyButton}
                         onClick={(e) => {
                           e.stopPropagation();
-                          denyRequest(item.metadata!["pending_approval_id"]);
+                          denyRequest(item.metadata!["pending_approval_id"]).finally(() => {
+                            acknowledgeSession(item.sessionId);
+                            onAcknowledged?.(item.sessionId);
+                          });
                         }}
                         title="Deny this tool-use request"
                         aria-label="Deny"
@@ -430,6 +454,10 @@ export function ReviewQueuePanel({
                     className={styles.skipButton}
                     onClick={(e) => {
                       e.stopPropagation();
+                      // If there's a pending approval, deny it so the underlying request is resolved
+                      if (item.metadata?.["pending_approval_id"]) {
+                        denyRequest(item.metadata["pending_approval_id"]).catch(() => {});
+                      }
                       if (onSkipSession) {
                         onSkipSession(item.sessionId);
                       } else {

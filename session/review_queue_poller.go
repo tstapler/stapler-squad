@@ -729,11 +729,14 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 			inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold))
 	}
 
-	// Acknowledgment snooze and grace-period checks only apply to low-priority informational
-	// states (idle, stale, uncommitted changes). For urgent/high/medium-priority states
-	// (approval pending, input required, error) the session MUST remain visible regardless
-	// of whether the user previously dismissed it — these require active user action.
-	if !shouldAdd || priority == PriorityLow {
+	// Acknowledgment snooze and grace-period checks.
+	// For sessions with an active controller, high/medium-priority states (approval, error,
+	// input required) bypass snooze so live Claude processes always surface to the user.
+	// For sessions WITHOUT an active controller (orphaned/external/no-tty sessions), there is
+	// no live process that can generate new approvals — detections come from static terminal
+	// content. In that case, respect acknowledgment at any priority level so the user can
+	// permanently dismiss stale entries.
+	if !shouldAdd || priority == PriorityLow || !statusInfo.IsControllerActive {
 		// Check if user dismissed this session.
 		// Sessions are snoozed when LastAcknowledged is newer than LastMeaningfulOutput.
 		if inst.ReviewState.IsAcknowledgedAfterOutput() {
@@ -853,6 +856,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 				}
 				if filePath, ok := a.ToolInput["file_path"].(string); ok && filePath != "" {
 					item.Metadata["tool_input_file"] = filePath
+				}
+				if a.Cwd != "" {
+					item.Metadata["cwd"] = a.Cwd
 				}
 				if a.Orphaned {
 					item.Metadata["orphaned"] = "true"
