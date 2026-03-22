@@ -3,7 +3,7 @@ package session
 import (
 	"testing"
 
-	"claude-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 // TestAttentionReasonFromDetected verifies every DetectedStatus maps to the expected reason.

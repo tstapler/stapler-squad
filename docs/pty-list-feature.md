@@ -52,7 +52,7 @@ Press `t` from the main session list to toggle into PTY list view.
 
 ### Categories
 
-1. **Squad Sessions** - PTYs associated with managed claude-squad sessions
+1. **Squad Sessions** - PTYs associated with managed stapler-squad sessions
 2. **Orphaned** - Unmanaged Claude instances running independently
 3. **Other** - Other tools (Aider, etc.)
 
@@ -357,7 +357,7 @@ go test ./app -run TestPTYViewIntegration -v
 **Solutions:**
 1. Check session status (must be Running or Ready)
 2. Verify tmux session is active: `tmux ls`
-3. Check PTY discovery logs in `~/.claude-squad/logs/`
+3. Check PTY discovery logs in `~/.stapler-squad/logs/`
 4. Manually refresh with `r` key
 
 ### Preview Shows No Output

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/session/vc"
+	"github.com/tstapler/stapler-squad/session/vc"
 )
 
 // BatchVCSProvider collects VCS status for multiple workspaces concurrently.

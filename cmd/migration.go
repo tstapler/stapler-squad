@@ -1,10 +1,10 @@
 package cmd
 
 import (
-	"claude-squad/cmd/commands"
-	"claude-squad/cmd/interfaces"
-	"claude-squad/config"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/cmd/commands"
+	"github.com/tstapler/stapler-squad/cmd/interfaces"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 	"strings"
 	"sync"

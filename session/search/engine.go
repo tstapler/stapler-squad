@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // SearchEngine is the main interface for full-text search over Claude history.

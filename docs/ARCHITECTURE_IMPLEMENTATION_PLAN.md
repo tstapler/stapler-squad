@@ -1,4 +1,4 @@
-# Architecture Implementation Plan - Claude Squad
+# Architecture Implementation Plan - Stapler Squad
 
 **Plan Date**: 2025-12-05
 **Based On**: [ARCHITECTURE_REVIEW.md](./ARCHITECTURE_REVIEW.md)
@@ -329,7 +329,7 @@ go test ./app -run TestRobustConfirmationModalFlow -v
 go test ./app -run TestSessionCreationOverlayFix -v
 
 # Verify UI still works
-./claude-squad
+./stapler-squad
 ```
 
 ---
@@ -403,8 +403,8 @@ func (e SessionStatusChanged) Timestamp() time.Time { return e.timestamp }
 package session
 
 import (
-    "claude-squad/domain/events"
-    "claude-squad/session"
+    "stapler-squad/domain/events"
+    "stapler-squad/session"
 )
 
 // SessionResult represents the result of a session operation
@@ -465,7 +465,7 @@ func (c *controller) NewSession() SessionResult {
 package adapters
 
 import (
-    "claude-squad/domain/events"
+    "stapler-squad/domain/events"
     tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -1186,7 +1186,7 @@ type Repository interface {
 package persistence
 
 import (
-    "claude-squad/domain/session"
+    "stapler-squad/domain/session"
     // OK to import infrastructure dependencies here
 )
 
@@ -1225,14 +1225,14 @@ infrastructure/
 
 **Before**:
 ```go
-import "claude-squad/session"
+import "stapler-squad/session"
 ```
 
 **After**:
 ```go
 import (
-    "claude-squad/domain/session"
-    "claude-squad/infrastructure/persistence"
+    "stapler-squad/domain/session"
+    "stapler-squad/infrastructure/persistence"
 )
 ```
 
@@ -1307,7 +1307,7 @@ type DomainEvent interface {
 package messaging
 
 import (
-    "claude-squad/domain/events"
+    "stapler-squad/domain/events"
     "context"
     "sync"
 )
@@ -1377,7 +1377,7 @@ func (b *memoryEventBus) Subscribe(eventType string, handler events.EventHandler
 package handlers
 
 import (
-    "claude-squad/domain/events"
+    "stapler-squad/domain/events"
     "context"
 )
 

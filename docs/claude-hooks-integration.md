@@ -1,6 +1,6 @@
 # Claude Code Hooks Integration
 
-This guide explains how to integrate Claude Squad notifications with Claude Code using hooks. When configured, you'll receive audio chimes and visual notifications when Claude needs your attention.
+This guide explains how to integrate Stapler Squad notifications with Claude Code using hooks. When configured, you'll receive audio chimes and visual notifications when Claude needs your attention.
 
 ## Quick Start
 
@@ -10,13 +10,13 @@ Run the installation script:
 
 ```bash
 # Interactive installation (will ask for scope)
-./scripts/cs-hooks-install
+./scripts/ssq-hooks-install
 
 # Install globally (all Claude sessions)
-./scripts/cs-hooks-install --global
+./scripts/ssq-hooks-install --global
 
 # Install for current project only
-./scripts/cs-hooks-install --project
+./scripts/ssq-hooks-install --project
 ```
 
 ### Manual Installation
@@ -29,33 +29,33 @@ Add the following to your `~/.claude/settings.json` (global) or `.claude/setting
     "Notification": [{
       "hooks": [{
         "type": "command",
-        "command": "/path/to/claude-squad/scripts/cs-hook-handler notification"
+        "command": "/path/to/stapler-squad/scripts/ssq-hook-handler notification"
       }]
     }],
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "/path/to/claude-squad/scripts/cs-hook-handler stop"
+        "command": "/path/to/stapler-squad/scripts/ssq-hook-handler stop"
       }]
     }],
     "PermissionRequest": [{
       "hooks": [{
         "type": "command",
-        "command": "/path/to/claude-squad/scripts/cs-hook-handler permission"
+        "command": "/path/to/stapler-squad/scripts/ssq-hook-handler permission"
       }]
     }],
     "PostToolUse": [{
       "matcher": ".*",
       "hooks": [{
         "type": "command",
-        "command": "/path/to/claude-squad/scripts/cs-hook-handler post-tool"
+        "command": "/path/to/stapler-squad/scripts/ssq-hook-handler post-tool"
       }]
     }]
   }
 }
 ```
 
-Replace `/path/to/claude-squad` with your actual installation path.
+Replace `/path/to/stapler-squad` with your actual installation path.
 
 ## Hook Events
 
@@ -75,7 +75,7 @@ Replace `/path/to/claude-squad` with your actual installation path.
 | `CS_SESSION_ID` | Override session ID detection | Auto-detected |
 | `CS_HOOKS_DISABLED` | Set to "true" to disable all notifications | false |
 | `CS_HOOKS_QUIET` | Set to "true" to suppress output | false |
-| `CS_SERVER_PORT` | Claude Squad server port | 8543 |
+| `CS_SERVER_PORT` | Stapler Squad server port | 8543 |
 
 ### Customizing Individual Hooks
 
@@ -88,7 +88,7 @@ You can selectively enable hooks by only including the ones you want:
     "Stop": [{
       "hooks": [{
         "type": "command",
-        "command": "/path/to/cs-hook-handler stop"
+        "command": "/path/to/ssq-hook-handler stop"
       }]
     }]
   }
@@ -102,7 +102,7 @@ You can selectively enable hooks by only including the ones you want:
     "PermissionRequest": [{
       "hooks": [{
         "type": "command",
-        "command": "/path/to/cs-hook-handler permission"
+        "command": "/path/to/ssq-hook-handler permission"
       }]
     }]
   }
@@ -121,7 +121,7 @@ Use the `matcher` field to filter PostToolUse hooks to specific tools:
       "matcher": "Bash",
       "hooks": [{
         "type": "command",
-        "command": "/path/to/cs-hook-handler post-tool"
+        "command": "/path/to/ssq-hook-handler post-tool"
       }]
     }]
   }
@@ -136,7 +136,7 @@ Use the `matcher` field to filter PostToolUse hooks to specific tools:
       "matcher": "Bash|Write|Edit",
       "hooks": [{
         "type": "command",
-        "command": "/path/to/cs-hook-handler post-tool"
+        "command": "/path/to/ssq-hook-handler post-tool"
       }]
     }]
   }
@@ -158,20 +158,20 @@ The hook handler maps Claude Code events to notification priorities:
 
 ### Notifications not appearing
 
-1. **Check Claude Squad is running:**
+1. **Check Stapler Squad is running:**
    ```bash
    curl -s http://localhost:8543/health
    ```
 
 2. **Verify hook handler is executable:**
    ```bash
-   ls -la scripts/cs-hook-handler
-   chmod +x scripts/cs-hook-handler
+   ls -la scripts/ssq-hook-handler
+   chmod +x scripts/ssq-hook-handler
    ```
 
 3. **Test hook handler manually:**
    ```bash
-   echo '{"session_id": "test"}' | ./scripts/cs-hook-handler stop
+   echo '{"session_id": "test"}' | ./scripts/ssq-hook-handler stop
    ```
 
 4. **Check hook is installed:**
@@ -183,9 +183,9 @@ The hook handler maps Claude Code events to notification priorities:
 
 The hook handler is designed to always exit with code 0 to avoid blocking Claude. If you see issues:
 
-1. **Check cs-notify exists:**
+1. **Check ssq-notify exists:**
    ```bash
-   ls -la scripts/cs-notify
+   ls -la scripts/ssq-notify
    ```
 
 2. **Temporarily disable hooks:**
@@ -210,9 +210,9 @@ export CS_SESSION_ID="my-session"
 
 ### Using the installer
 ```bash
-./scripts/cs-hooks-install --uninstall --global
+./scripts/ssq-hooks-install --uninstall --global
 # or
-./scripts/cs-hooks-install --uninstall --project
+./scripts/ssq-hooks-install --uninstall --project
 ```
 
 ### Manual removal
@@ -236,11 +236,11 @@ case "$HOOK_TYPE" in
     stop)
         # Play custom sound on macOS
         afplay /System/Library/Sounds/Glass.aiff &
-        # Also send to Claude Squad
-        echo "$INPUT" | cs-hook-handler stop
+        # Also send to Stapler Squad
+        echo "$INPUT" | ssq-hook-handler stop
         ;;
     *)
-        echo "$INPUT" | cs-hook-handler "$HOOK_TYPE"
+        echo "$INPUT" | ssq-hook-handler "$HOOK_TYPE"
         ;;
 esac
 ```
@@ -258,12 +258,12 @@ MESSAGE=$(echo "$INPUT" | jq -r '.notification.message // ""')
 # macOS notification
 osascript -e "display notification \"$MESSAGE\" with title \"$TITLE\""
 
-# Also send to Claude Squad
-echo "$INPUT" | cs-hook-handler notification
+# Also send to Stapler Squad
+echo "$INPUT" | ssq-hook-handler notification
 ```
 
 ## See Also
 
 - [Claude Code Hooks Documentation](https://code.claude.com/docs/en/hooks)
-- [cs-notify Script](../scripts/cs-notify) - Send notifications from command line
+- [ssq-notify Script](../scripts/ssq-notify) - Send notifications from command line
 - [Notification Feature Plan](tasks/notification-chimes.md) - Full feature specification

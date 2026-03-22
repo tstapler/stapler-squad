@@ -1,6 +1,6 @@
 package session
 
-import "claude-squad/session/detection"
+import "github.com/tstapler/stapler-squad/session/detection"
 
 // status_mapping.go documents the relationship between the three status types:
 //

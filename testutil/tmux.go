@@ -1,8 +1,8 @@
 package testutil
 
 import (
-	"claude-squad/executor"
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"fmt"
 	"os/exec"
 	"strings"

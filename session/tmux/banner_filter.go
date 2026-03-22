@@ -19,7 +19,7 @@ func NewBannerFilter() *BannerFilter {
 		statusLinePatterns: []*regexp.Regexp{
 			// Tmux status line pattern with session, windows, hostname, and timestamp
 			// Format: [session-name] window-index:window-name[*-#] "hostname" HH:MM DD-Mon-YY
-			// Example: [claudesquad_test-session] 0:claude* "MacBook-Pro" 09:45 17-Oct-25
+			// Example: [staplersquad_test-session] 0:claude* "MacBook-Pro" 09:45 17-Oct-25
 			// Example: [work] 1:vim- 2:bash* "dev-server" 14:22 17-Oct-25
 			regexp.MustCompile(`^\[.+\]\s+(?:\d+:\S+[\*\-\#]?\s+)+".+"\s+\d{2}:\d{2}\s+\d{1,2}-\w{3}-\d{2}$`),
 

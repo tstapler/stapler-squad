@@ -78,7 +78,7 @@ has no `Instance` equivalent).
 
 **Migration Strategy**:
 1. Wire `EntRepository` as the backing store for `Storage` behind a feature flag
-   (`CLAUDE_SQUAD_USE_ENT=true`, default false).
+   (`STAPLER_SQUAD_USE_ENT=true`, default false).
 2. Implement dual-write: JSON + Ent, read from Ent when flag is on.
 3. Validate with integration tests that round-trip `Session` data through Ent.
 4. Flip the default to true. Deprecate JSON path.
@@ -317,7 +317,7 @@ canonical domain model.
 
 **Change**: Modify `Storage` to accept a `Repository` interface (instead of
 `config.InstanceStorage`) and add a constructor that creates an `EntRepository`.
-Gate with `CLAUDE_SQUAD_USE_ENT` environment variable (default: false).
+Gate with `STAPLER_SQUAD_USE_ENT` environment variable (default: false).
 
 ```go
 // session/storage.go

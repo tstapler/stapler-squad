@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This feature enhances Claude Squad's session management capabilities by adding comprehensive search and sort functionality. Users can quickly discover sessions by title, repository, branch, tags, and recency, with intelligent sorting options to match their workflow. The implementation leverages the existing search index infrastructure while adding sort capabilities to both TUI and Web UI.
+This feature enhances Stapler Squad's session management capabilities by adding comprehensive search and sort functionality. Users can quickly discover sessions by title, repository, branch, tags, and recency, with intelligent sorting options to match their workflow. The implementation leverages the existing search index infrastructure while adding sort capabilities to both TUI and Web UI.
 
 **Key Benefits**:
 - **Time Savings**: Reduce session discovery time from minutes to seconds
@@ -57,7 +57,7 @@ This feature enhances Claude Squad's session management capabilities by adding c
 6. Program (secondary context)
 
 **References**:
-- Existing implementation: `/Users/tylerstapler/IdeaProjects/claude-squad/ui/search_index.go` (lines 514-535)
+- Existing implementation: `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/search_index.go` (lines 514-535)
 - Already indexes: title, category, program, branch, path, workingDir, tags
 
 #### FR-2: Flexible Sorting
@@ -209,7 +209,7 @@ Sessions (all)
 **Date**: 2025-12-05
 
 **Context**:
-Claude Squad already has a sophisticated `SearchIndex` implementation with hybrid fuzzy search (closestmatch + sahilm/fuzzy). We need to add sorting capabilities without degrading search performance.
+Stapler Squad already has a sophisticated `SearchIndex` implementation with hybrid fuzzy search (closestmatch + sahilm/fuzzy). We need to add sorting capabilities without degrading search performance.
 
 **Decision**:
 Extend the existing `SearchIndex` with sort capabilities rather than creating a separate `SortEngine`.
@@ -287,8 +287,8 @@ type UIState struct {
 // Use localStorage as backup to state manager
 const STORAGE_KEYS = {
     // Existing keys...
-    SORT_MODE: 'claude-squad-sort-mode',
-    SORT_DIRECTION: 'claude-squad-sort-direction',
+    SORT_MODE: 'stapler-squad-sort-mode',
+    SORT_DIRECTION: 'stapler-squad-sort-direction',
 };
 ```
 
@@ -406,11 +406,11 @@ Visual Indicators:
 **Epic ID**: EPIC-SEARCH-001
 **Duration**: 2-3 weeks
 **Team Size**: 1 developer
-**Stakeholders**: All Claude Squad users
+**Stakeholders**: All Stapler Squad users
 
 #### User Value Statement
 
-"As a Claude Squad user managing multiple AI coding sessions, I want to quickly find and resume relevant sessions using flexible search and sorting, so I can spend less time navigating and more time coding."
+"As a Stapler Squad user managing multiple AI coding sessions, I want to quickly find and resume relevant sessions using flexible search and sorting, so I can spend less time navigating and more time coding."
 
 #### Success Metrics
 
@@ -1814,7 +1814,7 @@ describe('sortSessions', () => {
 **Test Execution**:
 ```bash
 # TUI integration (manual)
-go build . && ./claude-squad
+go build . && ./stapler-squad
 # Follow test scenario steps
 
 # Web UI integration (Playwright)
@@ -2313,22 +2313,22 @@ graph TD
 
 **Development Environment Setup**:
 ```bash
-cd /Users/tylerstapler/IdeaProjects/claude-squad
+cd /Users/tylerstapler/IdeaProjects/stapler-squad
 
 # Build and run
 go build .
-./claude-squad
+./stapler-squad
 
 # Run tests
 go test ./ui -v
 
 # Run with profiling (if needed)
-./claude-squad --profile
+./stapler-squad --profile
 ```
 
 **Debugging Tips**:
 - Use `log.InfoLog.Printf()` for debug output
-- Check `~/.claude-squad/logs/claude-squad.log`
+- Check `~/.stapler-squad/logs/stapler-squad.log`
 - Use `make restart-web` for iterative development
 
 ---
@@ -2348,7 +2348,7 @@ go test ./ui -v
 
 **Development Environment Setup**:
 ```bash
-cd /Users/tylerstapler/IdeaProjects/claude-squad/web-app
+cd /Users/tylerstapler/IdeaProjects/stapler-squad/web-app
 
 # Install dependencies
 npm install

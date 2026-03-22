@@ -61,7 +61,7 @@ func TestTUIShutdownDiagnostic(t *testing.T) {
 		}
 
 		// Check logs for shutdown timing
-		// Note: Would need to read ~/.claude-squad/logs/claude-squad.log
+		// Note: Would need to read ~/.stapler-squad/logs/claude-squad.log
 		// to see the actual handleQuit timing logs
 	})
 

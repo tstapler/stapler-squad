@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 
-const STORAGE_KEY = 'claude-squad-logs-search-history';
+const STORAGE_KEY = 'stapler-squad-logs-search-history';
 const MAX_HISTORY = 10;
 
 interface SearchHistoryOptions {

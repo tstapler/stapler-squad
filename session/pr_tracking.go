@@ -1,8 +1,8 @@
 package session
 
 import (
-	"claude-squad/github"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/github"
+	"github.com/tstapler/stapler-squad/log"
 	"fmt"
 )
 

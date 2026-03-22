@@ -1,12 +1,12 @@
 package services
 
 import (
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/gen/proto/go/session/v1/sessionv1connect"
-	"claude-squad/log"
-	"claude-squad/server/protocol"
-	"claude-squad/session"
-	"claude-squad/session/scrollback"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/protocol"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/scrollback"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -299,8 +299,8 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 
 	// Check for control mode feature flag (real-time streaming) - DEFAULT TO ENABLED
 	// Control mode uses tmux's native -C flag for structured real-time notifications
-	// Set CLAUDE_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling
-	useControlMode := os.Getenv("CLAUDE_SQUAD_USE_CONTROL_MODE")
+	// Set STAPLER_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling
+	useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
 	if (useControlMode == "" || useControlMode == "true") && instance.IsManaged {
 		log.InfoLog.Printf("[WebSocket] Routing managed session '%s' to control mode streaming", sessionID)
 		return h.streamViaControlMode(stream, instance, streamingMode)
@@ -337,7 +337,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	sessionID := instance.Title
 	tmuxPrefix := instance.TmuxPrefix
 	if tmuxPrefix == "" {
-		tmuxPrefix = "claudesquad_"
+		tmuxPrefix = "staplersquad_"
 	}
 	tmuxSessionName := tmuxPrefix + instance.Title
 
@@ -611,7 +611,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 // This is the correct method for ALL tmux sessions (both managed and external) because:
 // 1. PTY-based streaming doesn't work for tmux (reads from "tmux attach" PTY, not the actual process)
 // 2. Tmux capture-pane provides reliable access to the terminal buffer
-// 3. Works identically for managed sessions (prefix "claudesquad_<name>") and external sessions
+// 3. Works identically for managed sessions (prefix "staplersquad_<name>") and external sessions
 //
 // This function polls tmux's pane buffer at regular intervals and sends content deltas to clients.
 func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWebSocketStream, instance *session.Instance, streamingMode string) error {
@@ -624,7 +624,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		// Managed session - construct tmux name using prefix
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {
-			tmuxPrefix = "claudesquad_" // Default prefix
+			tmuxPrefix = "staplersquad_" // Default prefix
 		}
 		tmuxSessionName = tmuxPrefix + instance.Title
 	}

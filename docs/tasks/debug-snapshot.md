@@ -24,14 +24,14 @@
 
 ## Problem Statement
 
-When users encounter problems with Claude Squad -- terminal status detection issues, sessions stuck in wrong states, tmux integration failures, or approval flow glitches -- there is no easy way to capture the full system state for diagnosis. Users must manually SSH in, run multiple `tmux` commands, read log files, and try to reconstruct what happened. This is error-prone and time-consuming.
+When users encounter problems with Stapler Squad -- terminal status detection issues, sessions stuck in wrong states, tmux integration failures, or approval flow glitches -- there is no easy way to capture the full system state for diagnosis. Users must manually SSH in, run multiple `tmux` commands, read log files, and try to reconstruct what happened. This is error-prone and time-consuming.
 
 A one-click "Debug Snapshot" button in the existing web UI debug menu should gather all relevant diagnostic information into a single well-structured JSON file that can be shared with maintainers or analyzed offline.
 
 **User goals:**
 1. Capture all relevant system state with a single click from the debug menu.
 2. Optionally attach a short note describing the problem being observed.
-3. Receive a structured JSON file in `~/.claude-squad/logs/` that is self-contained and shareable.
+3. Receive a structured JSON file in `~/.stapler-squad/logs/` that is self-contained and shareable.
 4. No disruption to running sessions -- the snapshot must be read-only and non-destructive.
 
 ---
@@ -96,7 +96,7 @@ The `TmuxSession` struct stores `sanitizedName` and `serverSocket` for each sess
 
 **File**: `log/log.go`
 
-Logs are written to `~/.claude-squad/logs/claudesquad.log` with rotating backup via `lumberjack`. The `GetLogDir()` function returns the log directory path. `GetLogFilePath()` returns the full log file path. The file format is:
+Logs are written to `~/.stapler-squad/logs/claudesquad.log` with rotating backup via `lumberjack`. The `GetLogDir()` function returns the log directory path. `GetLogFilePath()` returns the full log file path. The file format is:
 ```
 [instance-id] LEVEL:YYYY/MM/DD HH:MM:SS file.go:line: message
 ```
@@ -156,7 +156,7 @@ Web UI (DebugMenu.tsx)                    Server
   |                                         |-- Read scrollback buffers
   |                                         |-- Read approval store state
   |                                         |-- Read recent log lines
-  |                                         |-- Write JSON to ~/.claude-squad/logs/
+  |                                         |-- Write JSON to ~/.stapler-squad/logs/
   |                                         |
   |<--- { file_path, summary, timestamp } --|
   |                                         |
@@ -187,7 +187,7 @@ Web UI (DebugMenu.tsx)                    Server
 
 ## Data Model: Snapshot JSON Schema
 
-The snapshot file is written to `~/.claude-squad/logs/debug-snapshot-{timestamp}.json` where `{timestamp}` is formatted as `20260313-143025` (YYYYMMDD-HHMMSS).
+The snapshot file is written to `~/.stapler-squad/logs/debug-snapshot-{timestamp}.json` where `{timestamp}` is formatted as `20260313-143025` (YYYYMMDD-HHMMSS).
 
 ```json
 {
@@ -252,7 +252,7 @@ The snapshot file is written to `~/.claude-squad/logs/debug-snapshot-{timestamp}
     ]
   },
   "recent_logs": {
-    "log_file_path": "/Users/dev/.claude-squad/logs/claudesquad.log",
+    "log_file_path": "/Users/dev/.stapler-squad/logs/claudesquad.log",
     "line_count": 200,
     "lines": [
       "[pid-12345-1710000000] INFO:2026/03/13 14:30:00 session_service.go:100: Session started",

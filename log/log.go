@@ -18,7 +18,7 @@ import (
 // This helps differentiate log messages when multiple instances are running
 func getInstanceIdentifier() string {
 	// Priority 1: Use explicit instance ID from environment
-	if instanceID := os.Getenv("CLAUDE_SQUAD_INSTANCE"); instanceID != "" {
+	if instanceID := os.Getenv("STAPLER_SQUAD_INSTANCE"); instanceID != "" {
 		return instanceID
 	}
 
@@ -136,7 +136,7 @@ func DefaultLogConfig() *LogConfig {
 }
 
 // Default log directory and filename
-var logFileName = filepath.Join(os.TempDir(), "claudesquad.log")
+var logFileName = filepath.Join(os.TempDir(), "staplersquad.log")
 
 // StructuredLogEntry represents a structured log entry
 type StructuredLogEntry struct {
@@ -273,7 +273,7 @@ func GetConfigDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(homeDir, ".claude-squad"), nil
+	return filepath.Join(homeDir, ".stapler-squad"), nil
 }
 
 // GetLogDir returns the directory where logs should be stored
@@ -288,7 +288,7 @@ func GetLogDir(cfg *LogConfig) (string, error) {
 		return cfg.LogsDir, nil
 	}
 
-	// Otherwise use ~/.claude-squad/logs/
+	// Otherwise use ~/.stapler-squad/logs/
 	configDir, err := GetConfigDir()
 	if err != nil {
 		return os.TempDir(), fmt.Errorf("failed to get config directory: %w", err)
@@ -328,7 +328,7 @@ func GetLogFilePath(cfg *LogConfig) (string, error) {
 		return logFileName, err
 	}
 
-	return filepath.Join(logDir, "claudesquad.log"), nil
+	return filepath.Join(logDir, "staplersquad.log"), nil
 }
 
 // GetSessionLogFilePath returns the full path to a session-specific log file
@@ -545,7 +545,7 @@ func init() {
 
 // Initialize should be called once at the beginning of the program to set up logging.
 // defer Close() after calling this function. It sets the go log output to the file in
-// the configured log directory (default: ~/.claude-squad/logs/).
+// the configured log directory (default: ~/.stapler-squad/logs/).
 
 func Initialize(daemon bool) {
 	// Use default config
@@ -573,7 +573,7 @@ func InitializeForTests(fileLevel LogLevel, consoleLevel LogLevel) {
 	testLogDir, err := GetTestLogDir()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to get test log directory: %v\n", err)
-		testLogDir = filepath.Join(os.TempDir(), "claude-squad-test")
+		testLogDir = filepath.Join(os.TempDir(), "stapler-squad-test")
 	}
 	cfg.LogsDir = testLogDir
 

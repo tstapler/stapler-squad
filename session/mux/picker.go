@@ -23,8 +23,8 @@ type SessionInfo struct {
 	Attached     bool
 }
 
-// ListClaudeSquadSessionsWithInfo returns sessions with full metadata
-func ListClaudeSquadSessionsWithInfo() ([]SessionInfo, error) {
+// ListStaplerSquadSessionsWithInfo returns sessions with full metadata
+func ListStaplerSquadSessionsWithInfo() ([]SessionInfo, error) {
 	// Format: name|created|activity|path|windows|attached
 	cmd := exec.Command("tmux", "list-sessions", "-F",
 		"#{session_name}|#{session_created}|#{session_activity}|#{session_path}|#{session_windows}|#{session_attached}")
@@ -49,8 +49,8 @@ func ListClaudeSquadSessionsWithInfo() ([]SessionInfo, error) {
 		}
 
 		name := parts[0]
-		// Only include sessions that match our naming convention
-		if !strings.HasPrefix(name, "claudesquad_") {
+		// Only include sessions that match our naming convention (new or legacy prefix)
+		if !strings.HasPrefix(name, "staplersquad_") && !strings.HasPrefix(name, "claudesquad_") {
 			continue
 		}
 
@@ -74,13 +74,13 @@ func ListClaudeSquadSessionsWithInfo() ([]SessionInfo, error) {
 
 // InteractiveSessionPicker displays an interactive picker for session selection
 func InteractiveSessionPicker() (string, error) {
-	sessions, err := ListClaudeSquadSessionsWithInfo()
+	sessions, err := ListStaplerSquadSessionsWithInfo()
 	if err != nil {
 		return "", err
 	}
 
 	if len(sessions) == 0 {
-		return "", fmt.Errorf("no claude-squad tmux sessions found")
+		return "", fmt.Errorf("no stapler-squad tmux sessions found")
 	}
 
 	// Check if we have a terminal
@@ -118,8 +118,8 @@ func InteractiveSessionPicker() (string, error) {
 				nameStyle = "\033[1;32m"
 			}
 
-			// Format the session name (remove claudesquad_ prefix for display)
-			displayName := strings.TrimPrefix(s.Name, "claudesquad_")
+			// Format the session name (remove prefix for display)
+			displayName := strings.TrimPrefix(strings.TrimPrefix(s.Name, "staplersquad_"), "claudesquad_")
 			if len(displayName) > 40 {
 				displayName = displayName[:37] + "..."
 			}
@@ -198,11 +198,11 @@ func abbreviatePath(path string) string {
 		path = "~" + path[len(home):]
 	}
 
-	// Abbreviate .claude-squad paths
-	if strings.Contains(path, ".claude-squad/worktrees/") {
-		parts := strings.Split(path, ".claude-squad/worktrees/")
+	// Abbreviate .stapler-squad paths
+	if strings.Contains(path, ".stapler-squad/worktrees/") {
+		parts := strings.Split(path, ".stapler-squad/worktrees/")
 		if len(parts) > 1 {
-			path = "~/.claude-squad/worktrees/" + filepath.Base(parts[1])
+			path = "~/.stapler-squad/worktrees/" + filepath.Base(parts[1])
 		}
 	}
 

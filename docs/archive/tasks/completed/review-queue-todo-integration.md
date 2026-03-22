@@ -161,7 +161,7 @@ make build
 make test
 
 # Run with queue feature
-./claude-squad
+./stapler-squad
 
 # Toggle queue view (in app)
 Press 'r' key

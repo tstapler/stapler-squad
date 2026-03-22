@@ -1,6 +1,6 @@
 package interfaces
 
-import "claude-squad/session"
+import "github.com/tstapler/stapler-squad/session"
 
 // CommandContext provides context and state to command handlers
 type CommandContext struct {

@@ -2,7 +2,7 @@
 
 ## Epic Overview
 
-**Goal**: Eliminate test infrastructure failures by implementing comprehensive dependency injection and mocking for external command execution in the claude-squad codebase.
+**Goal**: Eliminate test infrastructure failures by implementing comprehensive dependency injection and mocking for external command execution in the stapler-squad codebase.
 
 **Value Proposition**:
 - Resolve critical blocking issues where tests timeout due to real external command execution

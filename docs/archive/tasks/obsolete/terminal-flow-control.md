@@ -1525,8 +1525,8 @@ Parallel Execution Opportunities:
 - [WebSocket Flow Control Best Practices](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API)
 
 ### Internal Resources
-- [Terminal Delta Protocol Documentation](/Users/tylerstapler/IdeaProjects/claude-squad/docs/terminal-delta-protocol.md)
-- [Software Planner Review Notes](/Users/tylerstapler/IdeaProjects/claude-squad/docs/terminal-flow-control-review.md) (from initial analysis)
+- [Terminal Delta Protocol Documentation](/Users/tylerstapler/IdeaProjects/stapler-squad/docs/terminal-delta-protocol.md)
+- [Software Planner Review Notes](/Users/tylerstapler/IdeaProjects/stapler-squad/docs/terminal-flow-control-review.md) (from initial analysis)
 
 ### Related Issues
 - Terminal crashes during large file dumps (production issue)

@@ -278,7 +278,7 @@ When creating new services or updating existing ones:
 
 ```go
 // Import abstractions
-import "claude-squad/app/services"
+import "stapler-squad/app/services"
 
 // Return framework-agnostic results
 func (s *MyService) DoSomething() services.UpdateResult {

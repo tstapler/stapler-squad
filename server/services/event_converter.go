@@ -1,10 +1,10 @@
 package services
 
 import (
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/server/adapters"
-	"claude-squad/server/events"
-	"claude-squad/session"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

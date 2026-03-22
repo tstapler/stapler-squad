@@ -4,14 +4,14 @@
 
 ### Problem Statement
 
-When the Claude Squad server restarts, sessions that were already waiting for approval (or
+When the Stapler Squad server restarts, sessions that were already waiting for approval (or
 in other attention-requiring states) are not immediately detected. The review queue starts
 empty and only populates after the background poller detects idle/attention states, which
 relies on the session having valid timestamps and the poller's 2-second poll cycle completing.
 
 More critically, the **HTTP hook-based approval system** (`ApprovalStore`) is entirely
 in-memory. If a Claude Code session sends a `PermissionRequest` hook and then the
-claude-squad server restarts before the user responds, the pending approval is **lost
+stapler-squad server restarts before the user responds, the pending approval is **lost
 forever**. The HTTP connection breaks, Claude Code receives no response, and the approval
 prompt may remain stuck in the terminal with no way to resolve it from the web UI.
 
@@ -124,7 +124,7 @@ are "display-only" after restart -- they indicate that the session needs attenti
 cannot directly resolve the hook.
 
 **Decision**: Add file-based persistence to `ApprovalStore` using a JSON file in the
-config directory (`~/.claude-squad/pending_approvals.json`). The store will:
+config directory (`~/.stapler-squad/pending_approvals.json`). The store will:
 
 1. Write to disk on every `Create()` call (append-style with file lock)
 2. Remove from disk on `Resolve()`, `Remove()`, and `CleanupExpired()`
@@ -134,7 +134,7 @@ config directory (`~/.claude-squad/pending_approvals.json`). The store will:
    need terminal-based resolution
 
 **Rationale**: File-based persistence is consistent with the existing config/state storage
-pattern in claude-squad. The Ent/SQLite database would be overkill for what is typically
+pattern in stapler-squad. The Ent/SQLite database would be overkill for what is typically
 0-5 records. JSON is human-readable for debugging. The "orphaned" concept cleanly separates
 live hook approvals from historical records.
 
@@ -210,7 +210,7 @@ without disrupting either system's existing behavior.
 
 ### Story 1: Startup Terminal Scan for Pre-Existing States
 
-**As a** user who restarts the claude-squad server,
+**As a** user who restarts the stapler-squad server,
 **I want** sessions with pending approval prompts to appear in the review queue immediately,
 **So that** I do not have to manually check each session to find ones needing attention.
 
@@ -321,7 +321,7 @@ from terminal content containing approval prompts.
 #### Task 2.1: Add persistence methods to `ApprovalStore`
 
 **Scope**: Add `persistToDisk()`, `loadFromDisk()`, `removeFromDisk()` methods.
-Use a JSON file at `~/.claude-squad/pending_approvals.json`.
+Use a JSON file at `~/.stapler-squad/pending_approvals.json`.
 
 **Data Model for persisted approval**:
 ```go
@@ -519,7 +519,7 @@ could experience write conflicts. The Go `os.WriteFile` is not atomic on all fil
 
 ### Potential Bug: Stale Terminal Content After Server Restart [SEVERITY: Low]
 
-**Description**: When claude-squad restarts, the tmux sessions continue running
+**Description**: When stapler-squad restarts, the tmux sessions continue running
 independently. The terminal buffer captured by `inst.Preview()` may contain content
 from before the restart mixed with new content. If the approval prompt was displayed
 before the restart and the session has since moved on, the startup scan might detect
@@ -596,8 +596,8 @@ Stories 1 and 2 can be developed in parallel by different engineers.
 ### Checkpoint 1: After Story 1
 
 **Verification**:
-1. Start claude-squad with a session that has an approval prompt visible
-2. Kill the server process (`pkill -f claude-squad`)
+1. Start stapler-squad with a session that has an approval prompt visible
+2. Kill the server process (`pkill -f stapler-squad`)
 3. Restart the server (`make restart-web`)
 4. Open the web UI -- the session should appear in the review queue within 5 seconds
 5. Check logs for `[StartupScan]` entries showing detected states
@@ -612,7 +612,7 @@ Stories 1 and 2 can be developed in parallel by different engineers.
 **Verification**:
 1. Create a session and trigger a hook approval (use `curl` to POST to
    `/api/hooks/permission-request`)
-2. Verify the approval appears in `~/.claude-squad/pending_approvals.json`
+2. Verify the approval appears in `~/.stapler-squad/pending_approvals.json`
 3. Kill and restart the server
 4. Call `ListPendingApprovals` -- the orphaned approval should appear
 5. Verify the orphaned approval is cleaned up after the configured timeout

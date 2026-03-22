@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 const setupTokenTTL = 24 * time.Hour

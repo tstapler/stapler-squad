@@ -1,8 +1,8 @@
 package session
 
 import (
-	"claude-squad/log"
-	"claude-squad/session/detection"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"fmt"
 	"strings"
 	"time"

@@ -2,9 +2,9 @@ package services
 
 import (
 	"bufio"
-	"claude-squad/config"
-	"claude-squad/log"
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"context"
 	"encoding/json"
 	"fmt"

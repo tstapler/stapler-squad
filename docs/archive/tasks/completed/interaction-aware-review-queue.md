@@ -742,7 +742,7 @@ export function useOptimisticQueue() {
 **Context**:
 - Current UI doesn't clearly show connection state
 - Need indicators for: WebSocket connected/disconnected, loading, empty queue, errors
-- Should match existing Claude Squad design language
+- Should match existing Stapler Squad design language
 
 **Implementation**:
 ```tsx

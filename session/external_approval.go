@@ -1,12 +1,12 @@
 package session
 
 import (
-	"claude-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"context"
 	"sync"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // ExternalApprovalSource identifies the source of an external approval.

@@ -91,7 +91,7 @@ cd domain && go list -f '{{.Imports}}' ./... | grep -E "bubbletea"
 ### Validation
 ```bash
 # Manual smoke test
-./claude-squad
+./stapler-squad
 
 # Full system test
 make restart-web
@@ -105,7 +105,7 @@ make restart-web
 ```bash
 go test ./app/services -run TestSessionManagementService -v
 go test ./app -run TestSessionCreation -v
-./claude-squad  # Test: Create and kill session
+./stapler-squad  # Test: Create and kill session
 ```
 
 ### Checkpoint 3: After Task 1.5
@@ -126,7 +126,7 @@ go test ./app/session -v
 ```bash
 go test ./... -v -race -count=3
 go test -bench=. ./app -benchmem
-./claude-squad  # Full smoke test
+./stapler-squad  # Full smoke test
 ```
 
 ---

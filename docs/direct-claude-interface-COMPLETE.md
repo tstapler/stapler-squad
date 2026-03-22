@@ -4,7 +4,7 @@
 
 **Status**: ✅ **COMPLETE** - All 17 tasks implemented and tested
 
-The Direct Claude Command Interface has been fully implemented, providing a comprehensive system for programmatically controlling Claude instances within claude-squad. All backend components are production-ready with extensive test coverage and excellent performance characteristics.
+The Direct Claude Command Interface has been fully implemented, providing a comprehensive system for programmatically controlling Claude instances within stapler-squad. All backend components are production-ready with extensive test coverage and excellent performance characteristics.
 
 ## Implementation Statistics
 

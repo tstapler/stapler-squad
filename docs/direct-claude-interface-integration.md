@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes how to integrate the Direct Claude Command Interface into the claude-squad TUI application. All backend components are complete and fully tested.
+This document describes how to integrate the Direct Claude Command Interface into the stapler-squad TUI application. All backend components are complete and fully tested.
 
 ## Architecture Summary
 

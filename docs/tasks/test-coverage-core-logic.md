@@ -24,7 +24,7 @@
 
 ## Problem Statement
 
-The two most critical codepaths in claude-squad have zero or near-zero unit test coverage:
+The two most critical codepaths in stapler-squad have zero or near-zero unit test coverage:
 
 1. **`session/instance.go`** (2,077 lines, 70+ methods): The core session entity that owns
    all state transitions (Creating to Running, Running to Paused, Paused to Running,
@@ -700,7 +700,7 @@ to be registered after a stop was requested.
   change to controller lifecycle management)
 - Recommend adding a `controllerStarting` flag in a future PR
 
-**Files affected**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/instance.go` lines 1773-1829
+**Files affected**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/instance.go` lines 1773-1829
 
 ### Potential Bug: Direct Field Access Bypasses Interface [SEVERITY: High]
 
@@ -717,7 +717,7 @@ compiler will force us to fix them to use interface methods.
 **Mitigation**: Task 1.2 explicitly calls out these locations and requires using existing
 interface methods (`HasWorktree()`, `GetDiffStats()`, `GetWorktreePath()`).
 
-**Files affected**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/instance.go`
+**Files affected**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/instance.go`
 
 ### Potential Bug: Jest jsdom Missing WebSocket [SEVERITY: Medium]
 
@@ -731,7 +731,7 @@ with `WebSocket is not defined`.
 - Add `global.WebSocket = jest.fn()` to `jest.setup.js` if needed
 - Module-mock `@/lib/transport/websocket-transport` in terminal stream tests
 
-**Files affected**: `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
+**Files affected**: `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/__tests__/useTerminalStream.test.ts`
 
 ### Potential Bug: Flaky Tests from Timing-Dependent Terminal Output [SEVERITY: Low]
 
@@ -755,7 +755,7 @@ in `web-app/tests/e2e/`. Unit tests focus on connection lifecycle only.
   and routes to test handlers based on method name
 - Check availability before implementing: `npm ls @connectrpc/connect`
 
-**Files affected**: `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/test-utils/mock-transport.ts`
+**Files affected**: `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/test-utils/mock-transport.ts`
 
 ### Potential Bug: Interface Change Breaks Existing Tests [SEVERITY: Low]
 
@@ -770,7 +770,7 @@ they compile after the interface change. The existing tests in `instance_test.go
 `gitManager: GitWorktreeManager{worktree: ...}` which assigns a concrete struct to an
 interface field -- this is valid Go and will continue to work.
 
-**Files affected**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/instance_test.go`
+**Files affected**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/instance_test.go`
 
 ---
 

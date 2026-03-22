@@ -2,7 +2,7 @@
 
 ## Summary
 
-Successfully implemented selective data loading for Claude Squad's SQLite repository, achieving **5.5x faster** queries and **144x less memory** usage for list operations.
+Successfully implemented selective data loading for Stapler Squad's SQLite repository, achieving **5.5x faster** queries and **144x less memory** usage for list operations.
 
 ## Problem Identified
 
@@ -111,7 +111,7 @@ All tests pass:
 --- PASS: TestBuilderMethods (0.00s)
 
 PASS
-ok      claude-squad/session    0.840s
+ok      stapler-squad/session    0.840s
 ```
 
 ## Usage Examples

@@ -186,16 +186,16 @@ go test ./... -timeout=120s -v
 
 ### Expected Output
 ```
-ok      claude-squad/executor    1.234s
-ok      claude-squad/testutil   60.123s
+ok      stapler-squad/executor    1.234s
+ok      stapler-squad/testutil   60.123s
 ```
 
 ### Troubleshooting
 If tests hang:
 1. Check timeout configuration in test runner
 2. Verify tmux is installed: `which tmux`
-3. Check for zombie processes: `ps aux | grep claude-squad`
-4. Review logs in `~/.claude-squad/logs/`
+3. Check for zombie processes: `ps aux | grep stapler-squad`
+4. Review logs in `~/.stapler-squad/logs/`
 
 ## References
 

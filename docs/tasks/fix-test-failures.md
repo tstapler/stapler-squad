@@ -31,7 +31,7 @@ This plan addresses the test failures preventing the current changeset (145 file
 
 ### Task 1.1: Fix TypeScript Type Error
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/terminal/CircularBuffer.test.ts`
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/terminal/CircularBuffer.test.ts`
 
 **Line 283**: Type 'boolean | undefined' is not assignable to type 'boolean'
 
@@ -90,7 +90,7 @@ Since the patterns are intentionally disabled with documented rationale, the tes
 
 ### Task 2.1: Disable Status Detector TestsFailing Tests
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/status_detector_tests_failing_test.go`
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/status_detector_tests_failing_test.go`
 
 **Action**: Add `t.Skip()` to each test function with explanation:
 
@@ -133,8 +133,8 @@ The filtering service tests expect the `List.GetVisibleItems()` method to reflec
 ### Task 3.1: Investigate List Cache Invalidation
 
 **Files to check**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/list.go` - `invalidateVisibleCache()` calls
-- `/Users/tylerstapler/IdeaProjects/claude-squad/app/services/filtering.go` - service implementation
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/list.go` - `invalidateVisibleCache()` calls
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/app/services/filtering.go` - service implementation
 
 **Hypothesis**: The `List.SearchByTitle()` method invalidates cache, but `GetVisibleItems()` may recalculate incorrectly.
 
@@ -162,7 +162,7 @@ func (f *filteringService) UpdateSearchQuery(query string) error {
 
 ### Task 4.1: Fix TestBannerFilter_HasMeaningfulContent
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/tmux/banner_filter_test.go`
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/tmux/banner_filter_test.go`
 
 **Failing Test Cases**:
 - "only banners" - expects `false`, getting `true`
@@ -188,13 +188,13 @@ With 2 lines total and last line excluded, only line 0 is checked. If "14:23 5-J
 
 ### Task 4.2: Fix TestPromptDetection
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/tmux/prompt_detection_test.go`
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/tmux/prompt_detection_test.go`
 
 **Issue**: Tests call `tmux.detectPromptInContent(tt.content)` but this method may not exist or have different behavior.
 
 **Verification**:
 ```bash
-grep -n "detectPromptInContent" /Users/tylerstapler/IdeaProjects/claude-squad/session/tmux/tmux.go
+grep -n "detectPromptInContent" /Users/tylerstapler/IdeaProjects/stapler-squad/session/tmux/tmux.go
 ```
 
 Confirmed the method exists at line 547. Check if:
@@ -211,7 +211,7 @@ Confirmed the method exists at line 547. Check if:
 
 ### Overview
 
-UI tests in `/Users/tylerstapler/IdeaProjects/claude-squad/test/ui/` are failing, likely due to:
+UI tests in `/Users/tylerstapler/IdeaProjects/stapler-squad/test/ui/` are failing, likely due to:
 1. Snapshot drift (UI rendering changed)
 2. Height calculation changes
 3. Overlay behavior modifications
@@ -229,7 +229,7 @@ go test ./test/ui -run TestSessionSetupOverlay -update
 
 ### Task 5.2: Fix Height Responsiveness Tests
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/test/ui/responsive_height_test.go`
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/test/ui/responsive_height_test.go`
 
 **Failing Tests**:
 - `TestSessionSetupHeightResponsiveness` (4 sub-tests)
@@ -241,7 +241,7 @@ go test ./test/ui -run TestSessionSetupOverlay -update
 
 ### Task 5.3: Fix Category Rendering Test
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/test/ui/session_ui_test.go`
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/test/ui/session_ui_test.go`
 
 **Test**: `TestSessionCategoriesRendering`
 
@@ -259,7 +259,7 @@ go test ./test/ui -run TestSessionSetupOverlay -update
 
 ### Task 6.1: Fix TestFilteringWithScrolling
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/ui/list_test.go` (or similar)
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/list_test.go` (or similar)
 
 **Issue**: Edge case in filtering + scrolling interaction.
 
@@ -271,13 +271,13 @@ go test ./test/ui -run TestSessionSetupOverlay -update
 
 ### Task 7.1: Fix TestMigration_EndToEnd
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/migration_test.go` (estimated)
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/migration_test.go` (estimated)
 
 **Likely Issue**: Schema migration or data transformation test failing due to schema changes in the changeset.
 
 ### Task 7.2: Fix TestReviewQueue_GetStatistics (4 tests)
 
-**File**: `/Users/tylerstapler/IdeaProjects/claude-squad/session/review_queue_test.go` (estimated)
+**File**: `/Users/tylerstapler/IdeaProjects/stapler-squad/session/review_queue_test.go` (estimated)
 
 **Likely Issue**: Statistics calculation or queue state assertions.
 

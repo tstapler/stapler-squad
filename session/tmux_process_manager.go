@@ -1,8 +1,8 @@
 package session
 
 import (
-	"claude-squad/log"
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"fmt"
 	"os"
 	"strings"

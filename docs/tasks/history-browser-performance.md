@@ -602,7 +602,7 @@ SessionService
    - Returns shutdown function
 3. Support environment variable configuration:
    - OTEL_EXPORTER_OTLP_ENDPOINT (default: localhost:4317)
-   - OTEL_SERVICE_NAME (default: claude-squad)
+   - OTEL_SERVICE_NAME (default: stapler-squad)
    - OTEL_ENVIRONMENT (default: development)
 
 **Verification:** Telemetry initializes without error, shutdown works
@@ -972,7 +972,7 @@ SessionService
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 
 # Service identification
-OTEL_SERVICE_NAME=claude-squad
+OTEL_SERVICE_NAME=stapler-squad
 OTEL_SERVICE_VERSION=1.0.0
 
 # Environment tagging

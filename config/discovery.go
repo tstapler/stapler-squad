@@ -5,14 +5,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // DiscoveryMode defines how the application discovers Claude instances
 type DiscoveryMode string
 
 const (
-	// DiscoveryManagedOnly discovers only instances created by claude-squad
+	// DiscoveryManagedOnly discovers only instances created by stapler-squad
 	DiscoveryManagedOnly DiscoveryMode = "managed-only"
 
 	// DiscoveryExternalOnly discovers only external Claude instances

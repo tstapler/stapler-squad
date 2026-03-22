@@ -1,6 +1,6 @@
 # Centralized Command & Help Management System
 
-This package provides a unified, context-aware command registry and auto-generated help system for Claude Squad. It replaces the scattered keybinding definitions with a centralized, maintainable approach.
+This package provides a unified, context-aware command registry and auto-generated help system for Stapler Squad. It replaces the scattered keybinding definitions with a centralized, maintainable approach.
 
 ## Architecture Overview
 
@@ -31,9 +31,9 @@ Here's how to integrate the new system with existing code:
 package main
 
 import (
-    "claude-squad/cmd"
-    "claude-squad/cmd/commands" 
-    "claude-squad/cmd/interfaces"
+    "stapler-squad/cmd"
+    "stapler-squad/cmd/commands" 
+    "stapler-squad/cmd/interfaces"
     tea "github.com/charmbracelet/bubbletea"
 )
 

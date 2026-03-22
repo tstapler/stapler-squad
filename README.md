@@ -1,9 +1,9 @@
-# Claude Squad [![CI](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml/badge.svg)](https://github.com/smtg-ai/claude-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/smtg-ai/claude-squad)](https://github.com/smtg-ai/claude-squad/releases/latest)
+# Stapler Squad [![CI](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml/badge.svg)](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/tstapler/stapler-squad)](https://github.com/tstapler/stapler-squad/releases/latest)
 
-[Claude Squad](https://smtg-ai.github.io/claude-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
+[Stapler Squad](https://tstapler.github.io/stapler-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
 
 
-![Claude Squad Screenshot](assets/screenshot.png)
+![Stapler Squad Screenshot](assets/screenshot.png)
 
 ### Highlights
 - Complete tasks in the background (including yolo / auto-accept mode!)
@@ -19,21 +19,21 @@ https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
 
 ### Installation
 
-Both Homebrew and manual installation will install Claude Squad as `cs` on your system.
+Both Homebrew and manual installation will install Stapler Squad as `cs` on your system.
 
 #### Homebrew
 
 ```bash
-brew install claude-squad
-ln -s "$(brew --prefix)/bin/claude-squad" "$(brew --prefix)/bin/cs"
+brew install stapler-squad
+ln -s "$(brew --prefix)/bin/stapler-squad" "$(brew --prefix)/bin/cs"
 ```
 
 #### Manual
 
-Claude Squad can also be installed by running the following command:
+Stapler Squad can also be installed by running the following command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash
 ```
 
 This puts the `cs` binary in `~/.local/bin`.
@@ -41,7 +41,7 @@ This puts the `cs` binary in `~/.local/bin`.
 To use a custom name for the binary:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.sh | bash -s -- --name <your-binary-name>
+curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash -s -- --name <your-binary-name>
 ```
 
 ### Prerequisites
@@ -51,16 +51,16 @@ curl -fsSL https://raw.githubusercontent.com/smtg-ai/claude-squad/main/install.s
 
 ### Configuration
 
-Configuration is stored in `~/.claude-squad/config.json`. You can view the location with `cs debug`.
+Configuration is stored in `~/.stapler-squad/config.json`. You can view the location with `cs debug`.
 
 #### Application Data Directory
 
-Claude Squad stores all application data in `~/.claude-squad/`:
+Stapler Squad stores all application data in `~/.stapler-squad/`:
 
 ```
-~/.claude-squad/
+~/.stapler-squad/
 ├── logs/                    # Application logs (rotated automatically)
-│   ├── claude-squad.log     # Main application log
+│   ├── stapler-squad.log     # Main application log
 │   └── debug.log           # Detailed debug information
 ├── worktrees/              # Git worktrees for isolated sessions
 │   ├── session-name_hash/  # Individual worktree directories
@@ -71,12 +71,12 @@ Claude Squad stores all application data in `~/.claude-squad/`:
 
 #### Logging Configuration
 
-Logs are stored in `~/.claude-squad/logs/` by default and include log rotation features. Configure logging with these options:
+Logs are stored in `~/.stapler-squad/logs/` by default and include log rotation features. Configure logging with these options:
 
 ```json
 {
   "logs_enabled": true,
-  "logs_dir": "",  // Empty for default location (~/.claude-squad/logs/)
+  "logs_dir": "",  // Empty for default location (~/.stapler-squad/logs/)
   "log_max_size": 10,  // Max log file size in MB before rotation
   "log_max_files": 5,  // Max number of rotated files to keep
   "log_max_age": 30,  // Max age in days for rotated files
@@ -88,7 +88,7 @@ Logs are stored in `~/.claude-squad/logs/` by default and include log rotation f
 
 #### Performance Configuration
 
-For process isolation when running multiple claude-squad instances, configure a unique tmux session prefix:
+For process isolation when running multiple stapler-squad instances, configure a unique tmux session prefix:
 
 ```json
 {
@@ -108,11 +108,11 @@ Available Commands:
   debug       Print debug information like config paths
   help        Help about any command
   reset       Reset all stored instances
-  version     Print the version number of claude-squad
+  version     Print the version number of stapler-squad
 
 Flags:
   -y, --autoyes          [experimental] If enabled, all instances will automatically accept prompts for claude code & aider
-  -h, --help             help for claude-squad
+  -h, --help             help for stapler-squad
   -p, --program string   Program to run in new instances (e.g. 'aider --model ollama_chat/gemma3:1b')
 ```
 
@@ -125,7 +125,7 @@ NOTE: The default program is `claude` and we recommend using the latest version.
 
 <br />
 
-<b>Using Claude Squad with other AI assistants:</b>
+<b>Using Stapler Squad with other AI assistants:</b>
 - For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
 - Launch with specific assistants:
    - Codex: `cs -p "codex"`
@@ -163,8 +163,8 @@ The menu at the bottom of the screen shows available commands:
 
 ```bash
 # Clone the repository
-git clone https://github.com/smtg-ai/claude-squad.git
-cd claude-squad
+git clone https://github.com/tstapler/stapler-squad.git
+cd stapler-squad
 
 # Set up development environment (installs all tools)
 make dev-setup
@@ -241,7 +241,7 @@ go test -bench=BenchmarkListRendering -benchmem ./app -timeout=10m &
 
 #### Code Quality Tools
 
-Claude Squad uses comprehensive static analysis for code quality:
+Stapler Squad uses comprehensive static analysis for code quality:
 
 ```bash
 # Install analysis tools
@@ -283,7 +283,7 @@ Install all tools with: `make install-tools`
 - Builder pattern for clean test setup with proper isolation
 
 **Developer Experience:**
-- Enhanced debugging with detailed logs in `~/.claude-squad/logs/`
+- Enhanced debugging with detailed logs in `~/.stapler-squad/logs/`
 - Comprehensive Makefile for streamlined development workflows
 - Static analysis tools (NilAway, Staticcheck, gosec) for code quality
 - Performance benchmarks for navigation and rendering optimization
@@ -295,9 +295,9 @@ Install all tools with: `make install-tools`
 If you get an error like `failed to start new session: timed out waiting for tmux session`:
 
 1. **Update the underlying program**: Ensure you're using the latest version of `claude` or your chosen AI assistant
-2. **Check logs**: Review `~/.claude-squad/logs/claude-squad.log` for detailed error information
+2. **Check logs**: Review `~/.stapler-squad/logs/stapler-squad.log` for detailed error information
 3. **Verify tmux**: Make sure tmux is installed and working (`tmux -V`)
-4. **Check for conflicts**: If running multiple claude-squad instances, configure unique `tmux_session_prefix` values in config.json
+4. **Check for conflicts**: If running multiple stapler-squad instances, configure unique `tmux_session_prefix` values in config.json
 
 **Debugging Session Creation:**
 - Logs show detailed information about tmux commands, git operations, and timing
@@ -316,4 +316,4 @@ If you get an error like `failed to start new session: timed out waiting for tmu
 
 ### Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=smtg-ai/claude-squad&type=Date)](https://www.star-history.com/#smtg-ai/claude-squad&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=tstapler/stapler-squad&type=Date)](https://www.star-history.com/#tstapler/stapler-squad&Date)

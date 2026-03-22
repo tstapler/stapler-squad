@@ -1,7 +1,7 @@
 # Mobile-Friendliness and Lighthouse Improvements
 
 **Date**: 2026-03-17
-**Epic**: Make the Claude Squad web application fully responsive, accessible, and performant across all devices and screen sizes.
+**Epic**: Make the Stapler Squad web application fully responsive, accessible, and performant across all devices and screen sizes.
 
 ---
 
@@ -716,14 +716,14 @@ Quality-of-life improvements and polish items that improve overall usability and
 ```tsx
 // config/page.tsx
 export const metadata = {
-  title: 'Configuration - Claude Squad',
-  description: 'Configure Claude Squad settings including agent programs, tmux prefix, and log levels.',
+  title: 'Configuration - Stapler Squad',
+  description: 'Configure Stapler Squad settings including agent programs, tmux prefix, and log levels.',
 };
 
 // login/page.tsx
 export const metadata = {
-  title: 'Sign In - Claude Squad',
-  description: 'Sign in to Claude Squad to manage your AI agent sessions.',
+  title: 'Sign In - Stapler Squad',
+  description: 'Sign in to Stapler Squad to manage your AI agent sessions.',
 };
 ```
 

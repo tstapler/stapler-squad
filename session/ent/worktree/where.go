@@ -3,7 +3,7 @@
 package worktree
 
 import (
-	"claude-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"

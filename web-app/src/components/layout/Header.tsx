@@ -40,7 +40,7 @@ export function Header() {
       <header className={styles.header}>
       <div className={styles.container}>
         <div className={styles.branding}>
-          <h1 className={styles.title}>Claude Squad</h1>
+          <h1 className={styles.title}>Stapler Squad</h1>
           <span className={styles.subtitle}>Session Manager</span>
         </div>
 

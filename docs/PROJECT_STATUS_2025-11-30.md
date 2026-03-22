@@ -1,4 +1,4 @@
-# Claude Squad - Project Status & Strategic Recommendation
+# Stapler Squad - Project Status & Strategic Recommendation
 **Date**: 2025-12-04 (Updated from 2025-11-30)
 **Analysis Type**: Comprehensive AIC Framework Assessment
 **Analyst**: Project Coordination Specialist
@@ -49,7 +49,7 @@
 **Conclusion**: No fix needed - bug report was based on stale code analysis
 
 **Status**: ✅ RESOLVED (no action required)
-**Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-001-last-acknowledged-persistence.md`
+**Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-001-last-acknowledged-persistence.md`
 
 ---
 
@@ -67,7 +67,7 @@
 **Conclusion**: No fix needed - recommended implementation already exists
 
 **Status**: ✅ RESOLVED (no action required)
-**Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-002-timestamp-refresh-reset.md`
+**Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-002-timestamp-refresh-reset.md`
 
 ---
 
@@ -113,8 +113,8 @@ State file composition:
 **Blocking**: None - ready to implement immediately
 
 **Status**: 🟡 READY TO FIX (P2 priority - high impact performance improvement)
-**Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-003-large-state-file-size.md`
-**Task Doc**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/tasks/bug-003-diff-content-removal.md`
+**Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-003-large-state-file-size.md`
+**Task Doc**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/tasks/bug-003-diff-content-removal.md`
 
 ---
 
@@ -243,21 +243,21 @@ State file composition:
 ### Task: BUG-003 Resolution (3 hours)
 
 **Files to Review**:
-1. `/Users/tylerstapler/IdeaProjects/claude-squad/session/storage.go`
+1. `/Users/tylerstapler/IdeaProjects/stapler-squad/session/storage.go`
    - Lines 70-75: DiffStats struct definition
    - Modify: Add `json:"-"` tag to Content field
 
-2. `/Users/tylerstapler/IdeaProjects/claude-squad/session/instance.go`
+2. `/Users/tylerstapler/IdeaProjects/stapler-squad/session/instance.go`
    - Lines 160-170: ToInstanceData() method
    - Lines 260-270: FromInstanceData() method
    - Verify: Content field not copied
 
-3. `/Users/tylerstapler/IdeaProjects/claude-squad/session/storage_test.go`
+3. `/Users/tylerstapler/IdeaProjects/stapler-squad/session/storage_test.go`
    - Add: TestLoadStateWithDiffContent()
    - Add: TestSaveStateExcludesDiffContent()
    - Add: Performance benchmarks
 
-4. `/Users/tylerstapler/IdeaProjects/claude-squad/server/services/session_service.go`
+4. `/Users/tylerstapler/IdeaProjects/stapler-squad/server/services/session_service.go`
    - Lines 200-230: GetSessionDiff implementation
    - Verify: Generates diffs on-demand correctly
 
@@ -281,7 +281,7 @@ State file composition:
 - ✅ No nil pointer errors
 
 **Task Document**:
-`/Users/tylerstapler/IdeaProjects/claude-squad/docs/tasks/bug-003-diff-content-removal.md`
+`/Users/tylerstapler/IdeaProjects/stapler-squad/docs/tasks/bug-003-diff-content-removal.md`
 
 ---
 

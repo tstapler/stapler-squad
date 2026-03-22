@@ -1,10 +1,10 @@
-# Claude Squad E2E Tests
+# Stapler Squad E2E Tests
 
-End-to-end tests for claude-squad web UI with **isolated test mode** to prevent interference with production data.
+End-to-end tests for stapler-squad web UI with **isolated test mode** to prevent interference with production data.
 
 ## Features
 
-✅ **Isolated Test Environment**: Tests run with dedicated data directory (`/tmp/claude-squad-test-<PID>`)
+✅ **Isolated Test Environment**: Tests run with dedicated data directory (`/tmp/stapler-squad-test-<PID>`)
 ✅ **Automatic Server Management**: Test server starts/stops automatically with isolated state
 ✅ **No Production Data Contamination**: All test data is ephemeral and cleaned up after tests
 ✅ **Separate Port**: Test server runs on port 8544 (production uses 8543)
@@ -42,14 +42,14 @@ npx playwright test smoke.spec.ts
 
 1. **Global Setup** (`global-setup.ts`):
    - Builds Go binary if needed
-   - Starts server with `--test-mode --test-dir /tmp/claude-squad-test-<PID>`
+   - Starts server with `--test-mode --test-dir /tmp/stapler-squad-test-<PID>`
    - Waits for server health check
    - Server runs on port 8544 with isolated data
 
 2. **Test Execution**:
    - All tests use `http://localhost:8544` (configured in `playwright.config.ts`)
-   - Test data stored in `/tmp/claude-squad-test-<PID>`
-   - No interference with production data at `~/.claude-squad`
+   - Test data stored in `/tmp/stapler-squad-test-<PID>`
+   - No interference with production data at `~/.stapler-squad`
 
 3. **Global Teardown** (`global-teardown.ts`):
    - Stops test server gracefully
@@ -62,10 +62,10 @@ You can also run the server manually in test mode:
 
 ```bash
 # From project root
-./claude-squad --web --test-mode --test-dir /tmp/my-test-data
+./stapler-squad --web --test-mode --test-dir /tmp/my-test-data
 
 # Or with custom test directory
-./claude-squad --web --test-mode --test-dir ~/tmp/custom-test-dir
+./stapler-squad --web --test-mode --test-dir ~/tmp/custom-test-dir
 ```
 
 ## Test Coverage
@@ -241,7 +241,7 @@ Average queue update latency: 63ms
 Test directories should be automatically removed. If not:
 ```bash
 # Manual cleanup
-rm -rf /tmp/claude-squad-test-*
+rm -rf /tmp/stapler-squad-test-*
 ```
 
 ## CI/CD Integration
@@ -286,28 +286,28 @@ jobs:
 ### CLI Flags
 
 ```bash
-./claude-squad --help
+./stapler-squad --help
 Flags:
   --test-mode              Run in test mode with isolated data directory
-  --test-dir string        Custom test data directory (defaults to /tmp/claude-squad-test-<PID>)
+  --test-dir string        Custom test data directory (defaults to /tmp/stapler-squad-test-<PID>)
   --web                    Run HTTP server with ConnectRPC API
 ```
 
 ### Environment Variables
 
-The `--test-mode` flag sets `CLAUDE_SQUAD_TEST_DIR` internally. You can also set it manually:
+The `--test-mode` flag sets `STAPLER_SQUAD_TEST_DIR` internally. You can also set it manually:
 
 ```bash
 # Manual test mode (without --test-mode flag)
-export CLAUDE_SQUAD_TEST_DIR=/tmp/my-test-data
-./claude-squad --web
+export STAPLER_SQUAD_TEST_DIR=/tmp/my-test-data
+./stapler-squad --web
 ```
 
 ### Data Isolation Hierarchy
 
 Config directory resolution priority:
-1. **Test directory** (`CLAUDE_SQUAD_TEST_DIR`) - Highest priority
-2. Explicit instance ID (`CLAUDE_SQUAD_INSTANCE`)
+1. **Test directory** (`STAPLER_SQUAD_TEST_DIR`) - Highest priority
+2. Explicit instance ID (`STAPLER_SQUAD_INSTANCE`)
 3. Auto-detected test mode (go test)
 4. Workspace-based isolation (default)
 5. Global shared state (fallback)
@@ -319,4 +319,4 @@ This ensures test data never interferes with production data.
 - [Playwright Documentation](https://playwright.dev/)
 - [Best Practices](https://playwright.dev/docs/best-practices)
 - [Debugging Guide](https://playwright.dev/docs/debug)
-- [Claude Squad Test Mode](../../CLAUDE.md#test-mode)
+- [Stapler Squad Test Mode](../../CLAUDE.md#test-mode)

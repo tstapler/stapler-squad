@@ -154,6 +154,6 @@ Add an LRU cache for frequently accessed sessions.
 Make external discovery async with promises for better performance.
 
 ## References
-- [Instance Type Definition](https://github.com/claude-squad/session/types.go)
-- [ReviewQueuePoller](https://github.com/claude-squad/session/review_queue_poller.go)
-- [ExternalSessionDiscovery](https://github.com/claude-squad/session/external_discovery.go)
+- [Instance Type Definition](https://github.com/stapler-squad/session/types.go)
+- [ReviewQueuePoller](https://github.com/stapler-squad/session/review_queue_poller.go)
+- [ExternalSessionDiscovery](https://github.com/stapler-squad/session/external_discovery.go)

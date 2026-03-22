@@ -75,8 +75,8 @@ func (l *List) IsCategoryExpanded(category string) bool {
 
 ```bash
 # Start fresh TUI with no expansion state
-rm ~/.claude-squad/state.json
-./claude-squad
+rm ~/.stapler-squad/state.json
+./stapler-squad
 
 # Create sessions without categories
 # Press 'n' -> leave category empty -> create session

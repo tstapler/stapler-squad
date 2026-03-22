@@ -1,13 +1,13 @@
 package server
 
 import (
-	"claude-squad/config"
-	"claude-squad/gen/proto/go/session/v1/sessionv1connect"
-	"claude-squad/log"
-	"claude-squad/server/middleware"
-	"claude-squad/server/notifications"
-	"claude-squad/server/services"
-	"claude-squad/server/web"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/server/web"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -201,7 +201,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok","service":"claude-squad-web"}`)) //nolint:errcheck
+		w.Write([]byte(`{"status":"ok","service":"stapler-squad-web"}`)) //nolint:errcheck
 	})
 
 	// Build middleware chain:
@@ -212,7 +212,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	handler := otelhttp.NewHandler(
 		middleware.Logging(middleware.CORS(inner)),
-		"claude-squad-http",
+		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
 	s.httpServer.Handler = handler
@@ -284,7 +284,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 	}
 	handler := otelhttp.NewHandler(
 		middleware.Logging(middleware.CORS(inner)),
-		"claude-squad-remote",
+		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
 

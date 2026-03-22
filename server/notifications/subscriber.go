@@ -1,8 +1,8 @@
 package notifications
 
 import (
-	"claude-squad/log"
-	"claude-squad/server/events"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
 	"context"
 	"fmt"
 	"sync"

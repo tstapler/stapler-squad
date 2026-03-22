@@ -143,18 +143,18 @@ describe('parseGitHubRef', () => {
 
     // Real-world examples
     {
-      name: 'claude-squad repo',
-      input: 'https://github.com/anthropics/claude-squad',
+      name: 'stapler-squad repo',
+      input: 'https://github.com/tstapler/stapler-squad',
       wantType: RefType.Repo,
       wantOwner: 'anthropics',
-      wantRepo: 'claude-squad',
+      wantRepo: 'stapler-squad',
     },
     {
-      name: 'claude-squad PR',
-      input: 'https://github.com/anthropics/claude-squad/pull/42',
+      name: 'stapler-squad PR',
+      input: 'https://github.com/tstapler/stapler-squad/pull/42',
       wantType: RefType.PR,
       wantOwner: 'anthropics',
-      wantRepo: 'claude-squad',
+      wantRepo: 'stapler-squad',
       wantPR: 42,
     },
 

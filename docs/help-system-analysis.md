@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Claude Squad has **two distinct help systems**: an **active interface-based system** (currently used) and a **sophisticated generator system** (implemented but unused). This analysis evaluates both approaches and provides recommendations for the optimal help architecture.
+Stapler Squad has **two distinct help systems**: an **active interface-based system** (currently used) and a **sophisticated generator system** (implemented but unused). This analysis evaluates both approaches and provides recommendations for the optimal help architecture.
 
 ## Current Help System (Active)
 

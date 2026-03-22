@@ -1,13 +1,13 @@
-# Claude Squad Logging System
+# Stapler Squad Logging System
 
-This package implements a configurable logging system for Claude Squad with the following features:
+This package implements a configurable logging system for Stapler Squad with the following features:
 
 ## Key Features
 
-- **Configurable Log Location**: Logs are stored in `~/.claude-squad/logs/` by default, but this can be changed in the config.
+- **Configurable Log Location**: Logs are stored in `~/.stapler-squad/logs/` by default, but this can be changed in the config.
 - **Global and Session-Specific Logs**: Separate log files are created for each session.
 - **Log Rotation**: Logs are automatically rotated based on size and age.
-- **Configuration Options**: Several options can be configured in `~/.claude-squad/config.json`
+- **Configuration Options**: Several options can be configured in `~/.stapler-squad/config.json`
 
 ## Configuration
 
@@ -16,7 +16,7 @@ The following logging options can be configured in `config.json`:
 ```json
 {
   "logs_enabled": true,
-  "logs_dir": "",  // Empty for default location (~/.claude-squad/logs/)
+  "logs_dir": "",  // Empty for default location (~/.stapler-squad/logs/)
   "log_max_size": 10,  // Max log file size in MB before rotation
   "log_max_files": 5,  // Max number of rotated files to keep
   "log_max_age": 30,  // Max age in days for rotated files
@@ -50,7 +50,7 @@ log.LogForSession("session-id", "error", "This is an error message for session %
 
 ## Implementation Details
 
-- Log files are stored in `~/.claude-squad/logs/` by default
+- Log files are stored in `~/.stapler-squad/logs/` by default
 - Global log file is named `claudesquad.log`
 - Session log files are named `session_<session-id>.log`
 - Log rotation is implemented using the lumberjack package

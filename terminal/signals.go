@@ -6,7 +6,7 @@ import (
 	"syscall"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

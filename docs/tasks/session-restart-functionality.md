@@ -2,7 +2,7 @@
 
 ## Epic Overview
 
-**Goal**: Implement comprehensive session restart functionality that automatically recovers crashed/exited Claude Squad sessions while preserving Claude Code conversation continuity through session ID resumption.
+**Goal**: Implement comprehensive session restart functionality that automatically recovers crashed/exited Stapler Squad sessions while preserving Claude Code conversation continuity through session ID resumption.
 
 **Value Proposition**:
 - **Automatic Recovery**: Health checker automatically restarts crashed sessions without user intervention
@@ -279,7 +279,7 @@ package session
 
 import (
 	"bufio"
-	"claude-squad/log"
+	"stapler-squad/log"
 	"regexp"
 	"time"
 )
@@ -985,7 +985,7 @@ export function ConfirmDialog({
 **Files**:
 - `config/config.go` (modify) - Add RestartPolicy configuration
 - `config/config_test.go` (modify) - Configuration tests
-- `.claude-squad/config.json` (example) - Example configuration
+- `.stapler-squad/config.json` (example) - Example configuration
 
 **Context**:
 - Need configurable policies for automatic restart behavior
@@ -1055,7 +1055,7 @@ func LoadConfig(path string) (*Config, error) {
 ```
 
 ```json
-// .claude-squad/config.json - Example configuration
+// .stapler-squad/config.json - Example configuration
 {
   "log_level": "info",
   "restart_policy": {
@@ -1692,7 +1692,7 @@ go test -tags=integration ./session -run TestRestart -v
 
 ## Overview
 
-Claude Squad provides robust session restart capabilities with automatic crash recovery and conversation continuity through Claude session ID preservation.
+Stapler Squad provides robust session restart capabilities with automatic crash recovery and conversation continuity through Claude session ID preservation.
 
 ## Features
 
@@ -1728,7 +1728,7 @@ Health checker automatically restarts crashed sessions based on configurable pol
 
 ## Configuration
 
-Edit `~/.claude-squad/config.json` to customize restart behavior:
+Edit `~/.stapler-squad/config.json` to customize restart behavior:
 
 ```json
 {
@@ -1758,7 +1758,7 @@ Claude Code conversations are preserved across restarts using the `--resume <ses
 
 **How it works:**
 1. When session starts, Claude outputs session ID (UUID format)
-2. Claude Squad extracts and stores session ID
+2. Stapler Squad extracts and stores session ID
 3. On restart, same session ID is passed via `--resume` flag
 4. Claude Code resumes conversation from previous state
 
@@ -1793,7 +1793,7 @@ claude --resume 550e8400-e29b-41d4-a716-446655440000
 
 **Check logs:**
 ```bash
-tail -f ~/.claude-squad/logs/claude-squad.log | grep restart
+tail -f ~/.stapler-squad/logs/stapler-squad.log | grep restart
 ```
 
 **Common causes:**
@@ -1830,7 +1830,7 @@ Health checker tracks restart statistics:
 
 **View metrics (future feature):**
 ```bash
-claude-squad stats --restarts
+stapler-squad stats --restarts
 ```
 
 ### Logs

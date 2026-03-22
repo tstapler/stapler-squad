@@ -3,8 +3,8 @@
 package ent
 
 import (
-	"claude-squad/session/ent/diffstats"
-	"claude-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"context"
 
 	"entgo.io/ent/dialect/sql"

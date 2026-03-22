@@ -1,6 +1,6 @@
 // Package mux provides PTY multiplexing functionality for external Claude sessions.
 // It enables bidirectional terminal streaming from external processes (like Claude Code
-// running in IntelliJ) to claude-squad for monitoring and interaction.
+// running in IntelliJ) to stapler-squad for monitoring and interaction.
 package mux
 
 import (
@@ -56,7 +56,7 @@ type SessionMetadata struct {
 	Env         map[string]string `json:"env"`          // Selected environment variables
 	SocketPath  string            `json:"socket_path"`  // Path to the Unix socket
 	StartTime   int64             `json:"start_time"`   // Unix timestamp when session started
-	TmuxSession string            `json:"tmux_session"` // Tmux session name (for claude-squad adoption)
+	TmuxSession string            `json:"tmux_session"` // Tmux session name (for stapler-squad adoption)
 }
 
 // EncodeMessage encodes a message to wire format.

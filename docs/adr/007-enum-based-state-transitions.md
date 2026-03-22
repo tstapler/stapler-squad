@@ -255,5 +255,5 @@ func (s *State) UnmarshalJSON(data []byte) error {
 
 ---
 **Decision Date**: 2025-01-19
-**Decision Makers**: Claude Code Assistant, claude-squad development team
+**Decision Makers**: Claude Code Assistant, stapler-squad development team
 **Review Date**: After Phase 2 completion

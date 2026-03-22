@@ -7,7 +7,7 @@ Accepted
 Claude-squad is a terminal-based user interface (TUI) application that requires intuitive and efficient keybindings for session management, navigation, and organization. As the application grows in complexity, we need consistent principles to guide keybinding choices and interface design decisions.
 
 ## Decision
-We will use **Vim as the north star** for all keybinding and TUI design decisions in claude-squad.
+We will use **Vim as the north star** for all keybinding and TUI design decisions in stapler-squad.
 
 ### Core Principles:
 

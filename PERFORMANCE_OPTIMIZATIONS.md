@@ -2,7 +2,7 @@
 
 ## Current Performance Issues
 
-Based on comprehensive benchmarking, claude-squad has severe performance issues with session navigation:
+Based on comprehensive benchmarking, stapler-squad has severe performance issues with session navigation:
 
 ### Benchmark Results
 - **Current**: 36-65 seconds per navigation sequence with 50 sessions

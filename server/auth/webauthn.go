@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"net/http"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 )
 
-// Handler wraps the go-webauthn/webauthn library and ties it to claude-squad's
+// Handler wraps the go-webauthn/webauthn library and ties it to stapler-squad's
 // CredentialStore and SessionManager.
 type Handler struct {
 	wa      *webauthn.WebAuthn

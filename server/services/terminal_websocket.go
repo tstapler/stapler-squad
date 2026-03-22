@@ -1,9 +1,9 @@
 package services
 
 import (
-	"claude-squad/log"
-	"claude-squad/server/events"
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"fmt"
 	"io"
 	"net/http"

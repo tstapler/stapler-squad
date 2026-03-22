@@ -7,9 +7,9 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/log"
-	"claude-squad/session/mux"
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/mux"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // ExternalSessionDiscovery discovers and manages external Claude sessions

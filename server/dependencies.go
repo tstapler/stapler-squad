@@ -1,12 +1,12 @@
 package server
 
 import (
-	"claude-squad/log"
-	"claude-squad/server/events"
-	"claude-squad/server/services"
-	"claude-squad/session"
-	"claude-squad/session/detection"
-	"claude-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/services"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/scrollback"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -430,7 +430,7 @@ func BuildRuntimeDeps(svc *ServiceDeps) (*RuntimeDeps, error) {
 
 	// Step 9: ScrollbackManager (independent of above)
 	homeDir, _ := os.UserHomeDir()
-	scrollbackPath := filepath.Join(homeDir, ".claude-squad", "sessions")
+	scrollbackPath := filepath.Join(homeDir, ".stapler-squad", "sessions")
 	scrollbackConfig := scrollback.DefaultScrollbackConfig()
 	scrollbackConfig.StoragePath = scrollbackPath
 	scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)

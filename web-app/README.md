@@ -1,6 +1,6 @@
-# Claude Squad Session Management UI
+# Stapler Squad Session Management UI
 
-This is the web-based session management interface for Claude Squad. It's a separate Next.js application from the main marketing website.
+This is the web-based session management interface for Stapler Squad. It's a separate Next.js application from the main marketing website.
 
 ## Architecture
 

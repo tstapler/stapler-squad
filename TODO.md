@@ -1,4 +1,4 @@
-# Claude Squad - Current Priority Tasks
+# Stapler Squad - Current Priority Tasks
 
 ## Priority Summary
 
@@ -90,28 +90,28 @@
 - **Root Cause**: `GetBorderColor()` accessed `queueView.reviewQueue` without nil checks
 - **Fix Applied**: Added defensive nil guards in `ui/list.go:1031-1044`
 - **Fix Time**: 20 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-004-queueview-nil-pointer.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-004-queueview-nil-pointer.md`
 
 **BUG-005** [HIGH]: Category Expansion Logic Using Wrong Boolean ✅ FIXED
 - **Impact**: Category expansion/collapse feature completely inverted
 - **Root Cause**: Used non-existent `shouldCollapseCategories` instead of `expandCategories`
 - **Fix Applied**: Changed to correct field in `ui/list.go:327, 364`
 - **Fix Time**: 22 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-005-category-expansion-wrong-boolean.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-005-category-expansion-wrong-boolean.md`
 
 **BUG-006** [HIGH]: Category Name Transformation Mismatch ✅ FIXED
 - **Impact**: Category names didn't match between storage and rendering, causing lookup failures
 - **Root Cause**: Manual string replacement instead of using `PathToDisplayCategory()` function
 - **Fix Applied**: Standardized to use `grouping.PathToDisplayCategory()` in 3 locations
 - **Fix Time**: 35 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-006-category-name-transformation-mismatch.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-006-category-name-transformation-mismatch.md`
 
 **BUG-007** [HIGH]: Default Category Expansion Not Forcing True ✅ FIXED
 - **Impact**: Default "All" category appeared collapsed, hiding all sessions
 - **Root Cause**: "All" category treated like user-defined categories (can be collapsed)
 - **Fix Applied**: Forced "All" category to always return `true` in `ui/list.go:364`
 - **Fix Time**: 17 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-007-default-category-expansion-not-forced.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-007-default-category-expansion-not-forced.md`
 
 ### 🔴 CRITICAL Open Bug (Blocks Test Stabilization)
 
@@ -121,7 +121,7 @@
 - **Symptom**: Category shows count "(1)" but no sessions render, visible items returns empty
 - **Investigation Needed**: 2.5-4.5 hours (isolate filtering bug, fix root cause, verify)
 - **Priority**: P1 - Blocks all UI test development
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-008-category-rendering-in-tests.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-008-category-rendering-in-tests.md`
 
 **Investigation Plan**:
 1. Add debug logging to `getVisibleItems()` filtering stages (30 min)
@@ -137,45 +137,45 @@
 - **Tests Affected**: `TestInstance_FieldAccess`, `TestInstance_Lifecycle`, `TestInstance_Serialization`
 - **Investigation Needed**: 4-7 hours (capture output, analyze, fix)
 - **Priority**: P2 - Critical for test suite health
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-009-session-package-test-failures.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-009-session-package-test-failures.md`
 
 **BUG-010** [HIGH]: tmux Banner and Prompt Detection Failures 🔍 Investigating
 - **Impact**: Session startup detection broken, tests timeout waiting for prompts
 - **Root Cause**: Shell banners interfere with prompt detection, timing issues
 - **Investigation Needed**: 4-5 hours (capture output, test shells, fix detection)
 - **Priority**: P2 - Blocks test stabilization, may affect production
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-010-tmux-banner-prompt-detection.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-010-tmux-banner-prompt-detection.md`
 
 **BUG-011** [HIGH]: UI Category Rendering Test Failure 🔍 Investigating
 - **Impact**: UI rendering tests failing, unknown production impact
 - **Tests Affected**: Category header, expand/collapse UI, styling (exact tests TBD)
 - **Investigation Needed**: 3-6 hours (identify failures, update expectations, fix bugs)
 - **Priority**: P2 - Important for test suite health
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-011-ui-category-rendering-test-failure.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-011-ui-category-rendering-test-failure.md`
 
 **BUG-012** [MEDIUM]: Testutil Package Failures 🔍 Investigating
 - **Impact**: Test infrastructure broken, blocks test development
 - **Root Cause**: Outdated mocks, stale fixtures, helper function changes (TBD)
 - **Investigation Needed**: 4-6 hours (identify broken utilities, update mocks/fixtures)
 - **Priority**: P2 - Affects all test development
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-012-testutil-package-failures.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-012-testutil-package-failures.md`
 
 ### Historical Bugs (Already Resolved)
 
 **BUG-001** [HIGH]: LastAcknowledged Field Not Persisted ✅ ALREADY FIXED
 - **Investigation Date**: 2025-11-30
 - **Result**: Field IS properly persisted, comprehensive tests passing
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-001-last-acknowledged-persistence.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-001-last-acknowledged-persistence.md`
 
 **BUG-002** [MEDIUM]: LastMeaningfulOutput Timestamp Reset ✅ ALREADY FIXED
 - **Investigation Date**: 2025-11-30
 - **Result**: Signature-based change detection working correctly
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-002-timestamp-refresh-reset.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-002-timestamp-refresh-reset.md`
 
 **BUG-003** [LOW]: Large State File Size (34MB JSON) ✅ FIXED (2025-12-01)
 - **Fix Date**: 2025-12-01
 - **Result**: 34 MB → ~800 KB (42x reduction) via diff content exclusion
-- **Location**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/fixed/BUG-003-large-state-file-size.md`
+- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-003-large-state-file-size.md`
 
 ### Bug Summary Statistics
 
@@ -190,7 +190,7 @@
 
 ### Bug Documentation Structure
 
-All bugs documented following standardized format in `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/`:
+All bugs documented following standardized format in `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/`:
 - **open/** - Active bugs requiring investigation or fix (BUG-008 through BUG-012)
 - **fixed/** - Resolved bugs with fix details (BUG-001 through BUG-007)
 - **in-progress/** - Bugs currently being worked on (empty)
@@ -315,7 +315,7 @@ Browse and search Claude session history from ~/.claude/history.jsonl:
 **Strategic Value**:
 - **Productivity**: Quick access to past work contexts
 - **Transparency**: Review historical Claude interactions
-- **Workflow Integration**: Seamless Claude Code + Claude Squad integration
+- **Workflow Integration**: Seamless Claude Code + Stapler Squad integration
 
 ### Story 1: TUI Integration - ✅ COMPLETE (8 hours, 5 tasks)
 - [x] ✅ Task 1.1: Add HistoryBrowser State [1h]
@@ -346,7 +346,7 @@ Browse and search Claude session history from ~/.claude/history.jsonl:
 
 ### Overview
 
-Add comprehensive Claude Code configuration management to Claude Squad:
+Add comprehensive Claude Code configuration management to Stapler Squad:
 - View/edit Claude configuration files (.claude/CLAUDE.md, settings.json, agents.md)
 - Syntax highlighting and validation
 - Real-time error feedback
@@ -354,7 +354,7 @@ Add comprehensive Claude Code configuration management to Claude Squad:
 
 **Strategic Value**:
 - **Transparency**: Direct config access eliminates manual file editing
-- **Workflow Integration**: Tight Claude Code + Claude Squad integration
+- **Workflow Integration**: Tight Claude Code + Stapler Squad integration
 - **Developer Experience**: In-app config management
 
 ### ✅ Phase 1 Complete: Backend Config Foundation
@@ -1701,7 +1701,7 @@ Comprehensive UX overhaul of the History Browser page (`/history`) to achieve fe
 
 ### Overview
 
-One-click diagnostic capture from the web UI debug menu. Gathers session metadata, tmux pane content, pending approvals, and recent server logs into a single JSON file at `~/.claude-squad/logs/debug-snapshot-{timestamp}.json`.
+One-click diagnostic capture from the web UI debug menu. Gathers session metadata, tmux pane content, pending approvals, and recent server logs into a single JSON file at `~/.stapler-squad/logs/debug-snapshot-{timestamp}.json`.
 
 **Key Features**:
 - [x] **Story 1**: Backend snapshot collector service (`server/services/debug_snapshot.go`)
@@ -1724,13 +1724,13 @@ One-click diagnostic capture from the web UI debug menu. Gathers session metadat
 ## COMPLETE: Passkey Authentication and Remote Access
 
 **Status**: Implemented (commits 756bd95, 45eda07, af46e5e)
-**Priority**: P1 - Enables secure remote access to claude-squad
+**Priority**: P1 - Enables secure remote access to stapler-squad
 **Epic ID**: EPIC-PASSKEY-001
 **Progress**: 100% (All stories implemented)
 
 ### Overview
 
-Implement WebAuthn/FIDO2 passkey authentication with QR-code-based enrollment to enable secure remote access to the claude-squad web UI from non-local machines (phone, tablet, laptop).
+Implement WebAuthn/FIDO2 passkey authentication with QR-code-based enrollment to enable secure remote access to the stapler-squad web UI from non-local machines (phone, tablet, laptop).
 
 **Key Problems Solved**:
 - **No remote access** - Server binds exclusively to localhost, inaccessible from other devices
@@ -1740,7 +1740,7 @@ Implement WebAuthn/FIDO2 passkey authentication with QR-code-based enrollment to
 **Strategic Value**:
 - **Remote Monitoring**: Check AI agent sessions from phone while away from desk
 - **Approval Workflow**: Respond to permission requests from mobile devices
-- **Multi-Device Access**: Use claude-squad from any device on the network
+- **Multi-Device Access**: Use stapler-squad from any device on the network
 
 ### Implementation Plan (5 Stories, 16 Tasks)
 
@@ -1828,7 +1828,7 @@ Implement WebAuthn/FIDO2 passkey authentication with QR-code-based enrollment to
 **Estimated Effort**: 4-5 weeks (4 stories, 15 atomic tasks)
 
 ### User Value
-Enable users to discover, monitor, and interact with external Claude Code processes running on their machine through the claude-squad web interface, without requiring those sessions to be started by claude-squad.
+Enable users to discover, monitor, and interact with external Claude Code processes running on their machine through the stapler-squad web interface, without requiring those sessions to be started by stapler-squad.
 
 ### Key Features:
 - [ ] **Story 1**: Enhanced external tmux session discovery (1 week)

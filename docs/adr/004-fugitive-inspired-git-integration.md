@@ -9,7 +9,7 @@ Claude-squad currently has basic git handoff commands (commit/push, checkout/pau
 Vim-fugitive is widely regarded as the gold standard for Git integration in terminal-based editors, providing an elegant, interactive workflow that feels native to Vim's modal editing paradigm.
 
 ## Decision
-We will redesign claude-squad's git integration to follow **vim-fugitive's design patterns and workflow philosophy**.
+We will redesign stapler-squad's git integration to follow **vim-fugitive's design patterns and workflow philosophy**.
 
 ### Core Principles:
 
@@ -90,4 +90,4 @@ We will redesign claude-squad's git integration to follow **vim-fugitive's desig
 - Seamless integration with session pause/resume workflow
 - Reduced need for external git commands
 
-This ADR establishes fugitive-style git integration as our target state while maintaining compatibility with claude-squad's session-centric workflow.
+This ADR establishes fugitive-style git integration as our target state while maintaining compatibility with stapler-squad's session-centric workflow.

@@ -118,6 +118,6 @@ Develop algorithm to compute minimal diffs between consecutive states.
 Adjust polling frequency based on terminal activity patterns.
 
 ## References
-- [Terminal State Protocol](https://github.com/claude-squad/proto/terminal_state.proto)
-- [StateApplicator Implementation](https://github.com/claude-squad/web-app/StateApplicator.ts)
+- [Terminal State Protocol](https://github.com/stapler-squad/proto/terminal_state.proto)
+- [StateApplicator Implementation](https://github.com/stapler-squad/web-app/StateApplicator.ts)
 - [tmux capture-pane Documentation](https://man.openbsd.org/tmux#capture-pane)

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/log"
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // PTYStatus represents the current state of a PTY
@@ -223,7 +223,7 @@ func (pd *PTYDiscovery) discoverPTYs() ([]*PTYConnection, error) {
 	squadPTYs := pd.discoverSquadPTYs()
 	connections = append(connections, squadPTYs...)
 
-	// Method 2: Discover orphaned Claude processes in claudesquad_ prefixed sessions
+	// Method 2: Discover orphaned Claude processes in staplersquad_ prefixed sessions
 	orphanedPTYs := pd.discoverOrphanedPTYs()
 	connections = append(connections, orphanedPTYs...)
 
@@ -268,7 +268,7 @@ func (pd *PTYDiscovery) discoverSquadPTYs() []*PTYConnection {
 			LastActivity:    time.Now(),
 			IsManaged:       true,
 			TmuxSocket:      instance.TmuxServerSocket,
-			TmuxSessionName: tmux.ToClaudeSquadTmuxName(instance.Title),
+			TmuxSessionName: tmux.ToStaplerSquadTmuxName(instance.Title),
 			CanAttach:       true,
 			CanDestroy:      true,
 			Owner:           "squad",
@@ -285,7 +285,7 @@ func (pd *PTYDiscovery) getPTYForInstance(instance *Instance) (string, int, erro
 	// Get PTY info directly from tmux - this is cross-platform and more reliable
 	// than trying to resolve file descriptors
 	// Generate tmux session name from instance title using the same sanitization logic
-	tmuxSession := tmux.ToClaudeSquadTmuxName(instance.Title)
+	tmuxSession := tmux.ToStaplerSquadTmuxName(instance.Title)
 	return pd.getPTYInfoFromTmux(tmuxSession)
 }
 
@@ -336,12 +336,12 @@ func (pd *PTYDiscovery) getPIDForPTY(ptyPath string) (int, error) {
 	return pid, nil
 }
 
-// discoverOrphanedPTYs finds unmanaged Claude processes in claude-squad tmux sessions
-// This only discovers Claude processes running in tmux sessions with the claude-squad prefix
+// discoverOrphanedPTYs finds unmanaged Claude processes in stapler-squad tmux sessions
+// This only discovers Claude processes running in tmux sessions with the stapler-squad prefix
 func (pd *PTYDiscovery) discoverOrphanedPTYs() []*PTYConnection {
 	connections := make([]*PTYConnection, 0)
 
-	// Get all tmux sessions with claude-squad prefix
+	// Get all tmux sessions with stapler-squad prefix
 	cmd := exec.Command("tmux", "list-sessions", "-F", "#{session_name}")
 	output, err := cmd.Output()
 	if err != nil {
@@ -353,8 +353,8 @@ func (pd *PTYDiscovery) discoverOrphanedPTYs() []*PTYConnection {
 	for scanner.Scan() {
 		sessionName := strings.TrimSpace(scanner.Text())
 
-		// Only check sessions with claude-squad prefix
-		if !strings.HasPrefix(sessionName, "claudesquad_") {
+		// Only check sessions with stapler-squad prefix (also accept legacy claudesquad_ for migration)
+		if !strings.HasPrefix(sessionName, "staplersquad_") && !strings.HasPrefix(sessionName, "claudesquad_") {
 			continue
 		}
 
@@ -409,7 +409,7 @@ func (pd *PTYDiscovery) isClaudeProcess(pid int) bool {
 }
 
 // discoverExternalClaude discovers Claude instances from non-prefixed tmux sessions
-// This discovers Claude instances NOT managed by claude-squad on the specified tmux server
+// This discovers Claude instances NOT managed by stapler-squad on the specified tmux server
 // socket: tmux server socket name (empty string = default server)
 func (pd *PTYDiscovery) discoverExternalClaude(socket string) []*PTYConnection {
 	connections := make([]*PTYConnection, 0)

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Claude Squad now features best-in-class fuzzy search functionality powered by the `sahilm/fuzzy` library, providing intelligent session discovery similar to VS Code's Ctrl+P, Sublime Text's Goto Anything, or FZF.
+Stapler Squad now features best-in-class fuzzy search functionality powered by the `sahilm/fuzzy` library, providing intelligent session discovery similar to VS Code's Ctrl+P, Sublime Text's Goto Anything, or FZF.
 
 ## Features
 

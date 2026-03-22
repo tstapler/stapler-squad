@@ -22,7 +22,7 @@
 
 ## Problem Description
 
-The application state file (`~/.claude-squad/state.json`) has grown to **34MB** (34,476,797 bytes) without schema enforcement, indexing, or efficient querying. This indicates either:
+The application state file (`~/.stapler-squad/state.json`) has grown to **34MB** (34,476,797 bytes) without schema enforcement, indexing, or efficient querying. This indicates either:
 1. Accumulation of many sessions over time (normal growth)
 2. Inefficient serialization (e.g., embedded terminal content, large diffs)
 3. Lack of archival/cleanup mechanism for old sessions
@@ -33,10 +33,10 @@ While not critical, this represents a **scalability concern** and **code smell**
 
 ```bash
 # Check current state file size
-ls -lh ~/.claude-squad/state.json
+ls -lh ~/.stapler-squad/state.json
 
 # Output (example from user's system)
--rw-r--r--@ 1 user  staff    33M Oct  3 09:19 /Users/user/.claude-squad/state.json
+-rw-r--r--@ 1 user  staff    33M Oct  3 09:19 /Users/user/.stapler-squad/state.json
 ```
 
 **Expected**: State file should be <5MB for typical usage (50-100 sessions)
@@ -77,7 +77,7 @@ ls -lh ~/.claude-squad/state.json
 
 ## Files Affected (3+ files - Context boundary: Analysis only)
 
-1. **~/.claude-squad/state.json** (34MB) - Data file
+1. **~/.stapler-squad/state.json** (34MB) - Data file
 2. **config/state.go** (~550 lines) - Persistence implementation
 3. **session/storage.go** (328 lines) - Storage API
 4. **session/instance.go** (multiple structs) - Serialization logic
@@ -91,25 +91,25 @@ Before determining fix approach, need to **analyze state file contents**:
 1. **Count sessions**:
    ```bash
    # Count top-level instances in JSON array
-   jq '. | length' ~/.claude-squad/state.json
+   jq '. | length' ~/.stapler-squad/state.json
    ```
 
 2. **Analyze average session size**:
    ```bash
    # Calculate average bytes per session
-   jq '. | length as $count | (input_filename | sub(".*/";"") | .[:-5] | tonumber) / $count' ~/.claude-squad/state.json
+   jq '. | length as $count | (input_filename | sub(".*/";"") | .[:-5] | tonumber) / $count' ~/.stapler-squad/state.json
    ```
 
 3. **Identify large fields**:
    ```bash
    # Find largest fields in a sample session
-   jq '.[0] | to_entries | map({key: .key, size: (.value | tostring | length)}) | sort_by(.size) | reverse' ~/.claude-squad/state.json
+   jq '.[0] | to_entries | map({key: .key, size: (.value | tostring | length)}) | sort_by(.size) | reverse' ~/.stapler-squad/state.json
    ```
 
 4. **Check for embedded content**:
    ```bash
    # Look for large ClaudeSession or DiffStats fields
-   jq '[.[] | {title, claude_size: (.claude_session | tostring | length), diff_size: (.diff_stats | tostring | length)}] | sort_by(.claude_size) | reverse | .[0:10]' ~/.claude-squad/state.json
+   jq '[.[] | {title, claude_size: (.claude_session | tostring | length), diff_size: (.diff_stats | tostring | length)}] | sort_by(.claude_size) | reverse | .[0:10]' ~/.stapler-squad/state.json
    ```
 
 ### Expected Findings
@@ -135,7 +135,7 @@ Before determining fix approach, need to **analyze state file contents**:
 
 **Implement cleanup policy**:
 - Archive sessions stopped/paused for >30 days
-- Move to `~/.claude-squad/archive/` directory
+- Move to `~/.stapler-squad/archive/` directory
 - Add "View Archive" feature for historical browsing
 
 **Estimated effort**: 3-4 hours (2 files: storage.go, archive.go)

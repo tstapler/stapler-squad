@@ -1,7 +1,7 @@
 package events
 
 import (
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 	"context"
 	"testing"
 )

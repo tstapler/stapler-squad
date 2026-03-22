@@ -21,7 +21,7 @@ Both features share a common root cause: external sessions lack the ClaudeContro
 ### Current Architecture
 
 ```
-MANAGED SESSIONS (claude-squad created):
+MANAGED SESSIONS (stapler-squad created):
   Instance -> TmuxSession -> ClaudeController -> StatusDetector -> ReviewQueuePoller
                                     |
                                     v
@@ -37,7 +37,7 @@ EXTERNAL SESSIONS (claude-mux created):
 
 ### Issue 1: Hooks Integration Gap
 
-The existing hooks system (`scripts/cs-hook-handler`) works for Claude sessions but has limitations:
+The existing hooks system (`scripts/ssq-hook-handler`) works for Claude sessions but has limitations:
 
 1. **Session ID Detection**: The hook handler tries to detect session ID from:
    - `CS_SESSION_ID` environment variable
@@ -152,7 +152,7 @@ ExternalSessionController:
 
 1. **Developers using IDEs**: Get notifications when Claude needs approval in IntelliJ/VSCode, with one-click return to IDE
 2. **Multi-terminal users**: Review queue shows all sessions needing attention regardless of where they started
-3. **Workflow continuity**: Start Claude anywhere, manage it from claude-squad
+3. **Workflow continuity**: Start Claude anywhere, manage it from stapler-squad
 
 ### Success Metrics
 
@@ -199,7 +199,7 @@ ExternalSessionController:
 - [ ] Works for IntelliJ, VSCode, Terminal, iTerm
 
 **Technical Notes**:
-- Extend `cs-hook-handler` source detection
+- Extend `ssq-hook-handler` source detection
 - Add `FocusWindow` API endpoint (already exists, needs IDE support)
 - Test with common IDE environments
 
@@ -288,7 +288,7 @@ Modify multiplexer to:
 - Add cleanup to `Shutdown()` method
 
 ### Task 1.3: Hook Handler Mux Context Enhancement
-**Files**: `scripts/cs-hook-handler`
+**Files**: `scripts/ssq-hook-handler`
 **Duration**: 2 hours
 **Dependencies**: None
 
@@ -511,8 +511,8 @@ Task 4.2 (E2E Tests)
 ### Before Starting Task 1.x (Hooks)
 
 Read these files:
-- `scripts/cs-hook-handler` - Current hook handling
-- `scripts/cs-hooks-install` - Hook installation
+- `scripts/ssq-hook-handler` - Current hook handling
+- `scripts/ssq-hooks-install` - Hook installation
 - `session/mux/multiplexer.go` - Mux startup flow
 - `docs/claude-hooks-integration.md` - Hook documentation
 

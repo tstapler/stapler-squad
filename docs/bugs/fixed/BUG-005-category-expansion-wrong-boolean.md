@@ -71,7 +71,7 @@ if !l.expandCategories {
 
 ```bash
 # Run TUI application
-./claude-squad
+./stapler-squad
 
 # Try to toggle category expansion
 # Press 'e' key -> Categories don't expand/collapse correctly

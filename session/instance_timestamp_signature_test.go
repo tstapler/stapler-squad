@@ -1,7 +1,7 @@
 package session
 
 import (
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"testing"
 	"time"
 )

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the comprehensive hang prevention infrastructure implemented in Claude Squad's testing harness to prevent and diagnose test hangs.
+This document describes the comprehensive hang prevention infrastructure implemented in Stapler Squad's testing harness to prevent and diagnose test hangs.
 
 ## Problem Statement
 

@@ -1,19 +1,19 @@
 package main
 
 import (
-	cmdbridge "claude-squad/cmd"
-	"claude-squad/config"
-	"claude-squad/daemon"
-	"claude-squad/executor"
-	"claude-squad/log"
-	"claude-squad/profiling"
-	"claude-squad/server"
-	serverauth "claude-squad/server/auth"
-	"claude-squad/server/middleware"
-	"claude-squad/session"
-	"claude-squad/session/git"
-	"claude-squad/session/tmux"
-	"claude-squad/telemetry"
+	cmdbridge "github.com/tstapler/stapler-squad/cmd"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/daemon"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/profiling"
+	"github.com/tstapler/stapler-squad/server"
+	serverauth "github.com/tstapler/stapler-squad/server/auth"
+	"github.com/tstapler/stapler-squad/server/middleware"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/telemetry"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -42,8 +42,8 @@ var (
 	remotePortFlag    int
 	rpIDFlag          string
 	rootCmd           = &cobra.Command{
-		Use:   "claude-squad",
-		Short: "Claude Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
+		Use:   "stapler-squad",
+		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := context.Background()
 
@@ -52,10 +52,10 @@ var (
 				testDir := testDirFlag
 				if testDir == "" {
 					// Use default test directory with PID for isolation
-					testDir = fmt.Sprintf("/tmp/claude-squad-test-%d", os.Getpid())
+					testDir = fmt.Sprintf("/tmp/stapler-squad-test-%d", os.Getpid())
 				}
 				// Set environment variable for config package to use
-				os.Setenv("CLAUDE_SQUAD_TEST_DIR", testDir)
+				os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
 				log.InfoLog.Printf("Test mode enabled: using isolated data directory %s", testDir)
 			}
 
@@ -167,7 +167,7 @@ var (
 			host, _, _ := net.SplitHostPort(address)
 			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
 				log.WarningLog.Printf("WARNING: Binding to non-localhost address %s. Ensure firewall rules are configured.", address)
-				fmt.Fprintf(os.Stderr, "\nWARNING: claude-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
+				fmt.Fprintf(os.Stderr, "\nWARNING: stapler-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
 			}
 
 			// --rp-id flag overrides config
@@ -304,10 +304,10 @@ var (
 
 	versionCmd = &cobra.Command{
 		Use:   "version",
-		Short: "Print the version number of claude-squad",
+		Short: "Print the version number of stapler-squad",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("claude-squad version %s\n", version)
-			fmt.Printf("https://github.com/smtg-ai/claude-squad/releases/tag/v%s\n", version)
+			fmt.Printf("stapler-squad version %s\n", version)
+			fmt.Printf("https://github.com/tstapler/stapler-squad/releases/tag/v%s\n", version)
 		},
 	}
 
@@ -480,7 +480,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&daemonFlag, "daemon", false, "Run a program that loads all sessions"+
 		" and runs autoyes mode on them.")
 	rootCmd.Flags().BoolVar(&testModeFlag, "test-mode", false, "Run in test mode with isolated data directory")
-	rootCmd.Flags().StringVar(&testDirFlag, "test-dir", "", "Custom test data directory (defaults to /tmp/claude-squad-test-<PID>)")
+	rootCmd.Flags().StringVar(&testDirFlag, "test-dir", "", "Custom test data directory (defaults to /tmp/stapler-squad-test-<PID>)")
 
 	// Discovery mode flags
 	rootCmd.Flags().StringVar(&discoveryModeFlag, "discovery-mode", "",
@@ -491,7 +491,7 @@ func init() {
 	// Profiling flags
 	rootCmd.Flags().BoolVar(&profileFlag, "profile", false, "Enable runtime profiling (HTTP server + goroutine monitoring)")
 	rootCmd.Flags().IntVar(&profilePortFlag, "profile-port", 6060, "Port for pprof HTTP server (default: 6060)")
-	rootCmd.Flags().BoolVar(&traceFlag, "trace", false, "Enable execution tracing to /tmp/claude-squad-trace-<PID>.out")
+	rootCmd.Flags().BoolVar(&traceFlag, "trace", false, "Enable execution tracing to /tmp/stapler-squad-trace-<PID>.out")
 
 	// Remote access and passkey flags
 	rootCmd.Flags().StringVar(&listenAddrFlag, "listen", "",

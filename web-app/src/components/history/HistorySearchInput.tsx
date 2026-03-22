@@ -41,7 +41,7 @@ export function HistorySearchInput({
     removeFromHistory,
     clearHistory,
   } = useSearchHistory({
-    storageKey: "claude-squad-history-search",
+    storageKey: "stapler-squad-history-search",
     maxEntries: 15,
   });
 

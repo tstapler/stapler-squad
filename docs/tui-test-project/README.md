@@ -62,7 +62,7 @@ docs/tui-test-project/
 - [TUI-023](./phase-3/TUI-023-phase3-validation.md) - Phase 3 Validation
 
 ## Phase 4: Claude-Squad Integration (Weeks 4-5)
-**Goal**: Provide claude-squad specific testing utilities
+**Goal**: Provide stapler-squad specific testing utilities
 
 ### Claude-Squad Specific Features (Week 4-5)
 - [TUI-024](./phase-4/TUI-024-session-helpers.md) - Session Management Test Helpers
@@ -121,7 +121,7 @@ docs/tui-test-project/
 - **Phase 1**: Basic terminal testing framework functional
 - **Phase 2**: BubbleTea integration complete and tested
 - **Phase 3**: Advanced features enhance testing capabilities
-- **Phase 4**: Full claude-squad integration and E2E testing
+- **Phase 4**: Full stapler-squad integration and E2E testing
 
 ## Notes
 - Tickets are sized using Fibonacci sequence (1, 2, 3, 5, 8)

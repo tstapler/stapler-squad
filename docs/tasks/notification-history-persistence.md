@@ -26,7 +26,7 @@
 
 ## Problem Statement
 
-Currently, notifications in Claude Squad are **ephemeral**. They exist in two disconnected layers:
+Currently, notifications in Stapler Squad are **ephemeral**. They exist in two disconnected layers:
 
 1. **Backend**: Events are published to the `EventBus` and streamed to connected clients via `WatchSessions`. Once delivered, they are gone. If no client is connected, the event is lost.
 2. **Frontend**: The `NotificationContext` accumulates a `notificationHistory` array in React state, but this is purely in-memory. A browser refresh or server restart wipes all history. The `notificationStorage.ts` utility in localStorage only tracks deduplication metadata (session IDs and timestamps for grace periods), not the notification content itself.
@@ -109,8 +109,8 @@ There are **three** distinct notification-producing paths in the backend:
 ### Existing Storage Patterns
 
 The project uses **JSON file storage** with file locking for session state (`config/state.go`):
-- `~/.claude-squad/state.json` for UI state
-- `~/.claude-squad/instances.json` for session instances
+- `~/.stapler-squad/state.json` for UI state
+- `~/.stapler-squad/instances.json` for session instances
 - File locking via `github.com/gofrs/flock`
 - Atomic writes with write-then-rename pattern
 - Instance-level isolation via workspace hashing
@@ -133,7 +133,7 @@ We need to persist notification history to disk. The options are:
 
 ### Decision
 
-**Use a JSON file** (`~/.claude-squad/notifications.json`) with the following rationale:
+**Use a JSON file** (`~/.stapler-squad/notifications.json`) with the following rationale:
 
 **Consistency**: The rest of the application uses JSON files for persistence (`state.json`, `instances.json`). Introducing a different storage backend for one feature creates tooling and maintenance burden.
 
@@ -175,7 +175,7 @@ Notifications come from two distinct backend paths (EventBus notifications and R
 1. Create a `NotificationHistoryStore` that subscribes to the `EventBus`.
 2. Filter for `EventNotification` events and persist them.
 3. For review queue events: add a new `EventNotification` emission in `ReactiveQueueManager.OnItemAdded()` so that review queue additions are also captured by the EventBus subscriber. This unifies the notification path.
-4. The `NotificationHistoryStore` writes to `~/.claude-squad/notifications.json`.
+4. The `NotificationHistoryStore` writes to `~/.stapler-squad/notifications.json`.
 
 This means **all notifications go through the EventBus**, which becomes the single capture point. The store persists them regardless of whether any web client is connected.
 
@@ -213,7 +213,7 @@ This means **all notifications go through the EventBus**, which becomes the sing
   |                    |        |      |                         |
   |            Read    |  Write |   Mark Read                   |
   |                    v        v      v                         |
-  |           ~/.claude-squad/notifications.json                |
+  |           ~/.stapler-squad/notifications.json                |
   |                                                              |
   |  [ReactiveQueueManager] ---> EventBus (new Publish call)    |
   |                                                              |
@@ -343,11 +343,11 @@ message ClearNotificationHistoryResponse {
 
 ## Story 1: Backend Notification Store
 
-**As** the Claude Squad server, **I want** to persist notification events to a JSON file with rolling retention, **so that** notification history survives server restarts and is available to all clients.
+**As** the Stapler Squad server, **I want** to persist notification events to a JSON file with rolling retention, **so that** notification history survives server restarts and is available to all clients.
 
 ### Acceptance Criteria (Given-When-Then)
 
-- **Given** the server is running, **when** a notification event is published to the EventBus, **then** it is appended to `~/.claude-squad/notifications.json` within 1 second.
+- **Given** the server is running, **when** a notification event is published to the EventBus, **then** it is appended to `~/.stapler-squad/notifications.json` within 1 second.
 - **Given** the notifications file has 500 entries, **when** a new notification arrives, **then** the oldest entry is removed before the new one is appended.
 - **Given** the notifications file has entries older than 7 days, **when** a new notification arrives, **then** expired entries are pruned.
 - **Given** the notifications file does not exist, **when** the first notification arrives, **then** the file is created with proper permissions (0644).
@@ -591,7 +591,7 @@ Update the panel to:
 
 ### Bug Risk 6: Workspace Isolation Mismatch [SEVERITY: Low]
 
-**Description**: If the user runs multiple Claude Squad instances in different workspaces, each instance has its own state directory (`~/.claude-squad/workspaces/{hash}/`). Notifications from one workspace would not appear in another workspace's notification history.
+**Description**: If the user runs multiple Stapler Squad instances in different workspaces, each instance has its own state directory (`~/.stapler-squad/workspaces/{hash}/`). Notifications from one workspace would not appear in another workspace's notification history.
 
 **Mitigation**:
 - This is actually correct behavior -- workspace isolation is by design. Each workspace has its own sessions, so notifications should be scoped to that workspace.
@@ -690,7 +690,7 @@ Task 2.1: Review Queue EventBus    Task 2.2: Wire Store into Server
 
 ### Integration Checkpoints
 
-**Checkpoint 1** (after Phase 1): Verify notifications are being written to `~/.claude-squad/notifications.json`. Trigger an approval request or SendNotification and confirm the file is populated. Inspect with `cat ~/.claude-squad/notifications.json | jq .`.
+**Checkpoint 1** (after Phase 1): Verify notifications are being written to `~/.stapler-squad/notifications.json`. Trigger an approval request or SendNotification and confirm the file is populated. Inspect with `cat ~/.stapler-squad/notifications.json | jq .`.
 
 **Checkpoint 2** (after Phase 2): Use `grpcurl` or the ConnectRPC web UI to call `GetNotificationHistory` and verify it returns persisted records. Mark one as read and re-fetch to confirm.
 

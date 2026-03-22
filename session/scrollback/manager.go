@@ -13,7 +13,7 @@ type ScrollbackConfig struct {
 	FlushInterval    time.Duration // How often to flush to disk (default: 5s)
 	CompressionType  string        // "none", "zstd", or "gzip" (default: "zstd")
 	CompressionLevel int           // Compression level (zstd: 1-19, default: 3)
-	StoragePath      string        // Base path for storage (default: ~/.claude-squad/sessions)
+	StoragePath      string        // Base path for storage (default: ~/.stapler-squad/sessions)
 }
 
 // DefaultScrollbackConfig returns the default configuration.

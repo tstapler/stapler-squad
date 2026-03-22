@@ -110,7 +110,7 @@ go test ./session -run TestDiffStatsSerializationExcludesContent
 go test ./session -run TestBackwardCompatibilityWithDiffContent
 
 # Manual verification
-# 1. Start claude-squad (loads existing 34MB state.json)
+# 1. Start stapler-squad (loads existing 34MB state.json)
 # 2. Verify no errors during load
 # 3. Save state file
 # 4. Check new state file size: should be ~800 KB
@@ -148,11 +148,11 @@ go test ./session -run TestBackwardCompatibilityWithDiffContent
 **Verification Steps**:
 ```bash
 # 1. Remove content from one session's diff_stats in state.json
-jq '.instances[0].diff_stats.content = ""' ~/.claude-squad/state.json > temp.json
-mv temp.json ~/.claude-squad/state.json
+jq '.instances[0].diff_stats.content = ""' ~/.stapler-squad/state.json > temp.json
+mv temp.json ~/.stapler-squad/state.json
 
-# 2. Start claude-squad
-./claude-squad
+# 2. Start stapler-squad
+./stapler-squad
 
 # 3. Open session detail in Web UI
 # Navigate to http://localhost:8543, click session, view Diff tab
@@ -387,7 +387,7 @@ go test -bench=BenchmarkSaveState -benchmem ./session
 
 1. **Backup existing state file**:
    ```bash
-   cp ~/.claude-squad/state.json ~/.claude-squad/state.json.backup.$(date +%Y%m%d)
+   cp ~/.stapler-squad/state.json ~/.stapler-squad/state.json.backup.$(date +%Y%m%d)
    ```
 
 2. **Deploy changes**:
@@ -397,7 +397,7 @@ go test -bench=BenchmarkSaveState -benchmem ./session
 
 3. **Test with existing state file**:
    ```bash
-   ./claude-squad
+   ./stapler-squad
    # Verify: Loads successfully, no errors
    ```
 
@@ -409,13 +409,13 @@ go test -bench=BenchmarkSaveState -benchmem ./session
 
 5. **Verify file size reduction**:
    ```bash
-   ls -lh ~/.claude-squad/state.json
+   ls -lh ~/.stapler-squad/state.json
    # Expected: ~800 KB (down from 34 MB)
    ```
 
 6. **Monitor for issues**:
    ```bash
-   tail -f ~/.claude-squad/logs/claude-squad.log
+   tail -f ~/.stapler-squad/logs/stapler-squad.log
    # Watch for errors related to diff generation or state loading
    ```
 
@@ -423,10 +423,10 @@ go test -bench=BenchmarkSaveState -benchmem ./session
 
 If issues arise:
 
-1. **Stop application**: `pkill -9 -f claude-squad`
-2. **Restore backup**: `cp ~/.claude-squad/state.json.backup.* ~/.claude-squad/state.json`
+1. **Stop application**: `pkill -9 -f stapler-squad`
+2. **Restore backup**: `cp ~/.stapler-squad/state.json.backup.* ~/.stapler-squad/state.json`
 3. **Revert to previous binary**: `git checkout HEAD~1 && go build .`
-4. **Restart application**: `./claude-squad`
+4. **Restart application**: `./stapler-squad`
 
 ---
 
@@ -476,7 +476,7 @@ If issues arise:
 
 ## Related Documentation
 
-- **Bug Report**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/bugs/open/BUG-003-large-state-file-size.md`
+- **Bug Report**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-003-large-state-file-size.md`
 - **SQLite Migration Plan**: `docs/tasks/repository-pattern-sqlite-migration.md` (deferred to P3)
 - **Persistence Architecture**: `session/storage.go` (current implementation)
 

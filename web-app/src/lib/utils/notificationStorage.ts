@@ -19,7 +19,7 @@ export interface NotificationRecord {
   acknowledgedAt?: number;
 }
 
-const STORAGE_KEY = "claude-squad-notifications";
+const STORAGE_KEY = "stapler-squad-notifications";
 
 /** Time-to-live for notification records (1 hour) */
 const NOTIFICATION_TTL_MS = 60 * 60 * 1000;

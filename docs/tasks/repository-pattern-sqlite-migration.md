@@ -79,7 +79,7 @@ defer s.lockFile.Unlock()
 **2. Multi-Window Support**
 ```go
 // SaveInstances merges with existing instances from disk
-// This allows multiple claude-squad processes to coexist
+// This allows multiple stapler-squad processes to coexist
 existingInstances, err := s.LoadInstances()
 // ... merge logic ...
 mergedInstances := append(ours, theirs...)
@@ -277,7 +277,7 @@ If SQLite migration is prioritized in the future, recommend **incremental approa
 
 ### Phase 1: Add Repository Layer (No Breaking Changes)
 - Implement SQLite repository alongside JSON storage
-- Add feature flag: `CLAUDE_SQUAD_STORAGE_BACKEND=json|sqlite`
+- Add feature flag: `STAPLER_SQUAD_STORAGE_BACKEND=json|sqlite`
 - Default to JSON, opt-in to SQLite
 - Allows testing in production without risk
 

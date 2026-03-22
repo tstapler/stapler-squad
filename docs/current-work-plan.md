@@ -1,4 +1,4 @@
-# Claude Squad: Current Work Plan
+# Stapler Squad: Current Work Plan
 
 ## Active Implementation: Contextual Git Repository Discovery
 

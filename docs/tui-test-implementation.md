@@ -2,13 +2,13 @@
 
 ## Overview
 
-This document outlines the complete implementation plan for a Go-based TUI testing framework, inspired by Microsoft's TUI-Test library and specifically designed to integrate with claude-squad's BubbleTea architecture.
+This document outlines the complete implementation plan for a Go-based TUI testing framework, inspired by Microsoft's TUI-Test library and specifically designed to integrate with stapler-squad's BubbleTea architecture.
 
 ## Project Goals
 
 - Provide comprehensive end-to-end testing for TUI applications
 - Support both isolated component testing and full application testing
-- Integrate seamlessly with claude-squad's existing test infrastructure
+- Integrate seamlessly with stapler-squad's existing test infrastructure
 - Create a reusable framework for the broader Go/BubbleTea ecosystem
 
 ## Architecture Overview
@@ -59,7 +59,7 @@ This document outlines the complete implementation plan for a Go-based TUI testi
 - Performance testing utilities
 
 ### Phase 4: Claude-Squad Integration (Weeks 4-5)
-**Goal**: Provide claude-squad specific testing utilities
+**Goal**: Provide stapler-squad specific testing utilities
 
 **Deliverables**:
 - Session management test helpers
@@ -174,13 +174,13 @@ type ModelTester struct {
 #### Basic Test
 ```go
 func TestClaudeSquadBasicFlow(t *testing.T) {
-    suite := tuitest.NewSuite("Claude Squad E2E")
+    suite := tuitest.NewSuite("Stapler Squad E2E")
 
     suite.Test("create session", func(ctx *tuitest.TestContext) error {
         terminal := ctx.Terminal()
 
         // Start application
-        err := terminal.Start("./claude-squad")
+        err := terminal.Start("./stapler-squad")
         if err != nil {
             return err
         }
@@ -221,7 +221,7 @@ func TestListComponent(t *testing.T) {
 
 ### Existing Test Enhancement
 
-The framework will enhance claude-squad's existing test infrastructure:
+The framework will enhance stapler-squad's existing test infrastructure:
 - Extend `test/ui/testrender.go` with TUI-specific capabilities
 - Add snapshot testing to component tests
 - Provide utilities for integration testing
@@ -256,7 +256,7 @@ The framework will enhance claude-squad's existing test infrastructure:
 
 ### Technical Risks
 1. **ANSI Parsing Complexity**: Mitigate with incremental implementation and extensive testing
-2. **BubbleTea Integration**: Work closely with existing patterns in claude-squad
+2. **BubbleTea Integration**: Work closely with existing patterns in stapler-squad
 3. **Cross-platform Compatibility**: Test on multiple platforms early
 
 ### Project Risks
@@ -269,7 +269,7 @@ The framework will enhance claude-squad's existing test infrastructure:
 1. Create project structure and initial files
 2. Implement Phase 1 core infrastructure
 3. Set up CI/CD pipeline
-4. Begin integration with claude-squad tests
+4. Begin integration with stapler-squad tests
 5. Gather feedback and iterate
 
 ## Dependencies
@@ -280,7 +280,7 @@ The framework will enhance claude-squad's existing test infrastructure:
 - `github.com/stretchr/testify` - Assertions (optional)
 
 ### Internal Dependencies
-- Integration with claude-squad's existing test infrastructure
+- Integration with stapler-squad's existing test infrastructure
 - Compatibility with current build and CI systems
 - Documentation alignment with project standards
 

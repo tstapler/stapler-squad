@@ -45,7 +45,7 @@ func testExistingSessionReuse(t *testing.T) {
 			// Handle DoesSessionExist() which uses list-sessions
 			if strings.Contains(cmdStr, "list-sessions") && strings.Contains(cmdStr, "#{session_name}") {
 				// Return the session name to indicate it exists
-				return []byte("claudesquad_existing-session"), nil
+				return []byte("staplersquad_existing-session"), nil
 			}
 			return []byte("output"), nil
 		},
@@ -91,7 +91,7 @@ func testExistingSessionWithCleanup(t *testing.T) {
 			// Handle DoesSessionExist() which uses list-sessions
 			if strings.Contains(cmdStr, "list-sessions") && strings.Contains(cmdStr, "#{session_name}") {
 				// Return the session name to indicate it exists
-				return []byte("claudesquad_existing-with-cleanup"), nil
+				return []byte("staplersquad_existing-with-cleanup"), nil
 			}
 			return []byte("output"), nil
 		},
@@ -135,7 +135,7 @@ func testNewSessionCreation(t *testing.T) {
 			if strings.Contains(cmdStr, "list-sessions") && strings.Contains(cmdStr, "#{session_name}") {
 				if sessionCreated {
 					// Session exists after creation
-					return []byte("claudesquad_new-session"), nil
+					return []byte("staplersquad_new-session"), nil
 				}
 				// No session initially
 				return nil, fmt.Errorf("no server running")
@@ -161,7 +161,7 @@ func TestSessionResumptionBehaviorComparison(t *testing.T) {
 	t.Run("OLD_Behavior_Would_Fail", func(t *testing.T) {
 		// This test documents what the OLD behavior would have been
 		// Before the fix: session.Start() would return an error like:
-		// "tmux session already exists: claudesquad_test-session"
+		// "tmux session already exists: staplersquad_test-session"
 
 		t.Logf("OLD behavior: session.Start() would fail with 'tmux session already exists' error")
 		t.Logf("This would cause the entire session creation to fail, leading to:")
@@ -187,7 +187,7 @@ func TestSessionResumptionBehaviorComparison(t *testing.T) {
 				// Handle DoesSessionExist() which uses list-sessions
 				if strings.Contains(cmdStr, "list-sessions") && strings.Contains(cmdStr, "#{session_name}") {
 					// Return the session name to indicate it exists
-					return []byte("claudesquad_resumption-test"), nil
+					return []byte("staplersquad_resumption-test"), nil
 				}
 				return []byte("output"), nil
 			},
@@ -228,7 +228,7 @@ func TestSessionResumptionIntegration(t *testing.T) {
 			if strings.Contains(cmdStr, "list-sessions") && strings.Contains(cmdStr, "#{session_name}") {
 				listSessionsCalled++
 				// Return the session name to indicate it exists
-				return []byte("claudesquad_postgres-connection-pooling"), nil
+				return []byte("staplersquad_postgres-connection-pooling"), nil
 			}
 			return []byte("output"), nil
 		},

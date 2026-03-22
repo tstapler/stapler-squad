@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 #
-# cs-hooks-install - Install Claude Code hooks for Claude Squad notifications
+# ssq-hooks-install - Install Claude Code hooks for Stapler Squad notifications
 #
 # This script installs hook configurations into your Claude Code settings
 # to enable automatic notifications when Claude needs attention.
 #
 # Usage:
-#   cs-hooks-install [options]
+#   ssq-hooks-install [options]
 #
 # Options:
 #   --global        Install to ~/.claude/settings.json (default: ask)
 #   --project       Install to .claude/settings.json in current directory
-#   --uninstall     Remove Claude Squad hooks from settings
+#   --uninstall     Remove Stapler Squad hooks from settings
 #   --dry-run       Show what would be done without making changes
 #   --help, -h      Show this help message
 #
 # Examples:
-#   cs-hooks-install                  # Interactive installation
-#   cs-hooks-install --global         # Install globally
-#   cs-hooks-install --project        # Install for current project
-#   cs-hooks-install --uninstall      # Remove hooks
+#   ssq-hooks-install                  # Interactive installation
+#   ssq-hooks-install --global         # Install globally
+#   ssq-hooks-install --project        # Install for current project
+#   ssq-hooks-install --uninstall      # Remove hooks
 #
 
 set -euo pipefail
@@ -33,7 +33,7 @@ NC='\033[0m' # No Color
 
 # Find script directory for hook handler path
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOOK_HANDLER="$SCRIPT_DIR/cs-hook-handler"
+HOOK_HANDLER="$SCRIPT_DIR/ssq-hook-handler"
 
 # Default options
 SCOPE=""
@@ -112,7 +112,7 @@ get_settings_path() {
     else
         # Interactive selection - display menu to stderr so it's visible
         echo "" >&2
-        echo "Where would you like to install Claude Squad hooks?" >&2
+        echo "Where would you like to install Stapler Squad hooks?" >&2
         echo "" >&2
         echo "  1) Global (~/.claude/settings.json)" >&2
         echo "     Applies to all Claude Code sessions" >&2
@@ -182,7 +182,7 @@ uninstall_hooks() {
         exit 0
     fi
     
-    info "Removing Claude Squad hooks from: $SETTINGS_PATH"
+    info "Removing Stapler Squad hooks from: $SETTINGS_PATH"
     
     if [[ "$DRY_RUN" == "true" ]]; then
         echo "Would remove hooks configuration containing: $HOOK_HANDLER"
@@ -217,12 +217,12 @@ uninstall_hooks() {
         if .hooks == null then del(.hooks) else . end
     ' "$SETTINGS_PATH" > "$TEMP_FILE" && mv "$TEMP_FILE" "$SETTINGS_PATH"
     
-    success "Removed Claude Squad hooks"
+    success "Removed Stapler Squad hooks"
 }
 
 # Install hooks
 install_hooks() {
-    info "Installing Claude Squad hooks to: $SETTINGS_PATH"
+    info "Installing Stapler Squad hooks to: $SETTINGS_PATH"
     
     # Check if hook handler is accessible from the target location
     if [[ "$SCOPE" == "global" ]] && [[ "$HOOK_HANDLER" == *"IdeaProjects"* ]]; then
@@ -256,7 +256,7 @@ install_hooks() {
         # Check if hooks already exist
         EXISTING_HOOKS=$(jq '.hooks // {}' "$SETTINGS_PATH")
         if echo "$EXISTING_HOOKS" | grep -q "$HOOK_HANDLER"; then
-            warn "Claude Squad hooks already installed. Use --uninstall first to reinstall."
+            warn "Stapler Squad hooks already installed. Use --uninstall first to reinstall."
             exit 0
         fi
         

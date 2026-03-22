@@ -185,7 +185,7 @@ func TestExpectErrorHandling(t *testing.T) {
 	})
 }
 
-// BuildTestBinary builds the claude-squad binary for testing
+// BuildTestBinary builds the stapler-squad binary for testing
 func BuildTestBinary(t *testing.T) {
 	t.Helper()
 

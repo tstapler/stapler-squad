@@ -23,10 +23,10 @@ The `LastAcknowledged` field exists in the `Instance` struct but is **NOT includ
 
 ## Reproduction
 
-1. Start claude-squad with active sessions
+1. Start stapler-squad with active sessions
 2. Dismiss a session from review queue (sets `LastAcknowledged` timestamp)
 3. Verify session is removed from review queue
-4. Restart claude-squad application
+4. Restart stapler-squad application
 5. **BUG**: Dismissed session immediately re-appears in review queue
 6. `LastAcknowledged` timestamp is reset to zero value
 
@@ -186,10 +186,10 @@ func TestReviewQueueDismissPersistence(t *testing.T) {
 ```
 
 ### Manual Verification
-1. Start claude-squad with active sessions
+1. Start stapler-squad with active sessions
 2. Dismiss a session from review queue (press `d` key)
 3. Verify session disappears from review queue
-4. Stop and restart claude-squad
+4. Stop and restart stapler-squad
 5. **Expected**: Dismissed session does NOT re-appear in review queue
 6. Wait 4+ hours (or adjust `ReAckThreshold` in tests)
 7. **Expected**: Session re-appears after snooze period expires

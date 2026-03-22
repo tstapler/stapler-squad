@@ -60,7 +60,7 @@
    - **Expected**: Model updates correctly and renders new state
 
 3. **Test Case**: Complex model interaction
-   - **Steps**: Test with claude-squad List component
+   - **Steps**: Test with stapler-squad List component
    - **Expected**: All list operations work correctly in test environment
 
 ---

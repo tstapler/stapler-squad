@@ -3,7 +3,7 @@
 **Date**: 2026-02-26
 **Updated**: 2026-03-13
 **Status**: In Progress — Stories 1-4 substantially complete; Stories 5-6 pending
-**Scope**: Enable users to approve/reject Claude Code tool use requests from the claude-squad web UI
+**Scope**: Enable users to approve/reject Claude Code tool use requests from the stapler-squad web UI
 
 ## Implementation Progress
 
@@ -81,7 +81,7 @@ InjectHookConfig is called in CreateSession, but its integration with worktree s
 
 ## Problem Statement
 
-Claude Squad currently **detects** when Claude Code needs approval (via terminal output
+Stapler Squad currently **detects** when Claude Code needs approval (via terminal output
 pattern matching in `session/detection/`) and **notifies** the user through the review
 queue and toast notifications. However, the user cannot **respond** to these approval
 requests from the web UI. The only options are "Focus Window", "View Session", and
@@ -153,7 +153,7 @@ Hooks can be defined in:
 - `.claude/settings.json` (per-project, committable)
 - `.claude/settings.local.json` (per-project, gitignored)
 
-For claude-squad managed sessions, the hook configuration should be injected into the
+For stapler-squad managed sessions, the hook configuration should be injected into the
 session's settings when the session is created.
 
 ### JSON Protocol Details
@@ -216,8 +216,8 @@ The existing system detects approval needs but cannot respond to them:
    detects `ReasonApprovalPending`, and adds items to the review queue.
 3. **Notification**: `web-app/src/components/ui/NotificationToast.tsx` shows toast with
    "Focus Window", "View Session", "Dismiss" buttons.
-4. **Hook Handler**: `scripts/cs-hook-handler` processes `PermissionRequest` hooks
-   but currently only sends a notification via `cs-notify` -- it does NOT block or
+4. **Hook Handler**: `scripts/ssq-hook-handler` processes `PermissionRequest` hooks
+   but currently only sends a notification via `ssq-notify` -- it does NOT block or
    return a decision.
 
 ### Existing Hook Infrastructure
@@ -226,7 +226,7 @@ The existing system detects approval needs but cannot respond to them:
 
 - Generates JSON hooks config with `PermissionRequest` handler.
 - Sets up environment variables (`CS_MUX_SOCKET_PATH`, `CS_MUX_TMUX_SESSION`, etc.).
-- Calls `scripts/cs-hook-handler permission` which just sends a notification.
+- Calls `scripts/ssq-hook-handler permission` which just sends a notification.
 
 ### Terminal Input Path
 
@@ -256,16 +256,16 @@ includes `APPROVAL_NEEDED`. The `ReviewItem` includes `AttentionReason.APPROVAL_
 
 **Context**: We need a mechanism where:
 1. Claude Code fires a `PermissionRequest` hook and blocks waiting for a response.
-2. The hook communicates the pending request to claude-squad's server.
+2. The hook communicates the pending request to stapler-squad's server.
 3. The web UI displays the request and collects the user's decision.
 4. The decision flows back to the hook, which returns it to Claude Code.
 
 **Options Considered**:
 
-### Option A: HTTP Hook Pointing at Claude Squad Server
+### Option A: HTTP Hook Pointing at Stapler Squad Server
 
 Configure Claude Code with an HTTP hook (`type: "http"`) that POSTs directly to the
-claude-squad server. The server holds the HTTP connection open (long-poll) until the
+stapler-squad server. The server holds the HTTP connection open (long-poll) until the
 user responds via the web UI, then returns the decision as the HTTP response.
 
 Pros:
@@ -300,7 +300,7 @@ Cons:
 
 ### Option C: HTTP Hook with Extended Timeout (Selected)
 
-Use an HTTP hook pointing at a dedicated endpoint on the claude-squad server. Set the
+Use an HTTP hook pointing at a dedicated endpoint on the stapler-squad server. Set the
 timeout to 300 seconds (5 minutes). The server holds the connection open until the
 user responds. If timeout occurs, the hook returns a non-blocking error, and Claude
 Code falls back to showing the permission dialog in the terminal.
@@ -329,7 +329,7 @@ the feature degrades gracefully -- it never blocks Claude Code permanently.
 and how approval requests are tracked.
 
 **Decision**: Implement a dedicated `/api/hooks/permission-request` endpoint on the
-claude-squad server that:
+stapler-squad server that:
 
 1. Receives the `PermissionRequest` JSON from Claude Code's HTTP hook.
 2. Creates a `PendingApproval` record in an in-memory store (with mutex protection).
@@ -344,7 +344,7 @@ claude-squad server that:
 ```go
 type PendingApproval struct {
     ID              string                 // UUID
-    SessionID       string                 // Claude Squad session identifier
+    SessionID       string                 // Stapler Squad session identifier
     ClaudeSessionID string                 // Claude Code's internal session_id
     ToolName        string                 // e.g., "Bash"
     ToolInput       map[string]any         // e.g., {"command": "npm test"}
@@ -361,7 +361,7 @@ type ApprovalDecision struct {
 
 **Session Mapping**: The hook input includes `cwd` (working directory) and optionally
 custom HTTP headers like `X-CS-Session-ID`. The endpoint uses these to map the hook
-request to a claude-squad session. For managed sessions, the `X-CS-Session-ID` header
+request to a stapler-squad session. For managed sessions, the `X-CS-Session-ID` header
 (injected at session creation) provides a direct match. For claude-mux sessions, cwd
 matching against session paths provides a fallback.
 
@@ -382,7 +382,7 @@ HTTP Hook (type: "http")
     |   Header: X-CS-Session-ID: <session-title>
     |
     v
-Claude Squad Server (Go)
+Stapler Squad Server (Go)
     |
     +-- Creates PendingApproval record
     |     (in-memory map, mutex-protected)
@@ -488,13 +488,13 @@ type ApprovalStore struct {
 #### Task 1.2: Add session mapping logic
 
 The hook request includes `cwd`, `session_id` (Claude Code internal), and optionally
-injected HTTP headers. We need to map these to a claude-squad session.
+injected HTTP headers. We need to map these to a stapler-squad session.
 
 Create `server/services/approval_session_mapper.go`:
 
 **Mapping Strategy** (in priority order):
 1. **HTTP header `X-CS-Session-ID`**: If the hook configuration includes this header
-   (injected by claude-squad when creating sessions), use it directly.
+   (injected by stapler-squad when creating sessions), use it directly.
 2. **`cwd` matching**: Compare `cwd` from hook input against each session's `Path`
    and `WorkingDir`. Use longest prefix match for worktree sessions.
 3. **Tmux session name**: If `X-CS-MUX-Session` appears in hook headers,
@@ -530,7 +530,7 @@ connection timed out.
 ## Story 2: Hook Script for PermissionRequest Blocking
 
 **Goal**: Configure Claude Code sessions to send `PermissionRequest` hooks to the
-claude-squad server as HTTP hooks, so the server can intercept and respond.
+stapler-squad server as HTTP hooks, so the server can intercept and respond.
 
 ### Tasks
 
@@ -559,7 +559,7 @@ from the HTTP hook).
 **Flow**:
 1. Parse the hook JSON from request body.
 2. Extract `X-CS-Session-ID` header for session mapping.
-3. Map to a claude-squad session using the session mapper (Task 1.2).
+3. Map to a stapler-squad session using the session mapper (Task 1.2).
 4. Create a `PendingApproval` record in the store (4-minute expiry).
 5. Publish an `ApprovalRequestEvent` via the event bus.
 6. Block on the `PendingApproval.decisionCh` channel with a select/timer.
@@ -614,7 +614,7 @@ rpc ListPendingApprovals(ListPendingApprovalsRequest) returns (ListPendingApprov
 
 #### Task 2.4: Inject HTTP hook configuration into managed sessions
 
-When claude-squad creates a new session (in `CreateSession`), inject the HTTP hook
+When stapler-squad creates a new session (in `CreateSession`), inject the HTTP hook
 configuration into the session's working directory.
 
 **Approach**: Write a `.claude/settings.local.json` file in the session's working
@@ -642,8 +642,8 @@ directory (or worktree) with the hook configuration:
 ```
 
 **Important considerations**:
-- The URL uses `localhost:8543` (claude-squad's default port).
-- The `X-CS-Session-ID` header identifies which claude-squad session this is.
+- The URL uses `localhost:8543` (stapler-squad's default port).
+- The `X-CS-Session-ID` header identifies which stapler-squad session this is.
 - The timeout is 300 seconds (5 minutes) to give users time to respond.
 - Write to `.claude/settings.local.json` so it does not get committed to git.
 - For worktree sessions, write to the worktree directory.
@@ -663,7 +663,7 @@ the existing command hook. The HTTP hook provides the blocking behavior needed f
 remote approval, while the command hook continues to send notifications.
 
 **Changes to `GenerateHooksFile`**:
-- Add an HTTP hook entry for `PermissionRequest` that points to the claude-squad server.
+- Add an HTTP hook entry for `PermissionRequest` that points to the stapler-squad server.
 - Keep the existing command hook for notifications (it fires in parallel).
 - Inject `X-CS-MUX-Session` as a header for session mapping.
 
@@ -1093,14 +1093,14 @@ approval. The web UI must handle multiple approvals per session correctly.
 ### Bug Risk: Session Mapping Failure [SEVERITY: Medium]
 
 **Description**: The hook request's `cwd` may not match any known session, especially
-for external Claude processes started outside of claude-squad. This could result in
+for external Claude processes started outside of stapler-squad. This could result in
 approval requests with no session context, confusing the user.
 
 **Mitigation**:
 - "Floating" approvals (no session match) are still displayed in the UI with
   whatever context is available (cwd, tool name).
 - Log a warning when session mapping fails.
-- The existing `cs-hook-handler` notification flow provides a parallel notification
+- The existing `ssq-hook-handler` notification flow provides a parallel notification
   path for context.
 
 **Prevention Strategy**:
@@ -1113,18 +1113,18 @@ approval requests with no session context, confusing the user.
 
 ### Bug Risk: Server Not Running When Hook Fires [SEVERITY: Low]
 
-**Description**: If claude-squad is not running when Claude Code fires a
+**Description**: If stapler-squad is not running when Claude Code fires a
 `PermissionRequest` hook, the HTTP request fails. Claude Code's HTTP hook handling
 treats connection failures as non-blocking errors and shows the normal permission
 dialog in the terminal.
 
 **Mitigation**: This is actually the desired graceful degradation behavior. No fix needed.
 
-**Prevention Strategy**: Document that the feature requires claude-squad to be running.
+**Prevention Strategy**: Document that the feature requires stapler-squad to be running.
 
 ### Bug Risk: Concurrent Resolve from Multiple Browser Tabs [SEVERITY: Low]
 
-**Description**: If the user has claude-squad open in multiple browser tabs, both
+**Description**: If the user has stapler-squad open in multiple browser tabs, both
 tabs show the same approval. If the user clicks Approve in both tabs simultaneously,
 the second resolve call will fail.
 
@@ -1156,7 +1156,7 @@ our injected hook could interfere.
 
 **Prevention Strategy**:
 - Use a read-modify-write pattern for the settings file.
-- Add a `"statusMessage": "claude-squad approval"` field to identify our hook.
+- Add a `"statusMessage": "stapler-squad approval"` field to identify our hook.
 - Test with pre-existing user hooks to verify coexistence.
 
 **Files Likely Affected**:
@@ -1197,7 +1197,7 @@ our injected hook could interfere.
 - [ ] Test on a mobile device (phone/tablet) -- verify buttons are tappable.
 - [ ] Test with multiple sessions having concurrent approval requests.
 - [ ] Test with claude-mux external session.
-- [ ] Kill claude-squad while an approval is pending, restart, verify cleanup.
+- [ ] Kill stapler-squad while an approval is pending, restart, verify cleanup.
 
 ---
 
@@ -1268,7 +1268,7 @@ Story 6: Mobile UX (depends on Story 4)
 Stories 5 and 6 are enhancements that can be deferred.
 
 **MVP (Minimum Viable Product)**: Stories 1-4 deliver the core functionality:
-- Claude Code sends approval requests to claude-squad via HTTP hooks.
+- Claude Code sends approval requests to stapler-squad via HTTP hooks.
 - The web UI shows pending approvals with Approve/Deny buttons.
 - User decisions flow back to Claude Code.
 - Graceful timeout/degradation when user does not respond.

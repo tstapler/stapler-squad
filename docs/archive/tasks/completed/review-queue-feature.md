@@ -4,7 +4,7 @@
 
 **Goal**: Implement a review queue system that helps users identify and prioritize sessions requiring their attention (pending approval dialogs, idle sessions, error states, completion signals).
 
-**Value Proposition**: Users can quickly identify which Claude Squad sessions need immediate attention, reducing context switching overhead and preventing important tasks from being overlooked.
+**Value Proposition**: Users can quickly identify which Stapler Squad sessions need immediate attention, reducing context switching overhead and preventing important tasks from being overlooked.
 
 **Success Metrics**:
 - Users can identify all sessions needing attention within 2 seconds
@@ -729,7 +729,7 @@ Story 5 (Performance) [depends on Stories 1-4]
 
 **Required Understanding Before Starting**:
 
-1. **Claude Squad Architecture**:
+1. **Stapler Squad Architecture**:
    - BubbleTea event-driven model
    - Session/Instance lifecycle
    - tmux integration patterns

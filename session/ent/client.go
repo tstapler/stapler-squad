@@ -9,14 +9,14 @@ import (
 	"log"
 	"reflect"
 
-	"claude-squad/session/ent/migrate"
+	"github.com/tstapler/stapler-squad/session/ent/migrate"
 
-	"claude-squad/session/ent/claudemetadata"
-	"claude-squad/session/ent/claudesession"
-	"claude-squad/session/ent/diffstats"
-	"claude-squad/session/ent/session"
-	"claude-squad/session/ent/tag"
-	"claude-squad/session/ent/worktree"
+	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
+	"github.com/tstapler/stapler-squad/session/ent/claudesession"
+	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/worktree"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect"

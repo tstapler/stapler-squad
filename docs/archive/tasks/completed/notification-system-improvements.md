@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This feature plan addresses three critical issues in Claude Squad's notification handling system:
+This feature plan addresses three critical issues in Stapler Squad's notification handling system:
 1. **Duplicate notifications on backend restart** - Frontend cannot distinguish initial snapshots from real-time events
 2. **Poor idle timeout status messages** - Generic "Timed out after X" messages imply failure rather than providing actionable context
 3. **No frontend acknowledgment grace period** - Users may be re-notified immediately after dismissing notifications
@@ -282,8 +282,8 @@ And the queue should reflect my actions
 #### Task 1.1: Add is_snapshot Field to Protobuf Schema
 **Estimated Time**: 1-2 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/proto/session/v1/events.proto`
-- Regenerated: `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/gen/session/v1/events_pb.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/proto/session/v1/events.proto`
+- Regenerated: `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/gen/session/v1/events_pb.ts`
 
 **Implementation Details**:
 ```protobuf
@@ -307,7 +307,7 @@ grep -n "isSnapshot\|is_snapshot" web-app/src/gen/session/v1/events_pb.ts
 #### Task 1.2: Update Backend to Set is_snapshot Flag
 **Estimated Time**: 1-2 hours
 **Files** (1):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/review_queue_manager.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/review_queue_manager.go`
 
 **Implementation Details**:
 ```go
@@ -354,8 +354,8 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 #### Task 1.3: Create Notification Storage Utility
 **Estimated Time**: 2-3 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/utils/notificationStorage.ts` (new)
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/utils/notificationStorage.test.ts` (new)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/utils/notificationStorage.ts` (new)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/utils/notificationStorage.test.ts` (new)
 
 **Implementation Details**:
 ```typescript
@@ -366,7 +366,7 @@ interface NotificationRecord {
   acknowledgedAt?: number;
 }
 
-const STORAGE_KEY = 'claude-squad-notifications';
+const STORAGE_KEY = 'stapler-squad-notifications';
 const NOTIFICATION_TTL_MS = 60 * 60 * 1000; // 1 hour
 const GRACE_PERIOD_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -447,8 +447,8 @@ function saveRecords(records: Map<string, NotificationRecord>): void {
 #### Task 1.4: Update useReviewQueueNotifications Hook
 **Estimated Time**: 2-3 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueueNotifications.ts`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueueNotifications.test.ts` (new or update)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueueNotifications.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueueNotifications.test.ts` (new or update)
 
 **Implementation Details**:
 ```typescript
@@ -509,7 +509,7 @@ useEffect(() => {
 #### Task 1.5: Update useReviewQueue to Detect Snapshot Events
 **Estimated Time**: 1-2 hours
 **Files** (1):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueue.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueue.ts`
 
 **Implementation Details**:
 ```typescript
@@ -552,8 +552,8 @@ case "itemAdded": {
 #### Task 2.1: Add New AttentionReason Enum Values
 **Estimated Time**: 1-2 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/proto/session/v1/types.proto`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/review_queue.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/proto/session/v1/types.proto`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/review_queue.go`
 
 **Implementation Details**:
 ```protobuf
@@ -603,7 +603,7 @@ grep -A 20 "AttentionReason" web-app/src/gen/session/v1/types_pb.ts
 #### Task 2.2: Update Reason-to-Proto Mapping
 **Estimated Time**: 1-2 hours
 **Files** (1):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/review_queue_manager.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/review_queue_manager.go`
 
 **Implementation Details**:
 ```go
@@ -645,8 +645,8 @@ func (rqm *ReactiveQueueManager) reasonToProto(r session.AttentionReason) sessio
 #### Task 2.3: Implement Semantic Context Generation
 **Estimated Time**: 3-4 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/review_queue_poller.go`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/context_generator.go` (new)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/review_queue_poller.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/context_generator.go` (new)
 
 **Implementation Details**:
 ```go
@@ -751,7 +751,7 @@ func formatDuration(d time.Duration) string {
 #### Task 2.4: Update Poller to Use New Reasons
 **Estimated Time**: 2-3 hours
 **Files** (1):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/review_queue_poller.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/review_queue_poller.go`
 
 **Implementation Details**:
 ```go
@@ -794,8 +794,8 @@ if statusInfo.ClaudeStatus == StatusInputRequired {
 #### Task 2.5: Update Frontend Reason Labels
 **Estimated Time**: 1-2 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/ReviewQueuePanel.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/ReviewQueueBadge.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/ReviewQueuePanel.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/ReviewQueueBadge.tsx`
 
 **Implementation Details**:
 ```typescript
@@ -840,7 +840,7 @@ const getReasonLabel = (reason: AttentionReason): string => {
 #### Task 3.1: Extend Notification Storage for Acknowledgments
 **Estimated Time**: 1-2 hours
 **Files** (1):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/utils/notificationStorage.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/utils/notificationStorage.ts`
 
 **Implementation Details**:
 (Already covered in Task 1.3 - `markAcknowledged()` function)
@@ -883,8 +883,8 @@ export function isInGracePeriod(sessionId: string): boolean {
 #### Task 3.2: Integrate Acknowledgment with Notification Context
 **Estimated Time**: 2-3 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/contexts/NotificationContext.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueue.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/contexts/NotificationContext.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueue.ts`
 
 **Implementation Details**:
 ```typescript
@@ -942,8 +942,8 @@ const acknowledgeSession = useCallback(
 #### Task 3.3: Add Acknowledge Button to Notification Toast
 **Estimated Time**: 2 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/NotificationToast.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/NotificationToast.module.css`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/NotificationToast.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/NotificationToast.module.css`
 
 **Implementation Details**:
 ```typescript
@@ -991,8 +991,8 @@ export interface NotificationData {
 #### Task 4.1: Add Acknowledge Action to History Panel
 **Estimated Time**: 2 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/notifications/NotificationHistoryPanel.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/contexts/NotificationContext.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/notifications/NotificationHistoryPanel.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/contexts/NotificationContext.tsx`
 
 **Implementation Details**:
 ```typescript
@@ -1029,8 +1029,8 @@ const acknowledgeFromHistory = useCallback(
 #### Task 5.1: Add Connection State Tracking
 **Estimated Time**: 2-3 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueue.ts`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useConnectionState.ts` (new)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueue.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useConnectionState.ts` (new)
 
 **Implementation Details**:
 ```typescript
@@ -1077,9 +1077,9 @@ export function useConnectionState() {
 #### Task 5.2: Add Reconnection Indicator UI
 **Estimated Time**: 2 hours
 **Files** (3):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/ConnectionIndicator.tsx` (new)
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/ConnectionIndicator.module.css` (new)
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/layout/Header.tsx` (update)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/ConnectionIndicator.tsx` (new)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/ConnectionIndicator.module.css` (new)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/layout/Header.tsx` (update)
 
 **Implementation Details**:
 ```typescript
@@ -1118,8 +1118,8 @@ export function ConnectionIndicator({ state, reconnectAttempts }: ConnectionIndi
 #### Task 5.3: Implement Offline Action Queue
 **Estimated Time**: 3-4 hours
 **Files** (2):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/utils/offlineQueue.ts` (new)
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueue.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/utils/offlineQueue.ts` (new)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueue.ts`
 
 **Implementation Details**:
 ```typescript
@@ -1130,7 +1130,7 @@ interface QueuedAction {
   timestamp: number;
 }
 
-const QUEUE_KEY = 'claude-squad-offline-queue';
+const QUEUE_KEY = 'stapler-squad-offline-queue';
 
 export function queueAction(action: QueuedAction): void {
   const queue = getQueue();
@@ -1193,8 +1193,8 @@ export async function flushQueue(
 - Use `useRef` to track snapshot completion timestamp
 
 **Files Affected**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueue.ts`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useReviewQueueNotifications.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueue.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useReviewQueueNotifications.ts`
 
 ---
 
@@ -1210,7 +1210,7 @@ export async function flushQueue(
 - Consider LRU eviction for oldest records
 
 **Files Affected**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/utils/notificationStorage.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/utils/notificationStorage.ts`
 
 ---
 
@@ -1226,8 +1226,8 @@ export async function flushQueue(
 - Document clock synchronization requirement
 
 **Files Affected**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/utils/notificationStorage.ts`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/review_queue_poller.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/utils/notificationStorage.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/review_queue_poller.go`
 
 ---
 
@@ -1243,8 +1243,8 @@ export async function flushQueue(
 - Show full context on hover/click
 
 **Files Affected**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/context_generator.go`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/NotificationToast.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/context_generator.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/NotificationToast.tsx`
 
 ---
 

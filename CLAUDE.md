@@ -10,11 +10,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 go build .
 
 # Run the application (web server mode on localhost:8543)
-./claude-squad
+./stapler-squad
 
 # Web development workflow
 make restart-web    # Build web UI and restart server (ALWAYS use this)
-                    # NOTE: Do NOT prefix with "pkill -9 -f claude-squad" - the Makefile already handles stopping gracefully
+                    # NOTE: Do NOT prefix with "pkill -9 -f stapler-squad" - the Makefile already handles stopping gracefully
                     # IMPORTANT: Do NOT pipe or redirect make restart-web output (e.g. | tail -20) as it will block forever.
                     #            Run it plain: make restart-web
 
@@ -44,13 +44,13 @@ fswatch -o web-app/src | xargs -n1 -I{} make restart-web PROFILE_FLAGS="--profil
 # - Provides real-time notifications via tmux native protocol
 # - Combines full history (capture-pane) + real-time updates (control mode)
 # To disable and use legacy capture-pane polling:
-CLAUDE_SQUAD_USE_CONTROL_MODE=false ./claude-squad
+STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad
 ```
 
 ### Profiling and Debugging Lock-Ups
 ```bash
 # Quick diagnosis for lock-ups/freezes
-./claude-squad --profile --trace
+./stapler-squad --profile --trace
 
 # When lock-up occurs (in another terminal):
 curl http://localhost:6060/debug/pprof/goroutine?debug=2 > goroutines.txt
@@ -58,12 +58,12 @@ curl http://localhost:6060/debug/pprof/block?debug=1 > block.txt
 curl http://localhost:6060/debug/pprof/mutex?debug=1 > mutex.txt
 
 # After exiting, analyze trace:
-go tool trace /tmp/claude-squad-trace-<PID>.out
+go tool trace /tmp/stapler-squad-trace-<PID>.out
 
 # Profile specific aspects:
-./claude-squad --profile                    # Enable profiling HTTP server
-./claude-squad --profile --profile-port 8080  # Custom port
-./claude-squad --trace                      # Execution tracing only
+./stapler-squad --profile                    # Enable profiling HTTP server
+./stapler-squad --profile --profile-port 8080  # Custom port
+./stapler-squad --trace                      # Execution tracing only
 
 # CPU profiling (30 seconds)
 curl http://localhost:6060/debug/pprof/profile?seconds=30 > cpu.prof
@@ -75,27 +75,27 @@ go tool pprof -http=:8081 heap.prof
 
 # Race detection (for data races)
 go build -race .
-./claude-squad --profile
+./stapler-squad --profile
 
 # See docs/PROFILING.md for comprehensive guide
 ```
 
 ### OpenTelemetry Observability
 
-Claude Squad supports OpenTelemetry instrumentation for APM integration (Datadog, etc.).
+Stapler Squad supports OpenTelemetry instrumentation for APM integration (Datadog, etc.).
 
 ```bash
 # Enable telemetry (disabled by default)
-OTEL_ENABLED=true ./claude-squad
+OTEL_ENABLED=true ./stapler-squad
 
 # Or use Datadog-specific flag
-DD_TRACE_ENABLED=true ./claude-squad
+DD_TRACE_ENABLED=true ./stapler-squad
 
 # Configure OTLP endpoint (default: localhost:4317)
-OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 OTEL_ENABLED=true ./claude-squad
+OTEL_EXPORTER_OTLP_ENDPOINT=localhost:4317 OTEL_ENABLED=true ./stapler-squad
 
 # Set environment and version for trace metadata
-OTEL_SERVICE_ENVIRONMENT=production OTEL_SERVICE_VERSION=1.0.0 OTEL_ENABLED=true ./claude-squad
+OTEL_SERVICE_ENVIRONMENT=production OTEL_SERVICE_VERSION=1.0.0 OTEL_ENABLED=true ./stapler-squad
 ```
 
 **Datadog Agent Configuration** (for OTLP ingestion):
@@ -219,7 +219,7 @@ go build .
 
 ### Nil Safety Analysis
 
-Claude Squad includes comprehensive nil safety analysis tools to prevent panic-causing nil pointer dereferences:
+Stapler Squad includes comprehensive nil safety analysis tools to prevent panic-causing nil pointer dereferences:
 
 ```bash
 # Run all nil safety tools
@@ -258,12 +258,12 @@ go install github.com/securego/gosec/v2/cmd/gosec@latest
 
 ## Application Data Directory
 
-Claude Squad stores application data, logs, and git worktrees in the `~/.claude-squad` directory:
+Stapler Squad stores application data, logs, and git worktrees in the `~/.stapler-squad` directory:
 
 ```
-~/.claude-squad/
+~/.stapler-squad/
 ├── logs/                    # Application logs for debugging
-│   ├── claude-squad.log     # Main application log
+│   ├── stapler-squad.log     # Main application log
 │   └── debug.log           # Detailed debug information
 ├── worktrees/              # Git worktrees for isolated sessions
 │   ├── session-name_hash/  # Individual worktree directories
@@ -273,7 +273,7 @@ Claude Squad stores application data, logs, and git worktrees in the `~/.claude-
 ```
 
 **Debugging Session Creation Issues:**
-- Check `~/.claude-squad/logs/claude-squad.log` for session creation attempts
+- Check `~/.stapler-squad/logs/stapler-squad.log` for session creation attempts
 - Look for tmux command executions, git operations, and timeout messages
 - Debug logs show detailed command execution and timing information
 
@@ -286,11 +286,11 @@ Claude Squad stores application data, logs, and git worktrees in the `~/.claude-
 
 ## External Session Monitoring (PTY Multiplexing)
 
-Claude Squad can monitor and interact with Claude sessions running in external terminals (IntelliJ, VS Code, etc.) through the `claude-mux` PTY multiplexer. This enables bidirectional terminal streaming without requiring sessions to be started from claude-squad.
+Stapler Squad can monitor and interact with Claude sessions running in external terminals (IntelliJ, VS Code, etc.) through the `claude-mux` PTY multiplexer. This enables bidirectional terminal streaming without requiring sessions to be started from stapler-squad.
 
 ### How It Works
 
-The `claude-mux` wrapper creates a pseudo-terminal (PTY) that wraps your Claude command and exposes it via a Unix domain socket at `/tmp/claude-mux-<PID>.sock`. Claude Squad automatically discovers these sockets and connects to them for real-time terminal streaming.
+The `claude-mux` wrapper creates a pseudo-terminal (PTY) that wraps your Claude command and exposes it via a Unix domain socket at `/tmp/claude-mux-<PID>.sock`. Stapler Squad automatically discovers these sockets and connects to them for real-time terminal streaming.
 
 **Architecture:**
 ```
@@ -298,7 +298,7 @@ External Terminal (IntelliJ) → claude-mux → PTY → Claude Process
                                     ↓
                             Unix Socket (/tmp/)
                                     ↓
-                          claude-squad (discovers & connects)
+                          stapler-squad (discovers & connects)
 ```
 
 ### Installation
@@ -306,7 +306,7 @@ External Terminal (IntelliJ) → claude-mux → PTY → Claude Process
 Run the installation script from the project root:
 
 ```bash
-cd /path/to/claude-squad
+cd /path/to/stapler-squad
 ./scripts/install-mux.sh
 ```
 
@@ -364,12 +364,12 @@ export PATH="$HOME/bin:$PATH"
 
 ### Session Discovery
 
-Claude Squad uses **auto-discovery with filesystem watching** for immediate session detection:
+Stapler Squad uses **auto-discovery with filesystem watching** for immediate session detection:
 
 - **Filesystem Watching**: Uses `fsnotify` to watch `/tmp/` for socket creation/deletion
 - **Immediate Connection**: New sessions discovered instantly (no polling delay)
 - **Automatic Fallback**: Falls back to polling if filesystem watching fails
-- **Zero Configuration**: Works automatically when claude-squad is running
+- **Zero Configuration**: Works automatically when stapler-squad is running
 
 **Verification:**
 ```bash
@@ -379,7 +379,7 @@ claude-mux claude
 # In another terminal, check socket creation
 ls /tmp/claude-mux-*.sock
 
-# Claude Squad will automatically discover and connect to the session
+# Stapler Squad will automatically discover and connect to the session
 ```
 
 ### Troubleshooting
@@ -397,7 +397,7 @@ ls /tmp/claude-mux-*.sock
 **Issue: Sessions not discovered**
 1. Check socket exists: `ls /tmp/claude-mux-*.sock`
 2. Verify permissions: `ls -l /tmp/claude-mux-*.sock` (should be 0600)
-3. Check claude-squad logs: `~/.claude-squad/logs/claude-squad.log`
+3. Check stapler-squad logs: `~/.stapler-squad/logs/stapler-squad.log`
 4. Verify discovery is running (automatic when web UI active)
 
 **Issue: Terminal output garbled**
@@ -432,7 +432,7 @@ ls /tmp/claude-mux-*.sock
 
 ## State File Isolation and Multi-Instance Support
 
-Claude Squad implements hierarchical state file isolation to prevent conflicts between tests, benchmarks, and multiple production instances. This ensures safe concurrent execution and data integrity.
+Stapler Squad implements hierarchical state file isolation to prevent conflicts between tests, benchmarks, and multiple production instances. This ensures safe concurrent execution and data integrity.
 
 ### Isolation Hierarchy
 
@@ -441,34 +441,34 @@ State files are automatically isolated based on a priority hierarchy:
 1. **Explicit Instance ID** (Highest Priority)
    ```bash
    # Named instance with dedicated state
-   CLAUDE_SQUAD_INSTANCE=work ./claude-squad
+   STAPLER_SQUAD_INSTANCE=work ./stapler-squad
 
    # Backward compatibility - shared global state
-   CLAUDE_SQUAD_INSTANCE=shared ./claude-squad
+   STAPLER_SQUAD_INSTANCE=shared ./stapler-squad
    ```
-   - State location: `~/.claude-squad/instances/{INSTANCE_ID}/`
+   - State location: `~/.stapler-squad/instances/{INSTANCE_ID}/`
    - Use case: Named instances for different projects/contexts
 
 2. **Test Mode Auto-Detection**
    - Automatically activated when running `go test` or benchmarks
-   - State location: `~/.claude-squad/test/test-{PID}/`
+   - State location: `~/.stapler-squad/test/test-{PID}/`
    - Use case: Prevents tests from corrupting production state
    - No configuration needed - works automatically
 
 3. **Workspace-Based Isolation** (Production Default)
    ```bash
    # Automatic per-directory state (default behavior)
-   cd ~/my-project && ./claude-squad
+   cd ~/my-project && ./stapler-squad
 
    # Disable workspace isolation if needed
-   CLAUDE_SQUAD_WORKSPACE_MODE=false ./claude-squad
+   STAPLER_SQUAD_WORKSPACE_MODE=false ./stapler-squad
    ```
-   - State location: `~/.claude-squad/workspaces/{WORKSPACE_HASH}/`
+   - State location: `~/.stapler-squad/workspaces/{WORKSPACE_HASH}/`
    - Use case: Different state per git repository/working directory
    - Each directory gets a stable, unique workspace ID (SHA256 hash)
 
 4. **Global Shared State** (Fallback)
-   - State location: `~/.claude-squad/`
+   - State location: `~/.stapler-squad/`
    - Use case: Backward compatibility, explicit sharing
    - Activated when workspace mode is disabled or detection fails
 
@@ -497,10 +497,10 @@ The instance identifier prevents confusion when:
 **Development Workflow:**
 ```bash
 # Default: Workspace isolation (safest, per-project state)
-cd ~/my-feature && ./claude-squad
+cd ~/my-feature && ./stapler-squad
 
 # Different project, different state automatically
-cd ~/other-project && ./claude-squad
+cd ~/other-project && ./stapler-squad
 ```
 
 **Testing and Benchmarks:**
@@ -516,10 +516,10 @@ go test -bench=. ./app
 **Multiple Named Instances:**
 ```bash
 # Work sessions
-CLAUDE_SQUAD_INSTANCE=work ./claude-squad
+STAPLER_SQUAD_INSTANCE=work ./stapler-squad
 
 # Personal projects
-CLAUDE_SQUAD_INSTANCE=personal ./claude-squad
+STAPLER_SQUAD_INSTANCE=personal ./stapler-squad
 
 # Completely isolated state files
 ```
@@ -527,19 +527,19 @@ CLAUDE_SQUAD_INSTANCE=personal ./claude-squad
 **Legacy Shared State:**
 ```bash
 # Use pre-isolation behavior if needed
-CLAUDE_SQUAD_INSTANCE=shared ./claude-squad
+STAPLER_SQUAD_INSTANCE=shared ./stapler-squad
 
 # Or disable workspace mode
-CLAUDE_SQUAD_WORKSPACE_MODE=false ./claude-squad
+STAPLER_SQUAD_WORKSPACE_MODE=false ./stapler-squad
 ```
 
 ### Migration Notes
 
 **Existing Users:**
 - Workspace isolation is now the default (per-directory state)
-- To use old shared behavior: `CLAUDE_SQUAD_INSTANCE=shared`
-- Or disable workspace mode: `CLAUDE_SQUAD_WORKSPACE_MODE=false`
-- Your existing `~/.claude-squad/` state is preserved
+- To use old shared behavior: `STAPLER_SQUAD_INSTANCE=shared`
+- Or disable workspace mode: `STAPLER_SQUAD_WORKSPACE_MODE=false`
+- Your existing `~/.stapler-squad/` state is preserved
 
 **Test Authors:**
 - Tests automatically get isolated state - no code changes needed
@@ -556,8 +556,8 @@ CLAUDE_SQUAD_WORKSPACE_MODE=false ./claude-squad
 
 **Issue: "Can't find my sessions after restart"**
 - Check if you're in a different directory (workspace isolation active)
-- Use `CLAUDE_SQUAD_WORKSPACE_MODE=false` for directory-independent state
-- Or set `CLAUDE_SQUAD_INSTANCE=shared` for global shared state
+- Use `STAPLER_SQUAD_WORKSPACE_MODE=false` for directory-independent state
+- Or set `STAPLER_SQUAD_INSTANCE=shared` for global shared state
 
 **Issue: "Tests are modifying production state"**
 - Should not happen with auto-detection
@@ -567,16 +567,16 @@ CLAUDE_SQUAD_WORKSPACE_MODE=false ./claude-squad
 **Issue: "Multiple instances conflicting"**
 - Each instance should have its own workspace automatically
 - Check instance identifiers in logs to verify isolation
-- Use explicit `CLAUDE_SQUAD_INSTANCE` for named instances
+- Use explicit `STAPLER_SQUAD_INSTANCE` for named instances
 
 **Issue: "Want to share state across multiple directories"**
-- Use named instance: `CLAUDE_SQUAD_INSTANCE=shared`
-- Or disable workspace mode: `CLAUDE_SQUAD_WORKSPACE_MODE=false`
+- Use named instance: `STAPLER_SQUAD_INSTANCE=shared`
+- Or disable workspace mode: `STAPLER_SQUAD_WORKSPACE_MODE=false`
 - Both approaches give you global shared state
 
 ## Architecture Overview
 
-Claude Squad is a web-based session management application built with Go. It manages multiple AI agent sessions (Claude Code, Aider, etc.) in isolated tmux sessions with git worktrees. The application runs as a web server on localhost:8543 and provides a React-based web UI.
+Stapler Squad is a web-based session management application built with Go. It manages multiple AI agent sessions (Claude Code, Aider, etc.) in isolated tmux sessions with git worktrees. The application runs as a web server on localhost:8543 and provides a React-based web UI.
 
 ### Core Architecture Layers
 
@@ -614,7 +614,7 @@ Claude Squad is a web-based session management application built with Go. It man
 
 ## Tag-Based Session Organization
 
-Claude Squad supports flexible session organization through tags and dynamic grouping strategies, enabling multi-dimensional organization beyond traditional single-category hierarchies.
+Stapler Squad supports flexible session organization through tags and dynamic grouping strategies, enabling multi-dimensional organization beyond traditional single-category hierarchies.
 
 ### Grouping Modes (Web UI)
 
@@ -842,7 +842,7 @@ Configure tmux session prefixes for process isolation:
 }
 ```
 
-This allows multiple claude-squad processes to run simultaneously without session conflicts.
+This allows multiple stapler-squad processes to run simultaneously without session conflicts.
 
 ## Makefile Usage
 

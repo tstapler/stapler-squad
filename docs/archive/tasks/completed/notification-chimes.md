@@ -2,7 +2,7 @@
 
 ## Epic Overview
 
-**Goal**: Enable Claude Code instances running in isolated tmux sessions to send notification chimes with metadata to the claude-squad server, which broadcasts these notifications to all connected clients (web UI and TUI) with audio alerts and visual banners.
+**Goal**: Enable Claude Code instances running in isolated tmux sessions to send notification chimes with metadata to the stapler-squad server, which broadcasts these notifications to all connected clients (web UI and TUI) with audio alerts and visual banners.
 
 **Value Proposition**:
 - **Real-time Awareness**: Users instantly know when sessions need attention without polling
@@ -52,7 +52,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Claude Squad Ecosystem                       │
+│                      Stapler Squad Ecosystem                       │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                   │
 │  ┌──────────────┐         ┌──────────────┐                      │
@@ -70,7 +70,7 @@
 │         │                        │                              │
 │         ▼                        ▼                              │
 │  ┌─────────────────────────────────────┐                       │
-│  │      Claude Squad Server            │                       │
+│  │      Stapler Squad Server            │                       │
 │  │                                     │                       │
 │  │  ┌──────────────────────────────┐  │                       │
 │  │  │ NotificationService          │  │                       │
@@ -257,7 +257,7 @@ enum NotificationPriority {
 **Status**: Proposed
 
 **Context**:
-We need to verify that notification requests come from legitimate claude-squad sessions, not arbitrary external processes or malicious actors.
+We need to verify that notification requests come from legitimate stapler-squad sessions, not arbitrary external processes or malicious actors.
 
 **Options Considered**:
 
@@ -325,7 +325,7 @@ func (s *SessionService) SendNotification(
 
 ### Potential Bug 1: Notification Loss During Server Restart [SEVERITY: High]
 
-**Description**: If the claude-squad server restarts while tmux sessions are running, notifications sent during downtime will be lost (HTTP request fails).
+**Description**: If the stapler-squad server restarts while tmux sessions are running, notifications sent during downtime will be lost (HTTP request fails).
 
 **Mitigation Strategy**:
 1. **Client-side retry logic** with exponential backoff:
@@ -1158,13 +1158,13 @@ func TestRateLimiter(t *testing.T) {
 **Implementation**:
 ```bash
 #!/usr/bin/env bash
-# notify-server - Send notification to claude-squad server
+# notify-server - Send notification to stapler-squad server
 # Usage: notify-server --session SESSION_ID --type TYPE --title TITLE [options]
 
 set -euo pipefail
 
 # Default configuration
-CLAUDE_SQUAD_URL="${CLAUDE_SQUAD_URL:-http://localhost:3000}"
+STAPLER_SQUAD_URL="${STAPLER_SQUAD_URL:-http://localhost:3000}"
 MAX_RETRIES=3
 RETRY_DELAY=1
 HEALTH_CHECK=true
@@ -1233,7 +1233,7 @@ PRIORITY="${PRIORITY:-MEDIUM}"
 
 # Health check (optional)
 if [[ "$HEALTH_CHECK" == "true" ]]; then
-    if ! curl -f --max-time 0.5 "${CLAUDE_SQUAD_URL}/health" &>/dev/null; then
+    if ! curl -f --max-time 0.5 "${STAPLER_SQUAD_URL}/health" &>/dev/null; then
         echo "Warning: Server health check failed, notification may not be delivered" >&2
     fi
 fi
@@ -1258,7 +1258,7 @@ for attempt in $(seq 1 "$MAX_RETRIES"); do
     if curl -f -X POST \
         -H "Content-Type: application/json" \
         -d "$JSON_PAYLOAD" \
-        "${CLAUDE_SQUAD_URL}/api/session.v1.SessionService/SendNotification" \
+        "${STAPLER_SQUAD_URL}/api/session.v1.SessionService/SendNotification" \
         &>/dev/null; then
         exit 0
     fi
@@ -1323,7 +1323,7 @@ exit 1
 ```python
 #!/usr/bin/env python3
 """
-notify.py - Python library for sending notifications to claude-squad server
+notify.py - Python library for sending notifications to stapler-squad server
 """
 
 import os
@@ -1341,7 +1341,7 @@ class NotificationClient:
         retry_delay: float = 1.0,
     ):
         self.base_url = base_url or os.getenv(
-            "CLAUDE_SQUAD_URL", "http://localhost:3000"
+            "STAPLER_SQUAD_URL", "http://localhost:3000"
         )
         self.max_retries = max_retries
         self.retry_delay = retry_delay
@@ -1386,7 +1386,7 @@ class NotificationClient:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description="Send notification to claude-squad")
+    parser = argparse.ArgumentParser(description="Send notification to stapler-squad")
     parser.add_argument("--session", "-s", required=True, help="Session ID")
     parser.add_argument("--type", "-t", required=True, help="Notification type")
     parser.add_argument("--title", required=True, help="Notification title")
@@ -2053,7 +2053,7 @@ func mapPriority(priority string) ui.NotificationPriority {
 package app
 
 import (
-    "claude-squad/server/events"
+    "stapler-squad/server/events"
     tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -2475,7 +2475,7 @@ If critical issues arise:
 
 ## Conclusion
 
-This feature plan establishes a comprehensive notification system that bridges the gap between isolated tmux sessions and the claude-squad server, enabling real-time awareness and improved developer productivity. The architecture follows best practices for event-driven systems, prioritizes performance and reliability, and includes extensive bug prevention measures and testing strategies.
+This feature plan establishes a comprehensive notification system that bridges the gap between isolated tmux sessions and the stapler-squad server, enabling real-time awareness and improved developer productivity. The architecture follows best practices for event-driven systems, prioritizes performance and reliability, and includes extensive bug prevention measures and testing strategies.
 
 The implementation is broken down into manageable atomic tasks with clear dependencies, success criteria, and testing requirements. The phased rollout approach ensures stability while gathering feedback, and the extensive documentation ensures long-term maintainability.
 

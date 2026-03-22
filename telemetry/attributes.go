@@ -1,11 +1,11 @@
-// Package telemetry provides OpenTelemetry instrumentation for claude-squad.
+// Package telemetry provides OpenTelemetry instrumentation for stapler-squad.
 package telemetry
 
 import (
 	"go.opentelemetry.io/otel/attribute"
 )
 
-// Semantic attribute keys for claude-squad operations
+// Semantic attribute keys for stapler-squad operations
 const (
 	// Session attributes
 	AttrSessionID       = "session.id"

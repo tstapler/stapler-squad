@@ -3,7 +3,7 @@
 **Epic ID**: EPIC-PASSKEY-001
 **Priority**: P1 - Enables core remote access use case
 **Status**: Planning Complete, Ready for Implementation
-**Target Branch**: `claude-squad-passkey`
+**Target Branch**: `stapler-squad-passkey`
 
 ---
 
@@ -23,9 +23,9 @@
 
 ## Problem Statement
 
-Claude Squad currently binds exclusively to `localhost:8543`, making it inaccessible from any machine other than the host. Users who run claude-squad on a development server, homelab, or headless machine cannot access the web UI from their phone, tablet, or laptop. There is also no authentication layer, because localhost-only access was the implicit security boundary.
+Stapler Squad currently binds exclusively to `localhost:8543`, making it inaccessible from any machine other than the host. Users who run stapler-squad on a development server, homelab, or headless machine cannot access the web UI from their phone, tablet, or laptop. There is also no authentication layer, because localhost-only access was the implicit security boundary.
 
-**Goal**: Allow users to securely access the claude-squad web UI from non-local machines using passkey (WebAuthn/FIDO2) authentication, with a QR-code-based enrollment flow for initial device registration.
+**Goal**: Allow users to securely access the stapler-squad web UI from non-local machines using passkey (WebAuthn/FIDO2) authentication, with a QR-code-based enrollment flow for initial device registration.
 
 ---
 
@@ -34,12 +34,12 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 ### Functional Requirements (User Stories)
 
 #### US-001: Remote Network Access
-**As a** developer running claude-squad on a remote machine,
+**As a** developer running stapler-squad on a remote machine,
 **I want to** access the web UI from my phone/laptop over the network,
 **So that** I can manage AI agent sessions without being physically at the host.
 
 **Acceptance Criteria** (Given-When-Then):
-- GIVEN claude-squad is started with `--remote-access` or `listen_address` configured,
+- GIVEN stapler-squad is started with `--remote-access` or `listen_address` configured,
   WHEN a user navigates to the server's IP/hostname from another device,
   THEN the web UI loads (behind an auth gate).
 - GIVEN remote access is enabled,
@@ -50,7 +50,7 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
   THEN it binds to `localhost:8543` exactly as today (zero behavior change).
 
 #### US-002: Passkey Registration via QR Code
-**As a** user setting up claude-squad for the first time with remote access,
+**As a** user setting up stapler-squad for the first time with remote access,
 **I want to** scan a QR code on my phone to register a passkey,
 **So that** I can authenticate from that device on future visits.
 
@@ -82,7 +82,7 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
   THEN they bypass the login page.
 
 #### US-004: Localhost Bypass
-**As a** developer accessing claude-squad from localhost,
+**As a** developer accessing stapler-squad from localhost,
 **I want to** skip authentication entirely,
 **So that** the local development experience is unchanged.
 
@@ -172,7 +172,7 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 **Rationale**:
 1. Passkeys are the direction the industry is moving (Apple, Google, Microsoft all support them natively).
 2. The QR code enrollment matches the user's request exactly.
-3. Phishing resistance is valuable -- claude-squad controls real shell sessions.
+3. Phishing resistance is valuable -- stapler-squad controls real shell sessions.
 4. Modern phones (iOS 16+, Android 9+) have built-in passkey support with biometrics.
 5. The added implementation complexity is justified by the security properties for a tool that controls terminal sessions.
 
@@ -189,7 +189,7 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 
 **Status**: Proposed
 
-**Context**: Users need to access claude-squad from non-local machines. Options:
+**Context**: Users need to access stapler-squad from non-local machines. Options:
 
 | Option | Pros | Cons |
 |---|---|---|
@@ -244,7 +244,7 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 
 **Storage Layout**:
 ```
-~/.claude-squad/
+~/.stapler-squad/
   workspaces/<hash>/
     auth/
       credentials.json   # WebAuthn credentials (0600 permissions)
@@ -312,7 +312,7 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 
 **Flow**:
 ```
-1. User visits claude-squad from local browser (or sees QR in terminal)
+1. User visits stapler-squad from local browser (or sees QR in terminal)
 2. UI/terminal shows QR code containing: https://<host>:8543/auth/setup?token=<one-time-token>
 3. User scans QR code with phone camera
 4. Phone browser opens the URL
@@ -333,12 +333,12 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 ## Epic-Level Analysis
 
 ### User Value
-**Primary**: Securely access claude-squad from any device (phone, tablet, laptop) when running on a remote/headless machine.
+**Primary**: Securely access stapler-squad from any device (phone, tablet, laptop) when running on a remote/headless machine.
 
 **Secondary**:
 - Monitor AI agent sessions from phone while away from desk.
 - Approve permission requests from phone notification (future: push notifications).
-- Share claude-squad access with a trusted colleague (register their device).
+- Share stapler-squad access with a trusted colleague (register their device).
 
 ### Success Metrics
 1. User can authenticate from a non-local IP address within 30 seconds of scanning QR code.
@@ -355,7 +355,7 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 ## Story Breakdown
 
 ### Story 1: Network Exposure and TLS Foundation
-**Goal**: Allow claude-squad to listen on non-localhost addresses with auto-TLS.
+**Goal**: Allow stapler-squad to listen on non-localhost addresses with auto-TLS.
 **Value**: Enables remote access -- the prerequisite for everything else.
 **Dependencies**: None.
 **INVEST**: Independent, Negotiable, Valuable, Estimable, Small, Testable.
@@ -402,9 +402,9 @@ Claude Squad currently binds exclusively to `localhost:8543`, making it inaccess
 - Log warning when binding to non-localhost.
 
 **Acceptance Criteria**:
-- `./claude-squad` binds to localhost:8543 (unchanged).
-- `./claude-squad --listen 0.0.0.0:8543` binds to all interfaces.
-- `./claude-squad --remote-access` binds to 0.0.0.0:8543.
+- `./stapler-squad` binds to localhost:8543 (unchanged).
+- `./stapler-squad --listen 0.0.0.0:8543` binds to all interfaces.
+- `./stapler-squad --remote-access` binds to 0.0.0.0:8543.
 - Warning logged when non-localhost binding.
 
 ---
@@ -814,7 +814,7 @@ func Auth(sessionManager *auth.SessionManager) func(http.Handler) http.Handler
 - Requests from 127.0.0.1 or ::1
 
 **Implementation Details**:
-- Read session cookie named `cs_session` (cs = claude-squad).
+- Read session cookie named `cs_session` (cs = stapler-squad).
 - Validate token against SessionManager.
 - Set `X-Auth-User` header for downstream handlers.
 - Return 401 for API requests, 302 redirect for page requests.

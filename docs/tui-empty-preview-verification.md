@@ -17,13 +17,13 @@
 ### Worktree Directory Check
 ```bash
 # Worktree directories exist on disk
-✓ /Users/tylerstapler/.claude-squad/worktrees/fix-erndering-makdrown_185b1adf34df22c0/ EXISTS
+✓ /Users/tylerstapler/.stapler-squad/worktrees/fix-erndering-makdrown_185b1adf34df22c0/ EXISTS
 ```
 
 ### Tmux Session Check
 ```bash
 # No tmux sessions exist for paused sessions
-✓ Only found: claudesquad_new-session, claudesquad_test-claude-squad
+✓ Only found: claudesquad_new-session, claudesquad_test-stapler-squad
 ✗ Missing: claudesquad_fix-erndering-makdrown (and all other paused sessions)
 ```
 
@@ -83,22 +83,22 @@ func (i *Instance) TmuxAlive() bool {
 ### Step 1: Verify Current State
 ```bash
 # Check session statuses
-jq '.instances[] | {title, status, paused: (.status == 3)}' ~/.claude-squad/state.json | head -20
+jq '.instances[] | {title, status, paused: (.status == 3)}' ~/.stapler-squad/state.json | head -20
 
 # Check tmux sessions
 tmux ls | grep claudesquad
 
 # Verify worktrees exist
-ls -la ~/.claude-squad/worktrees/ | grep fix-erndering-makdrown
+ls -la ~/.stapler-squad/worktrees/ | grep fix-erndering-makdrown
 ```
 
 ### Step 2: Resume Sessions in TUI
 
-**In the claude-squad TUI:**
+**In the stapler-squad TUI:**
 
-1. **Launch claude-squad**:
+1. **Launch stapler-squad**:
    ```bash
-   ./claude-squad
+   ./stapler-squad
    ```
 
 2. **Show all sessions** (including paused):
@@ -151,7 +151,7 @@ The previous attempts focused on:
 ```bash
 # Should show status=3 (Paused)
 jq '.instances[] | select(.title == "fix-erndering-makdrown") | {title, status}' \
-  ~/.claude-squad/state.json
+  ~/.stapler-squad/state.json
 
 # Should NOT find tmux session
 tmux ls | grep "fix-erndering-makdrown" || echo "No tmux session found"
@@ -161,7 +161,7 @@ tmux ls | grep "fix-erndering-makdrown" || echo "No tmux session found"
 ```bash
 # Should show status=0 (Running)
 jq '.instances[] | select(.title == "fix-erndering-makdrown") | {title, status}' \
-  ~/.claude-squad/state.json
+  ~/.stapler-squad/state.json
 
 # Should find tmux session
 tmux ls | grep "fix-erndering-makdrown" && echo "Tmux session found!"
@@ -207,11 +207,11 @@ if instance.Paused() {
 
 ## Files Examined
 
-- `/Users/tylerstapler/.claude-squad/state.json` - Session state (32.9MB, all sessions paused)
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/instance.go` - Preview() and TmuxAlive() logic
-- `/Users/tylerstapler/IdeaProjects/claude-squad/app/app.go` - Session loading logic
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/preview.go` - Async preview worker (working correctly)
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/diff.go` - Async diff worker (working correctly)
+- `/Users/tylerstapler/.stapler-squad/state.json` - Session state (32.9MB, all sessions paused)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/instance.go` - Preview() and TmuxAlive() logic
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/app/app.go` - Session loading logic
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/preview.go` - Async preview worker (working correctly)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/diff.go` - Async diff worker (working correctly)
 
 ## Related Documentation
 

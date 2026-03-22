@@ -133,7 +133,7 @@ If preview/diff are STILL empty after these changes, it means:
 ### 1. Check Session Status
 ```bash
 # Look at your state file
-cat ~/.claude-squad/state.json | jq '.instances[] | {title, status}'
+cat ~/.stapler-squad/state.json | jq '.instances[] | {title, status}'
 ```
 
 Expected statuses:
@@ -146,18 +146,18 @@ Expected statuses:
 ### 2. Check Worktree Paths
 ```bash
 # See if worktrees exist
-cat ~/.claude-squad/state.json | jq '.instances[] | {title, worktree: .worktree.worktree_path}'
+cat ~/.stapler-squad/state.json | jq '.instances[] | {title, worktree: .worktree.worktree_path}'
 ```
 
 Then check if those paths exist:
 ```bash
-ls -la ~/.claude-squad/worktrees/
+ls -la ~/.stapler-squad/worktrees/
 ```
 
 ### 3. Check Debug Logs
 ```bash
 # Run TUI and check logs in another terminal
-tail -f ~/.claude-squad/logs/debug.log | grep -i "preview\|diff"
+tail -f ~/.stapler-squad/logs/debug.log | grep -i "preview\|diff"
 ```
 
 Look for:
@@ -258,7 +258,7 @@ To confirm the fix works, after resuming a session:
 tmux ls | grep claudesquad
 
 # Check worktree exists
-ls -la ~/.claude-squad/worktrees/
+ls -la ~/.stapler-squad/worktrees/
 
 # Navigate to session in TUI and verify preview/diff show content
 ```

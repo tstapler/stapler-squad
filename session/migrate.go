@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // MigrationOptions configures the migration from JSON to SQLite

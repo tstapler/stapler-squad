@@ -3,7 +3,7 @@ package ssp
 import (
 	"time"
 
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // ClientState tracks the SSP state for a single connected client.

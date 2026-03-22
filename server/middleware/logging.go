@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"bufio"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 	"net"
 	"net/http"
 	"time"

@@ -2,7 +2,7 @@
 
 ## Quick Reference
 
-**Feature Plan**: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/tasks/claude-config-editor.md`  
+**Feature Plan**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/tasks/claude-config-editor.md`  
 **Epic ID**: FEATURE-001  
 **Estimated Effort**: 3-4 weeks  
 **Status**: Planning Complete
@@ -12,72 +12,72 @@
 ### 1. Backend Services (Go)
 
 **New Files to Create**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/config/claude.go` - ClaudeConfigManager
-- `/Users/tylerstapler/IdeaProjects/claude-squad/config/claude_test.go` - Unit tests
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/history.go` - ClaudeHistoryParser
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/history_test.go` - Unit tests
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/conversation.go` - ConversationStore
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/conversation_test.go` - Unit tests
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/config/claude.go` - ClaudeConfigManager
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/config/claude_test.go` - Unit tests
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/history.go` - ClaudeHistoryParser
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/history_test.go` - Unit tests
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/conversation.go` - ConversationStore
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/conversation_test.go` - Unit tests
 
 **Files to Modify**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/proto/session/v1/session.proto` - Add new RPCs
-- `/Users/tylerstapler/IdeaProjects/claude-squad/proto/session/v1/types.proto` - Add new message types
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/services/session_service.go` - Implement new RPC handlers
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/proto/session/v1/session.proto` - Add new RPCs
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/proto/session/v1/types.proto` - Add new message types
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/services/session_service.go` - Implement new RPC handlers
 
 ### 2. TUI Components (Go)
 
 **New Files to Create**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/configEditorOverlay.go` - Config editor overlay
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/configEditorOverlay_test.go` - Unit tests
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/sessionHistoryBrowserOverlay.go` - History browser
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/sessionHistoryBrowserOverlay_test.go` - Unit tests
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/historyDetailOverlay.go` - Conversation viewer
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/historyDetailOverlay_test.go` - Unit tests
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/syntax/highlighter.go` - Syntax highlighting (if needed)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/configEditorOverlay.go` - Config editor overlay
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/configEditorOverlay_test.go` - Unit tests
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/sessionHistoryBrowserOverlay.go` - History browser
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/sessionHistoryBrowserOverlay_test.go` - Unit tests
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/historyDetailOverlay.go` - Conversation viewer
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/historyDetailOverlay_test.go` - Unit tests
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/syntax/highlighter.go` - Syntax highlighting (if needed)
 
 **Files to Modify**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/app/app.go` - Register new overlays with UI coordinator
-- `/Users/tylerstapler/IdeaProjects/claude-squad/keys/keys.go` - Add key bindings (C for config, H for history)
-- `/Users/tylerstapler/IdeaProjects/claude-squad/keys/help.go` - Add key help entries
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/app/app.go` - Register new overlays with UI coordinator
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/keys/keys.go` - Add key bindings (C for config, H for history)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/keys/help.go` - Add key help entries
 
 ### 3. Web UI Components (TypeScript/React)
 
 **New Files to Create**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/config/ConfigEditor.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/config/ConfigEditor.module.css`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/config/ConfigEditor.test.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/SessionHistoryBrowser.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/SessionHistoryBrowser.module.css`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/SessionHistoryBrowser.test.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/ConversationViewer.tsx`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/ConversationViewer.module.css`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/app/config/page.tsx` - Config editor page
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/app/history/page.tsx` - History browser page
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useClaudeConfig.ts` - Config management hook
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useSessionHistory.ts` - History management hook
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/config/ConfigEditor.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/config/ConfigEditor.module.css`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/config/ConfigEditor.test.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/SessionHistoryBrowser.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/SessionHistoryBrowser.module.css`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/SessionHistoryBrowser.test.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/ConversationViewer.tsx`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/ConversationViewer.module.css`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/app/config/page.tsx` - Config editor page
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/app/history/page.tsx` - History browser page
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useClaudeConfig.ts` - Config management hook
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useSessionHistory.ts` - History management hook
 
 ### 4. Test Files
 
 **Integration Tests**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/integration/config_integration_test.go`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/integration/history_integration_test.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/integration/config_integration_test.go`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/integration/history_integration_test.go`
 
 **E2E Tests** (Playwright):
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/e2e/configEditor.spec.ts`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/e2e/sessionHistory.spec.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/e2e/configEditor.spec.ts`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/e2e/sessionHistory.spec.ts`
 
 **Test Fixtures**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/fixtures/claude/CLAUDE.md`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/fixtures/claude/settings.json`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/fixtures/claude/history.jsonl`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/fixtures/claude/history_large.jsonl`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/fixtures/claude/history_corrupted.jsonl`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/tests/fixtures/claude/__store.db`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/fixtures/claude/CLAUDE.md`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/fixtures/claude/settings.json`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/fixtures/claude/history.jsonl`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/fixtures/claude/history_large.jsonl`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/fixtures/claude/history_corrupted.jsonl`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/tests/fixtures/claude/__store.db`
 
 ## Architecture Patterns to Follow
 
 ### 1. Overlay Pattern (Existing)
-- Extend `BaseOverlay` in `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/base.go`
+- Extend `BaseOverlay` in `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/base.go`
 - Follow pattern from existing overlays like `sessionSetup.go`
 - Register with `UICoordinator` in app.go
 
@@ -123,7 +123,7 @@ func NewInstanceFromHistory(history *SessionHistorySummary) (*Instance, error) {
 ```go
 // Reuse existing config directory resolution
 // File: config/config.go
-configDir, err := GetConfigDir() // Returns ~/.claude-squad
+configDir, err := GetConfigDir() // Returns ~/.stapler-squad
 claudeDir := filepath.Join(os.UserHomeDir(), ".claude")
 ```
 
@@ -297,9 +297,9 @@ npm install react-markdown  # Markdown rendering
 ## Documentation Updates
 
 **Files to Update**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/CLAUDE.md` - Add config editor and history viewer usage
-- `/Users/tylerstapler/IdeaProjects/claude-squad/README.md` - Add feature overview
-- `/Users/tylerstapler/IdeaProjects/claude-squad/docs/architecture.md` - Add architecture diagrams (if exists)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/CLAUDE.md` - Add config editor and history viewer usage
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/README.md` - Add feature overview
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/architecture.md` - Add architecture diagrams (if exists)
 
 ## Key Risks & Mitigation
 
@@ -345,4 +345,4 @@ npm install react-markdown  # Markdown rendering
 ---
 
 **For detailed implementation guidance, see the full feature plan**:  
-`/Users/tylerstapler/IdeaProjects/claude-squad/docs/tasks/claude-config-editor.md`
+`/Users/tylerstapler/IdeaProjects/stapler-squad/docs/tasks/claude-config-editor.md`

@@ -1,6 +1,6 @@
 # Terminal Library
 
-Efficient terminal output management for the claude-squad web UI.
+Efficient terminal output management for the stapler-squad web UI.
 
 ## Architecture
 

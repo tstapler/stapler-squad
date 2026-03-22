@@ -1,8 +1,8 @@
-# Selective Data Loading in Claude Squad
+# Selective Data Loading in Stapler Squad
 
 ## Overview
 
-Claude Squad's SQLite repository now supports selective data loading through `LoadOptions`. This allows you to control exactly what child data is loaded for each session, optimizing performance and memory usage.
+Stapler Squad's SQLite repository now supports selective data loading through `LoadOptions`. This allows you to control exactly what child data is loaded for each session, optimizing performance and memory usage.
 
 ## Performance Impact
 

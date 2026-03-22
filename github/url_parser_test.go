@@ -131,18 +131,18 @@ func TestParseGitHubRef(t *testing.T) {
 
 		// Real-world examples
 		{
-			name:      "claude-squad repo",
-			input:     "https://github.com/anthropics/claude-squad",
+			name:      "stapler-squad repo",
+			input:     "https://github.com/tstapler/stapler-squad",
 			wantType:  RefTypeRepo,
-			wantOwner: "anthropics",
-			wantRepo:  "claude-squad",
+			wantOwner: "tstapler",
+			wantRepo:  "stapler-squad",
 		},
 		{
-			name:      "claude-squad PR",
-			input:     "https://github.com/anthropics/claude-squad/pull/42",
+			name:      "stapler-squad PR",
+			input:     "https://github.com/tstapler/stapler-squad/pull/42",
 			wantType:  RefTypePR,
-			wantOwner: "anthropics",
-			wantRepo:  "claude-squad",
+			wantOwner: "tstapler",
+			wantRepo:  "stapler-squad",
 			wantPR:    42,
 		},
 
@@ -393,9 +393,9 @@ func TestParseGitHubRef_ExtendedFormats(t *testing.T) {
 			},
 			{
 				name:       "Deep nested file path",
-				input:      "https://github.com/anthropics/claude-squad/blob/main/ui/overlay/sessionSetup.go#L100-L150",
-				wantOwner:  "anthropics",
-				wantRepo:   "claude-squad",
+				input:      "https://github.com/tstapler/stapler-squad/blob/main/ui/overlay/sessionSetup.go#L100-L150",
+				wantOwner:  "tstapler",
+				wantRepo:   "stapler-squad",
 				wantBranch: "main",
 				wantPath:   "ui/overlay/sessionSetup.go",
 				wantLine:   100,
@@ -465,9 +465,9 @@ func TestParseGitHubRef_ExtendedFormats(t *testing.T) {
 			},
 			{
 				name:      "Real commit URL",
-				input:     "https://github.com/anthropics/claude-squad/commit/91c1897e991cb2afe0f6a8e8e592c91dede",
-				wantOwner: "anthropics",
-				wantRepo:  "claude-squad",
+				input:     "https://github.com/tstapler/stapler-squad/commit/91c1897e991cb2afe0f6a8e8e592c91dede",
+				wantOwner: "tstapler",
+				wantRepo:  "stapler-squad",
 				wantSHA:   "91c1897e991cb2afe0f6a8e8e592c91dede",
 			},
 		}
@@ -518,9 +518,9 @@ func TestParseGitHubRef_ExtendedFormats(t *testing.T) {
 			},
 			{
 				name:      "Real issue URL",
-				input:     "https://github.com/anthropics/claude-squad/issues/99",
-				wantOwner: "anthropics",
-				wantRepo:  "claude-squad",
+				input:     "https://github.com/tstapler/stapler-squad/issues/99",
+				wantOwner: "tstapler",
+				wantRepo:  "stapler-squad",
 				wantIssue: 99,
 			},
 		}
@@ -574,9 +574,9 @@ func TestParseGitHubRef_ExtendedFormats(t *testing.T) {
 			},
 			{
 				name:      "Compare with feature branch",
-				input:     "https://github.com/anthropics/claude-squad/compare/main...feature/new-url-parser",
-				wantOwner: "anthropics",
-				wantRepo:  "claude-squad",
+				input:     "https://github.com/tstapler/stapler-squad/compare/main...feature/new-url-parser",
+				wantOwner: "tstapler",
+				wantRepo:  "stapler-squad",
 				wantBase:  "main",
 				wantHead:  "feature/new-url-parser",
 			},
@@ -631,9 +631,9 @@ func TestParseGitHubRef_ExtendedFormats(t *testing.T) {
 			},
 			{
 				name:      "Real release URL",
-				input:     "https://github.com/anthropics/claude-squad/releases/tag/v0.1.0",
-				wantOwner: "anthropics",
-				wantRepo:  "claude-squad",
+				input:     "https://github.com/tstapler/stapler-squad/releases/tag/v0.1.0",
+				wantOwner: "tstapler",
+				wantRepo:  "stapler-squad",
 				wantTag:   "v0.1.0",
 			},
 		}

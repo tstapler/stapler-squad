@@ -76,7 +76,7 @@ func TestStartTmuxSession(t *testing.T) {
 			// Handle DoesSessionExist() polling which uses list-sessions
 			if strings.Contains(cmd.String(), "list-sessions") && strings.Contains(cmd.String(), "#{session_name}") {
 				if created {
-					return []byte("claudesquad_test-session"), nil
+					return []byte("staplersquad_test-session"), nil
 				} else {
 					return nil, fmt.Errorf("no server running")
 				}

@@ -1,8 +1,8 @@
 package adapters
 
 import (
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/session"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

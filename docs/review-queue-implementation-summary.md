@@ -244,7 +244,7 @@ npm run test:review-queue
 === RUN   TestReactiveQueueManagerEventTypes
 --- PASS: TestReactiveQueueManagerEventTypes (0.05s)
 PASS
-ok      claude-squad/server     2.134s
+ok      stapler-squad/server     2.134s
 ```
 
 ### Expected E2E Test Results

@@ -1,9 +1,9 @@
 package server
 
 import (
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/server/events"
-	"claude-squad/session"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/session"
 	"context"
 	"os"
 	"path/filepath"
@@ -14,7 +14,7 @@ import (
 // TestReactiveQueueManagerIntegration tests the full reactive queue workflow
 func TestReactiveQueueManagerIntegration(t *testing.T) {
 	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "claude-squad-test-reactive-queue")
+	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-reactive-queue")
 	defer os.RemoveAll(testDir)
 
 	// Setup components
@@ -160,7 +160,7 @@ func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 // TestReactiveQueueManagerMultipleClients tests multiple concurrent clients
 func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "claude-squad-test-multiple-clients")
+	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-multiple-clients")
 	defer os.RemoveAll(testDir)
 
 	// Setup
@@ -255,7 +255,7 @@ func TestReactiveQueueManagerMultipleClients(t *testing.T) {
 // TestReactiveQueueManagerFiltering tests client-side filtering
 func TestReactiveQueueManagerFiltering(t *testing.T) {
 	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "claude-squad-test-filtering")
+	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-filtering")
 	defer os.RemoveAll(testDir)
 
 	// Setup
@@ -338,7 +338,7 @@ func TestReactiveQueueManagerFiltering(t *testing.T) {
 // TestReactiveQueueManagerEventTypes tests all event types
 func TestReactiveQueueManagerEventTypes(t *testing.T) {
 	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "claude-squad-test-event-types")
+	testDir := filepath.Join(os.TempDir(), "stapler-squad-test-event-types")
 	defer os.RemoveAll(testDir)
 
 	// Setup
@@ -424,7 +424,7 @@ func waitForEvent(t *testing.T, eventCh <-chan *sessionv1.ReviewQueueEvent, even
 // BenchmarkReactiveQueueManagerThroughput measures event processing throughput
 func BenchmarkReactiveQueueManagerThroughput(b *testing.B) {
 	// Setup test directory
-	testDir := filepath.Join(os.TempDir(), "claude-squad-bench-throughput")
+	testDir := filepath.Join(os.TempDir(), "stapler-squad-bench-throughput")
 	defer os.RemoveAll(testDir)
 
 	// Setup

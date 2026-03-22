@@ -4,7 +4,7 @@
 Accepted
 
 ## Context
-Claude Squad currently maintains two separate WebSocket implementations:
+Stapler Squad currently maintains two separate WebSocket implementations:
 1. **Managed sessions**: ConnectRPC protocol with advanced features (compression, flow control, state sync)
 2. **External sessions**: Simple WebSocket with raw text protocol and no advanced features
 
@@ -87,4 +87,4 @@ The old `/api/ws/external` endpoint will be maintained temporarily with deprecat
 ## References
 - [Feature Plan: Unified WebSocket Streaming](../../../tasks/unified-websocket-streaming.md)
 - [ConnectRPC Documentation](https://connect.build/)
-- [Original External Session Implementation](https://github.com/claude-squad/session/external_websocket.go)
+- [Original External Session Implementation](https://github.com/stapler-squad/session/external_websocket.go)

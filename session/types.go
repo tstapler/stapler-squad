@@ -11,12 +11,12 @@ import (
 type InstanceType int
 
 const (
-	// InstanceTypeManaged represents a session fully managed by claude-squad
+	// InstanceTypeManaged represents a session fully managed by stapler-squad
 	// with complete lifecycle control, git worktrees, and all features
 	InstanceTypeManaged InstanceType = iota
 
 	// InstanceTypeExternal represents a Claude instance discovered externally
-	// (not created by claude-squad) with limited interaction capabilities
+	// (not created by stapler-squad) with limited interaction capabilities
 	InstanceTypeExternal
 )
 
@@ -205,7 +205,7 @@ type PTYDiscoveryConfig struct {
 	Mode DiscoveryMode
 
 	// ManagedPrefix is the tmux session prefix for squad-managed sessions
-	// Default: "claudesquad_"
+	// Default: "staplersquad_"
 	ManagedPrefix string
 
 	// DiscoverExternal enables discovery of non-prefixed Claude instances
@@ -233,7 +233,7 @@ func DefaultPTYDiscoveryConfig() PTYDiscoveryConfig {
 		PrimarySocket:       "",
 		ExternalSockets:     []string{},
 		Mode:                DiscoveryModeManaged,
-		ManagedPrefix:       "claudesquad_",
+		ManagedPrefix:       "staplersquad_",
 		DiscoverExternal:    false,
 		AllowExternalAttach: false,
 		RequireConfirmation: true,

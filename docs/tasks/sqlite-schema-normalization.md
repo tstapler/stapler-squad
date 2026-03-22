@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document presents a revised domain-driven approach to normalizing the SQLite schema for claude-squad. The design separates the core Session entity (containing only universally required fields) from optional contexts that are attached based on deployment scenarios. This enables support for diverse environments including local git-based development, ephemeral containers, cloud instances, and headless API-driven sessions.
+This document presents a revised domain-driven approach to normalizing the SQLite schema for stapler-squad. The design separates the core Session entity (containing only universally required fields) from optional contexts that are attached based on deployment scenarios. This enables support for diverse environments including local git-based development, ephemeral containers, cloud instances, and headless API-driven sessions.
 
 ## Vision & Principles
 
@@ -485,7 +485,7 @@ ORDER BY a.last_meaningful_output DESC
 
 ### System-Wide Impact Overview
 
-This schema normalization represents a fundamental architectural shift affecting 200+ files across all layers of the claude-squad system. The refactoring touches approximately 15,000 lines of production code with cascading effects through the domain model, repository, service, API, and UI layers.
+This schema normalization represents a fundamental architectural shift affecting 200+ files across all layers of the stapler-squad system. The refactoring touches approximately 15,000 lines of production code with cascading effects through the domain model, repository, service, API, and UI layers.
 
 ### Layer-by-Layer Impact Analysis
 

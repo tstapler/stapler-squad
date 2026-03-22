@@ -112,7 +112,7 @@ A **hybrid multi-tier approach** that leverages existing infrastructure:
 ## Epic Overview
 
 ### User Value
-Enable users to discover, monitor, and interact with external Claude Code processes running on their machine through the claude-squad web interface, without requiring those sessions to be started by claude-squad.
+Enable users to discover, monitor, and interact with external Claude Code processes running on their machine through the stapler-squad web interface, without requiring those sessions to be started by stapler-squad.
 
 ### Success Metrics
 - Discover 100% of Claude processes running in tmux sessions (same user)

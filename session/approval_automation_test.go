@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 func TestNewApprovalAutomation(t *testing.T) {

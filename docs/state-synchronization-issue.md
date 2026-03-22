@@ -9,7 +9,7 @@
 ```bash
 $ tmux ls
 claudesquad_new-session: 1 windows (created Wed Oct  8 11:53:02 2025) (attached)
-claudesquad_test-claude-squad: 1 windows (created Wed Oct  8 11:53:02 2025) (attached)
+claudesquad_test-stapler-squad: 1 windows (created Wed Oct  8 11:53:02 2025) (attached)
 ```
 
 **Only 2 tmux sessions exist**
@@ -25,7 +25,7 @@ Ready (status=1): 15
 
 ### Active Claude-Squad Process
 ```bash
-PID 66548: ./claude-squad --web (started at 8:26PM)
+PID 66548: ./stapler-squad --web (started at 8:26PM)
 ```
 
 Running in web mode, actively managing only 2 sessions.
@@ -44,7 +44,7 @@ The sessions marked as "Ready" (status: 1) likely experienced one of these scena
 1. **Tmux sessions crashed** but state wasn't updated
 2. **Sessions were killed externally** (e.g., `tmux kill-session`)
 3. **System restart** without proper cleanup
-4. **Previous claude-squad crash** that didn't save state
+4. **Previous stapler-squad crash** that didn't save state
 
 When `FromInstanceData()` loads these sessions:
 ```go
@@ -107,7 +107,7 @@ The tmux session names should be:
 
 But `tmux ls` shows **only**:
 - `claudesquad_new-session`
-- `claudesquad_test-claude-squad`
+- `claudesquad_test-stapler-squad`
 
 ## Solution Approaches
 
@@ -148,7 +148,7 @@ for _, instance := range instances {
 
 ## Immediate User Workaround
 
-**For the 2 working sessions (new-session, test-claude-squad):**
+**For the 2 working sessions (new-session, test-stapler-squad):**
 - These should show preview/diff content correctly
 - Navigate to them in TUI to verify
 
@@ -226,7 +226,7 @@ func (h *home) performStartupHealthCheck() {
 - **First Run After Implementation**: Will detect 13 orphaned sessions and mark them as Paused
 - **Logs**: Will show: "Startup health check: Found 13 orphaned sessions out of 15 checked, marked as Paused"
 - **TUI**: Orphaned sessions will now correctly show as Paused instead of misleading "Ready" status
-- **Working Sessions**: "new-session" and "test-claude-squad" remain Ready since they have actual tmux backing
+- **Working Sessions**: "new-session" and "test-stapler-squad" remain Ready since they have actual tmux backing
 
 ### User Impact
 
@@ -243,7 +243,7 @@ func (h *home) performStartupHealthCheck() {
 
 ## Next Steps
 
-1. **Immediate**: Restart claude-squad to trigger the startup health check
+1. **Immediate**: Restart stapler-squad to trigger the startup health check
 2. **Verify**: Check logs for "Startup health check" messages showing orphaned sessions detected
 3. **Resume**: Use `r` key to resume any sessions you want to work on
 4. **Long-term**: Continue monitoring for any new state desynchronization issues

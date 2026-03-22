@@ -1,7 +1,7 @@
 package session
 
 import (
-	"claude-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/git"
 	"context"
 	"fmt"
 	"os"

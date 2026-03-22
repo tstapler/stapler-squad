@@ -1,4 +1,4 @@
-# SQLite Migration Strategy for Claude Squad
+# SQLite Migration Strategy for Stapler Squad
 
 ## Problem Analysis
 
@@ -30,7 +30,7 @@ The current JSON-based configuration system has a critical performance issue:
 
 ```
 ┌─────────────────────────────────────────────┐
-│                Claude Squad                 │
+│                Stapler Squad                 │
 ├─────────────────────────────────────────────┤
 │  Current: JSON File (~25MB)                │
 │  ├── sessions.json (all session data)      │

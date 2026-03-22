@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

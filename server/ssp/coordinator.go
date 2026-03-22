@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/session"
-	"claude-squad/session/framebuffer"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/framebuffer"
 )
 
 // Coordinator manages SSP state for a single terminal session.

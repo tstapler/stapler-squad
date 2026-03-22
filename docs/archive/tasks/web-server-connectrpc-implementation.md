@@ -3,7 +3,7 @@
 ## Epic Overview
 
 ### Goal
-Expose claude-squad's session management functionality through a web interface, enabling browser-based access to all TUI features including session creation, monitoring, terminal viewing, and git diff inspection.
+Expose stapler-squad's session management functionality through a web interface, enabling browser-based access to all TUI features including session creation, monitoring, terminal viewing, and git diff inspection.
 
 ### Value Proposition
 - **Multi-device Access**: Manage sessions from any browser without terminal access
@@ -303,7 +303,7 @@ package server
 import (
     "context"
     "net/http"
-    sessionv1 "claude-squad/gen/proto/go/session/v1"
+    sessionv1 "stapler-squad/gen/proto/go/session/v1"
     "connectrpc.com/connect"
 )
 
@@ -380,8 +380,8 @@ package services
 
 import (
     "context"
-    "claude-squad/session"
-    sessionv1 "claude-squad/gen/proto/go/session/v1"
+    "stapler-squad/session"
+    sessionv1 "stapler-squad/gen/proto/go/session/v1"
     "connectrpc.com/connect"
 )
 
@@ -903,7 +903,7 @@ package services
 import (
     "context"
     "io"
-    sessionv1 "claude-squad/gen/proto/go/session/v1"
+    sessionv1 "stapler-squad/gen/proto/go/session/v1"
     "connectrpc.com/connect"
 )
 
@@ -2294,7 +2294,7 @@ export class ErrorBoundary extends Component<Props, State> {
 **Testing**:
 ```bash
 make docker-build
-docker run -p 8080:8080 claude-squad-web
+docker run -p 8080:8080 stapler-squad-web
 # Access http://localhost:8080, verify full functionality
 ```
 
@@ -2317,30 +2317,30 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o claude-squad-web
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o stapler-squad-web
 
 # Stage 3: Production image
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates tmux git
 WORKDIR /app
-COPY --from=go-builder /app/claude-squad-web .
+COPY --from=go-builder /app/stapler-squad-web .
 COPY --from=web-builder /app/web/.next/standalone ./web
 COPY --from=web-builder /app/web/.next/static ./web/.next/static
 COPY --from=web-builder /app/web/public ./web/public
 
 EXPOSE 8080
-CMD ["./claude-squad-web", "--web"]
+CMD ["./stapler-squad-web", "--web"]
 ```
 
 ```yaml
 # docker-compose.yml
 services:
-  claude-squad-web:
+  stapler-squad-web:
     build: .
     ports:
       - "8080:8080"
     volumes:
-      - ./data:/root/.claude-squad
+      - ./data:/root/.stapler-squad
     environment:
       - LOG_LEVEL=info
       - PORT=8080

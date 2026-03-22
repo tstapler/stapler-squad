@@ -10,7 +10,7 @@ The application's state file (`state.json`) was out of sync with actual running 
 
 - **40 total sessions** in state.json
 - **15 sessions marked as "Ready"** (status: 1)
-- **Only 2 actual tmux sessions** running (`claudesquad_new-session`, `claudesquad_test-claude-squad`)
+- **Only 2 actual tmux sessions** running (`claudesquad_new-session`, `claudesquad_test-stapler-squad`)
 - **13 orphaned sessions** marked as Ready but lacking tmux backing
 
 This caused:
@@ -117,7 +117,7 @@ h.performStartupHealthCheck()
 
 **State Changes**:
 - 13 orphaned sessions: Status changed from Ready (1) → Paused (3)
-- 2 working sessions: Status remains Ready (new-session, test-claude-squad)
+- 2 working sessions: Status remains Ready (new-session, test-stapler-squad)
 
 ### Subsequent Runs
 
@@ -147,15 +147,15 @@ h.performStartupHealthCheck()
 
 ## Verification Steps
 
-1. **Check Logs** (in `~/.claude-squad/logs/claude-squad.log`):
+1. **Check Logs** (in `~/.stapler-squad/logs/stapler-squad.log`):
    ```bash
-   tail -50 ~/.claude-squad/logs/claude-squad.log | grep "Startup health check"
+   tail -50 ~/.stapler-squad/logs/stapler-squad.log | grep "Startup health check"
    ```
 
 2. **Verify State File**:
    ```bash
    # Count sessions by status after health check
-   jq '.instances[] | .status' ~/.claude-squad/state.json | sort | uniq -c
+   jq '.instances[] | .status' ~/.stapler-squad/state.json | sort | uniq -c
    ```
 
 3. **Verify Tmux Sessions**:
@@ -165,10 +165,10 @@ h.performStartupHealthCheck()
    ```
 
 4. **TUI Navigation**:
-   - Launch claude-squad
+   - Launch stapler-squad
    - Navigate to previously orphaned sessions
    - Verify they show as Paused with appropriate message
-   - Navigate to working sessions (new-session, test-claude-squad)
+   - Navigate to working sessions (new-session, test-stapler-squad)
    - Verify preview/diff panes show content
 
 ## Testing

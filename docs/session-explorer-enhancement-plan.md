@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document outlines the plan to enhance the Claude Squad session explorer by removing the 10-session limit and improving the session management experience. The enhancements focus on better organization, navigation, and searchability of sessions.
+This document outlines the plan to enhance the Stapler Squad session explorer by removing the 10-session limit and improving the session management experience. The enhancements focus on better organization, navigation, and searchability of sessions.
 
 ## Goals
 

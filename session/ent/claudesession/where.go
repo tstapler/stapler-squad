@@ -3,7 +3,7 @@
 package claudesession
 
 import (
-	"claude-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"time"
 
 	"entgo.io/ent/dialect/sql"

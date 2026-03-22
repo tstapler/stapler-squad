@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"claude-squad/session"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // TestDiffGenerator_NilOldState verifies full redraw when old state is nil

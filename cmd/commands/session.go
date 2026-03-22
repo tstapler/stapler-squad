@@ -1,8 +1,8 @@
 package commands
 
 import (
-	"claude-squad/cmd/interfaces"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/cmd/interfaces"
+	"github.com/tstapler/stapler-squad/log"
 	tea "github.com/charmbracelet/bubbletea"
 )
 

@@ -24,7 +24,7 @@ type TUISession struct {
 
 // ExpectSessionConfig configures expect-based TUI session behavior
 type ExpectSessionConfig struct {
-	// Command to run (defaults to "./claude-squad")
+	// Command to run (defaults to "./stapler-squad")
 	Command string
 	// Arguments to pass to command
 	Args []string
@@ -41,9 +41,9 @@ type ExpectSessionConfig struct {
 // DefaultExpectConfig returns default expect testing configuration
 func DefaultExpectConfig() ExpectSessionConfig {
 	// Find the binary - try current dir first, then parent dir
-	command := "./claude-squad"
+	command := "./stapler-squad"
 	if _, err := os.Stat(command); os.IsNotExist(err) {
-		command = "../claude-squad"
+		command = "../stapler-squad"
 	}
 
 	return ExpectSessionConfig{

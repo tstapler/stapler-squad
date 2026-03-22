@@ -50,8 +50,8 @@ The client-side watermark tracking and logging works, but the server continues s
 
 2. **Server Running**:
    ```bash
-   cd /Users/tylerstapler/IdeaProjects/claude-squad
-   ./claude-squad
+   cd /Users/tylerstapler/IdeaProjects/stapler-squad
+   ./stapler-squad
    ```
 
 3. **Web UI Open**:
@@ -294,4 +294,4 @@ After successful testing, implement:
 
 - xterm.js Flow Control Guide: https://xtermjs.org/docs/guides/flowcontrol/
 - xterm.js Terminal API: https://xtermjs.org/docs/api/terminal/classes/terminal/
-- Task Documentation: `/Users/tylerstapler/IdeaProjects/claude-squad/docs/tasks/terminal-flow-control.md`
+- Task Documentation: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/tasks/terminal-flow-control.md`

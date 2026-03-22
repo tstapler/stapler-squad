@@ -1,6 +1,6 @@
 # Profiling and Performance Debugging
 
-This guide covers comprehensive profiling techniques for diagnosing lock-ups, performance issues, and concurrency problems in Claude Squad.
+This guide covers comprehensive profiling techniques for diagnosing lock-ups, performance issues, and concurrency problems in Stapler Squad.
 
 ## Quick Start: Diagnosing Lock-Ups
 
@@ -8,7 +8,7 @@ If the app is locking up or freezing, use this workflow:
 
 ```bash
 # 1. Run with profiling and tracing enabled
-./claude-squad --profile --trace
+./stapler-squad --profile --trace
 
 # 2. When the lock-up occurs, capture profiles in another terminal:
 # Goroutine stacks (shows what all goroutines are doing)
@@ -22,7 +22,7 @@ curl http://localhost:6060/debug/pprof/mutex?debug=1 > mutex.txt
 
 # 3. Exit the app to save the trace file
 # 4. Analyze the trace:
-go tool trace /tmp/claude-squad-trace-<PID>.out
+go tool trace /tmp/stapler-squad-trace-<PID>.out
 ```
 
 ## Available Profiling Flags
@@ -35,30 +35,30 @@ Enables comprehensive runtime profiling:
 - Periodic goroutine count monitoring
 
 ```bash
-./claude-squad --profile
+./stapler-squad --profile
 ```
 
 ### `--profile-port <port>`
 Change the profiling HTTP server port (default: 6060):
 
 ```bash
-./claude-squad --profile --profile-port 8080
+./stapler-squad --profile --profile-port 8080
 ```
 
 ### `--trace`
 Enables execution tracing to capture detailed goroutine execution:
-- Creates `/tmp/claude-squad-trace-<PID>.out`
+- Creates `/tmp/stapler-squad-trace-<PID>.out`
 - Shows goroutine scheduling, blocking, and system calls
 - Visualize with `go tool trace`
 
 ```bash
-./claude-squad --trace
+./stapler-squad --trace
 ```
 
 ### Combined Usage
 ```bash
 # Full profiling + tracing
-./claude-squad --profile --trace
+./stapler-squad --profile --trace
 ```
 
 ## Profiling Endpoints
@@ -102,12 +102,12 @@ Execution traces provide the most detailed view of goroutine behavior:
 
 ```bash
 # 1. Run with tracing
-./claude-squad --trace
+./stapler-squad --trace
 
 # 2. Reproduce the lock-up, then exit the app
 
 # 3. Open trace in browser
-go tool trace /tmp/claude-squad-trace-<PID>.out
+go tool trace /tmp/stapler-squad-trace-<PID>.out
 ```
 
 ### Trace Viewer Features
@@ -133,7 +133,7 @@ Detect data races (concurrent access without synchronization):
 go build -race .
 
 # Run with race detection
-./claude-squad --profile
+./stapler-squad --profile
 
 # Any data races will be printed to stderr with stack traces
 ```
@@ -156,7 +156,7 @@ Automatically logged every 10 seconds when `--profile` is enabled:
 Add this to your code to enable SQLite diagnostics:
 
 ```go
-import "claude-squad/session"
+import "stapler-squad/session"
 
 // Create diagnostics helper
 diag := session.NewSQLiteDiagnostics(db)
@@ -195,7 +195,7 @@ defer close(done)
 
 **Diagnosis:**
 ```bash
-./claude-squad --profile
+./stapler-squad --profile
 curl http://localhost:6060/debug/pprof/goroutine?debug=1 | grep -A 5 "database/sql"
 ```
 
@@ -217,7 +217,7 @@ curl http://localhost:6060/debug/pprof/goroutine?debug=1 | grep -A 5 "database/s
 
 **Diagnosis:**
 ```bash
-./claude-squad --profile --trace
+./stapler-squad --profile --trace
 # After freeze:
 curl http://localhost:6060/debug/pprof/goroutine?debug=2 > goroutines.txt
 # Look for circular dependencies in blocked goroutines
@@ -236,7 +236,7 @@ curl http://localhost:6060/debug/pprof/goroutine?debug=2 > goroutines.txt
 
 **Diagnosis:**
 ```bash
-./claude-squad --profile
+./stapler-squad --profile
 curl http://localhost:6060/debug/pprof/mutex > mutex.prof
 go tool pprof -http=:8081 mutex.prof
 ```
@@ -258,8 +258,8 @@ go tool pprof -http=:8081 mutex.prof
 
 **Diagnosis:**
 ```bash
-./claude-squad --trace
-go tool trace /tmp/claude-squad-trace-<PID>.out
+./stapler-squad --trace
+go tool trace /tmp/stapler-squad-trace-<PID>.out
 # View "Synchronization blocking profile"
 ```
 
@@ -278,7 +278,7 @@ go tool trace /tmp/claude-squad-trace-<PID>.out
 **Diagnosis:**
 Check logs for SQLite diagnostics:
 ```bash
-grep "SQLite" ~/.claude-squad/logs/claude-squad.log
+grep "SQLite" ~/.stapler-squad/logs/stapler-squad.log
 ```
 
 **Solutions:**
@@ -346,7 +346,7 @@ Then use external monitoring tools:
 lsof -i :6060
 
 # Use different port
-./claude-squad --profile --profile-port 8080
+./stapler-squad --profile --profile-port 8080
 ```
 
 ### Trace File Too Large
@@ -355,16 +355,16 @@ lsof -i :6060
 # Start app, reproduce issue quickly, exit immediately
 
 # Or filter trace
-go tool trace -http=:8081 /tmp/claude-squad-trace-<PID>.out
+go tool trace -http=:8081 /tmp/stapler-squad-trace-<PID>.out
 ```
 
 ### No Profile Data
 ```bash
 # Ensure profiling is enabled
-./claude-squad --profile
+./stapler-squad --profile
 
 # Check logs for profiling messages
-tail -f ~/.claude-squad/logs/claude-squad.log | grep -i profil
+tail -f ~/.stapler-squad/logs/stapler-squad.log | grep -i profil
 ```
 
 ## Further Reading

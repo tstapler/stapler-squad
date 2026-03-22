@@ -1285,7 +1285,7 @@ export function SessionStats({ stats }: Props) {
 </div>
 
 // Ensure proper heading hierarchy
-<h1>Claude Squad Sessions</h1>
+<h1>Stapler Squad Sessions</h1>
 <section>
   <h2>Active Sessions</h2>
   <article>

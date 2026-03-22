@@ -292,7 +292,7 @@
   - Add benchmark visualization
 
 - [ ] **Task 3.4.3**: Integrate with existing benchmarks
-  - Enhance claude-squad's existing benchmarks
+  - Enhance stapler-squad's existing benchmarks
   - Add TUI-specific performance tests
   - Create comparative benchmarking
   - Add performance CI integration
@@ -353,7 +353,7 @@
 
 ### 4.4 Complete E2E Test Suite
 - [ ] **Task 4.4.1**: Implement comprehensive E2E tests
-  - Full claude-squad workflow testing
+  - Full stapler-squad workflow testing
   - Multi-session management testing
   - Git workflow integration testing
   - Performance and reliability testing
@@ -368,7 +368,7 @@
 - [ ] **Task 4.5.1**: Create comprehensive documentation
   - API reference documentation
   - Usage examples and tutorials
-  - Integration guide for claude-squad
+  - Integration guide for stapler-squad
   - Performance optimization guide
 
 - [ ] **Task 4.5.2**: Create example test suites

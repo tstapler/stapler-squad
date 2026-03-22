@@ -1,8 +1,8 @@
 package session
 
 import (
-	"claude-squad/session/detection"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"fmt"
 	"os"
@@ -417,7 +417,7 @@ func filterTmuxMetadata(content string) (string, int) {
 	for _, line := range splitLines(content) {
 		// Skip lines that look like tmux status bars
 		// Common patterns:
-		// - "[claudesquad_session-name]" window title format
+		// - "[staplersquad_session-name]" window title format
 		// - Lines with only whitespace and status indicators
 		// - Lines starting with "[" followed by timestamp or session info
 		trimmed := []byte(line)
@@ -675,5 +675,5 @@ func getPersistDir() string {
 	if homeDir == "" {
 		homeDir = "/tmp"
 	}
-	return homeDir + "/.claude-squad"
+	return homeDir + "/.stapler-squad"
 }

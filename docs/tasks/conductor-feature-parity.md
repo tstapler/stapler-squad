@@ -1,6 +1,6 @@
 # Conductor Feature Parity Plan
 
-Comprehensive implementation plan for closing the feature gap between Claude Squad and Conductor (conductor.build). Features are ordered by user value and implementation priority.
+Comprehensive implementation plan for closing the feature gap between Stapler Squad and Conductor (conductor.build). Features are ordered by user value and implementation priority.
 
 ---
 
@@ -34,11 +34,11 @@ Comprehensive implementation plan for closing the feature gap between Claude Squ
 
 **Context**: We need to store per-turn workspace snapshots without polluting the user's git history. Options considered:
 1. Stash-based storage (`git stash`)
-2. Private ref namespace (`refs/claude-squad/checkpoints/`)
+2. Private ref namespace (`refs/stapler-squad/checkpoints/`)
 3. Separate shadow repository
 4. File-system level snapshots (APFS clones on macOS)
 
-**Decision**: Use **private git ref namespace** at `refs/claude-squad/checkpoints/<session-name>/<sequence>`.
+**Decision**: Use **private git ref namespace** at `refs/stapler-squad/checkpoints/<session-name>/<sequence>`.
 
 **Rationale**:
 - Git refs under custom namespaces are invisible to `git log`, `git branch`, and most standard git commands
@@ -46,7 +46,7 @@ Comprehensive implementation plan for closing the feature gap between Claude Squ
 - Standard `git show`, `git diff`, and `git checkout` work against refs
 - No additional tooling or filesystem features required
 - Compatible with all git hosting providers (refs are not pushed by default)
-- Cleanup is straightforward with `git for-each-ref --format='delete %(refname)' refs/claude-squad/ | git update-ref --stdin`
+- Cleanup is straightforward with `git for-each-ref --format='delete %(refname)' refs/stapler-squad/ | git update-ref --stdin`
 
 **Consequences**:
 - Slightly increased `.git` directory size (one commit object per checkpoint)
@@ -82,7 +82,7 @@ Comprehensive implementation plan for closing the feature gap between Claude Squ
 **As a** developer, **I want** workspace state saved to private git refs **so that** I can revert to any previous turn.
 
 **Acceptance Criteria**:
-- Given a session with a git worktree, when a checkpoint is triggered, then all uncommitted changes are committed to a ref under `refs/claude-squad/checkpoints/<session>/<seq>`
+- Given a session with a git worktree, when a checkpoint is triggered, then all uncommitted changes are committed to a ref under `refs/stapler-squad/checkpoints/<session>/<seq>`
 - Given a checkpoint exists, when I query it, then I can see the diff between that checkpoint and the current state
 - Given 50+ checkpoints exist, when I list them, then they are returned ordered by sequence number with timestamps
 - Given a checkpoint ref, when I inspect it with `git show`, then it contains a valid commit with metadata (turn number, timestamp, trigger reason)
@@ -222,7 +222,7 @@ Description: If the agent is modifying files while a checkpoint is being created
 Mitigation:
 - Create checkpoints on the `Ready -> Running` transition (agent is idle at checkpoint moment)
 - Use `git stash create` (which is more atomic than add+commit) as the snapshot mechanism
-- Then store the stash tree as a ref: `git update-ref refs/claude-squad/checkpoints/... $(git stash create)`
+- Then store the stash tree as a ref: `git update-ref refs/stapler-squad/checkpoints/... $(git stash create)`
 - This avoids staging area conflicts with the agent's own git operations
 
 Files Likely Affected: `session/git/checkpoint.go`
@@ -254,7 +254,7 @@ Mitigation:
 
 ### Overview
 
-**User Value**: Define lifecycle scripts (`setup`, `run`, `archive`) per workspace via a `claude-squad.json` config file. The `run` script launches a dev server with allocated ports, enabling agents to test their changes against a running application. This closes the gap between writing code and validating it.
+**User Value**: Define lifecycle scripts (`setup`, `run`, `archive`) per workspace via a `stapler-squad.json` config file. The `run` script launches a dev server with allocated ports, enabling agents to test their changes against a running application. This closes the gap between writing code and validating it.
 
 **Success Metrics**:
 - Dev server starts within 10 seconds of session creation (for `setup` + `run`)
@@ -267,15 +267,15 @@ Mitigation:
 **Status**: Proposed
 
 **Context**: We need a way for users to declare per-workspace lifecycle scripts. Options:
-1. JSON config file (`claude-squad.json`) at workspace root
+1. JSON config file (`stapler-squad.json`) at workspace root
 2. YAML config file
-3. Global config in `~/.claude-squad/config.json` with per-path overrides
-4. `.claude-squad/` directory with individual script files
+3. Global config in `~/.stapler-squad/config.json` with per-path overrides
+4. `.stapler-squad/` directory with individual script files
 
-**Decision**: Use a **`claude-squad.json`** file at the workspace root, with optional global defaults in the existing `config.json`.
+**Decision**: Use a **`stapler-squad.json`** file at the workspace root, with optional global defaults in the existing `config.json`.
 
 **Rationale**:
-- JSON is already the config format for Claude Squad (`config.json`)
+- JSON is already the config format for Stapler Squad (`config.json`)
 - Root-level file is discoverable and version-controllable
 - Per-workspace overrides are clean and intuitive
 - No new dependencies (Go stdlib JSON)
@@ -284,12 +284,12 @@ Mitigation:
 ```json
 {
   "setup": "npm install",
-  "run": "npm run dev -- --port $CLAUDE_SQUAD_PORT",
+  "run": "npm run dev -- --port $STAPLER_SQUAD_PORT",
   "archive": "npm run build",
   "run_mode": "concurrent",
   "port_count": 1,
   "health_check": {
-    "url": "http://localhost:$CLAUDE_SQUAD_PORT/health",
+    "url": "http://localhost:$STAPLER_SQUAD_PORT/health",
     "timeout_seconds": 30,
     "interval_seconds": 5
   }
@@ -297,9 +297,9 @@ Mitigation:
 ```
 
 **Consequences**:
-- Users must create `claude-squad.json` in their repo (not automatic)
+- Users must create `stapler-squad.json` in their repo (not automatic)
 - Config is tied to the repo, not the session (multiple sessions from same repo share config)
-- `$CLAUDE_SQUAD_PORT` environment variable convention must be documented
+- `$STAPLER_SQUAD_PORT` environment variable convention must be documented
 
 ### Story Breakdown
 
@@ -307,10 +307,10 @@ Mitigation:
 **As a** developer, **I want** to declare lifecycle scripts in a config file **so that** my dev server starts automatically with each session.
 
 **Acceptance Criteria**:
-- Given a `claude-squad.json` at the workspace root, when a session starts, then the config is parsed and validated
+- Given a `stapler-squad.json` at the workspace root, when a session starts, then the config is parsed and validated
 - Given no config file exists, when a session starts, then it proceeds normally without errors
 - Given an invalid config file, when a session starts, then a clear error message identifies the problem
-- Given `$CLAUDE_SQUAD_PORT` in a script, when the script runs, then the variable is replaced with the allocated port
+- Given `$STAPLER_SQUAD_PORT` in a script, when the script runs, then the variable is replaced with the allocated port
 
 **Tasks**:
 
@@ -318,7 +318,7 @@ Mitigation:
 - Duration: 1-2h
 - Files: `session/workspace_config.go`, `session/workspace_config_test.go`
 - Description: Define `WorkspaceConfig` struct matching the JSON schema. Implement:
-  - `LoadWorkspaceConfig(workspacePath string) (*WorkspaceConfig, error)` -- reads and validates `claude-squad.json`
+  - `LoadWorkspaceConfig(workspacePath string) (*WorkspaceConfig, error)` -- reads and validates `stapler-squad.json`
   - `Validate() error` -- checks required fields, valid run_mode values
   - RunMode enum: `concurrent` (one per session), `nonconcurrent` (shared across sessions)
   - Default values for optional fields
@@ -335,7 +335,7 @@ Mitigation:
   - `Allocate(sessionName string, count int) ([]int, error)` -- allocates N consecutive ports
   - `Release(sessionName string) error` -- releases ports when session ends
   - `IsAvailable(port int) bool` -- checks if port is free (also probes OS-level binding)
-  - Persists allocations to `~/.claude-squad/port_allocations.json` for crash recovery
+  - Persists allocations to `~/.stapler-squad/port_allocations.json` for crash recovery
   - Validates ports are not already in use at OS level via `net.Listen`
 - INVEST Validation:
   - Independent: No session/git dependencies
@@ -347,7 +347,7 @@ Mitigation:
 
 **Acceptance Criteria**:
 - Given a `setup` script, when a session starts for the first time, then `setup` runs before the agent starts
-- Given a `run` script, when setup completes, then `run` starts as a background process with `CLAUDE_SQUAD_PORT` set
+- Given a `run` script, when setup completes, then `run` starts as a background process with `STAPLER_SQUAD_PORT` set
 - Given a running dev server, when the session is paused or destroyed, then `archive` runs and the dev server is terminated
 - Given a `run` script that crashes, when it is detected, then the failure is logged and the session continues (non-fatal)
 - Given `run_mode: nonconcurrent`, when a second session starts in the same workspace, then it reuses the existing dev server
@@ -363,7 +363,7 @@ Mitigation:
   - `RunArchive(ctx context.Context, config WorkspaceConfig, env map[string]string) error` -- synchronous
   - `RunProcess` struct: PID tracking, stdout/stderr capture to log files, health check goroutine
   - Scripts execute via `sh -c` with the workspace as working directory
-  - Environment variables: `CLAUDE_SQUAD_PORT`, `CLAUDE_SQUAD_SESSION`, `CLAUDE_SQUAD_WORKSPACE`
+  - Environment variables: `STAPLER_SQUAD_PORT`, `STAPLER_SQUAD_SESSION`, `STAPLER_SQUAD_WORKSPACE`
   - Timeout handling for setup/archive (default 60s)
 - INVEST Validation:
   - Independent: Process management only, no git/tmux dependency
@@ -438,7 +438,7 @@ Mitigation:
 
 **Resource Leak: Orphaned Dev Server Processes [SEVERITY: High]**
 
-Description: If Claude Squad crashes or is killed with SIGKILL, the background dev server processes will be orphaned. They will continue running and holding ports.
+Description: If Stapler Squad crashes or is killed with SIGKILL, the background dev server processes will be orphaned. They will continue running and holding ports.
 
 Mitigation:
 - Use process groups (`syscall.SysProcAttr{Setpgid: true}`) so child processes can be killed as a group
@@ -688,7 +688,7 @@ MCP server configuration lives in Claude Code's own config files:
 - `~/.claude/claude_desktop_config.json` (global)
 - `.claude/settings.json` (per-project)
 
-Claude Squad already has `GetClaudeConfig`/`ListClaudeConfigs`/`UpdateClaudeConfig` RPC endpoints that can read and write these files.
+Stapler Squad already has `GetClaudeConfig`/`ListClaudeConfigs`/`UpdateClaudeConfig` RPC endpoints that can read and write these files.
 
 ### Stories (High-Level)
 
@@ -802,7 +802,7 @@ Description: Checkpoints, dev server logs, and worktree data all consume disk sp
 
 Mitigation:
 - Add a periodic disk usage check in the health check system
-- Warn users when `~/.claude-squad/` exceeds a configurable threshold (default 5GB)
+- Warn users when `~/.stapler-squad/` exceeds a configurable threshold (default 5GB)
 - Auto-prune oldest checkpoints when disk pressure is detected
 - Add disk usage to the debug snapshot
 

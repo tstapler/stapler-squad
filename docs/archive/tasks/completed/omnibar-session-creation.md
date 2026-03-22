@@ -27,7 +27,7 @@
 
 ### User Value Proposition
 
-**Problem Statement**: The current session creation flow in claude-squad requires users to navigate through multiple wizard steps (name, program, location, branch) even for simple workflows. Users who want to quickly create a session from a GitHub PR or clone a repository must manually input information across several steps, creating friction in the workflow.
+**Problem Statement**: The current session creation flow in stapler-squad requires users to navigate through multiple wizard steps (name, program, location, branch) even for simple workflows. Users who want to quickly create a session from a GitHub PR or clone a repository must manually input information across several steps, creating friction in the workflow.
 
 **User Impact**:
 - **Workflow Friction**: 5-7 steps to create a GitHub-based session vs 1-2 for local sessions
@@ -325,13 +325,13 @@ AND auto-suggest a session name based on the PR number and repo.
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│                  Claude Squad User                    │
+│                  Stapler Squad User                    │
 └───────────────────┬──────────────────────────────────┘
                     │ Creates sessions via omnibar
                     │ Pastes GitHub URLs or paths
                     ▼
 ┌──────────────────────────────────────────────────────┐
-│            Claude Squad TUI Application               │
+│            Stapler Squad TUI Application               │
 │           (Omnibar Session Creation)                  │
 └───────────────────┬──────────────────────────────────┘
                     │ Validates paths, clones repos
@@ -1075,7 +1075,7 @@ func (r *DetectorRegistry) ListDetectors() []string {
 package omnibar
 
 import (
-	"claude-squad/ui/overlay"
+	"stapler-squad/ui/overlay"
 	"context"
 	"os"
 	"path/filepath"
@@ -1359,8 +1359,8 @@ func TestLocalPathDetector_Validate(t *testing.T) {
 package omnibar
 
 import (
-	"claude-squad/session/git"
-	"claude-squad/ui/overlay"
+	"stapler-squad/session/git"
+	"stapler-squad/ui/overlay"
 	"context"
 	"fmt"
 	"os/exec"
@@ -1944,17 +1944,17 @@ func TestIsValidGitBranchName(t *testing.T) {
 ### For Task 1.1 (Detector Interface & Registry)
 
 **Files to Read**:
-1. `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/sessionSetup.go`
+1. `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/sessionSetup.go`
    - Understand current SessionSetupOverlay structure
    - Note callback pattern (OnComplete, OnCancel)
    - Observe step-based wizard flow
 
-2. `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/fuzzyInput.go`
+2. `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/fuzzyInput.go`
    - Study existing input overlay patterns
    - Note async loader pattern (`SetAsyncLoader`)
    - Observe debouncing implementation
 
-3. `/Users/tylerstapler/IdeaProjects/claude-squad/github/url_parser.go`
+3. `/Users/tylerstapler/IdeaProjects/stapler-squad/github/url_parser.go`
    - Review existing GitHub URL parsing logic
    - Note ParsedGitHubRef struct
    - Understand IsGitHubRef() detection logic
@@ -1976,12 +1976,12 @@ func TestIsValidGitBranchName(t *testing.T) {
 ### For Task 1.2 (Local Path Detector)
 
 **Files to Read**:
-1. `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/pathutils.go`
+1. `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/pathutils.go`
    - Study ExpandPath() implementation
    - Review ValidatePathEnhanced() logic
    - Note PathValidationResult structure
 
-2. `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/sessionSetup.go` (lines 1320-1643)
+2. `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/sessionSetup.go` (lines 1320-1643)
    - Review existing path discovery logic
    - Note discoverGitRepositories() implementation
    - Understand isGitRepository() checks
@@ -2003,12 +2003,12 @@ func TestIsValidGitBranchName(t *testing.T) {
 ### For Task 1.3 (Path+Branch Detector)
 
 **Files to Read**:
-1. `/Users/tylerstapler/IdeaProjects/claude-squad/session/git/util.go`
+1. `/Users/tylerstapler/IdeaProjects/stapler-squad/session/git/util.go`
    - Study existing git command execution patterns
    - Note error handling for git operations
    - Understand git repository detection
 
-2. `/Users/tylerstapler/IdeaProjects/claude-squad/session/git/worktree_branch.go`
+2. `/Users/tylerstapler/IdeaProjects/stapler-squad/session/git/worktree_branch.go`
    - Review branch listing logic
    - Note git branch command usage
    - Understand remote branch handling
@@ -2091,7 +2091,7 @@ func TestIsValidGitBranchName(t *testing.T) {
 
 ## Summary
 
-This feature plan provides a comprehensive blueprint for implementing an intelligent omnibar session creation system in claude-squad. The design prioritizes:
+This feature plan provides a comprehensive blueprint for implementing an intelligent omnibar session creation system in stapler-squad. The design prioritizes:
 
 1. **User Experience**: Single-field input with smart detection eliminates multi-step wizard friction
 2. **Extensibility**: Detector pattern allows easy addition of new input types

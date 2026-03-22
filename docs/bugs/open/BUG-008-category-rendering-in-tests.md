@@ -199,7 +199,7 @@ Based on investigation findings, apply targeted fix:
 
 3. **Manual TUI verification**:
    ```bash
-   ./claude-squad
+   ./stapler-squad
    # Create sessions
    # Verify rendering
    # Toggle filters

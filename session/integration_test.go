@@ -1,8 +1,8 @@
 package session
 
 import (
-	"claude-squad/log"
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"context"
 	"fmt"
 	"os"
@@ -176,7 +176,7 @@ func testSessionRestoredInCorrectWorktree(t *testing.T) {
 	// Create an isolated test tmux session for recovery testing
 	uniqueName := fmt.Sprintf("recovery-test_%d", time.Now().UnixNano())
 
-	tmuxSession, tmuxCleanup := tmux.NewTmuxSessionWithPrefixAndCleanup(uniqueName, "bash -c 'pwd; read'", "claudesquad_test_")
+	tmuxSession, tmuxCleanup := tmux.NewTmuxSessionWithPrefixAndCleanup(uniqueName, "bash -c 'pwd; read'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup(); err != nil {
 			t.Logf("Warning: tmuxCleanup failed: %v", err)
@@ -284,14 +284,14 @@ func testMultipleSessionsRestoreIndependently(t *testing.T) {
 	_ = instance2.KillSessionKeepWorktree()
 
 	// Create new tmux sessions to test restoration (using test prefix for isolation)
-	tmux1, tmuxCleanup1 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance1.Title, "bash -c 'pwd && sleep 30'", "claudesquad_test_")
+	tmux1, tmuxCleanup1 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance1.Title, "bash -c 'pwd && sleep 30'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup1(); err != nil {
 			t.Logf("Warning: tmuxCleanup1 failed: %v", err)
 		}
 	}()
 
-	tmux2, tmuxCleanup2 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance2.Title, "bash -c 'pwd && sleep 30'", "claudesquad_test_")
+	tmux2, tmuxCleanup2 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance2.Title, "bash -c 'pwd && sleep 30'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup2(); err != nil {
 			t.Logf("Warning: tmuxCleanup2 failed: %v", err)
@@ -376,7 +376,7 @@ func testSessionRecoveryWithExistingChanges(t *testing.T) {
 	_ = instance.KillSessionKeepWorktree()
 
 	// Create new tmux session for testing restoration (using test prefix for isolation)
-	tmuxSession, tmuxCleanup := tmux.NewTmuxSessionWithPrefixAndCleanup(instance.Title, "bash", "claudesquad_test_")
+	tmuxSession, tmuxCleanup := tmux.NewTmuxSessionWithPrefixAndCleanup(instance.Title, "bash", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup(); err != nil {
 			t.Logf("Warning: tmuxCleanup failed: %v", err)
@@ -407,7 +407,7 @@ func testFallbackBehaviorWhenWorktreePathMissing(t *testing.T) {
 	defer os.RemoveAll(tempRepo)
 
 	// Create a tmux session without specifying worktree path (using test prefix for isolation)
-	session, cleanup := tmux.NewTmuxSessionWithPrefixAndCleanup("test-fallback-session", "bash", "claudesquad_test_")
+	session, cleanup := tmux.NewTmuxSessionWithPrefixAndCleanup("test-fallback-session", "bash", "staplersquad_test_")
 	defer func() {
 		if err := cleanup(); err != nil {
 			t.Logf("Warning: cleanup failed: %v", err)
@@ -479,7 +479,7 @@ func testExistingSessionResumption(t *testing.T, tempRepo string) {
 	sessionName := "existing-session-test"
 
 	// Create a tmux session directly (simulating an existing session scenario)
-	tmuxSession, tmuxCleanup := tmux.NewTmuxSessionWithPrefixAndCleanup(sessionName, "bash -c 'echo existing && sleep 30'", "claudesquad_test_")
+	tmuxSession, tmuxCleanup := tmux.NewTmuxSessionWithPrefixAndCleanup(sessionName, "bash -c 'echo existing && sleep 30'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup(); err != nil {
 			t.Logf("Warning: tmuxCleanup failed: %v", err)
@@ -600,14 +600,14 @@ func testExistingWorktreeResumption(t *testing.T, tempRepo string) {
 	require.Equal(t, worktreePath1, worktreePath2, "Both instances should use the same worktree path")
 
 	// Get tmux sessions and verify they have content (don't expect the exact echo content as it might not be captured)
-	tmux1, tmuxCleanup1 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance1.Title, "bash -c 'echo first && sleep 30'", "claudesquad_test_")
+	tmux1, tmuxCleanup1 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance1.Title, "bash -c 'echo first && sleep 30'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup1(); err != nil {
 			t.Logf("Warning: tmuxCleanup1 failed: %v", err)
 		}
 	}()
 
-	tmux2, tmuxCleanup2 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance2.Title, "bash -c 'echo second && sleep 30'", "claudesquad_test_")
+	tmux2, tmuxCleanup2 := tmux.NewTmuxSessionWithPrefixAndCleanup(instance2.Title, "bash -c 'echo second && sleep 30'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup2(); err != nil {
 			t.Logf("Warning: tmuxCleanup2 failed: %v", err)
@@ -712,14 +712,14 @@ func testFullResumptionScenario(t *testing.T, tempRepo string) {
 		"Both instances should use the same worktree path")
 
 	// Create manual tmux sessions to test they work in the shared worktree
-	tmux1, tmuxCleanup1 := tmux.NewTmuxSessionWithPrefixAndCleanup(sessionTitle+"-test1", "bash -c 'pwd && sleep 30'", "claudesquad_test_")
+	tmux1, tmuxCleanup1 := tmux.NewTmuxSessionWithPrefixAndCleanup(sessionTitle+"-test1", "bash -c 'pwd && sleep 30'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup1(); err != nil {
 			t.Logf("Warning: tmuxCleanup1 failed: %v", err)
 		}
 	}()
 
-	tmux2, tmuxCleanup2 := tmux.NewTmuxSessionWithPrefixAndCleanup(sessionTitle+"-test2", "bash -c 'pwd && sleep 30'", "claudesquad_test_")
+	tmux2, tmuxCleanup2 := tmux.NewTmuxSessionWithPrefixAndCleanup(sessionTitle+"-test2", "bash -c 'pwd && sleep 30'", "staplersquad_test_")
 	defer func() {
 		if err := tmuxCleanup2(); err != nil {
 			t.Logf("Warning: tmuxCleanup2 failed: %v", err)
@@ -776,7 +776,7 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 		_ = instance.Kill()
 
 		// Create new tmux session for testing (using test prefix for isolation)
-		tmuxSession := tmux.NewTmuxSessionWithPrefix(sessionTitle, "echo 'benchmark test'", "claudesquad_test_bench_")
+		tmuxSession := tmux.NewTmuxSessionWithPrefix(sessionTitle, "echo 'benchmark test'", "staplersquad_test_bench_")
 		instance.SetTmuxSession(tmuxSession)
 
 		err = tmuxSession.RestoreWithWorkDir(worktreePath)

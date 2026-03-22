@@ -2,7 +2,7 @@
 
 ## Summary
 
-The review queue feature is now fully implemented in the Claude Squad TUI! Users can now view and navigate sessions requiring their attention in a dedicated review queue view.
+The review queue feature is now fully implemented in the Stapler Squad TUI! Users can now view and navigate sessions requiring their attention in a dedicated review queue view.
 
 ## What Was Implemented
 

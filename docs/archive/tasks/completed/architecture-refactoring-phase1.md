@@ -784,7 +784,7 @@ go test ./app -run TestRobustConfirmationModalFlow -v
 go test ./app -run TestSessionCreationOverlayFix -v
 
 # Verify UI still works (manual)
-./claude-squad
+./stapler-squad
 ```
 
 **Validation Commands**:
@@ -1080,8 +1080,8 @@ func NewBaseEvent(aggregateID string) BaseEvent {
 package session
 
 import (
-    "claude-squad/domain/events"
-    "claude-squad/session"
+    "stapler-squad/domain/events"
+    "stapler-squad/session"
 )
 
 // SessionResult represents the result of a session operation
@@ -1225,7 +1225,7 @@ go test ./app/session -v
 package adapters
 
 import (
-    "claude-squad/domain/events"
+    "stapler-squad/domain/events"
     tea "github.com/charmbracelet/bubbletea"
 )
 
@@ -1494,7 +1494,7 @@ cd domain && go list -f '{{.Imports}}' ./... | grep -E "bubbletea"
 # Expected: No output
 
 # Manual smoke test
-./claude-squad
+./stapler-squad
 # Test: Create session, kill session, navigate
 ```
 
@@ -2152,7 +2152,7 @@ func TestNavigationManager_NoTimerLeak(t *testing.T) {
 ```bash
 go test ./app/services -run TestSessionManagementService -v
 go test ./app -run TestSessionCreation -v
-./claude-squad  # Smoke test: Create and kill session
+./stapler-squad  # Smoke test: Create and kill session
 ```
 
 **Success Criteria**:
@@ -2171,7 +2171,7 @@ go test ./app -run TestSessionCreation -v
 ```bash
 go test ./app/services -v
 go test -bench=BenchmarkNavigationPerformance ./app
-./claude-squad  # Smoke test: Navigate, filter, search
+./stapler-squad  # Smoke test: Navigate, filter, search
 ```
 
 **Success Criteria**:
@@ -2230,7 +2230,7 @@ go test ./app/session -v
 ```bash
 go test ./app/adapters -v
 go test ./app -v
-./claude-squad  # Full smoke test
+./stapler-squad  # Full smoke test
 ```
 
 **Success Criteria**:
@@ -2254,7 +2254,7 @@ go test ./... -v -race -cover
 go test -bench=. ./app -benchmem
 
 # Manual smoke test
-./claude-squad
+./stapler-squad
 # Test: Create, kill, attach, navigate, filter, search
 
 # Verify metrics
@@ -2669,7 +2669,7 @@ git push origin feature/architecture-phase1 --force-with-lease
 # Must pass all checks
 go test ./... -v -race -count=3
 go test -bench=. ./app -benchmem
-./claude-squad  # Manual smoke test
+./stapler-squad  # Manual smoke test
 ```
 
 ---

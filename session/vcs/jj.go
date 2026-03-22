@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // JJClient implements the VCS interface for Jujutsu

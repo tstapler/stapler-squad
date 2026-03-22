@@ -66,7 +66,7 @@ function LoginContent() {
     <main id="main-content" className={styles.container}>
       <div className={styles.card}>
         <div className={styles.logo}>⚔️</div>
-        <h1 className={styles.title}>Claude Squad</h1>
+        <h1 className={styles.title}>Stapler Squad</h1>
 
         {isSetup ? (
           <>

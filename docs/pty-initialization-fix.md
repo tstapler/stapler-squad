@@ -2,7 +2,7 @@
 
 ## Issue Summary
 
-Sessions without git worktrees (directory sessions) and all restored sessions were showing "(error)" status in claude-squad due to "PTY is not initialized" errors.
+Sessions without git worktrees (directory sessions) and all restored sessions were showing "(error)" status in stapler-squad due to "PTY is not initialized" errors.
 
 ## Root Cause
 

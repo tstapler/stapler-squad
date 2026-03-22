@@ -13,17 +13,17 @@ This framework provides end-to-end testing capabilities for TUI applications by:
 
 ## Quick Start
 
-### Claude Squad Keyboard Testing
+### Stapler Squad Keyboard Testing
 
 ```go
 func TestClaudeSquadKeyboards(t *testing.T) {
-    // Build and start claude-squad with PTY
-    tester, err := NewClaudeSquadTester(t, "./claude-squad", 30*time.Second)
+    // Build and start stapler-squad with PTY
+    tester, err := NewClaudeSquadTester(t, "./stapler-squad", 30*time.Second)
     require.NoError(t, err)
     defer tester.Close()
 
     // Wait for app to load
-    err = tester.WaitForText("Claude Squad", 5*time.Second)
+    err = tester.WaitForText("Stapler Squad", 5*time.Second)
     require.NoError(t, err)
 
     // Test 'n' key opens new session dialog
@@ -35,7 +35,7 @@ func TestClaudeSquadKeyboards(t *testing.T) {
 ### Running Tests
 
 ```bash
-# Test claude-squad keyboard shortcuts
+# Test stapler-squad keyboard shortcuts
 cd tuitest
 make test
 
@@ -48,12 +48,12 @@ make test-race
 
 ## Current Status
 
-This is an **initial implementation** focused on immediate keyboard testing needs for claude-squad. It implements:
+This is an **initial implementation** focused on immediate keyboard testing needs for stapler-squad. It implements:
 
 ✅ **Phase 1 (Partial)**: Project setup and basic PTY testing
 🚧 **Phase 2**: BubbleTea integration (planned)
 🚧 **Phase 3**: Advanced features (planned)
-🚧 **Phase 4**: Full claude-squad integration (in progress)
+🚧 **Phase 4**: Full stapler-squad integration (in progress)
 
 ## Architecture
 
@@ -136,4 +136,4 @@ This framework is actively being developed following the detailed implementation
 
 ## License
 
-Same as claude-squad project.
+Same as stapler-squad project.

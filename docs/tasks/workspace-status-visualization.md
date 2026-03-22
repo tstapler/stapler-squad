@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This feature introduces a comprehensive workspace status visualization system for claude-squad, enabling users to see at a glance the state of all directories that sessions have interacted with, their associated git worktrees, and pending git/jj work (uncommitted changes, untracked files, staged files). This dashboard-style view helps users understand where they have pending work across all their sessions, reducing the cognitive load of managing multiple parallel development tasks.
+This feature introduces a comprehensive workspace status visualization system for stapler-squad, enabling users to see at a glance the state of all directories that sessions have interacted with, their associated git worktrees, and pending git/jj work (uncommitted changes, untracked files, staged files). This dashboard-style view helps users understand where they have pending work across all their sessions, reducing the cognitive load of managing multiple parallel development tasks.
 
 ## Problem Statement
 
@@ -10,7 +10,7 @@ This feature introduces a comprehensive workspace status visualization system fo
 
 1. **No Global Workspace View**: Users can only see git status for one session at a time in the VcsPanel
 2. **Hidden Pending Work**: Uncommitted changes in paused or inactive sessions are not visible at a glance
-3. **Scattered Worktrees**: Users lose track of which directories have active claude-squad worktrees
+3. **Scattered Worktrees**: Users lose track of which directories have active stapler-squad worktrees
 4. **No Directory Discovery**: No way to see all directories that sessions have touched across time
 5. **Manual Status Checking**: Users must attach to each session individually to check git status
 
@@ -28,7 +28,7 @@ This feature introduces a comprehensive workspace status visualization system fo
 
 #### FR-1: Workspace Discovery
 
-- **FR-1.1**: System SHALL discover all directories that have active claude-squad sessions
+- **FR-1.1**: System SHALL discover all directories that have active stapler-squad sessions
 - **FR-1.2**: System SHALL identify git/jj worktrees associated with each session
 - **FR-1.3**: System SHALL track the main repository path for each worktree
 - **FR-1.4**: System SHALL detect orphaned worktrees (no active session)
@@ -253,7 +253,7 @@ type CacheInvalidationNotifier interface {
     Publish(ctx context.Context, workspacePath string) error
 }
 
-// TrackedWorkspace represents a directory tracked by claude-squad
+// TrackedWorkspace represents a directory tracked by stapler-squad
 type TrackedWorkspace struct {
     Path            string             // Absolute path to workspace
     RepositoryRoot  string             // Root of the git repository
@@ -373,14 +373,14 @@ var GlobalKeyStringsMap = map[string]KeyName{
 │ Summary: 3 repos, 5 workspaces, 12 uncommitted, 3 untracked            │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│ ▼ ~/projects/claude-squad (main)                          2 sessions   │
+│ ▼ ~/projects/stapler-squad (main)                          2 sessions   │
 │   ├─ main                           ✓ clean                            │
 │   │  └─ Session: "main-session"     ● running                          │
 │   └─ feature-branch                 ● 5 staged, 3 modified             │
 │      └─ Session: "feature-work"     ⏸ paused                           │
 │                                                                         │
 │ ▼ ~/projects/webapp (develop)                             1 session    │
-│   └─ ~/.claude-squad/worktrees/api-refactor                            │
+│   └─ ~/.stapler-squad/worktrees/api-refactor                            │
 │      ├─ Branch: cs/api-refactor     ○ 4 untracked, 2 modified          │
 │      └─ Session: "api-refactor"     ● running                          │
 │                                                                         │
@@ -626,7 +626,7 @@ CREATE INDEX idx_workspace_locks_expires ON workspace_locks(expires_at);
 
 **Tasks**:
 1. Create `DetectOrphanedWorktrees()` method
-2. Scan claude-squad worktree directory for orphans
+2. Scan stapler-squad worktree directory for orphans
 3. Match worktrees against active sessions
 4. Add orphan status to workspace display
 
@@ -1040,12 +1040,12 @@ database:
 
 ### Codebase Files
 
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/instance.go` - Session instance model
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/storage.go` - Session persistence
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/vc/types.go` - VCS type definitions
-- `/Users/tylerstapler/IdeaProjects/claude-squad/session/vc/git_provider.go` - Git operations
-- `/Users/tylerstapler/IdeaProjects/claude-squad/ui/overlay/gitStatusOverlay.go` - Existing git overlay
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/sessions/VcsPanel.tsx` - Web VCS panel
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/instance.go` - Session instance model
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/storage.go` - Session persistence
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/vc/types.go` - VCS type definitions
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/session/vc/git_provider.go` - Git operations
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/ui/overlay/gitStatusOverlay.go` - Existing git overlay
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/sessions/VcsPanel.tsx` - Web VCS panel
 
 ### ADRs & Documentation
 

@@ -8,15 +8,15 @@ import (
 	"strings"
 	"time"
 
-	"claude-squad/config"
-	sessionv1 "claude-squad/gen/proto/go/session/v1"
-	"claude-squad/gen/proto/go/session/v1/sessionv1connect"
-	"claude-squad/log"
-	"claude-squad/server/adapters"
-	"claude-squad/server/events"
-	"claude-squad/server/notifications"
-	"claude-squad/session"
-	"claude-squad/session/search"
+	"github.com/tstapler/stapler-squad/config"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/adapters"
+	"github.com/tstapler/stapler-squad/server/events"
+	"github.com/tstapler/stapler-squad/server/notifications"
+	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/search"
 
 	"connectrpc.com/connect"
 )
@@ -409,7 +409,7 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.claude-squad/repos/github.com/owner/repo)
+	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
 	resolvedPath := req.Msg.Path
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef

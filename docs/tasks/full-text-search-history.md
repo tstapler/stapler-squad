@@ -27,7 +27,7 @@
 
 ### User Value Proposition
 
-**Problem Statement**: Users of Claude Squad cannot efficiently find past conversations or specific exchanges buried in their Claude history. The current search only matches session names and project paths, forcing users to manually browse through potentially hundreds of conversations to locate relevant content.
+**Problem Statement**: Users of Stapler Squad cannot efficiently find past conversations or specific exchanges buried in their Claude history. The current search only matches session names and project paths, forcing users to manually browse through potentially hundreds of conversations to locate relevant content.
 
 **User Impact**:
 - **Wasted Time**: Users spend 5-10 minutes per day manually browsing history
@@ -253,19 +253,19 @@ AND 20-30 words of surrounding text.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Claude Squad User                        │
+│                     Stapler Squad User                        │
 └──────────────────────┬──────────────────────────────────────┘
                        │ Searches conversation history
                        │ Views snippets and opens messages
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   Claude Squad Web UI                        │
+│                   Stapler Squad Web UI                        │
 │  (History Browser with Full-Text Search)                     │
 └──────────────────────┬──────────────────────────────────────┘
                        │ gRPC/ConnectRPC API
                        ▼
 ┌─────────────────────────────────────────────────────────────┐
-│              Claude Squad Backend Services                   │
+│              Stapler Squad Backend Services                   │
 │  - SessionService (history + search RPCs)                    │
 │  - SearchEngine (indexing + querying)                        │
 └──────────────────────┬──────────────────────────────────────┘
@@ -468,7 +468,7 @@ New message added → Detect change (polling/watch)
 **Deciders**: Engineering Team
 
 **Context**:
-We need to decide on a search indexing strategy for Claude Squad history. Options include:
+We need to decide on a search indexing strategy for Stapler Squad history. Options include:
 1. SQLite FTS5 (Full-Text Search extension)
 2. External search engine (Elasticsearch, MeiliSearch)
 3. In-memory inverted index with disk persistence

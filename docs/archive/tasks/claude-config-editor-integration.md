@@ -190,8 +190,8 @@ Add to menu items in `ui/menu.go`:
 Once integrated:
 
 ```bash
-# Start Claude Squad
-./claude-squad
+# Start Stapler Squad
+./stapler-squad
 
 # Test config editor
 # Press ctrl+e to open config editor
@@ -339,9 +339,9 @@ go test ./session -run TestClaudeSessionHistory -v
 - `github.com/xeipuuv/gojsonschema` - JSON validation
 
 ### Internal Packages
-- `claude-squad/config` - Config management
-- `claude-squad/session` - History parsing
-- `claude-squad/ui/overlay` - Base overlay framework
+- `stapler-squad/config` - Config management
+- `stapler-squad/session` - History parsing
+- `stapler-squad/ui/overlay` - Base overlay framework
 
 ---
 

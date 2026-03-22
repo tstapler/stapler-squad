@@ -1,7 +1,7 @@
 # Fuzzy Search Enhancement Plan
 
 ## Overview
-Upgrade claude-squad's session search to provide best-in-class fuzzy search functionality similar to FZF, VS Code's Ctrl+P, or other modern fuzzy finders.
+Upgrade stapler-squad's session search to provide best-in-class fuzzy search functionality similar to FZF, VS Code's Ctrl+P, or other modern fuzzy finders.
 
 ## Current State Analysis
 
@@ -188,4 +188,4 @@ func (s SessionSearchItem) GetID() string {
 
 ---
 
-*This plan leverages claude-squad's existing excellent fuzzy search infrastructure to provide a best-in-class session search experience while maintaining the application's performance and usability standards.*
+*This plan leverages stapler-squad's existing excellent fuzzy search infrastructure to provide a best-in-class session search experience while maintaining the application's performance and usability standards.*

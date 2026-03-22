@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // ExternalTmuxStreamer provides terminal content streaming for external sessions.

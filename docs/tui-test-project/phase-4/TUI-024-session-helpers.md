@@ -1,7 +1,7 @@
 # TUI-024 - Session Management Test Helpers
 
 ## Story
-**As a** claude-squad developer
+**As a** stapler-squad developer
 **I want** specialized test helpers for session management testing
 **So that** I can easily test session lifecycle, state transitions, and edge cases
 
@@ -35,7 +35,7 @@
 - [ ] State transition testing is comprehensive
 - [ ] Edge cases and error scenarios are handled
 - [ ] Performance testing utilities are included
-- [ ] Integration with existing claude-squad tests
+- [ ] Integration with existing stapler-squad tests
 - [ ] Examples demonstrate real-world usage patterns
 - [ ] Documentation covers all helper functions
 
@@ -44,7 +44,7 @@
 **Time Estimate**: 8-12 hours
 
 ## Notes
-- Build on existing claude-squad session infrastructure
+- Build on existing stapler-squad session infrastructure
 - Consider tmux session isolation requirements
 - Support both unit and integration testing patterns
 - Handle asynchronous session operations

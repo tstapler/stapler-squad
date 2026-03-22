@@ -234,7 +234,7 @@ After each migration:
 
 2. Perform manual smoke tests:
    ```bash
-   go build . && ./claude-squad
+   go build . && ./stapler-squad
    # Test: navigation (j/k), filtering (f), search (s)
    ```
 
@@ -297,7 +297,7 @@ Services use read-write locks (`sync.RWMutex`) where appropriate:
 
 Monitor lock contention with profiling:
 ```bash
-./claude-squad --profile
+./stapler-squad --profile
 curl http://localhost:6060/debug/pprof/mutex?debug=1
 ```
 

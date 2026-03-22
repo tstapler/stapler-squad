@@ -213,7 +213,7 @@ Output:
 --- PASS: TestRobustConfirmationModalFlow (5.19s)
 --- PASS: TestSessionCreationOverlayFix (2.78s)
 PASS
-ok  	claude-squad/app	8.969s
+ok  	stapler-squad/app	8.969s
 ```
 
 ## Documentation Updates

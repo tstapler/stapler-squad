@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/log"
 
 	"github.com/go-webauthn/webauthn/webauthn"
 )

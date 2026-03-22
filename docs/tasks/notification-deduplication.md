@@ -150,9 +150,9 @@ message NotificationHistoryRecord {
 **Scope**: Extend the data model to support occurrence tracking.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/notifications/store.go` -- add `OccurrenceCount int` and `LastOccurredAt *time.Time` to `NotificationRecord`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/proto/session/v1/session.proto` -- add `occurrence_count` (field 12) and `last_occurred_at` (field 13) to `NotificationHistoryRecord`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/services/notification_service.go` -- update `recordToProto()` to map new fields
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/notifications/store.go` -- add `OccurrenceCount int` and `LastOccurredAt *time.Time` to `NotificationRecord`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/proto/session/v1/session.proto` -- add `occurrence_count` (field 12) and `last_occurred_at` (field 13) to `NotificationHistoryRecord`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/services/notification_service.go` -- update `recordToProto()` to map new fields
 
 **Acceptance Criteria**:
 - `NotificationRecord` struct has `OccurrenceCount int` and `LastOccurredAt *time.Time` with JSON tags
@@ -166,7 +166,7 @@ message NotificationHistoryRecord {
 **Scope**: When a new record arrives, check if an unread record with the same `(sessionId, notificationType)` already exists. If so, update it in place rather than inserting.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/notifications/store.go` -- modify `Append()` and add `findUnreadDuplicate()` helper
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/notifications/store.go` -- modify `Append()` and add `findUnreadDuplicate()` helper
 
 **Implementation Details**:
 ```go
@@ -211,7 +211,7 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 **Scope**: `GetUnreadCount()` should return the number of distinct unread records (which now represents distinct groups after dedup), not a raw count that would double-count.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/notifications/store.go` -- no functional change needed (the existing implementation already counts unread records, and with dedup there is one record per group)
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/notifications/store.go` -- no functional change needed (the existing implementation already counts unread records, and with dedup there is one record per group)
 
 **Acceptance Criteria**:
 - Verify via test that `GetUnreadCount()` returns the number of deduplicated unread groups
@@ -222,7 +222,7 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 **Scope**: Comprehensive test coverage for the new dedup logic.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/notifications/store_test.go` -- create or extend
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/notifications/store_test.go` -- create or extend
 
 **Test Cases**:
 1. `TestAppendDedup_SameSessionAndType` -- two appends collapse into one record
@@ -245,7 +245,7 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 **Scope**: On startup, deduplicate any existing records in the JSON file that have the same `(sessionId, notificationType)` and are unread.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/notifications/store.go` -- add `deduplicateExisting()` called from `NewNotificationHistoryStore()` after `loadFromDisk()`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/notifications/store.go` -- add `deduplicateExisting()` called from `NewNotificationHistoryStore()` after `loadFromDisk()`
 
 **Implementation Details**:
 - After loading records, scan for unread duplicates by `(sessionId, notificationType)`
@@ -271,7 +271,7 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 **Scope**: Create a utility function that groups `NotificationHistoryItem[]` by `(sessionId, notificationType)` and returns one representative item per group with a count.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/utils/notificationGrouping.ts` -- new file
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/utils/notificationGrouping.ts` -- new file
 
 **Implementation Details**:
 ```typescript
@@ -305,8 +305,8 @@ export function groupNotifications(
 **Scope**: Update `NotificationPanel.tsx` to use grouped notifications and show "xN" badges.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/NotificationPanel.tsx` -- use `groupNotifications()` on `notificationHistory` before mapping to JSX
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/NotificationPanel.module.css` -- add `.countBadge` style
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/NotificationPanel.tsx` -- use `groupNotifications()` on `notificationHistory` before mapping to JSX
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/NotificationPanel.module.css` -- add `.countBadge` style
 
 **Implementation Details**:
 - Import and call `groupNotifications(notificationHistory)` in the render
@@ -344,7 +344,7 @@ export function groupNotifications(
 **Scope**: The header notification bell badge should reflect the number of distinct unread groups, not raw unread records.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/contexts/NotificationContext.tsx` -- update `getUnreadCount()` to count by group
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/contexts/NotificationContext.tsx` -- update `getUnreadCount()` to count by group
 
 **Implementation Details**:
 - Import `groupNotifications` in the context
@@ -361,8 +361,8 @@ export function groupNotifications(
 **Scope**: When the user clicks a grouped notification or marks it read, mark all underlying record IDs as read.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/components/ui/NotificationPanel.tsx` -- update click handler to pass `group.allIds`
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/contexts/NotificationContext.tsx` -- ensure `markAsRead()` handles array of IDs
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/components/ui/NotificationPanel.tsx` -- update click handler to pass `group.allIds`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/contexts/NotificationContext.tsx` -- ensure `markAsRead()` handles array of IDs
 
 **Implementation Details**:
 - When the user interacts with a grouped card (clicks "View Session", "Approve", or explicitly marks read), pass all `group.allIds` to `markAsRead()`
@@ -388,7 +388,7 @@ export function groupNotifications(
 **Scope**: When a `NotificationEvent` arrives via SSE that matches a recently-shown toast for the same `(sessionId, notificationType)`, suppress the duplicate toast.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/hooks/useSessionNotifications.ts` -- add a dedup cache (Map) tracking recently-shown `(sessionId, type)` keys with a 10-second TTL
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/hooks/useSessionNotifications.ts` -- add a dedup cache (Map) tracking recently-shown `(sessionId, type)` keys with a 10-second TTL
 
 **Implementation Details**:
 ```typescript
@@ -422,7 +422,7 @@ const handleNotification = useCallback((event: NotificationEvent) => {
 **Scope**: The `notifications.StartSubscriber` goroutine should coalesce rapid-fire events for the same `(sessionId, notificationType)` before calling `store.Append()`, reducing disk I/O.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/server/notifications/subscriber.go` -- add a coalescing buffer with 500ms flush interval
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/server/notifications/subscriber.go` -- add a coalescing buffer with 500ms flush interval
 
 **Implementation Details**:
 - Maintain a `map[string]*NotificationRecord` keyed by `sessionId:notificationType`
@@ -441,7 +441,7 @@ const handleNotification = useCallback((event: NotificationEvent) => {
 **Scope**: The `NotificationContext` currently merges real-time notifications (from `addNotification`) with backend history (from `useNotificationHistory`). After dedup, ensure that a real-time event and the corresponding backend record do not both appear.
 
 **Files**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/web-app/src/lib/contexts/NotificationContext.tsx` -- update the `useEffect` that hydrates from backend to deduplicate against real-time items by `(sessionId, notificationType)` key, not just by `id`
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/web-app/src/lib/contexts/NotificationContext.tsx` -- update the `useEffect` that hydrates from backend to deduplicate against real-time items by `(sessionId, notificationType)` key, not just by `id`
 
 **Implementation Details**:
 - In the merge `useEffect`, build a set of `${sessionId}:${notificationType}` keys from existing real-time items

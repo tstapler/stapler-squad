@@ -1,9 +1,9 @@
 package session
 
 import (
-	"claude-squad/log"
-	"claude-squad/session/git"
-	"claude-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"context"
 	"fmt"
 	"os"
@@ -377,7 +377,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		// Use configurable prefix or default
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {
-			tmuxPrefix = "claudesquad_" // Default fallback
+			tmuxPrefix = "staplersquad_" // Default fallback
 		}
 
 		// Use server socket isolation if specified, otherwise use prefix-only isolation
@@ -443,7 +443,7 @@ type InstanceOptions struct {
 	Tags []string
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
 	SessionType SessionType
-	// TmuxPrefix is the prefix to use for tmux session names (e.g., "claudesquad_")
+	// TmuxPrefix is the prefix to use for tmux session names (e.g., "staplersquad_")
 	TmuxPrefix string
 	// TmuxServerSocket is the server socket name for tmux isolation (used with -L flag)
 	// If empty, uses the default tmux server. For complete isolation (e.g., testing),
@@ -759,7 +759,7 @@ func (i *Instance) initTmuxSession() {
 
 	tmuxPrefix := i.TmuxPrefix
 	if tmuxPrefix == "" {
-		tmuxPrefix = "claudesquad_"
+		tmuxPrefix = "staplersquad_"
 	}
 
 	var session *tmux.TmuxSession
@@ -1300,7 +1300,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	// Use configurable prefix or default
 	tmuxPrefix := i.TmuxPrefix
 	if tmuxPrefix == "" {
-		tmuxPrefix = "claudesquad_" // Default fallback
+		tmuxPrefix = "staplersquad_" // Default fallback
 	}
 
 	// Use server socket isolation if specified, otherwise use prefix-only isolation
@@ -2133,7 +2133,7 @@ func (i *Instance) IsGitHubSession() bool { return i.GitHub().IsGitHubSession() 
 //
 // This is necessary because:
 // - i.Path is the main repository path (e.g., ~/Documents/personal-wiki)
-// - gitWorktree.GetWorktreePath() is the actual worktree (e.g., ~/.claude-squad/worktrees/...)
+// - gitWorktree.GetWorktreePath() is the actual worktree (e.g., ~/.stapler-squad/worktrees/...)
 // - The main repo has .git as a directory; the worktree has .git as a file pointing to the main repo
 func (i *Instance) DetectAndPopulateWorktreeInfo() error {
 	// Determine the path to use for detection

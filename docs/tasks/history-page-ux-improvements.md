@@ -2542,8 +2542,8 @@ await fetch('/api/history/bulk', {
 ## References
 
 **Internal Documentation**:
-- `/Users/tylerstapler/IdeaProjects/claude-squad/docs/tasks/session-search-and-sort.md` - Search patterns
-- `/Users/tylerstapler/IdeaProjects/claude-squad/CLAUDE.md` - Development commands
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/tasks/session-search-and-sort.md` - Search patterns
+- `/Users/tylerstapler/IdeaProjects/stapler-squad/CLAUDE.md` - Development commands
 
 **External Resources**:
 - [WCAG 2.1 Guidelines](https://www.w3.org/WAI/WCAG21/quickref/)

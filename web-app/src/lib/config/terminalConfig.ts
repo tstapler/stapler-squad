@@ -130,7 +130,7 @@ export const lightTerminalTheme: import("@xterm/xterm").ITheme = {
   brightWhite: '#ecf0f1',
 };
 
-const STORAGE_KEY = "claude-squad-terminal-config";
+const STORAGE_KEY = "stapler-squad-terminal-config";
 
 /**
  * Load terminal configuration from localStorage

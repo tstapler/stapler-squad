@@ -165,10 +165,10 @@ Based on findings, implement robust detection:
 **Option 1: Custom Prompt Marker**
 ```bash
 # Set known prompt in tmux session
-export PS1="CLAUDE_SQUAD_READY> "
+export PS1="STAPLER_SQUAD_READY> "
 
 # Detection becomes trivial
-waitFor("CLAUDE_SQUAD_READY> ")
+waitFor("STAPLER_SQUAD_READY> ")
 ```
 
 **Option 2: Strip ANSI Codes**

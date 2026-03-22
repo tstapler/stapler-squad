@@ -1254,7 +1254,7 @@ func GetDefaultStateCommands() []MenuCommand {
 package overlay
 
 import (
-	"claude-squad/session"
+	"stapler-squad/session"
 	"fmt"
 	"strings"
 
@@ -2112,7 +2112,7 @@ go test ./ui -bench=BenchmarkOrganizeByStrategy
 ```markdown
 ## Tag-Based Session Organization
 
-Claude Squad supports flexible session organization through tags and dynamic grouping strategies.
+Stapler Squad supports flexible session organization through tags and dynamic grouping strategies.
 
 ### Grouping Modes
 

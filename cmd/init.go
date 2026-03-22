@@ -1,8 +1,8 @@
 package cmd
 
 import (
-	"claude-squad/cmd/commands"
-	"claude-squad/cmd/interfaces"
+	"github.com/tstapler/stapler-squad/cmd/commands"
+	"github.com/tstapler/stapler-squad/cmd/interfaces"
 )
 
 // Import category constants from interfaces

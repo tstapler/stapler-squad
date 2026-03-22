@@ -1,4 +1,4 @@
-# Claude Squad: Current Project State
+# Stapler Squad: Current Project State
 
 *Last Updated: 2025-01-19*
 

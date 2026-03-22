@@ -210,7 +210,7 @@ func (r *Renderer) RenderSession(session session.Instance, index int, selected b
 ## Repository Hierarchy Design
 
 ```
-📁 claude-squad-repo
+📁 stapler-squad-repo
 ├── 🏷️  Work (category)
 │   ├── feat/auth-system
 │   └── fix/login-bug

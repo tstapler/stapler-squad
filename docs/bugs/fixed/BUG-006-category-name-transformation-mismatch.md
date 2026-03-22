@@ -66,7 +66,7 @@ if expanded["Work/Frontend"] { // ❌ Not found!
 
 ```bash
 # Create session with nested category
-./claude-squad
+./stapler-squad
 # Create session with category "Work/Frontend"
 
 # Try to expand/collapse category

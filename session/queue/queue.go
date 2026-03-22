@@ -1,9 +1,9 @@
 package queue
 
 import (
-	"claude-squad/log"
-	"claude-squad/session/detection"
-	"claude-squad/session/git"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/git"
 	"fmt"
 	"sort"
 	"sync"

@@ -1,6 +1,6 @@
 # Implementation Plan: Analysis Findings
 
-This document outlines the implementation roadmap based on comprehensive analysis of Claude Squad's codebase, including category vs tag systems, help system comparison, and architectural improvements.
+This document outlines the implementation roadmap based on comprehensive analysis of Stapler Squad's codebase, including category vs tag systems, help system comparison, and architectural improvements.
 
 ## Phase 1: Enhanced Category System (High Priority)
 

@@ -1,6 +1,6 @@
 # Phase 1 Architecture Refactoring - Documentation Index
 
-This directory contains comprehensive planning documentation for Phase 1 of the Claude Squad architecture refactoring.
+This directory contains comprehensive planning documentation for Phase 1 of the Stapler Squad architecture refactoring.
 
 ---
 

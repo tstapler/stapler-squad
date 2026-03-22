@@ -4,13 +4,13 @@
 
 ### Problem Statement
 
-Claude Squad executes `git` and `tmux` subprocesses on nearly every API request cycle — `git diff`, `git status`, `tmux capture-pane`, `tmux list-sessions`, etc. The `TimeoutExecutor` provides a per-call timeout ceiling, but when an underlying resource is persistently degraded (locked git index, NFS stall, corrupted repository, tmux server overload), every request for that session still blocks for the full timeout duration before failing. With N concurrent API calls per session (WebSocket streaming, diff polling, status checks), a single degraded git worktree can consume N*timeout worth of goroutine-seconds every polling cycle.
+Stapler Squad executes `git` and `tmux` subprocesses on nearly every API request cycle — `git diff`, `git status`, `tmux capture-pane`, `tmux list-sessions`, etc. The `TimeoutExecutor` provides a per-call timeout ceiling, but when an underlying resource is persistently degraded (locked git index, NFS stall, corrupted repository, tmux server overload), every request for that session still blocks for the full timeout duration before failing. With N concurrent API calls per session (WebSocket streaming, diff polling, status checks), a single degraded git worktree can consume N*timeout worth of goroutine-seconds every polling cycle.
 
 A circuit breaker would detect repeated failures for a specific command class on a specific session and short-circuit subsequent calls immediately, returning a cached or error response without spawning the subprocess at all.
 
 ### User Value Statement
 
-Protect Claude Squad's responsiveness and resource usage when external subprocesses become persistently degraded, ensuring that one bad session does not drag down the entire server.
+Protect Stapler Squad's responsiveness and resource usage when external subprocesses become persistently degraded, ensuring that one bad session does not drag down the entire server.
 
 ### Success Metrics
 

@@ -11,7 +11,7 @@
 
 ## Executive Summary
 
-Add comprehensive Claude Code configuration management and session history viewing capabilities to Claude Squad. This feature enables users to:
+Add comprehensive Claude Code configuration management and session history viewing capabilities to Stapler Squad. This feature enables users to:
 
 1. **View and edit Claude configuration files** (.claude/CLAUDE.md, settings.json) within the TUI/Web UI
 2. **Browse historical Claude sessions** from the ~/.claude directory
@@ -21,7 +21,7 @@ Add comprehensive Claude Code configuration management and session history viewi
 **Strategic Value**:
 - **Productivity**: Users can quickly resume interrupted work by launching sessions from history
 - **Transparency**: Direct access to Claude configs eliminates manual file editing
-- **Workflow Integration**: Tight integration between Claude Code and Claude Squad reduces context switching
+- **Workflow Integration**: Tight integration between Claude Code and Stapler Squad reduces context switching
 
 **Technical Approach**: Extend existing overlay system with new config editor and history browser components, leverage existing session management infrastructure, and add new protobuf RPCs for config operations.
 
@@ -54,7 +54,7 @@ Add comprehensive Claude Code configuration management and session history viewi
 
 ```
 US-001: View Claude Configuration
-As a Claude Squad user
+As a Stapler Squad user
 I want to view my Claude configuration files (CLAUDE.md, settings.json) in the UI
 So that I can understand my current Claude setup without leaving the application
 
@@ -68,7 +68,7 @@ Acceptance Criteria:
 
 ```
 US-002: Edit Claude Configuration
-As a Claude Squad user
+As a Stapler Squad user
 I want to edit my Claude configuration files with validation
 So that I can customize Claude behavior without manual file editing
 
@@ -83,7 +83,7 @@ Acceptance Criteria:
 
 ```
 US-003: Browse Session History
-As a Claude Squad user
+As a Stapler Squad user
 I want to browse my historical Claude sessions by directory
 So that I can review past work and understand previous interactions
 
@@ -98,14 +98,14 @@ Acceptance Criteria:
 
 ```
 US-004: Launch Session from History
-As a Claude Squad user
+As a Stapler Squad user
 I want to create a new session based on a historical session
 So that I can resume work in the same context
 
 Acceptance Criteria:
 - GIVEN I have selected a historical session
 - WHEN I press Enter or click "Launch"
-- THEN a new Claude Squad session is created
+- THEN a new Stapler Squad session is created
 - AND the session uses the same directory, program, and category
 - AND I can optionally include the previous prompt/context
 - AND the new session appears in my active sessions list
@@ -113,7 +113,7 @@ Acceptance Criteria:
 
 ```
 US-005: Review Past Work
-As a Claude Squad user
+As a Stapler Squad user
 I want to view the history/conversation log for a past session
 So that I can understand what was accomplished
 
@@ -204,7 +204,7 @@ Acceptance Criteria:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     Claude Squad TUI/Web UI                  │
+│                     Stapler Squad TUI/Web UI                  │
 │  ┌──────────────────────────────────────────────────────┐  │
 │  │  New Overlays (TUI)                                   │  │
 │  │  - ConfigEditorOverlay (CLAUDE.md, settings.json)    │  │
@@ -609,7 +609,7 @@ Session appears in active sessions list
 
 **Status**: Accepted
 
-**Context**: Need modal UI components for config editing and history browsing. Claude Squad uses BubbleTea TUI framework with established overlay pattern.
+**Context**: Need modal UI components for config editing and history browsing. Stapler Squad uses BubbleTea TUI framework with established overlay pattern.
 
 **Decision**: Extend existing overlay system (ui/overlay/) with new overlays for config editor, history browser, and conversation viewer.
 
@@ -1361,7 +1361,7 @@ rpc GetClaudeConfig(GetClaudeConfigRequest) returns (GetClaudeConfigResponse) {}
 ```markdown
 ## Configuration Management
 
-Claude Squad provides built-in config management for Claude Code settings.
+Stapler Squad provides built-in config management for Claude Code settings.
 
 ### Viewing Configuration
 
@@ -1419,7 +1419,7 @@ Press `H` to open the session history browser. Sessions are grouped by project.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                   Claude Squad Application                   │
+│                   Stapler Squad Application                   │
 │                                                              │
 │  ┌────────────────┐         ┌────────────────┐             │
 │  │  TUI Frontend  │         │  Web Frontend  │             │
@@ -2065,7 +2065,7 @@ func TestConfigManager_PathTraversal(t *testing.T) {
 ### 7.1 Glossary
 
 - **Claude Code**: Anthropic's AI coding assistant CLI tool
-- **Claude Squad**: Session management application (this project)
+- **Stapler Squad**: Session management application (this project)
 - **CLAUDE.md**: Main configuration file for Claude Code instructions
 - **settings.json**: Claude Code settings and permissions
 - **history.jsonl**: Append-only log of Claude Code sessions

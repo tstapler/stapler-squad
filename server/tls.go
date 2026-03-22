@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"claude-squad/config"
-	"claude-squad/log"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 const (
@@ -203,7 +203,7 @@ func generateServerCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, hostn
 		SerialNumber: newSerial(),
 		Subject: pkix.Name{
 			Organization: []string{"Claude Squad"},
-			CommonName:   "claude-squad",
+			CommonName:   "stapler-squad",
 		},
 		NotBefore: time.Now().Add(-time.Hour),
 		NotAfter:  time.Now().Add(2 * 365 * 24 * time.Hour),

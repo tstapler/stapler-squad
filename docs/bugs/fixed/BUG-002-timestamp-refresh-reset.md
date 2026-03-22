@@ -39,8 +39,8 @@ The review queue poller's startup routine calls `Preview()` to refresh terminal 
 ## Reproduction
 
 1. Create a session and let it idle for 2+ hours
-2. Stop claude-squad application (timestamps persist correctly to disk)
-3. Restart claude-squad application
+2. Stop stapler-squad application (timestamps persist correctly to disk)
+3. Restart stapler-squad application
 4. Review queue poller runs startup refresh via `refreshAllSessionsInQueue()`
 5. **BUG**: Session shows "Last Activity: 30s ago" instead of "Last Activity: 2h ago"
 6. Historical timestamp is permanently lost (overwritten in memory and then saved)
@@ -276,7 +276,7 @@ func TestReviewQueuePreservesHistoricalTimestamps(t *testing.T) {
 1. Create a session and generate some terminal output
 2. Wait 1+ hours without any terminal activity
 3. Note the "Last Activity" timestamp in review queue UI
-4. Stop and restart claude-squad
+4. Stop and restart stapler-squad
 5. **Expected**: "Last Activity" shows original timestamp (~1h ago), not "30s ago"
 6. Verify by checking session detail view timestamps
 

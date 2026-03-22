@@ -1,7 +1,7 @@
 # Zombie Process Leak Fix
 
 **Date**: 2025-10-09
-**Issue**: claude-squad was leaking zombie tmux processes, reaching system process limit (10,662/10,666)
+**Issue**: stapler-squad was leaking zombie tmux processes, reaching system process limit (10,662/10,666)
 **Root Cause**: Daemon process started with `cmd.Start()` but never reaped
 **Fix**: Added `cmd.Process.Release()` to properly release daemon process
 
@@ -23,16 +23,16 @@ return nil
 
 ## Immediate Cleanup Steps
 
-### 1. Stop All claude-squad Processes
+### 1. Stop All stapler-squad Processes
 ```bash
-# Find all claude-squad processes
-ps aux | grep claude-squad | grep -v grep
+# Find all stapler-squad processes
+ps aux | grep stapler-squad | grep -v grep
 
-# Kill all running claude-squad instances (including zombies)
-killall -9 claude-squad
+# Kill all running stapler-squad instances (including zombies)
+killall -9 stapler-squad
 
 # Verify all are killed
-ps aux | grep claude-squad | grep -v grep
+ps aux | grep stapler-squad | grep -v grep
 ```
 
 ### 2. Clean Up Zombie Processes
@@ -57,32 +57,32 @@ ps aux | wc -l
 
 ### 4. Rebuild and Restart
 ```bash
-cd /Users/tylerstapler/IdeaProjects/claude-squad
+cd /Users/tylerstapler/IdeaProjects/stapler-squad
 
 # Build with fix
 go build .
 
-# Start claude-squad
-./claude-squad
+# Start stapler-squad
+./stapler-squad
 ```
 
 ## Verification Steps
 
 ### Monitor for Zombie Accumulation
-After restarting claude-squad, monitor for any new zombies:
+After restarting stapler-squad, monitor for any new zombies:
 
 ```bash
 # Monitor zombie count (should stay at 0)
 watch -n 5 'ps aux | awk '\''$8=="Z"'\'' | wc -l'
 
-# Check claude-squad child processes
-ps aux | grep -E 'claude-squad|tmux' | grep -v grep
+# Check stapler-squad child processes
+ps aux | grep -E 'stapler-squad|tmux' | grep -v grep
 ```
 
 ### Check Daemon Launches
 ```bash
 # Watch logs for daemon launches
-tail -f ~/.claude-squad/logs/claude-squad.log | grep daemon
+tail -f ~/.stapler-squad/logs/stapler-squad.log | grep daemon
 
 # Should see:
 # [INFO] started daemon child process with PID: XXXXX

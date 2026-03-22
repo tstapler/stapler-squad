@@ -19,8 +19,8 @@ export class TestServer {
     const pid = process.pid;
     this.config = {
       port: config.port || 8544, // Use different port for tests
-      testDir: config.testDir || `/tmp/claude-squad-test-${pid}`,
-      buildPath: config.buildPath || path.join(__dirname, '../../../claude-squad'),
+      testDir: config.testDir || `/tmp/stapler-squad-test-${pid}`,
+      buildPath: config.buildPath || path.join(__dirname, '../../../stapler-squad'),
     };
   }
 
@@ -141,7 +141,7 @@ export class TestServer {
 
     console.log('Building Go binary...');
     const projectRoot = path.join(__dirname, '../../..');
-    await execPromise('go build -o claude-squad .', { cwd: projectRoot });
+    await execPromise('go build -o stapler-squad .', { cwd: projectRoot });
     console.log('✅ Binary built');
   }
 

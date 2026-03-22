@@ -227,7 +227,7 @@ cd domain && go list -f '{{.Imports}}' ./...  # Import check
 
 **Validation**:
 ```bash
-./claude-squad                               # Manual smoke test
+./stapler-squad                               # Manual smoke test
 make restart-web                             # Full system test
 ```
 

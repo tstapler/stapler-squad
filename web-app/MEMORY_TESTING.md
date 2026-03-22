@@ -1,6 +1,6 @@
 # Memory Leak Testing Guide
 
-Comprehensive testing procedures for validating terminal memory stability and performance in the claude-squad web UI.
+Comprehensive testing procedures for validating terminal memory stability and performance in the stapler-squad web UI.
 
 ## Quick Validation Checklist
 
@@ -235,7 +235,7 @@ const presets = [
 **Test Scenarios**:
 ```bash
 # Test 1: Theme change (should NOT recreate terminal)
-localStorage.setItem('claude-squad-terminal-config',
+localStorage.setItem('stapler-squad-terminal-config',
   JSON.stringify({ theme: 'light' }));
 window.dispatchEvent(new CustomEvent('terminal-config-changed',
   { detail: loadedConfig }));

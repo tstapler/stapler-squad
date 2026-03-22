@@ -172,9 +172,9 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
     if hasChanges {
         switch opts.ChangeStrategy {
         case KeepAsWIP:
-            g.run("git", "stash", "push", "-m", "claude-squad: WIP before switch")
+            g.run("git", "stash", "push", "-m", "stapler-squad: WIP before switch")
         case BringAlong:
-            g.run("git", "stash", "push", "-m", "claude-squad: bringing changes")
+            g.run("git", "stash", "push", "-m", "stapler-squad: bringing changes")
         case Abandon:
             g.run("git", "checkout", ".")
             g.run("git", "clean", "-fd")
