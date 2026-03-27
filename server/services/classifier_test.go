@@ -1541,6 +1541,62 @@ func TestClassify_DockerRead_StillAutoAllow(t *testing.T) {
 	}
 }
 
+func TestClassify_CatTmpWrite_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"cat > /tmp/script.py << 'EOF'\nprint('hello')\nEOF",
+		"cat > /tmp/query.graphql << 'EOF'\nquery { user { id } }\nEOF",
+		"cat > /tmp/analyze.go << 'EOF'\npackage main\nEOF",
+		"cat>/tmp/foo.sh <<'EOF'\necho hi\nEOF",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("cmd %q: expected AutoAllow (cat /tmp write), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
+	}
+}
+
+func TestCategorizeToolName_PlaywrightRead(t *testing.T) {
+	readOps := []string{
+		"mcp__playwright__browser_take_screenshot",
+		"mcp__playwright__browser_network_requests",
+		"mcp__playwright__browser_console_messages",
+		"mcp__playwright__browser_snapshot",
+		"mcp__playwright__browser_tabs",
+	}
+	for _, name := range readOps {
+		got := CategorizeToolName(name)
+		if got != ToolCategoryMCPRead {
+			t.Errorf("CategorizeToolName(%q) = %q, want mcp-read", name, got)
+		}
+	}
+
+	// browser_run_code executes JS — must remain mcp-write
+	got := CategorizeToolName("mcp__playwright__browser_run_code")
+	if got != ToolCategoryMCPWrite {
+		t.Errorf("CategorizeToolName(browser_run_code) = %q, want mcp-write", got)
+	}
+}
+
+func TestCategorizeToolName_RepomixPackRemote(t *testing.T) {
+	got := CategorizeToolName("mcp__repomix__pack_remote_repository")
+	if got != ToolCategoryMCPRead {
+		t.Errorf("CategorizeToolName(pack_remote_repository) = %q, want mcp-read", got)
+	}
+	// pack_codebase mutates/creates output — remains mcp-write
+	got = CategorizeToolName("mcp__repomix__pack_codebase")
+	if got != ToolCategoryMCPWrite {
+		t.Errorf("CategorizeToolName(pack_codebase) = %q, want mcp-write", got)
+	}
+}
+
 func TestExtractAllCommands_Subshell(t *testing.T) {
 	cmds := ExtractAllCommands("echo $(rm -rf /)")
 	// Should find at least 2: echo and rm.

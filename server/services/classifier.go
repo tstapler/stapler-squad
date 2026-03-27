@@ -93,12 +93,17 @@ var mcpReadOperations = map[string]bool{
 	"read_multiple_files": true, "list_directory": true, "list_directory_with_sizes": true,
 	"directory_tree": true, "get_file_info": true, "list_allowed_directories": true,
 	"search_files": true,
-	// repomix
+	// repomix — pack_remote_repository only fetches a remote repo's contents, no mutations
 	"read_repomix_output": true, "grep_repomix_output": true, "attach_packed_output": true,
+	"pack_remote_repository": true,
 	// context7 — all operations are read-only
 	"resolve-library-id": true, "query-docs": true,
 	// sequential-thinking — pure reasoning, no side effects
 	"sequentialthinking": true,
+	// playwright — observation-only operations (no clicks, inputs, or code execution)
+	"browser_take_screenshot": true, "browser_snapshot": true,
+	"browser_network_requests": true, "browser_console_messages": true,
+	"browser_tabs": true,
 }
 
 // CategorizeToolName returns the ToolCategory constant for a given tool name.
@@ -874,6 +879,21 @@ func SeedRules() []Rule {
 			Priority:    100,
 			Enabled:     true,
 			Source:      "seed",
+		},
+		{
+			// cat > /tmp/... << 'EOF' is a common Claude Code pattern for writing temp scripts,
+			// queries, or helper files to /tmp before execution. Writing to /tmp is low-risk
+			// (ephemeral, world-readable) and should not require manual review.
+			ID:             "seed-allow-bash-cat-tmp-write",
+			Name:           "Allow cat heredoc writes to /tmp",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bcat\s*>+\s*/tmp/`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "Writing temporary files to /tmp is ephemeral and low-risk.",
+			Priority:       100,
+			Enabled:        true,
+			Source:         "seed",
 		},
 		{
 			// Criteria-based matching correctly handles git -C <path> <subcmd> by skipping
