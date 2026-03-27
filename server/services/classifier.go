@@ -55,6 +55,78 @@ type Classifier interface {
 	BuildContext(cwd string) ClassificationContext
 }
 
+// ToolCategory constants classify tool names into coarse groups for use in Rule.ToolCategory.
+// This lets seed rules match whole classes of tools without fragile long regex patterns.
+const (
+	// ToolCategoryAny matches any tool (empty string — default behaviour).
+	ToolCategoryAny = ""
+	// ToolCategoryBuiltin matches any Claude Code built-in tool (no "__" in name).
+	// Examples: Bash, Read, Write, Edit, Glob, Grep, Task, WebFetch, WebSearch, ToolSearch.
+	ToolCategoryBuiltin = "builtin"
+	// ToolCategoryBuiltinAgent matches planning / task-management built-ins that pose no risk.
+	// Examples: ExitPlanMode, EnterPlanMode, AskUserQuestion, TodoWrite, Task*, Skill, NotebookEdit.
+	ToolCategoryBuiltinAgent = "builtin-agent"
+	// ToolCategoryMCP matches any MCP tool (name contains "__").
+	ToolCategoryMCP = "mcp"
+	// ToolCategoryMCPRead matches MCP tools whose operation names are read-only.
+	// Determined by CategorizeToolName; covers context7, sequential-thinking, and
+	// filesystem/repomix read operations.
+	ToolCategoryMCPRead = "mcp-read"
+	// ToolCategoryMCPWrite matches MCP tools whose operation names mutate state.
+	ToolCategoryMCPWrite = "mcp-write"
+)
+
+// builtinAgentTools is the set of Claude Code tool names that are planning / task-management
+// tools with no side effects requiring review.
+var builtinAgentTools = map[string]bool{
+	"exitplanmode": true, "enterplanmode": true, "askuserquestion": true,
+	"todowrite": true, "taskcreate": true, "taskupdate": true, "taskget": true,
+	"tasklist": true, "taskoutput": true, "taskstop": true,
+	"notebookedit": true, "skill": true,
+}
+
+// mcpReadOperations is the set of operation suffixes (the part after the second "__") that are
+// considered read-only for MCP tools. Used by CategorizeToolName.
+var mcpReadOperations = map[string]bool{
+	// filesystem
+	"read_file": true, "read_text_file": true, "read_media_file": true,
+	"read_multiple_files": true, "list_directory": true, "list_directory_with_sizes": true,
+	"directory_tree": true, "get_file_info": true, "list_allowed_directories": true,
+	"search_files": true,
+	// repomix
+	"read_repomix_output": true, "grep_repomix_output": true, "attach_packed_output": true,
+	// context7 — all operations are read-only
+	"resolve-library-id": true, "query-docs": true,
+	// sequential-thinking — pure reasoning, no side effects
+	"sequentialthinking": true,
+}
+
+// CategorizeToolName returns the ToolCategory constant for a given tool name.
+// The classification uses Claude Code naming conventions:
+//   - MCP tools follow the pattern "mcp__<server>__<operation>" (contains "__").
+//   - Built-in tools never contain "__".
+//   - Agent tools are a named subset of built-ins.
+func CategorizeToolName(name string) string {
+	lower := strings.ToLower(name)
+	if !strings.Contains(lower, "__") {
+		// Built-in tool.
+		if builtinAgentTools[lower] {
+			return ToolCategoryBuiltinAgent
+		}
+		return ToolCategoryBuiltin
+	}
+	// MCP tool: mcp__<server>__<operation>
+	parts := strings.SplitN(lower, "__", 3)
+	if len(parts) == 3 {
+		op := parts[2]
+		if mcpReadOperations[op] {
+			return ToolCategoryMCPRead
+		}
+		return ToolCategoryMCPWrite
+	}
+	return ToolCategoryMCP
+}
+
 // CommandCriteria provides structured, composable matching criteria for Bash commands.
 // It is evaluated against a ParsedCommand and allows precise rules without complex regex.
 // When multiple fields are set, all must match (AND semantics).
@@ -184,6 +256,10 @@ type Rule struct {
 	ToolName string
 	// ToolPattern matches against the tool name when ToolName is empty.
 	ToolPattern *regexp.Regexp
+	// ToolCategory matches against the structural category returned by CategorizeToolName.
+	// Evaluated after ToolName/ToolPattern (those take precedence when non-empty).
+	// Use one of the ToolCategory* constants. Empty string means any category matches.
+	ToolCategory string
 	// Criteria provides structured matching for Bash command programs, subcommands and flags.
 	// When set alongside CommandPattern, both must match (AND semantics).
 	Criteria *CommandCriteria
@@ -391,7 +467,7 @@ func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 
 // matchesRule returns true if all non-nil criteria in rule match the payload.
 func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPayload) bool {
-	// Tool name match.
+	// Tool name / pattern / category match.
 	if rule.ToolName != "" {
 		if !strings.EqualFold(payload.ToolName, rule.ToolName) {
 			return false
@@ -399,6 +475,15 @@ func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPa
 	} else if rule.ToolPattern != nil {
 		if !rule.ToolPattern.MatchString(payload.ToolName) {
 			return false
+		}
+	} else if rule.ToolCategory != "" {
+		cat := CategorizeToolName(payload.ToolName)
+		if cat != rule.ToolCategory {
+			// ToolCategoryBuiltinAgent is a sub-category of ToolCategoryBuiltin.
+			// A rule targeting "builtin" should also match agent tools.
+			if !(rule.ToolCategory == ToolCategoryBuiltin && cat == ToolCategoryBuiltinAgent) {
+				return false
+			}
 		}
 	}
 
@@ -653,6 +738,78 @@ func SeedRules() []Rule {
 			Priority:    500,
 			Enabled:     true,
 			Source:      "seed",
+		},
+		{
+			// gh api covers both REST (gh api repos/...) and GraphQL (gh api graphql).
+			// Read operations like gh pr view are auto-allowed at 100 via seed-allow-bash-gh-read.
+			// Write GH CLI operations (pr create, issue create, etc.) are caught by seed-escalate-gh-write below.
+			// This rule catches the lower-level API calls that can do arbitrary reads or writes.
+			ID:       "seed-escalate-gh-api",
+			Name:     "Escalate gh api calls",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"gh"},
+				Subcommands: []string{"api"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "gh api calls can modify GitHub resources and should be reviewed.",
+			Alternative: "Use Python subprocess([\"gh\", \"api\", ...]) for unattended gh api calls; it bypasses the Bash tool approval handler.",
+			Priority:    500,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// Covers high-level gh CLI write commands. Read operations (pr view, pr list, etc.)
+			// are auto-allowed by seed-allow-bash-gh-read at priority 100.
+			ID:       "seed-escalate-gh-write",
+			Name:     "Escalate gh write operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"gh"},
+				Subcommands: []string{
+					"pr create", "pr comment", "pr merge", "pr close", "pr edit", "pr reopen", "pr review",
+					"issue create", "issue close", "issue edit", "issue comment",
+					"repo create", "repo delete", "repo fork",
+					"release create", "release delete", "release upload",
+				},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "gh write operations modify GitHub resources and should be reviewed.",
+			Priority:    500,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// curl with file output flags (-o/-O/--output) writes response bodies to disk.
+			// Must fire at 500 to override seed-allow-curl-read at 100.
+			ID:             "seed-escalate-curl-output",
+			Name:           "Escalate curl with file output flags",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bcurl\b.*\s(-[a-zA-Z]*[oO]|--(output|remote-name))\b`),
+			Decision:       Escalate,
+			RiskLevel:      RiskMedium,
+			Reason:         "curl -o/-O downloads a file to disk and should be reviewed.",
+			Alternative:    "Review the URL and destination path before downloading.",
+			Priority:       500,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// curl with write HTTP methods can modify remote state.
+			// Must fire at 500 to override seed-allow-curl-read at 100.
+			// Note: -X alone (e.g. -X GET) is harmless but rare; we conservatively escalate any -X.
+			ID:             "seed-escalate-curl-write-method",
+			Name:           "Escalate curl write HTTP methods (POST/PUT/DELETE/PATCH)",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bcurl\b.*(\s-X\s|\s--request\s|\s--data\b|\s-d\s|\s--data-raw\b|\s--data-binary\b|\s--upload-file\b|\s-T\s|\s-F\s|\s--form\s)`),
+			Decision:       Escalate,
+			RiskLevel:      RiskHigh,
+			Reason:         "curl with write methods or request bodies can modify remote state and should be reviewed.",
+			Priority:       500,
+			Enabled:        true,
+			Source:         "seed",
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
@@ -997,6 +1154,7 @@ func SeedRules() []Rule {
 		},
 		{
 			// Deep subcommand matching: extractSubcommand captures 2 tokens for gh.
+			// gh api and write operations are escalated at priority 500 before this rule fires.
 			ID:       "seed-allow-bash-gh-read",
 			Name:     "Allow read-only GitHub CLI commands",
 			ToolName: "Bash",
@@ -1005,7 +1163,7 @@ func SeedRules() []Rule {
 				Subcommands: []string{
 					"pr view", "pr list", "pr show", "pr status", "pr checks", "pr diff",
 					"issue view", "issue list", "issue show",
-					"run view", "run list", "run log",
+					"run view", "run list", "run log", "run watch",
 					"release view", "release list",
 					"repo view", "repo list",
 					"workflow view", "workflow list",
@@ -1090,6 +1248,53 @@ func SeedRules() []Rule {
 			Source:    "seed",
 		},
 
+		{
+			// Core Claude Code agent interaction and task management tools.
+			// These tools pose no risk (they ask questions, manage task lists, or signal
+			// plan approval) and should never require manual review.
+			// Uses ToolCategory so new agent tools are auto-matched without rule updates.
+			ID:           "seed-allow-agent-tools",
+			Name:         "Allow Claude Code agent and planning tools",
+			ToolCategory: ToolCategoryBuiltinAgent,
+			Decision:     AutoAllow,
+			RiskLevel:    RiskLow,
+			Reason:       "Core Claude Code agent interaction and task management tools.",
+			Priority:     100,
+			Enabled:      true,
+			Source:       "seed",
+		},
+		{
+			// MCP read-only tools: filesystem reads, documentation lookup, sequential thinking,
+			// and codebase analysis output reading. Write/mutate MCP tools are excluded and escalate.
+			// Uses ToolCategory so newly registered read-only MCP operations are auto-matched.
+			ID:           "seed-allow-mcp-read",
+			Name:         "Allow read-only MCP tools",
+			ToolCategory: ToolCategoryMCPRead,
+			Decision:     AutoAllow,
+			RiskLevel:    RiskLow,
+			Reason:       "Read-only MCP tools pose no risk.",
+			Priority:     100,
+			Enabled:      true,
+			Source:       "seed",
+		},
+		{
+			// curl read-only: GET requests without file output or write methods.
+			// The 500-priority rules (seed-escalate-curl-output, seed-escalate-curl-write-method)
+			// intercept unsafe curl invocations before this rule fires.
+			ID:       "seed-allow-curl-read",
+			Name:     "Allow curl read-only (GET, no file output)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"curl"},
+			},
+			Decision:    AutoAllow,
+			RiskLevel:   RiskLow,
+			Reason:      "curl GET requests without output flags or write methods are read-only.",
+			Priority:    100,
+			Enabled:     true,
+			Source:      "seed",
+		},
+
 		// ══════════════════════════════════════════════════════════════════════════
 		// Escalate catch-all (Priority 50) — no allow rule exists; provides a reason
 		// ══════════════════════════════════════════════════════════════════════════
@@ -1148,6 +1353,45 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "Changing file permissions or ownership can affect system security.",
 			Alternative: "Confirm the intended permissions and target files before proceeding.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// docker exec runs commands inside containers; docker run creates and starts new
+			// containers; docker compose manages multi-container stacks; docker rm/stop/kill
+			// mutate container state. The read-only commands are allowed at 100 by
+			// seed-allow-bash-docker-read.
+			ID:       "seed-escalate-docker-write",
+			Name:     "Escalate docker container lifecycle and execution operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"docker"},
+				Subcommands: []string{
+					// Execution
+					"exec", "run", "attach",
+					// Container lifecycle
+					"rm", "stop", "start", "restart", "kill", "pause", "unpause", "rename", "update",
+					// Compose
+					"compose",
+					// Modern container subcommands
+					"container rm", "container stop", "container start",
+					"container restart", "container kill", "container exec", "container run",
+					"container prune",
+					// Image write
+					"build", "pull", "push", "tag", "import", "load", "save",
+					"image build", "image pull", "image push", "image tag", "image rm", "image prune",
+					// System
+					"system prune",
+					// Network/volume write
+					"network create", "network rm", "network prune", "network connect", "network disconnect",
+					"volume create", "volume rm", "volume prune",
+				},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "docker operations that create, modify, execute in, or remove containers should be reviewed.",
+			Alternative: "Review the container configuration and command before proceeding.",
 			Priority:    50,
 			Enabled:     true,
 			Source:      "seed",

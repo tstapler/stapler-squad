@@ -349,7 +349,8 @@ func splitCommandParts(cmd string) []string {
 	result := make([]string, 0, len(parts))
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
-		if p != "" {
+		// Skip empty parts and shell comment lines.
+		if p != "" && !strings.HasPrefix(p, "#") {
 			result = append(result, p)
 		}
 	}

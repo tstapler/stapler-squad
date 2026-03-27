@@ -1201,6 +1201,346 @@ func TestClassify_MvnSafe_AutoAllow(t *testing.T) {
 	}
 }
 
+// ── CategorizeToolName ────────────────────────────────────────────────────────
+
+func TestCategorizeToolName(t *testing.T) {
+	cases := []struct {
+		name     string
+		wantCat  string
+	}{
+		// Built-in file / search tools
+		{"Bash", ToolCategoryBuiltin},
+		{"Read", ToolCategoryBuiltin},
+		{"Write", ToolCategoryBuiltin},
+		{"Edit", ToolCategoryBuiltin},
+		{"Glob", ToolCategoryBuiltin},
+		{"Grep", ToolCategoryBuiltin},
+		{"WebFetch", ToolCategoryBuiltin},
+		{"WebSearch", ToolCategoryBuiltin},
+		{"Task", ToolCategoryBuiltin},
+		{"ToolSearch", ToolCategoryBuiltin},
+		// Built-in agent tools
+		{"ExitPlanMode", ToolCategoryBuiltinAgent},
+		{"EnterPlanMode", ToolCategoryBuiltinAgent},
+		{"AskUserQuestion", ToolCategoryBuiltinAgent},
+		{"TodoWrite", ToolCategoryBuiltinAgent},
+		{"TaskCreate", ToolCategoryBuiltinAgent},
+		{"TaskUpdate", ToolCategoryBuiltinAgent},
+		{"TaskGet", ToolCategoryBuiltinAgent},
+		{"TaskList", ToolCategoryBuiltinAgent},
+		{"TaskOutput", ToolCategoryBuiltinAgent},
+		{"TaskStop", ToolCategoryBuiltinAgent},
+		{"NotebookEdit", ToolCategoryBuiltinAgent},
+		{"Skill", ToolCategoryBuiltinAgent},
+		// Case-insensitive
+		{"exitplanmode", ToolCategoryBuiltinAgent},
+		{"BASH", ToolCategoryBuiltin},
+		// MCP read tools
+		{"mcp__filesystem__read_file", ToolCategoryMCPRead},
+		{"mcp__filesystem__list_directory", ToolCategoryMCPRead},
+		{"mcp__context7__query-docs", ToolCategoryMCPRead},
+		{"mcp__sequential-thinking__sequentialthinking", ToolCategoryMCPRead},
+		{"mcp__repomix__grep_repomix_output", ToolCategoryMCPRead},
+		// MCP write tools
+		{"mcp__filesystem__write_file", ToolCategoryMCPWrite},
+		{"mcp__filesystem__edit_file", ToolCategoryMCPWrite},
+		{"mcp__filesystem__create_directory", ToolCategoryMCPWrite},
+		{"mcp__playwright__browser_click", ToolCategoryMCPWrite},
+		{"mcp__repomix__pack_codebase", ToolCategoryMCPWrite},
+		{"mcp__datadog__search_datadog_logs", ToolCategoryMCPWrite},
+	}
+	for _, tc := range cases {
+		got := CategorizeToolName(tc.name)
+		if got != tc.wantCat {
+			t.Errorf("CategorizeToolName(%q) = %q, want %q", tc.name, got, tc.wantCat)
+		}
+	}
+}
+
+func TestClassify_ToolCategory_Builtin_Matches_AgentSubcategory(t *testing.T) {
+	// A rule targeting ToolCategoryBuiltin should match both plain builtins AND agent tools.
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{{
+		ID:           "test-allow-all-builtins",
+		ToolCategory: ToolCategoryBuiltin,
+		Decision:     AutoAllow,
+		RiskLevel:    RiskLow,
+		Reason:       "test",
+		Priority:     100,
+		Enabled:      true,
+		Source:       "user",
+	}})
+	ctx := ClassificationContext{}
+
+	for _, tool := range []string{"Read", "Bash", "ExitPlanMode", "TaskCreate", "Skill"} {
+		payload := PermissionRequestPayload{ToolName: tool, ToolInput: map[string]interface{}{}}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("tool %q: expected AutoAllow via ToolCategoryBuiltin, got %v", tool, result.Decision)
+		}
+	}
+}
+
+func TestClassify_ToolCategory_MCPRead_DoesNotMatchMCPWrite(t *testing.T) {
+	// mcp-read category rules must NOT match MCP write tools.
+	c := NewRuleBasedClassifier()
+	c.ReplaceRules([]Rule{{
+		ID:           "test-mcp-read-only",
+		ToolCategory: ToolCategoryMCPRead,
+		Decision:     AutoAllow,
+		RiskLevel:    RiskLow,
+		Reason:       "test",
+		Priority:     100,
+		Enabled:      true,
+		Source:       "user",
+	}})
+	ctx := ClassificationContext{}
+
+	readTool := "mcp__filesystem__read_file"
+	writeTool := "mcp__filesystem__write_file"
+
+	r := c.Classify(PermissionRequestPayload{ToolName: readTool, ToolInput: map[string]interface{}{}}, ctx)
+	if r.Decision != AutoAllow {
+		t.Errorf("read tool %q should be AutoAllow, got %v", readTool, r.Decision)
+	}
+
+	r = c.Classify(PermissionRequestPayload{ToolName: writeTool, ToolInput: map[string]interface{}{}}, ctx)
+	if r.Decision != Escalate {
+		t.Errorf("write tool %q should Escalate (no matching rule), got %v", writeTool, r.Decision)
+	}
+}
+
+// ── New seed rules (agent tools, MCP, curl, gh, docker) ──────────────────────
+
+func TestClassify_AgentTools_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	tools := []string{
+		"ExitPlanMode", "EnterPlanMode", "AskUserQuestion",
+		"TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
+		"NotebookEdit", "Skill",
+	}
+	for _, tool := range tools {
+		payload := PermissionRequestPayload{ToolName: tool, ToolInput: map[string]interface{}{}}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("tool %q: expected AutoAllow, got %v (rule=%s, reason=%s)", tool, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_McpReadTools_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	tools := []string{
+		"mcp__filesystem__read_file",
+		"mcp__filesystem__read_text_file",
+		"mcp__filesystem__list_directory",
+		"mcp__filesystem__search_files",
+		"mcp__filesystem__get_file_info",
+		"mcp__filesystem__directory_tree",
+		"mcp__context7__resolve-library-id",
+		"mcp__context7__query-docs",
+		"mcp__sequential-thinking__sequentialthinking",
+		"mcp__repomix__read_repomix_output",
+		"mcp__repomix__grep_repomix_output",
+	}
+	for _, tool := range tools {
+		payload := PermissionRequestPayload{ToolName: tool, ToolInput: map[string]interface{}{}}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("tool %q: expected AutoAllow, got %v (rule=%s, reason=%s)", tool, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_CurlRead_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"curl https://api.example.com/users",
+		"curl -s http://localhost:8080/health",
+		"curl -s -H 'Accept: application/json' https://api.github.com/repos/owner/repo",
+		"curl -u user:pass https://api.example.com/data",
+		"curl https://example.com | jq '.key'",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("cmd %q: expected AutoAllow, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_CurlOutput_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"curl -o /tmp/file.tar.gz https://example.com/archive.tar.gz",
+		"curl -O https://example.com/script.sh",
+		"curl --output /tmp/data.json https://api.example.com/data",
+		"curl --remote-name https://example.com/file.zip",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != Escalate {
+			t.Errorf("cmd %q: expected Escalate, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_CurlWriteMethod_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`curl -X POST https://api.example.com/events -d '{"key":"val"}'`,
+		`curl --request PUT https://api.example.com/resource/1`,
+		`curl -X DELETE https://api.example.com/resource/1`,
+		`curl --data '{"name":"test"}' https://api.example.com/create`,
+		`curl -d @payload.json https://api.example.com/upload`,
+		`curl -F file=@/tmp/data.csv https://api.example.com/import`,
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != Escalate {
+			t.Errorf("cmd %q: expected Escalate, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_GhApi_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"gh api repos/owner/repo/issues",
+		"gh api graphql -f query='...'",
+		"gh api repos/owner/repo/pulls/1/comments/1/replies -f body='Fixed'",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != Escalate {
+			t.Errorf("cmd %q: expected Escalate, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_GhWrite_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"gh pr create --title 'My PR' --body 'Description'",
+		"gh pr comment 123 --body 'Fixed'",
+		"gh pr merge 123 --squash",
+		"gh issue create --title 'Bug' --body 'Details'",
+		"gh release create v1.0 --notes 'Changelog'",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != Escalate {
+			t.Errorf("cmd %q: expected Escalate, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_GhRunWatch_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"gh run watch 12345",
+		"gh run watch 12345 --exit-status",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("cmd %q: expected AutoAllow, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_DockerWrite_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		"docker exec my-container bash",
+		"docker run --rm alpine sh -c 'echo hi'",
+		"docker compose up -d",
+		"docker compose down",
+		"docker rm my-container",
+		"docker stop my-container",
+		"docker build -t myimage .",
+		"docker pull nginx:latest",
+		"docker system prune -f",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != Escalate {
+			t.Errorf("cmd %q: expected Escalate, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_DockerRead_StillAutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	// Read-only docker commands must not be caught by the new write escalate rule.
+	cmds := []string{
+		"docker ps",
+		"docker images",
+		"docker logs my-container",
+		"docker inspect my-container",
+		"docker container ls",
+		"docker image ls",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("cmd %q: expected AutoAllow (docker read), got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
 func TestExtractAllCommands_Subshell(t *testing.T) {
 	cmds := ExtractAllCommands("echo $(rm -rf /)")
 	// Should find at least 2: echo and rm.
