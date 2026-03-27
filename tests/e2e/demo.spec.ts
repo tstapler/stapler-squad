@@ -8,15 +8,25 @@ import * as fs from 'fs';
  * Narrative:
  *   You have 6 Claude/Aider agents running across your microservices.
  *   Stapler Squad is your mission control: see everything, act on what needs
- *   attention, never lose context.
+ *   attention, automate the predictable, and never lose context.
  *
  * Pre-seeded sessions (6 total):
- *   payment-stripe-integration  Running   Backend   Payments/API/Priority
- *   fix-api-timeout             NeedsApproval Backend Bug/API/Urgent
- *   auth-refactor               Paused    Backend   Auth/Security
- *   dashboard-redesign          Running   Frontend  React/UX/Priority
- *   k8s-autoscaling             Ready     Infrastructure DevOps/Kubernetes
- *   payment-email-notifications Running   Backend   Payments/Notifications (aider)
+ *   payment-stripe-integration  Running       Backend        Payments/API/Priority
+ *   fix-api-timeout             NeedsApproval Backend        Bug/API/Urgent
+ *   auth-refactor               Paused        Backend        Auth/Security
+ *   dashboard-redesign          Running       Frontend       React/UX/Priority
+ *   k8s-autoscaling             Ready         Infrastructure DevOps/Kubernetes
+ *   payment-email-notifications Running       Backend        Payments/Notifications (aider)
+ *
+ * Scenes:
+ *   01 - Dashboard             overview of all 6 agents
+ *   02 - Search                "payment" filters 6 → 2 in real time
+ *   03 - NeedsApproval filter  triage workflow
+ *   04 - Group by Tag          multi-dimensional organisation
+ *   05 - Review Queue          structured triage
+ *   06 - Rules page            built-in auto-approval rules
+ *   07 - Add custom rule       creating a new "Allow git log" rule
+ *   08 - Final hero            back to sessions dashboard
  */
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
@@ -254,10 +264,64 @@ test('Demo Flow', async ({ page }) => {
   await snap(page, '05-review-queue.png');
   await page.waitForTimeout(800);
 
-  // ── Scene 6: Back to sessions — final hero shot ───────────────────────────
+  // ── Scene 6: Rules page — auto-approval rules ────────────────────────────
+  await page.locator('a[href*="rules"]').first().click();
+  await page.waitForTimeout(1500);
+  // Switch to the Built-in tab to show the pre-seeded protective rules.
+  const builtInTab = page.getByRole('button', { name: /built.in/i }).first();
+  if (await builtInTab.isVisible({ timeout: 3000 })) {
+    await builtInTab.click();
+    await page.waitForTimeout(700);
+  }
+  await showSceneLabel(page, '🛡️ Auto-approval rules — automate the predictable');
+  await snap(page, '06-rules.png');
+  await page.waitForTimeout(1000);
+
+  // ── Scene 7: Add a custom rule ────────────────────────────────────────────
+  // Switch back to All / Custom tab and open the new-rule form.
+  const allTab = page.getByRole('button', { name: /^all/i }).first();
+  if (await allTab.isVisible({ timeout: 2000 })) {
+    await allTab.click();
+    await page.waitForTimeout(400);
+  }
+  const addRuleButton = page.getByRole('button', { name: /add custom rule/i }).first();
+  if (await addRuleButton.isVisible({ timeout: 3000 })) {
+    await addRuleButton.click();
+    await page.waitForTimeout(600);
+
+    // Fill in the form to show a realistic "Allow git log" rule.
+    const nameInput = page.locator('input[placeholder*="Allow git log"]').first();
+    if (await nameInput.isVisible({ timeout: 2000 })) {
+      await humanType(nameInput, 'Allow git log', 90);
+    }
+
+    const toolInput = page.locator('input[placeholder*="Bash"]').first();
+    if (await toolInput.isVisible({ timeout: 2000 })) {
+      await humanType(toolInput, 'Bash', 90);
+    }
+
+    const cmdInput = page.locator('input[placeholder*="git log"]').first();
+    if (await cmdInput.isVisible({ timeout: 2000 })) {
+      await humanType(cmdInput, '^git log', 90);
+    }
+
+    await page.waitForTimeout(600);
+    await showSceneLabel(page, '⚙️ Custom rules — teach Claude what\'s always safe');
+    await snap(page, '07-add-rule.png');
+    await page.waitForTimeout(1000);
+
+    // Cancel — don't persist in the demo.
+    const cancelButton = page.getByRole('button', { name: /cancel/i }).first();
+    if (await cancelButton.isVisible({ timeout: 2000 })) {
+      await cancelButton.click();
+      await page.waitForTimeout(400);
+    }
+  }
+
+  // ── Scene 8: Back to sessions — final hero shot ───────────────────────────
   await page.locator('a[href="/"]').first().click();
   await page.waitForTimeout(1000);
   await showSceneLabel(page, '✨ Stapler Squad — mission control for AI agents');
-  await snap(page, '06-final.png');
+  await snap(page, '08-final.png');
   await page.waitForTimeout(2500); // Clean ending frame for the video loop.
 });
