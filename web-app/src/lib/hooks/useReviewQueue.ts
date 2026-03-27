@@ -202,7 +202,9 @@ export function useReviewQueue(
   );
 
   // Handle review queue events from dedicated WatchReviewQueue stream
-  // Use ref callback to avoid dependency issues that would cause stream reconnects
+  // Use ref callback to avoid dependency issues that would cause stream reconnects.
+  // The handler only uses setReviewQueue with functional updates (no stale closures),
+  // so it only needs to be set once on mount.
   const handleReviewQueueEventRef = useRef<((event: ReviewQueueEvent) => void) | undefined>(undefined);
 
   useEffect(() => {
@@ -288,7 +290,8 @@ export function useReviewQueue(
           break;
       }
     };
-  });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Setup WebSocket push updates with dedicated WatchReviewQueue stream
   useEffect(() => {
@@ -338,22 +341,39 @@ export function useReviewQueue(
     };
   }, [useWebSocketPush, priorityFilter, reasonFilter]);
 
-  // Setup fallback polling or legacy auto-refresh
+  // Keep a ref to the latest refresh so interval callbacks are always current
+  // without needing refresh in the interval-setup effect's dep array.
+  const refreshRef = useRef(refresh);
   useEffect(() => {
-    // Initial fetch
-    refresh();
+    refreshRef.current = refresh;
+  }, [refresh]);
 
+  // Always do an initial REST fetch on mount for immediate fresh data.
+  // Even in WebSocket push mode the stream may take a moment to connect and
+  // deliver its initialSnapshot, leaving the page empty in the meantime.
+  // The REST response fills the UI instantly; the stream then overlays updates.
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — run once on mount
+
+  // Setup fallback polling or legacy auto-refresh.
+  // Intentionally excludes `refresh` from deps; uses refreshRef.current instead
+  // so that filter changes (which change `refresh` identity) don't cause an
+  // immediate duplicate fetch — the WatchReviewQueue stream re-connects on
+  // filter changes and delivers a fresh initialSnapshot.
+  useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
 
     if (useWebSocketPush) {
       // Hybrid mode: Use longer fallback polling interval
       interval = setInterval(() => {
-        refresh();
+        refreshRef.current();
       }, fallbackPollInterval);
     } else if (autoRefresh) {
       // Legacy mode: Use original refresh interval
       interval = setInterval(() => {
-        refresh();
+        refreshRef.current();
       }, refreshInterval);
     }
 
@@ -362,7 +382,8 @@ export function useReviewQueue(
         clearInterval(interval);
       }
     };
-  }, [useWebSocketPush, autoRefresh, refreshInterval, fallbackPollInterval, refresh]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useWebSocketPush, autoRefresh, refreshInterval, fallbackPollInterval]);
 
   // Acknowledge session with optimistic update
   const acknowledgeSession = useCallback(

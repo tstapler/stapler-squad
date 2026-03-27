@@ -4,6 +4,19 @@ import { useCallback, useEffect, useRef } from "react";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
+
+/**
+ * Notification types that should only appear in history — no toast, no sound.
+ * These are informational events where interrupting the user adds no value.
+ */
+const HISTORY_ONLY_TYPES = new Set([
+  NotificationType.TASK_COMPLETE,
+  NotificationType.PROCESS_FINISHED,
+  NotificationType.PROCESS_STARTED,
+  NotificationType.STATUS_CHANGE,
+  NotificationType.INFO,
+  NotificationType.DEBUG,
+]);
 import { NotificationEvent } from "@/gen/session/v1/events_pb";
 import { NotificationPriority, NotificationType } from "@/gen/session/v1/types_pb";
 import { SessionService } from "@/gen/session/v1/session_connect";
@@ -223,7 +236,7 @@ interface UseSessionNotificationsOptions {
  */
 export function useSessionNotifications(options: UseSessionNotificationsOptions = {}) {
   const { enableAudio = true, onViewSession } = options;
-  const { addNotification } = useNotifications();
+  const { addNotification, addToHistoryOnly } = useNotifications();
 
   // Use refs to avoid recreating callback when dependencies change
   const enableAudioRef = useRef(enableAudio);
@@ -257,11 +270,31 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
       }
     }
 
-    if (lastShown && now - lastShown < DEDUP_WINDOW_MS) {
+    // Never suppress approval_needed notifications — each one blocks Claude and requires a response.
+    const isApproval = event.notificationType === NotificationType.APPROVAL_NEEDED;
+    if (!isApproval && lastShown && now - lastShown < DEDUP_WINDOW_MS) {
       // Duplicate toast suppressed — event still reaches history store via server
       return;
     }
     recentToastKeys.current.set(dedupKey, now);
+
+    // History-only types: no toast, no sound — just record in the history panel
+    if (HISTORY_ONLY_TYPES.has(event.notificationType)) {
+      const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
+        sessionId: event.sessionId,
+        sessionName: event.sessionName || "Unknown Session",
+        title: event.title,
+        message: event.message,
+        priority: mapPriority(event.priority),
+        notificationType: mapNotificationType(event.notificationType),
+        metadata: event.metadata,
+        onView: onViewSessionRef.current
+          ? () => onViewSessionRef.current?.(event.sessionId)
+          : undefined,
+      };
+      addToHistoryOnly(notificationData);
+      return;
+    }
 
     // Play audio chime based on priority
     if (enableAudioRef.current) {
@@ -307,7 +340,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
 
     // Add visual notification
     addNotification(notificationData);
-  }, [addNotification]);
+  }, [addNotification, addToHistoryOnly]);
 
   return handleNotification;
 }

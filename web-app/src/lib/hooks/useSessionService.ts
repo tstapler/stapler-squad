@@ -337,11 +337,12 @@ export function useSessionService(
         setSessions((prev) =>
           prev.map((s) => {
             if (s.id === sessionId) {
-              // Create new Session with updated status
-              return new Session({
-                ...s,
-                status: newStatus,
-              });
+              // Mutate status in place on a shallow clone to avoid full protobuf
+              // object reconstruction (new Session({...s}) is expensive and causes
+              // all SessionCards to re-render even if only one status changed).
+              const updated = s.clone();
+              updated.status = newStatus;
+              return updated;
             }
             return s;
           })

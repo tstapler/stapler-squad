@@ -42,19 +42,65 @@ interface NotificationToastProps {
   notification: NotificationData;
   onClose: () => void;
   autoClose?: number; // Auto-close after N milliseconds (0 = no auto-close)
+  /** Auto-minimize to compact pill after N milliseconds (0 = disabled). Tier 2 default: 5000ms. */
+  autoMinimize?: number;
 }
 
 /**
  * Toast notification that appears in the corner of the screen
  * Shows session information and provides action buttons
  */
+/**
+ * Returns the auto-close duration in ms based on notification type.
+ * 0 = never auto-close.
+ */
+function getAutoCloseMs(type: NotificationData["notificationType"]): number {
+  switch (type) {
+    case "approval_needed":
+    case "question":
+      return 0; // Never auto-close — blocks Claude until resolved
+    case "error":
+    case "task_failed":
+      return 12000;
+    case "warning":
+      return 8000;
+    default:
+      return 8000;
+  }
+}
+
+/**
+ * Returns the auto-minimize delay in ms based on notification type.
+ * 0 = never minimize. Tier 1 types never minimize.
+ */
+function getAutoMinimizeMs(type: NotificationData["notificationType"]): number {
+  switch (type) {
+    case "approval_needed":
+    case "question":
+      return 0; // Never minimize — needs user action
+    case "error":
+    case "task_failed":
+    case "warning":
+      return 5000; // Minimize after 5s so it stays visible but compact
+    default:
+      return 0;
+  }
+}
+
 export function NotificationToast({
   notification,
   onClose,
-  autoClose = 8000, // 8 seconds default
+  autoClose,
+  autoMinimize,
 }: NotificationToastProps) {
+  const effectiveAutoClose =
+    autoClose !== undefined ? autoClose : getAutoCloseMs(notification.notificationType);
+  const effectiveAutoMinimize =
+    autoMinimize !== undefined ? autoMinimize : getAutoMinimizeMs(notification.notificationType);
+
   const [isVisible, setIsVisible] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
   const auditLog = useAuditLog();
 
   // Entrance animation
@@ -65,13 +111,23 @@ export function NotificationToast({
 
   // Auto-close timer (does NOT acknowledge - user didn't explicitly dismiss)
   useEffect(() => {
-    if (autoClose > 0) {
+    if (effectiveAutoClose > 0) {
       const timer = setTimeout(() => {
         handleClose(false);
-      }, autoClose);
+      }, effectiveAutoClose);
       return () => clearTimeout(timer);
     }
-  }, [autoClose]);
+  }, [effectiveAutoClose]);
+
+  // Auto-minimize timer: shrink to compact pill so it doesn't obscure content
+  useEffect(() => {
+    if (effectiveAutoMinimize > 0 && !isMinimized) {
+      const timer = setTimeout(() => {
+        setIsMinimized(true);
+      }, effectiveAutoMinimize);
+      return () => clearTimeout(timer);
+    }
+  }, [effectiveAutoMinimize, isMinimized]);
 
   const handleClose = (shouldAcknowledge: boolean = false) => {
     setIsExiting(true);
@@ -188,10 +244,12 @@ export function NotificationToast({
 
   return (
     <div
-      className={`${styles.toast} ${isVisible ? styles.visible : ""} ${isExiting ? styles.exiting : ""}`}
+      className={`${styles.toast} ${notification.notificationType === "approval_needed" ? styles.toastApproval : ""} ${isVisible ? styles.visible : ""} ${isExiting ? styles.exiting : ""} ${isMinimized ? styles.minimized : ""}`}
       style={{ "--priority-color": getPriorityColor() } as React.CSSProperties}
       role="alert"
-      aria-live="assertive"
+      aria-live={notification.notificationType === "approval_needed" ? "assertive" : "polite"}
+      onClick={isMinimized ? () => setIsMinimized(false) : undefined}
+      title={isMinimized ? "Click to expand" : undefined}
     >
       <div className={styles.header}>
         <div className={styles.icon}>{getTypeIcon()}</div>

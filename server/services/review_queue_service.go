@@ -139,6 +139,11 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
+	// Always remove from the in-memory review queue immediately.
+	// This handles sessions with IDs that don't match any stored instance
+	// (e.g., external sessions, or sessions with corrupt IDs from the TTY detection bug).
+	rqs.reviewQueue.Remove(req.Msg.Id)
+
 	instances, err := rqs.storage.LoadInstances()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
@@ -155,7 +160,12 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 	}
 
 	if instance == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+		// Session not in storage (external session or unknown ID). Queue item already removed above.
+		log.InfoLog.Printf("[ReviewQueue] AcknowledgeSession: session '%s' not found in storage, removed from queue", req.Msg.Id)
+		return connect.NewResponse(&sessionv1.AcknowledgeSessionResponse{
+			Success: true,
+			Message: fmt.Sprintf("Session '%s' removed from review queue", req.Msg.Id),
+		}), nil
 	}
 
 	instance.LastAcknowledged = time.Now()

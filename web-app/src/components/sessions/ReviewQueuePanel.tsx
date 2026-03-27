@@ -1,13 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
+import { useState, useEffect, useMemo } from "react";
+import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
+import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
-import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
-import { useApprovals } from "@/lib/hooks/useApprovals";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { Priority, AttentionReason, ReviewItem } from "@/gen/session/v1/types_pb";
-import { NotificationSound } from "@/lib/utils/notifications";
 import styles from "./ReviewQueuePanel.module.css";
 
 interface ReviewQueuePanelProps {
@@ -54,7 +52,7 @@ export function ReviewQueuePanel({
   const [hadItems, setHadItems] = useState(false);
 
   const {
-    items,
+    items: allItems,
     totalItems,
     loading,
     error,
@@ -64,19 +62,22 @@ export function ReviewQueuePanel({
     oldestAgeSeconds,
     refresh,
     acknowledgeSession,
-  } = useReviewQueue({
-    // Enable hybrid push/poll by default
-    useWebSocketPush: true,
-    fallbackPollInterval: 30000, // 30-second fallback polling
-    priorityFilter,
-    reasonFilter,
-    // Legacy polling options (only used if useWebSocketPush is disabled)
-    autoRefresh: false, // Disable legacy polling in favor of WebSocket push
-    refreshInterval,
-  });
+  } = useReviewQueueContext();
+
+  // Apply client-side filtering
+  const items = useMemo(() => {
+    let filtered = allItems;
+    if (priorityFilter !== undefined) {
+      filtered = filtered.filter((item) => item.priority === priorityFilter);
+    }
+    if (reasonFilter !== undefined) {
+      filtered = filtered.filter((item) => item.reason === reasonFilter);
+    }
+    return filtered;
+  }, [allItems, priorityFilter, reasonFilter]);
 
   // Approval actions for APPROVAL_PENDING items
-  const { approve: approveRequest, deny: denyRequest } = useApprovals();
+  const { approve: approveRequest, deny: denyRequest } = useApprovalsContext();
 
   // Keyboard navigation
   const { currentIndex, goToNext, goToPrevious } = useReviewQueueNavigation({
@@ -86,24 +87,6 @@ export function ReviewQueuePanel({
       onSessionClick?.(item.sessionId);
     },
     enableKeyboardShortcuts: true,
-  });
-
-  // Play notification sound when new items are added to the queue
-  useReviewQueueNotifications(items, {
-    enabled: true,
-    soundType: NotificationSound.DING,
-    showBrowserNotification: true,
-    showToastNotification: true,
-    notificationTitle: "Session Needs Attention",
-    onNavigateToSession: (sessionId) => {
-      // Open the session when clicking "View Session" in toast
-      onSessionClick?.(sessionId);
-    },
-    onAcknowledge: (sessionId) => {
-      // When user clicks "Dismiss" in toast, acknowledge the session
-      // This prevents re-notification for the grace period
-      acknowledgeSession(sessionId);
-    },
   });
 
   // Notify parent component when queue items change (for navigation)

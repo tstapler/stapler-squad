@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
@@ -248,15 +248,17 @@ export function SessionList({
     }
   };
 
-  const handleToggleSession = (sessionId: string) => {
-    const newSelected = new Set(selectedSessions);
-    if (newSelected.has(sessionId)) {
-      newSelected.delete(sessionId);
-    } else {
-      newSelected.add(sessionId);
-    }
-    setSelectedSessions(newSelected);
-  };
+  const handleToggleSession = useCallback((sessionId: string) => {
+    setSelectedSessions((prev) => {
+      const newSelected = new Set(prev);
+      if (newSelected.has(sessionId)) {
+        newSelected.delete(sessionId);
+      } else {
+        newSelected.add(sessionId);
+      }
+      return newSelected;
+    });
+  }, []);
 
   const handleSelectAll = () => {
     const allSessionIds = new Set(filteredSessions.map(s => s.id));
@@ -496,22 +498,23 @@ export function SessionList({
                 {displayName} ({groupSessions.length})
               </h3>
               <div className={styles.categoryContent}>
-                {groupSessions.map((session) => (
-                  <SessionCard
-                    key={session.id}
-                    session={session}
-                    onClick={() => onSessionClick?.(session)}
-                    onDelete={() => onDeleteSession?.(session.id)}
-                    onPause={() => onPauseSession?.(session.id)}
-                    onResume={() => onResumeSession?.(session.id)}
-                    onDuplicate={() => onDuplicateSession?.(session.id)}
-                    onRename={onRenameSession}
-                    onRestart={onRestartSession}
-                    onUpdateTags={onUpdateTags}
-                    selectMode={selectMode}
-                    isSelected={selectedSessions.has(session.id)}
-                    onToggleSelect={() => handleToggleSession(session.id)}
-                  />
+                {groupSessions.map((session, index) => (
+                  <div key={session.id} style={{'--card-index': index} as React.CSSProperties}>
+                    <SessionCard
+                      session={session}
+                      onClick={() => onSessionClick?.(session)}
+                      onDelete={() => onDeleteSession?.(session.id)}
+                      onPause={() => onPauseSession?.(session.id)}
+                      onResume={() => onResumeSession?.(session.id)}
+                      onDuplicate={() => onDuplicateSession?.(session.id)}
+                      onRename={onRenameSession}
+                      onRestart={onRestartSession}
+                      onUpdateTags={onUpdateTags}
+                      selectMode={selectMode}
+                      isSelected={selectedSessions.has(session.id)}
+                      onToggleSelect={() => handleToggleSession(session.id)}
+                    />
+                  </div>
                 ))}
               </div>
             </div>

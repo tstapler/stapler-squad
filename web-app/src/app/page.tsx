@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, Suspense, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionList } from "@/components/sessions/SessionList";
@@ -64,7 +64,7 @@ function HomeContent() {
   // 3. External metadata tmux session name match
   // 4. Tmux session name with prefix stripped (e.g., "claudesquad_foo" → "foo")
   // 5. Path-based matching (for notifications from hooks using cwd)
-  const findSessionById = (sessionId: string): Session | undefined => {
+  const findSessionById = useCallback((sessionId: string): Session | undefined => {
     // Try exact ID match first
     let session = sessions.find((s) => s.id === sessionId);
     if (session) return session;
@@ -123,7 +123,7 @@ function HomeContent() {
     }
 
     return session;
-  };
+  }, [sessions]);
 
   // Handle pending session navigation from notification click
   useEffect(() => {

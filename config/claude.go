@@ -172,10 +172,19 @@ func (m *ClaudeConfigManager) ListConfigs() ([]ConfigFile, error) {
 }
 
 // UpdateConfig updates a Claude configuration file atomically with backup
-// It creates a .bak file before writing, and uses a temporary file for atomicity
+// It creates a .bak file before writing, and uses a temporary file for atomicity.
+// JSON files are validated before writing to prevent corrupt settings files.
 func (m *ClaudeConfigManager) UpdateConfig(filename string, content string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Validate JSON content before writing to prevent corrupt settings files.
+	if strings.HasSuffix(filename, ".json") {
+		var v interface{}
+		if err := json.Unmarshal([]byte(content), &v); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidJSON, err)
+		}
+	}
 
 	filePath := filepath.Join(m.claudeDir, filename)
 

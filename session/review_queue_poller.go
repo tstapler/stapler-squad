@@ -330,16 +330,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 	log.InfoLog.Printf("[ReviewQueue] === CHECKING SESSION '%s' === (started=%v, paused=%v)",
 		inst.Title, inst.Started(), inst.Paused())
 
-	// MIGRATION CLEANUP: Remove any stale queue items persisted before the
-	// LastMeaningfulOutput field was added. We no longer skip processing — sessions
-	// without a recorded output timestamp (new sessions, failed controllers) are still
-	// valid candidates for the review queue. GetTimeSinceLastMeaningfulOutput() and
-	// IsAcknowledgedAfterOutput() both handle the zero-value case safely.
 	if inst.LastMeaningfulOutput.IsZero() {
-		if rqp.queue.Has(inst.Title) {
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': CLEANUP - Removing stale queue item with zero LastMeaningfulOutput", inst.Title)
-			rqp.queue.Remove(inst.Title)
-		}
 		log.DebugLog.Printf("[ReviewQueue] Session '%s': LastMeaningfulOutput is zero — processing without output timestamp", inst.Title)
 	}
 

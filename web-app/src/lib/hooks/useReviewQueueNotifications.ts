@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import { ReviewItem } from "@/gen/session/v1/types_pb";
+import { ReviewItem, AttentionReason } from "@/gen/session/v1/types_pb";
 import {
   playNotificationSound,
   showBrowserNotification,
@@ -16,6 +16,42 @@ import {
   cleanupExpired,
 } from "@/lib/utils/notificationStorage";
 
+/**
+ * Tier 1 — Interrupt: blocks Claude execution, needs immediate user response.
+ * Shows persistent toast + OS notification with sound.
+ */
+const TIER1_REASONS = new Set([
+  AttentionReason.APPROVAL_PENDING,
+  AttentionReason.INPUT_REQUIRED,
+  AttentionReason.WAITING_FOR_USER,
+]);
+
+/**
+ * Tier 2 — Surface: actionable failure, user should know soon.
+ * Shows brief toast (auto-minimizes) + OS notification if tab hidden.
+ */
+const TIER2_REASONS = new Set([
+  AttentionReason.ERROR_STATE,
+  AttentionReason.TESTS_FAILING,
+  AttentionReason.STALE,
+]);
+
+/**
+ * Tier 3 — History only: informational, no interrupt.
+ * TASK_COMPLETE, IDLE, UNCOMMITTED_CHANGES, IDLE_TIMEOUT → history panel only.
+ */
+function getTier(reason: AttentionReason): 1 | 2 | 3 {
+  if (TIER1_REASONS.has(reason)) return 1;
+  if (TIER2_REASONS.has(reason)) return 2;
+  return 3;
+}
+
+/**
+ * Minimum milliseconds an item must remain in the queue before a notification fires.
+ * This filters out items that briefly enter the queue during auto-approve processing.
+ */
+const DWELL_TIME_MS = 3_000;
+
 interface UseReviewQueueNotificationsOptions {
   /**
    * Enable/disable notifications
@@ -24,7 +60,7 @@ interface UseReviewQueueNotificationsOptions {
   enabled?: boolean;
 
   /**
-   * Sound type to play
+   * Sound type to play for Tier 1 notifications
    * @default NotificationSound.DING
    */
   soundType?: NotificationSound;
@@ -36,7 +72,7 @@ interface UseReviewQueueNotificationsOptions {
   showBrowserNotification?: boolean;
 
   /**
-   * Show in-app toast notification
+   * Show in-app toast notification for Tier 1/2
    * @default true
    */
   showToastNotification?: boolean;
@@ -64,18 +100,20 @@ interface UseReviewQueueNotificationsOptions {
 }
 
 /**
- * Hook that monitors review queue items and plays notification sounds
- * when new sessions are added that need user attention.
+ * Hook that monitors review queue items and notifies the user based on urgency tier.
  *
- * @example
- * ```tsx
- * const { items } = useReviewQueue();
- * useReviewQueueNotifications(items, {
- *   enabled: true,
- *   soundType: NotificationSound.DING,
- *   showBrowserNotification: true,
- * });
- * ```
+ * Tier 1 (APPROVAL_PENDING, INPUT_REQUIRED, WAITING_FOR_USER):
+ *   - Persistent toast (no auto-close) + browser notification with OS sound + history
+ *
+ * Tier 2 (ERROR_STATE, TESTS_FAILING, STALE):
+ *   - Brief toast (auto-minimizes) + history only (no browser notification unless tab hidden)
+ *
+ * Tier 3 (TASK_COMPLETE, IDLE, UNCOMMITTED_CHANGES, etc.):
+ *   - History panel only — no toast, no sound, no interruption
+ *
+ * Dwell-time filter: items must remain in the queue for at least 3 seconds before
+ * a notification fires. This prevents spurious notifications from auto-approved items
+ * that briefly appear in the queue while the classifier is running.
  */
 export function useReviewQueueNotifications(
   items: ReviewItem[],
@@ -92,18 +130,19 @@ export function useReviewQueueNotifications(
     onAcknowledge,
   } = options;
 
-  const { showSessionNotification } = useNotifications();
+  const { showSessionNotification, addToHistoryOnly, markAsReadBySessionId } = useNotifications();
 
   // Track previous items to detect new additions (in-memory for fast access)
   const previousItemsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
 
+  // Dwell-time tracking: maps sessionId -> timestamp when item first appeared
+  const itemFirstSeenRef = useRef<Map<string, number>>(new Map());
+
   // Acknowledge handler that updates localStorage and calls backend
   const handleAcknowledge = useCallback(
     (sessionId: string) => {
-      // Mark as acknowledged in localStorage (prevents re-notification for grace period)
       markAcknowledged(sessionId);
-      // Call the backend acknowledge callback
       onAcknowledge?.(sessionId);
     },
     [onAcknowledge]
@@ -115,80 +154,145 @@ export function useReviewQueueNotifications(
     // Periodic cleanup of expired records
     cleanupExpired();
 
-    // Build current item set
-    const currentItemIds = new Set(items.map((item) => item.sessionId));
+    // Build current item set with reason lookup
+    const currentItemMap = new Map(items.map((item) => [item.sessionId, item]));
+    const currentItemIds = new Set(currentItemMap.keys());
+    const now = Date.now();
 
-    // On initial load, mark all current items as notified to prevent duplicate alerts
-    // This handles both first page load AND WebSocket reconnection scenarios
+    // Remove dwell-time entries for items no longer in the queue
+    for (const id of itemFirstSeenRef.current.keys()) {
+      if (!currentItemIds.has(id)) {
+        itemFirstSeenRef.current.delete(id);
+      }
+    }
+
+    // On initial load, mark all current items as seen to prevent duplicate alerts
     if (isInitialLoadRef.current) {
       isInitialLoadRef.current = false;
-      // Mark all current items as notified in localStorage
       markNotifiedBatch(Array.from(currentItemIds));
       previousItemsRef.current = currentItemIds;
+      // Seed dwell-time map so existing items don't fire on first render
+      for (const id of currentItemIds) {
+        itemFirstSeenRef.current.set(id, 0); // 0 = already present before we started watching
+      }
       return;
     }
 
-    // Find new items that:
-    // 1. Weren't in previous in-memory set
-    // 2. Should be notified (not in localStorage grace period)
-    const newItemIds = Array.from(currentItemIds).filter((id) => {
-      // Not in previous set
-      if (previousItemsRef.current.has(id)) {
-        return false;
+    // Record first-seen timestamp for any new item entering the queue
+    for (const id of currentItemIds) {
+      if (!itemFirstSeenRef.current.has(id)) {
+        itemFirstSeenRef.current.set(id, now);
       }
-      // Not in localStorage grace period or TTL
-      return shouldNotify(id);
+    }
+
+    // Find items that:
+    // 1. Weren't in the previous in-memory set
+    // 2. Should be notified (not in localStorage grace period)
+    // 3. Have dwelled in the queue long enough (dwell-time filter for auto-approve)
+    const newItemIds = Array.from(currentItemIds).filter((id) => {
+      if (previousItemsRef.current.has(id)) return false;
+      if (!shouldNotify(id)) return false;
+      const firstSeen = itemFirstSeenRef.current.get(id) ?? now;
+      if (firstSeen === 0) return false; // Was already present at initial load
+      return now - firstSeen >= DWELL_TIME_MS;
     });
 
     if (newItemIds.length > 0) {
-      const newItems = items.filter((item) =>
-        newItemIds.includes(item.sessionId)
-      );
+      const newItems = newItemIds
+        .map((id) => currentItemMap.get(id))
+        .filter((item): item is ReviewItem => item !== undefined);
 
-      // Mark all new items as notified in localStorage
       markNotifiedBatch(newItemIds);
 
-      // Play notification sound (once for all new items)
-      playNotificationSound(soundType);
+      // Split by tier
+      const tier1Items = newItems.filter((item) => getTier(item.reason) === 1);
+      const tier2Items = newItems.filter((item) => getTier(item.reason) === 2);
+      const tier3Items = newItems.filter((item) => getTier(item.reason) === 3);
 
-      // Show toast notification for each new item with acknowledge action
-      if (showToast && newItems.length > 0) {
-        newItems.forEach((item) => {
-          showSessionNotification(
-            item,
-            () => {
-              onNavigateToSession?.(item.sessionId);
-            },
-            () => {
-              handleAcknowledge(item.sessionId);
-            }
-          );
+      // Tier 1: interrupt toast + sound + browser notification
+      if (tier1Items.length > 0) {
+        playNotificationSound(soundType);
+
+        if (showToast) {
+          tier1Items.forEach((item) => {
+            showSessionNotification(
+              item,
+              () => { onNavigateToSession?.(item.sessionId); },
+              () => { handleAcknowledge(item.sessionId); }
+            );
+          });
+        }
+
+        if (showBrowser && tier1Items.length > 0) {
+          const sessionName = tier1Items[0].sessionName || "Unnamed Session";
+          const body =
+            tier1Items.length === 1
+              ? `${sessionName} is waiting for your input`
+              : `${tier1Items.length} sessions need your approval`;
+
+          showBrowserNotification(notificationTitle, {
+            body,
+            tag: `review-queue-tier1-${tier1Items[0].sessionId}`,
+            requireInteraction: true, // Tier 1: persist in OS notification center
+          });
+        }
+      }
+
+      // Tier 2: brief toast (auto-minimizes via NotificationToast) + silent browser notification if hidden
+      if (tier2Items.length > 0) {
+        if (showToast) {
+          tier2Items.forEach((item) => {
+            showSessionNotification(
+              item,
+              () => { onNavigateToSession?.(item.sessionId); },
+              () => { handleAcknowledge(item.sessionId); }
+            );
+          });
+        }
+
+        if (showBrowser && typeof document !== "undefined" && document.hidden) {
+          const sessionName = tier2Items[0].sessionName || "Unnamed Session";
+          const body =
+            tier2Items.length === 1
+              ? `${sessionName} has an issue`
+              : `${tier2Items.length} sessions have issues`;
+
+          showBrowserNotification(notificationTitle, {
+            body,
+            tag: `review-queue-tier2`,
+            requireInteraction: false,
+            silent: true, // Tier 2: no OS sound, we're informing not interrupting
+          });
+        }
+      }
+
+      // Tier 3: history only — no toast, no sound
+      if (tier3Items.length > 0) {
+        tier3Items.forEach((item) => {
+          addToHistoryOnly({
+            sessionId: item.sessionId,
+            sessionName: item.sessionName || "Unnamed Session",
+            message: item.context || "Task completed",
+            priority: "low",
+            notificationType: "task_complete",
+            onView: () => { onNavigateToSession?.(item.sessionId); },
+          });
         });
       }
 
-      // Show browser notification if enabled
-      if (showBrowser && newItems.length > 0) {
-        const sessionName = newItems[0].sessionName || "Unnamed Session";
-        const body =
-          newItems.length === 1
-            ? `${sessionName} is waiting for your input`
-            : `${newItems.length} sessions need your attention`;
-
-        showBrowserNotification(notificationTitle, {
-          body,
-          tag: "review-queue", // Prevents duplicate browser notifications
-          requireInteraction: false,
-          silent: true, // We already played our custom sound
-        });
-      }
-
-      // Call optional callback
       if (onNewItems) {
         onNewItems(newItems);
       }
     }
 
-    // Update previous items reference
+    // Items that left the queue — mark their notifications as read
+    const removedIds = Array.from(previousItemsRef.current).filter(
+      (id) => !currentItemIds.has(id)
+    );
+    if (removedIds.length > 0) {
+      markAsReadBySessionId(removedIds);
+    }
+
     previousItemsRef.current = currentItemIds;
   }, [
     items,
@@ -200,17 +304,18 @@ export function useReviewQueueNotifications(
     onNewItems,
     onNavigateToSession,
     handleAcknowledge,
+    markAsReadBySessionId,
+    showSessionNotification,
+    addToHistoryOnly,
   ]);
 
   return {
-    // Reset tracking (useful if you want to re-enable after disabling)
     reset: () => {
       previousItemsRef.current = new Set();
+      itemFirstSeenRef.current = new Map();
       isInitialLoadRef.current = true;
     },
-    // Manually acknowledge a session (for external use)
     acknowledge: handleAcknowledge,
-    // Mark a session as notified (for external use)
     markNotified,
   };
 }

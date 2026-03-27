@@ -34,13 +34,20 @@ func makeRecord(id, sessionID string, notifType int32) *NotificationRecord {
 	}
 }
 
+// notifTypeDedup is a notification type that participates in (sessionID, notificationType)
+// deduplication — any type except APPROVAL_NEEDED (1) which is intentionally excluded.
+const notifTypeDedup = int32(10) // INFO
+
+// notifTypeApprovalNeededTest is the value of NOTIFICATION_TYPE_APPROVAL_NEEDED for use in tests.
+const notifTypeApprovalNeededTest = int32(1)
+
 // TestAppendDedup_SameSessionAndType verifies that two appends with the same
 // (sessionID, notificationType) produce one record with OccurrenceCount=2.
 func TestAppendDedup_SameSessionAndType(t *testing.T) {
 	store := newTestStore(t)
 
-	r1 := makeRecord("id-1", "session-A", 1)
-	r2 := makeRecord("id-2", "session-A", 1)
+	r1 := makeRecord("id-1", "session-A", notifTypeDedup)
+	r2 := makeRecord("id-2", "session-A", notifTypeDedup)
 
 	if err := store.Append(r1); err != nil {
 		t.Fatalf("Append r1: %v", err)
@@ -165,13 +172,13 @@ func TestAppendDedup_ReadThenNew(t *testing.T) {
 func TestAppendDedup_MetadataUpdated(t *testing.T) {
 	store := newTestStore(t)
 
-	r1 := makeRecord("id-1", "session-A", 1)
-	r1.Metadata = map[string]string{"approval_id": "old-approval"}
+	r1 := makeRecord("id-1", "session-A", notifTypeDedup)
+	r1.Metadata = map[string]string{"key": "old-value"}
 	r1.Title = "Old Title"
 	r1.Message = "Old Message"
 
-	r2 := makeRecord("id-2", "session-A", 1)
-	r2.Metadata = map[string]string{"approval_id": "new-approval"}
+	r2 := makeRecord("id-2", "session-A", notifTypeDedup)
+	r2.Metadata = map[string]string{"key": "new-value"}
 	r2.Title = "New Title"
 	r2.Message = "New Message"
 
@@ -191,8 +198,8 @@ func TestAppendDedup_MetadataUpdated(t *testing.T) {
 	}
 
 	rec := records[0]
-	if rec.Metadata["approval_id"] != "new-approval" {
-		t.Errorf("expected metadata approval_id='new-approval', got '%s'", rec.Metadata["approval_id"])
+	if rec.Metadata["key"] != "new-value" {
+		t.Errorf("expected metadata key='new-value', got '%s'", rec.Metadata["key"])
 	}
 	if rec.Title != "New Title" {
 		t.Errorf("expected Title='New Title', got '%s'", rec.Title)
@@ -208,7 +215,7 @@ func TestAppendDedup_OccurrenceCountIncrements(t *testing.T) {
 	store := newTestStore(t)
 
 	for i := 1; i <= 3; i++ {
-		r := makeRecord("id-"+string(rune('0'+i)), "session-A", 1)
+		r := makeRecord("id-"+string(rune('0'+i)), "session-A", notifTypeDedup)
 		if err := store.Append(r); err != nil {
 			t.Fatalf("Append %d: %v", i, err)
 		}
@@ -232,13 +239,13 @@ func TestAppendDedup_MoveToFront(t *testing.T) {
 	store := newTestStore(t)
 
 	// Insert record for session-B first (will be at front initially)
-	rB := makeRecord("id-B", "session-B", 1)
+	rB := makeRecord("id-B", "session-B", notifTypeDedup)
 	if err := store.Append(rB); err != nil {
 		t.Fatalf("Append rB: %v", err)
 	}
 
 	// Insert record for session-A (will be at front)
-	rA1 := makeRecord("id-A1", "session-A", 1)
+	rA1 := makeRecord("id-A1", "session-A", notifTypeDedup)
 	if err := store.Append(rA1); err != nil {
 		t.Fatalf("Append rA1: %v", err)
 	}
@@ -246,7 +253,7 @@ func TestAppendDedup_MoveToFront(t *testing.T) {
 	// Now at this point: [session-A, session-B]
 	// Insert another session-B record (at position 1, not 0). Dedup should
 	// merge into the existing session-B record and move it to the front.
-	rB2 := makeRecord("id-B2", "session-B", 1)
+	rB2 := makeRecord("id-B2", "session-B", notifTypeDedup)
 	if err := store.Append(rB2); err != nil {
 		t.Fatalf("Append rB2: %v", err)
 	}
@@ -283,7 +290,7 @@ func TestAppendDedup_BackwardCompatibility(t *testing.T) {
 	oldRecord := &NotificationRecord{
 		ID:               "old-id",
 		SessionID:        "session-A",
-		NotificationType: 1,
+		NotificationType: notifTypeDedup,
 		Title:            "Old notification",
 		Message:          "Old message",
 		CreatedAt:        time.Now(),
@@ -325,7 +332,7 @@ func TestAppendDedup_BackwardCompatibility(t *testing.T) {
 	}
 
 	// Now append a duplicate -- should merge and increment correctly
-	r2 := makeRecord("id-2", "session-A", 1)
+	r2 := makeRecord("id-2", "session-A", notifTypeDedup)
 	if err := store.Append(r2); err != nil {
 		t.Fatalf("Append r2: %v", err)
 	}
@@ -350,17 +357,17 @@ func TestAppendDedup_BackwardCompatibility(t *testing.T) {
 func TestGetUnreadCount_WithDedup(t *testing.T) {
 	store := newTestStore(t)
 
-	// 3 events for session A, type 1
+	// 3 events for session A, same dedupable type
 	for i := 0; i < 3; i++ {
-		r := makeRecord("a-"+string(rune('0'+i)), "session-A", 1)
+		r := makeRecord("a-"+string(rune('0'+i)), "session-A", notifTypeDedup)
 		if err := store.Append(r); err != nil {
 			t.Fatalf("Append session-A #%d: %v", i, err)
 		}
 	}
 
-	// 2 events for session B, type 1
+	// 2 events for session B, same dedupable type
 	for i := 0; i < 2; i++ {
-		r := makeRecord("b-"+string(rune('0'+i)), "session-B", 1)
+		r := makeRecord("b-"+string(rune('0'+i)), "session-B", notifTypeDedup)
 		if err := store.Append(r); err != nil {
 			t.Fatalf("Append session-B #%d: %v", i, err)
 		}
@@ -388,15 +395,16 @@ func TestDeduplicateExisting_Migration(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "notifications.json")
 
-	// Create 5 duplicate unread records for the same (sessionID, type)
+	// Create 5 duplicate unread records for the same (sessionID, type).
+	// Use a dedupable type (not APPROVAL_NEEDED which is excluded from dedup).
 	records := make([]*NotificationRecord, 5)
 	baseTime := time.Now()
 	for i := 0; i < 5; i++ {
 		records[i] = &NotificationRecord{
 			ID:               "dup-" + string(rune('0'+i)),
 			SessionID:        "session-foo",
-			NotificationType: 1,
-			Title:            "Approval needed",
+			NotificationType: notifTypeDedup,
+			Title:            "Repeated notification",
 			Message:          "msg-" + string(rune('0'+i)),
 			Metadata:         map[string]string{"key": "val-" + string(rune('0'+i))},
 			CreatedAt:        baseTime.Add(time.Duration(i) * time.Second),
@@ -514,7 +522,7 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 		{
 			ID:               "unread-1",
 			SessionID:        "session-foo",
-			NotificationType: 1,
+			NotificationType: notifTypeDedup,
 			Title:            "Unread 1",
 			CreatedAt:        now.Add(-1 * time.Minute),
 			IsRead:           false,
@@ -522,7 +530,7 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 		{
 			ID:               "unread-2",
 			SessionID:        "session-foo",
-			NotificationType: 1,
+			NotificationType: notifTypeDedup,
 			Title:            "Unread 2",
 			CreatedAt:        now.Add(-2 * time.Minute),
 			IsRead:           false,
@@ -531,7 +539,7 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 		{
 			ID:               "read-1",
 			SessionID:        "session-foo",
-			NotificationType: 1,
+			NotificationType: notifTypeDedup,
 			Title:            "Read",
 			CreatedAt:        now.Add(-1 * time.Hour),
 			IsRead:           true,
@@ -577,5 +585,134 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 	}
 	if unreadCount != 1 {
 		t.Errorf("expected 1 unread record, got %d", unreadCount)
+	}
+}
+
+// TestAppendDedup_ApprovalNeededNotDeduped verifies that APPROVAL_NEEDED notifications
+// (type 1) are never deduplicated, even when the same session has multiple unread records.
+// Each approval carries a unique ID that must equal the notification record ID for
+// SetMetadata outcome-stamping to work correctly.
+func TestAppendDedup_ApprovalNeededNotDeduped(t *testing.T) {
+	store := newTestStore(t)
+
+	// Three APPROVAL_NEEDED events for the same session — all should create separate records.
+	for i := 1; i <= 3; i++ {
+		r := makeRecord("approval-"+string(rune('0'+i)), "session-A", notifTypeApprovalNeededTest)
+		if err := store.Append(r); err != nil {
+			t.Fatalf("Append %d: %v", i, err)
+		}
+	}
+
+	records, total, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if total != 3 {
+		t.Errorf("expected 3 separate APPROVAL_NEEDED records (no dedup), got %d", total)
+	}
+	if len(records) != 3 {
+		t.Fatalf("expected 3 records in slice, got %d", len(records))
+	}
+	// Each record should have OccurrenceCount=1 (no merging occurred)
+	for _, r := range records {
+		if r.OccurrenceCount != 1 {
+			t.Errorf("record %s: expected OccurrenceCount=1, got %d", r.ID, r.OccurrenceCount)
+		}
+	}
+}
+
+// TestSetMetadata_ApprovalDecisionStamping verifies that SetMetadata correctly stamps
+// the approval_decision on a notification record when the record ID equals the approval ID.
+// This is the core mechanism for persisting resolution badges across page refreshes.
+func TestSetMetadata_ApprovalDecisionStamping(t *testing.T) {
+	store := newTestStore(t)
+
+	approvalID := "approval-uuid-1"
+	r := &NotificationRecord{
+		ID:               approvalID, // notification ID == approval ID by convention
+		SessionID:        "session-A",
+		NotificationType: notifTypeApprovalNeededTest,
+		Title:            "Permission Required: Bash",
+		Message:          "git commit -m 'test'",
+		Metadata:         map[string]string{"approval_id": approvalID, "tool_name": "Bash"},
+		CreatedAt:        time.Now(),
+	}
+	if err := store.Append(r); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	// Simulate ResolveApproval stamping the decision
+	if err := store.SetMetadata(approvalID, "approval_decision", "allow"); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+
+	records, _, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	if got := records[0].Metadata["approval_decision"]; got != "allow" {
+		t.Errorf("expected approval_decision='allow', got '%s'", got)
+	}
+}
+
+// TestSetMetadata_NoDedup_SecondApprovalStamped verifies that when two APPROVAL_NEEDED
+// notifications are created for the same session, SetMetadata correctly stamps each one
+// independently because they are not deduplicated.
+func TestSetMetadata_NoDedup_SecondApprovalStamped(t *testing.T) {
+	store := newTestStore(t)
+
+	approvalID1 := "approval-uuid-1"
+	approvalID2 := "approval-uuid-2"
+
+	r1 := &NotificationRecord{
+		ID:               approvalID1,
+		SessionID:        "session-A",
+		NotificationType: notifTypeApprovalNeededTest,
+		Metadata:         map[string]string{"approval_id": approvalID1},
+		CreatedAt:        time.Now(),
+	}
+	r2 := &NotificationRecord{
+		ID:               approvalID2,
+		SessionID:        "session-A",
+		NotificationType: notifTypeApprovalNeededTest,
+		Metadata:         map[string]string{"approval_id": approvalID2},
+		CreatedAt:        time.Now(),
+	}
+
+	if err := store.Append(r1); err != nil {
+		t.Fatalf("Append r1: %v", err)
+	}
+	if err := store.Append(r2); err != nil {
+		t.Fatalf("Append r2: %v", err)
+	}
+
+	// Stamp the second approval's decision
+	if err := store.SetMetadata(approvalID2, "approval_decision", "deny"); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+
+	records, _, err := store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records (no dedup), got %d", len(records))
+	}
+
+	// Find the record with approval_id=approvalID2 and verify its stamp
+	var found bool
+	for _, r := range records {
+		if r.ID == approvalID2 {
+			found = true
+			if got := r.Metadata["approval_decision"]; got != "deny" {
+				t.Errorf("expected approval_decision='deny' on record %s, got '%s'", r.ID, got)
+			}
+		}
+	}
+	if !found {
+		t.Errorf("could not find record with ID=%s; dedup may have incorrectly merged it", approvalID2)
 	}
 }

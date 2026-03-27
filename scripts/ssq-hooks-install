@@ -160,7 +160,8 @@ create_hooks_config() {
     "PermissionRequest": [{
       "hooks": [{
         "type": "command",
-        "command": "$HOOK_HANDLER permission"
+        "command": "$HOOK_HANDLER permission",
+        "timeout": 300
       }]
     }],
     "PostToolUse": [{

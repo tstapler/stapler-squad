@@ -149,6 +149,35 @@ service SessionService {
   // ClearNotificationHistory removes notifications from the history.
   // Optionally filters by timestamp to only clear older notifications.
   rpc ClearNotificationHistory(ClearNotificationHistoryRequest) returns (ClearNotificationHistoryResponse) {}
+
+  // ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).
+  rpc ListApprovalRules(ListApprovalRulesRequest) returns (ListApprovalRulesResponse) {}
+
+  // UpsertApprovalRule creates or updates a user-defined auto-approval rule.
+  rpc UpsertApprovalRule(UpsertApprovalRuleRequest) returns (UpsertApprovalRuleResponse) {}
+
+  // DeleteApprovalRule removes a user-defined auto-approval rule by ID.
+  rpc DeleteApprovalRule(DeleteApprovalRuleRequest) returns (DeleteApprovalRuleResponse) {}
+
+  // GetApprovalAnalytics returns aggregated analytics for classification decisions.
+  rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
+
+  // ListDatabases returns all discovered workspace databases with metadata.
+  // Used by the workspace switcher UI to show available workspaces.
+  rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse) {}
+
+  // GetCurrentDatabase returns metadata for the currently active workspace database.
+  rpc GetCurrentDatabase(GetCurrentDatabaseRequest) returns (GetCurrentDatabaseResponse) {}
+
+  // SwitchDatabase switches to a different workspace database and restarts the server.
+  // The server will exec-restart itself after writing a preference file.
+  // The client should poll until the server is back up, then reload.
+  rpc SwitchDatabase(SwitchDatabaseRequest) returns (SwitchDatabaseResponse) {}
+
+  // MergeDatabase copies all sessions from a source workspace database into the
+  // currently active database. Skips sessions whose titles already exist.
+  // No server restart required — changes are immediately visible.
+  rpc MergeDatabase(MergeDatabaseRequest) returns (MergeDatabaseResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -951,4 +980,105 @@ message ClearNotificationHistoryRequest {
 message ClearNotificationHistoryResponse {
   bool success = 1;
   int32 cleared_count = 2;
+}
+
+// ============================================================================
+// Auto-Approval Rules & Analytics Messages
+// ============================================================================
+
+message ListApprovalRulesRequest {
+  // Optional: filter by source ("user", "seed", "claude-settings"). Empty = all.
+  optional string source_filter = 1;
+}
+
+message ListApprovalRulesResponse {
+  repeated ApprovalRuleProto rules = 1;
+}
+
+message UpsertApprovalRuleRequest {
+  ApprovalRuleProto rule = 1;
+}
+
+message UpsertApprovalRuleResponse {
+  ApprovalRuleProto rule = 1;
+  bool created = 2;
+}
+
+message DeleteApprovalRuleRequest {
+  string id = 1;
+}
+
+message DeleteApprovalRuleResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetApprovalAnalyticsRequest {
+  // Time window in days (default 7, max 90).
+  optional int32 window_days = 1;
+}
+
+message GetApprovalAnalyticsResponse {
+  AnalyticsSummaryProto summary = 1;
+  // Daily breakdown sorted ascending by date, covering the requested window.
+  repeated DailyBucketProto daily_buckets = 2;
+}
+
+// ============================================================================
+// Database / Workspace Switcher Messages
+// ============================================================================
+
+message ListDatabasesRequest {}
+
+message ListDatabasesResponse {
+  // All discovered workspace databases.
+  repeated DatabaseInfo databases = 1;
+
+  // Workspace ID of the currently active database.
+  string current_workspace_id = 2;
+}
+
+message GetCurrentDatabaseRequest {}
+
+message GetCurrentDatabaseResponse {
+  // Metadata for the currently active workspace database.
+  DatabaseInfo database = 1;
+}
+
+// SwitchDatabaseRequest specifies the target workspace to switch to.
+message SwitchDatabaseRequest {
+  // Absolute path to the target workspace config directory.
+  // Must be under ~/.stapler-squad/ for security.
+  string config_dir = 1;
+}
+
+// SwitchDatabaseResponse confirms the switch was initiated.
+message SwitchDatabaseResponse {
+  // Whether the switch was successfully initiated.
+  bool success = 1;
+
+  // Human-readable status message.
+  string message = 2;
+}
+
+// MergeDatabaseRequest specifies the source workspace to merge sessions from.
+message MergeDatabaseRequest {
+  // Absolute path to the source workspace config directory.
+  // Must be under ~/.stapler-squad/ for security.
+  string config_dir = 1;
+}
+
+// MergeDatabaseResponse reports how many sessions were imported.
+message MergeDatabaseResponse {
+  // Whether the merge completed without error.
+  bool success = 1;
+
+  // Human-readable status message.
+  string message = 2;
+
+  // Number of sessions copied into the current database.
+  int32 sessions_imported = 3;
+
+  // Number of sessions skipped due to title conflicts.
+  int32 sessions_skipped = 4;
 }

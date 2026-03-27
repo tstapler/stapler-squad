@@ -15,6 +15,14 @@ const (
 	MaxNotifications = 500
 	// MaxNotificationAge is the maximum age of a notification before it is pruned.
 	MaxNotificationAge = 7 * 24 * time.Hour
+
+	// notifTypeApprovalNeeded is the NOTIFICATION_TYPE_APPROVAL_NEEDED enum value from
+	// session/v1/types.proto (value = 1). APPROVAL_NEEDED notifications are excluded from
+	// (sessionID, notificationType) deduplication because each approval carries a unique
+	// approval_id that must equal the notification record ID so that SetMetadata can stamp
+	// the outcome after resolution. Merging records would overwrite approval_id in the
+	// metadata, causing SetMetadata to silently no-op and badges to never persist after refresh.
+	notifTypeApprovalNeeded = int32(1)
 )
 
 // NotificationRecord is the persisted representation of a notification event.
@@ -98,6 +106,8 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 // the existing record is updated in place (occurrence count incremented, metadata
 // refreshed, moved to front) instead of inserting a new record. Per ADR-003, if the
 // existing record is already read, a new unread record is created instead.
+//
+// APPROVAL_NEEDED notifications (type 1) are never deduplicated — see notifTypeApprovalNeeded.
 func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,17 +119,21 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 		}
 	}
 
-	// Check for unread duplicate by (sessionID, notificationType)
-	if existing := s.findUnreadDuplicate(record.SessionID, record.NotificationType); existing != nil {
-		// Update existing record with latest data
-		existing.OccurrenceCount++
-		existing.LastOccurredAt = &record.CreatedAt
-		existing.Message = record.Message
-		existing.Metadata = record.Metadata
-		existing.Title = record.Title
-		// Move updated record to front (newest-first ordering)
-		s.moveToFront(existing)
-		return s.saveToDisk()
+	// Check for unread duplicate by (sessionID, notificationType).
+	// APPROVAL_NEEDED is excluded: each approval has a unique ID that must equal the
+	// notification record ID; deduplication would break SetMetadata outcome-stamping.
+	if record.NotificationType != notifTypeApprovalNeeded {
+		if existing := s.findUnreadDuplicate(record.SessionID, record.NotificationType); existing != nil {
+			// Update existing record with latest data
+			existing.OccurrenceCount++
+			existing.LastOccurredAt = &record.CreatedAt
+			existing.Message = record.Message
+			existing.Metadata = record.Metadata
+			existing.Title = record.Title
+			// Move updated record to front (newest-first ordering)
+			s.moveToFront(existing)
+			return s.saveToDisk()
+		}
 	}
 
 	// No duplicate found -- insert as new record with count=1
@@ -335,6 +349,10 @@ func (s *NotificationHistoryStore) deduplicateExisting() error {
 	needsSave := false
 	toRemove := make(map[*NotificationRecord]bool)
 	for _, group := range groups {
+		// APPROVAL_NEEDED records are never deduped (see notifTypeApprovalNeeded).
+		if group[0].NotificationType == notifTypeApprovalNeeded {
+			continue
+		}
 		if len(group) <= 1 {
 			continue
 		}

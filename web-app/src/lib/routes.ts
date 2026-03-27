@@ -6,6 +6,7 @@ export const routes = {
   home: "/",
   sessionCreate: "/sessions/new",
   reviewQueue: "/review-queue",
+  rules: "/rules",
   history: "/history",
   logs: "/logs",
   config: "/config",

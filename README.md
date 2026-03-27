@@ -5,6 +5,8 @@
 
 ![Stapler Squad Screenshot](assets/screenshot.png)
 
+https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
+
 ### Highlights
 - Complete tasks in the background (including yolo / auto-accept mode!)
 - Manage instances and tasks in one terminal window
@@ -19,13 +21,13 @@ https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
 
 ### Installation
 
-Both Homebrew and manual installation will install Stapler Squad as `cs` on your system.
+Both Homebrew and manual installation will install Stapler Squad as `ssq` on your system.
 
 #### Homebrew
 
 ```bash
 brew install stapler-squad
-ln -s "$(brew --prefix)/bin/stapler-squad" "$(brew --prefix)/bin/cs"
+ln -s "$(brew --prefix)/bin/stapler-squad" "$(brew --prefix)/bin/ssq"
 ```
 
 #### Manual
@@ -36,7 +38,7 @@ Stapler Squad can also be installed by running the following command:
 curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install.sh | bash
 ```
 
-This puts the `cs` binary in `~/.local/bin`.
+This puts the `ssq` binary in `~/.local/bin`.
 
 To use a custom name for the binary:
 
@@ -51,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/tstapler/stapler-squad/main/install
 
 ### Configuration
 
-Configuration is stored in `~/.stapler-squad/config.json`. You can view the location with `cs debug`.
+Configuration is stored in `~/.stapler-squad/config.json`. You can view the location with `ssq debug`.
 
 #### Application Data Directory
 
@@ -82,7 +84,7 @@ Logs are stored in `~/.stapler-squad/logs/` by default and include log rotation 
   "log_max_age": 30,  // Max age in days for rotated files
   "log_compress": true,  // Whether to compress rotated files
   "use_session_logs": true,  // Whether to create separate log files for each session
-  "tmux_session_prefix": "claudesquad_"  // Custom prefix for tmux session isolation
+  "tmux_session_prefix": "staplerssq_"  // Custom prefix for tmux session isolation
 }
 ```
 
@@ -100,8 +102,8 @@ For process isolation when running multiple stapler-squad instances, configure a
 
 ```
 Usage:
-  cs [flags]
-  cs [command]
+  ssq [flags]
+  ssq [command]
 
 Available Commands:
   completion  Generate the autocompletion script for the specified shell
@@ -119,7 +121,7 @@ Flags:
 Run the application with:
 
 ```bash
-cs
+ssq
 ```
 NOTE: The default program is `claude` and we recommend using the latest version.
 
@@ -128,10 +130,10 @@ NOTE: The default program is `claude` and we recommend using the latest version.
 <b>Using Stapler Squad with other AI assistants:</b>
 - For [Codex](https://github.com/openai/codex): Set your API key with `export OPENAI_API_KEY=<your_key>`
 - Launch with specific assistants:
-   - Codex: `cs -p "codex"`
-   - Aider: `cs -p "aider ..."`
-   - Gemini: `cs -p "gemini"`
-- Make this the default, by modifying the config file (locate with `cs debug`)
+   - Codex: `ssq -p "codex"`
+   - Aider: `ssq -p "aider ..."`
+   - Gemini: `ssq -p "gemini"`
+- Make this the default, by modifying the config file (locate with `ssq debug`)
 
 <br />
 
@@ -266,28 +268,6 @@ make lint             # Multi-tool linting suite
 
 Install all tools with: `make install-tools`
 
-### Recent Improvements
-
-**Test Infrastructure Overhaul (2025-01):**
-- ✅ Fixed critical tmux integration test timeouts and hangs
-- ✅ Implemented isolated tmux sockets for reliable test execution
-- ✅ Added mock command executors to bypass external dependencies
-- ✅ Comprehensive session creation and lifecycle testing (25+ scenarios)
-- ✅ Git worktree integration fully tested and validated
-- ✅ Test execution time reduced from indefinite hangs to <30s
-
-**Key Test Improvements:**
-- `TestComprehensiveSessionCreation`: Full session lifecycle validation with mocked dependencies
-- `TestSessionRecoveryScenarios`: Git worktree restoration and multi-session independence
-- All tests now use dedicated tmux servers to prevent conflicts with production
-- Builder pattern for clean test setup with proper isolation
-
-**Developer Experience:**
-- Enhanced debugging with detailed logs in `~/.stapler-squad/logs/`
-- Comprehensive Makefile for streamlined development workflows
-- Static analysis tools (NilAway, Staticcheck, gosec) for code quality
-- Performance benchmarks for navigation and rendering optimization
-
 ### FAQs
 
 #### Failed to start new session
@@ -304,11 +284,22 @@ If you get an error like `failed to start new session: timed out waiting for tmu
 - Look for patterns like "timed out waiting for tmux session" or external command hangs
 - Check if `which claude` or other external commands are blocking
 
+### Web UI
+
+Stapler Squad includes a web-based UI accessible at `http://localhost:8543` when running. It provides:
+
+- Real-time terminal streaming for all sessions
+- Session organization with tags, filtering, and search
+- Approval queue for reviewing AI-proposed changes
+- Session logs and diff preview
+
+The web UI launches automatically alongside the TUI when you run `ssq`.
+
 ### How It Works
 
 1. **tmux** to create isolated terminal sessions for each agent
 2. **git worktrees** to isolate codebases so each session works on its own branch
-3. A simple TUI interface for easy navigation and management
+3. A TUI and web UI for session management and monitoring
 
 ### License
 

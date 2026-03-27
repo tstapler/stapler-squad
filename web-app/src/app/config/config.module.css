@@ -321,6 +321,90 @@
   }
 }
 
+/* Network / Remote Access Section */
+.networkSection {
+  margin-top: 32px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border-color);
+}
+
+.networkCard {
+  background: var(--card-background);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 600px;
+}
+
+.networkRow {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.networkLabel {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+}
+
+.networkValue {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.networkValueText {
+  font-family: monospace;
+  font-size: 13px;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 8px;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.networkCopyBtn {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 0.15s;
+}
+
+.networkCopyBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.networkLink {
+  color: var(--primary, #4f8ef7);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.networkLink:hover {
+  text-decoration: underline;
+}
+
+.networkDisabledNote {
+  color: var(--text-muted);
+  font-size: 13px;
+  font-style: italic;
+}
+
 /* Passkey / Security Section */
 .securitySection {
   margin-top: 32px;

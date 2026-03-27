@@ -731,3 +731,148 @@ message PendingApprovalProto {
   // Seconds remaining before expiry (convenience field for countdown timers).
   int32 seconds_remaining = 9;
 }
+
+// ============================================================================
+// Auto-Approval Rules Messages
+// ============================================================================
+
+// AutoDecision is the action the classifier takes for a matching rule.
+enum AutoDecision {
+  AUTO_DECISION_UNSPECIFIED = 0;
+  AUTO_DECISION_ALLOW = 1;
+  AUTO_DECISION_DENY = 2;
+  AUTO_DECISION_ESCALATE = 3;
+}
+
+// ApprovalRuleProto represents a single auto-approval rule.
+message ApprovalRuleProto {
+  string id = 1;
+  string name = 2;
+  string tool_name = 3;
+  string tool_pattern = 4;
+  string command_pattern = 5;
+  string file_pattern = 6;
+  AutoDecision decision = 7;
+  string risk_level = 8;
+  string reason = 9;
+  string alternative = 10;
+  int32 priority = 11;
+  bool enabled = 12;
+  string source = 13;
+  google.protobuf.Timestamp created_at = 14;
+}
+
+// AnalyticsSummaryProto aggregates classification decisions over a time window.
+message AnalyticsSummaryProto {
+  int32 total_decisions = 1;
+  map<string, int32> decision_counts = 2;
+  repeated ToolStatProto top_tools = 3;
+  repeated CommandStatProto top_denied_commands = 4;
+  repeated RuleStatProto top_triggered_rules = 5;
+  double auto_approve_rate = 6;
+  double manual_review_rate = 7;
+  google.protobuf.Timestamp window_start = 8;
+  google.protobuf.Timestamp window_end = 9;
+  // Top programs invoked via the Bash tool (AST-derived categorization).
+  repeated ProgramStatProto top_command_programs = 10;
+  // Top Python modules imported in inline (-c) Python invocations.
+  repeated ImportStatProto top_python_imports = 11;
+  // Coverage gap: decisions that escaped all rules (escalated with no rule match).
+  // These are prime candidates for new rules to reduce manual review.
+  int32 coverage_gap_count = 12;
+  // coverage_gap_rate is the percentage (0–100) of decisions with no matching rule.
+  double coverage_gap_rate = 13;
+  // Top tools that most frequently escape rule coverage.
+  repeated ToolStatProto top_uncovered_tools = 14;
+  // Top Bash programs that most frequently escape rule coverage.
+  repeated ProgramStatProto top_uncovered_programs = 15;
+  // Full (program, subcommand) distribution for drill-down analysis.
+  // Not truncated to top-N — use to investigate specific programs like "gh" or "sed".
+  repeated SubcommandStatProto command_subcommand_stats = 16;
+}
+
+message ToolStatProto {
+  string tool_name = 1;
+  int32 count = 2;
+}
+
+message CommandStatProto {
+  string preview = 1;
+  string tool_name = 2;
+  int32 count = 3;
+}
+
+message RuleStatProto {
+  string rule_id = 1;
+  string rule_name = 2;
+  int32 count = 3;
+}
+
+// ProgramStatProto represents a program invoked via the Bash tool with its usage count.
+message ProgramStatProto {
+  // program_name is the executable name (e.g., "git", "npm", "python3").
+  string program_name = 1;
+  // category groups the program (e.g., "vcs", "node", "python").
+  string category = 2;
+  int32 count = 3;
+}
+
+// ImportStatProto represents a Python module imported in an inline invocation.
+message ImportStatProto {
+  // module is the top-level package name (e.g., "os", "requests", "numpy").
+  string module = 1;
+  int32 count = 2;
+}
+
+// SubcommandStatProto represents a (program, subcommand) pair with its usage count.
+// subcommand may contain a space for two-level CLIs (e.g., "pr create" for gh).
+message SubcommandStatProto {
+  string program_name = 1;
+  string subcommand = 2;
+  string category = 3;
+  int32 count = 4;
+}
+
+// DailyBucketProto aggregates classification decisions for a single calendar day.
+message DailyBucketProto {
+  // Calendar date in "YYYY-MM-DD" format (local time).
+  string date = 1;
+  int32 auto_allow = 2;
+  int32 auto_deny = 3;
+  int32 escalate = 4;
+  int32 manual_allow = 5;
+  int32 manual_deny = 6;
+  int32 total = 7;
+}
+
+// ============================================================================
+// Database / Workspace Switcher Types
+// ============================================================================
+
+// DatabaseInfo contains display information about a workspace database.
+// Used by the workspace switcher UI in the header.
+message DatabaseInfo {
+  // Short directory name (hash for workspace-based, instance name for named instances).
+  string workspace_id = 1;
+
+  // Type of workspace: "workspace", "instance", or "shared".
+  string type = 2;
+
+  // Working directory where the server was started (empty for shared/instance).
+  string cwd = 3;
+
+  // Human-readable name: last path component of cwd, or "Default" for shared.
+  string name = 4;
+
+  // Absolute path to this workspace's config/data directory.
+  string config_dir = 5;
+
+  // Number of sessions stored in this workspace's database.
+  int32 session_count = 6;
+
+  // Whether this is the currently active workspace.
+  bool is_current = 7;
+
+  // When this workspace was last used (last server startup in this workspace).
+  google.protobuf.Timestamp last_used = 8;
+}

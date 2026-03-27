@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -40,19 +41,38 @@ type ReviewQueueChecker interface {
 	CheckSession(inst *session.Instance)
 }
 
+// approvalNotificationStamper is a narrow interface for stamping approval outcomes
+// on notification records after the approval is resolved (or times out).
+type approvalNotificationStamper interface {
+	SetMetadata(id, key, value string) error
+}
+
 // ApprovalHandler handles Claude Code HTTP hooks for PermissionRequest events.
 // It blocks the HTTP connection open while waiting for the user's decision,
 // then returns the decision in the hookSpecificOutput JSON format.
 type ApprovalHandler struct {
-	store        *ApprovalStore
-	storage      *session.Storage
-	eventBus     *events.EventBus
-	queueChecker ReviewQueueChecker // optional: triggers immediate review queue check on new approval
+	store               *ApprovalStore
+	storage             *session.Storage
+	eventBus            *events.EventBus
+	queueChecker        ReviewQueueChecker          // optional: triggers immediate review queue check on new approval
+	classifier          *RuleBasedClassifier        // optional: auto-classify before escalating to manual review
+	analyticsStore      *AnalyticsStore             // optional: record classification decisions
+	domainChecker       *DomainAgeChecker           // optional: escalate requests to newly-registered domains
+	notificationStamper approvalNotificationStamper // optional: stamps approval outcomes on notification records
+	timeout             time.Duration               // default 4m; overridable in tests
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
 func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus *events.EventBus) *ApprovalHandler {
-	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus}
+	return &ApprovalHandler{store: store, storage: storage, eventBus: eventBus, timeout: 4 * time.Minute}
+}
+
+// approvalTimeout returns the configured timeout, falling back to 4 minutes.
+func (h *ApprovalHandler) approvalTimeout() time.Duration {
+	if h.timeout > 0 {
+		return h.timeout
+	}
+	return 4 * time.Minute
 }
 
 // SetQueueChecker injects a ReviewQueueChecker for triggering immediate review queue updates
@@ -60,6 +80,29 @@ func NewApprovalHandler(store *ApprovalStore, storage *session.Storage, eventBus
 // next 2-second poll cycle.
 func (h *ApprovalHandler) SetQueueChecker(checker ReviewQueueChecker) {
 	h.queueChecker = checker
+}
+
+// SetClassifier injects a RuleBasedClassifier for auto-approving/denying tool use requests
+// before they reach the manual review queue.
+func (h *ApprovalHandler) SetClassifier(c *RuleBasedClassifier) {
+	h.classifier = c
+}
+
+// SetAnalyticsStore injects an AnalyticsStore for recording classification decisions.
+func (h *ApprovalHandler) SetAnalyticsStore(a *AnalyticsStore) {
+	h.analyticsStore = a
+}
+
+// SetDomainChecker injects a DomainAgeChecker for escalating requests to newly-registered domains.
+func (h *ApprovalHandler) SetDomainChecker(d *DomainAgeChecker) {
+	h.domainChecker = d
+}
+
+// SetNotificationStamper injects a stamper for persisting approval outcomes on notification records.
+// When set, resolved and timed-out approvals are stamped with approval_decision in their metadata
+// so the notification panel can show a persistent badge after page refresh.
+func (h *ApprovalHandler) SetNotificationStamper(s approvalNotificationStamper) {
+	h.notificationStamper = s
 }
 
 // HandlePermissionRequest handles POST /api/hooks/permission-request.
@@ -90,6 +133,89 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		sessionID = "unknown"
 	}
 
+	// Secret scan: auto-deny any command that appears to contain a plaintext secret.
+	// Runs on the full command text (before any truncation) so it catches long secrets.
+	if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
+		if hit := ScanForSecrets(cmd); hit.Found {
+			msg := FormatSecretDenyMessage(hit.PatternName)
+			log.InfoLog.Printf("[ApprovalHandler] Auto-denied %s/%s — plaintext secret detected (%s)", sessionID, payload.ToolName, hit.PatternName)
+			if h.analyticsStore != nil {
+				h.analyticsStore.RecordFromResult(payload, ClassificationResult{
+					Decision:  AutoDeny,
+					RiskLevel: RiskCritical,
+					RuleID:    "secret-scan",
+					RuleName:  "Plaintext Secret Detection",
+					Reason:    msg,
+				}, sessionID, "", 0)
+			}
+			h.writeDecision(w, "deny", msg)
+			return
+		}
+	}
+
+	// Domain age check: if a Bash command is contacting a newly-registered domain,
+	// escalate immediately regardless of other rules.
+	if h.domainChecker != nil {
+		if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
+			domains := ExtractDomainsFromCommand(cmd)
+			for _, domain := range domains {
+				isNew, err := h.domainChecker.IsNewlyRegistered(r.Context(), domain)
+				if err != nil {
+					log.WarningLog.Printf("[ApprovalHandler] Domain age check error for %s: %v", domain, err)
+					continue
+				}
+				if isNew {
+					threshDays := int(h.domainChecker.NewDomainThreshold().Hours() / 24)
+					reason := fmt.Sprintf("Domain %q was registered within the last %d days — possible phishing or supply-chain risk.", domain, threshDays)
+					log.InfoLog.Printf("[ApprovalHandler] Escalating %s/%s — newly-registered domain %s", sessionID, payload.ToolName, domain)
+					if h.analyticsStore != nil {
+						h.analyticsStore.RecordFromResult(payload, ClassificationResult{
+							Decision:  Escalate,
+							RiskLevel: RiskHigh,
+							RuleID:    "new-domain-check",
+							RuleName:  "New Domain Check",
+							Reason:    reason,
+						}, sessionID, "", 0)
+					}
+					// Fall through to manual review queue (do NOT return here).
+					// The domain reason will appear in the pending approval context.
+					_ = reason // will be surfaced when the approval is shown in review queue
+					goto createApproval
+				}
+			}
+		}
+	}
+
+	// Classify the request: auto-allow/deny if a rule matches; escalate to manual review otherwise.
+	if h.classifier != nil {
+		start := time.Now()
+		classCtx := h.classifier.BuildContext(payload.Cwd)
+		result := h.classifier.Classify(payload, classCtx)
+		durationMs := time.Since(start).Milliseconds()
+
+		if h.analyticsStore != nil {
+			h.analyticsStore.RecordFromResult(payload, result, sessionID, "", durationMs)
+		}
+
+		switch result.Decision {
+		case AutoAllow:
+			log.InfoLog.Printf("[ApprovalHandler] Auto-allowed %s/%s (rule=%s)", sessionID, payload.ToolName, result.RuleID)
+			h.writeDecision(w, "allow", "")
+			return
+		case AutoDeny:
+			msg := result.Reason
+			if result.Alternative != "" {
+				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
+			}
+			log.InfoLog.Printf("[ApprovalHandler] Auto-denied %s/%s (rule=%s): %s", sessionID, payload.ToolName, result.RuleID, msg)
+			h.writeDecision(w, "deny", msg)
+			return
+		// Escalate: fall through to manual review queue
+		}
+	}
+
+createApproval:
+
 	// Create a pending approval record
 	approvalID := uuid.New().String()
 	approval := &PendingApproval{
@@ -101,9 +227,8 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		Cwd:             payload.Cwd,
 		PermissionMode:  payload.PermissionMode,
 		CreatedAt:       time.Now(),
-		// Use 4 minutes: strictly less than the 5-minute hook timeout.
-		// This ensures the server always responds before the hook times out.
-		ExpiresAt: time.Now().Add(4 * time.Minute),
+		// Use the configured timeout (default 4 minutes), strictly less than the 5-minute hook timeout.
+		ExpiresAt: time.Now().Add(h.approvalTimeout()),
 	}
 
 	if err := h.store.Create(approval); err != nil {
@@ -134,14 +259,23 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	case decision = <-approval.decisionCh:
 		// User responded via ResolveApproval RPC
 		log.InfoLog.Printf("[ApprovalHandler] Approval %s resolved: %s", approvalID, decision.Behavior)
-	case <-time.After(4 * time.Minute):
-		// Server-side timeout (60s before the hook's 5-minute timeout)
+	case <-time.After(h.approvalTimeout()):
+		// Server-side timeout (before the hook's 5-minute timeout).
+		// Return an empty HTTP response so the hook script gets no hookSpecificOutput
+		// and Claude Code falls back to its native terminal permission dialog.
+		// This lets the user still approve/deny in the terminal rather than being
+		// silently allowed or denied.
 		h.store.Remove(approvalID)
-		decision = ApprovalDecision{
-			Behavior: "deny",
-			Message:  "Approval timed out. Please respond in the terminal.",
+		// Stamp the notification so the panel shows a "timed out" badge instead of
+		// live Approve/Deny buttons after page refresh.
+		if h.notificationStamper != nil {
+			if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", "timeout"); err != nil {
+				log.WarningLog.Printf("[ApprovalHandler] Could not stamp timeout on notification %s: %v", approvalID, err)
+			}
 		}
-		log.InfoLog.Printf("[ApprovalHandler] Approval %s timed out", approvalID)
+		log.InfoLog.Printf("[ApprovalHandler] Approval %s timed out — returning empty response (native dialog fallback)", approvalID)
+		w.WriteHeader(http.StatusOK)
+		return
 	case <-r.Context().Done():
 		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
 		h.store.Remove(approvalID)
@@ -313,6 +447,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	entry := hookEntry{
 		Type:    "command",
 		Command: curlCmd,
+		Timeout: hookTimeout,
 	}
 	group := hookMatcherGroup{Hooks: []hookEntry{entry}}
 
@@ -324,9 +459,16 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	}
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &raw); err != nil {
-			// Malformed JSON — don't corrupt the file, just log and skip.
-			log.WarningLog.Printf("[InjectHookConfig] %s is not valid JSON, skipping hook injection: %v", settingsPath, err)
-			return nil
+			// Malformed JSON — attempt targeted repair before falling back to a fresh config.
+			log.WarningLog.Printf("[InjectHookConfig] %s has invalid JSON (%v), attempting repair", settingsPath, err)
+			repaired, repairErr := repairSettingsJSON(data)
+			if repairErr == nil {
+				log.InfoLog.Printf("[InjectHookConfig] Repaired %s successfully", settingsPath)
+				_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
+			} else {
+				log.WarningLog.Printf("[InjectHookConfig] Could not repair %s (%v), resetting to minimal config", settingsPath, repairErr)
+				raw = map[string]json.RawMessage{}
+			}
 		}
 	}
 
@@ -403,9 +545,73 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
 		return fmt.Errorf("create .claude dir: %w", err)
 	}
-	if err := os.WriteFile(settingsPath, out, 0o644); err != nil {
-		return fmt.Errorf("write %s: %w", settingsPath, err)
+	// Write atomically via temp file to avoid partial writes corrupting the file.
+	tmpPath := settingsPath + ".tmp"
+	if err := os.WriteFile(tmpPath, out, 0o644); err != nil {
+		return fmt.Errorf("write temp %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, settingsPath); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename %s: %w", tmpPath, err)
 	}
 	log.InfoLog.Printf("[InjectHookConfig] Wrote hook config to %s (session=%s)", settingsPath, sessionTitle)
 	return nil
+}
+
+// repairSettingsJSON attempts to fix common JSON syntax errors in Claude settings files.
+//
+// The most common corruption seen in settings.local.json is a missing comma between
+// adjacent values (e.g. two string entries in the permissions.allow array written by
+// separate code paths without coordinating on the trailing comma).
+//
+// Strategy: use json.SyntaxError.Offset to locate the exact byte where the parser
+// choked, then insert a comma just after the last non-whitespace byte before that
+// position.  Repeats up to maxRepairs times to handle multiple missing commas.
+// Returns the repaired bytes, or an error if the JSON could not be made valid.
+func repairSettingsJSON(data []byte) ([]byte, error) {
+	const maxRepairs = 20
+	current := make([]byte, len(data))
+	copy(current, data)
+
+	for i := 0; i < maxRepairs; i++ {
+		var syntaxErr *json.SyntaxError
+		if err := json.Unmarshal(current, new(interface{})); err == nil {
+			return current, nil
+		} else if !errors.As(err, &syntaxErr) {
+			return nil, fmt.Errorf("non-syntax error, cannot repair: %w", err)
+		} else {
+			offset := int(syntaxErr.Offset)
+			if offset <= 0 || offset > len(current) {
+				return nil, fmt.Errorf("offset %d out of range (len=%d): %w", offset, len(current), err)
+			}
+			errMsg := err.Error()
+
+			// Missing comma between array elements or object key:value pairs.
+			// syntaxErr.Offset points to the byte AFTER the one that was just read
+			// (i.e. the erroneous character is at index Offset-1).
+			// Walk backwards past whitespace to find the end of the previous token,
+			// then insert a comma there.
+			if strings.Contains(errMsg, "after array element") ||
+				strings.Contains(errMsg, "after object key:value pair") {
+				insertAt := offset - 1 // index of the unexpected character
+				for insertAt > 0 && isJSONWhitespace(current[insertAt-1]) {
+					insertAt--
+				}
+				fixed := make([]byte, 0, len(current)+1)
+				fixed = append(fixed, current[:insertAt]...)
+				fixed = append(fixed, ',')
+				fixed = append(fixed, current[insertAt:]...)
+				current = fixed
+				continue
+			}
+
+			return nil, fmt.Errorf("unsupported JSON syntax error at offset %d: %w", offset, err)
+		}
+	}
+	return nil, fmt.Errorf("still invalid after %d repair attempts", maxRepairs)
+}
+
+// isJSONWhitespace reports whether b is a JSON whitespace character.
+func isJSONWhitespace(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }

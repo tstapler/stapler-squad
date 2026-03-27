@@ -180,5 +180,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/grpc v1.77.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
+	mvdan.cc/sh/v3 v3.13.0 // indirect
 	pluginrpc.com/pluginrpc v0.5.0 // indirect
 )

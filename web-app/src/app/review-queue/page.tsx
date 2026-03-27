@@ -6,7 +6,7 @@ import { Session, ReviewItem } from "@/gen/session/v1/types_pb";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
 import { useSessionService } from "@/lib/hooks/useSessionService";
-import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
+import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { getApiBaseUrl } from "@/lib/config";
 import styles from "./page.module.css";
@@ -42,10 +42,7 @@ function ReviewQueueContent() {
   });
 
   // Acknowledge function for dismissing sessions from the modal
-  const { acknowledgeSession } = useReviewQueue({
-    useWebSocketPush: false,
-    autoRefresh: false,
-  });
+  const { acknowledgeSession } = useReviewQueueContext();
 
   // Review queue items for navigation (next/previous)
   const [reviewQueueItems, setReviewQueueItems] = useState<Session[]>([]);

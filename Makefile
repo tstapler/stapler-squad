@@ -6,7 +6,7 @@ PROFILE_FLAGS ?=
 PROFILE_PORT ?= 6060
 SERVER_FLAGS ?= --remote-access
 
-.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile
+.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile demo-video
 
 # Default target
 help: ## Show this help message
@@ -15,7 +15,7 @@ help: ## Show this help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 # Build targets
-build: server/web/dist ## Build the Go application (depends on web dist being ready)
+build: proto-gen server/web/dist ## Build the Go application (depends on web dist being ready)
 	go build -o stapler-squad .
 
 # Build Next.js app to web-app/out (using development mode for unminified React)
@@ -218,6 +218,9 @@ profile-memory: ## Run benchmarks with memory profiling
 docs: ## Generate and open test coverage documentation
 	make test-coverage
 	@which open >/dev/null 2>&1 && open coverage.html || echo "Open coverage.html in your browser"
+
+demo-video: build ## Record demo video and save to assets/demo.webm
+	RECORD_DEMO=1 go test ./tests/demo/... -run TestRecordDemo -v -timeout 120s
 
 # Environment validation
 validate-env: ## Validate development environment setup

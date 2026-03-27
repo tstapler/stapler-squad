@@ -1,6 +1,6 @@
 "use client";
 
-import React, { createContext, useContext, useState, useCallback, useEffect } from "react";
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from "react";
 import { NotificationData, NotificationToast } from "@/components/ui/NotificationToast";
 import { ReviewItem } from "@/gen/session/v1/types_pb";
 import { NotificationType, NotificationPriority } from "@/gen/session/v1/types_pb";
@@ -19,6 +19,8 @@ interface NotificationContextValue {
   notificationHistory: NotificationHistoryItem[];
   isPanelOpen: boolean;
   addNotification: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
+  /** Add to history panel only — no toast, no sound. For informational events like task_complete. */
+  addToHistoryOnly: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
   removeNotification: (id: string) => void;
   clearAll: () => void;
   /**
@@ -34,6 +36,7 @@ interface NotificationContextValue {
   ) => void;
   togglePanel: () => void;
   markAsRead: (id: string | string[]) => void;
+  markAsReadBySessionId: (sessionId: string | string[]) => void;
   markAllAsRead: () => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
@@ -187,6 +190,23 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     []
   );
 
+  const addToHistoryOnly = useCallback(
+    (notification: Omit<NotificationData, "id" | "timestamp">) => {
+      const id = `notification-${Date.now()}-${Math.random()}`;
+      const newNotification: NotificationData = {
+        ...notification,
+        id,
+        timestamp: Date.now(),
+      };
+      // History-only: skip the active toasts list entirely
+      setNotificationHistory((prev) => {
+        if (prev.some((n) => n.id === id)) return prev;
+        return [{ ...newNotification, isRead: false }, ...prev];
+      });
+    },
+    []
+  );
+
   const removeNotification = useCallback((id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
@@ -244,6 +264,24 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     history.markAsRead(ids);
   }, [auditLog, history]);
 
+  const markAsReadBySessionId = useCallback((sessionId: string | string[]) => {
+    const sessionIds = new Set(Array.isArray(sessionId) ? sessionId : [sessionId]);
+    setNotificationHistory((prev) => {
+      const idsToMark: string[] = [];
+      const updated = prev.map((n) => {
+        if (!n.isRead && n.sessionId != null && sessionIds.has(n.sessionId)) {
+          idsToMark.push(n.id);
+          return { ...n, isRead: true };
+        }
+        return n;
+      });
+      if (idsToMark.length > 0) {
+        history.markAsRead(idsToMark);
+      }
+      return updated;
+    });
+  }, [history]);
+
   const markAllAsRead = useCallback(() => {
     setNotificationHistory((prev) => {
       const unreadCount = prev.filter((n) => !n.isRead).length;
@@ -277,7 +315,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     history.clearHistory();
   }, [auditLog, history]);
 
-  const getUnreadCount = useCallback(() => {
+  // Pre-compute unread count once when history changes (avoids O(N log N) groupNotifications
+  // being called on every Header render via getUnreadCount()).
+  const unreadCount = useMemo(() => {
     // Return count of distinct unread (sessionId, notificationType) groups,
     // not the raw number of unread records. This ensures the header badge
     // reflects deduplicated groups even for stale pre-dedup data.
@@ -287,6 +327,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     return unreadGroups.length;
   }, [notificationHistory]);
 
+  const getUnreadCount = useCallback(() => unreadCount, [unreadCount]);
+
   return (
     <NotificationContext.Provider
       value={{
@@ -294,11 +336,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         notificationHistory,
         isPanelOpen,
         addNotification,
+        addToHistoryOnly,
         removeNotification,
         clearAll,
         showSessionNotification,
         togglePanel,
         markAsRead,
+        markAsReadBySessionId,
         markAllAsRead,
         removeFromHistory,
         clearHistory,

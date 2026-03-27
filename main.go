@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -521,7 +522,8 @@ func init() {
 // resolveLANHostname returns a domain name suitable for use as a WebAuthn rpID.
 // It tries (in order):
 //  1. Reverse-DNS PTR lookup on lanIPStr (picks up DHCP-assigned FQDNs)
-//  2. os.Hostname() + ".local"  (mDNS/Bonjour, always works on macOS/iOS LANs)
+//  2. os.Hostname() + each DNS search domain (e.g. hostname.corp.internal)
+//  3. os.Hostname() + ".local"  (mDNS/Bonjour, always works on macOS/iOS LANs)
 //
 // Returns empty string if neither succeeds (caller falls back to raw IP).
 func resolveLANHostname(lanIPStr string) string {
@@ -538,13 +540,51 @@ func resolveLANHostname(lanIPStr string) string {
 		}
 	}
 
-	// 2. mDNS .local — universally available on Apple devices / Bonjour LANs.
-	if h, err := os.Hostname(); err == nil && h != "" {
-		log.InfoLog.Printf("auth: using mDNS hostname: %s.local", h)
-		return h + ".local"
+	hostname, hostErr := os.Hostname()
+
+	// 2. DNS search domains — works when the DHCP server publishes a domain
+	// (e.g. UniFi with a custom LAN domain like "staplerhome.internal").
+	// Try each configured search domain; use the first one that resolves.
+	if hostErr == nil && hostname != "" {
+		for _, domain := range getDNSSearchDomains() {
+			if domain == "local" {
+				continue // skip; we handle .local separately below
+			}
+			fqdn := hostname + "." + domain
+			if addrs, err := net.LookupHost(fqdn); err == nil && len(addrs) > 0 {
+				log.InfoLog.Printf("auth: resolved LAN hostname via search domain %s: %s", domain, fqdn)
+				return fqdn
+			}
+		}
+	}
+
+	// 3. mDNS .local — universally available on Apple devices / Bonjour LANs.
+	if hostErr == nil && hostname != "" {
+		log.InfoLog.Printf("auth: using mDNS hostname: %s.local", hostname)
+		return hostname + ".local"
 	}
 
 	return ""
+}
+
+// getDNSSearchDomains returns the DNS search domains configured on this system
+// by parsing /etc/resolv.conf.  Returns nil if the file cannot be read or has
+// no search directive.
+func getDNSSearchDomains() []string {
+	data, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return nil
+	}
+	var domains []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "search ") {
+			for _, d := range strings.Fields(line)[1:] {
+				domains = append(domains, d)
+			}
+		}
+	}
+	return domains
 }
 
 // getOutboundIP detects the primary LAN IP by consulting the OS routing table.
@@ -645,6 +685,9 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {
 		return fmt.Errorf("start remote server: %w", err)
 	}
+
+	// Store the HTTPS URL so /api/server-info can expose it to the settings UI.
+	srv.SetHTTPSURL(origin)
 
 	// Bootstrap: if no passkeys registered, print setup + CA QR codes.
 	if !store.HasCredentials() {

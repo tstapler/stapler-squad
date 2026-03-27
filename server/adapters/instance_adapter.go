@@ -63,7 +63,6 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 		protoSession.DiffStats = &sessionv1.DiffStats{
 			Added:   int32(stats.Added),
 			Removed: int32(stats.Removed),
-			Content: stats.Content,
 		}
 	}
 

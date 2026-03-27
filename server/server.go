@@ -10,10 +10,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/web"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -29,6 +31,7 @@ type Server struct {
 	mux        *http.ServeMux
 	tlsConfig  *tls.Config          // non-nil when TLS is enabled
 	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
+	httpsURL   string               // set when remote access is enabled
 }
 
 // NewServer creates a new HTTP server instance with SessionService registered.
@@ -75,15 +78,19 @@ func NewServer(addr string) *Server {
 		go deps.ReactiveQueueMgr.Start(serverCtx)
 		log.InfoLog.Printf("ReactiveQueueManager started")
 
-		// Initialize notification history store and EventBus subscriber
+		// Initialize notification history store and EventBus subscriber.
+		// notifStore is declared here so it can be wired into the approval handler below.
+		var notifStore *notifications.NotificationHistoryStore
 		configDir, configErr := config.GetConfigDir()
 		if configErr != nil {
 			log.ErrorLog.Printf("Failed to get config dir for notification store: %v", configErr)
 		} else {
 			notifStorePath := filepath.Join(configDir, "notifications.json")
-			notifStore, storeErr := notifications.NewNotificationHistoryStore(notifStorePath)
+			var storeErr error
+			notifStore, storeErr = notifications.NewNotificationHistoryStore(notifStorePath)
 			if storeErr != nil {
 				log.ErrorLog.Printf("Failed to create notification history store: %v", storeErr)
+				notifStore = nil
 			} else {
 				notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
 				log.InfoLog.Printf("NotificationHistoryStore initialized at %s", notifStorePath)
@@ -136,6 +143,15 @@ func NewServer(addr string) *Server {
 		)
 		// Wire the review queue poller for immediate queue checks on new approvals (Story 3, Task 3.1)
 		approvalHandler.SetQueueChecker(deps.ReviewQueuePoller)
+		// Wire the classifier and analytics store for auto-approve/deny before manual review
+		approvalHandler.SetClassifier(deps.SessionService.GetClassifier())
+		approvalHandler.SetAnalyticsStore(deps.SessionService.GetAnalyticsStore())
+		// Wire the domain age checker (enabled by default) for newly-registered domain escalation
+		approvalHandler.SetDomainChecker(services.NewDomainAgeChecker(true))
+		// Wire the notification stamper so approval outcomes persist across page refreshes
+		if notifStore != nil {
+			approvalHandler.SetNotificationStamper(notifStore)
+		}
 		srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 		log.InfoLog.Printf("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 
@@ -152,6 +168,10 @@ func NewServer(addr string) *Server {
 		cbHandler.RegisterRoutes(srv.mux)
 		log.InfoLog.Printf("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
 	}
+
+	// Register server-info endpoint for settings UI
+	srv.registerServerInfoHandler()
+	log.InfoLog.Printf("Registered server-info handler at /api/server-info")
 
 	// Serve web UI static files
 	distFS, err := web.GetDistFS()
@@ -205,13 +225,13 @@ func (s *Server) Start(ctx context.Context) error {
 	})
 
 	// Build middleware chain:
-	// otelhttp -> logging -> CORS -> [auth] -> mux
+	// otelhttp -> logging -> CORS -> gzip -> [auth] -> mux
 	inner := http.Handler(s.mux)
 	if s.authMiddleware != nil {
 		inner = s.authMiddleware(inner)
 	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORS(inner)),
+		middleware.Logging(middleware.CORS(middleware.Compress(inner))),
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
@@ -273,6 +293,45 @@ func (s *Server) Mux() *http.ServeMux {
 	return s.mux
 }
 
+// SetHTTPSURL records the public HTTPS URL for this server (used by /api/server-info).
+// Call this after remote access is configured in main.go.
+func (s *Server) SetHTTPSURL(url string) {
+	s.httpsURL = url
+}
+
+// registerServerInfoHandler registers the /api/server-info endpoint which exposes
+// the CA PEM file path and HTTPS URL for display in the settings UI.
+func (s *Server) registerServerInfoHandler() {
+	s.mux.HandleFunc("/api/server-info", func(w http.ResponseWriter, r *http.Request) {
+		type serverInfoResponse struct {
+			CAPEMPath  string `json:"ca_pem_path"`
+			HTTPSURL   string `json:"https_url"`
+			TLSEnabled bool   `json:"tls_enabled"`
+		}
+
+		configDir, err := config.GetConfigDir()
+		var caPath string
+		tlsEnabled := false
+		if err == nil {
+			caPath = filepath.Join(configDir, "tls-ca.pem")
+			if _, statErr := os.Stat(caPath); statErr == nil {
+				tlsEnabled = true
+			}
+		}
+
+		info := serverInfoResponse{
+			CAPEMPath:  caPath,
+			HTTPSURL:   s.httpsURL,
+			TLSEnabled: tlsEnabled,
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if encErr := json.NewEncoder(w).Encode(info); encErr != nil {
+			log.ErrorLog.Printf("server-info: encode error: %v", encErr)
+		}
+	})
+}
+
 // StartRemote starts a second HTTPS server on remoteAddr, sharing the same
 // route mux as the local server but protected by TLS and auth middleware.
 // It binds eagerly (returns a bind error immediately if the port is in use),
@@ -283,7 +342,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 		inner = authMW(inner)
 	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORS(inner)),
+		middleware.Logging(middleware.CORS(middleware.Compress(inner))),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)

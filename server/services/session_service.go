@@ -47,12 +47,16 @@ type SessionService struct {
 	notificationSvc *NotificationService
 	approvalSvc     *ApprovalService
 	utilitySvc      *UtilityService
+	rulesSvc        *RulesService
 
 	// External session discovery (for mux-enabled sessions from external terminals)
 	externalDiscovery *session.ExternalSessionDiscovery
 
 	// approvalStore holds pending Claude Code hook approval requests.
 	approvalStore *ApprovalStore
+
+	// databaseSvc handles workspace/database switcher RPCs.
+	databaseSvc *DatabaseService
 }
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
@@ -94,6 +98,27 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 	approvalSvc := NewApprovalService(approvalStore)
 	utilitySvc := NewUtilityService(approvalStore)
 
+	// Build rules store, analytics store, and classifier for approval rules service.
+	rulesFilePath := ""
+	analyticsFilePath := ""
+	if configErr == nil {
+		rulesFilePath = configDir + "/auto_approve_rules.json"
+		analyticsFilePath = configDir + "/approval_analytics.jsonl"
+	}
+	rulesStore, rulesErr := NewRulesStore(rulesFilePath)
+	if rulesErr != nil {
+		log.WarningLog.Printf("Failed to load rules store, using empty store: %v", rulesErr)
+		rulesStore = &RulesStore{}
+	}
+	analyticsStore := NewAnalyticsStore(analyticsFilePath)
+	analyticsStore.Start(context.Background())
+	classifier := NewRuleBasedClassifier()
+	// Merge user rules into the classifier.
+	if userRules := rulesStore.ToRules(); len(userRules) > 0 {
+		classifier.AddRules(userRules)
+	}
+	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifier)
+
 	return &SessionService{
 		storage:         storage,
 		eventBus:        eventBus,
@@ -105,7 +130,9 @@ func NewSessionService(storage *session.Storage, eventBus *events.EventBus) *Ses
 		notificationSvc: notificationSvc,
 		approvalSvc:     approvalSvc,
 		utilitySvc:      utilitySvc,
+		rulesSvc:        rulesSvc,
 		approvalStore:   approvalStore,
+		databaseSvc:     NewDatabaseService(),
 	}
 }
 
@@ -132,6 +159,9 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 // On first startup, if the legacy state.json exists and Ent DB is empty, sessions are
 // auto-migrated from JSON to Ent.
 func NewSessionServiceFromConfig() (*SessionService, error) {
+	// Write workspace metadata on startup so the workspace switcher can discover this workspace.
+	config.EnsureWorkspaceMeta()
+
 	configDir, err := config.GetConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("failed to determine config directory: %w", err)
@@ -165,6 +195,22 @@ func (s *SessionService) GetStorage() *session.Storage {
 // GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
 func (s *SessionService) GetApprovalStore() *ApprovalStore {
 	return s.approvalStore
+}
+
+// GetClassifier returns the rule-based classifier for wiring up the ApprovalHandler.
+func (s *SessionService) GetClassifier() *RuleBasedClassifier {
+	if s.rulesSvc == nil {
+		return nil
+	}
+	return s.rulesSvc.classifier
+}
+
+// GetAnalyticsStore returns the analytics store for wiring up the ApprovalHandler.
+func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
+	if s.rulesSvc == nil {
+		return nil
+	}
+	return s.rulesSvc.analyticsStore
 }
 
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the
@@ -1484,4 +1530,68 @@ func (s *SessionService) ListPendingApprovals(
 	req *connect.Request[sessionv1.ListPendingApprovalsRequest],
 ) (*connect.Response[sessionv1.ListPendingApprovalsResponse], error) {
 	return s.approvalSvc.ListPendingApprovals(ctx, req)
+}
+
+// ListApprovalRules returns all auto-approval rules (user, seed, and claude-settings).
+func (s *SessionService) ListApprovalRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListApprovalRulesRequest],
+) (*connect.Response[sessionv1.ListApprovalRulesResponse], error) {
+	return s.rulesSvc.ListApprovalRules(ctx, req)
+}
+
+// UpsertApprovalRule creates or updates a user-defined auto-approval rule.
+func (s *SessionService) UpsertApprovalRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertApprovalRuleRequest],
+) (*connect.Response[sessionv1.UpsertApprovalRuleResponse], error) {
+	return s.rulesSvc.UpsertApprovalRule(ctx, req)
+}
+
+// DeleteApprovalRule removes a user-defined auto-approval rule by ID.
+func (s *SessionService) DeleteApprovalRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteApprovalRuleRequest],
+) (*connect.Response[sessionv1.DeleteApprovalRuleResponse], error) {
+	return s.rulesSvc.DeleteApprovalRule(ctx, req)
+}
+
+// GetApprovalAnalytics returns aggregated analytics for classification decisions.
+func (s *SessionService) GetApprovalAnalytics(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetApprovalAnalyticsRequest],
+) (*connect.Response[sessionv1.GetApprovalAnalyticsResponse], error) {
+	return s.rulesSvc.GetApprovalAnalytics(ctx, req)
+}
+
+// ListDatabases returns all discovered workspace databases with metadata.
+func (s *SessionService) ListDatabases(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListDatabasesRequest],
+) (*connect.Response[sessionv1.ListDatabasesResponse], error) {
+	return s.databaseSvc.ListDatabases(ctx, req)
+}
+
+// GetCurrentDatabase returns metadata for the currently active workspace database.
+func (s *SessionService) GetCurrentDatabase(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetCurrentDatabaseRequest],
+) (*connect.Response[sessionv1.GetCurrentDatabaseResponse], error) {
+	return s.databaseSvc.GetCurrentDatabase(ctx, req)
+}
+
+// SwitchDatabase switches to a different workspace database and restarts the server.
+func (s *SessionService) SwitchDatabase(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SwitchDatabaseRequest],
+) (*connect.Response[sessionv1.SwitchDatabaseResponse], error) {
+	return s.databaseSvc.SwitchDatabase(ctx, req)
+}
+
+// MergeDatabase copies sessions from a source workspace into the current database.
+func (s *SessionService) MergeDatabase(
+	ctx context.Context,
+	req *connect.Request[sessionv1.MergeDatabaseRequest],
+) (*connect.Response[sessionv1.MergeDatabaseResponse], error) {
+	return s.databaseSvc.MergeDatabase(ctx, req)
 }

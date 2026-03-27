@@ -41,6 +41,13 @@ interface FileState {
   originalContent: string;
 }
 
+// Server info returned by /api/server-info
+interface ServerInfo {
+  ca_pem_path: string;
+  https_url: string;
+  tls_enabled: boolean;
+}
+
 export default function ConfigEditorPage() {
   const [configs, setConfigs] = useState<ClaudeConfigFile[]>([]);
   const [selectedConfig, setSelectedConfig] = useState<ClaudeConfigFile | null>(null);
@@ -54,6 +61,8 @@ export default function ConfigEditorPage() {
   const [isValidating, setIsValidating] = useState(false);
   // Per-file state tracking for multi-file navigation
   const [fileStates, setFileStates] = useState<Record<string, FileState>>({});
+  const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
+  const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -75,6 +84,14 @@ export default function ConfigEditorPage() {
   // Load configs on mount
   useEffect(() => {
     loadConfigs();
+  }, []);
+
+  // Load server info on mount
+  useEffect(() => {
+    fetch('/api/server-info')
+      .then(r => r.json())
+      .then((data: ServerInfo) => setServerInfo(data))
+      .catch(() => { /* server-info not critical, ignore errors */ });
   }, []);
 
   // Validate JSON content and update Monaco markers
@@ -318,6 +335,13 @@ export default function ConfigEditorPage() {
     }
   };
 
+  const copyToClipboard = (text: string, field: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedField(field);
+      setTimeout(() => setCopiedField(null), 2000);
+    });
+  };
+
   // Handle keyboard shortcuts (Ctrl+S to save, Ctrl+1-9 for file switching)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -534,6 +558,60 @@ export default function ConfigEditorPage() {
             <div className={styles.emptyState}>
               Select a config file to edit
             </div>
+          )}
+        </div>
+      </div>
+
+      <div className={styles.networkSection}>
+        <h2 className={styles.sectionTitle}>🌐 Network &amp; Remote Access</h2>
+        <div className={styles.networkCard}>
+          {serverInfo ? (
+            <>
+              <div className={styles.networkRow}>
+                <span className={styles.networkLabel}>HTTPS URL</span>
+                {serverInfo.https_url ? (
+                  <div className={styles.networkValue}>
+                    <span className={styles.networkValueText} title={serverInfo.https_url}>
+                      {serverInfo.https_url}
+                    </span>
+                    <a href={serverInfo.https_url} target="_blank" rel="noreferrer" className={styles.networkLink}>
+                      Open
+                    </a>
+                    <button
+                      className={styles.networkCopyBtn}
+                      onClick={() => copyToClipboard(serverInfo.https_url, 'httpsUrl')}
+                    >
+                      {copiedField === 'httpsUrl' ? 'Copied!' : 'Copy'}
+                    </button>
+                  </div>
+                ) : (
+                  <span className={styles.networkDisabledNote}>Remote access not enabled (start with --remote-access)</span>
+                )}
+              </div>
+              <div className={styles.networkRow}>
+                <span className={styles.networkLabel}>CA Certificate Path</span>
+                {serverInfo.tls_enabled && serverInfo.ca_pem_path ? (
+                  <div className={styles.networkValue}>
+                    <span className={styles.networkValueText} title={serverInfo.ca_pem_path}>
+                      {serverInfo.ca_pem_path}
+                    </span>
+                    <button
+                      className={styles.networkCopyBtn}
+                      onClick={() => copyToClipboard(serverInfo.ca_pem_path, 'caPath')}
+                    >
+                      {copiedField === 'caPath' ? 'Copied!' : 'Copy'}
+                    </button>
+                    <a href="/auth/ca.pem" download="stapler-squad-ca.pem" className={styles.networkLink}>
+                      Download
+                    </a>
+                  </div>
+                ) : (
+                  <span className={styles.networkDisabledNote}>TLS not active</span>
+                )}
+              </div>
+            </>
+          ) : (
+            <span className={styles.networkDisabledNote}>Loading…</span>
           )}
         </div>
       </div>

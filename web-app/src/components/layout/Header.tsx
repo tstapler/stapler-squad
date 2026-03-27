@@ -9,6 +9,7 @@ import { DebugMenu } from "@/components/ui/DebugMenu";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { routes } from "@/lib/routes";
+import { WorkspaceSwitcher } from "@/components/layout/WorkspaceSwitcher";
 import styles from "./Header.module.css";
 
 export function Header() {
@@ -75,6 +76,12 @@ export function Header() {
             <ReviewQueueNavBadge inline={true} />
           </AppLink>
           <AppLink
+            href={routes.rules}
+            className={`${styles.navLink} ${pathname === routes.rules ? styles.active : ""}`}
+          >
+            Rules
+          </AppLink>
+          <AppLink
             href={routes.logs}
             className={`${styles.navLink} ${pathname === routes.logs ? styles.active : ""}`}
           >
@@ -95,6 +102,7 @@ export function Header() {
         </nav>
 
         <div className={styles.actions}>
+          <WorkspaceSwitcher />
           <button
             className={styles.newSessionButton}
             onClick={openOmnibar}

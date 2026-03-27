@@ -1,0 +1,24 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - var(--header-height));
+  background: var(--background, #0a0a0a);
+}
+
+.main {
+  flex: 1;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 2rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+@media (max-width: 768px) {
+  .main {
+    padding: 1rem;
+  }
+}

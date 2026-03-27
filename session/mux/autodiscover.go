@@ -71,13 +71,10 @@ func (ad *AutoDiscovery) Start(ctx context.Context) (<-chan struct{}, error) {
 func (ad *AutoDiscovery) startWatching(ctx context.Context) (<-chan struct{}, error) {
 	tmpDir := os.TempDir()
 
-	// Add /tmp to watcher
+	// Add /tmp to watcher. If this fails (e.g. stale temp files on macOS), fall back to polling.
 	if err := ad.watcher.Add(tmpDir); err != nil {
-		// If watching fails, fall back to polling
-		if ad.useFallback {
-			return ad.startPollingFallback(ctx)
-		}
-		return nil, fmt.Errorf("failed to watch %s: %w", tmpDir, err)
+		ad.useFallback = true
+		return ad.startPollingFallback(ctx)
 	}
 
 	done := make(chan struct{})

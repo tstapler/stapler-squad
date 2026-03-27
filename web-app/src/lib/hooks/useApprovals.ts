@@ -13,7 +13,7 @@ import { getApiBaseUrl } from "@/lib/config";
 
 interface UseApprovalsOptions {
   sessionId?: string;
-  pollInterval?: number; // in milliseconds, default 3000
+  pollInterval?: number; // in milliseconds, default 30000
   /**
    * Increment this counter externally to trigger an immediate refresh.
    * Use when the parent receives an APPROVAL_NEEDED notification so the
@@ -54,7 +54,7 @@ interface UseApprovalsReturn {
 export function useApprovals(
   options: UseApprovalsOptions = {}
 ): UseApprovalsReturn {
-  const { sessionId, pollInterval = 3000, notificationTrigger } = options;
+  const { sessionId, pollInterval = 30000, notificationTrigger } = options;
 
   const [approvals, setApprovals] = useState<PendingApprovalProto[]>([]);
   const [loading, setLoading] = useState(false);

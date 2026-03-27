@@ -116,8 +116,14 @@ get_session_id() {
     fi
 
     # Get TTY for per-terminal disambiguation (used in IDE/fallback cases below)
+    # Note: `tty` prints "not a tty" to stdout (not stderr) when stdin isn't a terminal,
+    # so we must check the exit code before using its output.
     local tty_suffix=""
-    local tty_dev=$(tty 2>/dev/null | sed 's/\/dev\///' || echo "")
+    local tty_raw
+    local tty_dev=""
+    if tty_raw=$(tty 2>/dev/null) && [[ "$tty_raw" == /dev/* ]]; then
+        tty_dev="${tty_raw#/dev/}"
+    fi
     if [[ -n "$tty_dev" ]]; then
         tty_suffix="-$tty_dev"
     fi
@@ -489,6 +495,13 @@ case "$HOOK_TYPE" in
         # Parse the decision from the server's JSON response.
         BEHAVIOR=$(echo "$RESPONSE" | jq -r '.hookSpecificOutput.decision.behavior // "allow"' 2>/dev/null || echo "allow")
 
+        # Always print the JSON response to stdout so Claude Code reads the
+        # hookSpecificOutput decision. Without this, Claude ignores the hook
+        # result and falls back to showing its native permission dialog.
+        if [[ -n "$RESPONSE" ]]; then
+            echo "$RESPONSE"
+        fi
+
         if [[ "$BEHAVIOR" == "allow" ]]; then
             exit 0
         else
@@ -496,7 +509,7 @@ case "$HOOK_TYPE" in
             if [[ -n "$DENY_MSG" ]]; then
                 echo "$DENY_MSG" >&2
             fi
-            exit 1
+            exit 2
         fi
         ;;
 

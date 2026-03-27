@@ -1,9 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useReviewQueue } from "@/lib/hooks/useReviewQueue";
+import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
-import { getApiBaseUrl } from "@/lib/config";
 import { NotificationSound } from "@/lib/utils/notifications";
 import styles from "./ReviewQueueNavBadge.module.css";
 
@@ -17,10 +16,7 @@ interface ReviewQueueNavBadgeProps {
  */
 export function ReviewQueueNavBadge({ inline = false }: ReviewQueueNavBadgeProps) {
   const router = useRouter();
-  const { items } = useReviewQueue({
-    useWebSocketPush: true,
-    fallbackPollInterval: 30000,
-  });
+  const { items } = useReviewQueueContext();
 
   // Play notification sound when new items are added to the queue
   useReviewQueueNotifications(items, {

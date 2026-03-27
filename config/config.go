@@ -145,6 +145,18 @@ func GetConfigDir() (string, error) {
 		return filepath.Join(baseDir, "instances", instanceID), nil
 	}
 
+	// Priority 2.5: Preferred workspace from preference file
+	// Written by SwitchDatabase RPC; cleared automatically on removal.
+	if data, err := os.ReadFile(GetPreferredWorkspaceFile(baseDir)); err == nil {
+		prefDir := strings.TrimSpace(string(data))
+		if filepath.IsAbs(prefDir) &&
+			(prefDir == baseDir || strings.HasPrefix(prefDir, baseDir+string(filepath.Separator))) {
+			if _, statErr := os.Stat(prefDir); statErr == nil {
+				return prefDir, nil
+			}
+		}
+	}
+
 	// Priority 3: Test mode auto-detection (automatic isolation)
 	if isTestMode() {
 		// Each test/benchmark process gets its own isolated state

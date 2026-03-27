@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_connect";
@@ -13,6 +13,16 @@ import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { getApiBaseUrl } from "@/lib/config";
 import { NotificationData } from "./NotificationToast";
 import styles from "./NotificationPanel.module.css";
+
+type TypeFilter = "all" | "approval_needed" | "error" | "task_complete" | "info";
+
+const TYPE_FILTER_LABELS: Record<TypeFilter, string> = {
+  all: "All",
+  approval_needed: "Approval",
+  error: "Error",
+  task_complete: "Task",
+  info: "Info",
+};
 
 /**
  * NotificationPanel - A sidebar that displays notification history
@@ -46,6 +56,9 @@ export function NotificationPanel() {
     return clientRef.current;
   }, []);
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+
   // Track per-approval resolution state so buttons update after the user decides.
   // "allow" / "deny" = user resolved it; "expired" = already resolved or timed out.
   const [resolvedApprovals, setResolvedApprovals] = useState<Record<string, "allow" | "deny" | "expired">>({});
@@ -55,13 +68,18 @@ export function NotificationPanel() {
   // Seed resolvedApprovals from persisted metadata when history loads or updates.
   // The server stamps "approval_decision" on the notification record when an approval
   // is resolved, so this survives page refreshes.
+  // "timeout" and "canceled" are server-side outcomes where the approval was not handled
+  // via the UI; we map them to "expired" for display (same "Expired" badge).
   useEffect(() => {
     const seeded: Record<string, "allow" | "deny" | "expired"> = {};
     for (const n of notificationHistory) {
       const decision = n.metadata?.["approval_decision"];
       const approvalId = n.metadata?.["approval_id"];
-      if (approvalId && (decision === "allow" || decision === "deny")) {
+      if (!approvalId || !decision) continue;
+      if (decision === "allow" || decision === "deny") {
         seeded[approvalId] = decision;
+      } else if (decision === "timeout" || decision === "canceled") {
+        seeded[approvalId] = "expired";
       }
     }
     if (Object.keys(seeded).length > 0) {
@@ -83,6 +101,46 @@ export function NotificationPanel() {
       setPendingApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
     }
   }, [getClient, markAsRead]);
+  // Filter notifications by search query and type
+  const filteredNotifications = useMemo(() => {
+    let list = notificationHistory;
+
+    if (typeFilter !== "all") {
+      if (typeFilter === "error") {
+        // "Error" pill covers error + task_failed + warning
+        list = list.filter((n) =>
+          n.notificationType === "error" ||
+          n.notificationType === "task_failed" ||
+          n.notificationType === "warning"
+        );
+      } else if (typeFilter === "info") {
+        // "Info" covers everything not covered by the other explicit filters
+        list = list.filter(
+          (n) =>
+            n.notificationType !== "approval_needed" &&
+            n.notificationType !== "error" &&
+            n.notificationType !== "task_failed" &&
+            n.notificationType !== "warning" &&
+            n.notificationType !== "task_complete"
+        );
+      } else {
+        list = list.filter((n) => n.notificationType === typeFilter);
+      }
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(
+        (n) =>
+          (n.sessionName || "").toLowerCase().includes(q) ||
+          (n.message || "").toLowerCase().includes(q) ||
+          (n.title || "").toLowerCase().includes(q)
+      );
+    }
+
+    return list;
+  }, [notificationHistory, typeFilter, searchQuery]);
+
   const unreadCount = getUnreadCount();
 
   const handleNotificationClick = (ids: string | string[], onView?: () => void, sessionId?: string) => {
@@ -236,6 +294,30 @@ export function NotificationPanel() {
           </div>
         </div>
 
+        {/* Search + Filter Bar */}
+        <div className={styles.filterBar}>
+          <input
+            className={styles.searchInput}
+            type="search"
+            placeholder="Search notifications…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            aria-label="Search notifications"
+          />
+          <div className={styles.filterPills} role="group" aria-label="Filter by type">
+            {(Object.keys(TYPE_FILTER_LABELS) as TypeFilter[]).map((filter) => (
+              <button
+                key={filter}
+                className={`${styles.filterPill} ${typeFilter === filter ? styles.filterPillActive : ""}`}
+                onClick={() => setTypeFilter(filter)}
+                aria-pressed={typeFilter === filter}
+              >
+                {TYPE_FILTER_LABELS[filter]}
+              </button>
+            ))}
+          </div>
+        </div>
+
         {/* Notification List */}
         <div className={styles.content}>
           {historyLoading && notificationHistory.length === 0 ? (
@@ -243,17 +325,21 @@ export function NotificationPanel() {
               <div className={styles.emptyIcon}>⏳</div>
               <p className={styles.emptyText}>Loading notifications...</p>
             </div>
-          ) : notificationHistory.length === 0 ? (
+          ) : filteredNotifications.length === 0 ? (
             <div className={styles.empty}>
-              <div className={styles.emptyIcon}>🔔</div>
-              <p className={styles.emptyText}>No notifications yet</p>
+              <div className={styles.emptyIcon}>{searchQuery || typeFilter !== "all" ? "🔍" : "🔔"}</div>
+              <p className={styles.emptyText}>
+                {searchQuery || typeFilter !== "all" ? "No matching notifications" : "No notifications yet"}
+              </p>
               <p className={styles.emptySubtext}>
-                You'll see notifications from your sessions here
+                {searchQuery || typeFilter !== "all"
+                  ? "Try adjusting your search or filter"
+                  : "You'll see notifications from your sessions here"}
               </p>
             </div>
           ) : (
             <div className={styles.list}>
-              {groupNotifications(notificationHistory).map((group) => {
+              {groupNotifications(filteredNotifications).map((group) => {
                 const notification = group.notification;
                 const contextString = getContextString(notification);
                 const hasSourceApp = notification.sourceApp || notification.sourceBundleId;

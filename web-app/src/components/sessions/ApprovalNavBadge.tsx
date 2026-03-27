@@ -1,6 +1,6 @@
 "use client";
 
-import { useApprovals } from "@/lib/hooks/useApprovals";
+import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import styles from "./ApprovalNavBadge.module.css";
 
 interface ApprovalNavBadgeProps {
@@ -14,7 +14,7 @@ interface ApprovalNavBadgeProps {
  * Hidden when there are no pending approvals.
  */
 export function ApprovalNavBadge({ inline = false }: ApprovalNavBadgeProps) {
-  const { approvals } = useApprovals();
+  const { approvals } = useApprovalsContext();
 
   const count = approvals.length;
 

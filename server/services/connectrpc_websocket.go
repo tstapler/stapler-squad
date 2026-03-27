@@ -24,9 +24,10 @@ import (
 )
 
 var wsUpgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	CheckOrigin:     isAllowedOrigin,
+	ReadBufferSize:    1024,
+	WriteBufferSize:   1024,
+	EnableCompression: true, // negotiate permessage-deflate with supporting clients
+	CheckOrigin:       isAllowedOrigin,
 }
 
 // isAllowedOrigin allows WebSocket upgrades from localhost and any HTTPS origin.

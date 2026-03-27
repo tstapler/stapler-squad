@@ -96,9 +96,11 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     }
   }, [offset]);
 
-  // Initial fetch on mount
+  // Initial fetch on mount + poll every 15 seconds for new events
   useEffect(() => {
     fetchHistory(true);
+    const interval = setInterval(() => fetchHistory(true), 15_000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
