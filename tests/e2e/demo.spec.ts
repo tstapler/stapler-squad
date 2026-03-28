@@ -11,12 +11,15 @@ import * as fs from 'fs';
  *   attention, automate the predictable, and never lose context.
  *
  * Pre-seeded sessions (6 total):
- *   payment-stripe-integration  Running       Backend        Payments/API/Priority
+ *   payment-stripe-integration  Paused        Backend        Payments/API/Priority
  *   fix-api-timeout             NeedsApproval Backend        Bug/API/Urgent
  *   auth-refactor               Paused        Backend        Auth/Security
- *   dashboard-redesign          Running       Frontend       React/UX/Priority
+ *   dashboard-redesign          Paused        Frontend       React/UX/Priority
  *   k8s-autoscaling             Ready         Infrastructure DevOps/Kubernetes
- *   payment-email-notifications Running       Backend        Payments/Notifications (aider)
+ *   payment-email-notifications Paused        Backend        Payments/Notifications (aider)
+ *
+ * Note: No Running sessions — poller reclassifies Running sessions without
+ * a backing tmux process. Paused/Ready/NeedsApproval are stable in test mode.
  *
  * Scenes:
  *   01 - Dashboard             overview of all 6 agents
@@ -199,7 +202,8 @@ test('Demo Flow', async ({ page }) => {
   // ── Scene 1: Dashboard — show all 6 sessions at once ─────────────────────
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
   await expect(page).toHaveTitle(/Stapler Squad/);
-  await page.waitForSelector('input[placeholder*="Search"]', { timeout: 10000 });
+  // Wait for the session list search input specifically (not the notification panel search).
+  await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 15000 });
   await page.waitForTimeout(1000);
 
   // Remove any notification toasts before snapshotting the clean dashboard.
@@ -208,12 +212,17 @@ test('Demo Flow', async ({ page }) => {
   });
   await page.waitForTimeout(300);
 
-  await showSceneLabel(page, '🚀 Mission Control — 6 agents, one dashboard');
+  // Park the cursor in the bottom-right so it doesn't appear as an artifact
+  // floating mid-content on the opening static shot.
+  await page.mouse.move(1380, 860);
+  await page.waitForTimeout(150);
+
+  await showSceneLabel(page, '🚀 Mission Control — 6 agents, one dashboard', 2500);
   await snap(page, '01-dashboard.png');
   await page.waitForTimeout(1000);
 
   // ── Scene 2: Search — "payment" filters 6 → 2 in real time ───────────────
-  const searchInput = page.locator('input[placeholder*="Search"]').first();
+  const searchInput = page.locator('input[aria-label="Search sessions"]').first();
   await humanType(searchInput, 'payment');
   await page.waitForTimeout(800);
   await showSceneLabel(page, '🔍 Instant search across all sessions');
@@ -273,6 +282,24 @@ test('Demo Flow', async ({ page }) => {
     await builtInTab.click();
     await page.waitForTimeout(700);
   }
+  // Curate the display: show only the first 8 rules to keep the scene readable.
+  // The 42-rule table is too dense at demo viewport size — 8 rows communicate
+  // the system clearly without overwhelming the viewer.
+  await page.evaluate(() => {
+    const tables = document.querySelectorAll('table');
+    tables.forEach(table => {
+      const rows = table.querySelectorAll('tbody tr');
+      rows.forEach((row, i) => {
+        if (i >= 8) (row as HTMLElement).style.display = 'none';
+      });
+    });
+    // Also handle list-based rule items in case the component isn't a table.
+    const listItems = document.querySelectorAll('[class*="rule"][class*="row"], [class*="ruleRow"], [class*="RuleRow"]');
+    listItems.forEach((item, i) => {
+      if (i >= 8) (item as HTMLElement).style.display = 'none';
+    });
+  });
+  await page.waitForTimeout(300);
   await showSceneLabel(page, '🛡️ Auto-approval rules — automate the predictable');
   await snap(page, '06-rules.png');
   await page.waitForTimeout(1000);
@@ -289,6 +316,15 @@ test('Demo Flow', async ({ page }) => {
     await addRuleButton.click();
     await page.waitForTimeout(600);
 
+    // Scroll the form into the center of the viewport so the command pattern
+    // field — the hero detail of the scene — is clearly visible and not
+    // competing with the rules table above or analytics section below.
+    const ruleForm = page.locator('form, [class*="add"][class*="rule"], [class*="addRule"], [class*="AddRule"]').last();
+    if (await ruleForm.isVisible({ timeout: 2000 })) {
+      await ruleForm.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(300);
+    }
+
     // Fill in the form to show a realistic "Allow git log" rule.
     const nameInput = page.locator('input[placeholder*="Allow git log"]').first();
     if (await nameInput.isVisible({ timeout: 2000 })) {
@@ -300,7 +336,9 @@ test('Demo Flow', async ({ page }) => {
       await humanType(toolInput, 'Bash', 90);
     }
 
-    const cmdInput = page.locator('input[placeholder*="git log"]').first();
+    // Use "^git log" (with caret) to distinguish from the Name field whose
+    // placeholder also contains "git log" but without the leading caret.
+    const cmdInput = page.locator('input[placeholder*="^git log"]').first();
     if (await cmdInput.isVisible({ timeout: 2000 })) {
       await humanType(cmdInput, '^git log', 90);
     }
@@ -319,9 +357,40 @@ test('Demo Flow', async ({ page }) => {
   }
 
   // ── Scene 8: Back to sessions — final hero shot ───────────────────────────
+  // This scene completes the narrative loop: we started with a pending approval
+  // (fix-api-timeout). Now we show it resolved — injecting a DOM update that
+  // flips the "NEEDS APPROVAL" badge to "READY" to signal work was handled.
   await page.locator('a[href="/"]').first().click();
   await page.waitForTimeout(1000);
-  await showSceneLabel(page, '✨ Stapler Squad — mission control for AI agents');
+
+  // Scroll down enough to reveal the fix-api-timeout card (3rd in Backend
+  // group) so the badge flip is visible in the final frame.
+  await page.evaluate(() => window.scrollBy({ top: 350, behavior: 'smooth' }));
+  await page.waitForTimeout(600);
+
+  // Flip any "NEEDS APPROVAL" badge to "READY" to close the narrative arc —
+  // the approval was reviewed, the agent is unblocked.
+  await page.evaluate(() => {
+    document.querySelectorAll('*').forEach(el => {
+      if (el.children.length === 0 && el.textContent?.trim().toUpperCase().includes('NEEDS APPROVAL')) {
+        const badge = el as HTMLElement;
+        badge.textContent = 'READY';
+        badge.style.setProperty('color', '#16a34a', 'important');
+        badge.style.setProperty('background', '#dcfce7', 'important');
+        badge.style.setProperty('border-color', '#22c55e', 'important');
+      }
+    });
+  });
+  await page.waitForTimeout(400);
+
+  // Hover the (now-READY) fix-api-timeout card to signal active interaction.
+  const urgentCard = page.locator('[class*="card"], [class*="Card"], [class*="session"]').nth(2);
+  if (await urgentCard.isVisible({ timeout: 2000 })) {
+    await urgentCard.hover();
+    await page.waitForTimeout(300);
+  }
+
+  await showSceneLabel(page, '✨ Stapler Squad — every agent tracked, every approval handled', 3000);
   await snap(page, '08-final.png');
   await page.waitForTimeout(2500); // Clean ending frame for the video loop.
 });

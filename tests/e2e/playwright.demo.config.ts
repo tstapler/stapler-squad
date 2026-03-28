@@ -37,7 +37,7 @@ export default defineConfig({
     video: 'on',
 
     // Full HD viewport for a crisp demo.
-    viewport: { width: 2560, height: 1440 },
+    viewport: { width: 1440, height: 900 },
 
     actionTimeout: 15000,
     navigationTimeout: 20000,
@@ -51,7 +51,7 @@ export default defineConfig({
     {
       name: 'chromium',
       // Spread device for browser settings, then override viewport to ensure 1920×1080.
-      use: { ...devices['Desktop Chrome'], viewport: { width: 2560, height: 1440 } },
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
     },
   ],
 });

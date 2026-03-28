@@ -1,21 +1,42 @@
 # Stapler Squad [![CI](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml/badge.svg)](https://github.com/tstapler/stapler-squad/actions/workflows/build.yml) [![GitHub Release](https://img.shields.io/github/v/release/tstapler/stapler-squad)](https://github.com/tstapler/stapler-squad/releases/latest)
 
-[Stapler Squad](https://tstapler.github.io/stapler-squad/) is a terminal app that manages multiple [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli) (and other local agents including [Aider](https://github.com/Aider-AI/aider)) in separate workspaces, allowing you to work on multiple tasks simultaneously.
+[Stapler Squad](https://tstapler.github.io/stapler-squad/) is a web-based mission control for running multiple AI coding agents ([Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex), [Gemini](https://github.com/google-gemini/gemini-cli), [Aider](https://github.com/Aider-AI/aider)) simultaneously — with a real-time dashboard, automatic approval rules, and a structured review queue. Run it with `ssq`, then open `http://localhost:8543`.
 
+![Stapler Squad Demo](assets/demo.gif)
 
-![Stapler Squad Screenshot](assets/screenshot.png)
+<details>
+<summary>Full video</summary>
+<video src="assets/demo.webm" width="100%" autoplay loop muted controls></video>
+</details>
 
-https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
+→ [Feature screenshots](docs/features.md)
 
 ### Highlights
-- Complete tasks in the background (including yolo / auto-accept mode!)
-- Manage instances and tasks in one terminal window
-- Review changes before applying them, checkout changes before pushing them
-- Each task gets its own isolated git workspace, so no conflicts
 
-<br />
+**Visibility**
+- **Real-time dashboard** — status badges, diff stats, tags, and approvals for all agents in one view
+- **Live terminal streaming** — full xterm.js terminal per session, no SSH required
+- **Diff viewer** — per-session git diff with VCS context at a glance
+- **Notifications** — real-time alerts when agents need attention
 
-https://github.com/user-attachments/assets/aef18253-e58f-4525-9032-f5a3d66c975a
+**Organisation**
+- **Instant search** — filter across titles, paths, branches, and tags as you type
+- **Tag-based grouping** — view sessions across 8 grouping strategies (tag, category, status, branch, and more)
+- **Workspace switcher** — manage multiple project contexts from one UI
+- **Bulk actions** — select and act on multiple sessions simultaneously
+
+**Review & Approval**
+- **Auto-approval rules engine** — 42 built-in rules block dangerous operations automatically; add custom rules to approve safe, repetitive actions without manual review
+- **Review Queue** — structured triage before any agent change reaches your codebase
+- **Approval analytics** — visualise decision trends and classifier performance over time
+
+**History & Debugging**
+- **History search** — searchable, filterable record of every agent action across all sessions
+- **Logs viewer** — live-tail application logs with time range, export, and density controls
+- **Config viewer** — inspect and understand your current configuration from the UI
+
+**Infrastructure**
+- Each agent gets its own **isolated git workspace** — no branch conflicts
 
 <br />
 
@@ -68,7 +89,7 @@ Stapler Squad stores all application data in `~/.stapler-squad/`:
 │   ├── session-name_hash/  # Individual worktree directories
 │   └── ...
 ├── config.json            # Application configuration
-└── sessions.json          # Session state persistence
+└── sessions.db            # Session state (SQLite)
 ```
 
 #### Logging Configuration
@@ -135,30 +156,6 @@ NOTE: The default program is `claude` and we recommend using the latest version.
    - Gemini: `ssq -p "gemini"`
 - Make this the default, by modifying the config file (locate with `ssq debug`)
 
-<br />
-
-#### Menu
-The menu at the bottom of the screen shows available commands: 
-
-##### Instance/Session Management
-- `n` - Create a new session
-- `N` - Create a new session with a prompt
-- `D` - Kill (delete) the selected session
-- `↑/j`, `↓/k` - Navigate between sessions
-
-##### Actions
-- `↵/o` - Attach to the selected session to reprompt
-- `ctrl-q` - Detach from session
-- `s` - Commit and push branch to github
-- `c` - Checkout. Commits changes and pauses the session
-- `r` - Resume a paused session
-- `?` - Show help menu
-
-##### Navigation
-- `tab` - Switch between preview tab and diff tab
-- `q` - Quit the application
-- `shift-↓/↑` - scroll in diff view
-
 ### Development
 
 #### Building from Source
@@ -201,10 +198,12 @@ make lint          # Code style and quality checks
 make format        # Format code with gofmt
 
 # Performance testing
-make benchmark          # Full benchmarks (runs in background)
-make benchmark-quick    # Fast subset for development
-make benchmark-navigation # Navigation performance tests
+make benchmark         # Full benchmarks (runs in background)
 make profile-cpu       # CPU profiling analysis
+
+# Demo recording
+make demo-video        # Record demo, add browser chrome, export GIF (assets/demo.webm + assets/demo.gif)
+make demo-post-process # Re-run post-processing only (add chrome frame + regenerate GIF)
 
 # Tool management
 make install-tools # Install all development tools
@@ -286,20 +285,33 @@ If you get an error like `failed to start new session: timed out waiting for tmu
 
 ### Web UI
 
-Stapler Squad includes a web-based UI accessible at `http://localhost:8543` when running. It provides:
+Stapler Squad's web UI is accessible at `http://localhost:8543` when running. It provides:
 
 - Real-time terminal streaming for all sessions
 - Session organization with tags, filtering, and search
-- Approval queue for reviewing AI-proposed changes
+- **Auto-approval rules engine** — built-in and custom rules with risk-level classification
+- **Approval analytics dashboard** — visualise decision trends and classifier performance
+- **Review Queue** — triage pending agent actions before they're applied
+- **Workspace switcher** — manage multiple project contexts from one UI
 - Session logs and diff preview
 
-The web UI launches automatically alongside the TUI when you run `ssq`.
+The web UI launches automatically when you run `ssq`.
 
 ### How It Works
 
 1. **tmux** to create isolated terminal sessions for each agent
 2. **git worktrees** to isolate codebases so each session works on its own branch
-3. A TUI and web UI for session management and monitoring
+3. A web UI for real-time session management, approvals, and review
+
+### Background
+
+Stapler Squad started as a fork of [claude-squad](https://github.com/smtg-ai/claude-squad), a TUI for managing multiple Claude Code sessions. Two things pushed me toward a full rewrite:
+
+**A browser is a better interface for this job.** A web UI opens instantly in multiple windows, works over SSH without port-forwarding a terminal, and lets you monitor agents from any device. A Charm TUI is great for a single focused session — less so when you have six agents running across different services and you want to glance at all of them while doing something else.
+
+**Claude is better at building web UIs than TUIs.** The Charm/Bubble Tea ecosystem is relatively niche, which means less training data, less reliable code generation, and slower iteration. React and Next.js are Claude's home turf — features that would take days to wrangle in a TUI come together in hours.
+
+The result is opinionated toward my own workflow: approval gates before agent changes land, a rules engine to automate the repetitive stuff, and a review queue so nothing slips through unnoticed. If that matches how you think about running AI agents, you'll feel at home. If not, the original claude-squad may be a better fit.
 
 ### License
 

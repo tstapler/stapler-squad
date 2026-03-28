@@ -139,19 +139,20 @@ func (s *DemoServer) Stop() {
 
 // mockSessions returns 6 realistic InstanceData records spanning Backend,
 // Frontend, and Infrastructure categories. No tmux processes required —
-// statuses are Paused, Ready, Running, and NeedsApproval.
+// statuses are Paused, Ready, and NeedsApproval only (no Running) so the
+// review-queue poller does not reclassify them when no tmux process exists.
 //
 // Two sessions include "payment" in their title/tags so the search demo
 // filters from 6 → 2 results, which is visually more compelling than 3 → 1.
 func mockSessions() []session.InstanceData {
 	now := time.Now()
 	return []session.InstanceData{
-		// Active: payment integration running now.
+		// Paused mid-task: payment integration with large diff in progress.
 		{
 			Title:                "payment-stripe-integration",
 			Path:                 "/Users/dev/services/payment-service",
 			Branch:               "feature/stripe-webhooks",
-			Status:               session.Running,
+			Status:               session.Paused,
 			Program:              "claude",
 			Category:             "Backend",
 			Tags:                 []string{"Payments", "API", "Priority"},
@@ -191,12 +192,12 @@ func mockSessions() []session.InstanceData {
 			LastMeaningfulOutput: now.Add(-25 * time.Minute),
 			DiffStats:            session.DiffStatsData{Added: 342, Removed: 89},
 		},
-		// Active: analytics dashboard frontend.
+		// Paused: analytics dashboard frontend — large diff ready for review.
 		{
 			Title:                "dashboard-redesign",
 			Path:                 "/Users/dev/apps/web-client",
 			Branch:               "feature/analytics-dashboard",
-			Status:               session.Running,
+			Status:               session.Paused,
 			Program:              "claude",
 			Category:             "Frontend",
 			Tags:                 []string{"React", "UX", "Priority"},
@@ -221,12 +222,12 @@ func mockSessions() []session.InstanceData {
 			LastMeaningfulOutput: now.Add(-15 * time.Minute),
 			DiffStats:            session.DiffStatsData{Added: 73, Removed: 11},
 		},
-		// Active: payment receipts via aider (shows multi-agent support).
+		// Paused: payment receipts via aider (shows multi-agent support).
 		{
 			Title:                "payment-email-notifications",
 			Path:                 "/Users/dev/services/notification-service",
 			Branch:               "feature/payment-receipts",
-			Status:               session.Running,
+			Status:               session.Paused,
 			Program:              "aider",
 			Category:             "Backend",
 			Tags:                 []string{"Payments", "Notifications"},

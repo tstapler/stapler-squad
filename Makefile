@@ -6,7 +6,7 @@ PROFILE_FLAGS ?=
 PROFILE_PORT ?= 6060
 SERVER_FLAGS ?= --remote-access
 
-.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile demo-video
+.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile demo-video demo-post-process demo-gif
 
 # Default target
 help: ## Show this help message
@@ -219,8 +219,24 @@ docs: ## Generate and open test coverage documentation
 	make test-coverage
 	@which open >/dev/null 2>&1 && open coverage.html || echo "Open coverage.html in your browser"
 
-demo-video: build ## Record demo video and save to assets/demo.webm
-	RECORD_DEMO=1 go test ./tests/demo/... -run TestRecordDemo -v -timeout 120s
+# File-target: re-post-process whenever the raw WebM is newer than the GIF.
+# Both outputs (webm with chrome frame, gif) are produced by the script.
+# `demo-post-process` is a .PHONY convenience alias; `assets/demo.gif` is the
+# real file-level dependency target used by demo-video.
+assets/demo.gif: assets/demo.webm scripts/demo-post-process.sh
+	@./scripts/demo-post-process.sh assets/demo.webm
+
+demo-post-process: assets/demo.gif ## Add browser chrome frame to assets/demo.webm and export assets/demo.gif
+demo-gif: assets/demo.gif ## Alias for demo-post-process
+
+# assets/demo.webm is produced by the Go test harness (Playwright recording).
+# Declaring it as a file target lets make skip the recording when the webm is
+# already newer than the stapler-squad binary and no source files changed.
+assets/demo.webm: stapler-squad tests/e2e/demo.spec.ts tests/demo/helpers.go
+	@cd tests/e2e && npm install --silent
+	RECORD_DEMO=1 go test ./tests/demo/... -run TestRecordDemo -v -timeout 180s
+
+demo-video: assets/demo.gif ## Record demo video, add browser chrome, and export GIF (assets/demo.webm + assets/demo.gif)
 
 # Environment validation
 validate-env: ## Validate development environment setup

@@ -23,3 +23,7 @@ test-results/
 tests/playwright-report/
 tests/test-results/
 tests/test-results.json
+
+# Playwright test artifacts
+assets/demo-recording/.last-run.json
+assets/demo-recording/demo-Demo-Flow-chromium/
