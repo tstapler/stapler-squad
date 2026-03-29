@@ -8,20 +8,8 @@ import { AutocompleteInput } from "@/components/ui/AutocompleteInput";
 import { useRepositorySuggestions } from "@/lib/hooks/useRepositorySuggestions";
 import { useBranchSuggestions } from "@/lib/hooks/useBranchSuggestions";
 import { sessionSchema, SessionFormData, defaultValues } from "@/lib/validation/sessionSchema";
+import { getProgramDisplay, PROGRAMS, DEFAULT_PROGRAM } from "@/lib/constants/programs";
 import styles from "./SessionWizard.module.css";
-
-// Helper function to get program display name
-function getProgramDisplay(program?: string): string {
-  if (!program) return "Claude Code (default)";
-  if (program === "claude") return "Claude Code";
-  if (program === "env -u CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL=http://localhost:47000 claude") {
-    return "Claude Code (Proxy via localhost:47000)";
-  }
-  if (program === "aider") return "Aider";
-  if (program === "aider --model ollama_chat/gemma3:1b") return "Aider (Ollama Gemma 1B)";
-  if (program.startsWith("aider --model")) return program;
-  return program;
-}
 
 interface SessionWizardProps {
   onComplete: (data: SessionFormData) => Promise<void>;
@@ -303,14 +291,9 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
             <div className={styles.field}>
               <label htmlFor="program">Program</label>
               <select id="program" {...register("program")}>
-                <option value="claude">Claude Code</option>
-                <option value="env -u CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BASE_URL=http://localhost:47000 claude">
-                  Claude Code (Proxy via localhost:47000)
-                </option>
-                <option value="aider">Aider</option>
-                <option value="aider --model ollama_chat/gemma3:1b">
-                  Aider (Ollama Gemma 1B)
-                </option>
+                {PROGRAMS.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
                 <option value="custom">Custom Command...</option>
               </select>
               <span className={styles.hint}>
