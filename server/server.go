@@ -32,6 +32,7 @@ type Server struct {
 	tlsConfig  *tls.Config          // non-nil when TLS is enabled
 	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
 	httpsURL   string               // set when remote access is enabled
+	hostnames  []string             // detected LAN hostnames
 }
 
 // NewServer creates a new HTTP server instance with SessionService registered.
@@ -299,14 +300,25 @@ func (s *Server) SetHTTPSURL(url string) {
 	s.httpsURL = url
 }
 
+// SetHostnames records the detected LAN hostnames for this server.
+func (s *Server) SetHostnames(hostnames []string) {
+	s.hostnames = hostnames
+}
+
+// GetHostnames returns the detected LAN hostnames.
+func (s *Server) GetHostnames() []string {
+	return s.hostnames
+}
+
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
 	s.mux.HandleFunc("/api/server-info", func(w http.ResponseWriter, r *http.Request) {
 		type serverInfoResponse struct {
-			CAPEMPath  string `json:"ca_pem_path"`
-			HTTPSURL   string `json:"https_url"`
-			TLSEnabled bool   `json:"tls_enabled"`
+			CAPEMPath  string   `json:"ca_pem_path"`
+			HTTPSURL   string   `json:"https_url"`
+			TLSEnabled bool     `json:"tls_enabled"`
+			Hostnames  []string `json:"hostnames"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -323,6 +335,7 @@ func (s *Server) registerServerInfoHandler() {
 			CAPEMPath:  caPath,
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
+			Hostnames:  s.hostnames,
 		}
 
 		w.Header().Set("Content-Type", "application/json")

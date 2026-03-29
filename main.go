@@ -177,7 +177,16 @@ var (
 				cfg.PasskeyRPID = rpIDFlag
 			}
 
+			// Detect LAN IP for hostname resolution and display
+			lanIP, _ := getOutboundIP()
+			lanIPStr := "127.0.0.1"
+			if lanIP != nil {
+				lanIPStr = lanIP.String()
+			}
+			hostnames := resolveLANHostnames(lanIPStr)
+
 			srv := server.NewServer(address)
+			srv.SetHostnames(hostnames)
 
 			// Start a second HTTPS server with passkey auth for remote access.
 			if remoteAccessFlag || cfg.PasskeyEnabled {
@@ -617,8 +626,8 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	lanIPStr := lanIP.String()
 
-	// Resolve all usable domain names for WebAuthn rpID and TLS cert SANs.
-	hostnames := resolveLANHostnames(lanIPStr)
+	// Use hostnames already resolved and stored on the server.
+	hostnames := srv.GetHostnames()
 
 	remoteAddr := fmt.Sprintf("0.0.0.0:%d", remotePort)
 

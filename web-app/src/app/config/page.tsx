@@ -46,6 +46,7 @@ interface ServerInfo {
   ca_pem_path: string;
   https_url: string;
   tls_enabled: boolean;
+  hostnames: string[];
 }
 
 export default function ConfigEditorPage() {
@@ -607,6 +608,26 @@ export default function ConfigEditorPage() {
                   </div>
                 ) : (
                   <span className={styles.networkDisabledNote}>TLS not active</span>
+                )}
+              </div>
+              <div className={styles.networkRow}>
+                <span className={styles.networkLabel}>Detected Hostnames</span>
+                {serverInfo.hostnames && serverInfo.hostnames.length > 0 ? (
+                  <div className={styles.hostnamesList}>
+                    {serverInfo.hostnames.map((hn, idx) => (
+                      <div key={idx} className={styles.hostnameItem}>
+                        <span className={styles.hostnameText}>{hn}</span>
+                        <button
+                          className={styles.networkCopyBtn}
+                          onClick={() => copyToClipboard(hn, `hostname-${idx}`)}
+                        >
+                          {copiedField === `hostname-${idx}` ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span className={styles.networkDisabledNote}>No LAN hostnames detected</span>
                 )}
               </div>
             </>
