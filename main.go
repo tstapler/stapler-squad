@@ -188,6 +188,9 @@ var (
 			srv := server.NewServer(address)
 			srv.SetHostnames(hostnames)
 
+			localOrigin := fmt.Sprintf("http://%s", address)
+			srv.SetOrigins([]string{localOrigin})
+
 			// Start a second HTTPS server with passkey auth for remote access.
 			if remoteAccessFlag || cfg.PasskeyEnabled {
 				if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
@@ -663,6 +666,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		origins = append(origins, fmt.Sprintf("https://%s:%d", hn, remotePort))
 	}
 	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
+	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
 	// Initialise auth subsystem.
 	store, err := serverauth.NewCredentialStore()

@@ -33,6 +33,7 @@ type Server struct {
 	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
 	httpsURL   string               // set when remote access is enabled
 	hostnames  []string             // detected LAN hostnames
+	origins    []string             // allowed CORS origins
 }
 
 // NewServer creates a new HTTP server instance with SessionService registered.
@@ -232,7 +233,7 @@ func (s *Server) Start(ctx context.Context) error {
 		inner = s.authMiddleware(inner)
 	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORS(middleware.Compress(inner))),
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
@@ -310,6 +311,11 @@ func (s *Server) GetHostnames() []string {
 	return s.hostnames
 }
 
+// SetOrigins records the allowed CORS origins.
+func (s *Server) SetOrigins(origins []string) {
+	s.origins = origins
+}
+
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
@@ -357,7 +363,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 		inner = authMW(inner)
 	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORS(middleware.Compress(inner))),
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
