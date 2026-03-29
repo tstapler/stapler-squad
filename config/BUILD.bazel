@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "config",
+    srcs = [
+        "claude.go",
+        "config.go",
+        "discovery.go",
+        "state.go",
+        "workspace_meta.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/config",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor",
+        "//log",
+        "@com_github_gofrs_flock//:flock",
+        "@com_github_xeipuuv_gojsonschema//:gojsonschema",
+    ],
+)
+
+go_test(
+    name = "config_test",
+    srcs = [
+        "claude_test.go",
+        "config_categories_test.go",
+        "config_test.go",
+    ],
+    embed = [":config"],
+    deps = [
+        "//log",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

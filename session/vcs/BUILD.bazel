@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "vcs",
+    srcs = [
+        "detect.go",
+        "git.go",
+        "jj.go",
+        "vcs.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/vcs",
+    visibility = ["//visibility:public"],
+    deps = ["//log"],
+)

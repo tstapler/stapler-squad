@@ -1,0 +1,9 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "hook",
+    srcs = ["hook.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/ent/hook",
+    visibility = ["//visibility:public"],
+    deps = ["//session/ent"],
+)

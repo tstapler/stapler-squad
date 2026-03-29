@@ -1,0 +1,15 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "demo",
+    srcs = ["helpers.go"],
+    importpath = "github.com/tstapler/stapler-squad/tests/demo",
+    visibility = ["//visibility:public"],
+    deps = ["//session"],
+)
+
+go_test(
+    name = "demo_test",
+    srcs = ["demo_test.go"],
+    embed = [":demo"],
+)

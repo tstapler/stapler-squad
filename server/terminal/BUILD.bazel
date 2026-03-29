@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "terminal",
+    srcs = [
+        "delta.go",
+        "line_ring_buffer.go",
+        "state.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/terminal",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//gen/proto/go/session/v1:session",
+        "//log",
+        "@com_github_mattn_go_runewidth//:go-runewidth",
+    ],
+)
+
+go_test(
+    name = "terminal_test",
+    srcs = [
+        "delta_test.go",
+        "line_ring_buffer_test.go",
+        "state_test.go",
+    ],
+    embed = [":terminal"],
+    deps = ["//gen/proto/go/session/v1:session"],
+)

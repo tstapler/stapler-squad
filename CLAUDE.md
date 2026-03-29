@@ -47,6 +47,37 @@ fswatch -o web-app/src | xargs -n1 -I{} make restart-web PROFILE_FLAGS="--profil
 STAPLER_SQUAD_USE_CONTROL_MODE=false ./stapler-squad
 ```
 
+### Bazel Build (Modern Build System)
+
+The project also supports Bazel for building. This is optional - the Makefile-based build is still the primary method.
+
+```bash
+# Install Bazelisk (recommended)
+brew install bazelisk
+
+# Full build with Bazel (web UI + Go backend)
+make bazel-all
+
+# Build just the Go backend (requires web UI built first)
+make bazel-build
+
+# Build and run with Bazel
+make bazel-run
+
+# Run tests with Bazel
+make bazel-test
+
+# Clean Bazel cache
+make bazel-clean
+
+# Update Bazel dependencies (run when adding new Go deps)
+make bazel-update-deps
+
+# Or manually:
+bazel build //:stapler-squad
+bazel test //...
+```
+
 ### Profiling and Debugging Lock-Ups
 ```bash
 # Quick diagnosis for lock-ups/freezes

@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "enttest",
+    srcs = ["enttest.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/ent/enttest",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/ent",
+        "//session/ent/migrate",
+        "//session/ent/runtime",
+        "@io_entgo_ent//dialect/sql/schema",
+    ],
+)

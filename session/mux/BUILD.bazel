@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "mux",
+    srcs = [
+        "autodiscover.go",
+        "discovery.go",
+        "hooks.go",
+        "multiplexer.go",
+        "picker.go",
+        "protocol.go",
+        "tmux_options.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/mux",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/tmux",
+        "@com_github_creack_pty//:pty",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@org_golang_x_term//:term",
+    ],
+)
+
+go_test(
+    name = "mux_test",
+    srcs = [
+        "autodiscover_test.go",
+        "tmux_options_test.go",
+    ],
+    embed = [":mux"],
+)

@@ -1,0 +1,9 @@
+# Enable bzlmod (Bazel 5+ dependency management)
+common --enable_bzlmod
+
+# Build settings
+build --disk_cache=~/.bazel-cache/disk
+build --repository_cache=~/.bazel-cache/repository
+
+# Test settings
+test --test_output=errors

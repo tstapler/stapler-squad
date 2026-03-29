@@ -15,6 +15,15 @@ web/src/gen/
 /web-app/node_modules/
 /.playwright-mcp
 
+# Bazel
+bazel-*
+bazel-bin/
+bazel-out/
+bazel-testlogs/
+.bazeliskrc
+.bazelversion
+# Note: .bazelrc is kept as it may contain project-specific configuration
+
 # worktrees
 worktrees/
 

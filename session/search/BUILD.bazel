@@ -1,0 +1,31 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "search",
+    srcs = [
+        "bm25.go",
+        "document_store.go",
+        "engine.go",
+        "index_store.go",
+        "inverted_index.go",
+        "snippet.go",
+        "sync_types.go",
+        "tokenizer.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/search",
+    visibility = ["//visibility:public"],
+    deps = ["//session"],
+)
+
+go_test(
+    name = "search_test",
+    srcs = [
+        "bm25_test.go",
+        "engine_test.go",
+        "index_store_test.go",
+        "inverted_index_test.go",
+        "snippet_test.go",
+        "tokenizer_test.go",
+    ],
+    embed = [":search"],
+)

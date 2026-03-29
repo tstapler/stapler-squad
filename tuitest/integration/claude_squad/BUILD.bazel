@@ -1,0 +1,11 @@
+load("@rules_go//go:def.bzl", "go_test")
+
+go_test(
+    name = "claude_squad_test",
+    srcs = ["keyboard_test.go"],
+    deps = [
+        "@com_github_creack_pty//:pty",
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

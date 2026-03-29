@@ -42,7 +42,7 @@ ifneq ($(MISSING_TOOLS),)
 	fi
 endif
 
-.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile demo-video demo-post-process demo-gif
+.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile demo-video demo-post-process demo-gif bazel-build bazel-run bazel-test bazel-clean bazel-update-deps bazel-all
 
 # Default target
 help: ## Show this help message
@@ -290,3 +290,32 @@ validate-env: ensure-tools ## Validate development environment setup
 	@which gosec >/dev/null 2>&1 && echo "✅ gosec installed" || echo "❌ gosec missing (run 'make install-tools')"
 	@which deadcode >/dev/null 2>&1 && echo "✅ deadcode installed" || echo "❌ deadcode missing (run 'make install-tools')"
 	@echo "Environment validation complete"
+
+# Bazel build targets (modern Bazel with bzlmod)
+.PHONY: bazel-build bazel-run bazel-test bazel-clean bazel-update-deps bazel-all
+bazel-build: ## Build with Bazel (requires web-ui built first via make web-build)
+	@echo "Building Go with Bazel..."
+	@bazel build //:stapler-squad
+	@echo "✅ Bazel build complete"
+
+bazel-all: web-build bazel-build ## Build web UI and Go with Bazel (full build)
+	@echo ""
+	@echo "=== Full Bazel build complete ==="
+	@echo "Binary: bazel-bin/stapler-squad_/stapler-squad"
+
+bazel-run: bazel-build ## Build and run with Bazel
+	@echo "Running with Bazel..."
+	@bazel-bin/stapler-squad_/stapler-squad $(SERVER_FLAGS) &
+
+bazel-test: ## Run tests with Bazel
+	@echo "Running tests with Bazel..."
+	@bazel test //...
+
+bazel-clean: ## Clean Bazel cache
+	@echo "Cleaning Bazel cache..."
+	@bazel clean
+
+bazel-update-deps: ## Update Bazel dependencies from go.mod (automatic - handles missing deps)
+	@echo "Updating Bazel dependencies (automatic mode)..."
+	@./scripts/bazel-deps.sh
+	@echo "✅ Bazel dependencies updated"

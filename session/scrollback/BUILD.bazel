@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "scrollback",
+    srcs = [
+        "buffer.go",
+        "manager.go",
+        "storage.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/scrollback",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_klauspost_compress//zstd"],
+)
+
+go_test(
+    name = "scrollback_test",
+    srcs = ["buffer_test.go"],
+    embed = [":scrollback"],
+)

@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "terminal",
+    srcs = [
+        "compat.go",
+        "signals.go",
+        "size.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/terminal",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@org_golang_x_term//:term",
+    ],
+)

@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "detection",
+    srcs = [
+        "approval.go",
+        "detector.go",
+        "idle.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/detection",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_test(
+    name = "detection_test",
+    srcs = [
+        "approval_test.go",
+        "detector_test.go",
+        "idle_test.go",
+        "input_required_test.go",
+        "tests_failing_test.go",
+    ],
+    embed = [":detection"],
+)

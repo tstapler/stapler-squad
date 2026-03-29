@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "framebuffer",
+    srcs = ["diff.go"],
+    importpath = "github.com/tstapler/stapler-squad/session/framebuffer",
+    visibility = ["//visibility:public"],
+    deps = ["//session"],
+)
+
+go_test(
+    name = "framebuffer_test",
+    srcs = ["diff_test.go"],
+    embed = [":framebuffer"],
+    deps = ["//session"],
+)

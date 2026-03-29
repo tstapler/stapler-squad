@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "adapters",
+    srcs = [
+        "instance_adapter.go",
+        "review_queue_adapter.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/adapters",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//gen/proto/go/session/v1:session",
+        "//session",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "auth",
+    srcs = [
+        "handlers.go",
+        "qrcode.go",
+        "session.go",
+        "setup.go",
+        "store.go",
+        "user.go",
+        "webauthn.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/auth",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//log",
+        "@com_github_go_webauthn_webauthn//webauthn",
+        "@com_github_gofrs_flock//:flock",
+        "@com_github_skip2_go_qrcode//:go-qrcode",
+    ],
+)

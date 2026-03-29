@@ -1,0 +1,38 @@
+load("@gazelle//:def.bzl", "gazelle")
+load("@rules_go//go:def.bzl", "go_binary", "go_library")
+
+gazelle(
+    name = "gazelle",
+    prefix = "github.com/tstapler/stapler-squad",
+)
+
+go_library(
+    name = "go_library",
+    srcs = ["main.go"],
+    importpath = "github.com/tstapler/stapler-squad",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//cmd",
+        "//config",
+        "//daemon",
+        "//executor",
+        "//log",
+        "//profiling",
+        "//server",
+        "//server/auth",
+        "//server/middleware",
+        "//session",
+        "//session/git",
+        "//session/tmux",
+        "//telemetry",
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)
+
+go_binary(
+    name = "stapler-squad",
+    embed = [":go_library"],
+    goarch = "amd64",
+    goos = "linux",
+    visibility = ["//visibility:public"],
+)

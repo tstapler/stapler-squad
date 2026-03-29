@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "diffstats",
+    srcs = [
+        "diffstats.go",
+        "where.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/ent/diffstats",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session/ent/predicate",
+        "@io_entgo_ent//dialect/sql",
+        "@io_entgo_ent//dialect/sql/sqlgraph",
+    ],
+)

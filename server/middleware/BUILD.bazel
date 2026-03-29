@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "middleware",
+    srcs = [
+        "auth.go",
+        "cors.go",
+        "gzip.go",
+        "logging.go",
+        "static.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/middleware",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "@com_github_klauspost_compress//gzip",
+        "@com_github_klauspost_compress//zstd",
+    ],
+)

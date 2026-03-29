@@ -1,0 +1,46 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "server",
+    srcs = [
+        "dependencies.go",
+        "review_queue_manager.go",
+        "server.go",
+        "tls.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//config",
+        "//gen/proto/go/session/v1:session",
+        "//gen/proto/go/session/v1/sessionv1connect",
+        "//log",
+        "//server/adapters",
+        "//server/events",
+        "//server/middleware",
+        "//server/notifications",
+        "//server/services",
+        "//server/web",
+        "//session",
+        "//session/detection",
+        "//session/scrollback",
+        "@com_connectrpc_connect//:connect",
+        "@com_connectrpc_otelconnect//:otelconnect",
+        "@io_opentelemetry_go_contrib_instrumentation_net_http_otelhttp//:otelhttp",
+        "@org_golang_google_protobuf//types/known/timestamppb",
+    ],
+)
+
+go_test(
+    name = "server_test",
+    srcs = [
+        "dependencies_test.go",
+        "review_queue_manager_test.go",
+    ],
+    embed = [":server"],
+    deps = [
+        "//gen/proto/go/session/v1:session",
+        "//server/events",
+        "//session",
+    ],
+)

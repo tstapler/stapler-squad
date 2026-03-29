@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "vc",
+    srcs = [
+        "detector.go",
+        "git_provider.go",
+        "jj_provider.go",
+        "provider.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/vc",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "vc_test",
+    srcs = [
+        "detector_test.go",
+        "git_provider_test.go",
+        "jj_provider_test.go",
+        "types_test.go",
+    ],
+    embed = [":vc"],
+)
