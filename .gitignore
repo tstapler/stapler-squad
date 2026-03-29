@@ -11,6 +11,7 @@ stapler-squad-test
 # Generated protocol buffer code
 gen/
 web/src/gen/
+.proto-gen.stamp
 /web-app/.next
 /web-app/node_modules/
 /.playwright-mcp

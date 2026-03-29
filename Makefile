@@ -10,6 +10,8 @@ SERVER_FLAGS ?= --remote-access
 GO_FILES := $(shell find . -maxdepth 3 -name "*.go" -not -path "./vendor/*" -not -path "./node_modules/*")
 WEB_FILES := $(shell find web-app/src -type f 2>/dev/null)
 PROTO_FILES := $(shell find proto -name "*.proto" 2>/dev/null)
+PROTO_STAMP := .proto-gen.stamp
+PROTO_OUT_DIRS := gen/proto/go web/src/gen
 
 # Tool detection and automatic installation
 MISSING_TOOLS :=
@@ -116,12 +118,18 @@ install: ensure-tools ## Install stapler-squad locally
 	go install .
 
 # Protocol Buffer code generation
-proto-gen: ensure-tools $(PROTO_FILES) ## Generate Go and TypeScript code from proto files
-	@echo "Generating protocol buffer code..."
-	buf generate proto
-	@echo "✅ Code generation complete"
-	@echo "  Go code:         gen/proto/go/"
-	@echo "  TypeScript code: web/src/gen/"
+proto-gen: ensure-tools ## Generate Go and TypeScript code from proto files
+	@echo "Checking if proto files need regeneration..."
+	@if [ ! -f $(PROTO_STAMP) ] || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ]; then \
+		echo "Generating protocol buffer code..."; \
+		buf generate proto; \
+		echo "✅ Code generation complete"; \
+		echo "  Go code:         gen/proto/go/"; \
+		echo "  TypeScript code: web/src/gen/"; \
+		touch $(PROTO_STAMP); \
+	else \
+		echo "✅ Proto files unchanged, skipping generation"; \
+	fi
 
 proto-lint: ensure-tools ## Lint protocol buffer files
 	buf lint proto
