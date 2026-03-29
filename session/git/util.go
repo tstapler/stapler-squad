@@ -181,7 +181,7 @@ func createInitialCommit(repo *git.Repository, repoPath string) error {
 	// Create the initial commit
 	_, err = worktree.Commit("Initial commit", &git.CommitOptions{
 		Author: &object.Signature{
-			Name:  "Claude Squad",
+			Name:  "Stapler Squad",
 			Email: "stapler-squad@localhost",
 			When:  time.Now(),
 		},
