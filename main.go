@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	cmdbridge "github.com/tstapler/stapler-squad/cmd"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/daemon"
@@ -14,9 +17,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
-	"context"
-	"encoding/json"
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -310,7 +310,6 @@ var (
 			} else {
 				fmt.Println("✅ No key binding conflicts detected")
 			}
-
 
 			return nil
 		},
@@ -666,6 +665,13 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		origins = append(origins, fmt.Sprintf("https://%s:%d", hn, remotePort))
 	}
 	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
+
+	displayHost := rpID
+	if len(hostnames) > 0 {
+		displayHost = hostnames[0]
+	}
+	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
+
 	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
 	// Initialise auth subsystem.

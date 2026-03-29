@@ -1,6 +1,11 @@
 package server
 
 import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
@@ -8,11 +13,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/web"
-	"context"
-	"crypto/tls"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -26,14 +26,14 @@ import (
 
 // Server manages the HTTP server with ConnectRPC handlers.
 type Server struct {
-	addr      string
-	httpServer *http.Server
-	mux        *http.ServeMux
-	tlsConfig  *tls.Config          // non-nil when TLS is enabled
+	addr           string
+	httpServer     *http.Server
+	mux            *http.ServeMux
+	tlsConfig      *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL   string               // set when remote access is enabled
-	hostnames  []string             // detected LAN hostnames
-	origins    []string             // allowed CORS origins
+	httpsURL       string                          // set when remote access is enabled
+	hostnames      []string                        // detected LAN hostnames
+	origins        []string                        // allowed CORS origins
 }
 
 // NewServer creates a new HTTP server instance with SessionService registered.
@@ -49,6 +49,7 @@ type Server struct {
 //  7. ReactiveQueueMgr    — depends on ReviewQueue, Poller, EventBus, StatusManager, Storage
 //  8. ScrollbackManager   — independent; depends only on filesystem paths
 //  9. TmuxStreamerManager — independent
+//
 // 11. ExternalDiscovery   — depends on Storage, ReviewQueue, StatusManager, Poller (via callbacks)
 // 12. ExternalApprovalMonitor — depends on ExternalDiscovery
 //
@@ -314,6 +315,11 @@ func (s *Server) GetHostnames() []string {
 // SetOrigins records the allowed CORS origins.
 func (s *Server) SetOrigins(origins []string) {
 	s.origins = origins
+}
+
+// GetOrigins returns the allowed CORS origins.
+func (s *Server) GetOrigins() []string {
+	return s.origins
 }
 
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes

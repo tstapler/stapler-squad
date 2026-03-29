@@ -2,7 +2,9 @@ package auth
 
 import (
 	"fmt"
+	"net"
 	"net/http"
+	"strings"
 
 	"github.com/tstapler/stapler-squad/log"
 
