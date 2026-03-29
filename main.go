@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -519,52 +520,59 @@ func init() {
 	rootCmd.AddCommand(listSessionsCmd)
 }
 
-// resolveLANHostname returns a domain name suitable for use as a WebAuthn rpID.
-// It tries (in order):
-//  1. Reverse-DNS PTR lookup on lanIPStr (picks up DHCP-assigned FQDNs)
-//  2. os.Hostname() + each DNS search domain (e.g. hostname.corp.internal)
-//  3. os.Hostname() + ".local"  (mDNS/Bonjour, always works on macOS/iOS LANs)
-//
-// Returns empty string if neither succeeds (caller falls back to raw IP).
-func resolveLANHostname(lanIPStr string) string {
+// resolveLANHostnames returns a list of domain names suitable for use as a WebAuthn rpID
+// or TLS SANs. It collects all identifiable hostnames from various sources.
+func resolveLANHostnames(lanIPStr string) []string {
+	var hostnames []string
+	seen := make(map[string]bool)
+
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name != "" && strings.Contains(name, ".") && !seen[name] {
+			hostnames = append(hostnames, name)
+			seen[name] = true
+		}
+	}
+
 	// 1. Reverse DNS — works when the DHCP server registers PTR records.
-	if names, err := net.LookupAddr(lanIPStr); err == nil && len(names) > 0 {
-		// PTR records end with a trailing dot; strip it.
-		name := names[0]
-		if len(name) > 0 && name[len(name)-1] == '.' {
-			name = name[:len(name)-1]
+	if names, err := net.LookupAddr(lanIPStr); err == nil {
+		for _, name := range names {
+			// PTR records end with a trailing dot; strip it.
+			if len(name) > 0 && name[len(name)-1] == '.' {
+				name = name[:len(name)-1]
+			}
+			add(name)
 		}
-		if name != "" {
-			log.InfoLog.Printf("auth: resolved LAN hostname via PTR: %s", name)
-			return name
+	}
+
+	// 2. Linux-specific: mDNS reverse lookup via avahi-resolve
+	if out, err := exec.Command("avahi-resolve", "-a", lanIPStr).Output(); err == nil {
+		fields := strings.Fields(string(out))
+		if len(fields) >= 2 {
+			add(fields[1])
 		}
+	}
+
+	// 3. Try hostname -f for FQDN
+	if out, err := exec.Command("hostname", "-f").Output(); err == nil {
+		add(string(out))
 	}
 
 	hostname, hostErr := os.Hostname()
-
-	// 2. DNS search domains — works when the DHCP server publishes a domain
-	// (e.g. UniFi with a custom LAN domain like "staplerhome.internal").
-	// Try each configured search domain; use the first one that resolves.
 	if hostErr == nil && hostname != "" {
+		// 4. hostname + search domains
 		for _, domain := range getDNSSearchDomains() {
 			if domain == "local" {
-				continue // skip; we handle .local separately below
+				continue
 			}
-			fqdn := hostname + "." + domain
-			if addrs, err := net.LookupHost(fqdn); err == nil && len(addrs) > 0 {
-				log.InfoLog.Printf("auth: resolved LAN hostname via search domain %s: %s", domain, fqdn)
-				return fqdn
-			}
+			add(hostname + "." + domain)
 		}
+
+		// 5. mDNS .local fallback
+		add(hostname + ".local")
 	}
 
-	// 3. mDNS .local — universally available on Apple devices / Bonjour LANs.
-	if hostErr == nil && hostname != "" {
-		log.InfoLog.Printf("auth: using mDNS hostname: %s.local", hostname)
-		return hostname + ".local"
-	}
-
-	return ""
+	return hostnames
 }
 
 // getDNSSearchDomains returns the DNS search domains configured on this system
@@ -609,17 +617,14 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	}
 	lanIPStr := lanIP.String()
 
-	// Resolve a usable domain name for WebAuthn rpID — browsers reject raw IPs.
-	// Priority: reverse-DNS (DHCP-assigned FQDN) > mDNS .local > raw IP fallback.
-	localHostname := resolveLANHostname(lanIPStr)
+	// Resolve all usable domain names for WebAuthn rpID and TLS cert SANs.
+	hostnames := resolveLANHostnames(lanIPStr)
 
 	remoteAddr := fmt.Sprintf("0.0.0.0:%d", remotePort)
 
-	// Build SAN list for the TLS cert (include both hostname and IP).
+	// Build SAN list for the TLS cert (include localhost, IP, and all hostnames).
 	sans := []string{"localhost", "127.0.0.1", lanIPStr}
-	if localHostname != "" {
-		sans = append(sans, localHostname)
-	}
+	sans = append(sans, hostnames...)
 
 	tlsPaths, err := server.EnsureTLSCerts(sans)
 	if err != nil {
@@ -631,14 +636,14 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		return fmt.Errorf("load TLS config: %w", err)
 	}
 
-	// Determine rpID: config/flag override > .local hostname > detected LAN IP.
+	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
 	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
 	rpID := cfg.PasskeyRPID
 	displayHost := lanIPStr // host used in QR code URLs
 	if rpID == "" {
-		if localHostname != "" {
-			rpID = localHostname
-			displayHost = localHostname
+		if len(hostnames) > 0 {
+			rpID = hostnames[0]
+			displayHost = hostnames[0]
 		} else {
 			rpID = lanIPStr
 		}
