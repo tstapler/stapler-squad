@@ -135,6 +135,16 @@ func Compress(next http.Handler) http.Handler {
 			return
 		}
 
+		// All /api/* requests are ConnectRPC / gRPC endpoints.  Those protocols
+		// manage their own message-level framing and compression internally.
+		// Applying HTTP-level gzip on top breaks the client frame parser and
+		// produces binary garbage (the "Unexpected token ''" / "not valid JSON"
+		// error visible in the browser).  Pass all API requests through unmodified.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		w.Header().Add("Vary", "Accept-Encoding")
 
 		cw := &compressResponseWriter{
