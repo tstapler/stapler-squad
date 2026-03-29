@@ -645,31 +645,24 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		return fmt.Errorf("load TLS config: %w", err)
 	}
 
-	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
-	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
 	rpID := cfg.PasskeyRPID
-	displayHost := lanIPStr // host used in QR code URLs
 	if rpID == "" {
 		if len(hostnames) > 0 {
 			rpID = hostnames[0]
-			displayHost = hostnames[0]
 		} else {
 			rpID = lanIPStr
 		}
-	} else {
-		displayHost = rpID
+	}
+	allRPIDs := []string{rpID}
+	if len(hostnames) > 1 {
+		allRPIDs = append(allRPIDs, hostnames...)
 	}
 
-	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
-	origins := []string{origin, fmt.Sprintf("https://localhost:%d", remotePort)}
-	seen := map[string]bool{}
-	unique := origins[:0]
-	for _, o := range origins {
-		if !seen[o] {
-			seen[o] = true
-			unique = append(unique, o)
-		}
+	origins := []string{fmt.Sprintf("https://%s:%d", rpID, remotePort)}
+	for _, hn := range hostnames {
+		origins = append(origins, fmt.Sprintf("https://%s:%d", hn, remotePort))
 	}
+	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
 
 	// Initialise auth subsystem.
 	store, err := serverauth.NewCredentialStore()
@@ -685,7 +678,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
 	sessions := serverauth.NewSessionManager(sessionsPath)
 
-	waHandler, err := serverauth.NewHandler(rpID, unique, store, sessions)
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions)
 	if err != nil {
 		return fmt.Errorf("create webauthn handler: %w", err)
 	}

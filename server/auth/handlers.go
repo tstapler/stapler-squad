@@ -103,7 +103,7 @@ func (h *httpHandlers) beginRegistration(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	_, creation, ceremonyKey, err := h.wa.BeginRegistration()
+	_, creation, ceremonyKey, err := h.wa.BeginRegistration(r)
 	if err != nil {
 		log.ErrorLog.Printf("auth: begin registration failed: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -165,7 +165,7 @@ func (h *httpHandlers) beginLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	assertion, ceremonyKey, err := h.wa.BeginLogin()
+	assertion, ceremonyKey, err := h.wa.BeginLogin(r)
 	if err != nil {
 		log.ErrorLog.Printf("auth: begin login failed: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
