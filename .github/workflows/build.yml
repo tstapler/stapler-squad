@@ -45,9 +45,7 @@ jobs:
         cache-dependency-path: web-app/package-lock.json
 
     - name: Install buf
-      run: |
-        curl -sSL https://buf.build/install.sh | bash
-        echo "$HOME/.local/bin" >> $GITHUB_PATH
+      run: go install github.com/bufbuild/buf/cmd/buf@latest
 
     - name: Install Bazelisk
       run: |
