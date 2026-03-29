@@ -169,8 +169,8 @@ func generateCA() (*ecdsa.PrivateKey, *x509.Certificate, []byte, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: newSerial(),
 		Subject: pkix.Name{
-			Organization: []string{"Claude Squad Local CA"},
-			CommonName:   "Claude Squad CA",
+			Organization: []string{"Stapler Squad Local CA"},
+			CommonName:   "Stapler Squad CA",
 		},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -202,7 +202,7 @@ func generateServerCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, hostn
 	tmpl := &x509.Certificate{
 		SerialNumber: newSerial(),
 		Subject: pkix.Name{
-			Organization: []string{"Claude Squad"},
+			Organization: []string{"Stapler Squad"},
 			CommonName:   "stapler-squad",
 		},
 		NotBefore: time.Now().Add(-time.Hour),

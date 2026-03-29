@@ -25,7 +25,7 @@ func (u *localUser) WebAuthnName() string {
 }
 
 func (u *localUser) WebAuthnDisplayName() string {
-	return "Claude Squad Owner"
+	return "Stapler Squad Owner"
 }
 
 func (u *localUser) WebAuthnCredentials() []webauthn.Credential {
