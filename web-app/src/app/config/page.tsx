@@ -47,6 +47,7 @@ interface ServerInfo {
   https_url: string;
   tls_enabled: boolean;
   hostnames: string[];
+  programs: string[];
 }
 
 export default function ConfigEditorPage() {
@@ -628,6 +629,20 @@ export default function ConfigEditorPage() {
                   </div>
                 ) : (
                   <span className={styles.networkDisabledNote}>No LAN hostnames detected</span>
+                )}
+              </div>
+              <div className={styles.networkRow}>
+                <span className={styles.networkLabel}>Available Programs</span>
+                {serverInfo.programs && serverInfo.programs.length > 0 ? (
+                  <div className={styles.hostnamesList}>
+                    {serverInfo.programs.map((p, idx) => (
+                      <div key={idx} className={styles.hostnameItem}>
+                        <span className={styles.hostnameText}>{p}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <span className={styles.networkDisabledNote}>No CLI programs detected</span>
                 )}
               </div>
             </>

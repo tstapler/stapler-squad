@@ -319,6 +319,7 @@ func (s *Server) registerServerInfoHandler() {
 			HTTPSURL   string   `json:"https_url"`
 			TLSEnabled bool     `json:"tls_enabled"`
 			Hostnames  []string `json:"hostnames"`
+			Programs   []string `json:"programs"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -336,6 +337,7 @@ func (s *Server) registerServerInfoHandler() {
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.hostnames,
+			Programs:   config.GetAvailablePrograms(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")

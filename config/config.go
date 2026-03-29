@@ -234,6 +234,8 @@ type Config struct {
 	// VCSPreference controls which version control system to prefer when both are available
 	// Options: "auto" (prefer JJ if available), "jj" (always use JJ), "git" (always use Git)
 	VCSPreference string `json:"vcs_preference"`
+	// AvailablePrograms is a list of detected CLI programs
+	AvailablePrograms []string `json:"available_programs"`
 }
 
 // DefaultConfig returns the default configuration
@@ -243,6 +245,8 @@ func DefaultConfig() *Config {
 		log.ErrorLog.Printf("failed to get claude command: %v", err)
 		program = defaultProgram
 	}
+
+	availablePrograms := GetAvailablePrograms()
 
 	return &Config{
 		ListenAddress:      "localhost:8543",
@@ -272,6 +276,7 @@ func DefaultConfig() *Config {
 		KeyCategories:                 getDefaultKeyCategories(),
 		TerminalStreamingMode:         "raw",  // Default to raw streaming (simpler, more reliable)
 		VCSPreference:                 "auto", // Default to auto-detection (prefer JJ if available)
+		AvailablePrograms:             availablePrograms,
 	}
 }
 
@@ -288,7 +293,7 @@ func GetClaudeCommand() (string, error) {
 	}
 
 	// Try to resolve aliases for both proxy-claude and claude
-	candidates := []string{"proxy-claude", "claude"}
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini"}
 
 	for _, candidate := range candidates {
 		// Attempt to get the alias definition from the shell
@@ -354,6 +359,40 @@ func GetClaudeCommand() (string, error) {
 	}
 
 	return "", fmt.Errorf("claude command not found in aliases or PATH")
+}
+
+// GetAvailablePrograms returns a list of all detected CLI programs.
+func GetAvailablePrograms() []string {
+	programs := []string{}
+	seen := make(map[string]bool)
+
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+
+	candidates := []string{"proxy-claude", "claude", "claude-code", "gemini"}
+
+	for _, candidate := range candidates {
+		var shellCmd string
+		if strings.Contains(shell, "zsh") {
+			shellCmd = fmt.Sprintf("source ~/.zshrc &>/dev/null || true; which %s 2>/dev/null", candidate)
+		} else if strings.Contains(shell, "bash") {
+			shellCmd = fmt.Sprintf("source ~/.bashrc &>/dev/null || true; which %s 2>/dev/null", candidate)
+		} else {
+			shellCmd = fmt.Sprintf("which %s", candidate)
+		}
+
+		cmd := globalCommandExecutor.Command(shell, "-c", shellCmd)
+		if output, err := globalCommandExecutor.Output(cmd); err == nil {
+			path := strings.TrimSpace(string(output))
+			if path != "" && !seen[path] {
+				programs = append(programs, path)
+				seen[path] = true
+			}
+		}
+	}
+	return programs
 }
 
 func LoadConfig() *Config {
