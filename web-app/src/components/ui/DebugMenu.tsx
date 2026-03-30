@@ -7,9 +7,9 @@ import {
   setNotificationPreference,
   requestNotificationPermission,
 } from "@/lib/utils/notifications";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl } from "@/lib/config";
 import styles from "./DebugMenu.module.css";
 
@@ -33,13 +33,13 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
   } | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   useFocusTrap(menuRef, isOpen);
 
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
 
   // Load initial state from localStorage

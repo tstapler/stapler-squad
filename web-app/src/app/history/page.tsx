@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
 import {
@@ -44,14 +44,14 @@ export default function HistoryBrowserPage() {
   const { groupedEntries, flatEntries } = useHistoryGrouping(filteredEntries, groupingStrategy);
 
   // Refs
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const entryListRef = useRef<HTMLDivElement>(null);
 
   // Initialize ConnectRPC client and load data
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
   useEffect(() => { loadHistory(); }, []);
 

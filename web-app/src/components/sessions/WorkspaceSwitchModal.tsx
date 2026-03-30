@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import {
   AvailableWorkspaceTargets,
   BookmarkTarget,
@@ -89,7 +89,7 @@ export function WorkspaceSwitchModal({
 
   const client = useMemo(
     () =>
-      createPromiseClient(
+      createClient(
         SessionService,
         createConnectTransport({ baseUrl })
       ),

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Session, ReviewItem } from "@/gen/session/v1/types_pb";
+import { Session, SessionSchema, ReviewItem } from "@/gen/session/v1/types_pb";
+import { create } from "@bufbuild/protobuf";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
 import { useSessionService } from "@/lib/hooks/useSessionService";
@@ -14,7 +15,7 @@ import styles from "./page.module.css";
 // Construct a minimal Session from ReviewItem data for immediate modal opening
 // before useSessionService has finished loading.
 function sessionFromReviewItem(item: ReviewItem): Session {
-  return new Session({
+  return create(SessionSchema, {
     id: item.sessionId,
     title: item.sessionName,
     path: item.path,

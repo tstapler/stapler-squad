@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 
@@ -19,7 +19,7 @@ const HISTORY_ONLY_TYPES = new Set([
 ]);
 import { NotificationEvent } from "@/gen/session/v1/events_pb";
 import { NotificationPriority, NotificationType } from "@/gen/session/v1/types_pb";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { NotificationData } from "@/components/ui/NotificationToast";
 import { getApiBaseUrl } from "@/lib/config";
 
@@ -29,7 +29,7 @@ import { getApiBaseUrl } from "@/lib/config";
 async function resolveApproval(approvalId: string, decision: "allow" | "deny"): Promise<void> {
   try {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    const client = createPromiseClient(SessionService, transport);
+    const client = createClient(SessionService, transport);
     await client.resolveApproval({ approvalId, decision });
   } catch (error) {
     console.error(`[resolveApproval] Failed to resolve approval ${approvalId}:`, error);
@@ -94,7 +94,7 @@ async function focusWindow(bundleId?: string, appName?: string): Promise<void> {
     const transport = createConnectTransport({
       baseUrl: getApiBaseUrl(),
     });
-    const client = createPromiseClient(SessionService, transport);
+    const client = createClient(SessionService, transport);
     const response = await client.focusWindow({
       bundleId: bundleId,
       appName: appName,

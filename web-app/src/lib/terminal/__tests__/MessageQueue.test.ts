@@ -8,30 +8,25 @@
 import { MessageQueue } from '../MessageQueue';
 
 // Mock the events_pb module to avoid protobuf resolution issues in Jest.
-// The real TerminalData class is just a protobuf message with sessionId and data fields.
+// The real TerminalData is a plain protobuf v2 object with sessionId and data fields.
 jest.mock('@/gen/session/v1/events_pb', () => {
-  class MockTerminalData {
-    sessionId: string;
-    data: { case: string | undefined; value?: unknown };
-    constructor(init: { sessionId: string; data: { case: string | undefined; value?: unknown } }) {
-      this.sessionId = init.sessionId;
-      this.data = init.data;
-    }
-  }
   return {
-    TerminalData: MockTerminalData,
+    TerminalData: class {},
+    TerminalDataSchema: Symbol('MockTerminalDataSchema'),
     TerminalInput: class {},
   };
 });
 
-// Import after mock
-const { TerminalData } = require('@/gen/session/v1/events_pb');
+// Mock @bufbuild/protobuf so that create(schema, init) returns a plain object
+jest.mock('@bufbuild/protobuf', () => ({
+  create: (_schema: unknown, init: Record<string, unknown>) => ({ ...init }),
+}));
 
-function createTestMessage(sessionId: string, input?: string) {
-  return new TerminalData({
+function createTestMessage(sessionId: string, input?: string): any {
+  return {
     sessionId,
-    data: input ? { case: "input", value: { data: input } } : { case: undefined },
-  });
+    data: input ? { case: "input" as const, value: { data: input } } : { case: undefined },
+  };
 }
 
 describe('MessageQueue', () => {

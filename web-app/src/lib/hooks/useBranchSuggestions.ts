@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl } from "@/lib/config";
 
 interface BranchSuggestionsOptions {
@@ -27,7 +27,7 @@ export function useBranchSuggestions(options: BranchSuggestionsOptions = {}) {
 
         // Create ConnectRPC client
         const transport = createConnectTransport({ baseUrl });
-        const client = createPromiseClient(SessionService, transport);
+        const client = createClient(SessionService, transport);
 
         // Fetch all sessions to extract branch names
         const response = await client.listSessions({});

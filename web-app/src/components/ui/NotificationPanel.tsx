@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
-import { ResolveApprovalRequest } from "@/gen/session/v1/session_pb";
+import { SessionService } from "@/gen/session/v1/session_pb";
+import { ResolveApprovalRequest, ResolveApprovalRequestSchema } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { formatRelativeTime } from "@/lib/utils/datetime";
@@ -47,11 +48,11 @@ export function NotificationPanel() {
   const auditLog = useAuditLog();
 
   // Lightweight RPC client for resolving approvals directly from the panel
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const getClient = useCallback(() => {
     if (!clientRef.current) {
       const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-      clientRef.current = createPromiseClient(SessionService, transport);
+      clientRef.current = createClient(SessionService, transport);
     }
     return clientRef.current;
   }, []);
@@ -90,7 +91,7 @@ export function NotificationPanel() {
   const resolveApproval = useCallback(async (approvalId: string, decision: "allow" | "deny", notificationIds: string | string[]) => {
     setPendingApprovals(prev => ({ ...prev, [approvalId]: true }));
     try {
-      await getClient().resolveApproval(new ResolveApprovalRequest({ approvalId, decision }));
+      await getClient().resolveApproval(create(ResolveApprovalRequestSchema, { approvalId, decision }));
       setResolvedApprovals(prev => ({ ...prev, [approvalId]: decision }));
       markAsRead(notificationIds);
     } catch (err) {

@@ -1,22 +1,17 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
+import type { LogEntry } from "@/gen/session/v1/session_pb";
+import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { formatTimestamp, formatRelativeTime } from "@/lib/utils/datetime";
 import { useDebounce } from "@/lib/hooks/useDebounce";
 import { MultiSelect, LOG_LEVEL_OPTIONS } from "@/components/logs/MultiSelect";
 import { LiveTailToggle } from "@/components/logs/LiveTailToggle";
 import { useLiveTail } from "@/lib/hooks/useLiveTail";
 import styles from "./SessionLogsTab.module.css";
-
-interface LogEntry {
-  timestamp?: { toDate(): Date };
-  level: string;
-  message: string;
-  source?: string;
-}
 
 interface SessionLogsTabProps {
   sessionId: string;
@@ -38,11 +33,11 @@ export function SessionLogsTab({ sessionId, baseUrl }: SessionLogsTabProps) {
   const [liveTailInterval, setLiveTailInterval] = useState(3000);
 
   const debouncedSearch = useDebounce(searchQuery, 300);
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    clientRef.current = createPromiseClient(
+    clientRef.current = createClient(
       SessionService,
       createConnectTransport({ baseUrl })
     );
@@ -177,10 +172,10 @@ export function SessionLogsTab({ sessionId, baseUrl }: SessionLogsTabProps) {
                   <tr key={i} className={styles.row}>
                     <td
                       className={styles.timestamp}
-                      title={entry.timestamp ? formatTimestamp(entry.timestamp.toDate()) : "N/A"}
+                      title={entry.timestamp ? formatTimestamp(timestampDate(entry.timestamp)) : "N/A"}
                     >
                       {entry.timestamp
-                        ? formatRelativeTime(entry.timestamp.toDate().getTime())
+                        ? formatRelativeTime(timestampDate(entry.timestamp).getTime())
                         : "N/A"}
                     </td>
                     <td className={`${styles.level} ${getLevelClass(entry.level)}`}>

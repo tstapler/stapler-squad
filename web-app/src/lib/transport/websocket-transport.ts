@@ -1,12 +1,11 @@
 "use client";
 
-import {
-  AnyMessage,
-  Message,
-  MethodInfo,
-  MethodKind,
-  PartialMessage,
-  ServiceType,
+import type {
+  DescMessage,
+  DescMethodUnary,
+  DescMethodStreaming,
+  MessageShape,
+  MessageInitShape,
 } from "@bufbuild/protobuf";
 import type {
   ContextValues,
@@ -16,7 +15,7 @@ import type {
   UnaryResponse,
 } from "@connectrpc/connect";
 import { Code, ConnectError, createContextValues } from "@connectrpc/connect";
-import { ConnectTransportOptions } from "@connectrpc/connect-web";
+import type { ConnectTransportOptions } from "@connectrpc/connect-web";
 import {
   compressedFlag,
   createClientMethodSerializers,
@@ -29,7 +28,6 @@ import {
   endStreamFlag,
   endStreamFromJson,
   requestHeader,
-  validateResponse,
 } from "@connectrpc/connect/protocol-connect";
 import { connect } from "it-ws/client";
 
@@ -66,16 +64,12 @@ export function createWebsocketBasedTransport(
 ): Transport {
   return {
     // Use standard fetch for unary calls
-    async unary<
-      I extends Message<I> = AnyMessage,
-      O extends Message<O> = AnyMessage
-    >(
-      service: ServiceType,
-      method: MethodInfo<I, O>,
+    async unary<I extends DescMessage, O extends DescMessage>(
+      method: DescMethodUnary<I, O>,
       signal: AbortSignal | undefined,
       timeoutMs: number | undefined,
-      header: Headers,
-      message: PartialMessage<I>,
+      header: HeadersInit | undefined,
+      input: MessageInitShape<I>,
       contextValues?: ContextValues
     ): Promise<UnaryResponse<I, O>> {
       const useBinaryFormat = opt.useBinaryFormat ?? true;
@@ -90,30 +84,27 @@ export function createWebsocketBasedTransport(
         signal,
         interceptors: opt.interceptors,
         req: {
-          stream: false,
-          service,
+          stream: false as const,
+          service: method.parent,
           method,
-          url: createMethodUrl(opt.baseUrl, service, method),
-          init: {
-            method: "POST",
-            mode: "cors",
-          },
+          url: createMethodUrl(opt.baseUrl, method),
+          requestMethod: "POST",
           header: requestHeader(
-            MethodKind.Unary,
+            method.methodKind,
             useBinaryFormat,
             timeoutMs,
             header,
             false
           ),
           contextValues: contextValues ?? createContextValues(),
-          message,
+          message: input,
         },
         next: async (
           req: UnaryRequest<I, O>
         ): Promise<UnaryResponse<I, O>> => {
           const response = await fetch(req.url, {
-            method: req.init.method ?? "POST",
-            mode: req.init.mode as RequestMode,
+            method: "POST",
+            mode: "cors",
             headers: req.header,
             body: serialize(req.message) as BodyInit, // Uint8Array is valid BodyInit
             signal: req.signal,
@@ -133,11 +124,11 @@ export function createWebsocketBasedTransport(
           const message = parse(bodyBytes);
 
           return {
-            stream: false,
+            stream: false as const,
             header: response.headers,
             message,
             trailer,
-            service,
+            service: method.parent,
             method,
           } satisfies UnaryResponse<I, O>;
         },
@@ -145,16 +136,12 @@ export function createWebsocketBasedTransport(
     },
 
     // Use WebSocket for streaming calls
-    async stream<
-      I extends Message<I> = AnyMessage,
-      O extends Message<O> = AnyMessage
-    >(
-      service: ServiceType,
-      method: MethodInfo<I, O>,
+    async stream<I extends DescMessage, O extends DescMessage>(
+      method: DescMethodStreaming<I, O>,
       signal: AbortSignal | undefined,
       timeoutMs: number | undefined,
-      header: Headers | undefined,
-      input: AsyncIterable<PartialMessage<I>>,
+      header: HeadersInit | undefined,
+      input: AsyncIterable<MessageInitShape<I>>,
       contextValues?: ContextValues
     ): Promise<StreamResponse<I, O>> {
       const useBinaryFormat = opt.useBinaryFormat ?? true;
@@ -219,7 +206,7 @@ export function createWebsocketBasedTransport(
       // For server streaming: send single request message
       // For bidirectional streaming: send initial request, then stream via WebSocket
       async function createRequestBody(
-        input: AsyncIterable<I>
+        input: AsyncIterable<MessageShape<I>>
       ): Promise<Uint8Array> {
         const r = await input[Symbol.asyncIterator]().next();
         if (r.done === true) {
@@ -241,18 +228,13 @@ export function createWebsocketBasedTransport(
         timeoutMs,
         signal,
         req: {
-          stream: true,
-          service,
+          stream: true as const,
+          service: method.parent,
           method,
-          url: createMethodUrl(opt.baseUrl, service, method),
-          init: {
-            method: "POST",
-            credentials: opt.credentials ?? "same-origin",
-            redirect: "error",
-            mode: "cors",
-          },
+          url: createMethodUrl(opt.baseUrl, method),
+          requestMethod: "POST",
           header: requestHeader(
-            method.kind,
+            method.methodKind,
             useBinaryFormat,
             timeoutMs,
             header,
@@ -287,7 +269,7 @@ export function createWebsocketBasedTransport(
           (async () => {
             try {
               for await (const msg of req.message) {
-                const serialized = serialize(msg);
+                const serialized = serialize(msg as MessageShape<I>);
                 if (isDebugEnabled()) {
                   console.log(`[WebSocket] Sending message:`, {
                     sessionId: (msg as any).sessionId,

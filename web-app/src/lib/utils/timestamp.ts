@@ -1,4 +1,4 @@
-import type { Timestamp } from "@bufbuild/protobuf";
+import type { Timestamp } from "@bufbuild/protobuf/wkt";
 
 export type DateFilter = "all" | "today" | "week" | "month";
 

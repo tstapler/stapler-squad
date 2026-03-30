@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import styles from "./DiffViewer.module.css";
 
 interface DiffViewerProps {
@@ -143,7 +143,7 @@ export function DiffViewer({ sessionId, baseUrl }: DiffViewerProps) {
       setError(null);
 
       try {
-        const client = createPromiseClient(
+        const client = createClient(
           SessionService,
           createConnectTransport({ baseUrl })
         );
