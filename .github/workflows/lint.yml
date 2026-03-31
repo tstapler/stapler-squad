@@ -48,3 +48,4 @@ jobs:
             gofmt -d .
             exit 1
           fi
+# Trigger CI
