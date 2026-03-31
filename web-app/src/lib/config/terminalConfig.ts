@@ -44,6 +44,11 @@ export interface TerminalConfig {
    * Enable cursor blinking
    */
   cursorBlink: boolean;
+
+  /**
+   * Mouse event tracking mode
+   */
+  mouseTracking: "none" | "x10" | "vt200" | "drag" | "any";
 }
 
 /**
@@ -58,6 +63,7 @@ export const DEFAULT_TERMINAL_CONFIG: TerminalConfig = {
   enableBell: false,
   cursorStyle: "block",
   cursorBlink: true,
+  mouseTracking: "none",
 };
 
 /**

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { detect, InputType, INPUT_TYPE_INFO, DetectionResult } from "@/lib/omnibar";
+import { PROGRAMS } from "@/lib/constants/programs";
 import styles from "./Omnibar.module.css";
 
 interface OmnibarProps {
@@ -404,11 +405,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession }: OmnibarProps) {
                     value={program}
                     onChange={(e) => setProgram(e.target.value)}
                   >
-                    <option value="claude">Claude Code</option>
-                    <option value="aider">Aider</option>
-                    <option value="aider --model ollama_chat/gemma3:1b">
-                      Aider (Ollama Gemma 1B)
-                    </option>
+                    {PROGRAMS.map((p) => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
                   </select>
                 </div>
 

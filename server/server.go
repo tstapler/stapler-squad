@@ -1,6 +1,11 @@
 package server
 
 import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
@@ -8,11 +13,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/web"
-	"context"
-	"crypto/tls"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"os"
@@ -26,13 +26,14 @@ import (
 
 // Server manages the HTTP server with ConnectRPC handlers.
 type Server struct {
-	addr      string
-	httpServer *http.Server
-	mux        *http.ServeMux
-	tlsConfig  *tls.Config          // non-nil when TLS is enabled
+	addr           string
+	httpServer     *http.Server
+	mux            *http.ServeMux
+	tlsConfig      *tls.Config                     // non-nil when TLS is enabled
 	authMiddleware func(http.Handler) http.Handler // nil when auth is disabled
-	httpsURL   string               // set when remote access is enabled
-	hostnames  []string             // detected LAN hostnames
+	httpsURL       string                          // set when remote access is enabled
+	hostnames      []string                        // detected LAN hostnames
+	origins        []string                        // allowed CORS origins
 }
 
 // NewServer creates a new HTTP server instance with SessionService registered.
@@ -48,6 +49,7 @@ type Server struct {
 //  7. ReactiveQueueMgr    — depends on ReviewQueue, Poller, EventBus, StatusManager, Storage
 //  8. ScrollbackManager   — independent; depends only on filesystem paths
 //  9. TmuxStreamerManager — independent
+//
 // 11. ExternalDiscovery   — depends on Storage, ReviewQueue, StatusManager, Poller (via callbacks)
 // 12. ExternalApprovalMonitor — depends on ExternalDiscovery
 //
@@ -232,7 +234,7 @@ func (s *Server) Start(ctx context.Context) error {
 		inner = s.authMiddleware(inner)
 	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORS(middleware.Compress(inner))),
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
 		"stapler-squad-http",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)
@@ -310,6 +312,16 @@ func (s *Server) GetHostnames() []string {
 	return s.hostnames
 }
 
+// SetOrigins records the allowed CORS origins.
+func (s *Server) SetOrigins(origins []string) {
+	s.origins = origins
+}
+
+// GetOrigins returns the allowed CORS origins.
+func (s *Server) GetOrigins() []string {
+	return s.origins
+}
+
 // registerServerInfoHandler registers the /api/server-info endpoint which exposes
 // the CA PEM file path and HTTPS URL for display in the settings UI.
 func (s *Server) registerServerInfoHandler() {
@@ -319,6 +331,7 @@ func (s *Server) registerServerInfoHandler() {
 			HTTPSURL   string   `json:"https_url"`
 			TLSEnabled bool     `json:"tls_enabled"`
 			Hostnames  []string `json:"hostnames"`
+			Programs   []string `json:"programs"`
 		}
 
 		configDir, err := config.GetConfigDir()
@@ -336,6 +349,7 @@ func (s *Server) registerServerInfoHandler() {
 			HTTPSURL:   s.httpsURL,
 			TLSEnabled: tlsEnabled,
 			Hostnames:  s.hostnames,
+			Programs:   config.GetAvailablePrograms(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -355,7 +369,7 @@ func (s *Server) StartRemote(ctx context.Context, remoteAddr string, tlsCfg *tls
 		inner = authMW(inner)
 	}
 	handler := otelhttp.NewHandler(
-		middleware.Logging(middleware.CORS(middleware.Compress(inner))),
+		middleware.Logging(middleware.CORSWithOrigins(s.origins)(middleware.Compress(inner))),
 		"stapler-squad-remote",
 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
 	)

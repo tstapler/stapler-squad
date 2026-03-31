@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	cmdbridge "github.com/tstapler/stapler-squad/cmd"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/daemon"
@@ -14,9 +17,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/telemetry"
-	"context"
-	"encoding/json"
-	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -188,6 +188,9 @@ var (
 			srv := server.NewServer(address)
 			srv.SetHostnames(hostnames)
 
+			localOrigin := fmt.Sprintf("http://%s", address)
+			srv.SetOrigins([]string{localOrigin})
+
 			// Start a second HTTPS server with passkey auth for remote access.
 			if remoteAccessFlag || cfg.PasskeyEnabled {
 				if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
@@ -307,7 +310,6 @@ var (
 			} else {
 				fmt.Println("✅ No key binding conflicts detected")
 			}
-
 
 			return nil
 		},
@@ -485,6 +487,76 @@ var (
 			return nil
 		},
 	}
+
+	printQRCodesCmd = &cobra.Command{
+		Use:   "print-qr-codes",
+		Short: "Generate a 1-hour setup token and print QR codes for all detected domains",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			port, _ := cmd.Flags().GetInt("remote-port")
+			rpID, _ := cmd.Flags().GetString("rp-id")
+
+			// Generate and persist a new setup token so the running server picks it up.
+			configDir, err := config.GetConfigDir()
+			if err != nil {
+				return fmt.Errorf("get config dir: %w", err)
+			}
+			setupTokenPath := filepath.Join(configDir, serverauth.SetupTokenFile)
+			mgr := serverauth.NewSetupManager()
+			token, err := mgr.GenerateToFile(setupTokenPath)
+			if err != nil {
+				return fmt.Errorf("generate setup token: %w", err)
+			}
+			fmt.Fprintf(os.Stderr, "New setup token written to %s (valid 1h)\n", setupTokenPath)
+
+			lanIP, err := getOutboundIP()
+			if err != nil {
+				lanIP = net.ParseIP("127.0.0.1")
+			}
+			lanIPStr := lanIP.String()
+
+			hostnames := resolveLANHostnames(lanIPStr)
+
+			displayHost := rpID
+			if displayHost == "" {
+				if len(hostnames) > 0 {
+					displayHost = hostnames[0]
+				} else {
+					displayHost = lanIPStr
+				}
+			}
+
+			// Collect all unique hosts to print QR codes for.
+			seen := make(map[string]bool)
+			var hosts []string
+			addHost := func(h string) {
+				if !seen[h] {
+					seen[h] = true
+					hosts = append(hosts, h)
+				}
+			}
+			addHost(displayHost)
+			for _, hn := range hostnames {
+				addHost(hn)
+			}
+			addHost(lanIPStr)
+
+			for _, host := range hosts {
+				caURL := fmt.Sprintf("https://%s:%d/auth/ca.pem", host, port)
+				setupURL := fmt.Sprintf("https://%s:%d/login?setup_token=%s", host, port, token)
+
+				fmt.Fprintf(os.Stderr, "\n══ Domain: %s ══\n", host)
+				fmt.Fprintf(os.Stderr, "\n── QR Code 1: Install CA certificate ──\n")
+				if qrErr := serverauth.PrintQRToTerminal(caURL); qrErr != nil {
+					fmt.Fprintf(os.Stderr, "QR print failed: %v\n", qrErr)
+				}
+				fmt.Fprintf(os.Stderr, "\n── QR Code 2: Register passkey (valid 1h) ──\n")
+				if qrErr := serverauth.PrintQRToTerminal(setupURL); qrErr != nil {
+					fmt.Fprintf(os.Stderr, "QR print failed: %v\n", qrErr)
+				}
+			}
+			return nil
+		},
+	}
 )
 
 func init() {
@@ -522,11 +594,15 @@ func init() {
 		panic(err)
 	}
 
+	printQRCodesCmd.Flags().Int("remote-port", 8444, "Port of the remote access HTTPS server")
+	printQRCodesCmd.Flags().String("rp-id", "", "Override hostname/IP (defaults to detected LAN hostname)")
+
 	rootCmd.AddCommand(debugCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(resetCmd)
 	rootCmd.AddCommand(testPtyCmd)
 	rootCmd.AddCommand(listSessionsCmd)
+	rootCmd.AddCommand(printQRCodesCmd)
 }
 
 // resolveLANHostnames returns a list of domain names suitable for use as a WebAuthn rpID
@@ -631,8 +707,11 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 	remoteAddr := fmt.Sprintf("0.0.0.0:%d", remotePort)
 
-	// Build SAN list for the TLS cert (include localhost, IP, and all hostnames).
-	sans := []string{"localhost", "127.0.0.1", lanIPStr}
+	// Build SAN list for the TLS cert — hostnames only.
+	// IPs are intentionally excluded: WebAuthn rpID must be a hostname, so
+	// including the LAN IP in the SANs would cause the CA to regenerate on
+	// every DHCP lease change, invalidating previously installed CA certs.
+	sans := []string{"localhost"}
 	sans = append(sans, hostnames...)
 
 	tlsPaths, err := server.EnsureTLSCerts(sans)
@@ -645,31 +724,32 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 		return fmt.Errorf("load TLS config: %w", err)
 	}
 
-	// Determine rpID: config/flag override > first detected hostname > detected LAN IP.
-	// WebAuthn spec requires a domain name; IP addresses are not accepted by browsers.
 	rpID := cfg.PasskeyRPID
-	displayHost := lanIPStr // host used in QR code URLs
 	if rpID == "" {
 		if len(hostnames) > 0 {
 			rpID = hostnames[0]
-			displayHost = hostnames[0]
 		} else {
 			rpID = lanIPStr
 		}
-	} else {
-		displayHost = rpID
+	}
+	allRPIDs := []string{rpID}
+	if len(hostnames) > 1 {
+		allRPIDs = append(allRPIDs, hostnames...)
 	}
 
-	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
-	origins := []string{origin, fmt.Sprintf("https://localhost:%d", remotePort)}
-	seen := map[string]bool{}
-	unique := origins[:0]
-	for _, o := range origins {
-		if !seen[o] {
-			seen[o] = true
-			unique = append(unique, o)
-		}
+	origins := []string{fmt.Sprintf("https://%s:%d", rpID, remotePort)}
+	for _, hn := range hostnames {
+		origins = append(origins, fmt.Sprintf("https://%s:%d", hn, remotePort))
 	}
+	origins = append(origins, fmt.Sprintf("https://localhost:%d", remotePort))
+
+	displayHost := rpID
+	if len(hostnames) > 0 {
+		displayHost = hostnames[0]
+	}
+	origin := fmt.Sprintf("https://%s:%d", displayHost, remotePort)
+
+	srv.SetOrigins(append(srv.GetOrigins(), origins...))
 
 	// Initialise auth subsystem.
 	store, err := serverauth.NewCredentialStore()
@@ -685,15 +765,19 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	sessionsPath := filepath.Join(configDir, "auth-sessions.json")
 	sessions := serverauth.NewSessionManager(sessionsPath)
 
-	waHandler, err := serverauth.NewHandler(rpID, unique, store, sessions)
+	waHandler, err := serverauth.NewHandler(allRPIDs, origins, store, sessions)
 	if err != nil {
 		return fmt.Errorf("create webauthn handler: %w", err)
 	}
 
 	setupMgr := serverauth.NewSetupManager()
 
+	// Watch the setup token file for tokens generated by print-qr-codes.
+	setupTokenPath := filepath.Join(configDir, serverauth.SetupTokenFile)
+	go setupMgr.WatchFile(ctx, setupTokenPath)
+
 	// Register auth routes on the shared mux (accessible via both servers).
-	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, tlsPaths.CAFile)
+	serverauth.RegisterRoutes(srv.Mux(), waHandler, sessions, store, setupMgr, tlsPaths.CAFile, displayHost)
 
 	// Start the remote HTTPS server with auth middleware applied.
 	if err := srv.StartRemote(ctx, remoteAddr, tlsCfg, middleware.Auth(sessions)); err != nil {

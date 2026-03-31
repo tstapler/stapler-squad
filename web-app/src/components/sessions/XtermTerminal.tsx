@@ -37,8 +37,18 @@ export interface XtermTerminalProps {
   scrollback?: number;
 
   /**
+   * Mouse tracking mode for enabling mouse event reporting
+   * 'none': No mouse tracking (default)
+   * 'x10': Send Mouse X & Y on button press
+   * 'vt200': Send Mouse X & Y on button press and release
+   * 'drag': Use Cell Motion Mouse Tracking
+   * 'any': Use All Motion Mouse Tracking
+   */
+  mouseTracking?: 'none' | 'x10' | 'vt200' | 'drag' | 'any';
+
+  /**
    * Use terminal configuration from localStorage
-   * If true, theme/fontSize/scrollback props are ignored unless explicitly provided
+   * If true, theme/fontSize/scrollback/mouseTracking props are ignored unless explicitly provided
    */
   useConfig?: boolean;
 }
@@ -64,6 +74,7 @@ export interface XtermTerminalHandle {
  * - Automatic resizing with FitAddon
  * - Clickable web links
  * - Search functionality
+ * - Mouse event reporting (drag-to-select, clicks, etc.)
  * - Professional terminal UX
  */
 export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>(({
@@ -72,6 +83,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   theme: themeProp,
   fontSize: fontSizeProp,
   scrollback: scrollbackProp,
+  mouseTracking: mouseTrackingProp,
   useConfig = false,
 }, ref) => {
   // Load configuration
@@ -81,6 +93,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const theme = themeProp ?? config?.theme ?? "dark";
   const fontSize = fontSizeProp ?? config?.fontSize ?? 14;
   const scrollback = scrollbackProp ?? config?.scrollbackLines ?? 0;
+  const mouseTracking = mouseTrackingProp ?? config?.mouseTracking ?? 'none';
   const fontFamily = config?.fontFamily ?? 'Menlo, Monaco, "Courier New", monospace';
   const cursorStyle = config?.cursorStyle ?? "block";
   const cursorBlink = config?.cursorBlink ?? true;
@@ -120,7 +133,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       scrollback,
       allowProposedApi: true, // Required for some addons
       rightClickSelectsWord: true, // Right-click selects the word under cursor
-    });
+      mouseTracking // Enable mouse event reporting (proposed API)
+    } as any);
 
     // Create and load addons
     const fitAddon = new FitAddon();
