@@ -5,6 +5,7 @@ linters:
     - nilnil
     - staticcheck
     - govet
+    - typecheck
 
 linters-settings:
   forbidigo:
@@ -23,3 +24,6 @@ issues:
     # Allow fmt.Print* in cmd/ subdirectories (CLI output)
     - path: "^cmd/"
       linters: [forbidigo]
+    # Ignore embed errors - dist folder not present during lint (built in separate job)
+    - path: "server/web/embed\\.go"
+      text: "no matching files found"
