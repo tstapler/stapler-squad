@@ -9,9 +9,7 @@ require (
 	github.com/atotto/clipboard v0.1.4
 	github.com/bufbuild/buf v1.57.2
 	github.com/bufbuild/connect-go v1.10.0
-	github.com/charmbracelet/bubbles v0.20.0
 	github.com/charmbracelet/bubbletea v1.3.5
-	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/charmbracelet/x/exp/teatest v0.0.0-20250922100529-c9afca5d6f21
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.9.0
@@ -22,11 +20,6 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/mattn/go-sqlite3 v1.14.32
-	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6
-	github.com/muesli/reflow v0.3.0
-	github.com/muesli/termenv v0.16.0
-	github.com/sahilm/fuzzy v0.1.1
-	github.com/schollz/closestmatch v2.1.0+incompatible
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
@@ -38,6 +31,12 @@ require (
 	google.golang.org/protobuf v1.36.10
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
+)
+
+require (
+	github.com/charmbracelet/lipgloss v1.1.0 // indirect
+	github.com/muesli/ansi v0.0.0-20230316100256-276c6243b2f6 // indirect
+	github.com/muesli/termenv v0.16.0 // indirect
 )
 
 require (
@@ -168,7 +167,7 @@ require (
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.27.0
+	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.49.0 // indirect
 	golang.org/x/exp v0.0.0-20250819193227-8b4c13bb791b // indirect
 	golang.org/x/mod v0.33.0 // indirect
