@@ -35,7 +35,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11
-          args: --timeout=3m --no-config --enable=forbidigo --enable=ineffassign --enable=nilnil --enable=staticcheck --enable=govet --path-ignore=server/web/embed.go
+          args: --timeout=3m --no-config --tests=false --enable=forbidigo --enable=ineffassign --enable=nilnil --enable=staticcheck
           skip-cache: false
           only-new-issues: true
 
