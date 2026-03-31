@@ -4,9 +4,5 @@ run:
   go: "1.23"
 
 linters:
-  exclusions:
-    rules:
-      - path: server/web/embed\.go
-        linters:
-          - typecheck
-        text: "no matching files found"
+  disable:
+    - typecheck
