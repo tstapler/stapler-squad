@@ -32,4 +32,5 @@ issues:
     - path: "session/ent/schema"
       text: "\\.Type undefined"
     # Ignore Go version mismatch errors (CI uses different Go version)
-    - text: "unsupported version: 2"
+    - path: ".*"
+      text: "unsupported version: 2"
