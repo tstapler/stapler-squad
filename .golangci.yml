@@ -2,7 +2,3 @@ version: "2"
 
 run:
   go: "1.23"
-
-linters:
-  disable:
-    - typecheck
