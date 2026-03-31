@@ -32,7 +32,7 @@ jobs:
           cache: false
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.1
           args: --timeout=3m --out-format=line-number --fast --max-issues-per-linter=0 --max-same-issues=0
