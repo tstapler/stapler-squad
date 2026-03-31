@@ -1120,11 +1120,11 @@ func SeedRules() []Rule {
 			Name:     "Allow Node.js runtime and TypeScript tools",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"node", "tsc", "ts-node", "tsx"},
+				Programs: []string{"node", "ts-node", "tsx"},
 			},
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
-			Reason:    "Node.js runtime and TypeScript compiler for project code.",
+			Reason:    "Node.js runtime and TypeScript execution tools for project code.",
 			Priority:  100,
 			Enabled:   true,
 			Source:    "seed",
@@ -1154,6 +1154,40 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Make is a standard build tool for running project tasks.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// opa fmt --diff shows formatting diffs without writing; opa test runs policy tests.
+			// opa eval/run/exec are excluded (can evaluate arbitrary policies against data).
+			ID:       "seed-allow-bash-opa",
+			Name:     "Allow OPA format check and test",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"opa"},
+				Subcommands: []string{"fmt", "test", "check"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "OPA fmt/test/check are read-only policy validation operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// tsc --noEmit is the standard type-checking invocation; tsc with output flags
+			// (--outDir, --outFile, -p) compiles and writes files — those escalate by default.
+			ID:       "seed-allow-bash-tsc",
+			Name:     "Allow TypeScript compiler (type-check only)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:       []string{"tsc"},
+				ForbiddenFlags: []string{"--outDir", "--outFile", "--declaration", "--declarationDir"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "tsc without output flags runs type-checking only (no file writes).",
 			Priority:  100,
 			Enabled:   true,
 			Source:    "seed",
