@@ -8,9 +8,6 @@ linters:
   disable:
     - typecheck
 
-run:
-  go: "1.23"
-
 linters-settings:
   forbidigo:
     forbid:
