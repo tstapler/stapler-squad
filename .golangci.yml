@@ -10,5 +10,18 @@ linters:
     - nilnil
     - staticcheck
     - govet
+  settings:
+    forbidigo:
+      forbid:
+        - pattern: ^fmt\.Print(f|ln)?$
+          msg: "use the log package instead of fmt.Print* in production code"
+      exclude-godoc-examples: true
 
 issues:
+  exclude-rules:
+    - path: "main\\.go"
+      linters: [forbidigo]
+    - path: "_test\\.go"
+      linters: [forbidigo]
+    - path: "^cmd/"
+      linters: [forbidigo]
