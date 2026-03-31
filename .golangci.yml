@@ -7,8 +7,6 @@ linters:
     - nilnil
     - staticcheck
     - govet
-  disable:
-    - typecheck
 
 linters-settings:
   forbidigo:
