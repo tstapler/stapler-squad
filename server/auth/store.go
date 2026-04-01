@@ -31,9 +31,9 @@ type credentialData struct {
 
 // storedCredential is a JSON-serialisable wrapper around webauthn.Credential.
 type storedCredential struct {
-	ID              []byte                `json:"id"`
-	PublicKey       []byte                `json:"public_key"`
-	AttestationType string                `json:"attestation_type"`
+	ID              []byte                 `json:"id"`
+	PublicKey       []byte                 `json:"public_key"`
+	AttestationType string                 `json:"attestation_type"`
 	Authenticator   webauthn.Authenticator `json:"authenticator"`
 }
 

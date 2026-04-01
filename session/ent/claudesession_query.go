@@ -3,13 +3,13 @@
 package ent
 
 import (
+	"context"
+	"database/sql/driver"
+	"fmt"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/session"
-	"context"
-	"database/sql/driver"
-	"fmt"
 	"math"
 
 	"entgo.io/ent"

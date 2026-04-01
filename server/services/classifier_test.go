@@ -1205,8 +1205,8 @@ func TestClassify_MvnSafe_AutoAllow(t *testing.T) {
 
 func TestCategorizeToolName(t *testing.T) {
 	cases := []struct {
-		name     string
-		wantCat  string
+		name    string
+		wantCat string
 	}{
 		// Built-in file / search tools
 		{"Bash", ToolCategoryBuiltin},

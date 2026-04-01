@@ -106,8 +106,8 @@ func GenerateHooksFile(meta *HooksMetadata) (string, error) {
 				Matcher: HookMatcher{Event: "PermissionRequest"},
 				Hooks: []HookCommand{
 					{
-						Type: "http",
-						URL:  "http://localhost:8543/api/hooks/permission-request",
+						Type:    "http",
+						URL:     "http://localhost:8543/api/hooks/permission-request",
 						Timeout: 300,
 						Headers: map[string]string{
 							"X-CS-Session-ID": meta.TmuxSession,

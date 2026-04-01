@@ -1,10 +1,10 @@
 package notifications
 
 import (
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/events"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
 	"sync"
 	"time"
 )

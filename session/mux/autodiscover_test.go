@@ -40,15 +40,15 @@ func TestIsClaudeMuxSocket(t *testing.T) {
 		{"/tmp/other-file.sock", false},
 		{"/tmp/claude-mux.sock", false}, // Missing PID
 		{"/tmp/claude-mux-12345.txt", false},
-		{"claude-mux-12345.sock", true},                // Base name only
-		{"/var/run/claude-mux-789.sock", true},         // Different directory
-		{"/tmp/CLAUDE-MUX-12345.sock", false},          // Case sensitive
-		{"/tmp/claude-mux-12345.sock.old", false},      // Extra extension
-		{"/tmp/.claude-mux-12345.sock", false},         // Hidden file
-		{"/tmp/my-claude-mux-12345.sock", false},       // Prefix mismatch
-		{"/tmp/claude-mux-12345.sock.backup", false},   // Suffix
-		{"/tmp/claude-mux-abc.sock", true},             // Non-numeric OK
-		{"/tmp/claude-mux-.sock", true},                // Empty PID OK
+		{"claude-mux-12345.sock", true},              // Base name only
+		{"/var/run/claude-mux-789.sock", true},       // Different directory
+		{"/tmp/CLAUDE-MUX-12345.sock", false},        // Case sensitive
+		{"/tmp/claude-mux-12345.sock.old", false},    // Extra extension
+		{"/tmp/.claude-mux-12345.sock", false},       // Hidden file
+		{"/tmp/my-claude-mux-12345.sock", false},     // Prefix mismatch
+		{"/tmp/claude-mux-12345.sock.backup", false}, // Suffix
+		{"/tmp/claude-mux-abc.sock", true},           // Non-numeric OK
+		{"/tmp/claude-mux-.sock", true},              // Empty PID OK
 	}
 
 	for _, tt := range tests {

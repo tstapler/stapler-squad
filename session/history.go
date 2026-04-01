@@ -76,11 +76,11 @@ func NewClaudeSessionHistoryFromClaudeDir() (*ClaudeSessionHistory, error) {
 
 // conversationMessage represents a single message in a Claude conversation file
 type conversationMessage struct {
-	Type      string    `json:"type"`
-	UUID      string    `json:"uuid"`
-	SessionID string    `json:"sessionId"`
-	Timestamp string    `json:"timestamp"`
-	CWD       string    `json:"cwd"`
+	Type      string `json:"type"`
+	UUID      string `json:"uuid"`
+	SessionID string `json:"sessionId"`
+	Timestamp string `json:"timestamp"`
+	CWD       string `json:"cwd"`
 	Message   struct {
 		Role    string      `json:"role"`
 		Model   string      `json:"model,omitempty"`
@@ -229,7 +229,7 @@ func (sh *ClaudeSessionHistory) parseConversationFile(filePath string) (*ClaudeH
 			line := scanner.Bytes()
 			// Quick heuristic: lines with "type":"user" or "type":"assistant"
 			if strings.Contains(string(line), `"type":"user"`) ||
-			   strings.Contains(string(line), `"type":"assistant"`) {
+				strings.Contains(string(line), `"type":"assistant"`) {
 				remainingCount++
 
 				// Update lastTimestamp from last few messages

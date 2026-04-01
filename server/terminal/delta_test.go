@@ -187,7 +187,7 @@ func TestDeltaGenerator_PeriodicFullSync(t *testing.T) {
 
 	// Generate many deltas to trigger periodic sync
 	for i := 0; i < 60; i++ {
-		output := "Content change " + string(rune('0' + (i % 10)))
+		output := "Content change " + string(rune('0'+(i%10)))
 		delta := dg.GenerateDelta([]byte(output))
 
 		if i < 49 {
@@ -270,7 +270,7 @@ func TestDeltaGenerator_ThreadSafety(t *testing.T) {
 	// Goroutine 1: Generate deltas
 	go func() {
 		for i := 0; i < 100; i++ {
-			output := "Content " + string(rune('0' + (i % 10)))
+			output := "Content " + string(rune('0'+(i%10)))
 			delta := dg.GenerateDelta([]byte(output))
 			if delta == nil {
 				t.Errorf("GenerateDelta returned nil in goroutine")

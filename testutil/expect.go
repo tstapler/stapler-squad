@@ -164,10 +164,10 @@ func (s *TUISession) WaitForPrompt(timeout time.Duration) error {
 
 	// Common prompt patterns
 	patterns := []string{
-		"Press",      // "Press ? for help"
-		"›",          // Selection indicator
-		"sessions",   // Main view
-		"[",          // Key hints like "[n] new"
+		"Press",    // "Press ? for help"
+		"›",        // Selection indicator
+		"sessions", // Main view
+		"[",        // Key hints like "[n] new"
 	}
 
 	for _, pattern := range patterns {

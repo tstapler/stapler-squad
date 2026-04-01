@@ -1,8 +1,8 @@
 package session
 
 import (
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"fmt"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"regexp"
 	"strconv"
 	"strings"

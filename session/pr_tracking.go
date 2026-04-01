@@ -1,9 +1,9 @@
 package session
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
-	"fmt"
 )
 
 // PR Tracking Methods for Instance

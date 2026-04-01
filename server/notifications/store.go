@@ -1,9 +1,9 @@
 package notifications
 
 import (
-	"github.com/tstapler/stapler-squad/log"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -40,10 +40,10 @@ type NotificationRecord struct {
 	ReadAt           *time.Time        `json:"read_at,omitempty"`
 	// OccurrenceCount tracks how many deduplicated occurrences this record represents.
 	// A value of 0 (zero-value from old JSON) should be treated as 1 by consumers.
-	OccurrenceCount int        `json:"occurrence_count,omitempty"`
+	OccurrenceCount int `json:"occurrence_count,omitempty"`
 	// LastOccurredAt is the timestamp of the most recent occurrence. May differ from
 	// CreatedAt which tracks the first occurrence.
-	LastOccurredAt  *time.Time `json:"last_occurred_at,omitempty"`
+	LastOccurredAt *time.Time `json:"last_occurred_at,omitempty"`
 }
 
 // notificationsFile is the JSON file format for persisted notifications.

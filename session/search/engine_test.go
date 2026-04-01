@@ -198,8 +198,8 @@ func TestSearchEngine_Search_Ranking(t *testing.T) {
 	engine := NewSearchEngine()
 
 	// Add messages with different term frequencies
-	engine.IndexMessage("session-1", 0, "user", "docker", time.Now())                           // 1 occurrence
-	engine.IndexMessage("session-1", 1, "assistant", "docker docker docker", time.Now())        // 3 occurrences
+	engine.IndexMessage("session-1", 0, "user", "docker", time.Now())                    // 1 occurrence
+	engine.IndexMessage("session-1", 1, "assistant", "docker docker docker", time.Now()) // 3 occurrences
 
 	results, err := engine.Search("docker", SearchOptions{})
 	if err != nil {

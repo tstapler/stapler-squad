@@ -15,9 +15,9 @@ const (
 	AttrSessionCategory = "session.category"
 
 	// History attributes
-	AttrHistoryProject     = "history.project"
-	AttrHistorySessionID   = "history.session_id"
-	AttrHistoryEntryCount  = "history.entry_count"
+	AttrHistoryProject      = "history.project"
+	AttrHistorySessionID    = "history.session_id"
+	AttrHistoryEntryCount   = "history.entry_count"
 	AttrHistoryMessageCount = "history.message_count"
 
 	// Search attributes
@@ -27,8 +27,8 @@ const (
 	AttrSearchIndexSize   = "search.index_size"
 
 	// Storage attributes
-	AttrStorageOperation = "storage.operation"
-	AttrStorageCount     = "storage.count"
+	AttrStorageOperation  = "storage.operation"
+	AttrStorageCount      = "storage.count"
 	AttrStorageDurationMs = "storage.duration_ms"
 
 	// Database attributes (SQLite)

@@ -45,11 +45,11 @@ func Auth(validator AuthValidator) func(http.Handler) http.Handler {
 
 // isExempt returns true for paths that must be accessible before login.
 var exemptPrefixes = []string{
-	"/auth/",    // all auth endpoints
-	"/login",    // login page and assets
-	"/health",   // health check
-	"/_next/",   // Next.js build assets
-	"/favicon",  // browser tab icon
+	"/auth/",   // all auth endpoints
+	"/login",   // login page and assets
+	"/health",  // health check
+	"/_next/",  // Next.js build assets
+	"/favicon", // browser tab icon
 }
 
 func isExempt(path string) bool {

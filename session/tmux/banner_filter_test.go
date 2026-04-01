@@ -150,9 +150,9 @@ func TestBannerFilter_HasMeaningfulContent(t *testing.T) {
 	filter := NewBannerFilter()
 
 	tests := []struct {
-		name        string
-		text        string
-		hasMeaning  bool
+		name       string
+		text       string
+		hasMeaning bool
 	}{
 		{
 			name:       "empty text",

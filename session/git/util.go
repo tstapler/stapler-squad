@@ -1,8 +1,8 @@
 package git
 
 import (
-	"github.com/tstapler/stapler-squad/log"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
 	"path/filepath"

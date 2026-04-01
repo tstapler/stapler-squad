@@ -26,7 +26,7 @@ func TestRecordDemo(t *testing.T) {
 	srv := StartDemoServer(t)
 	defer srv.Stop()
 
-	if err := srv.WaitForHealth(30*time.Second); err != nil {
+	if err := srv.WaitForHealth(30 * time.Second); err != nil {
 		t.Fatalf("server health check failed: %v", err)
 	}
 

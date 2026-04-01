@@ -1,10 +1,10 @@
 package queue
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/git"
-	"fmt"
 	"sort"
 	"sync"
 	"time"

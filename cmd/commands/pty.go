@@ -1,9 +1,9 @@
 package commands
 
 import (
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tstapler/stapler-squad/cmd/interfaces"
 	"github.com/tstapler/stapler-squad/log"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // PTYHandlers contains handlers for PTY management commands

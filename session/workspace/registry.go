@@ -68,9 +68,9 @@ type WorkspaceRegistry struct {
 
 	// In-memory state (protected by mu)
 	mu           sync.RWMutex
-	workspaces   map[string]*TrackedWorkspace  // keyed by absolute path
-	byRepository map[string][]string           // repo root -> workspace paths
-	statusCache  map[string]*cachedStatus      // path -> cached status
+	workspaces   map[string]*TrackedWorkspace // keyed by absolute path
+	byRepository map[string][]string          // repo root -> workspace paths
+	statusCache  map[string]*cachedStatus     // path -> cached status
 
 	// Distributed coordination
 	distLock DistributedLock

@@ -1,4 +1,5 @@
 // Example usage of AutoDiscovery - not included in build
+//go:build ignore
 // +build ignore
 
 package main

@@ -9,31 +9,31 @@ import (
 type EscapeCategory string
 
 const (
-	CategoryCSI       EscapeCategory = "CSI"       // Control Sequence Introducer \x1b[
-	CategoryOSC       EscapeCategory = "OSC"       // Operating System Command \x1b]
-	CategoryDCS       EscapeCategory = "DCS"       // Device Control String \x1bP
-	CategoryPM        EscapeCategory = "PM"        // Privacy Message \x1b^
-	CategoryAPC       EscapeCategory = "APC"       // Application Program Command \x1b_
-	CategorySOS       EscapeCategory = "SOS"       // Start of String \x1bX
-	CategoryC1        EscapeCategory = "C1"        // C1 control codes
-	CategorySimple    EscapeCategory = "Simple"    // Simple 2-char escapes
-	CategoryDECPriv   EscapeCategory = "DECPriv"   // DEC Private modes \x1b[?
-	CategorySGR       EscapeCategory = "SGR"       // Select Graphic Rendition (colors/styles)
-	CategoryCursor    EscapeCategory = "Cursor"    // Cursor positioning
-	CategoryErase     EscapeCategory = "Erase"     // Screen/line erase
-	CategoryScroll    EscapeCategory = "Scroll"    // Scroll region
-	CategoryCharset   EscapeCategory = "Charset"   // Character set selection
-	CategoryUnknown   EscapeCategory = "Unknown"   // Unknown sequence
+	CategoryCSI     EscapeCategory = "CSI"     // Control Sequence Introducer \x1b[
+	CategoryOSC     EscapeCategory = "OSC"     // Operating System Command \x1b]
+	CategoryDCS     EscapeCategory = "DCS"     // Device Control String \x1bP
+	CategoryPM      EscapeCategory = "PM"      // Privacy Message \x1b^
+	CategoryAPC     EscapeCategory = "APC"     // Application Program Command \x1b_
+	CategorySOS     EscapeCategory = "SOS"     // Start of String \x1bX
+	CategoryC1      EscapeCategory = "C1"      // C1 control codes
+	CategorySimple  EscapeCategory = "Simple"  // Simple 2-char escapes
+	CategoryDECPriv EscapeCategory = "DECPriv" // DEC Private modes \x1b[?
+	CategorySGR     EscapeCategory = "SGR"     // Select Graphic Rendition (colors/styles)
+	CategoryCursor  EscapeCategory = "Cursor"  // Cursor positioning
+	CategoryErase   EscapeCategory = "Erase"   // Screen/line erase
+	CategoryScroll  EscapeCategory = "Scroll"  // Scroll region
+	CategoryCharset EscapeCategory = "Charset" // Character set selection
+	CategoryUnknown EscapeCategory = "Unknown" // Unknown sequence
 )
 
 // ParsedEscapeCode represents a single parsed escape sequence
 type ParsedEscapeCode struct {
-	RawBytes     []byte         // Original bytes
-	HexEncoded   string         // Hex representation for display
-	Category     EscapeCategory // Type of sequence
-	Description  string         // Human-readable description
-	StartOffset  int            // Position in original data
-	EndOffset    int            // End position in original data
+	RawBytes    []byte         // Original bytes
+	HexEncoded  string         // Hex representation for display
+	Category    EscapeCategory // Type of sequence
+	Description string         // Human-readable description
+	StartOffset int            // Position in original data
+	EndOffset   int            // End position in original data
 }
 
 // EscapeCodeParser extracts escape sequences from terminal output

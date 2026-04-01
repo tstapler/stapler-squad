@@ -43,9 +43,9 @@ func NewSearchService(
 	historyCacheTTL time.Duration,
 ) *SearchService {
 	return &SearchService{
-		searchEngine:    searchEngine,
+		searchEngine:     searchEngine,
 		snippetGenerator: snippetGenerator,
-		historyCacheTTL: historyCacheTTL,
+		historyCacheTTL:  historyCacheTTL,
 	}
 }
 

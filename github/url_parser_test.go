@@ -6,14 +6,14 @@ import (
 
 func TestParseGitHubRef(t *testing.T) {
 	tests := []struct {
-		name      string
-		input     string
-		wantType  RefType
-		wantOwner string
-		wantRepo  string
-		wantPR    int
+		name       string
+		input      string
+		wantType   RefType
+		wantOwner  string
+		wantRepo   string
+		wantPR     int
 		wantBranch string
-		wantErr   bool
+		wantErr    bool
 	}{
 		// PR URLs
 		{

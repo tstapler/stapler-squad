@@ -1,10 +1,10 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"os"
 	"sync"
 	"time"

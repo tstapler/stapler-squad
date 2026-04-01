@@ -13,8 +13,8 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 
-	_ "github.com/mattn/go-sqlite3" // SQLite driver for session counting
 	"connectrpc.com/connect"
+	_ "github.com/mattn/go-sqlite3" // SQLite driver for session counting
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

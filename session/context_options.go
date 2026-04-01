@@ -108,11 +108,11 @@ var ContextForSearch = ContextOptions{
 // Focused on git context and change indicators.
 // Memory usage: ~3-5 KB per session
 var ContextForReviewQueue = ContextOptions{
-	LoadGit:       true,  // For branch and commit info
-	LoadActivity:  true,  // For queue prioritization
-	LoadWorktree:  true,  // For diff context
-	LoadDiffStats: true,  // For change indicators
-	LoadTags:      true,  // For filtering
+	LoadGit:       true, // For branch and commit info
+	LoadActivity:  true, // For queue prioritization
+	LoadWorktree:  true, // For diff context
+	LoadDiffStats: true, // For change indicators
+	LoadTags:      true, // For filtering
 }
 
 // AnyContextLoaded returns true if any context is configured to load.

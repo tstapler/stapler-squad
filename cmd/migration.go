@@ -1,14 +1,14 @@
 package cmd
 
 import (
+	"fmt"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tstapler/stapler-squad/cmd/commands"
 	"github.com/tstapler/stapler-squad/cmd/interfaces"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
-	"fmt"
 	"strings"
 	"sync"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Bridge provides compatibility between old and new command systems

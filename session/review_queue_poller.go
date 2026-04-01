@@ -1,10 +1,10 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"strings"
 	"sync"
 	"time"
@@ -23,8 +23,8 @@ func DefaultReviewQueuePollerConfig() ReviewQueuePollerConfig {
 	return ReviewQueuePollerConfig{
 		PollInterval:       2 * time.Second, // Poll every 2 seconds for immediate detection
 		IdleThreshold:      5 * time.Second, // Add to queue after 5s idle for immediate user notifications
-		InputWaitDuration:  3 * time.Second,  // Flag if waiting for input > 3s (reduced from 5s)
-		StalenessThreshold: 2 * time.Minute,  // Flag if no meaningful output for 2 minutes (reduced from 5min)
+		InputWaitDuration:  3 * time.Second, // Flag if waiting for input > 3s (reduced from 5s)
+		StalenessThreshold: 2 * time.Minute, // Flag if no meaningful output for 2 minutes (reduced from 5min)
 	}
 }
 
@@ -815,12 +815,12 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		}
 
 		item := &ReviewItem{
-			SessionID:    inst.Title,
-			SessionName:  inst.Title,
-			Reason:       reason,
-			Priority:     priority,
-			DetectedAt:   detectedAt,
-			Context:      context,
+			SessionID:   inst.Title,
+			SessionName: inst.Title,
+			Reason:      reason,
+			Priority:    priority,
+			DetectedAt:  detectedAt,
+			Context:     context,
 			// Populate session details for rich display
 			Program:      inst.Program,
 			Branch:       inst.Branch,

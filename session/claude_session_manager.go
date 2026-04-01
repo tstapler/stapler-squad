@@ -1,9 +1,9 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/log"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"path/filepath"
 	"strings"

@@ -3,8 +3,8 @@ package tmux
 import (
 	"bufio"
 	"bytes"
-	"github.com/tstapler/stapler-squad/log"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"strconv"
 	"strings"
@@ -140,9 +140,10 @@ func (t *TmuxSession) StopControlMode() error {
 
 // readControlModeOutput reads and parses control mode notifications from tmux.
 // This runs in a goroutine and processes lines like:
-//   %output %0 hello world
-//   %session-changed $13 session-name
-//   %exit
+//
+//	%output %0 hello world
+//	%session-changed $13 session-name
+//	%exit
 func (t *TmuxSession) readControlModeOutput() {
 	doneCh := t.controlModeDone // capture before StopControlMode can nil it
 	scanner := bufio.NewScanner(t.controlModeStdout)
@@ -203,11 +204,12 @@ func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
 
 // processControlModeLine parses and handles a single control mode notification line.
 // Control mode lines start with % and follow specific formats:
-//   %output %PANE_ID DATA     - Terminal output from pane
-//   %begin TIME MSGID FLAGS   - Begin command response
-//   %end TIME MSGID FLAGS     - End command response
-//   %error ERROR_MESSAGE      - Error notification
-//   %exit                     - Session closed
+//
+//	%output %PANE_ID DATA     - Terminal output from pane
+//	%begin TIME MSGID FLAGS   - Begin command response
+//	%end TIME MSGID FLAGS     - End command response
+//	%error ERROR_MESSAGE      - Error notification
+//	%exit                     - Session closed
 func (t *TmuxSession) processControlModeLine(line string) {
 	// Skip empty lines
 	if line == "" {

@@ -19,11 +19,11 @@ type IndexStore struct {
 
 // IndexVersion tracks metadata about the persisted index.
 type IndexVersion struct {
-	Version      int       `json:"version"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Version       int       `json:"version"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 	DocumentCount int       `json:"document_count"`
-	TermCount    int       `json:"term_count"`
+	TermCount     int       `json:"term_count"`
 }
 
 const (

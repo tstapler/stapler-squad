@@ -36,7 +36,7 @@ const (
 //     server restarts).
 type SessionManager struct {
 	mu           sync.Mutex
-	ceremonies   map[string]*ceremony   // key → ceremony session
+	ceremonies   map[string]*ceremony    // key → ceremony session
 	authSessions map[string]*authSession // token → auth session
 	sessionsPath string                  // file path for persistence; empty = in-memory only
 }

@@ -1,8 +1,8 @@
 package tmux
 
 import (
-	"github.com/tstapler/stapler-squad/executor"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor"
 	"os"
 	"os/exec"
 	"path/filepath"

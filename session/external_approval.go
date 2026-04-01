@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/detection"
 	"context"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
 	"time"
 
@@ -56,8 +56,8 @@ type monitoredSession struct {
 	tmuxStreamer *ExternalTmuxStreamer // Tmux-based streamer
 	title        string
 	source       ExternalApprovalSource
-	consumer     OutputConsumer         // For socket-based
-	tmuxConsumer func(content string)   // For tmux-based
+	consumer     OutputConsumer       // For socket-based
+	tmuxConsumer func(content string) // For tmux-based
 	lastDetect   time.Time
 	pending      []*detection.ApprovalRequest
 }

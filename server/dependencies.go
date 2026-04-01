@@ -1,13 +1,13 @@
 package server
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/scrollback"
-	"fmt"
 	"os"
 	"path/filepath"
 	"time"

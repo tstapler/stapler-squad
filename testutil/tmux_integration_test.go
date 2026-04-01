@@ -154,9 +154,9 @@ func TestRealTmuxSessionLifecycle(t *testing.T) {
 
 		// Use custom timeout configuration
 		config := WaitConfig{
-			Timeout:     5 * time.Second,
+			Timeout:      5 * time.Second,
 			PollInterval: 100 * time.Millisecond,
-			Description: "session to exist with custom timeout",
+			Description:  "session to exist with custom timeout",
 		}
 
 		err = waiter.WaitForSessionExistsWithConfig(config)

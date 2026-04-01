@@ -1,21 +1,21 @@
 package commands
 
 import (
-	"github.com/tstapler/stapler-squad/cmd/interfaces"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tstapler/stapler-squad/cmd/interfaces"
 )
 
 // VCHandlers contains handlers for version control commands
 type VCHandlers struct {
-	OnVCStageFile       func() (tea.Model, tea.Cmd)
-	OnVCUnstageFile     func() (tea.Model, tea.Cmd)
-	OnVCStageAll        func() (tea.Model, tea.Cmd)
-	OnVCUnstageAll      func() (tea.Model, tea.Cmd)
-	OnVCOpenTerminal    func() (tea.Model, tea.Cmd)
-	OnVCToggleHelp      func() (tea.Model, tea.Cmd)
-	OnVCNavigateUp      func() (tea.Model, tea.Cmd)
-	OnVCNavigateDown    func() (tea.Model, tea.Cmd)
-	OnVCCommandPalette  func() (tea.Model, tea.Cmd)
+	OnVCStageFile      func() (tea.Model, tea.Cmd)
+	OnVCUnstageFile    func() (tea.Model, tea.Cmd)
+	OnVCStageAll       func() (tea.Model, tea.Cmd)
+	OnVCUnstageAll     func() (tea.Model, tea.Cmd)
+	OnVCOpenTerminal   func() (tea.Model, tea.Cmd)
+	OnVCToggleHelp     func() (tea.Model, tea.Cmd)
+	OnVCNavigateUp     func() (tea.Model, tea.Cmd)
+	OnVCNavigateDown   func() (tea.Model, tea.Cmd)
+	OnVCCommandPalette func() (tea.Model, tea.Cmd)
 }
 
 var vcHandlers = &VCHandlers{}

@@ -13,7 +13,7 @@ import (
 type RiskLevel int
 
 const (
-	RiskLow      RiskLevel = iota
+	RiskLow RiskLevel = iota
 	RiskMedium
 	RiskHigh
 	RiskCritical
@@ -522,10 +522,11 @@ func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPa
 
 // SeedRules returns the built-in rule set, sorted by Priority descending.
 // Priority tiers:
-//   1000 — AutoDeny (critical, must fire before any allow)
-//    500 — Escalate-before-allow (targeted escalations that override allow rules at 100)
-//    100 — AutoAllow (standard development operations)
-//     50 — Escalate catch-all (operations with no allow rule; provides a helpful reason)
+//
+//	1000 — AutoDeny (critical, must fire before any allow)
+//	 500 — Escalate-before-allow (targeted escalations that override allow rules at 100)
+//	 100 — AutoAllow (standard development operations)
+//	  50 — Escalate catch-all (operations with no allow rule; provides a helpful reason)
 //
 // Criteria-based rules provide precise matching without complex regex;
 // CommandPattern is retained only where regex expressiveness is needed.
@@ -779,12 +780,12 @@ func SeedRules() []Rule {
 					"release create", "release delete", "release upload",
 				},
 			},
-			Decision:    Escalate,
-			RiskLevel:   RiskMedium,
-			Reason:      "gh write operations modify GitHub resources and should be reviewed.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			Decision:  Escalate,
+			RiskLevel: RiskMedium,
+			Reason:    "gh write operations modify GitHub resources and should be reviewed.",
+			Priority:  500,
+			Enabled:   true,
+			Source:    "seed",
 		},
 		{
 			// curl with file output flags (-o/-O/--output) writes response bodies to disk.
@@ -1307,12 +1308,12 @@ func SeedRules() []Rule {
 			Criteria: &CommandCriteria{
 				Programs: []string{"curl"},
 			},
-			Decision:    AutoAllow,
-			RiskLevel:   RiskLow,
-			Reason:      "curl GET requests without output flags or write methods are read-only.",
-			Priority:    100,
-			Enabled:     true,
-			Source:      "seed",
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "curl GET requests without output flags or write methods are read-only.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════

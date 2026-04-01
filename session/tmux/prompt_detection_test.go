@@ -274,38 +274,38 @@ The codebase is well-structured and follows Python best practices. The main area
 // TestStatusUpdateLogic tests the complete status update flow
 func TestStatusUpdateLogic(t *testing.T) {
 	tests := []struct {
-		name        string
-		program     string
-		content     string
-		autoYes     bool
+		name           string
+		program        string
+		content        string
+		autoYes        bool
 		expectedStatus string // This would map to session.Status constants
 	}{
 		{
-			name:        "Claude prompt without autoYes should need approval",
-			program:     ProgramClaude,
-			content:     "Ready to make changes.\n\nNo, and tell Claude what to do differently\n\nShould I proceed?",
-			autoYes:     false,
+			name:           "Claude prompt without autoYes should need approval",
+			program:        ProgramClaude,
+			content:        "Ready to make changes.\n\nNo, and tell Claude what to do differently\n\nShould I proceed?",
+			autoYes:        false,
 			expectedStatus: "NeedsApproval",
 		},
 		{
-			name:        "Claude prompt with autoYes should continue running",
-			program:     ProgramClaude,
-			content:     "Ready to make changes.\n\nNo, and tell Claude what to do differently\n\nShould I proceed?",
-			autoYes:     true,
+			name:           "Claude prompt with autoYes should continue running",
+			program:        ProgramClaude,
+			content:        "Ready to make changes.\n\nNo, and tell Claude what to do differently\n\nShould I proceed?",
+			autoYes:        true,
 			expectedStatus: "Running", // AutoYes would tap enter automatically
 		},
 		{
-			name:        "Claude working without prompt should be ready",
-			program:     ProgramClaude,
-			content:     "Implementation complete! All files have been updated successfully.",
-			autoYes:     false,
+			name:           "Claude working without prompt should be ready",
+			program:        ProgramClaude,
+			content:        "Implementation complete! All files have been updated successfully.",
+			autoYes:        false,
 			expectedStatus: "Ready",
 		},
 		{
-			name:        "Aider prompt without autoYes should need approval",
-			program:     ProgramAider,
-			content:     "I want to modify app.py with the following changes:\n\n(Y)es/(N)o/(D)on't ask again",
-			autoYes:     false,
+			name:           "Aider prompt without autoYes should need approval",
+			program:        ProgramAider,
+			content:        "I want to modify app.py with the following changes:\n\n(Y)es/(N)o/(D)on't ask again",
+			autoYes:        false,
 			expectedStatus: "NeedsApproval",
 		},
 	}

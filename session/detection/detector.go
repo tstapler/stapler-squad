@@ -42,10 +42,10 @@ type StatusPatterns struct {
 	NeedsApproval []StatusPattern `yaml:"needs_approval"`
 	InputRequired []StatusPattern `yaml:"input_required"` // Explicit input prompts
 	Error         []StatusPattern `yaml:"error"`
-	TestsFailing  []StatusPattern `yaml:"tests_failing"`  // Tests are failing
-	Idle          []StatusPattern `yaml:"idle"`           // Waiting for user input
-	Active        []StatusPattern `yaml:"active"`         // Actively executing commands
-	Success       []StatusPattern `yaml:"success"`        // Task completed successfully
+	TestsFailing  []StatusPattern `yaml:"tests_failing"` // Tests are failing
+	Idle          []StatusPattern `yaml:"idle"`          // Waiting for user input
+	Active        []StatusPattern `yaml:"active"`        // Actively executing commands
+	Success       []StatusPattern `yaml:"success"`       // Task completed successfully
 }
 
 // StatusDetector analyzes PTY output to determine the current status of a Claude instance.
@@ -526,7 +526,7 @@ func getDefaultPatterns() StatusPatterns {
 			// We detect this by looking for the numbered option selector pattern.
 			// This is much more reliable than trying to match generic question text.
 			{
-				Name:        "numbered_option_selector",
+				Name: "numbered_option_selector",
 				// Matches Claude Code's numbered selection format with arrow selector
 				// Example: " ❯ 1. Yes" or "   2. No"
 				Pattern:     `[❯>]\s*\d+\.\s+\w`,

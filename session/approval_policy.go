@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/detection"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"regexp"
 	"strings"
 	"sync"
@@ -11,20 +11,20 @@ import (
 
 // ApprovalPolicy defines a rule for automatic approval.
 type ApprovalPolicy struct {
-	ID              string            `json:"id"`
-	Name            string            `json:"name"`
-	Description     string            `json:"description"`
-	ApprovalTypes   []detection.ApprovalType    `json:"approval_types"` // Types this policy applies to
-	Enabled         bool              `json:"enabled"`
-	Priority        int               `json:"priority"`   // Higher priority policies checked first
-	Conditions      []PolicyCondition `json:"conditions"` // All must match
-	Action          PolicyAction      `json:"action"`     // What to do when matched
-	TimeRestriction *TimeRestriction  `json:"time_restriction,omitempty"`
-	UsageLimit      *UsageLimit       `json:"usage_limit,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-	usageCount      int               // Runtime tracking
-	lastUsed        time.Time         // Runtime tracking
+	ID              string                   `json:"id"`
+	Name            string                   `json:"name"`
+	Description     string                   `json:"description"`
+	ApprovalTypes   []detection.ApprovalType `json:"approval_types"` // Types this policy applies to
+	Enabled         bool                     `json:"enabled"`
+	Priority        int                      `json:"priority"`   // Higher priority policies checked first
+	Conditions      []PolicyCondition        `json:"conditions"` // All must match
+	Action          PolicyAction             `json:"action"`     // What to do when matched
+	TimeRestriction *TimeRestriction         `json:"time_restriction,omitempty"`
+	UsageLimit      *UsageLimit              `json:"usage_limit,omitempty"`
+	CreatedAt       time.Time                `json:"created_at"`
+	UpdatedAt       time.Time                `json:"updated_at"`
+	usageCount      int                      // Runtime tracking
+	lastUsed        time.Time                // Runtime tracking
 }
 
 // PolicyCondition represents a single condition that must be met.
@@ -69,13 +69,13 @@ type PolicyEngine struct {
 
 // PolicyAuditEntry records policy evaluation results.
 type PolicyAuditEntry struct {
-	Timestamp      time.Time        `json:"timestamp"`
-	RequestID      string           `json:"request_id"`
-	PolicyID       string           `json:"policy_id"`
-	PolicyName     string           `json:"policy_name"`
-	Action         PolicyAction     `json:"action"`
+	Timestamp      time.Time                  `json:"timestamp"`
+	RequestID      string                     `json:"request_id"`
+	PolicyID       string                     `json:"policy_id"`
+	PolicyName     string                     `json:"policy_name"`
+	Action         PolicyAction               `json:"action"`
 	MatchedRequest *detection.ApprovalRequest `json:"matched_request"`
-	Reason         string           `json:"reason"`
+	Reason         string                     `json:"reason"`
 }
 
 // NewPolicyEngine creates a new approval policy engine.
@@ -258,11 +258,11 @@ func (pe *PolicyEngine) Evaluate(request *detection.ApprovalRequest) (*PolicyDec
 // PolicyDecision represents the result of policy evaluation.
 type PolicyDecision struct {
 	Request       *detection.ApprovalRequest `json:"request"`
-	Timestamp     time.Time        `json:"timestamp"`
-	Decision      PolicyAction     `json:"decision"`
-	Matched       bool             `json:"matched"`
-	MatchedPolicy *ApprovalPolicy  `json:"matched_policy,omitempty"`
-	Reason        string           `json:"reason"`
+	Timestamp     time.Time                  `json:"timestamp"`
+	Decision      PolicyAction               `json:"decision"`
+	Matched       bool                       `json:"matched"`
+	MatchedPolicy *ApprovalPolicy            `json:"matched_policy,omitempty"`
+	Reason        string                     `json:"reason"`
 }
 
 // appliesToType checks if a policy applies to a given approval type.

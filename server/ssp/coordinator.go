@@ -37,7 +37,7 @@ type Coordinator struct {
 	echoHistory *EchoHistory
 
 	// Frame rate control
-	lastFrameTime time.Time
+	lastFrameTime    time.Time
 	minFrameInterval time.Duration
 
 	// Configuration

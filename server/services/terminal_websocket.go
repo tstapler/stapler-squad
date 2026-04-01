@@ -1,10 +1,10 @@
 package services
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
-	"fmt"
 	"io"
 	"net/http"
 	"sync"

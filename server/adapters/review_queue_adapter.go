@@ -13,14 +13,14 @@ func ReviewItemToProto(item *session.ReviewItem) *sessionv1.ReviewItem {
 	}
 
 	protoItem := &sessionv1.ReviewItem{
-		SessionId:    item.SessionID,
-		SessionName:  item.SessionName,
-		Reason:       attentionReasonToProto(item.Reason),
-		Priority:     priorityToProto(item.Priority),
-		DetectedAt:   timestamppb.New(item.DetectedAt),
-		Context:      item.Context,
-		PatternName:  item.PatternName,
-		Metadata:     item.Metadata,
+		SessionId:   item.SessionID,
+		SessionName: item.SessionName,
+		Reason:      attentionReasonToProto(item.Reason),
+		Priority:    priorityToProto(item.Priority),
+		DetectedAt:  timestamppb.New(item.DetectedAt),
+		Context:     item.Context,
+		PatternName: item.PatternName,
+		Metadata:    item.Metadata,
 		// Session details for rich display
 		Program:      item.Program,
 		Branch:       item.Branch,
@@ -80,13 +80,13 @@ func ReviewQueueToProto(queue *session.ReviewQueue) *sessionv1.ReviewQueue {
 	}
 
 	protoQueue := &sessionv1.ReviewQueue{
-		TotalItems:         int32(stats.TotalItems),
-		Items:              protoItems,
-		ByPriority:         byPriority,
-		ByReason:           byReason,
-		AverageAgeSeconds:  int64(stats.AverageAge.Seconds()),
-		OldestItemId:       stats.OldestItem,
-		OldestAgeSeconds:   int64(stats.OldestAge.Seconds()),
+		TotalItems:        int32(stats.TotalItems),
+		Items:             protoItems,
+		ByPriority:        byPriority,
+		ByReason:          byReason,
+		AverageAgeSeconds: int64(stats.AverageAge.Seconds()),
+		OldestItemId:      stats.OldestItem,
+		OldestAgeSeconds:  int64(stats.OldestAge.Seconds()),
 	}
 
 	return protoQueue

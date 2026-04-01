@@ -1,9 +1,9 @@
 package services
 
 import (
+	"encoding/json"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
-	"encoding/json"
 	"net/http"
 )
 
@@ -33,7 +33,7 @@ type circuitBreakerEntry struct {
 }
 
 type circuitBreakerConfigEntry struct {
-	FailureThreshold      int `json:"failure_threshold"`
+	FailureThreshold       int `json:"failure_threshold"`
 	RecoveryTimeoutSeconds int `json:"recovery_timeout_seconds"`
 }
 
@@ -58,7 +58,7 @@ func (h *CircuitBreakerHandler) HandleCircuitBreakers(w http.ResponseWriter, r *
 			ConsecutiveFailures: snap.ConsecutiveFailures,
 			LastStateChange:     snap.LastStateChange.UTC().Format("2006-01-02T15:04:05Z"),
 			Config: circuitBreakerConfigEntry{
-				FailureThreshold:      snap.Config.FailureThreshold,
+				FailureThreshold:       snap.Config.FailureThreshold,
 				RecoveryTimeoutSeconds: int(snap.Config.RecoveryTimeout.Seconds()),
 			},
 		}

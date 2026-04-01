@@ -305,7 +305,7 @@ func ComputeSummary(entries []AnalyticsEntry) AnalyticsSummary {
 	// module → count for Python inline imports
 	importCounts := make(map[string]int)
 	// coverage gap: tools/programs that escaped all rules (escalated with no rule_id)
-	uncoveredToolCounts   := make(map[string]int)
+	uncoveredToolCounts := make(map[string]int)
 	uncoveredProgramStats := make(map[string]ProgramStat)
 	// full (program, subcommand) distribution — keyed by "program\x00subcommand"
 	subcommandStats := make(map[string]SubcommandStat)

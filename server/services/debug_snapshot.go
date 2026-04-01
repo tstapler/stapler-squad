@@ -2,12 +2,12 @@ package services
 
 import (
 	"bufio"
-	"github.com/tstapler/stapler-squad/config"
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,15 +21,15 @@ var serverStartTime = time.Now()
 
 // DebugSnapshot is the top-level JSON structure written to disk.
 type DebugSnapshot struct {
-	Version    int                 `json:"version"`
-	Timestamp  time.Time           `json:"timestamp"`
-	Note       string              `json:"note,omitempty"`
-	Server     ServerInfo          `json:"server"`
-	Sessions   []SessionSnapshot   `json:"sessions"`
-	Tmux       TmuxSnapshot        `json:"tmux"`
-	Approvals  ApprovalSnapshot    `json:"approvals"`
-	RecentLogs RecentLogsSnapshot  `json:"recent_logs"`
-	Errors     []string            `json:"errors,omitempty"`
+	Version    int                `json:"version"`
+	Timestamp  time.Time          `json:"timestamp"`
+	Note       string             `json:"note,omitempty"`
+	Server     ServerInfo         `json:"server"`
+	Sessions   []SessionSnapshot  `json:"sessions"`
+	Tmux       TmuxSnapshot       `json:"tmux"`
+	Approvals  ApprovalSnapshot   `json:"approvals"`
+	RecentLogs RecentLogsSnapshot `json:"recent_logs"`
+	Errors     []string           `json:"errors,omitempty"`
 }
 
 // ServerInfo contains runtime metadata for the server process.
@@ -43,24 +43,24 @@ type ServerInfo struct {
 
 // SessionSnapshot captures the state of a single session at snapshot time.
 type SessionSnapshot struct {
-	Title               string    `json:"title"`
-	Status              string    `json:"status"`
-	Program             string    `json:"program"`
-	Path                string    `json:"path"`
-	Branch              string    `json:"branch"`
-	SessionType         string    `json:"session_type"`
-	Category            string    `json:"category"`
-	Tags                []string  `json:"tags"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
-	LastTerminalUpdate  time.Time `json:"last_terminal_update,omitempty"`
+	Title                string    `json:"title"`
+	Status               string    `json:"status"`
+	Program              string    `json:"program"`
+	Path                 string    `json:"path"`
+	Branch               string    `json:"branch"`
+	SessionType          string    `json:"session_type"`
+	Category             string    `json:"category"`
+	Tags                 []string  `json:"tags"`
+	CreatedAt            time.Time `json:"created_at"`
+	UpdatedAt            time.Time `json:"updated_at"`
+	LastTerminalUpdate   time.Time `json:"last_terminal_update,omitempty"`
 	LastMeaningfulOutput time.Time `json:"last_meaningful_output,omitempty"`
-	LastOutputSignature string    `json:"last_output_signature,omitempty"`
-	PaneContent         string    `json:"pane_content,omitempty"`
-	PaneContentRaw      string    `json:"pane_content_raw,omitempty"`
-	PaneContentTruncated bool     `json:"pane_content_truncated,omitempty"`
-	InstanceType        string    `json:"instance_type"`
-	GitHubPRNumber      int       `json:"github_pr_number,omitempty"`
+	LastOutputSignature  string    `json:"last_output_signature,omitempty"`
+	PaneContent          string    `json:"pane_content,omitempty"`
+	PaneContentRaw       string    `json:"pane_content_raw,omitempty"`
+	PaneContentTruncated bool      `json:"pane_content_truncated,omitempty"`
+	InstanceType         string    `json:"instance_type"`
+	GitHubPRNumber       int       `json:"github_pr_number,omitempty"`
 }
 
 // TmuxSnapshot captures global tmux state.
@@ -71,28 +71,28 @@ type TmuxSnapshot struct {
 
 // TmuxSessionDetail captures per-tmux-session diagnostic info.
 type TmuxSessionDetail struct {
-	TmuxSessionName  string `json:"tmux_session_name"`
-	ListPanesOutput  string `json:"list_panes_output,omitempty"`
-	PaneContent      string `json:"pane_content,omitempty"`
+	TmuxSessionName string `json:"tmux_session_name"`
+	ListPanesOutput string `json:"list_panes_output,omitempty"`
+	PaneContent     string `json:"pane_content,omitempty"`
 }
 
 // ApprovalSnapshot captures the pending approvals state.
 type ApprovalSnapshot struct {
-	PendingCount int               `json:"pending_count"`
-	Pending      []ApprovalDetail  `json:"pending,omitempty"`
+	PendingCount int              `json:"pending_count"`
+	Pending      []ApprovalDetail `json:"pending,omitempty"`
 }
 
 // ApprovalDetail captures the fields of a single pending approval.
 type ApprovalDetail struct {
-	ID             string                 `json:"id"`
-	SessionID      string                 `json:"session_id"`
-	ClaudeSessionID string                `json:"claude_session_id"`
-	ToolName       string                 `json:"tool_name"`
-	ToolInput      map[string]interface{} `json:"tool_input,omitempty"`
-	Cwd            string                 `json:"cwd"`
-	PermissionMode string                 `json:"permission_mode"`
-	CreatedAt      time.Time              `json:"created_at"`
-	ExpiresAt      time.Time              `json:"expires_at"`
+	ID              string                 `json:"id"`
+	SessionID       string                 `json:"session_id"`
+	ClaudeSessionID string                 `json:"claude_session_id"`
+	ToolName        string                 `json:"tool_name"`
+	ToolInput       map[string]interface{} `json:"tool_input,omitempty"`
+	Cwd             string                 `json:"cwd"`
+	PermissionMode  string                 `json:"permission_mode"`
+	CreatedAt       time.Time              `json:"created_at"`
+	ExpiresAt       time.Time              `json:"expires_at"`
 }
 
 // RecentLogsSnapshot contains the most recent log lines.

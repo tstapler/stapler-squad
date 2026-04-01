@@ -1,27 +1,27 @@
 package commands
 
 import (
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/tstapler/stapler-squad/cmd/interfaces"
 	"github.com/tstapler/stapler-squad/log"
-	tea "github.com/charmbracelet/bubbletea"
 )
 
 // SessionHandlers contains handlers for session management commands
 type SessionHandlers struct {
 	// These will be set by the application when integrating with the new system
-	OnNewSession       func() (tea.Model, tea.Cmd)
-	OnKillSession      func() (tea.Model, tea.Cmd)
-	OnAttachSession    func() (tea.Model, tea.Cmd)
-	OnCheckout         func() (tea.Model, tea.Cmd)
-	OnResume           func() (tea.Model, tea.Cmd)
-	OnClaudeSettings   func() (tea.Model, tea.Cmd)
-	OnTagEditor        func() (tea.Model, tea.Cmd)
-	OnHistoryBrowser   func() (tea.Model, tea.Cmd)
-	OnConfigEditor     func() (tea.Model, tea.Cmd)
-	OnRenameSession    func() (tea.Model, tea.Cmd)
-	OnRestartSession   func() (tea.Model, tea.Cmd)
-	OnWorkspaceStatus  func() (tea.Model, tea.Cmd)
-	OnWorkspaceSwitch  func() (tea.Model, tea.Cmd)
+	OnNewSession      func() (tea.Model, tea.Cmd)
+	OnKillSession     func() (tea.Model, tea.Cmd)
+	OnAttachSession   func() (tea.Model, tea.Cmd)
+	OnCheckout        func() (tea.Model, tea.Cmd)
+	OnResume          func() (tea.Model, tea.Cmd)
+	OnClaudeSettings  func() (tea.Model, tea.Cmd)
+	OnTagEditor       func() (tea.Model, tea.Cmd)
+	OnHistoryBrowser  func() (tea.Model, tea.Cmd)
+	OnConfigEditor    func() (tea.Model, tea.Cmd)
+	OnRenameSession   func() (tea.Model, tea.Cmd)
+	OnRestartSession  func() (tea.Model, tea.Cmd)
+	OnWorkspaceStatus func() (tea.Model, tea.Cmd)
+	OnWorkspaceSwitch func() (tea.Model, tea.Cmd)
 }
 
 var sessionHandlers = &SessionHandlers{}
