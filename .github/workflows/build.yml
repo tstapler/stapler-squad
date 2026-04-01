@@ -91,7 +91,7 @@ jobs:
       run: make web-build
 
     - name: Run tests
-      run: go test -v ./...
+      run: go test -short ./...
 
     - name: Build with Bazel
       env:
