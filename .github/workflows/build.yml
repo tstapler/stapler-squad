@@ -72,14 +72,13 @@ jobs:
     - name: Install Bazelisk
       run: |
         # Install Bazelisk from GitHub releases (works on all platforms)
-        # Use a writable location
+        # Always use amd64 Bazelisk - Bazel itself handles cross-compilation
         mkdir -p "$HOME/bin"
-        ARCH="${{ matrix.goarch }}"
         OS="${{ matrix.goos }}"
         if [ "$OS" = "windows" ]; then
           curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-windows-amd64.exe -o "$HOME/bin/bazel.exe"
         else
-          curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-${OS}-${ARCH}" -o "$HOME/bin/bazel"
+          curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-${OS}-amd64" -o "$HOME/bin/bazel"
           chmod +x "$HOME/bin/bazel"
         fi
         echo "$HOME/bin" >> $GITHUB_PATH
