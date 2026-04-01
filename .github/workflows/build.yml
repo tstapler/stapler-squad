@@ -25,7 +25,6 @@ on:
 jobs:
   build:
     name: Build Binary and Test
-    runs-on: ubuntu-latest
     strategy:
       matrix:
         goos: [linux, darwin, windows]
@@ -34,21 +33,28 @@ jobs:
           - goos: linux
             goarch: amd64
             bazel_platform: linux_amd64
+            runs-on: ubuntu-latest
           - goos: linux
             goarch: arm64
             bazel_platform: linux_arm64
+            runs-on: ubuntu-latest
           - goos: darwin
             goarch: amd64
             bazel_platform: darwin_amd64
+            runs-on: macos-latest
           - goos: darwin
             goarch: arm64
             bazel_platform: darwin_arm64
+            runs-on: macos-latest
           - goos: windows
             goarch: amd64
             bazel_platform: windows_amd64
+            runs-on: windows-latest
         exclude:
           - goos: windows
             goarch: arm64
+
+    runs-on: ${{ matrix.runs-on }}
 
     steps:
     - uses: actions/checkout@v4
