@@ -2,7 +2,7 @@
 # Bazel dependency automation script
 # Automatically handles indirect->direct dependency conversions for Bazel
 
-set -e
+set -euo pipefail
 
 echo "=== Bazel Dependency Automation ==="
 echo "This script automates updating Bazel dependencies from go.mod"
@@ -31,8 +31,11 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
         break
     fi
     
-    # Extract missing packages
-    MISSING=$(echo "$BUILD_OUTPUT" | grep -oP "no such package '@\@\[unknown repo '([^']+)' requested from" | sed "s/no such package '@\@\[unknown repo '//g" | sed "s/' requested from.*//g" | sort -u)
+    # Extract missing packages (portable: avoid grep -P and use awk instead)
+    MISSING=$(echo "$BUILD_OUTPUT" | awk '/no such package/ && /unknown repo/ {
+        n = split($0, parts, "'\''")
+        if (n >= 2) print parts[2]
+    }' | sort -u)
     
     if [ -z "$MISSING" ]; then
         echo "Build failed but no missing packages detected. Showing error:"
@@ -59,11 +62,34 @@ while [ $ITERATION -lt $MAX_ITERATIONS ]; do
             io_opentelemetry_*)
                 GOPATH=$(echo "$REPO" | sed 's/io_opentelemetry_/go.opentelemetry.io\//')
                 ;;
-            org_golang_*)
-                GOPATH=$(echo "$REPO" | sed 's/org_golang_/golang.org\/x\//')
+            org_golang_google_protobuf*)
+                SUFFIX="${REPO#org_golang_google_protobuf}"
+                if [ -n "$SUFFIX" ]; then
+                    GOPATH="google.golang.org/protobuf$(echo "$SUFFIX" | sed 's/_/\//g')"
+                else
+                    GOPATH="google.golang.org/protobuf"
+                fi
+                ;;
+            org_golang_google_grpc*)
+                SUFFIX="${REPO#org_golang_google_grpc}"
+                if [ -n "$SUFFIX" ]; then
+                    GOPATH="google.golang.org/grpc$(echo "$SUFFIX" | sed 's/_/\//g')"
+                else
+                    GOPATH="google.golang.org/grpc"
+                fi
+                ;;
+            org_golang_x_*)
+                GOPATH=$(echo "$REPO" | sed 's/org_golang_x_/golang.org\/x\//')
                 ;;
             in_gopkg_*)
-                GOPATH=$(echo "$REPO" | sed 's/in_gopkg_/gopkg.in\//' | sed 's/_/./g')
+                rest=${REPO#in_gopkg_}
+                version_suffix=""
+                base="$rest"
+                if echo "$rest" | grep -q '_v[0-9]\+$'; then
+                    version_suffix=".${rest##*_}"
+                    base=${rest%_*}
+                fi
+                GOPATH="gopkg.in/$(echo "$base" | sed 's/_/\//g')$version_suffix"
                 ;;
             go_uber_*)
                 GOPATH=$(echo "$REPO" | sed 's/go_uber_/go.uber.io\//')

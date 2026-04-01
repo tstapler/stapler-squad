@@ -301,7 +301,7 @@ validate-env: ensure-tools ## Validate development environment setup
 
 # Bazel build targets (modern Bazel with bzlmod)
 .PHONY: bazel-build bazel-run bazel-test bazel-clean bazel-update-deps bazel-all
-bazel-build: ## Build with Bazel (requires web-ui built first via make web-build)
+bazel-build: web-build ## Build with Bazel (requires web-ui built first via make web-build)
 	@echo "Building Go with Bazel..."
 	@bazel build //:stapler-squad
 	@echo "✅ Bazel build complete"
@@ -309,11 +309,10 @@ bazel-build: ## Build with Bazel (requires web-ui built first via make web-build
 bazel-all: web-build bazel-build ## Build web UI and Go with Bazel (full build)
 	@echo ""
 	@echo "=== Full Bazel build complete ==="
-	@echo "Binary: bazel-bin/stapler-squad_/stapler-squad"
 
 bazel-run: bazel-build ## Build and run with Bazel
 	@echo "Running with Bazel..."
-	@bazel-bin/stapler-squad_/stapler-squad $(SERVER_FLAGS) &
+	@bazel run //:stapler-squad -- $(SERVER_FLAGS)
 
 bazel-test: ## Run tests with Bazel
 	@echo "Running tests with Bazel..."
