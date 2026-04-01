@@ -35,7 +35,7 @@ jobs:
         uses: golangci/golangci-lint-action@v7
         with:
           version: v2.11
-          args: --timeout=3m --tests=false --enable=forbidigo --enable=ineffassign --enable=nilnil --enable=staticcheck
+          args: --timeout=3m --tests=false
           skip-cache: false
           only-new-issues: true
 

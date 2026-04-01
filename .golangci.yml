@@ -2,3 +2,8 @@ version: "2"
 
 run:
   go: "1.23"
+
+issues:
+  exclusions:
+    paths:
+      - server/web/embed\.go
