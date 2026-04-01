@@ -8,6 +8,9 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/build.yml'
+      - 'MODULE.bazel'
+      - 'BUILD.bazel'
+      - '**/BUILD.bazel'
   pull_request:
     branches: [ main ]
     paths:
@@ -15,6 +18,9 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/build.yml'
+      - 'MODULE.bazel'
+      - 'BUILD.bazel'
+      - '**/BUILD.bazel'
 
 jobs:
   build:
@@ -49,7 +55,14 @@ jobs:
 
     - name: Install Bazelisk
       run: |
-        brew install bazelisk
+        # Install Bazelisk from GitHub releases (works on all platforms)
+        curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-${{ matrix.goarch == 'arm64' && 'arm64' || 'amd64' }} -o /usr/local/bin/bazel
+        chmod +x /usr/local/bin/bazel
+        # For macOS, download the darwin version
+        if [ "${{ matrix.goos }}" = "darwin" ]; then
+          curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-darwin-${{ matrix.goarch == 'arm64' && 'arm64' || 'amd64' }} -o /usr/local/bin/bazel
+          chmod +x /usr/local/bin/bazel
+        fi
 
     - name: Generate protobuf code
       run: make proto-gen
