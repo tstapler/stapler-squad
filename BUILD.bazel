@@ -32,7 +32,5 @@ go_library(
 go_binary(
     name = "stapler-squad",
     embed = [":go_library"],
-    goarch = "amd64",
-    goos = "linux",
     visibility = ["//visibility:public"],
 )
