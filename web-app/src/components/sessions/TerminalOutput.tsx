@@ -639,14 +639,15 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <div className={styles.unavailableSubtext}>Could not connect to terminal session</div>
           </div>
         )}
-        <XtermTerminal
-          ref={xtermRef}
-          onData={handleTerminalData}
-          onResize={handleTerminalResize}
-          theme={theme}
-          fontSize={14}
-          scrollback={5000}
-        />
+<XtermTerminal
+  ref={xtermRef}
+  onData={handleTerminalData}
+  onResize={handleTerminalResize}
+  theme={theme}
+  fontSize={14}
+  scrollback={5000}
+  mouseTracking="any"
+/>
       </div>
       {/* Mobile keyboard toolbar */}
       <div className={styles.mobileKeyboard}>

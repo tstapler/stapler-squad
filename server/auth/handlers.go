@@ -1,23 +1,29 @@
 package auth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 )
 
 // RegisterRoutes registers all /auth/* endpoints on mux.
-func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionManager, store *CredentialStore, setup *SetupManager, tlsCAPath string) {
+// primaryDomain is the hostname used in the CA download filename so clients
+// know which server issued the cert (e.g. "myhost.local").
+func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionManager, store *CredentialStore, setup *SetupManager, tlsCAPath, primaryDomain string) {
 	h := &httpHandlers{
-		wa:       waHandler,
-		sessions: sessions,
-		store:    store,
-		setup:    setup,
-		caPath:   tlsCAPath,
+		wa:            waHandler,
+		sessions:      sessions,
+		store:         store,
+		setup:         setup,
+		caPath:        tlsCAPath,
+		primaryDomain: primaryDomain,
 	}
 
 	mux.HandleFunc("/auth/status", h.status)
@@ -32,11 +38,12 @@ func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionMan
 }
 
 type httpHandlers struct {
-	wa       *Handler
-	sessions *SessionManager
-	store    *CredentialStore
-	setup    *SetupManager
-	caPath   string
+	wa            *Handler
+	sessions      *SessionManager
+	store         *CredentialStore
+	setup         *SetupManager
+	caPath        string
+	primaryDomain string
 }
 
 // isLocalhostRequest returns true when the request originates from the loopback
@@ -146,6 +153,11 @@ func (h *httpHandlers) finishRegistration(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Consume the setup token now that registration succeeded.
+	if setupToken := r.URL.Query().Get("setup_token"); setupToken != "" {
+		h.setup.Consume(setupToken)
+	}
+
 	setAuthCookie(w, token)
 	jsonResponse(w, map[string]interface{}{"ok": true})
 }
@@ -232,28 +244,53 @@ func (h *httpHandlers) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // serveCACert serves the CA certificate PEM so users can import it into their
-// browser/OS trust store.
+// browser/OS trust store. The download filename encodes the issuing domain,
+// the issue date, and a short content hash so clients can identify which
+// server produced the cert and whether it has changed.
+//
+// Format: stapler-squad-ca-<domain>-<YYYY-MM-DD>-<hash8>.pem
 func (h *httpHandlers) serveCACert(w http.ResponseWriter, r *http.Request) {
 	if h.caPath == "" {
 		http.Error(w, "CA cert not available (HTTP mode)", http.StatusNotFound)
 		return
 	}
+
+	data, err := os.ReadFile(h.caPath)
+	if err != nil {
+		log.ErrorLog.Printf("auth: read CA cert: %v", err)
+		http.Error(w, "could not read CA cert", http.StatusInternalServerError)
+		return
+	}
+
+	sum := sha256.Sum256(data)
+	hash8 := hex.EncodeToString(sum[:])[:8]
+	date := time.Now().UTC().Format("2006-01-02")
+	domain := h.primaryDomain
+	if domain == "" {
+		domain = "localhost"
+	}
+	filename := fmt.Sprintf("stapler-squad-ca-%s-%s-%s.pem", domain, date, hash8)
+
 	w.Header().Set("Content-Type", "application/x-pem-file")
-	w.Header().Set("Content-Disposition", `attachment; filename="stapler-squad-ca.pem"`)
-	http.ServeFile(w, r, h.caPath)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, filename))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
 
 // isAuthorised returns true if the request carries a valid auth session token
-// OR a valid setup token in the query string.
+// OR a valid setup token in the query string. The setup token is NOT consumed
+// here — call setup.Consume() after the ceremony completes successfully.
 func (h *httpHandlers) isAuthorised(r *http.Request) bool {
 	if token, err := getAuthToken(r); err == nil {
 		if h.sessions.ValidateAuthSession(token) {
 			return true
 		}
 	}
-	// Allow setup token via query param for first-time registration flow
+	// Allow setup token via query param for first-time registration flow.
+	// Use IsValid (non-consuming) so the token remains valid across begin→finish.
 	if setupToken := r.URL.Query().Get("setup_token"); setupToken != "" {
-		return h.setup.Validate(setupToken)
+		return h.setup.IsValid(setupToken)
 	}
 	return false
 }
