@@ -496,6 +496,30 @@ Use `go tool trace -http=:8081 file.out` to open a specific file, or restrict th
 
 ---
 
+## Recovering a Corrupted Benchmark Baseline
+
+Baseline files are committed directly to `main` under `benchmarks/` by the CI workflow on every push. If a bad run pushes inflated or incorrect values (e.g., a noisy CI runner), revert the specific baseline commit on `main`.
+
+```bash
+# 1. Find the bad baseline commit
+git log --oneline benchmarks/go/tier1-baseline.txt | head -10
+# or for frontend/e2e baselines:
+git log --oneline benchmarks/frontend/throughput-baseline.json | head -10
+git log --oneline benchmarks/e2e/latency-baseline.json | head -10
+
+# 2. Revert the specific bad commit (creates a new revert commit — never force-push)
+git revert <bad-commit-sha> --no-edit
+
+# 3. Push the revert — CI will pick up the restored baseline on the next PR
+git push origin main
+```
+
+**Why not `git reset --hard`?** Resetting and force-pushing destroys history that other PRs may have already compared against. Reverting is always safer and maintains a clear audit trail.
+
+**Tip:** If multiple consecutive baseline commits are bad (e.g., a noisy runner affected several pushes), use `git revert <old>..<new>` to revert a range.
+
+---
+
 ## Further Reading
 
 - [Go Diagnostics](https://go.dev/doc/diagnostics)
