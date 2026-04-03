@@ -326,7 +326,7 @@ benchmark-compare: ensure-tools ## Run benchmarks and compare against saved base
 benchmark-tier1: ensure-tools ## Run Tier 1 critical-path benchmarks (fast, ~5 min)
 	@echo "Running Tier 1 benchmarks..."
 	go test \
-		-bench='BenchmarkEventBus|BenchmarkDeltaGeneration|BenchmarkCircularBuffer|BenchmarkSessionService_List|BenchmarkSessionService_Get' \
+		-bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkSessionService_List|BenchmarkSessionService_Get' \
 		-benchmem \
 		-count=8 \
 		-timeout=10m \

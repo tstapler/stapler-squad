@@ -57,7 +57,7 @@ jobs:
       - name: Run Tier 1 benchmarks
         run: |
           go test \
-            -bench='BenchmarkEventBus|BenchmarkDeltaGeneration|BenchmarkCircularBuffer|BenchmarkSessionService_List|BenchmarkSessionService_Get' \
+            -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkSessionService_List|BenchmarkSessionService_Get' \
             -benchmem \
             -count=8 \
             -timeout=10m \
@@ -286,7 +286,9 @@ jobs:
         run: cd web-app && npm run build
 
       - name: Start backend server
-        run: ./stapler-squad &
+        run: |
+          ./stapler-squad &
+          npx wait-on http://localhost:8543 --timeout 30000
 
       - name: Start frontend server
         run: |
