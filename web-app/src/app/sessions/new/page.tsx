@@ -35,6 +35,9 @@ function NewSessionContent() {
             category: session.category || "",
             prompt: "",
             autoYes: false,
+            sessionType: (session as any).sessionType || "new_worktree",
+            existingWorktree: (session as any).existingWorktree || "",
+            useTitleAsBranch: true,
           });
         }
         setLoading(false);
@@ -61,6 +64,7 @@ function NewSessionContent() {
         prompt: data.prompt || "",
         autoYes: data.autoYes,
         existingWorktree: data.existingWorktree || "",
+        sessionType: data.sessionType,
       });
 
       // Show success indicator (for tests)
