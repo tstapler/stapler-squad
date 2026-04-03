@@ -87,6 +87,18 @@ function getAutoMinimizeMs(type: NotificationData["notificationType"]): number {
   }
 }
 
+function getRelativeTime(timestamp: number): string {
+  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes === 1) return "1 min ago";
+  if (minutes < 60) return `${minutes} mins ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours === 1) return "1 hr ago";
+  return `${hours} hrs ago`;
+}
+
 export function NotificationToast({
   notification,
   onClose,
@@ -101,7 +113,16 @@ export function NotificationToast({
   const [isVisible, setIsVisible] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
+  const [relativeTime, setRelativeTime] = useState(() => getRelativeTime(notification.timestamp));
   const auditLog = useAuditLog();
+
+  // Tick every second to keep relative time live
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setRelativeTime(getRelativeTime(notification.timestamp));
+    }, 1_000);
+    return () => clearInterval(interval);
+  }, [notification.timestamp]);
 
   // Entrance animation
   useEffect(() => {
@@ -262,8 +283,8 @@ export function NotificationToast({
             {subtitleText && (
               <span className={styles.sourceApp}>{subtitleText}</span>
             )}
-            <span className={styles.timestamp}>
-              {new Date(notification.timestamp).toLocaleTimeString()}
+            <span className={styles.timestamp} title={new Date(notification.timestamp).toLocaleTimeString()}>
+              {relativeTime}
             </span>
           </div>
         </div>

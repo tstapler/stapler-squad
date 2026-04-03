@@ -236,6 +236,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     [addNotification]
   );
 
+  // Remove stale toasts (older than 5 minutes) every minute
+  useEffect(() => {
+    const STALE_MS = 5 * 60 * 1000;
+    const interval = setInterval(() => {
+      const cutoff = Date.now() - STALE_MS;
+      setNotifications((prev) => prev.filter((n) => n.timestamp >= cutoff));
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, []);
+
   const togglePanel = useCallback(() => {
     setIsPanelOpen((prev) => {
       const newState = !prev;
