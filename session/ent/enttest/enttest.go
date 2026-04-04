@@ -9,9 +9,8 @@ import (
 	// required by schema hooks.
 	_ "github.com/tstapler/stapler-squad/session/ent/runtime"
 
-	"github.com/tstapler/stapler-squad/session/ent/migrate"
-
 	"entgo.io/ent/dialect/sql/schema"
+	"github.com/tstapler/stapler-squad/session/ent/migrate"
 )
 
 type (
