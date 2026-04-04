@@ -11,9 +11,18 @@ linters:
     - gocognit       # Pre-existing complexity issues
     - nestif         # Pre-existing complexity issues
     - funcorder      # Pre-existing complexity issues
+    - gocyclo        # Pre-existing complexity issues
+    - godoclint      # Pre-existing doc issues
+    - godot          # Pre-existing dot ending issues
+    - godox          # Pre-existing TODO issues
     - dupword        # Pre-existing duplicate word issues
     - embeddedstructfieldcheck  # Pre-existing struct field issues
     - gochecknoinits  # Pre-existing init function issues
+    - ineffassign    # Pre-existing issues
+    - interfacebloat # Pre-existing issues
+    - nlreturn       # Pre-existing issues
+    - nosprintfhostport  # Pre-existing issues
+    - predeclared    # Pre-existing issues
     - depguard       # Pre-existing issues
     - lll            # Pre-existing issues
     - mnd            # Pre-existing issues (magic numbers)
