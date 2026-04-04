@@ -9,6 +9,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/queue"
 )
 
+// lookoutRunRecoverMsg is logged when the run() goroutine panics.
+const lookoutRunRecoverMsg = "[Lookout] panic in run() goroutine, session may be stuck"
+
 // LookoutState represents the supervisor state of a session's Lookout goroutine.
 type LookoutState int
 
@@ -67,7 +70,7 @@ type LookoutConfig struct {
 // Lookout is the per-session supervisor goroutine that watches for TaskComplete,
 // triggers the Sweep quality gate, and manages the correction retry loop.
 //
-// State machine: Idle → Active → Sweeping → AwaitingRetry → (back to Active) or Fallen
+// State machine: Idle → Active → Sweeping → AwaitingRetry → (back to Sweeping) or Fallen
 // All state reads are safe for concurrent callers via RLock.
 type Lookout struct {
 	cfg LookoutConfig
@@ -88,17 +91,19 @@ type Lookout struct {
 	// Retry history accumulation
 	retryHistory []queue.RetryAttempt
 
+	wg     sync.WaitGroup // tracks the run() goroutine for clean shutdown
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-// NewLookout creates a new Lookout. doneCh is a send-only channel the Lookout
-// uses to report its final result to the Fixer.
-func NewLookout(cfg LookoutConfig, doneCh chan<- LookoutResult) *Lookout {
+// NewLookout creates a new Lookout. parentCtx is inherited from the Fixer so that
+// Fixer cancellation propagates to all Lookouts. doneCh is a send-only channel the
+// Lookout uses to report its final result to the Fixer.
+func NewLookout(parentCtx context.Context, cfg LookoutConfig, doneCh chan<- LookoutResult) *Lookout {
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = 3
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parentCtx)
 	return &Lookout{
 		cfg:            cfg,
 		state:          LookoutIdle,
@@ -138,12 +143,17 @@ func (l *Lookout) OnTaskComplete() {
 
 // Start launches the Lookout's run() goroutine.
 func (l *Lookout) Start() {
-	go l.run()
+	l.wg.Add(1)
+	go func() {
+		defer l.wg.Done()
+		l.run()
+	}()
 }
 
-// Stop cancels the Lookout's context, causing run() to exit.
+// Stop cancels the Lookout's context and waits for run() to exit.
 func (l *Lookout) Stop() {
 	l.cancel()
+	l.wg.Wait()
 }
 
 // EarpieceCh returns the read-only channel the Fixer uses to receive SweepResults
@@ -162,6 +172,9 @@ func (l *Lookout) EarpieceCh() <-chan *SweepResult {
 //	Fallen -> (stays until ctx.Done)
 func (l *Lookout) run() {
 	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorLog.Printf("%s: %s: %v", lookoutRunRecoverMsg, l.cfg.SessionID, r)
+		}
 		l.setState(LookoutStopped)
 	}()
 
@@ -197,7 +210,9 @@ func (l *Lookout) run() {
 				l.mu.Lock()
 				l.retryCount++
 				l.mu.Unlock()
-				l.setState(LookoutIdle)
+				// Transition to Sweeping (not Idle) so the retry actually re-runs the sweep
+				// without waiting for another TaskComplete signal that will never arrive.
+				l.setState(LookoutSweeping)
 			}
 
 		case LookoutFallen:
@@ -228,10 +243,23 @@ func (l *Lookout) handleTaskComplete() {
 // runSweepAsync executes the sweep pipeline in a goroutine and sends the result
 // to sweepResultCh. It is always launched from the Sweeping state.
 func (l *Lookout) runSweepAsync() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorLog.Printf("[Lookout:%s] panic in runSweepAsync: %v", l.cfg.SessionID, r)
+			select {
+			case l.sweepResultCh <- &SweepResult{Status: SweepStatusError}:
+			default:
+			}
+		}
+	}()
+
 	runner, err := DetectTestRunner(l.cfg.WorkingDir)
 	if err != nil || runner == nil {
 		log.InfoLog.Printf("[Lookout:%s] No test runner detected (err=%v)", l.cfg.SessionID, err)
-		l.sweepResultCh <- &SweepResult{Status: SweepStatusNoTestsFound}
+		select {
+		case l.sweepResultCh <- &SweepResult{Status: SweepStatusNoTestsFound}:
+		default:
+		}
 		return
 	}
 
@@ -239,13 +267,21 @@ func (l *Lookout) runSweepAsync() {
 	result, err := RunSweep(l.ctx, l.cfg.WorkingDir, runner)
 	if err != nil {
 		log.ErrorLog.Printf("[Lookout:%s] Sweep error: %v", l.cfg.SessionID, err)
-		l.sweepResultCh <- &SweepResult{Status: SweepStatusError}
+		select {
+		case l.sweepResultCh <- &SweepResult{Status: SweepStatusError}:
+		default:
+		}
 		return
 	}
 
 	diffSummary, _ := CollectDiffSummary(l.cfg.WorkingDir)
 	result.DiffSummary = diffSummary
-	l.sweepResultCh <- result
+	select {
+	case l.sweepResultCh <- result:
+	default:
+		// Context was cancelled; discard result to avoid goroutine block.
+		log.DebugLog.Printf("[Lookout:%s] sweepResultCh full on send, result discarded", l.cfg.SessionID)
+	}
 }
 
 // handleSweepResult processes the outcome of a sweep and transitions the state
@@ -346,11 +382,17 @@ func (l *Lookout) handleSweepResult(result *SweepResult) {
 		}
 		l.mu.Unlock()
 
-		// Signal the Fixer to inject an earpiece correction prompt.
-		select {
-		case l.earpieceCh <- result:
-		default:
-			// Channel full -- Fixer will pick it up on next read.
+		// Signal the Fixer to inject an earpiece correction prompt only when
+		// autonomous mode (GoingDark) is enabled. In Supervised mode the score
+		// is assembled but no injection occurs — the human reviews the failure.
+		if l.cfg.GoingDark {
+			select {
+			case l.earpieceCh <- result:
+			default:
+				// Channel full -- Fixer will pick it up on next read.
+			}
+		} else {
+			log.DebugLog.Printf("[Lookout:%s] Supervised mode: skip earpiece injection (GoingDark=false)", l.cfg.SessionID)
 		}
 
 		l.setState(LookoutAwaitingRetry)

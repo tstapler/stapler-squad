@@ -8,21 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/session/queue"
 )
-
-// ansiRegexp strips ANSI escape sequences from terminal output.
-var ansiRegexp = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-// stripANSI removes ANSI escape sequences from s.
-func stripANSI(s string) string {
-	return ansiRegexp.ReplaceAllString(s, "")
-}
 
 // truncateLast truncates s to the last n characters.
 func truncateLast(s string, n int) string {
@@ -226,7 +217,7 @@ func RunSweep(ctx context.Context, dir string, runner *TestRunner) (*SweepResult
 	duration := time.Since(start)
 
 	rawOutput := outBuf.String()
-	cleanOutput := stripANSI(rawOutput)
+	cleanOutput := StripANSI(rawOutput)
 	cleanOutput = truncateLast(cleanOutput, 4000)
 
 	exitCode := 0

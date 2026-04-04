@@ -1,6 +1,7 @@
 package crew
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os/exec"
@@ -59,6 +60,15 @@ func (c *DefaultTmuxPaneChecker) CapturePaneContent(sessionName string) (string,
 	return string(out), nil
 }
 
+// paneReadyGate1Interval is the polling interval for Gate 1 (process check).
+const paneReadyGate1Interval = 1 * time.Second
+
+// paneReadyGate2Interval is the quiescence sample interval for Gate 2.
+const paneReadyGate2Interval = 500 * time.Millisecond
+
+// paneReadyGate2Timeout is the maximum time to wait for quiescence before proceeding.
+const paneReadyGate2Timeout = 30 * time.Second
+
 // WaitForPaneReady implements the three-gate readiness check before Earpiece injection.
 //
 // Gate 1 (hard block): pane_current_command must contain "claude" or "node".
@@ -66,14 +76,15 @@ func (c *DefaultTmuxPaneChecker) CapturePaneContent(sessionName string) (string,
 // Gate 3 (confirmation): last non-empty line must not match OS shell or y/n prompts.
 //
 // Returns nil if all gates pass, *PaneReadyError with gate details if any gate fails.
-func WaitForPaneReady(sessionName string, timeout time.Duration, checker TmuxPaneChecker) error {
+// Returns ctx.Err() if the context is cancelled during waiting.
+func WaitForPaneReady(ctx context.Context, sessionName string, timeout time.Duration, checker TmuxPaneChecker) error {
 	if checker == nil {
 		checker = &DefaultTmuxPaneChecker{}
 	}
 
 	deadline := time.Now().Add(timeout)
 
-	// Gate 1: Process check
+	// Gate 1: Process check — wait until claude or node is the foreground process.
 	for {
 		if time.Now().After(deadline) {
 			return &PaneReadyError{
@@ -85,49 +96,58 @@ func WaitForPaneReady(sessionName string, timeout time.Duration, checker TmuxPan
 		cmd, err := checker.PaneCurrentCommand(sessionName)
 		if err != nil {
 			log.DebugLog.Printf("[Earpiece] Gate 1 error for %s: %v", sessionName, err)
-			time.Sleep(1 * time.Second)
-			continue
+		} else {
+			cmd = strings.ToLower(cmd)
+			if strings.Contains(cmd, "claude") || strings.Contains(cmd, "node") {
+				break
+			}
+			log.DebugLog.Printf("[Earpiece] Gate 1: pane_current_command=%q (waiting for claude/node)", cmd)
 		}
-		cmd = strings.ToLower(cmd)
-		if strings.Contains(cmd, "claude") || strings.Contains(cmd, "node") {
-			break
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(paneReadyGate1Interval):
 		}
-		log.DebugLog.Printf("[Earpiece] Gate 1: pane_current_command=%q (waiting for claude/node)", cmd)
-		time.Sleep(1 * time.Second)
 	}
 
-	// Gate 2: Quiescence check (pane content stable for 500ms)
-	quiescenceTimeout := time.Now().Add(30 * time.Second)
+	// Gate 2: Quiescence check — pane content must be stable for one sample interval.
+	quiescenceDeadline := time.Now().Add(paneReadyGate2Timeout)
 	for {
-		if time.Now().After(quiescenceTimeout) {
-			// Timeout on quiescence — proceed anyway (log warning)
+		if time.Now().After(quiescenceDeadline) {
+			// Timeout on quiescence — proceed anyway (log warning).
 			log.DebugLog.Printf("[Earpiece] Gate 2: quiescence timeout for %s, proceeding", sessionName)
 			break
 		}
 		content1, err := checker.CapturePaneContent(sessionName)
 		if err != nil {
 			log.DebugLog.Printf("[Earpiece] Gate 2 capture error for %s: %v", sessionName, err)
-			time.Sleep(500 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(paneReadyGate2Interval):
+			}
 			continue
 		}
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(paneReadyGate2Interval):
+		}
 		content2, err := checker.CapturePaneContent(sessionName)
 		if err != nil {
 			log.DebugLog.Printf("[Earpiece] Gate 2 capture error for %s: %v", sessionName, err)
 			continue
 		}
-		hash1 := paneHash(content1)
-		hash2 := paneHash(content2)
-		if hash1 == hash2 {
+		if paneHash(content1) == paneHash(content2) {
 			break // Stable
 		}
 		log.DebugLog.Printf("[Earpiece] Gate 2: pane still changing for %s", sessionName)
 	}
 
-	// Gate 3: Prompt pattern check (last non-empty line)
+	// Gate 3: Prompt pattern check — last non-empty line must not be a shell or y/n prompt.
 	content, err := checker.CapturePaneContent(sessionName)
 	if err != nil {
-		// If we can't capture, proceed (conservative)
+		// If we can't capture, proceed (conservative).
 		return nil
 	}
 	lastLine := lastNonEmptyLine(content)
@@ -249,7 +269,9 @@ func (t *EarpieceTemplate) Render(attempt int, testOutput string, gitDiff string
 
 // CollectGitDiff runs `git diff HEAD` in the given directory and returns the output.
 func CollectGitDiff(dir string) string {
-	out, err := exec.Command("git", "diff", "HEAD").Output()
+	cmd := exec.Command("git", "diff", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
 	if err != nil {
 		return ""
 	}
@@ -263,6 +285,9 @@ type InstanceFinder interface {
 	FindInstance(sessionID string) *session.Instance
 }
 
+// paneReadyDefaultTimeout is the default timeout passed to WaitForPaneReady.
+const paneReadyDefaultTimeout = 30 * time.Second
+
 // InjectEarpiece performs the full Earpiece injection sequence:
 //  1. Wait for pane to be ready (three-gate check, up to 30s)
 //  2. Render the correction prompt using EarpieceTemplate
@@ -271,6 +296,7 @@ type InstanceFinder interface {
 // Returns an error if the pane is not ready or injection fails.
 // Returns nil if injection succeeded or if the instance is not found (non-fatal).
 func InjectEarpiece(
+	ctx context.Context,
 	sessionID string,
 	sessionName string,
 	workingDir string,
@@ -288,8 +314,8 @@ func InjectEarpiece(
 		return nil
 	}
 
-	// Wait for pane readiness (30 second timeout)
-	if err := WaitForPaneReady(sessionName, 30*time.Second, checker); err != nil {
+	// Wait for pane readiness; respects context cancellation for clean shutdown.
+	if err := WaitForPaneReady(ctx, sessionName, paneReadyDefaultTimeout, checker); err != nil {
 		return fmt.Errorf("pane not ready for %s: %w", sessionID, err)
 	}
 
