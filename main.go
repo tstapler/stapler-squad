@@ -42,7 +42,8 @@ var (
 	listenAddrFlag    string
 	remoteAccessFlag  bool
 	remotePortFlag    int
-	rpIDFlag          string
+	rpIDFlag             string
+	tmuxKeepServerFlag   bool
 	rootCmd           = &cobra.Command{
 		Use:   "stapler-squad",
 		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
@@ -195,6 +196,21 @@ var (
 			if remoteAccessFlag || cfg.PasskeyEnabled {
 				if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
 					return fmt.Errorf("start remote access: %w", err)
+				}
+			}
+
+			// Ensure tmux server is running before sessions are restored.
+			if err := tmux.EnsureServerRunning(""); err != nil {
+				log.WarningLog.Printf("Failed to ensure tmux server running: %v", err)
+			}
+			// Layer 3: keepalive session prevents server from exiting when all user sessions close.
+			if err := tmux.CreateKeepaliveSession(""); err != nil {
+				log.WarningLog.Printf("Failed to create keepalive session: %v", err)
+			}
+			// Layer 1 (opt-in): configure tmux to keep server alive even if keepalive session dies.
+			if tmuxKeepServerFlag {
+				if err := tmux.SetExitEmpty("", false); err != nil {
+					log.WarningLog.Printf("Failed to set tmux exit-empty off: %v", err)
 				}
 			}
 
@@ -587,6 +603,8 @@ func init() {
 	rootCmd.Flags().StringVar(&rpIDFlag, "rp-id", "",
 		"WebAuthn Relying Party ID override (your LAN IP or hostname, e.g. '192.168.1.42'). "+
 			"Defaults to the detected LAN IP.")
+	rootCmd.Flags().BoolVar(&tmuxKeepServerFlag, "tmux-keep-server", false,
+		"Configure tmux to keep the server running even when all sessions exit (sets 'exit-empty off')")
 
 	// Hide the daemonFlag as it's only for internal use
 	err := rootCmd.Flags().MarkHidden("daemon")

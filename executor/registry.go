@@ -36,6 +36,16 @@ func (r *CircuitBreakerRegistry) Unregister(key string) {
 	delete(r.executors, key)
 }
 
+// ResetAll resets all circuit breakers in all registered executors to closed state.
+// Call after successfully recovering an external dependency (e.g. tmux server restart).
+func (r *CircuitBreakerRegistry) ResetAll() {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, cbe := range r.executors {
+		cbe.Reset()
+	}
+}
+
 // AllBreakers returns a combined snapshot of all circuit breakers across all registered executors.
 // The returned map keys are prefixed with the executor key for disambiguation (e.g., "git-session1/git-diff").
 func (r *CircuitBreakerRegistry) AllBreakers() map[string]CircuitBreakerSnapshot {

@@ -116,14 +116,123 @@ func toStaplerSquadTmuxNameWithPrefix(str string, prefix string) string {
 	return fmt.Sprintf("%s%s", prefix, str)
 }
 
+// serverNotRunning returns true if the combined output of a failed tmux command
+// indicates the tmux server process is not running (as opposed to a session not found).
+func serverNotRunning(output []byte) bool {
+	s := strings.ToLower(string(output))
+	return strings.Contains(s, "no server running") || strings.Contains(s, "error connecting to")
+}
+
+// checkServerNotRunning runs tmux list-sessions directly (bypassing any circuit breaker)
+// and returns true if the server is not running.
+func checkServerNotRunning(serverSocket string) bool {
+	args := []string{"list-sessions"}
+	if serverSocket != "" {
+		args = append([]string{"-L", serverSocket}, args...)
+	}
+	cmd := exec.Command("tmux", args...)
+	out, err := cmd.CombinedOutput()
+	return err != nil && serverNotRunning(out)
+}
+
+// EnsureServerRunning starts the tmux server if it is not already running.
+// Uses exec.Command directly so it always runs regardless of circuit breaker state.
+func EnsureServerRunning(serverSocket string) error {
+	if !checkServerNotRunning(serverSocket) {
+		return nil // server is already running
+	}
+	args := []string{"start-server"}
+	if serverSocket != "" {
+		args = append([]string{"-L", serverSocket}, args...)
+	}
+	cmd := exec.Command("tmux", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
+	}
+	log.InfoLog.Printf("[tmux] server started successfully")
+	return nil
+}
+
+// SetExitEmpty sets the tmux server-level exit-empty option.
+// When enabled=false, the server stays alive even when all sessions are closed.
+// Requires the server to already be running.
+func SetExitEmpty(serverSocket string, enabled bool) error {
+	value := "off"
+	if enabled {
+		value = "on"
+	}
+	args := []string{"set-option", "-g", "exit-empty", value}
+	if serverSocket != "" {
+		args = append([]string{"-L", serverSocket}, args...)
+	}
+	cmd := exec.Command("tmux", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("tmux set-option exit-empty %s failed: %w (output: %s)", value, err, out)
+	}
+	return nil
+}
+
+// CreateKeepaliveSession creates a hidden tmux session that keeps the server alive.
+// The session runs an idle shell and is intentionally never cleaned up by stapler-squad.
+// As long as this session exists, the tmux server cannot exit due to having no sessions.
+func CreateKeepaliveSession(serverSocket string) error {
+	keepaliveName := TmuxPrefix + "keepalive"
+
+	// Check if already exists
+	hasArgs := []string{"has-session", "-t", keepaliveName}
+	if serverSocket != "" {
+		hasArgs = append([]string{"-L", serverSocket}, hasArgs...)
+	}
+	if exec.Command("tmux", hasArgs...).Run() == nil {
+		return nil // already exists
+	}
+
+	// Create a detached session with an idle shell
+	newArgs := []string{"new-session", "-d", "-s", keepaliveName}
+	if serverSocket != "" {
+		newArgs = append([]string{"-L", serverSocket}, newArgs...)
+	}
+	cmd := exec.Command("tmux", newArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to create keepalive session: %w (output: %s)", err, out)
+	}
+	log.InfoLog.Printf("[tmux] keepalive session '%s' created", keepaliveName)
+	return nil
+}
+
 // CleanupFunc represents a cleanup function that should be deferred
 type CleanupFunc func() error
+
+// tmuxCircuitBreakerConfig returns a circuit breaker config tuned for tmux commands.
+// Unlike the default config, "no sessions" (exit 1 on an empty server) does not count
+// as a failure for the list-sessions command class, because an empty server is a normal
+// transient state during session creation — not a dependency failure.
+func tmuxCircuitBreakerConfig() executor.CircuitBreakerConfig {
+	return executor.CircuitBreakerConfig{
+		FailureThreshold: executor.DefaultCircuitBreakerConfig().FailureThreshold,
+		RecoveryTimeout:  executor.DefaultCircuitBreakerConfig().RecoveryTimeout,
+		IsFailure: func(commandClass string, output []byte, err error) bool {
+			if err == nil {
+				return false
+			}
+			if commandClass == "tmux-list-sessions" {
+				// Only trip the breaker when the server itself is down.
+				// "No sessions" (empty server, exit 1, no output) is a normal state.
+				return serverNotRunning(output)
+			}
+			return true
+		},
+	}
+}
 
 // NewTmuxSession creates a new TmuxSession with the given name and program.
 // The executor is wrapped with a CircuitBreakerExecutor for resilience.
 func NewTmuxSession(name string, program string) *TmuxSession {
 	baseExec := executor.MakeExecutor()
-	cbExec := executor.NewCircuitBreakerExecutor(baseExec, executor.DefaultCircuitBreakerConfig())
+	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	executor.GetGlobalRegistry().Register("tmux-"+name, cbExec)
 	return newTmuxSession(name, program, MakePtyFactory(), cbExec, TmuxPrefix)
 }
@@ -132,7 +241,7 @@ func NewTmuxSession(name string, program string) *TmuxSession {
 // The executor is wrapped with a CircuitBreakerExecutor for resilience.
 func NewTmuxSessionWithPrefix(name string, program string, prefix string) *TmuxSession {
 	baseExec := executor.MakeExecutor()
-	cbExec := executor.NewCircuitBreakerExecutor(baseExec, executor.DefaultCircuitBreakerConfig())
+	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	executor.GetGlobalRegistry().Register("tmux-"+name, cbExec)
 	return newTmuxSession(name, program, MakePtyFactory(), cbExec, prefix)
 }
@@ -166,7 +275,7 @@ func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix stri
 // prefix: session name prefix (e.g., "staplersquad_test_")
 func NewTmuxSessionWithServerSocket(name string, program string, prefix string, serverSocket string) *TmuxSession {
 	baseExec := executor.MakeExecutor()
-	cbExec := executor.NewCircuitBreakerExecutor(baseExec, executor.DefaultCircuitBreakerConfig())
+	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	executor.GetGlobalRegistry().Register("tmux-"+name, cbExec)
 	return newTmuxSessionWithSocket(name, program, MakePtyFactory(), cbExec, prefix, serverSocket)
 }
@@ -211,7 +320,7 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 // The session must already exist in tmux. Call AttachToExisting() after creation to establish the PTY connection.
 func NewTmuxSessionFromExisting(exactSessionName string) *TmuxSession {
 	baseExec := executor.MakeExecutor()
-	cbExec := executor.NewCircuitBreakerExecutor(baseExec, executor.DefaultCircuitBreakerConfig())
+	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
 	executor.GetGlobalRegistry().Register("tmux-ext-"+exactSessionName, cbExec)
 	return &TmuxSession{
 		sanitizedName:    exactSessionName, // Use exact name - no prefix transformation
@@ -308,8 +417,10 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		return nil
 	}
 
-	// Create a new detached tmux session and start the program in it
-	cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	// Create a new detached tmux session and start the program in it.
+	// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
+	// nested Claude Code sessions are not blocked by the "nested session" guard.
+	cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=", "-c", workDir, t.program)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
 	// since detached sessions don't need PTY attachment during creation
@@ -429,8 +540,10 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 				}
 			}
 
-			// Create a new detached tmux session directly (avoid recursive call to Start)
-			cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+			// Create a new detached tmux session directly (avoid recursive call to Start).
+			// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
+			// nested Claude Code sessions are not blocked by the "nested session" guard.
+			cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=", "-c", workDir, t.program)
 			err := t.cmdExec.Run(cmd)
 			if err != nil {
 				// Session creation failed - but it might be because the session already exists
@@ -447,6 +560,11 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			} else {
 				log.InfoLog.Printf("Created new tmux session '%s' in directory '%s'", t.sanitizedName, workDir)
 				t.invalidateExistsCache() // Session was created, invalidate cache
+				// new-session started the tmux server; reset this session's circuit breakers
+				// so subsequent DoesSessionExist() calls can verify the session is running.
+				if r, ok := t.cmdExec.(executor.Resettable); ok {
+					r.Reset()
+				}
 			}
 		}
 	} else {
@@ -1027,6 +1145,47 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 	return nil
 }
 
+// recoverFromServerFailure attempts to restart the tmux server and reset circuit breakers.
+// It also recreates the keepalive session to prevent the server from dying again.
+// For isolated servers (serverSocket != ""), no keepalive is created — the caller
+// manages the server's lifecycle directly (e.g., test harnesses).
+func (t *TmuxSession) recoverFromServerFailure(caller string) {
+	if restartErr := EnsureServerRunning(t.serverSocket); restartErr == nil {
+		log.InfoLog.Printf("[tmux] server restarted from %s, resetting circuit breakers", caller)
+		executor.GetGlobalRegistry().ResetAll()
+		if t.serverSocket == "" {
+			if keepErr := CreateKeepaliveSession(t.serverSocket); keepErr != nil {
+				log.WarningLog.Printf("[tmux] failed to recreate keepalive session: %v", keepErr)
+			}
+		}
+	} else {
+		log.WarningLog.Printf("[tmux] failed to restart tmux server from %s: %v", caller, restartErr)
+	}
+}
+
+// listSessionsRaw runs "tmux list-sessions -F #{session_name}" using the provided context.
+// On circuit-breaker open it falls back to a direct exec.CombinedOutput call so that
+// existence checks always work regardless of breaker state.
+// Returns raw combined output and the first error encountered.
+func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
+	var cmdArgs []string
+	if t.serverSocket != "" {
+		cmdArgs = []string{"-L", t.serverSocket, "list-sessions", "-F", "#{session_name}"}
+	} else {
+		cmdArgs = []string{"list-sessions", "-F", "#{session_name}"}
+	}
+	cmd := exec.CommandContext(ctx, "tmux", cmdArgs...)
+	output, err := t.cmdExec.CombinedOutput(cmd)
+	// If the circuit breaker is open, fall back to direct exec.
+	// "No sessions" (exit 1 when server running but empty) can cause false circuit
+	// breaker trips; the fallback ensures checks always work regardless of breaker state.
+	if errors.Is(err, executor.ErrCircuitOpen) {
+		cmd = exec.CommandContext(ctx, "tmux", cmdArgs...)
+		output, err = cmd.CombinedOutput()
+	}
+	return output, err
+}
+
 func (t *TmuxSession) DoesSessionExist() bool {
 	if t == nil {
 		return false
@@ -1050,19 +1209,12 @@ func (t *TmuxSession) DoesSessionExist() bool {
 		return t.existsCache
 	}
 
-	// Use list-sessions to get actual running sessions for reliable checking
-	// Use a 3 second timeout to be more resilient under high system load
+	// Use list-sessions to get actual running sessions for reliable checking.
+	// Use a 3 second timeout to be more resilient under high system load.
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux")
-	// Add server socket isolation if specified
-	if t.serverSocket != "" {
-		cmd = exec.CommandContext(ctx, "tmux", "-L", t.serverSocket, "list-sessions", "-F", "#{session_name}")
-	} else {
-		cmd = exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
-	}
-	output, err := t.cmdExec.Output(cmd)
+	output, err := t.listSessionsRaw(ctx)
 
 	// Check if error is due to timeout
 	if ctx.Err() == context.DeadlineExceeded {
@@ -1073,6 +1225,11 @@ func (t *TmuxSession) DoesSessionExist() bool {
 	}
 
 	if err != nil {
+		// Attempt auto-recovery only for the default server (serverSocket == "").
+		// Isolated servers (serverSocket != "") are managed by the caller (e.g., test harnesses).
+		if t.serverSocket == "" && serverNotRunning(output) {
+			t.recoverFromServerFailure("DoesSessionExist")
+		}
 		// If tmux list-sessions fails, there are no sessions
 		t.existsCache = false
 		t.existsCacheTime = time.Now()
@@ -1102,7 +1259,7 @@ func (t *TmuxSession) invalidateExistsCache() {
 	t.existsCacheTime = time.Time{} // Zero time forces cache miss
 }
 
-// DoesSessionExistNoCache checks if session exists WITHOUT using cache
+// DoesSessionExistNoCache checks if session exists WITHOUT using cache.
 // This is used for critical validation before session creation to ensure we have
 // the most up-to-date information about session existence.
 func (t *TmuxSession) DoesSessionExistNoCache() bool {
@@ -1110,21 +1267,17 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 		return false
 	}
 
-	// Direct check without cache - for critical validation before session creation
+	// Direct check without cache — use a longer timeout for critical validation.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "tmux")
-	// Add server socket isolation if specified
-	if t.serverSocket != "" {
-		cmd = exec.CommandContext(ctx, "tmux", "-L", t.serverSocket, "list-sessions", "-F", "#{session_name}")
-	} else {
-		cmd = exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
-	}
-	output, err := t.cmdExec.Output(cmd)
-
+	output, err := t.listSessionsRaw(ctx)
 	if err != nil {
 		log.WarningLog.Printf("DoesSessionExistNoCache: tmux list-sessions failed: %v", err)
+		// Only attempt auto-recovery for the default server (not isolated test servers).
+		if t.serverSocket == "" && serverNotRunning(output) {
+			t.recoverFromServerFailure("DoesSessionExistNoCache")
+		}
 		return false
 	}
 
