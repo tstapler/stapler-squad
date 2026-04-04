@@ -1,0 +1,91 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "tmux",
+    srcs = [
+        "banner_filter.go",
+        "control_mode.go",
+        "pty.go",
+        "test_helpers.go",
+        "tmux.go",
+        "tmux_unix.go",
+        "tmux_windows.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/tmux",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//executor",
+        "//log",
+        "@com_github_creack_pty//:pty",
+        "@com_github_google_uuid//:uuid",
+    ] + select({
+        "@rules_go//go/platform:aix": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:android": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:darwin": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:dragonfly": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:freebsd": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:illumos": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:ios": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:js": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:linux": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:netbsd": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:openbsd": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:osx": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:plan9": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:qnx": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:solaris": [
+            "@org_golang_x_term//:term",
+        ],
+        "@rules_go//go/platform:windows": [
+            "@org_golang_x_term//:term",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+go_test(
+    name = "tmux_test",
+    srcs = [
+        "banner_filter_test.go",
+        "directory_restoration_test.go",
+        "prompt_detection_test.go",
+        "repo_vs_worktree_test.go",
+        "restore_test.go",
+        "session_recovery_test.go",
+        "session_resumption_test.go",
+        "tmux_test.go",
+    ],
+    embed = [":tmux"],
+    deps = [
+        "//executor",
+        "@com_github_stretchr_testify//require",
+    ],
+)

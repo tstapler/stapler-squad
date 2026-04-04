@@ -35,15 +35,15 @@ var commandPermissionRequirements = map[CommandID]func(perms session.InstancePer
 	"pty.disconnect":   func(perms session.InstancePermissions) bool { return perms.CanAttach },
 
 	// Navigation and organization commands that require only view permission
-	"nav.search":               func(perms session.InstancePermissions) bool { return perms.CanView },
-	"nav.next_review":          func(perms session.InstancePermissions) bool { return perms.CanView && perms.CanAddToQueue },
-	"nav.previous_review":      func(perms session.InstancePermissions) bool { return perms.CanView && perms.CanAddToQueue },
-	"nav.toggle_review_queue":  func(perms session.InstancePermissions) bool { return perms.CanView && perms.CanAddToQueue },
-	"org.filter_paused":        func(perms session.InstancePermissions) bool { return perms.CanView },
-	"org.clear_filters":        func(perms session.InstancePermissions) bool { return perms.CanView },
-	"org.toggle_group":         func(perms session.InstancePermissions) bool { return perms.CanView },
-	"pty.toggle_view":          func(perms session.InstancePermissions) bool { return perms.CanView },
-	"pty.refresh":              func(perms session.InstancePermissions) bool { return perms.CanView },
+	"nav.search":              func(perms session.InstancePermissions) bool { return perms.CanView },
+	"nav.next_review":         func(perms session.InstancePermissions) bool { return perms.CanView && perms.CanAddToQueue },
+	"nav.previous_review":     func(perms session.InstancePermissions) bool { return perms.CanView && perms.CanAddToQueue },
+	"nav.toggle_review_queue": func(perms session.InstancePermissions) bool { return perms.CanView && perms.CanAddToQueue },
+	"org.filter_paused":       func(perms session.InstancePermissions) bool { return perms.CanView },
+	"org.clear_filters":       func(perms session.InstancePermissions) bool { return perms.CanView },
+	"org.toggle_group":        func(perms session.InstancePermissions) bool { return perms.CanView },
+	"pty.toggle_view":         func(perms session.InstancePermissions) bool { return perms.CanView },
+	"pty.refresh":             func(perms session.InstancePermissions) bool { return perms.CanView },
 
 	// Basic navigation always available if CanView is true
 	"nav.up":        func(perms session.InstancePermissions) bool { return perms.CanView },

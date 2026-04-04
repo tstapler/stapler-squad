@@ -72,7 +72,7 @@ func TestKeyConflictDetection(t *testing.T) {
 // Helper function to check if a string contains a substring
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && s[len(s)-len(substr):] == substr ||
-		   (len(s) > len(substr) && findSubstring(s, substr))
+		(len(s) > len(substr) && findSubstring(s, substr))
 }
 
 func findSubstring(s, substr string) bool {
@@ -117,7 +117,7 @@ func TestValidateAllContexts(t *testing.T) {
 
 	// Register commands - last binding wins (overwrites, no conflicts detected)
 	bridge.registry.Register(cmd1).BindKeyInContext("x", ContextList)
-	bridge.registry.Register(cmd2).BindKeyInContext("x", ContextList)  // Overwrites cmd1's binding
+	bridge.registry.Register(cmd2).BindKeyInContext("x", ContextList)   // Overwrites cmd1's binding
 	bridge.registry.Register(cmd3).BindKeyInContext("y", ContextSearch) // No conflict
 
 	allConflicts := bridge.ValidateAllContexts()

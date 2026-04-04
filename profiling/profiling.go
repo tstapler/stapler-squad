@@ -15,13 +15,13 @@ import (
 
 // Config holds profiling configuration
 type Config struct {
-	Enabled       bool
-	HTTPPort      int
-	BlockProfile  bool
-	MutexProfile  bool
-	CPUProfile    bool
-	TraceEnabled  bool
-	TraceFile     string
+	Enabled      bool
+	HTTPPort     int
+	BlockProfile bool
+	MutexProfile bool
+	CPUProfile   bool
+	TraceEnabled bool
+	TraceFile    string
 }
 
 // StartProfiling enables runtime profiling based on config

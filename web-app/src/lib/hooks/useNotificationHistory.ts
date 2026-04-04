@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import {
   NotificationHistoryRecord,
   GetNotificationHistoryRequest,
+  GetNotificationHistoryRequestSchema,
   MarkNotificationReadRequest,
+  MarkNotificationReadRequestSchema,
   ClearNotificationHistoryRequest,
+  ClearNotificationHistoryRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl } from "@/lib/config";
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -41,14 +45,14 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
   const [hasMore, setHasMore] = useState(false);
   const [offset, setOffset] = useState(0);
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   // Initialize ConnectRPC client
   useEffect(() => {
     const transport = createConnectTransport({
       baseUrl: getApiBaseUrl(),
     });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
 
   // Fetch notification history from the server
@@ -60,7 +64,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
 
     try {
       const currentOffset = resetOffset ? 0 : offset;
-      const request = new GetNotificationHistoryRequest({
+      const request = create(GetNotificationHistoryRequestSchema, {
         limit: DEFAULT_PAGE_SIZE,
         offset: currentOffset,
       });
@@ -127,7 +131,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     setUnreadCount((prev) => Math.max(0, prev - ids.length));
 
     try {
-      const request = new MarkNotificationReadRequest({
+      const request = create(MarkNotificationReadRequestSchema, {
         notificationIds: ids,
       });
       await clientRef.current.markNotificationRead(request);
@@ -149,7 +153,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     setUnreadCount(0);
 
     try {
-      const request = new MarkNotificationReadRequest({
+      const request = create(MarkNotificationReadRequestSchema, {
         notificationIds: [], // empty = mark all
       });
       await clientRef.current.markNotificationRead(request);
@@ -171,7 +175,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
     setHasMore(false);
 
     try {
-      const request = new ClearNotificationHistoryRequest({
+      const request = create(ClearNotificationHistoryRequestSchema, {
         beforeTimestamp,
       });
       await clientRef.current.clearNotificationHistory(request);

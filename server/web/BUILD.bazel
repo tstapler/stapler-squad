@@ -1,0 +1,17 @@
+# gazelle:prefix github.com/tstapler/stapler-squad/server/web
+
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "web",
+    srcs = ["embed.go"],
+    embedsrcs = glob(["dist/**"]),
+    importpath = "github.com/tstapler/stapler-squad/server/web",
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "dist_files",
+    srcs = glob(["dist/**"]),
+    visibility = ["//visibility:public"],
+)

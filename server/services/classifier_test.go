@@ -1205,8 +1205,8 @@ func TestClassify_MvnSafe_AutoAllow(t *testing.T) {
 
 func TestCategorizeToolName(t *testing.T) {
 	cases := []struct {
-		name     string
-		wantCat  string
+		name    string
+		wantCat string
 	}{
 		// Built-in file / search tools
 		{"Bash", ToolCategoryBuiltin},
@@ -1222,7 +1222,8 @@ func TestCategorizeToolName(t *testing.T) {
 		// Built-in agent tools
 		{"ExitPlanMode", ToolCategoryBuiltinAgent},
 		{"EnterPlanMode", ToolCategoryBuiltinAgent},
-		{"AskUserQuestion", ToolCategoryBuiltinAgent},
+		// AskUserQuestion is intentionally NOT in builtinAgentTools - it should be escalated
+		{"AskUserQuestion", ToolCategoryBuiltin},
 		{"TodoWrite", ToolCategoryBuiltinAgent},
 		{"TaskCreate", ToolCategoryBuiltinAgent},
 		{"TaskUpdate", ToolCategoryBuiltinAgent},
@@ -1317,7 +1318,7 @@ func TestClassify_AgentTools_AutoAllow(t *testing.T) {
 	ctx := ClassificationContext{}
 
 	tools := []string{
-		"ExitPlanMode", "EnterPlanMode", "AskUserQuestion",
+		"ExitPlanMode", "EnterPlanMode",
 		"TodoWrite", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList", "TaskOutput", "TaskStop",
 		"NotebookEdit", "Skill",
 	}
@@ -1327,6 +1328,17 @@ func TestClassify_AgentTools_AutoAllow(t *testing.T) {
 		if result.Decision != AutoAllow {
 			t.Errorf("tool %q: expected AutoAllow, got %v (rule=%s, reason=%s)", tool, result.Decision, result.RuleID, result.Reason)
 		}
+	}
+}
+
+func TestClassify_AskUserQuestion_Escalates(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	payload := PermissionRequestPayload{ToolName: "AskUserQuestion", ToolInput: map[string]interface{}{}}
+	result := c.Classify(payload, ctx)
+	if result.Decision != Escalate {
+		t.Errorf("AskUserQuestion: expected Escalate, got %v (rule=%s, reason=%s)", result.Decision, result.RuleID, result.Reason)
 	}
 }
 
@@ -1594,6 +1606,60 @@ func TestCategorizeToolName_RepomixPackRemote(t *testing.T) {
 	got = CategorizeToolName("mcp__repomix__pack_codebase")
 	if got != ToolCategoryMCPWrite {
 		t.Errorf("CategorizeToolName(pack_codebase) = %q, want mcp-write", got)
+	}
+}
+
+func TestClassify_OPA_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	allowed := []string{
+		"opa fmt --diff policy.rego",
+		"opa test -v opa/policy/",
+		"opa check policy.rego",
+		"opa test -v opa/spring-config/policy/ 2>&1",
+	}
+	for _, cmd := range allowed {
+		r := c.Classify(PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": cmd}}, ctx)
+		if r.Decision != AutoAllow {
+			t.Errorf("opa cmd %q: expected AutoAllow, got %v (rule=%s)", cmd, r.Decision, r.RuleID)
+		}
+	}
+
+	// opa eval/run execute policies against data — must escalate
+	risky := []string{"opa eval -d data.json query", "opa run --server"}
+	for _, cmd := range risky {
+		r := c.Classify(PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": cmd}}, ctx)
+		if r.Decision == AutoAllow {
+			t.Errorf("opa cmd %q: expected Escalate, got AutoAllow", cmd)
+		}
+	}
+}
+
+func TestClassify_TSC_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	allowed := []string{
+		"tsc --noEmit",
+		"tsc",
+		"tsc --noEmit --strict",
+		"/path/to/node_modules/.bin/tsc --noEmit",
+	}
+	for _, cmd := range allowed {
+		r := c.Classify(PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": cmd}}, ctx)
+		if r.Decision != AutoAllow {
+			t.Errorf("tsc cmd %q: expected AutoAllow, got %v (rule=%s, reason=%s)", cmd, r.Decision, r.RuleID, r.Reason)
+		}
+	}
+
+	// tsc with output flags writes files — must escalate
+	risky := []string{"tsc --outDir dist", "tsc --outFile bundle.js", "tsc --declaration"}
+	for _, cmd := range risky {
+		r := c.Classify(PermissionRequestPayload{ToolName: "Bash", ToolInput: map[string]interface{}{"command": cmd}}, ctx)
+		if r.Decision == AutoAllow {
+			t.Errorf("tsc cmd %q: expected Escalate, got AutoAllow", cmd)
+		}
 	}
 }
 

@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useRef } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
-import { LogUserInteractionRequest } from "@/gen/session/v1/session_pb";
+import { SessionService } from "@/gen/session/v1/session_pb";
+import { LogUserInteractionRequest, LogUserInteractionRequestSchema } from "@/gen/session/v1/session_pb";
 import { UserInteractionEvent_InteractionType } from "@/gen/session/v1/events_pb";
+import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl } from "@/lib/config";
 
 interface UseAuditLogOptions {
@@ -24,7 +25,7 @@ interface AuditLogEntry {
 export function useAuditLog(options: UseAuditLogOptions = {}) {
   const { baseUrl = getApiBaseUrl(), enabled = true } = options;
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   // Initialize gRPC client on first use
   const getClient = useCallback(() => {
@@ -32,7 +33,7 @@ export function useAuditLog(options: UseAuditLogOptions = {}) {
       const transport = createConnectTransport({
         baseUrl,
       });
-      clientRef.current = createPromiseClient(SessionService, transport);
+      clientRef.current = createClient(SessionService, transport);
     }
     return clientRef.current;
   }, [baseUrl]);
@@ -46,7 +47,7 @@ export function useAuditLog(options: UseAuditLogOptions = {}) {
 
       try {
         const client = getClient();
-        const request = new LogUserInteractionRequest({
+        const request = create(LogUserInteractionRequestSchema, {
           sessionId: entry.sessionId,
           interactionType: entry.interactionType,
           context: entry.context,

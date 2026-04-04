@@ -3,9 +3,9 @@
 package ent
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/session"
-	"fmt"
 	"strings"
 	"time"
 

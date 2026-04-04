@@ -337,8 +337,8 @@ func TestStoreStats(t *testing.T) {
 
 	// Parse various sequences
 	parser.Parse([]byte("\x1b[31m\x1b[32m\x1b[0m")) // 3 SGR
-	parser.Parse([]byte("\x1b[A\x1b[B"))             // 2 Cursor
-	parser.Parse([]byte("\x1b[?25h"))                // 1 DECPriv
+	parser.Parse([]byte("\x1b[A\x1b[B"))            // 2 Cursor
+	parser.Parse([]byte("\x1b[?25h"))               // 1 DECPriv
 
 	stats := store.GetStats()
 

@@ -13,9 +13,9 @@ func TestConfigurationBasedCategorization(t *testing.T) {
 	// Override the config with custom key categories
 	bridge.config = &config.Config{
 		KeyCategories: map[string]string{
-			"n":     "Custom Session",
-			"g":     "Custom Git",
-			"test":  "Custom Category",
+			"n":    "Custom Session",
+			"g":    "Custom Git",
+			"test": "Custom Category",
 		},
 	}
 

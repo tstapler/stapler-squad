@@ -1,11 +1,11 @@
 package config
 
 import (
-	"github.com/tstapler/stapler-squad/executor"
-	"github.com/tstapler/stapler-squad/log"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
 	"os/user"
@@ -261,15 +261,15 @@ func DefaultConfig() *Config {
 			}
 			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
 		}(),
-		DetectNewSessions:        true,
-		SessionDetectionInterval: 5000,
-		StateRefreshInterval:     3000,
-		LogsEnabled:              true,
-		LogsDir:                  "", // Empty string means use default location
-		LogMaxSize:               10, // 10MB
-		LogMaxFiles:              5,  // Keep 5 rotated files
-		LogMaxAge:                30, // 30 days
-		LogCompress:              true,
+		DetectNewSessions:             true,
+		SessionDetectionInterval:      5000,
+		StateRefreshInterval:          3000,
+		LogsEnabled:                   true,
+		LogsDir:                       "", // Empty string means use default location
+		LogMaxSize:                    10, // 10MB
+		LogMaxFiles:                   5,  // Keep 5 rotated files
+		LogMaxAge:                     30, // 30 days
+		LogCompress:                   true,
 		UseSessionLogs:                true,
 		TmuxSessionPrefix:             "staplersquad_", // Default prefix for backward compatibility
 		PerformBackgroundHealthChecks: true,            // Enabled by default for automated session maintenance

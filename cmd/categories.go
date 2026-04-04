@@ -22,4 +22,3 @@ var CategoryOrder = []Category{
 	CategorySystem,
 	CategoryLegacy,
 }
-

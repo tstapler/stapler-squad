@@ -1,9 +1,9 @@
 package terminal
 
 import (
+	"bytes"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"bytes"
 	"hash/fnv"
 	"sync"
 	"time"
@@ -16,22 +16,22 @@ import (
 // Unlike delta-based approaches, sends complete terminal screen state for robustness.
 // Uses LZMA compression with dynamic dictionary learning for bandwidth optimization.
 type StateGenerator struct {
-	sequence        uint64          // State sequence number (monotonic)
-	cols            int             // Terminal columns
-	rows            int             // Terminal rows
+	sequence        uint64                   // State sequence number (monotonic)
+	cols            int                      // Terminal columns
+	rows            int                      // Terminal rows
 	lastState       *sessionv1.TerminalState // Previous state for optimization
 	compressionDict *CompressionDictionary   // Dynamic dictionary for LZMA
-	mutex           sync.RWMutex    // Protects concurrent access
+	mutex           sync.RWMutex             // Protects concurrent access
 }
 
 // CompressionDictionary manages dynamic dictionary learning for LZMA compression
 type CompressionDictionary struct {
 	patterns    map[uint64][]byte // Pattern hash -> byte pattern
 	frequencies map[uint64]int    // Pattern hash -> frequency count
-	totalBytes  uint64           // Total bytes processed for statistics
-	level       string           // Dictionary level (base/session/user/project)
-	updatedAt   time.Time        // Last update timestamp
-	mutex       sync.RWMutex     // Protects dictionary updates
+	totalBytes  uint64            // Total bytes processed for statistics
+	level       string            // Dictionary level (base/session/user/project)
+	updatedAt   time.Time         // Last update timestamp
+	mutex       sync.RWMutex      // Protects dictionary updates
 }
 
 // NewStateGenerator creates a new MOSH-style state generator
@@ -156,8 +156,8 @@ func (sg *StateGenerator) GenerateStateWithCursor(output []byte, cursorX, cursor
 
 	// Create terminal state
 	state := &sessionv1.TerminalState{
-		Sequence:   sg.sequence,
-		Dimensions: terminalDimensions,
+		Sequence:    sg.sequence,
+		Dimensions:  terminalDimensions,
 		Lines:       lines,
 		Cursor:      cursor,
 		Scrollback:  scrollback,
@@ -403,10 +403,10 @@ func (sg *StateGenerator) extractPatterns(output []byte) map[uint64][]byte {
 func (sg *StateGenerator) generateCompressionMetadata(output []byte) *sessionv1.CompressionMetadata {
 	if sg.compressionDict == nil {
 		return &sessionv1.CompressionMetadata{
-			Algorithm:          "none",
-			UncompressedSize:   uint64(len(output)),
-			CompressedSize:     uint64(len(output)),
-			CompressionRatio:   1.0,
+			Algorithm:        "none",
+			UncompressedSize: uint64(len(output)),
+			CompressedSize:   uint64(len(output)),
+			CompressionRatio: 1.0,
 		}
 	}
 
@@ -423,10 +423,10 @@ func (sg *StateGenerator) generateCompressionMetadata(output []byte) *sessionv1.
 
 	compressionRatio := float32(1.0 - effectiveness*0.7)
 	return &sessionv1.CompressionMetadata{
-		Algorithm:          "lzma", // Will be implemented in next story
-		UncompressedSize:   uint64(len(output)),
-		CompressedSize:     uint64(float64(len(output)) * (1.0 - effectiveness*0.7)), // Estimated compression
-		CompressionRatio:   compressionRatio, // Estimated ratio
+		Algorithm:        "lzma", // Will be implemented in next story
+		UncompressedSize: uint64(len(output)),
+		CompressedSize:   uint64(float64(len(output)) * (1.0 - effectiveness*0.7)), // Estimated compression
+		CompressionRatio: compressionRatio,                                         // Estimated ratio
 		Dictionary: &sessionv1.DictionaryMetadata{
 			Level:         sg.compressionDict.level,
 			PatternCount:  uint64(len(sg.compressionDict.patterns)),

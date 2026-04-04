@@ -43,9 +43,9 @@ func TestStatusDetector_DetectIdle(t *testing.T) {
 	sd := NewStatusDetector()
 
 	testCases := []string{
-		"$ ",           // Shell command prompt
-		"— INSERT —",   // Vim INSERT mode
-		"— NORMAL —",   // Vim NORMAL mode
+		"$ ",         // Shell command prompt
+		"— INSERT —", // Vim INSERT mode
+		"— NORMAL —", // Vim NORMAL mode
 	}
 
 	for _, output := range testCases {

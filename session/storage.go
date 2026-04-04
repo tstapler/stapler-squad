@@ -1,9 +1,9 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"time"
 )
 

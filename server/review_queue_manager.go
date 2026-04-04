@@ -1,12 +1,12 @@
 package server
 
 import (
+	"context"
+	"fmt"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
-	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -25,14 +25,14 @@ type ReactiveQueueManager struct {
 	storage       *session.Storage // For persisting timestamps
 
 	// Streaming clients for WatchReviewQueue
-	streamClients     map[string]*reviewQueueStreamClient
-	streamClientsMu   sync.RWMutex
-	nextClientID      int
-	nextClientIDMu    sync.Mutex
+	streamClients   map[string]*reviewQueueStreamClient
+	streamClientsMu sync.RWMutex
+	nextClientID    int
+	nextClientIDMu  sync.Mutex
 
 	// Subscription channels
-	eventCh   <-chan *events.Event
-	subID     string
+	eventCh <-chan *events.Event
+	subID   string
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -41,20 +41,20 @@ type ReactiveQueueManager struct {
 
 // reviewQueueStreamClient represents a client streaming review queue events
 type reviewQueueStreamClient struct {
-	id       string
-	filters  *WatchReviewQueueFilters
-	eventCh  chan *sessionv1.ReviewQueueEvent
-	ctx      context.Context
-	cancel   context.CancelFunc
+	id      string
+	filters *WatchReviewQueueFilters
+	eventCh chan *sessionv1.ReviewQueueEvent
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 // WatchReviewQueueFilters contains filters for review queue event streaming
 type WatchReviewQueueFilters struct {
-	PriorityFilter      []session.Priority
-	ReasonFilter        []session.AttentionReason
-	SessionIDs          []string
-	IncludeStatistics   bool
-	InitialSnapshot     bool
+	PriorityFilter    []session.Priority
+	ReasonFilter      []session.AttentionReason
+	SessionIDs        []string
+	IncludeStatistics bool
+	InitialSnapshot   bool
 }
 
 // NewReactiveQueueManager creates a new reactive queue manager.
@@ -238,9 +238,12 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	}
 	rqm.publishToClients(event)
 
-	// Also publish an EventNotification to the EventBus so the notification history
-	// store captures this event. This unifies all notification sources through the EventBus.
-	if rqm.eventBus != nil {
+	// Publish an EventNotification to the EventBus so the notification history store
+	// captures this event — but skip APPROVAL_PENDING items. The ApprovalHandler already
+	// broadcasts a richer notification (with the actual command preview and approval UUID)
+	// when the HTTP hook fires. Publishing again here would create a duplicate card in the
+	// notification panel because APPROVAL_NEEDED records are never deduplicated server-side.
+	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending {
 		notifType, notifPriority := rqm.mapReviewItemToNotification(item)
 		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
 		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)

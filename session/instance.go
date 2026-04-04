@@ -1,11 +1,11 @@
 package session
 
 import (
+	"context"
+	"fmt"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
@@ -276,22 +276,22 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:                data.Title,
-		Path:                 migratedPath, // Use migrated path
-		WorkingDir:           data.WorkingDir,
-		Branch:               data.Branch,
-		Status:               data.Status,
-		Height:               data.Height,
-		Width:                data.Width,
-		CreatedAt:            data.CreatedAt,
-		UpdatedAt:            data.UpdatedAt,
-		Program:              data.Program,
-		Prompt:               data.Prompt,
-		Category:             data.Category,
-		IsExpanded:           data.IsExpanded,
-		Tags:                 tags, // Use migrated tags (includes category if needed)
-		SessionType:          data.SessionType,
-		TmuxPrefix: data.TmuxPrefix,
+		Title:       data.Title,
+		Path:        migratedPath, // Use migrated path
+		WorkingDir:  data.WorkingDir,
+		Branch:      data.Branch,
+		Status:      data.Status,
+		Height:      data.Height,
+		Width:       data.Width,
+		CreatedAt:   data.CreatedAt,
+		UpdatedAt:   data.UpdatedAt,
+		Program:     data.Program,
+		Prompt:      data.Prompt,
+		Category:    data.Category,
+		IsExpanded:  data.IsExpanded,
+		Tags:        tags, // Use migrated tags (includes category if needed)
+		SessionType: data.SessionType,
+		TmuxPrefix:  data.TmuxPrefix,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   data.LastTerminalUpdate,
 			LastMeaningfulOutput: data.LastMeaningfulOutput,
@@ -304,10 +304,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			LastUserResponse:     data.LastUserResponse,
 			ProcessingGraceUntil: data.ProcessingGraceUntil,
 		},
-		InstanceType: InstanceTypeManaged,     // Restored instances are always managed
-		IsManaged:            true,
-		ExternalMetadata:     nil,                    // External instances are not persisted
-		Permissions:          GetManagedPermissions(), // Full permissions for managed instances
+		InstanceType:     InstanceTypeManaged, // Restored instances are always managed
+		IsManaged:        true,
+		ExternalMetadata: nil,                     // External instances are not persisted
+		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
 		// GitHub integration fields
 		GitHubPRNumber:  data.GitHubPRNumber,
 		GitHubPRURL:     data.GitHubPRURL,
@@ -499,28 +499,28 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	}
 
 	instance := &Instance{
-		Title:                opts.Title,
-		Status:               Ready,
-		Path:                 absPath,
-		Branch:               opts.Branch,
-		Program:              opts.Program,
-		Height:               0,
-		Width:                0,
-		CreatedAt:            t,
-		UpdatedAt:            t,
-		AutoYes:              opts.AutoYes,
-		Prompt:               opts.Prompt,
-		ExistingWorktree:     opts.ExistingWorktree,
-		Category:             opts.Category,
-		Tags:                 opts.Tags, // Set tags from options
-		SessionType:          sessionType,
-		TmuxPrefix:           opts.TmuxPrefix,
-		TmuxServerSocket:     opts.TmuxServerSocket,
-		IsExpanded:           true, // Default to expanded for newly created instances
-		InstanceType:         InstanceTypeManaged,
-		IsManaged:            true,
-		ExternalMetadata:     nil,                    // Only set for external instances
-		Permissions: GetManagedPermissions(), // Full permissions for managed instances
+		Title:            opts.Title,
+		Status:           Ready,
+		Path:             absPath,
+		Branch:           opts.Branch,
+		Program:          opts.Program,
+		Height:           0,
+		Width:            0,
+		CreatedAt:        t,
+		UpdatedAt:        t,
+		AutoYes:          opts.AutoYes,
+		Prompt:           opts.Prompt,
+		ExistingWorktree: opts.ExistingWorktree,
+		Category:         opts.Category,
+		Tags:             opts.Tags, // Set tags from options
+		SessionType:      sessionType,
+		TmuxPrefix:       opts.TmuxPrefix,
+		TmuxServerSocket: opts.TmuxServerSocket,
+		IsExpanded:       true, // Default to expanded for newly created instances
+		InstanceType:     InstanceTypeManaged,
+		IsManaged:        true,
+		ExternalMetadata: nil,                     // Only set for external instances
+		Permissions:      GetManagedPermissions(), // Full permissions for managed instances
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   t, // Initialize to creation time
 			LastMeaningfulOutput: t, // Initialize to creation time
@@ -1952,9 +1952,9 @@ func (i *Instance) GetStatusIconForType() string {
 
 // UpdateTerminalTimestamps is a coordinator method that bridges TmuxProcessManager (I/O)
 // with ReviewState (timestamp recording). It:
-//   1. Calls tmuxManager.FilterBanners/HasMeaningfulContent (no lock needed, read-only tmux ops)
-//   2. Acquires stateMutex
-//   3. Delegates to ReviewState.UpdateTimestamps
+//  1. Calls tmuxManager.FilterBanners/HasMeaningfulContent (no lock needed, read-only tmux ops)
+//  2. Acquires stateMutex
+//  3. Delegates to ReviewState.UpdateTimestamps
 //
 // This method intentionally stays on Instance because it coordinates two sub-managers.
 // The forceUpdate parameter bypasses meaningful content checking for user-initiated interactions.

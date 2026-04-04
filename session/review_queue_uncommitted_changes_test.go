@@ -1,9 +1,9 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/git"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/git"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,7 +67,7 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		Path:        repoPath,
 		Branch:      branchName,
 		Status:      Running,
-		gitManager: GitWorktreeManager{worktree: worktree},
+		gitManager:  GitWorktreeManager{worktree: worktree},
 		started:     true,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -144,52 +144,52 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 // TestReviewQueue_UncommittedChanges_Priority verifies priority ordering
 func TestReviewQueue_UncommittedChanges_Priority(t *testing.T) {
 	tests := []struct {
-		name              string
-		existingReason    AttentionReason
-		existingPriority  Priority
-		shouldOverride    bool
-		expectedReason    AttentionReason
-		expectedPriority  Priority
+		name             string
+		existingReason   AttentionReason
+		existingPriority Priority
+		shouldOverride   bool
+		expectedReason   AttentionReason
+		expectedPriority Priority
 	}{
 		{
-			name:              "error_overrides_uncommitted",
-			existingReason:    ReasonErrorState,
-			existingPriority:  PriorityUrgent,
-			shouldOverride:    false,
-			expectedReason:    ReasonErrorState,
-			expectedPriority:  PriorityUrgent,
+			name:             "error_overrides_uncommitted",
+			existingReason:   ReasonErrorState,
+			existingPriority: PriorityUrgent,
+			shouldOverride:   false,
+			expectedReason:   ReasonErrorState,
+			expectedPriority: PriorityUrgent,
 		},
 		{
-			name:              "approval_overrides_uncommitted",
-			existingReason:    ReasonApprovalPending,
-			existingPriority:  PriorityHigh,
-			shouldOverride:    false,
-			expectedReason:    ReasonApprovalPending,
-			expectedPriority:  PriorityHigh,
+			name:             "approval_overrides_uncommitted",
+			existingReason:   ReasonApprovalPending,
+			existingPriority: PriorityHigh,
+			shouldOverride:   false,
+			expectedReason:   ReasonApprovalPending,
+			expectedPriority: PriorityHigh,
 		},
 		{
-			name:              "input_overrides_uncommitted",
-			existingReason:    ReasonInputRequired,
-			existingPriority:  PriorityMedium,
-			shouldOverride:    false,
-			expectedReason:    ReasonInputRequired,
-			expectedPriority:  PriorityMedium,
+			name:             "input_overrides_uncommitted",
+			existingReason:   ReasonInputRequired,
+			existingPriority: PriorityMedium,
+			shouldOverride:   false,
+			expectedReason:   ReasonInputRequired,
+			expectedPriority: PriorityMedium,
 		},
 		{
-			name:              "uncommitted_can_override_idle",
-			existingReason:    ReasonIdleTimeout,
-			existingPriority:  PriorityLow,
-			shouldOverride:    true,
-			expectedReason:    ReasonUncommittedChanges,
-			expectedPriority:  PriorityLow,
+			name:             "uncommitted_can_override_idle",
+			existingReason:   ReasonIdleTimeout,
+			existingPriority: PriorityLow,
+			shouldOverride:   true,
+			expectedReason:   ReasonUncommittedChanges,
+			expectedPriority: PriorityLow,
 		},
 		{
-			name:              "uncommitted_can_override_complete",
-			existingReason:    ReasonTaskComplete,
-			existingPriority:  PriorityLow,
-			shouldOverride:    true,
-			expectedReason:    ReasonUncommittedChanges,
-			expectedPriority:  PriorityLow,
+			name:             "uncommitted_can_override_complete",
+			existingReason:   ReasonTaskComplete,
+			existingPriority: PriorityLow,
+			shouldOverride:   true,
+			expectedReason:   ReasonUncommittedChanges,
+			expectedPriority: PriorityLow,
 		},
 	}
 
@@ -224,7 +224,7 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 		Path:        "/tmp/test-path",
 		Branch:      "",
 		Status:      Running,
-		gitManager: GitWorktreeManager{worktree: nil}, // No worktree
+		gitManager:  GitWorktreeManager{worktree: nil}, // No worktree
 		started:     true,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -307,7 +307,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		Path:        repoPath,
 		Branch:      branchName,
 		Status:      Running,
-		gitManager: GitWorktreeManager{worktree: worktree},
+		gitManager:  GitWorktreeManager{worktree: worktree},
 		started:     true,
 		CreatedAt:   now,
 		UpdatedAt:   now,

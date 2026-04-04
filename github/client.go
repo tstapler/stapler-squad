@@ -11,22 +11,22 @@ import (
 
 // PRInfo contains metadata about a GitHub pull request
 type PRInfo struct {
-	Number      int       `json:"number"`
-	Title       string    `json:"title"`
-	Body        string    `json:"body"`
-	HeadRef     string    `json:"headRefName"`
-	BaseRef     string    `json:"baseRefName"`
-	State       string    `json:"state"`
-	Author      string    `json:"author"`
-	Labels      []string  `json:"labels"`
-	HTMLURL     string    `json:"url"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	IsDraft     bool      `json:"isDraft"`
-	Mergeable   string    `json:"mergeable"`
-	Additions   int       `json:"additions"`
-	Deletions   int       `json:"deletions"`
-	ChangedFiles int      `json:"changedFiles"`
+	Number       int       `json:"number"`
+	Title        string    `json:"title"`
+	Body         string    `json:"body"`
+	HeadRef      string    `json:"headRefName"`
+	BaseRef      string    `json:"baseRefName"`
+	State        string    `json:"state"`
+	Author       string    `json:"author"`
+	Labels       []string  `json:"labels"`
+	HTMLURL      string    `json:"url"`
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+	IsDraft      bool      `json:"isDraft"`
+	Mergeable    string    `json:"mergeable"`
+	Additions    int       `json:"additions"`
+	Deletions    int       `json:"deletions"`
+	ChangedFiles int       `json:"changedFiles"`
 }
 
 // PRComment represents a comment on a PR (either issue comment or review comment)

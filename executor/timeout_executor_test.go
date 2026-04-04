@@ -158,9 +158,9 @@ func TestTimeoutExecutor_ConcurrentExecution(t *testing.T) {
 func TestTimeoutExecutor_TimeoutDuration(t *testing.T) {
 	// Test different timeout durations
 	testCases := []struct {
-		name    string
-		timeout time.Duration
-		sleep   string
+		name          string
+		timeout       time.Duration
+		sleep         string
 		shouldTimeout bool
 	}{
 		{

@@ -1,0 +1,9 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "compression",
+    srcs = ["lzma.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/compression",
+    visibility = ["//visibility:public"],
+    deps = ["@com_github_ulikunitz_xz//:xz"],
+)

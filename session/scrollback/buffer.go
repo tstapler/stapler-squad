@@ -28,13 +28,13 @@ type CircularBuffer struct {
 // NewCircularBuffer creates a new circular buffer with the specified maximum size.
 func NewCircularBuffer(maxSize int) *CircularBuffer {
 	return &CircularBuffer{
-		entries: make([]ScrollbackEntry, maxSize),
-		head:    0,
-		tail:    0,
-		size:    0,
-		maxSize: maxSize,
+		entries:  make([]ScrollbackEntry, maxSize),
+		head:     0,
+		tail:     0,
+		size:     0,
+		maxSize:  maxSize,
 		sequence: 0,
-		dirty:   false,
+		dirty:    false,
 	}
 }
 

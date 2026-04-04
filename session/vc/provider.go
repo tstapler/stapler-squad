@@ -96,9 +96,9 @@ type PushOptions struct {
 
 // CommitOptions contains options for the Commit operation
 type CommitOptions struct {
-	Message   string   // Commit message
-	Amend     bool     // Amend the last commit
-	AllowEmpty bool    // Allow empty commits
-	Author    string   // Override author
-	Files     []string // Specific files to commit (empty = all staged)
+	Message    string   // Commit message
+	Amend      bool     // Amend the last commit
+	AllowEmpty bool     // Allow empty commits
+	Author     string   // Override author
+	Files      []string // Specific files to commit (empty = all staged)
 }

@@ -313,12 +313,12 @@ func (e *SearchEngine) GetStats() SearchEngineStats {
 	docStats := e.docStore.GetStats()
 
 	return SearchEngineStats{
-		TotalDocuments:  indexStats.TotalDocs,
-		TotalTerms:      indexStats.TotalTerms,
-		TotalPostings:   indexStats.TotalPostings,
-		TotalSessions:   docStats.TotalSessions,
-		AvgDocLength:    indexStats.AvgDocLength,
-		AvgTermsPerDoc:  indexStats.AvgTermsPerDoc,
+		TotalDocuments: indexStats.TotalDocs,
+		TotalTerms:     indexStats.TotalTerms,
+		TotalPostings:  indexStats.TotalPostings,
+		TotalSessions:  docStats.TotalSessions,
+		AvgDocLength:   indexStats.AvgDocLength,
+		AvgTermsPerDoc: indexStats.AvgTermsPerDoc,
 	}
 }
 

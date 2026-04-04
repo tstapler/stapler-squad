@@ -13,10 +13,10 @@ package services
 // See: docs/tasks/unified-websocket-streaming.md
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
-	"fmt"
 	"net/http"
 )
 

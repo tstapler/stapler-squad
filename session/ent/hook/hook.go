@@ -3,9 +3,9 @@
 package hook
 
 import (
-	"github.com/tstapler/stapler-squad/session/ent"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // The ClaudeMetadataFunc type is an adapter to allow the use of ordinary

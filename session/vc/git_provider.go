@@ -9,7 +9,7 @@ import (
 
 // GitProvider implements VCSProvider for Git repositories
 type GitProvider struct {
-	workDir string
+	workDir  string
 	repoRoot string
 }
 

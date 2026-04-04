@@ -136,14 +136,14 @@ func GetExternalPermissions(allowAttach bool) InstancePermissions {
 // since they're explicitly opted-in by launching through claude-mux with tmux session.
 func GetMuxExternalPermissions() InstancePermissions {
 	return InstancePermissions{
-		CanView:              true,
-		CanAttach:            true,
-		CanSendCommand:       true,
-		CanPause:             false, // Can't pause external process
-		CanResume:            false, // Can't resume external process
-		CanDestroy:           true,  // Can kill tmux session (unified architecture)
-		CanModifyGit:         false, // No git worktree management
-		CanAddToQueue:        true,  // Can add to review queue for approvals
+		CanView:        true,
+		CanAttach:      true,
+		CanSendCommand: true,
+		CanPause:       false, // Can't pause external process
+		CanResume:      false, // Can't resume external process
+		CanDestroy:     true,  // Can kill tmux session (unified architecture)
+		CanModifyGit:   false, // No git worktree management
+		CanAddToQueue:  true,  // Can add to review queue for approvals
 		RequiresConfirmation: map[string]bool{
 			"destroy": true, // Require confirmation for killing external sessions
 		},

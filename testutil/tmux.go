@@ -1,9 +1,9 @@
 package testutil
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"fmt"
 	"os/exec"
 	"strings"
 	"sync/atomic"

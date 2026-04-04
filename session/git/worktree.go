@@ -1,10 +1,10 @@
 package git
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
-	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"

@@ -3,9 +3,9 @@
 package ent
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
-	"fmt"
 	"strings"
 
 	"entgo.io/ent"

@@ -123,8 +123,8 @@ func TestVCSStatusTotalChanges(t *testing.T) {
 			expected: 2,
 		},
 		{
-			name: "empty status",
-			status: &VCSStatus{},
+			name:     "empty status",
+			status:   &VCSStatus{},
 			expected: 0,
 		},
 	}

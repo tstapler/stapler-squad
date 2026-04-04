@@ -3,12 +3,12 @@
 package ent
 
 import (
-	"github.com/tstapler/stapler-squad/session/ent/predicate"
-	"github.com/tstapler/stapler-squad/session/ent/session"
-	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"context"
 	"database/sql/driver"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"math"
 
 	"entgo.io/ent"

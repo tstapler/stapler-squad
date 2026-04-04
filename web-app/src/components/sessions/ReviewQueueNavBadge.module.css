@@ -42,3 +42,9 @@
 .badge[data-count-medium="true"] {
   background: var(--warning-color, #ff8c00);
 }
+
+@media (prefers-reduced-motion: reduce) {
+  .badge:not(:empty) {
+    animation: none;
+  }
+}

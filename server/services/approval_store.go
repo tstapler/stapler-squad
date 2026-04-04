@@ -1,10 +1,10 @@
 package services
 
 import (
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session"
 	"os"
 	"path/filepath"
 	"sync"
@@ -391,8 +391,8 @@ func (s *ApprovalStore) loadFromDisk() error {
 			PermissionMode:  p.PermissionMode,
 			CreatedAt:       p.CreatedAt,
 			ExpiresAt:       p.ExpiresAt,
-			Orphaned:        true,       // Always mark as orphaned on load
-			decisionCh:      nil,        // No live HTTP connection
+			Orphaned:        true, // Always mark as orphaned on load
+			decisionCh:      nil,  // No live HTTP connection
 		}
 		s.pending[a.ID] = a
 		s.bySession[a.SessionID] = append(s.bySession[a.SessionID], a.ID)

@@ -1,0 +1,23 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "events",
+    srcs = [
+        "bus.go",
+        "subscriber.go",
+        "types.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/events",
+    visibility = ["//visibility:public"],
+    deps = ["//session"],
+)
+
+go_test(
+    name = "events_test",
+    srcs = [
+        "bus_bench_test.go",
+        "bus_test.go",
+    ],
+    embed = [":events"],
+    deps = ["//session"],
+)

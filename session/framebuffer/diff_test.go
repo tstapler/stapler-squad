@@ -436,16 +436,16 @@ func TestColorToSGR(t *testing.T) {
 		foreground bool
 		expected   string
 	}{
-		{"", true, "39"},           // Default fg
-		{"", false, "49"},          // Default bg
-		{"color0", true, "30"},     // Black fg
-		{"color1", true, "31"},     // Red fg
-		{"color7", false, "47"},    // White bg
-		{"bright-color0", true, "90"},   // Bright black fg
-		{"bright-color1", false, "101"}, // Bright red bg
-		{"color-196", true, "38;5;196"}, // 256-color fg
-		{"color-255", false, "48;5;255"}, // 256-color bg
-		{"rgb(255,0,0)", true, "38;2;255;0;0"}, // RGB red fg
+		{"", true, "39"},                        // Default fg
+		{"", false, "49"},                       // Default bg
+		{"color0", true, "30"},                  // Black fg
+		{"color1", true, "31"},                  // Red fg
+		{"color7", false, "47"},                 // White bg
+		{"bright-color0", true, "90"},           // Bright black fg
+		{"bright-color1", false, "101"},         // Bright red bg
+		{"color-196", true, "38;5;196"},         // 256-color fg
+		{"color-255", false, "48;5;255"},        // 256-color bg
+		{"rgb(255,0,0)", true, "38;2;255;0;0"},  // RGB red fg
 		{"rgb(0,255,0)", false, "48;2;0;255;0"}, // RGB green bg
 	}
 

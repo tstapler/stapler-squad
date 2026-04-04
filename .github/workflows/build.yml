@@ -8,6 +8,9 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/build.yml'
+      - 'MODULE.bazel'
+      - 'BUILD.bazel'
+      - '**/BUILD.bazel'
   pull_request:
     branches: [ main ]
     paths:
@@ -15,8 +18,70 @@ on:
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/build.yml'
+      - 'MODULE.bazel'
+      - 'BUILD.bazel'
+      - '**/BUILD.bazel'
 
 jobs:
+  # Bazel build and test with cross-platform support
+  bazel:
+    name: Bazel Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - stapler-squad
+          - stapler-squad_linux_amd64
+          - stapler-squad_linux_arm64
+          - stapler-squad_darwin_amd64
+          - stapler-squad_darwin_arm64
+          - stapler-squad_windows_amd64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: web-app/package-lock.json
+
+    - name: Install buf
+      run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+    - name: Install Bazelisk
+      run: |
+        mkdir -p "$HOME/bin"
+        curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64 -o "$HOME/bin/bazel"
+        chmod +x "$HOME/bin/bazel"
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Generate protobuf code
+      run: make proto-gen
+
+    - name: Build web UI
+      run: make web-build
+
+    - name: Run Gazelle to generate BUILD files
+      run: bazel run //:gazelle
+
+    - name: Build with Bazel
+      run: bazel build //:${{ matrix.target }}
+
+    - name: Verify binary
+      run: |
+        OUTPUT_PATH=$(bazel info output_path)
+        find "$OUTPUT_PATH" -name "${{ matrix.target }}" -type f 2>/dev/null | head -1 | xargs -I{} ls -la {}
+        find "$OUTPUT_PATH" -name "${{ matrix.target }}*" -type f 2>/dev/null | head -1 | xargs -I{} file {}
+
+  # Legacy Go build - kept for compatibility during transition
   build:
     name: Build Binary and Test
     runs-on: ubuntu-latest
@@ -24,6 +89,22 @@ jobs:
       matrix:
         goos: [linux, darwin, windows]
         goarch: [amd64, arm64]
+        include:
+          - goos: linux
+            goarch: amd64
+            bazel_platform: linux_amd64
+          - goos: linux
+            goarch: arm64
+            bazel_platform: linux_arm64
+          - goos: darwin
+            goarch: amd64
+            bazel_platform: darwin_amd64
+          - goos: darwin
+            goarch: arm64
+            bazel_platform: darwin_arm64
+          - goos: windows
+            goarch: amd64
+            bazel_platform: windows_amd64
         exclude:
           - goos: windows
             goarch: arm64
@@ -34,13 +115,43 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.23'
+        go-version: '1.25'
         cache: true
 
-    - name: Run tests
-      run: go test -v ./...
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: web-app/package-lock.json
 
-    - name: Build
+    - name: Install buf
+      run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+    - name: Install Bazelisk
+      run: |
+        # Install Bazelisk from GitHub releases (works on all platforms)
+        # Always use amd64 Bazelisk - Bazel itself handles cross-compilation
+        mkdir -p "$HOME/bin"
+        OS="${{ matrix.goos }}"
+        if [ "$OS" = "windows" ]; then
+          curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-windows-amd64.exe -o "$HOME/bin/bazel.exe"
+        else
+          curl -fsSL "https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-${OS}-amd64" -o "$HOME/bin/bazel"
+          chmod +x "$HOME/bin/bazel"
+        fi
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Generate protobuf code
+      run: make proto-gen
+
+    - name: Build web UI
+      run: make web-build
+
+    - name: Run tests
+      run: go test -short ./...
+
+    - name: Build with Go
       env:
         GOOS: ${{ matrix.goos }}
         GOARCH: ${{ matrix.goarch }}
@@ -49,7 +160,9 @@ jobs:
         if [ "${{ matrix.goos }}" = "windows" ]; then
           BINARY_NAME=$BINARY_NAME.exe
         fi
-        go build -v -o build/${{ matrix.goos }}_${{ matrix.goarch }}/$BINARY_NAME
+        GOOS=$GOOS GOARCH=$GOARCH go build -o $BINARY_NAME .
+        mkdir -p build/${{ matrix.goos }}_${{ matrix.goarch }}
+        mv $BINARY_NAME build/${{ matrix.goos }}_${{ matrix.goarch }}/
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4

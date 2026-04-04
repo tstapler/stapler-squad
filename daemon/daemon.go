@@ -1,11 +1,11 @@
 package daemon
 
 import (
+	"fmt"
+	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
-	"fmt"
-	"github.com/fsnotify/fsnotify"
 	"os"
 	"os/exec"
 	"os/signal"

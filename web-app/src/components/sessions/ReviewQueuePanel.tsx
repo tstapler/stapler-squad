@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
@@ -50,6 +50,11 @@ export function ReviewQueuePanel({
   );
   // Track whether queue ever had items so we can show "all done" vs generic empty state
   const [hadItems, setHadItems] = useState(false);
+
+  // Live region announcement text for screen readers
+  const [liveAnnouncement, setLiveAnnouncement] = useState('');
+  // Prevent announcement on initial mount
+  const hasMountedRef = useRef(false);
 
   const {
     items: allItems,
@@ -103,9 +108,24 @@ export function ReviewQueuePanel({
     }
   }, [items.length]);
 
+  // Update live announcement for screen readers when queue changes
+  useEffect(() => {
+    if (loading) return;
+    if (!hasMountedRef.current) {
+      hasMountedRef.current = true;
+      return; // Skip announcement on initial mount
+    }
+    if (items.length === 0 && hadItems) {
+      setLiveAnnouncement('Queue cleared. All items reviewed.');
+    } else if (items.length > 0) {
+      setLiveAnnouncement(`${items.length} ${items.length === 1 ? 'item' : 'items'} need attention.`);
+    }
+  }, [items.length, hadItems, loading]);
+
   // Format duration in seconds (e.g., averageAgeSeconds, oldestAgeSeconds)
   const formatDuration = (durationSeconds: bigint): string => {
     const duration = Number(durationSeconds);
+    if (duration < 0 || duration > 31_536_000) return "Unknown"; // Cap at 1 year; guards clock skew / unit mismatch
     if (duration < 60) return `${duration}s`;
     if (duration < 3600) return `${Math.floor(duration / 60)}m`;
     if (duration < 86400) return `${Math.floor(duration / 3600)}h`;
@@ -185,6 +205,10 @@ export function ReviewQueuePanel({
 
   return (
     <div className={styles.panel} data-testid="review-queue">
+      {/* Screen reader live region for queue count changes */}
+      <div aria-live="polite" aria-atomic="true" className={styles.visuallyHidden}>
+        {liveAnnouncement}
+      </div>
       <div className={styles.header}>
         <div className={styles.titleRow}>
           <h2 className={styles.title}>
@@ -229,6 +253,7 @@ export function ReviewQueuePanel({
             <button
               className={`${styles.filterButton} ${priorityFilter === undefined ? styles.active : ""}`}
               onClick={() => handleFilterByPriority(undefined)}
+              aria-pressed={priorityFilter === undefined}
             >
               All ({totalItems})
             </button>
@@ -241,6 +266,7 @@ export function ReviewQueuePanel({
                     className={`${styles.filterButton} ${priorityFilter === priority ? styles.active : ""}`}
                     onClick={() => handleFilterByPriority(priority)}
                     disabled={count === 0}
+                    aria-pressed={priorityFilter === priority}
                   >
                     {getPriorityLabel(priority)} ({count})
                   </button>
@@ -256,6 +282,7 @@ export function ReviewQueuePanel({
             <button
               className={`${styles.filterButton} ${reasonFilter === undefined ? styles.active : ""}`}
               onClick={() => handleFilterByReason(undefined)}
+              aria-pressed={reasonFilter === undefined}
             >
               All ({totalItems})
             </button>
@@ -275,6 +302,7 @@ export function ReviewQueuePanel({
                   className={`${styles.filterButton} ${reasonFilter === reason ? styles.active : ""}`}
                   onClick={() => handleFilterByReason(reason)}
                   disabled={count === 0}
+                  aria-pressed={reasonFilter === reason}
                 >
                   {getReasonLabel(reason)} ({count})
                 </button>
@@ -433,27 +461,27 @@ export function ReviewQueuePanel({
                       </button>
                     </>
                   )}
-                  <button
-                    className={styles.skipButton}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      // If there's a pending approval, deny it so the underlying request is resolved
-                      if (item.metadata?.["pending_approval_id"]) {
-                        denyRequest(item.metadata["pending_approval_id"]).catch(() => {});
-                      }
-                      if (onSkipSession) {
-                        onSkipSession(item.sessionId);
-                      } else {
-                        acknowledgeSession(item.sessionId);
-                      }
-                      onAcknowledged?.(item.sessionId);
-                    }}
-                    title="Acknowledge session (remove from queue)"
-                    aria-label="Acknowledge session"
-                    data-testid={`acknowledge-${item.sessionId}`}
-                  >
-                    ⏭
-                  </button>
+                  {/* Skip button: only shown for non-approval items.
+                      Approval items already have explicit ✓ Approve / ✗ Deny buttons above. */}
+                  {!item.metadata?.["pending_approval_id"] && (
+                    <button
+                      className={styles.skipButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (onSkipSession) {
+                          onSkipSession(item.sessionId);
+                        } else {
+                          acknowledgeSession(item.sessionId);
+                        }
+                        onAcknowledged?.(item.sessionId);
+                      }}
+                      title="Acknowledge session (remove from queue)"
+                      aria-label="Acknowledge session"
+                      data-testid={`acknowledge-${item.sessionId}`}
+                    >
+                      ⏭
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

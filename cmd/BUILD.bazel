@@ -1,0 +1,36 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "cmd",
+    srcs = [
+        "categories.go",
+        "contexts.go",
+        "init.go",
+        "migration.go",
+        "permissions.go",
+        "registry.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/cmd",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/commands",
+        "//cmd/interfaces",
+        "//config",
+        "//log",
+        "//session",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+    ],
+)
+
+go_test(
+    name = "cmd_test",
+    srcs = [
+        "bridge_test.go",
+        "config_integration_test.go",
+    ],
+    embed = [":cmd"],
+    deps = [
+        "//cmd/interfaces",
+        "//config",
+    ],
+)

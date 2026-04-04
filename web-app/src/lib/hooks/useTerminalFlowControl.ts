@@ -1,7 +1,8 @@
 "use client";
 
 import { useRef, useState, useCallback } from "react";
-import { TerminalData, TerminalInput, TerminalResize, ScrollbackRequest, CurrentPaneRequest, FlowControl, InputWithEcho } from "@/gen/session/v1/events_pb";
+import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema, InputWithEcho, InputWithEchoSchema } from "@/gen/session/v1/events_pb";
+import { create } from "@bufbuild/protobuf";
 import { StateApplicator } from "@/lib/terminal/StateApplicator";
 import { EchoOverlay } from "@/lib/terminal/EchoOverlay";
 import type { Terminal } from '@xterm/xterm';
@@ -126,7 +127,7 @@ export function useTerminalFlowControl({
         rows: currentTerminal.rows,
       };
 
-      const currentPaneReq = new CurrentPaneRequest({
+      const currentPaneReq = create(CurrentPaneRequestSchema, {
         lines: 50,
         includeEscapes: true,
         targetCols: currentTerminal.cols,
@@ -135,7 +136,7 @@ export function useTerminalFlowControl({
       });
 
       pushMessage(
-        new TerminalData({
+        create(TerminalDataSchema, {
           sessionId,
           data: {
             case: "currentPaneRequest",
@@ -310,11 +311,11 @@ export function useTerminalFlowControl({
     try {
       const inputBytes = new TextEncoder().encode(input);
       pushMessage(
-        new TerminalData({
+        create(TerminalDataSchema, {
           sessionId,
           data: {
             case: "input",
-            value: new TerminalInput({ data: inputBytes }),
+            value: create(TerminalInputSchema, { data: inputBytes }),
           },
         })
       );
@@ -340,11 +341,11 @@ export function useTerminalFlowControl({
       const inputBytes = new TextEncoder().encode(input);
 
       pushMessage(
-        new TerminalData({
+        create(TerminalDataSchema, {
           sessionId,
           data: {
             case: "inputEcho",
-            value: new InputWithEcho({
+            value: create(InputWithEchoSchema, {
               data: inputBytes,
               echoNum: echoNum,
               clientTimestampMs: BigInt(clientTimestamp),
@@ -379,11 +380,11 @@ export function useTerminalFlowControl({
       console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
       lastResizeTimeRef.current = now;
       pushMessage(
-        new TerminalData({
+        create(TerminalDataSchema, {
           sessionId,
           data: {
             case: "resize",
-            value: new TerminalResize({ cols, rows }),
+            value: create(TerminalResizeSchema, { cols, rows }),
           },
         })
       );
@@ -394,11 +395,11 @@ export function useTerminalFlowControl({
 
         console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
         pushMessage(
-          new TerminalData({
+          create(TerminalDataSchema, {
             sessionId,
             data: {
               case: "currentPaneRequest",
-              value: new CurrentPaneRequest({
+              value: create(CurrentPaneRequestSchema, {
                 lines: 50,
                 includeEscapes: true,
                 targetCols: cols,
@@ -423,11 +424,11 @@ export function useTerminalFlowControl({
     try {
       console.log(`[useTerminalFlowControl] Requesting scrollback: fromSeq=${fromSequence}, limit=${limit}`);
       pushMessage(
-        new TerminalData({
+        create(TerminalDataSchema, {
           sessionId,
           data: {
             case: "scrollbackRequest",
-            value: new ScrollbackRequest({
+            value: create(ScrollbackRequestSchema, {
               fromSequence: BigInt(fromSequence),
               limit,
             }),
@@ -448,11 +449,11 @@ export function useTerminalFlowControl({
     try {
       console.log(`[useTerminalFlowControl] Sending flow control: paused=${paused}, watermark=${watermark || 'N/A'}`);
       pushMessage(
-        new TerminalData({
+        create(TerminalDataSchema, {
           sessionId,
           data: {
             case: "flowControl",
-            value: new FlowControl({
+            value: create(FlowControlSchema, {
               paused,
               watermark: watermark !== undefined ? BigInt(watermark) : undefined,
             }),

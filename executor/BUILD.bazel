@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "executor",
+    srcs = [
+        "circuit_breaker.go",
+        "executor.go",
+        "registry.go",
+        "timeout_executor.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/executor",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "executor_test",
+    srcs = [
+        "circuit_breaker_test.go",
+        "timeout_executor_test.go",
+    ],
+    embed = [":executor"],
+    deps = [
+        "@com_github_stretchr_testify//assert",
+        "@com_github_stretchr_testify//require",
+    ],
+)

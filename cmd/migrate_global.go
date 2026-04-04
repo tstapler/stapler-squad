@@ -1,3 +1,4 @@
+//go:build ignore
 // +build ignore
 
 package main
@@ -37,7 +38,7 @@ func main() {
 
 	// Parse state.json to extract instances
 	var state struct {
-		HelpScreensSeen uint32                `json:"help_screens_seen"`
+		HelpScreensSeen uint32                 `json:"help_screens_seen"`
 		Instances       []session.InstanceData `json:"instances"`
 	}
 	if err := json.Unmarshal(stateData, &state); err != nil {
@@ -120,7 +121,7 @@ func main() {
 	fmt.Printf("SQLite database size: %.2f MB\n", float64(dbInfo.Size())/(1024*1024))
 
 	// Calculate space saved
-	spaceSaved := float64(len(stateData)-int(dbInfo.Size()))/(1024*1024)
+	spaceSaved := float64(len(stateData)-int(dbInfo.Size())) / (1024 * 1024)
 	fmt.Printf("Space saved: %.2f MB (%.1f%% reduction)\n",
 		spaceSaved,
 		(spaceSaved/float64(len(stateData)))*100*1024*1024)

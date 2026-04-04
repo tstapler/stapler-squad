@@ -95,8 +95,8 @@ func LoadDiscoveryConfig() *DiscoveryConfig {
 
 	// Validate mode and use default if invalid
 	if config.Mode != DiscoveryManagedOnly &&
-	   config.Mode != DiscoveryExternalOnly &&
-	   config.Mode != DiscoveryAll {
+		config.Mode != DiscoveryExternalOnly &&
+		config.Mode != DiscoveryAll {
 		log.WarningLog.Printf("invalid discovery mode '%s', using default", config.Mode)
 		config.Mode = DiscoveryManagedOnly
 	}

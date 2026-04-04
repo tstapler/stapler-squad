@@ -3,11 +3,11 @@
 package ent
 
 import (
+	"context"
+	"fmt"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
-	"context"
-	"fmt"
 	"math"
 
 	"entgo.io/ent"

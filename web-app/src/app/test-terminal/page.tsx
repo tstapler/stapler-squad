@@ -3,7 +3,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { StateApplicator } from '@/lib/terminal/StateApplicator';
-import { TerminalState, TerminalLine, TerminalDimensions } from '@/gen/session/v1/events_pb';
+import { TerminalState, TerminalStateSchema, TerminalLine, TerminalLineSchema, TerminalDimensions, TerminalDimensionsSchema } from '@/gen/session/v1/events_pb';
+import { create } from "@bufbuild/protobuf";
 
 // Dynamically import xterm to avoid SSR issues
 type TerminalType = import('@xterm/xterm').Terminal;
@@ -107,16 +108,16 @@ export default function TestTerminalPage() {
       }
 
       lines.push(
-        new TerminalLine({
+        create(TerminalLineSchema, {
           content: new TextEncoder().encode(content),
         })
       );
     }
 
-    return new TerminalState({
+    return create(TerminalStateSchema, {
       sequence: BigInt(sequence),
       lines,
-      dimensions: new TerminalDimensions({
+      dimensions: create(TerminalDimensionsSchema, {
         cols: 80,
         rows: 24,
       }),

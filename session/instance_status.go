@@ -1,21 +1,21 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/log"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
 )
 
 // InstanceStatusInfo provides extended status information for an instance.
 type InstanceStatusInfo struct {
-	BasicStatus        Status         // Running, Paused, Ready
+	BasicStatus        Status                   // Running, Paused, Ready
 	ClaudeStatus       detection.DetectedStatus // If ClaudeController is active
-	StatusContext      string         // Context/details about current status (e.g., error message)
-	PendingApprovals   int            // Number of pending approvals
-	QueuedCommands     int            // Number of queued commands
-	LastCommandStatus  string         // Status of last command
-	IsControllerActive bool           // Whether ClaudeController is running
+	StatusContext      string                   // Context/details about current status (e.g., error message)
+	PendingApprovals   int                      // Number of pending approvals
+	QueuedCommands     int                      // Number of queued commands
+	LastCommandStatus  string                   // Status of last command
+	IsControllerActive bool                     // Whether ClaudeController is running
 	IdleState          detection.IdleStateInfo  // NEW: Idle state information
 }
 

@@ -35,6 +35,7 @@
     ".next/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules"
+    "node_modules",
+    "src/gen/session/v1/session_connect.ts"
   ]
 }

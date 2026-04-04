@@ -201,11 +201,11 @@ func TestApprove_AllSourceStatuses(t *testing.T) {
 	}{
 		{"Creating->Running", Creating, true},
 		{"Ready->Running", Ready, true},
-		{"Running->Running", Running, false},   // self-transition
+		{"Running->Running", Running, false}, // self-transition
 		{"Paused->Running", Paused, true},
 		{"NeedsApproval->Running", NeedsApproval, true},
 		{"Loading->Running", Loading, true},
-		{"Stopped->Running", Stopped, false},   // terminal
+		{"Stopped->Running", Stopped, false}, // terminal
 	}
 
 	for _, tt := range tests {
@@ -236,13 +236,13 @@ func TestDeny_AllSourceStatuses(t *testing.T) {
 		from       Status
 		expectPass bool
 	}{
-		{"Creating->Paused", Creating, false},     // not in allowed transitions
-		{"Ready->Paused", Ready, false},           // not in allowed transitions
+		{"Creating->Paused", Creating, false}, // not in allowed transitions
+		{"Ready->Paused", Ready, false},       // not in allowed transitions
 		{"Running->Paused", Running, true},
-		{"Paused->Paused", Paused, false},         // self-transition
+		{"Paused->Paused", Paused, false}, // self-transition
 		{"NeedsApproval->Paused", NeedsApproval, true},
-		{"Loading->Paused", Loading, false},       // not in allowed transitions
-		{"Stopped->Paused", Stopped, false},       // terminal
+		{"Loading->Paused", Loading, false}, // not in allowed transitions
+		{"Stopped->Paused", Stopped, false}, // terminal
 	}
 
 	for _, tt := range tests {

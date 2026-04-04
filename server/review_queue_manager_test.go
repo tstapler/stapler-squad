@@ -1,10 +1,10 @@
 package server
 
 import (
+	"context"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
-	"context"
 	"os"
 	"path/filepath"
 	"testing"

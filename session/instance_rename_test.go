@@ -7,37 +7,37 @@ import (
 
 func TestInstanceRename(t *testing.T) {
 	tests := []struct {
-		name        string
+		name         string
 		currentTitle string
-		newTitle    string
-		wantErr     bool
-		errType     error
+		newTitle     string
+		wantErr      bool
+		errType      error
 	}{
 		{
-			name:        "successful rename",
+			name:         "successful rename",
 			currentTitle: "old-session",
-			newTitle:    "new-session",
-			wantErr:     false,
+			newTitle:     "new-session",
+			wantErr:      false,
 		},
 		{
-			name:        "rename to same title",
+			name:         "rename to same title",
 			currentTitle: "same-session",
-			newTitle:    "same-session",
-			wantErr:     false,
+			newTitle:     "same-session",
+			wantErr:      false,
 		},
 		{
-			name:        "title too long",
+			name:         "title too long",
 			currentTitle: "normal-session",
-			newTitle:    "this-is-an-extremely-long-session-title-that-exceeds-the-maximum-allowed-length-for-a-session-title-and-should-fail-validation-when-we-try-to-rename-the-instance-to-this-very-long-title",
-			wantErr:     true,
-			errType:     ErrInvalidTitleLength,
+			newTitle:     "this-is-an-extremely-long-session-title-that-exceeds-the-maximum-allowed-length-for-a-session-title-and-should-fail-validation-when-we-try-to-rename-the-instance-to-this-very-long-title",
+			wantErr:      true,
+			errType:      ErrInvalidTitleLength,
 		},
 		{
-			name:        "title with invalid characters",
+			name:         "title with invalid characters",
 			currentTitle: "normal-session",
-			newTitle:    "invalid/session",
-			wantErr:     true,
-			errType:     ErrInvalidTitleChars,
+			newTitle:     "invalid/session",
+			wantErr:      true,
+			errType:      ErrInvalidTitleChars,
 		},
 	}
 
@@ -76,12 +76,12 @@ func TestInstanceRestart(t *testing.T) {
 	// and other dependencies, which is beyond the scope of this basic implementation.
 
 	tests := []struct {
-		name            string
-		started         bool
-		status          Status
-		preserveOutput  bool
-		wantErr         bool
-		errType         error
+		name           string
+		started        bool
+		status         Status
+		preserveOutput bool
+		wantErr        bool
+		errType        error
 	}{
 		{
 			name:           "restart unstarted instance",

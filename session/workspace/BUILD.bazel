@@ -1,0 +1,32 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "workspace",
+    srcs = [
+        "lock.go",
+        "lock_noop.go",
+        "lock_postgres.go",
+        "lock_sqlite.go",
+        "notify.go",
+        "notify_postgres.go",
+        "registry.go",
+        "types.go",
+        "vcs_batch.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/workspace",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session",
+        "//session/vc",
+    ],
+)
+
+go_test(
+    name = "workspace_test",
+    srcs = [
+        "lock_test.go",
+        "registry_test.go",
+    ],
+    embed = [":workspace"],
+    deps = ["//session"],
+)

@@ -1,10 +1,10 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/analytics"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/analytics"
 	"io"
 	"strings"
 	"sync"
@@ -36,7 +36,7 @@ type ResponseStream struct {
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
 	started      bool
-	bufferSize   int // Channel buffer size for each subscriber
+	bufferSize   int                         // Channel buffer size for each subscriber
 	escapeParser *analytics.EscapeCodeParser // For escape code analytics
 }
 

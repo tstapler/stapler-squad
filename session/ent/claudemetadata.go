@@ -3,9 +3,9 @@
 package ent
 
 import (
+	"fmt"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
-	"fmt"
 	"strings"
 
 	"entgo.io/ent"

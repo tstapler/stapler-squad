@@ -16,10 +16,10 @@ import (
 // streaming responses (ConnectRPC server-streaming) reach the client in real time.
 type compressResponseWriter struct {
 	http.ResponseWriter
-	cw          io.WriteCloser // gzip or zstd encoder; nil until first write
-	flusher     interface{ Flush() error } // zstd.Encoder; nil for gzip (uses cw as Flusher)
-	encoding    string         // "gzip" or "zstd" — sent in Content-Encoding header
-	wroteHeader bool
+	cw           io.WriteCloser             // gzip or zstd encoder; nil until first write
+	flusher      interface{ Flush() error } // zstd.Encoder; nil for gzip (uses cw as Flusher)
+	encoding     string                     // "gzip" or "zstd" — sent in Content-Encoding header
+	wroteHeader  bool
 	skipCompress bool
 }
 

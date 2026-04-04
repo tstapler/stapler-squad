@@ -21,12 +21,12 @@ type EscapeCodeEntry struct {
 
 // EscapeCodeStats provides aggregated statistics
 type EscapeCodeStats struct {
-	Enabled        bool                      `json:"enabled"`
-	TotalCodes     int64                     `json:"totalCodes"`     // Total codes recorded
-	UniqueCodes    int                       `json:"uniqueCodes"`    // Unique sequences
-	CategoryCounts map[EscapeCategory]int64  `json:"categoryCounts"` // Count by category
-	TopCodes       []EscapeCodeEntry         `json:"topCodes"`       // Most frequent codes
-	RecentCodes    []EscapeCodeEntry         `json:"recentCodes"`    // Recently seen codes
+	Enabled        bool                     `json:"enabled"`
+	TotalCodes     int64                    `json:"totalCodes"`     // Total codes recorded
+	UniqueCodes    int                      `json:"uniqueCodes"`    // Unique sequences
+	CategoryCounts map[EscapeCategory]int64 `json:"categoryCounts"` // Count by category
+	TopCodes       []EscapeCodeEntry        `json:"topCodes"`       // Most frequent codes
+	RecentCodes    []EscapeCodeEntry        `json:"recentCodes"`    // Recently seen codes
 }
 
 // EscapeCodeStore provides thread-safe storage for escape code analytics
@@ -265,10 +265,10 @@ func (s *EscapeCodeStore) Export() ([]byte, error) {
 	defer s.mu.RUnlock()
 
 	data := struct {
-		Enabled    bool                `json:"enabled"`
-		TotalCount int64               `json:"totalCount"`
-		Entries    []EscapeCodeEntry   `json:"entries"`
-		ExportedAt time.Time           `json:"exportedAt"`
+		Enabled    bool              `json:"enabled"`
+		TotalCount int64             `json:"totalCount"`
+		Entries    []EscapeCodeEntry `json:"entries"`
+		ExportedAt time.Time         `json:"exportedAt"`
 	}{
 		Enabled:    s.enabled,
 		TotalCount: s.totalCount,

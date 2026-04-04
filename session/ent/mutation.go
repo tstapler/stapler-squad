@@ -3,6 +3,9 @@
 package ent
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
@@ -10,9 +13,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
-	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"time"
 

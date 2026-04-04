@@ -1,8 +1,8 @@
 package events
 
 import (
-	"github.com/tstapler/stapler-squad/session"
 	"context"
+	"github.com/tstapler/stapler-squad/session"
 	"testing"
 )
 

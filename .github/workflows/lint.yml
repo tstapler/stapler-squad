@@ -7,6 +7,7 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
+      - '.golangci.yml'
       - '.github/workflows/lint.yml'
   pull_request:
     branches: [ main ]
@@ -14,6 +15,7 @@ on:
       - '**.go'
       - 'go.mod'
       - 'go.sum'
+      - '.golangci.yml'
       - '.github/workflows/lint.yml'
 
 jobs:
@@ -30,10 +32,10 @@ jobs:
           cache: false
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
-          version: v1.60.1
-          args: --timeout=3m --out-format=line-number --fast --max-issues-per-linter=0 --max-same-issues=0
+          version: v2.11
+          args: --timeout=3m --tests=false
           skip-cache: false
           only-new-issues: true
 
@@ -46,3 +48,4 @@ jobs:
             gofmt -d .
             exit 1
           fi
+# Trigger CI

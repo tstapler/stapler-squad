@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "analytics",
+    srcs = [
+        "escape_code_descriptions.go",
+        "escape_code_parser.go",
+        "escape_code_store.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/analytics",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "analytics_test",
+    srcs = ["escape_code_parser_test.go"],
+    embed = [":analytics"],
+)

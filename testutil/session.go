@@ -1,8 +1,8 @@
 package testutil
 
 import (
-	"github.com/tstapler/stapler-squad/session"
 	"fmt"
+	"github.com/tstapler/stapler-squad/session"
 )
 
 // SessionWaiter provides utilities for waiting on session operations

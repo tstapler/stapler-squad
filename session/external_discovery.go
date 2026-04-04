@@ -135,15 +135,15 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	// Create Instance wrapper
 	now := time.Now()
 	instance := &Instance{
-		Title:                title,
-		Path:                 discovered.Metadata.Cwd,
-		Program:              discovered.Metadata.Command,
-		Status:               Running,
-		InstanceType:         InstanceTypeExternal,
-		Category:             "External",
-		Tags:                 []string{"external", "mux"},
-		CreatedAt: now, // Initialize timestamps to avoid stale notifications
-		UpdatedAt: now,
+		Title:        title,
+		Path:         discovered.Metadata.Cwd,
+		Program:      discovered.Metadata.Command,
+		Status:       Running,
+		InstanceType: InstanceTypeExternal,
+		Category:     "External",
+		Tags:         []string{"external", "mux"},
+		CreatedAt:    now, // Initialize timestamps to avoid stale notifications
+		UpdatedAt:    now,
 		ReviewState: ReviewState{
 			LastTerminalUpdate:   now,
 			LastMeaningfulOutput: now, // Initialize to now - external sessions have output when discovered

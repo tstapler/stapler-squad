@@ -1,0 +1,25 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "notifications",
+    srcs = [
+        "store.go",
+        "subscriber.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/notifications",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//log",
+        "//server/events",
+    ],
+)
+
+go_test(
+    name = "notifications_test",
+    srcs = [
+        "store_test.go",
+        "subscriber_test.go",
+    ],
+    embed = [":notifications"],
+    deps = ["//server/events"],
+)

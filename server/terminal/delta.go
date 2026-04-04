@@ -1,21 +1,21 @@
 package terminal
 
 import (
+	"bytes"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"bytes"
 )
 
 // DeltaGenerator generates MOSH-style delta compression for terminal output.
 // Tracks terminal state and produces TerminalDelta messages containing only changed lines.
 // Reduces bandwidth by 70-90% for typical terminal usage (especially animations).
 type DeltaGenerator struct {
-	lastLines            *LineRingBuffer // Previous terminal state (ring buffer for O(1) operations)
-	version              uint64          // State version counter for synchronization
-	cols                 int             // Terminal columns (for line wrapping)
-	rows                 int             // Terminal rows (viewport size)
-	deltasSinceFullSync  int             // Count of deltas since last full sync (MOSH-inspired)
-	fullSyncInterval     int             // Send full sync every N deltas (default: 50)
+	lastLines           *LineRingBuffer // Previous terminal state (ring buffer for O(1) operations)
+	version             uint64          // State version counter for synchronization
+	cols                int             // Terminal columns (for line wrapping)
+	rows                int             // Terminal rows (viewport size)
+	deltasSinceFullSync int             // Count of deltas since last full sync (MOSH-inspired)
+	fullSyncInterval    int             // Send full sync every N deltas (default: 50)
 }
 
 // NewDeltaGenerator creates a new delta generator with initial dimensions.

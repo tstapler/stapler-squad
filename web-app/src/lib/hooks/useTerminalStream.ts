@@ -1,8 +1,9 @@
 "use client";
 
-import { createPromiseClient } from "@connectrpc/connect";
-import { SessionService } from "@/gen/session/v1/session_connect";
-import { TerminalData, CurrentPaneRequest } from "@/gen/session/v1/events_pb";
+import { createClient } from "@connectrpc/connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
+import { TerminalData, TerminalDataSchema, CurrentPaneRequest, CurrentPaneRequestSchema } from "@/gen/session/v1/events_pb";
+import { create } from "@bufbuild/protobuf";
 import { createWebsocketBasedTransport } from "@/lib/transport/websocket-transport";
 import { createAuthInterceptor } from "@/lib/config";
 import { useEffect, useRef, useState, useCallback } from "react";
@@ -80,7 +81,7 @@ export function useTerminalStream({
   const isConnectedRef = useRef(false);
   const textDecoderRef = useRef(new TextDecoder());
 
-  const clientRef = useRef(createPromiseClient(
+  const clientRef = useRef(createClient(
     SessionService,
     createWebsocketBasedTransport({
       baseUrl,
@@ -151,7 +152,7 @@ export function useTerminalStream({
       messageQueueRef.current = new MessageQueue();
 
       // Send initial handshake with dimensions
-      const currentPaneReq = new CurrentPaneRequest({
+      const currentPaneReq = create(CurrentPaneRequestSchema, {
         lines: 50,
         includeEscapes: true,
         streamingMode: streamingMode,
@@ -166,7 +167,7 @@ export function useTerminalStream({
       }
 
       messageQueueRef.current.push(
-        new TerminalData({
+        create(TerminalDataSchema, {
           sessionId,
           data: { case: "currentPaneRequest", value: currentPaneReq },
         })

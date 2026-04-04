@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "ssp",
+    srcs = [
+        "client_state.go",
+        "coordinator.go",
+        "echo_history.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/server/ssp",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//session",
+        "//session/framebuffer",
+    ],
+)

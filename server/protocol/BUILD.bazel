@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "protocol",
+    srcs = ["envelope.go"],
+    importpath = "github.com/tstapler/stapler-squad/server/protocol",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "protocol_test",
+    srcs = ["envelope_test.go"],
+    embed = [":protocol"],
+)

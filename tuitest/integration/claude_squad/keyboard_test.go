@@ -547,9 +547,9 @@ func TestNewSessionDialog(t *testing.T) {
 		// Step 5: Check if we successfully created a session
 		finalOutput := tester.GetOutput()
 		sessionCreated := strings.Contains(finalOutput, testPath) ||
-		                 strings.Contains(finalOutput, "tui-test-session") ||
-		                 strings.Contains(finalOutput, "claude") ||
-		                 strings.Contains(finalOutput, "Claude")
+			strings.Contains(finalOutput, "tui-test-session") ||
+			strings.Contains(finalOutput, "claude") ||
+			strings.Contains(finalOutput, "Claude")
 
 		if sessionCreated {
 			t.Log("✓ Session appears to have been created")

@@ -40,6 +40,27 @@ export function ApprovalPanel({ sessionId, onResolved }: ApprovalPanelProps) {
     }
   }, [approvals, onResolved]);
 
+  // Keyboard shortcuts: Enter = Approve, Shift+Enter = Deny
+  // Only active when exactly one approval is pending and terminal is not focused.
+  useEffect(() => {
+    if (approvals.length !== 1) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Enter") return;
+      if (e.ctrlKey || e.altKey || e.metaKey) return;
+      // Guard: do not fire when an input field or the terminal (textarea) has focus
+      const tag = (document.activeElement as HTMLElement)?.tagName?.toUpperCase();
+      if (tag === "INPUT" || tag === "TEXTAREA" || (document.activeElement as HTMLElement)?.isContentEditable) return;
+      e.preventDefault();
+      if (e.shiftKey) {
+        deny(approvals[0].id);
+      } else {
+        approve(approvals[0].id);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [approvals, approve, deny]);
+
   if (error) {
     return (
       <div className={styles.panel}>

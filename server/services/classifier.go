@@ -13,7 +13,7 @@ import (
 type RiskLevel int
 
 const (
-	RiskLow      RiskLevel = iota
+	RiskLow RiskLevel = iota
 	RiskMedium
 	RiskHigh
 	RiskCritical
@@ -78,8 +78,10 @@ const (
 
 // builtinAgentTools is the set of Claude Code tool names that are planning / task-management
 // tools with no side effects requiring review.
+// Note: AskUserQuestion is intentionally excluded — it should be escalated to the review queue
+// so users can see and respond to Claude's questions via the web UI.
 var builtinAgentTools = map[string]bool{
-	"exitplanmode": true, "enterplanmode": true, "askuserquestion": true,
+	"exitplanmode": true, "enterplanmode": true,
 	"todowrite": true, "taskcreate": true, "taskupdate": true, "taskget": true,
 	"tasklist": true, "taskoutput": true, "taskstop": true,
 	"notebookedit": true, "skill": true,
@@ -522,10 +524,11 @@ func (c *RuleBasedClassifier) matchesRule(rule Rule, payload PermissionRequestPa
 
 // SeedRules returns the built-in rule set, sorted by Priority descending.
 // Priority tiers:
-//   1000 — AutoDeny (critical, must fire before any allow)
-//    500 — Escalate-before-allow (targeted escalations that override allow rules at 100)
-//    100 — AutoAllow (standard development operations)
-//     50 — Escalate catch-all (operations with no allow rule; provides a helpful reason)
+//
+//	1000 — AutoDeny (critical, must fire before any allow)
+//	 500 — Escalate-before-allow (targeted escalations that override allow rules at 100)
+//	 100 — AutoAllow (standard development operations)
+//	  50 — Escalate catch-all (operations with no allow rule; provides a helpful reason)
 //
 // Criteria-based rules provide precise matching without complex regex;
 // CommandPattern is retained only where regex expressiveness is needed.
@@ -779,12 +782,12 @@ func SeedRules() []Rule {
 					"release create", "release delete", "release upload",
 				},
 			},
-			Decision:    Escalate,
-			RiskLevel:   RiskMedium,
-			Reason:      "gh write operations modify GitHub resources and should be reviewed.",
-			Priority:    500,
-			Enabled:     true,
-			Source:      "seed",
+			Decision:  Escalate,
+			RiskLevel: RiskMedium,
+			Reason:    "gh write operations modify GitHub resources and should be reviewed.",
+			Priority:  500,
+			Enabled:   true,
+			Source:    "seed",
 		},
 		{
 			// curl with file output flags (-o/-O/--output) writes response bodies to disk.
@@ -1120,11 +1123,11 @@ func SeedRules() []Rule {
 			Name:     "Allow Node.js runtime and TypeScript tools",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"node", "tsc", "ts-node", "tsx"},
+				Programs: []string{"node", "ts-node", "tsx"},
 			},
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
-			Reason:    "Node.js runtime and TypeScript compiler for project code.",
+			Reason:    "Node.js runtime and TypeScript execution tools for project code.",
 			Priority:  100,
 			Enabled:   true,
 			Source:    "seed",
@@ -1154,6 +1157,40 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Make is a standard build tool for running project tasks.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// opa fmt --diff shows formatting diffs without writing; opa test runs policy tests.
+			// opa eval/run/exec are excluded (can evaluate arbitrary policies against data).
+			ID:       "seed-allow-bash-opa",
+			Name:     "Allow OPA format check and test",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"opa"},
+				Subcommands: []string{"fmt", "test", "check"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "OPA fmt/test/check are read-only policy validation operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// tsc --noEmit is the standard type-checking invocation; tsc with output flags
+			// (--outDir, --outFile, -p) compiles and writes files — those escalate by default.
+			ID:       "seed-allow-bash-tsc",
+			Name:     "Allow TypeScript compiler (type-check only)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:       []string{"tsc"},
+				ForbiddenFlags: []string{"--outDir", "--outFile", "--declaration", "--declarationDir"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "tsc without output flags runs type-checking only (no file writes).",
 			Priority:  100,
 			Enabled:   true,
 			Source:    "seed",
@@ -1307,12 +1344,12 @@ func SeedRules() []Rule {
 			Criteria: &CommandCriteria{
 				Programs: []string{"curl"},
 			},
-			Decision:    AutoAllow,
-			RiskLevel:   RiskLow,
-			Reason:      "curl GET requests without output flags or write methods are read-only.",
-			Priority:    100,
-			Enabled:     true,
-			Source:      "seed",
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "curl GET requests without output flags or write methods are read-only.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════

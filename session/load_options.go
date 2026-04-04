@@ -75,7 +75,7 @@ var LoadForReviewQueue = LoadOptions{
 	LoadWorktree:      true, // For branch info
 	LoadDiffStats:     true, // For change indicators
 	LoadDiffContent:   false,
-	LoadTags:          true,  // For filtering
+	LoadTags:          true, // For filtering
 	LoadClaudeSession: false,
 }
 

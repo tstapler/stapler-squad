@@ -1,8 +1,8 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/log"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"regexp"
 	"strings"
 )

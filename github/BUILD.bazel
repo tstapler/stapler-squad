@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "github",
+    srcs = [
+        "client.go",
+        "clone.go",
+        "url_parser.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/github",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "github_test",
+    srcs = ["url_parser_test.go"],
+    embed = [":github"],
+)

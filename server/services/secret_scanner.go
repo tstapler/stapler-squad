@@ -32,11 +32,13 @@ var secretPatterns = []secretPattern{
 	// Generic inline secret assignments: SECRET=value, PASSWORD=value, PGPASSWORD=value, etc.
 	// The \b word boundary is intentionally omitted so that env vars like PGPASSWORD or
 	// MYSQL_ROOT_PASSWORD (where the keyword is a suffix) are also caught.
-	{Name: "Inline secret env var", Pattern: regexp.MustCompile(`(?i)(?:password|passwd|secret|api_?key|auth_?token|access_?token|private_?key)\s*=\s*\S{8,}`)},
+	// Shell variable references ($VAR, "$VAR", '${VAR}') are excluded to avoid false positives
+	// on commands like -Pflyway.password="$RDS_TOKEN" where the value is not a plaintext secret.
+	{Name: "Inline secret env var", Pattern: regexp.MustCompile(`(?i)(?:password|passwd|secret|api_?key|auth_?token|access_?token|private_?key)\s*=\s*(?:"[^"$][^"]{6,}"|'[^'$][^']{6,}'|[^\s$"'][^\s]{7,})`)},
 	// Well-known database / service credential env vars with keyword as a suffix (PGPASSWORD, MYSQL_PWD, …)
-	{Name: "Database credential env var", Pattern: regexp.MustCompile(`(?i)(?:pg|mysql|mariadb|postgres|redis|mongo(?:db)?|db|database|rabbitmq|smtp|mail)(?:_root)?(?:_?password|_?passwd|_?pwd|_pass)\s*=\s*\S{4,}`)},
+	{Name: "Database credential env var", Pattern: regexp.MustCompile(`(?i)(?:pg|mysql|mariadb|postgres|redis|mongo(?:db)?|db|database|rabbitmq|smtp|mail)(?:_root)?(?:_?password|_?passwd|_?pwd|_pass)\s*=\s*(?:"[^"$][^"]{2,}"|'[^'$][^']{2,}'|[^\s$"'][^\s]{3,})`)},
 	// CLI flags: --password=value --token=value etc.
-	{Name: "Inline secret CLI flag", Pattern: regexp.MustCompile(`(?i)--(?:password|passwd|secret|api-?key|auth-?token|access-?token|private-?key)\s*(?:=|\s+)\S{8,}`)},
+	{Name: "Inline secret CLI flag", Pattern: regexp.MustCompile(`(?i)--(?:password|passwd|secret|api-?key|auth-?token|access-?token|private-?key)\s*(?:=|\s+)(?:"[^"$][^"]{6,}"|'[^'$][^']{6,}'|[^\s$"'][^\s]{7,})`)},
 }
 
 // SecretScanResult holds the result of scanning for secrets.

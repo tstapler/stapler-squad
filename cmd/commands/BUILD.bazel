@@ -1,0 +1,26 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "commands",
+    srcs = [
+        "get_session.go",
+        "git.go",
+        "navigation.go",
+        "organization.go",
+        "pty.go",
+        "session.go",
+        "system.go",
+        "vc.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/cmd/commands",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//cmd/interfaces",
+        "//gen/proto/go/session/v1:session",
+        "//gen/proto/go/session/v1/sessionv1connect",
+        "//log",
+        "@com_connectrpc_connect//:connect",
+        "@com_github_charmbracelet_bubbletea//:bubbletea",
+        "@com_github_spf13_cobra//:cobra",
+    ],
+)

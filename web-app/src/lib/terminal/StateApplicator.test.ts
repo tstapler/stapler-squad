@@ -3,7 +3,8 @@
  */
 
 import { StateApplicator } from './StateApplicator';
-import { TerminalState, TerminalLine, CursorPosition, TerminalDimensions, LineAttributes } from '@/gen/session/v1/events_pb';
+import { TerminalState, TerminalStateSchema, TerminalLine, TerminalLineSchema, CursorPosition, CursorPositionSchema, TerminalDimensions, TerminalDimensionsSchema, LineAttributes, LineAttributesSchema } from '@/gen/session/v1/events_pb';
+import { create } from "@bufbuild/protobuf";
 
 // Mock xterm Terminal
 class MockTerminal {
@@ -134,7 +135,7 @@ describe('StateApplicator', () => {
   describe('dimension handling', () => {
     it('should resize terminal when dimensions change', () => {
       const state = createTestState(BigInt(1), ['Test']);
-      state.dimensions = new TerminalDimensions({ rows: 30, cols: 100 });
+      state.dimensions = create(TerminalDimensionsSchema, { rows: 30, cols: 100 });
 
       stateApplicator.applyState(state);
 
@@ -146,7 +147,7 @@ describe('StateApplicator', () => {
 
     it('should not resize when dimensions match', () => {
       const state = createTestState(BigInt(1), ['Test']);
-      state.dimensions = new TerminalDimensions({ rows: 24, cols: 80 }); // Same as mock default
+      state.dimensions = create(TerminalDimensionsSchema, { rows: 24, cols: 80 }); // Same as mock default
 
       mockTerminal.clearWrittenData();
       stateApplicator.applyState(state);
@@ -159,7 +160,7 @@ describe('StateApplicator', () => {
   describe('cursor handling', () => {
     it('should position cursor correctly', () => {
       const state = createTestState(BigInt(1), ['Test line']);
-      state.cursor = new CursorPosition({ row: 5, col: 10, visible: true });
+      state.cursor = create(CursorPositionSchema, { row: 5, col: 10, visible: true });
 
       stateApplicator.applyState(state);
 
@@ -170,7 +171,7 @@ describe('StateApplicator', () => {
 
     it('should hide cursor when not visible', () => {
       const state = createTestState(BigInt(1), ['Test line']);
-      state.cursor = new CursorPosition({ row: 0, col: 0, visible: false });
+      state.cursor = create(CursorPositionSchema, { row: 0, col: 0, visible: false });
 
       stateApplicator.applyState(state);
 
@@ -182,7 +183,7 @@ describe('StateApplicator', () => {
       mockTerminal.rows = 5;
       mockTerminal.cols = 10;
       const state = createTestState(BigInt(1), ['Test']);
-      state.cursor = new CursorPosition({ row: 100, col: 200, visible: true }); // Way out of bounds
+      state.cursor = create(CursorPositionSchema, { row: 100, col: 200, visible: true }); // Way out of bounds
 
       stateApplicator.applyState(state);
 
@@ -237,19 +238,19 @@ describe('StateApplicator', () => {
 // Helper function to create test states
 function createTestState(sequence: bigint, lines: string[]): TerminalState {
   const terminalLines = lines.map(content =>
-    new TerminalLine({
+    create(TerminalLineSchema, {
       content: new TextEncoder().encode(content),
-      attributes: new LineAttributes({
+      attributes: create(LineAttributesSchema, {
         isEmpty: content.length === 0,
         asciiOnly: true
       })
     })
   );
 
-  return new TerminalState({
+  return create(TerminalStateSchema, {
     sequence,
-    dimensions: new TerminalDimensions({ rows: 24, cols: 80 }),
+    dimensions: create(TerminalDimensionsSchema, { rows: 24, cols: 80 }),
     lines: terminalLines,
-    cursor: new CursorPosition({ row: 0, col: 0, visible: true })
+    cursor: create(CursorPositionSchema, { row: 0, col: 0, visible: true })
   });
 }

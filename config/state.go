@@ -1,10 +1,10 @@
 package config
 
 import (
-	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"path/filepath"
 	"time"

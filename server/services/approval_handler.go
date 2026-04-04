@@ -128,6 +128,14 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	sessionID := r.Header.Get("X-CS-Session-ID")
 	if sessionID == "" {
 		sessionID = h.mapSessionByCwd(payload.Cwd)
+	} else {
+		// Normalize the header value to the canonical instance title. The hook config
+		// injected by InjectHookConfig uses sessionTitle (canonical), but a manually
+		// configured hook or a legacy hook may use the tmux-prefixed session name
+		// (e.g. "staplersquad_my-session" instead of "my-session"). Normalizing here
+		// ensures approval notifications share the same session ID as all other
+		// notification types, preventing the same session from appearing twice in the panel.
+		sessionID = h.normalizeSessionID(sessionID)
 	}
 	if sessionID == "" {
 		sessionID = "unknown"
@@ -210,7 +218,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			log.InfoLog.Printf("[ApprovalHandler] Auto-denied %s/%s (rule=%s): %s", sessionID, payload.ToolName, result.RuleID, msg)
 			h.writeDecision(w, "deny", msg)
 			return
-		// Escalate: fall through to manual review queue
+			// Escalate: fall through to manual review queue
 		}
 	}
 
@@ -362,6 +370,37 @@ func (h *ApprovalHandler) mapSessionByCwd(cwd string) string {
 	return bestTitle
 }
 
+// normalizeSessionID maps a raw X-CS-Session-ID header value to the canonical stapler-squad
+// instance title. If the value already matches a known instance title it is returned unchanged.
+// If the value appears to be a tmux-prefixed session name (e.g. "staplersquad_my-session"),
+// the method strips the prefix and returns the matching instance title. Returns the original
+// value unchanged when no match is found (preserves existing behaviour for unknown sessions).
+func (h *ApprovalHandler) normalizeSessionID(sessionID string) string {
+	if h.storage == nil {
+		return sessionID
+	}
+	instances, err := h.storage.LoadInstances()
+	if err != nil {
+		return sessionID
+	}
+	// First pass: exact title match — nothing to normalize.
+	for _, inst := range instances {
+		if inst.Title == sessionID {
+			return sessionID
+		}
+	}
+	// Second pass: tmux-prefix stripping.
+	// The tmux session name is "<prefix>_<title>" where the prefix is arbitrary but ends
+	// with "_". Check whether sessionID has a "_<title>" suffix for any known instance.
+	for _, inst := range instances {
+		suffix := "_" + inst.Title
+		if strings.HasSuffix(sessionID, suffix) && len(sessionID) > len(suffix) {
+			return inst.Title
+		}
+	}
+	return sessionID
+}
+
 // writeDecision writes the hookSpecificOutput JSON response to the HTTP response.
 func (h *ApprovalHandler) writeDecision(w http.ResponseWriter, behavior, message string) {
 	resp := hookDecisionResponse{
@@ -419,8 +458,8 @@ type claudeSettingsHooks struct {
 // claudeSettings is the partial structure of .claude/settings.local.json.
 // Only the "hooks" key is read/written; other fields are preserved via rawOther.
 type claudeSettings struct {
-	Hooks     claudeSettingsHooks        `json:"hooks"`
-	rawOther  map[string]json.RawMessage // preserves unknown fields
+	Hooks    claudeSettingsHooks        `json:"hooks"`
+	rawOther map[string]json.RawMessage // preserves unknown fields
 }
 
 const (

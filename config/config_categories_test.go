@@ -14,11 +14,11 @@ func TestKeyCategories(t *testing.T) {
 
 	// Test some default mappings
 	expectedMappings := map[string]string{
-		"n":     "Session Management",
-		"g":     "Git Integration",
-		"up":    "Navigation",
-		"f":     "Organization",
-		"tab":   "System",
+		"n":   "Session Management",
+		"g":   "Git Integration",
+		"up":  "Navigation",
+		"f":   "Organization",
+		"tab": "System",
 	}
 
 	for key, expectedCategory := range expectedMappings {

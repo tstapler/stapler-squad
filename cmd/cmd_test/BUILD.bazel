@@ -1,0 +1,8 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "cmd_test",
+    srcs = ["testutils.go"],
+    importpath = "github.com/tstapler/stapler-squad/cmd/cmd_test",
+    visibility = ["//visibility:public"],
+)

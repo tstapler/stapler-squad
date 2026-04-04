@@ -1,0 +1,21 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "schema",
+    srcs = [
+        "claudemetadata.go",
+        "claudesession.go",
+        "diffstats.go",
+        "session.go",
+        "tag.go",
+        "worktree.go",
+    ],
+    importpath = "github.com/tstapler/stapler-squad/session/ent/schema",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@io_entgo_ent//:ent",
+        "@io_entgo_ent//schema/edge",
+        "@io_entgo_ent//schema/field",
+        "@io_entgo_ent//schema/index",
+    ],
+)
