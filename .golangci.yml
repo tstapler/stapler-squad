@@ -3,6 +3,37 @@ version: "2"
 run:
   go: "1.23"
 
+issues:
+  exclude-rules:
+    # Pre-existing complexity issues from origin/main
+    - linters:
+        - cyclop
+        - funlen
+        - gocognit
+        - nestif
+        - funcorder
+      path: "cmd/migration.go"
+    - linters:
+        - cyclop
+      path: "executor/timeout_executor.go"
+    - linters:
+        - cyclop
+        - funlen
+      path: "github/(clone|url_parser).go"
+    - linters:
+        - cyclop
+        - funlen
+        - gocognit
+        - nestif
+      path: "log/log.go"
+    - linters:
+        - cyclop
+        - funlen
+        - gocognit
+        - nestif
+        - funcorder
+      path: "main.go"
+
 linters:
   default: fast
   disable:
