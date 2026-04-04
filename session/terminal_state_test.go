@@ -337,6 +337,15 @@ func TestClone(t *testing.T) {
 		t.Errorf("Clone version doesn't match: %d vs %d", clone.Version, state.Version)
 	}
 
+	// Check saved cursor matches
+	state.SavedCursorRow = 2
+	state.SavedCursorCol = 4
+	cloneWithSaved := state.Clone()
+	if cloneWithSaved.SavedCursorRow != state.SavedCursorRow || cloneWithSaved.SavedCursorCol != state.SavedCursorCol {
+		t.Errorf("Clone saved cursor doesn't match: expected (%d,%d), got (%d,%d)",
+			state.SavedCursorRow, state.SavedCursorCol, cloneWithSaved.SavedCursorRow, cloneWithSaved.SavedCursorCol)
+	}
+
 	// Verify it's a deep copy - modifying clone shouldn't affect original
 	clone.Grid[0][0].Char = 'X'
 	if state.Grid[0][0].Char != 'T' {
@@ -469,6 +478,55 @@ func TestGetLineText_WithStyles(t *testing.T) {
 
 	if !containsString(lineText, "\x1b[0m") {
 		t.Error("Expected reset ANSI code in line text")
+	}
+}
+
+func TestCursorSaveRestore(t *testing.T) {
+	state := NewTerminalState(25, 80)
+
+	// Move cursor to a specific position
+	state.ProcessOutput([]byte("\x1b[5;10H"))
+
+	if state.CursorRow != 4 || state.CursorCol != 9 {
+		t.Fatalf("Failed to move cursor initially, got (%d,%d)", state.CursorRow, state.CursorCol)
+	}
+
+	// Save cursor
+	state.ProcessOutput([]byte("\x1b7"))
+
+	if state.SavedCursorRow != 4 || state.SavedCursorCol != 9 {
+		t.Errorf("Expected saved cursor at (4,9), got (%d,%d)", state.SavedCursorRow, state.SavedCursorCol)
+	}
+
+	// Move cursor away
+	state.ProcessOutput([]byte("\x1b[10;20H"))
+
+	// Restore cursor
+	state.ProcessOutput([]byte("\x1b8"))
+
+	if state.CursorRow != 4 || state.CursorCol != 9 {
+		t.Errorf("Expected cursor restored to (4,9), got (%d,%d)", state.CursorRow, state.CursorCol)
+	}
+}
+
+func TestCursorSaveRestore_WithResize(t *testing.T) {
+	state := NewTerminalState(25, 80)
+
+	// Move cursor and save
+	state.ProcessOutput([]byte("\x1b[20;50H\x1b7"))
+
+	// Resize terminal to be smaller than the saved position
+	state.Resize(10, 40)
+
+	// Restore cursor
+	state.ProcessOutput([]byte("\x1b8"))
+
+	// The restored cursor should be clamped to the new dimensions
+	if state.CursorRow != 9 {
+		t.Errorf("Expected cursor row clamped to 9, got %d", state.CursorRow)
+	}
+	if state.CursorCol != 39 {
+		t.Errorf("Expected cursor col clamped to 39, got %d", state.CursorCol)
 	}
 }
 
