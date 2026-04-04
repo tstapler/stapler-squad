@@ -49,6 +49,10 @@ type TerminalState struct {
 	CursorCol     int
 	CursorVisible bool
 
+	// Saved cursor state
+	SavedCursorRow int
+	SavedCursorCol int
+
 	// Current text style for new characters
 	CurrentStyle CellStyle
 
@@ -59,14 +63,16 @@ type TerminalState struct {
 // NewTerminalState creates a new terminal state with given dimensions
 func NewTerminalState(rows, cols int) *TerminalState {
 	state := &TerminalState{
-		Rows:          rows,
-		Cols:          cols,
-		Grid:          make([][]Cell, rows),
-		CursorRow:     0,
-		CursorCol:     0,
-		CursorVisible: true,
-		CurrentStyle:  DefaultStyle(),
-		Version:       0,
+		Rows:           rows,
+		Cols:           cols,
+		Grid:           make([][]Cell, rows),
+		CursorRow:      0,
+		CursorCol:      0,
+		CursorVisible:  true,
+		SavedCursorRow: 0,
+		SavedCursorCol: 0,
+		CurrentStyle:   DefaultStyle(),
+		Version:        0,
 	}
 
 	// Initialize grid with empty cells
@@ -286,9 +292,24 @@ func (ts *TerminalState) handleCSI(params string, command string) {
 func (ts *TerminalState) handleSimpleEscape(command string) {
 	switch command {
 	case "7": // Save cursor position
-		// TODO: Implement cursor save if needed
+		ts.SavedCursorRow = ts.CursorRow
+		ts.SavedCursorCol = ts.CursorCol
 	case "8": // Restore cursor position
-		// TODO: Implement cursor restore if needed
+		ts.CursorRow = ts.SavedCursorRow
+		ts.CursorCol = ts.SavedCursorCol
+		// Clamp to valid range in case of resize
+		if ts.CursorRow >= ts.Rows {
+			ts.CursorRow = ts.Rows - 1
+		}
+		if ts.CursorCol >= ts.Cols {
+			ts.CursorCol = ts.Cols - 1
+		}
+		if ts.CursorRow < 0 {
+			ts.CursorRow = 0
+		}
+		if ts.CursorCol < 0 {
+			ts.CursorCol = 0
+		}
 	case "D": // Line feed
 		ts.CursorRow++
 		if ts.CursorRow >= ts.Rows {
@@ -722,14 +743,16 @@ func (ts *TerminalState) Clone() *TerminalState {
 	defer ts.mu.RUnlock()
 
 	clone := &TerminalState{
-		Rows:          ts.Rows,
-		Cols:          ts.Cols,
-		Grid:          make([][]Cell, ts.Rows),
-		CursorRow:     ts.CursorRow,
-		CursorCol:     ts.CursorCol,
-		CursorVisible: ts.CursorVisible,
-		CurrentStyle:  ts.CurrentStyle,
-		Version:       ts.Version,
+		Rows:           ts.Rows,
+		Cols:           ts.Cols,
+		Grid:           make([][]Cell, ts.Rows),
+		CursorRow:      ts.CursorRow,
+		CursorCol:      ts.CursorCol,
+		CursorVisible:  ts.CursorVisible,
+		SavedCursorRow: ts.SavedCursorRow,
+		SavedCursorCol: ts.SavedCursorCol,
+		CurrentStyle:   ts.CurrentStyle,
+		Version:        ts.Version,
 	}
 
 	// Deep copy grid
