@@ -146,7 +146,7 @@ func (f *Fixer) spawnLookout(item *session.ReviewItem) {
 		Program:    item.Program,
 	}
 
-	lookout := NewLookout(cfg, f.doneCh)
+	lookout := NewLookout(f.ctx, cfg, f.doneCh)
 	f.lookouts[item.SessionID] = lookout
 
 	// Start the Lookout state machine.
@@ -168,6 +168,12 @@ func (f *Fixer) spawnLookout(item *session.ReviewItem) {
 // watchEarpiece reads from a Lookout's EarpieceCh and injects correction prompts
 // until the Lookout stops or the Fixer's context is cancelled.
 func (f *Fixer) watchEarpiece(sessionID, sessionName, workingDir string, maxRetries int, l *Lookout) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorLog.Printf("[Fixer] panic in watchEarpiece for session %s: %v", sessionID, r)
+		}
+	}()
+
 	earpieceCh := l.EarpieceCh()
 	retryAttempt := 1
 
@@ -184,6 +190,7 @@ func (f *Fixer) watchEarpiece(sessionID, sessionName, workingDir string, maxRetr
 			}
 			log.InfoLog.Printf("[Fixer] injecting earpiece for session %s (attempt %d/%d)", sessionID, retryAttempt, maxRetries)
 			if err := InjectEarpiece(
+				f.ctx,
 				sessionID,
 				sessionName,
 				workingDir,
@@ -202,6 +209,12 @@ func (f *Fixer) watchEarpiece(sessionID, sessionName, workingDir string, maxRetr
 
 // reapLookouts processes results delivered to doneCh by completed Lookouts.
 func (f *Fixer) reapLookouts() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.ErrorLog.Printf("[Fixer] panic in reapLookouts: %v", r)
+		}
+	}()
+
 	for {
 		select {
 		case <-f.ctx.Done():
@@ -248,10 +261,13 @@ func (f *Fixer) enrichReviewItemScore(sessionID string, score *queue.Score) {
 		return
 	}
 
-	item.Score = score
+	// Copy the item before mutating to avoid a data race with other goroutines
+	// that may hold the same pointer returned by queue.Get.
+	itemCopy := *item
+	itemCopy.Score = score
 
 	// Re-add to queue (Add performs an upsert, preserving DetectedAt).
-	f.queue.Add(item)
+	f.queue.Add(&itemCopy)
 	log.InfoLog.Printf("[Fixer] attached Score to ReviewItem for session %s", sessionID)
 }
 
@@ -266,14 +282,16 @@ func (f *Fixer) escalateToMastermind(result LookoutResult) {
 		return
 	}
 
-	// Upgrade the reason to reflect the failed correction loop.
-	item.Reason = session.ReasonTestsFailing
-	item.Priority = session.PriorityHigh
+	// Copy the item before mutating to avoid a data race with other goroutines
+	// that may hold the same pointer returned by queue.Get.
+	itemCopy := *item
+	itemCopy.Reason = session.ReasonTestsFailing
+	itemCopy.Priority = session.PriorityHigh
 
 	if result.Score != nil {
-		item.Score = result.Score
+		itemCopy.Score = result.Score
 	}
 
-	f.queue.Add(item)
+	f.queue.Add(&itemCopy)
 	log.InfoLog.Printf("[Fixer] escalated session %s to Mastermind (ReasonTestsFailing)", result.SessionID)
 }
