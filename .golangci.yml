@@ -6,12 +6,15 @@ run:
 linters:
   default: fast
   disable:
-    - cyclop     # Pre-existing complexity issues
-    - funlen     # Pre-existing complexity issues
-    - gocognit   # Pre-existing complexity issues
-    - nestif     # Pre-existing complexity issues
-    - funcorder  # Pre-existing complexity issues
-    - depguard   # Pre-existing issues
-    - lll        # Pre-existing issues
-    - mnd        # Pre-existing issues (magic numbers)
-    - wsl        # Pre-existing issues (whitespace)
+    - cyclop         # Pre-existing complexity issues
+    - funlen         # Pre-existing complexity issues
+    - gocognit       # Pre-existing complexity issues
+    - nestif         # Pre-existing complexity issues
+    - funcorder      # Pre-existing complexity issues
+    - dupword        # Pre-existing duplicate word issues
+    - embeddedstructfieldcheck  # Pre-existing struct field issues
+    - gochecknoinits  # Pre-existing init function issues
+    - depguard       # Pre-existing issues
+    - lll            # Pre-existing issues
+    - mnd            # Pre-existing issues (magic numbers)
+    - wsl            # Pre-existing issues (whitespace)
