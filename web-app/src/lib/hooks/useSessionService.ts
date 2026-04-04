@@ -129,6 +129,7 @@ export function useSessionService(
           prompt: request.prompt,
           autoYes: request.autoYes,
           existingWorktree: request.existingWorktree,
+          sessionType: request.sessionType,
         });
 
         // Add to local state (with duplicate check to handle race with watch stream)

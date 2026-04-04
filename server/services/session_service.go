@@ -486,13 +486,28 @@ func (s *SessionService) CreateSession(
 		program = cfg.DefaultProgram
 	}
 
-	// Determine session type based on ExistingWorktree field
-	sessionType := session.SessionTypeDirectory
-	if req.Msg.ExistingWorktree != "" {
-		sessionType = session.SessionTypeExistingWorktree
-	} else if branch != "" {
-		// If branch is specified, create a new worktree
-		sessionType = session.SessionTypeNewWorktree
+	// Determine session type - use explicit session_type if provided, otherwise infer from fields
+	var sessionType session.SessionType
+	if req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
+		// Use explicit session_type from request
+		switch req.Msg.SessionType {
+		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
+			sessionType = session.SessionTypeDirectory
+		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
+			sessionType = session.SessionTypeNewWorktree
+		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
+			sessionType = session.SessionTypeExistingWorktree
+		default:
+			sessionType = session.SessionTypeDirectory
+		}
+	} else {
+		// Fall back to inference logic for backward compatibility
+		sessionType = session.SessionTypeDirectory
+		if req.Msg.ExistingWorktree != "" {
+			sessionType = session.SessionTypeExistingWorktree
+		} else if branch != "" {
+			sessionType = session.SessionTypeNewWorktree
+		}
 	}
 
 	// Build instance options

@@ -73,6 +73,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         autoYes: data.autoYes,
         workingDir: data.workingDir,
         existingWorktree: data.existingWorktree,
+        sessionType: data.sessionType,
       });
 
       if (session) {

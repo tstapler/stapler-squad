@@ -239,6 +239,10 @@ message CreateSessionRequest {
   // Optional: Resume an existing Claude conversation by ID.
   // This ID comes from ClaudeHistoryEntry.id and will use Claude's --resume flag.
   string resume_id = 10;
+
+  // Optional: Session type (directory, new_worktree, existing_worktree).
+  // If not specified, backend will infer from other fields (branch, existing_worktree).
+  SessionType session_type = 11;
 }
 
 message CreateSessionResponse {
