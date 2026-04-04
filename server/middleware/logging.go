@@ -2,10 +2,8 @@ package middleware
 
 import (
 	"bufio"
-	"github.com/tstapler/stapler-squad/log"
 	"net"
 	"net/http"
-	"time"
 )
 
 // responseWriter wraps http.ResponseWriter to capture status code.
@@ -46,66 +44,14 @@ func (rw *responseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, http.ErrNotSupported
 }
 
-// Logging middleware logs all HTTP requests with timing information.
+// Logging middleware wraps the response writer to capture status code.
 func Logging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		// Wrap response writer to capture status code
 		wrapped := &responseWriter{
 			ResponseWriter: w,
 			statusCode:     http.StatusOK,
 			written:        false,
 		}
-
-		// Call next handler
 		next.ServeHTTP(wrapped, r)
-
-		// Log request details
-		duration := time.Since(start)
-		log.InfoLog.Printf(
-			"HTTP %s %s - Status: %d - Duration: %v - RemoteAddr: %s",
-			r.Method,
-			r.URL.Path,
-			wrapped.statusCode,
-			duration,
-			r.RemoteAddr,
-		)
-	})
-}
-
-// LoggingWithDetails provides more detailed logging including query params and headers.
-func LoggingWithDetails(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		// Log request details
-		log.InfoLog.Printf(
-			"HTTP Request: %s %s - Query: %s - User-Agent: %s",
-			r.Method,
-			r.URL.Path,
-			r.URL.RawQuery,
-			r.Header.Get("User-Agent"),
-		)
-
-		// Wrap response writer to capture status code
-		wrapped := &responseWriter{
-			ResponseWriter: w,
-			statusCode:     http.StatusOK,
-			written:        false,
-		}
-
-		// Call next handler
-		next.ServeHTTP(wrapped, r)
-
-		// Log response details
-		duration := time.Since(start)
-		log.InfoLog.Printf(
-			"HTTP Response: %s %s - Status: %d - Duration: %v",
-			r.Method,
-			r.URL.Path,
-			wrapped.statusCode,
-			duration,
-		)
 	})
 }

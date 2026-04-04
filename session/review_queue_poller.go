@@ -327,18 +327,12 @@ func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStat
 
 // checkSession checks a single session and adds/removes from queue as needed.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
-	log.InfoLog.Printf("[ReviewQueue] === CHECKING SESSION '%s' === (started=%v, paused=%v)",
-		inst.Title, inst.Started(), inst.Paused())
-
 	if inst.LastMeaningfulOutput.IsZero() {
 		log.DebugLog.Printf("[ReviewQueue] Session '%s': LastMeaningfulOutput is zero — processing without output timestamp", inst.Title)
 	}
 
 	// Skip paused or unstarted sessions
 	if !inst.Started() || inst.Paused() {
-		log.InfoLog.Printf("[ReviewQueue] Session '%s': Skipping (started=%v, paused=%v)",
-			inst.Title, inst.Started(), inst.Paused())
-		rqp.queue.Remove(inst.Title)
 		return
 	}
 
@@ -364,9 +358,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 
 	// STEP 5: Check grace period for temporary removal
 	inGracePeriod := inst.ReviewState.IsInProcessingGracePeriod()
-
-	log.InfoLog.Printf("[ReviewQueue] Session '%s': isNewPrompt=%v, userResponded=%v, isProcessing=%v, gracePeriod=%v",
-		inst.Title, isNewPrompt, userRespondedToPrompt, isProcessing, inGracePeriod)
 
 	// DECISION LOGIC:
 

@@ -469,7 +469,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				return
 			case data, ok := <-updateChan:
 				if !ok {
-					log.InfoLog.Printf("[streamViaControlMode] Update channel closed for session '%s'", sessionID)
 					return
 				}
 
@@ -531,7 +530,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 				// Check for EndStream
 				if envelope.Flags&protocol.EndStreamFlag != 0 {
-					log.InfoLog.Printf("[streamViaControlMode] Received EndStream for session '%s'", sessionID)
 					errChan <- nil
 					return
 				}
@@ -599,10 +597,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// EndStream is sent by the caller (HandleWebSocket) after this function returns.
 	select {
 	case err := <-errChan:
-		log.InfoLog.Printf("[streamViaControlMode] Streaming ended for session '%s': %v", sessionID, err)
 		return err
 	case <-doneChan:
-		log.InfoLog.Printf("[streamViaControlMode] Streaming completed for session '%s'", sessionID)
 		return nil
 	}
 }
@@ -1133,8 +1129,6 @@ func sendErrorResponse(conn *websocket.Conn, errorMsg string) {
 
 // sendEndStreamSuccess sends a successful EndStream message
 func sendEndStreamSuccess(stream *connectWebSocketStream) {
-	log.InfoLog.Printf("Sending EndStreamSuccess")
-
 	// ConnectRPC protocol requires JSON-encoded EndStream payload (not protobuf)
 	// Success EndStream is an empty JSON object
 	dataBytes := []byte(`{}`)

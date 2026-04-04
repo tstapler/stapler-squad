@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	cmdbridge "github.com/tstapler/stapler-squad/cmd"
+	"github.com/tstapler/stapler-squad/cmd/commands"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/daemon"
 	"github.com/tstapler/stapler-squad/executor"
@@ -603,6 +604,7 @@ func init() {
 	rootCmd.AddCommand(testPtyCmd)
 	rootCmd.AddCommand(listSessionsCmd)
 	rootCmd.AddCommand(printQRCodesCmd)
+	rootCmd.AddCommand(commands.GetSessionCmd)
 }
 
 // resolveLANHostnames returns a list of domain names suitable for use as a WebAuthn rpID

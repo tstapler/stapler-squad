@@ -638,9 +638,16 @@ func (s *SessionService) UpdateSession(
 	}
 
 	// Handle program update
-	if req.Msg.Program != nil && *req.Msg.Program != "" {
+	if req.Msg.Program != nil && *req.Msg.Program != "" && instance.Program != *req.Msg.Program {
 		instance.Program = *req.Msg.Program
 		updatedFields = append(updatedFields, "program")
+
+		// If the session is running, restart it with the new program
+		if instance.Status == session.Running {
+			if err := instance.Restart(true); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after program change: %w", err))
+			}
+		}
 	}
 
 	// Update the instance in the list and save
@@ -706,6 +713,12 @@ func (s *SessionService) DeleteSession(
 	// Delete from storage
 	if err := s.storage.DeleteInstance(req.Msg.Id); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
+	}
+
+	// Remove from review queue immediately
+	if s.reviewQueueSvc != nil {
+		s.reviewQueueSvc.GetQueue().Remove(req.Msg.Id)
+		log.InfoLog.Printf("[ReviewQueue] Removed deleted session '%s' from review queue", req.Msg.Id)
 	}
 
 	// CRITICAL: Update the ReviewQueuePoller's instance references after deletion

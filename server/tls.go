@@ -4,15 +4,18 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
-	"net"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -20,9 +23,10 @@ import (
 )
 
 const (
-	certFileName = "tls-cert.pem"
-	keyFileName  = "tls-key.pem"
-	caFileName   = "tls-ca.pem"
+	certFileName     = "tls-cert.pem"
+	keyFileName      = "tls-key.pem"
+	caFileName       = "tls-ca.pem"
+	certHashFileName = "tls-cert.hash"
 )
 
 // TLSPaths holds the file paths for the generated TLS certificate set.
@@ -32,9 +36,9 @@ type TLSPaths struct {
 	CAFile   string
 }
 
-// EnsureTLSCerts generates a self-signed CA and server certificate if they do
-// not already exist, and returns their paths.  The certificate is valid for the
-// provided hostname/IP SANs.
+// EnsureTLSCerts generates a self-signed CA and server certificate when the
+// stored SAN hash doesn't match the current hostname list or the cert is
+// nearing expiry. Returns paths to the cert files.
 func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
 	configDir, err := config.GetConfigDir()
 	if err != nil {
@@ -46,14 +50,12 @@ func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
 		KeyFile:  filepath.Join(configDir, keyFileName),
 		CAFile:   filepath.Join(configDir, caFileName),
 	}
+	hashFile := filepath.Join(configDir, certHashFileName)
 
-	// Reuse existing cert only if it is unexpired AND covers all required SANs.
-	if tlsValidForHosts(paths.CertFile, hostnames) {
+	want := sanHash(hostnames)
+	if certCurrent(paths.CertFile, hashFile, want) {
 		log.InfoLog.Printf("tls: reusing existing certificate at %s", paths.CertFile)
 		return paths, nil
-	}
-	if tlsValid(paths.CertFile) {
-		log.InfoLog.Printf("tls: existing certificate does not cover all required SANs %v — regenerating", hostnames)
 	}
 
 	log.InfoLog.Printf("tls: generating self-signed certificate for %v", hostnames)
@@ -83,6 +85,9 @@ func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
 	if err := os.WriteFile(paths.KeyFile, keyPEM, 0600); err != nil {
 		return nil, fmt.Errorf("write key: %w", err)
 	}
+	if err := os.WriteFile(hashFile, []byte(want), 0644); err != nil {
+		return nil, fmt.Errorf("write cert hash: %w", err)
+	}
 
 	log.InfoLog.Printf("tls: certificate written to %s", paths.CertFile)
 	log.InfoLog.Printf("tls: CA certificate (for import on phones) at %s", paths.CAFile)
@@ -101,9 +106,26 @@ func LoadTLSConfig(certFile, keyFile string) (*tls.Config, error) {
 	}, nil
 }
 
-// tlsValid returns true if certFile exists and its leaf certificate has not
-// expired (with a 7-day safety margin).
-func tlsValid(certFile string) bool {
+// sanHash returns a stable hex hash of the sorted hostname list. Any change to
+// the set of hostnames produces a different hash, triggering regeneration.
+func sanHash(hostnames []string) string {
+	sorted := make([]string, len(hostnames))
+	copy(sorted, hostnames)
+	sort.Strings(sorted)
+	h := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return hex.EncodeToString(h[:])
+}
+
+// certCurrent returns true if the cert file exists, is not nearing expiry, and
+// the stored SAN hash matches want.
+func certCurrent(certFile, hashFile, want string) bool {
+	// Check stored hash first — cheapest test.
+	stored, err := os.ReadFile(hashFile)
+	if err != nil || strings.TrimSpace(string(stored)) != want {
+		return false
+	}
+
+	// Check cert expiry.
 	data, err := os.ReadFile(certFile)
 	if err != nil {
 		return false
@@ -119,47 +141,6 @@ func tlsValid(certFile string) bool {
 	return time.Now().Add(7 * 24 * time.Hour).Before(cert.NotAfter)
 }
 
-// tlsValidForHosts returns true if the cert at certFile is unexpired AND
-// contains all of the required hostnames/IPs in its SANs.
-func tlsValidForHosts(certFile string, required []string) bool {
-	data, err := os.ReadFile(certFile)
-	if err != nil {
-		return false
-	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return false
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return false
-	}
-	// Check expiry first.
-	if !time.Now().Add(7 * 24 * time.Hour).Before(cert.NotAfter) {
-		return false
-	}
-	// Verify every required hostname/IP is covered by the cert.
-	for _, h := range required {
-		if ip := net.ParseIP(h); ip != nil {
-			found := false
-			for _, certIP := range cert.IPAddresses {
-				if certIP.Equal(ip) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				return false
-			}
-		} else {
-			if err := cert.VerifyHostname(h); err != nil {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 func generateCA() (*ecdsa.PrivateKey, *x509.Certificate, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -169,8 +150,8 @@ func generateCA() (*ecdsa.PrivateKey, *x509.Certificate, []byte, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: newSerial(),
 		Subject: pkix.Name{
-			Organization: []string{"Claude Squad Local CA"},
-			CommonName:   "Claude Squad CA",
+			Organization: []string{"Stapler Squad Local CA"},
+			CommonName:   "Stapler Squad CA",
 		},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -202,23 +183,14 @@ func generateServerCert(caKey *ecdsa.PrivateKey, caCert *x509.Certificate, hostn
 	tmpl := &x509.Certificate{
 		SerialNumber: newSerial(),
 		Subject: pkix.Name{
-			Organization: []string{"Claude Squad"},
+			Organization: []string{"Stapler Squad"},
 			CommonName:   "stapler-squad",
 		},
-		NotBefore: time.Now().Add(-time.Hour),
-		NotAfter:  time.Now().Add(2 * 365 * 24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{
-			x509.ExtKeyUsageServerAuth,
-		},
-	}
-
-	for _, h := range hostnames {
-		if ip := net.ParseIP(h); ip != nil {
-			tmpl.IPAddresses = append(tmpl.IPAddresses, ip)
-		} else {
-			tmpl.DNSNames = append(tmpl.DNSNames, h)
-		}
+		NotBefore:   time.Now().Add(-time.Hour),
+		NotAfter:    time.Now().Add(2 * 365 * 24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
+		DNSNames:    hostnames,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 
 	certDER, createErr := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)

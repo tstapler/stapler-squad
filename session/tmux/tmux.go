@@ -309,7 +309,9 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	}
 
 	// Create a new detached tmux session and start the program in it
-	cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, t.program)
+	historyPath := fmt.Sprintf("%s/.stapler_squad_history", workDir)
+	programWithHistory := fmt.Sprintf("env HISTFILE=%s %s", historyPath, t.program)
+	cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-c", workDir, programWithHistory)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
 	// since detached sessions don't need PTY attachment during creation
