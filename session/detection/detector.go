@@ -42,10 +42,10 @@ type StatusPatterns struct {
 	NeedsApproval []StatusPattern `yaml:"needs_approval"`
 	InputRequired []StatusPattern `yaml:"input_required"` // Explicit input prompts
 	Error         []StatusPattern `yaml:"error"`
-	TestsFailing  []StatusPattern `yaml:"tests_failing"`  // Tests are failing
-	Idle          []StatusPattern `yaml:"idle"`           // Waiting for user input
-	Active        []StatusPattern `yaml:"active"`         // Actively executing commands
-	Success       []StatusPattern `yaml:"success"`        // Task completed successfully
+	TestsFailing  []StatusPattern `yaml:"tests_failing"` // Tests are failing
+	Idle          []StatusPattern `yaml:"idle"`          // Waiting for user input
+	Active        []StatusPattern `yaml:"active"`        // Actively executing commands
+	Success       []StatusPattern `yaml:"success"`       // Task completed successfully
 }
 
 // StatusDetector analyzes PTY output to determine the current status of a Claude instance.
@@ -377,6 +377,25 @@ func getDefaultPatterns() StatusPatterns {
 				Description: "Claude is using tools",
 				Priority:    9,
 			},
+			// OpenCode-specific processing indicators
+			{
+				Name:        "opencode_thinking",
+				Pattern:     `(?i)Thinking:`,
+				Description: "OpenCode is thinking about a request",
+				Priority:    11,
+			},
+			{
+				Name:        "opencode_reading",
+				Pattern:     `(?i)→ (Read|read)`,
+				Description: "OpenCode is reading a file",
+				Priority:    10,
+			},
+			{
+				Name:        "opencode_writing",
+				Pattern:     `(?i)→ (Write|write|Edit|edit)`,
+				Description: "OpenCode is writing/editing files",
+				Priority:    10,
+			},
 		},
 		NeedsApproval: []StatusPattern{
 			{
@@ -461,6 +480,12 @@ func getDefaultPatterns() StatusPatterns {
 				Priority:    25,
 			},
 			{
+				Name:        "esc_interrupt_short",
+				Pattern:     `esc interrupt`,
+				Description: "Active operation that can be interrupted (short form)",
+				Priority:    24,
+			},
+			{
 				Name:        "synthesizing",
 				Pattern:     `(?i)Synthesizing\.{0,3}`,
 				Description: "Claude is synthesizing a response",
@@ -526,12 +551,30 @@ func getDefaultPatterns() StatusPatterns {
 			// We detect this by looking for the numbered option selector pattern.
 			// This is much more reliable than trying to match generic question text.
 			{
-				Name:        "numbered_option_selector",
+				Name: "numbered_option_selector",
 				// Matches Claude Code's numbered selection format with arrow selector
 				// Example: " ❯ 1. Yes" or "   2. No"
 				Pattern:     `[❯>]\s*\d+\.\s+\w`,
 				Description: "Selection prompt with numbered options",
 				Priority:    16,
+			},
+			// OpenCode uses ┃ prefixed numbered format in its prompt/footer area:
+			// "┃  4. Icons:" or "┃  1. Option A"
+			// This does NOT match plain numbered lists in body content ("1. Point 1")
+			{
+				Name:        "opencode_numbered_options",
+				Pattern:     `(?m)┃\s*\d+\.\s+\S`,
+				Description: "OpenCode numbered option selection",
+				Priority:    20,
+			},
+			// OpenCode permission dialogs use ┃ prefixed UI elements:
+			// "┃  Allow once   Allow always   Reject"
+			// "Reject   Allow always   Allow once"
+			{
+				Name:        "opencode_permission",
+				Pattern:     `(?i)┃?\s*allow\s+once\s+allow\s+always\s+reject|┃?\s*reject\s+allow\s+always\s+allow\s+once`,
+				Description: "OpenCode permission prompt buttons",
+				Priority:    22,
 			},
 		},
 	}

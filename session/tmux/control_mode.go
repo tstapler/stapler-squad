@@ -3,8 +3,8 @@ package tmux
 import (
 	"bufio"
 	"bytes"
-	"github.com/tstapler/stapler-squad/log"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"strconv"
 	"strings"
@@ -58,8 +58,6 @@ func (t *TmuxSession) StartControlMode() error {
 		return fmt.Errorf("failed to start control mode for session '%s': %w", t.sanitizedName, err)
 	}
 
-	log.InfoLog.Printf("Started control mode for session '%s' (pid: %d)", t.sanitizedName, cmd.Process.Pid)
-
 	// Store control mode infrastructure
 	t.controlModeCmd = cmd
 	t.controlModeStdout = stdout
@@ -86,8 +84,6 @@ func (t *TmuxSession) StopControlMode() error {
 	if t.controlModeCmd == nil {
 		return nil // Not running
 	}
-
-	log.InfoLog.Printf("Stopping control mode for session '%s'", t.sanitizedName)
 
 	// Signal termination
 	if t.controlModeDone != nil {
@@ -134,15 +130,15 @@ func (t *TmuxSession) StopControlMode() error {
 	t.controlModeSubMu.Unlock()
 
 	t.controlModeCmd = nil
-	log.InfoLog.Printf("Stopped control mode for session '%s'", t.sanitizedName)
 	return nil
 }
 
 // readControlModeOutput reads and parses control mode notifications from tmux.
 // This runs in a goroutine and processes lines like:
-//   %output %0 hello world
-//   %session-changed $13 session-name
-//   %exit
+//
+//	%output %0 hello world
+//	%session-changed $13 session-name
+//	%exit
 func (t *TmuxSession) readControlModeOutput() {
 	doneCh := t.controlModeDone // capture before StopControlMode can nil it
 	scanner := bufio.NewScanner(t.controlModeStdout)
@@ -167,8 +163,6 @@ func (t *TmuxSession) readControlModeOutput() {
 			log.ErrorLog.Printf("Control mode output scanner error for session '%s': %v", t.sanitizedName, err)
 		}
 	}
-
-	log.InfoLog.Printf("Control mode output reader finished for session '%s'", t.sanitizedName)
 
 	// Control mode process has exited. Close all subscriber channels so that waiting
 	// goroutines (e.g. streamViaControlMode) detect the end-of-stream and unblock.
@@ -203,11 +197,12 @@ func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
 
 // processControlModeLine parses and handles a single control mode notification line.
 // Control mode lines start with % and follow specific formats:
-//   %output %PANE_ID DATA     - Terminal output from pane
-//   %begin TIME MSGID FLAGS   - Begin command response
-//   %end TIME MSGID FLAGS     - End command response
-//   %error ERROR_MESSAGE      - Error notification
-//   %exit                     - Session closed
+//
+//	%output %PANE_ID DATA     - Terminal output from pane
+//	%begin TIME MSGID FLAGS   - Begin command response
+//	%end TIME MSGID FLAGS     - End command response
+//	%error ERROR_MESSAGE      - Error notification
+//	%exit                     - Session closed
 func (t *TmuxSession) processControlModeLine(line string) {
 	// Skip empty lines
 	if line == "" {
@@ -366,8 +361,6 @@ func (t *TmuxSession) SubscribeToControlModeUpdates() (string, chan []byte) {
 	}
 	t.controlModeSubscribers[subscriberID] = ch
 
-	log.InfoLog.Printf("New control mode subscriber %s for session '%s' (total: %d)",
-		subscriberID, t.sanitizedName, len(t.controlModeSubscribers))
 	return subscriberID, ch
 }
 
@@ -379,7 +372,5 @@ func (t *TmuxSession) UnsubscribeFromControlModeUpdates(subscriberID string) {
 	if ch, exists := t.controlModeSubscribers[subscriberID]; exists {
 		close(ch)
 		delete(t.controlModeSubscribers, subscriberID)
-		log.InfoLog.Printf("Unsubscribed %s from control mode session '%s' (remaining: %d)",
-			subscriberID, t.sanitizedName, len(t.controlModeSubscribers))
 	}
 }

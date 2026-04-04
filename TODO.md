@@ -77,116 +77,52 @@
 
 ---
 
-## Bug Tracking: Test Stabilization Session (2025-12-05)
+## Bug Tracking: Backend and Web UI (2026-03-20)
 
-**Status**: 4 bugs fixed, 1 CRITICAL bug open, 4 additional bugs require investigation
-**Session Date**: 2025-12-05
-**Total Effort**: 4 bugs fixed (~90 minutes), investigation pending for remaining bugs
+**Status**: 3 bugs fixed, 4 additional bugs require investigation
+**Total Effort**: 3 bugs fixed (BUG-001 through BUG-003)
 
-### ✅ Fixed Bugs (BUG-004 through BUG-007)
+### ✅ Fixed Bugs (BUG-001 through BUG-003)
 
-**BUG-004** [MEDIUM]: QueueView Nil Pointer Dereference ✅ FIXED
-- **Impact**: Test failures, potential runtime panics in TUI
-- **Root Cause**: `GetBorderColor()` accessed `queueView.reviewQueue` without nil checks
-- **Fix Applied**: Added defensive nil guards in `ui/list.go:1031-1044`
-- **Fix Time**: 20 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-004-queueview-nil-pointer.md`
+**BUG-001** [HIGH]: LastAcknowledged Field Not Persisted ✅ FIXED
+- **Investigation Date**: 2025-11-30
+- **Result**: Field IS properly persisted, comprehensive tests passing
 
-**BUG-005** [HIGH]: Category Expansion Logic Using Wrong Boolean ✅ FIXED
-- **Impact**: Category expansion/collapse feature completely inverted
-- **Root Cause**: Used non-existent `shouldCollapseCategories` instead of `expandCategories`
-- **Fix Applied**: Changed to correct field in `ui/list.go:327, 364`
-- **Fix Time**: 22 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-005-category-expansion-wrong-boolean.md`
+**BUG-002** [MEDIUM]: LastMeaningfulOutput Timestamp Reset ✅ FIXED
+- **Investigation Date**: 2025-11-30
+- **Result**: Signature-based change detection working correctly
 
-**BUG-006** [HIGH]: Category Name Transformation Mismatch ✅ FIXED
-- **Impact**: Category names didn't match between storage and rendering, causing lookup failures
-- **Root Cause**: Manual string replacement instead of using `PathToDisplayCategory()` function
-- **Fix Applied**: Standardized to use `grouping.PathToDisplayCategory()` in 3 locations
-- **Fix Time**: 35 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-006-category-name-transformation-mismatch.md`
+**BUG-003** [LOW]: Large State File Size (34MB JSON) ✅ FIXED (2025-12-01)
+- **Fix Date**: 2025-12-01
+- **Result**: 34 MB → ~800 KB (42x reduction) via diff content exclusion
 
-**BUG-007** [HIGH]: Default Category Expansion Not Forcing True ✅ FIXED
-- **Impact**: Default "All" category appeared collapsed, hiding all sessions
-- **Root Cause**: "All" category treated like user-defined categories (can be collapsed)
-- **Fix Applied**: Forced "All" category to always return `true` in `ui/list.go:364`
-- **Fix Time**: 17 minutes
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-007-default-category-expansion-not-forced.md`
-
-### 🔴 CRITICAL Open Bug (Blocks Test Stabilization)
-
-**BUG-008** [CRITICAL]: Category Rendering in Tests - Sessions Don't Render ❌ OPEN
-- **Impact**: Test suite completely broken, prevents verification of rendering logic
-- **Status**: 🐛 Open - Requires investigation
-- **Symptom**: Category shows count "(1)" but no sessions render, visible items returns empty
-- **Investigation Needed**: 2.5-4.5 hours (isolate filtering bug, fix root cause, verify)
-- **Priority**: P1 - Blocks all UI test development
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-008-category-rendering-in-tests.md`
-
-**Investigation Plan**:
-1. Add debug logging to `getVisibleItems()` filtering stages (30 min)
-2. Check category group construction and membership (30 min)
-3. Identify which filter is incorrectly excluding sessions (1 hour)
-4. Apply targeted fix based on findings (1-2 hours)
-5. Comprehensive testing (30 min)
-
-### 🟡 Additional Open Bugs (Require Investigation)
+### 🟡 Open Bugs (Require Investigation)
 
 **BUG-009** [HIGH]: Session Package Test Failures 🔍 Investigating
 - **Impact**: Core session management tests failing, unknown production impact
 - **Tests Affected**: `TestInstance_FieldAccess`, `TestInstance_Lifecycle`, `TestInstance_Serialization`
 - **Investigation Needed**: 4-7 hours (capture output, analyze, fix)
-- **Priority**: P2 - Critical for test suite health
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-009-session-package-test-failures.md`
+- **Priority**: P1 - Critical for core domain integrity
 
 **BUG-010** [HIGH]: tmux Banner and Prompt Detection Failures 🔍 Investigating
 - **Impact**: Session startup detection broken, tests timeout waiting for prompts
 - **Root Cause**: Shell banners interfere with prompt detection, timing issues
 - **Investigation Needed**: 4-5 hours (capture output, test shells, fix detection)
-- **Priority**: P2 - Blocks test stabilization, may affect production
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-010-tmux-banner-prompt-detection.md`
-
-**BUG-011** [HIGH]: UI Category Rendering Test Failure 🔍 Investigating
-- **Impact**: UI rendering tests failing, unknown production impact
-- **Tests Affected**: Category header, expand/collapse UI, styling (exact tests TBD)
-- **Investigation Needed**: 3-6 hours (identify failures, update expectations, fix bugs)
-- **Priority**: P2 - Important for test suite health
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-011-ui-category-rendering-test-failure.md`
+- **Priority**: P1 - Blocks reliable session automation
 
 **BUG-012** [MEDIUM]: Testutil Package Failures 🔍 Investigating
 - **Impact**: Test infrastructure broken, blocks test development
 - **Root Cause**: Outdated mocks, stale fixtures, helper function changes (TBD)
 - **Investigation Needed**: 4-6 hours (identify broken utilities, update mocks/fixtures)
 - **Priority**: P2 - Affects all test development
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/open/BUG-012-testutil-package-failures.md`
-
-### Historical Bugs (Already Resolved)
-
-**BUG-001** [HIGH]: LastAcknowledged Field Not Persisted ✅ ALREADY FIXED
-- **Investigation Date**: 2025-11-30
-- **Result**: Field IS properly persisted, comprehensive tests passing
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-001-last-acknowledged-persistence.md`
-
-**BUG-002** [MEDIUM]: LastMeaningfulOutput Timestamp Reset ✅ ALREADY FIXED
-- **Investigation Date**: 2025-11-30
-- **Result**: Signature-based change detection working correctly
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-002-timestamp-refresh-reset.md`
-
-**BUG-003** [LOW]: Large State File Size (34MB JSON) ✅ FIXED (2025-12-01)
-- **Fix Date**: 2025-12-01
-- **Result**: 34 MB → ~800 KB (42x reduction) via diff content exclusion
-- **Location**: `/Users/tylerstapler/IdeaProjects/stapler-squad/docs/bugs/fixed/BUG-003-large-state-file-size.md`
 
 ### Bug Summary Statistics
 
-**Total Bugs Tracked**: 12
-**Fixed**: 7 (BUG-001, BUG-002, BUG-003, BUG-004, BUG-005, BUG-006, BUG-007)
-**Open - Critical**: 1 (BUG-008 - blocks test development)
-**Open - High**: 3 (BUG-009, BUG-010, BUG-011 - require investigation)
-**Open - Medium**: 1 (BUG-012 - test infrastructure)
+**Total Bugs Tracked**: 6
+**Fixed**: 3 (BUG-001, BUG-002, BUG-003)
+**Open - High**: 2 (BUG-009, BUG-010)
+**Open - Medium**: 1 (BUG-012)
 
-**Estimated Investigation Effort**: 14-22.5 hours for all open bugs
-**Recommended Next Action**: Fix BUG-008 (CRITICAL, 2.5-4.5 hours) to unblock test development
 
 ### Bug Documentation Structure
 

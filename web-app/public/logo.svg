@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 280">
+  <!-- Staple 0 RED x=109 -->
+  <path d="M109,40 H199 V162 L191,182 L183,162 V62 H127 V162 L119,182 L109,162 Z"
+        fill="#DC2626" stroke="#7F1D1D" stroke-width="1.5" stroke-linejoin="round"/>
+  <line x1="127" y1="40" x2="127" y2="62" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="145" y1="40" x2="145" y2="53" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="163" y1="40" x2="163" y2="53" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="181" y1="40" x2="181" y2="62" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+
+  <!-- Staple 1 GOLD x=202 -->
+  <path d="M202,40 H292 V162 L284,182 L276,162 V62 H220 V162 L212,182 L202,162 Z"
+        fill="#D97706" stroke="#78350F" stroke-width="1.5" stroke-linejoin="round"/>
+  <line x1="220" y1="40" x2="220" y2="62" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+  <line x1="238" y1="40" x2="238" y2="53" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+  <line x1="256" y1="40" x2="256" y2="53" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+  <line x1="274" y1="40" x2="274" y2="62" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+
+  <!-- Staple 2 RED x=295 -->
+  <path d="M295,40 H385 V162 L377,182 L369,162 V62 H313 V162 L305,182 L295,162 Z"
+        fill="#DC2626" stroke="#7F1D1D" stroke-width="1.5" stroke-linejoin="round"/>
+  <line x1="313" y1="40" x2="313" y2="62" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="331" y1="40" x2="331" y2="53" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="349" y1="40" x2="349" y2="53" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="367" y1="40" x2="367" y2="62" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+
+  <!-- Staple 3 GOLD x=388 -->
+  <path d="M388,40 H478 V162 L470,182 L462,162 V62 H406 V162 L398,182 L388,162 Z"
+        fill="#D97706" stroke="#78350F" stroke-width="1.5" stroke-linejoin="round"/>
+  <line x1="406" y1="40" x2="406" y2="62" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+  <line x1="424" y1="40" x2="424" y2="53" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+  <line x1="442" y1="40" x2="442" y2="53" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+  <line x1="460" y1="40" x2="460" y2="62" stroke="#92400E" stroke-width="1.2" opacity="0.6"/>
+
+  <!-- Staple 4 RED x=481 -->
+  <path d="M481,40 H571 V162 L563,182 L555,162 V62 H499 V162 L491,182 L481,162 Z"
+        fill="#DC2626" stroke="#7F1D1D" stroke-width="1.5" stroke-linejoin="round"/>
+  <line x1="499" y1="40" x2="499" y2="62" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="517" y1="40" x2="517" y2="53" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="535" y1="40" x2="535" y2="53" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+  <line x1="553" y1="40" x2="553" y2="62" stroke="#991B1B" stroke-width="1.2" opacity="0.6"/>
+
+  <!-- Wordmark -->
+  <text x="340" y="226" text-anchor="middle"
+        font-family="'Courier New', Courier, monospace"
+        font-size="13" letter-spacing="6"
+        fill="#DC2626">STAPLER · SQUAD</text>
+</svg>

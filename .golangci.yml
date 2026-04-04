@@ -9,7 +9,7 @@ linters:
 linters-settings:
   forbidigo:
     forbid:
-      - pattern: ^fmt\.Print(f|ln)?$
+      - p: ^fmt\.Print(f|ln)?$
         msg: "use the log package instead of fmt.Print* in production code"
     exclude-godoc-examples: true
 

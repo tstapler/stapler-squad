@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"github.com/tstapler/stapler-squad/log"
 	"io/fs"
 	"net/http"
 	"path"
@@ -29,9 +28,6 @@ func StaticFileServer(fileSystem fs.FS, indexFile string) http.Handler {
 
 		if err != nil {
 			// File doesn't exist - serve root index.html for SPA routing
-			log.InfoLog.Printf("Serving %s for SPA route: %s (file not found)", indexFile, cleanPath)
-
-			// Read and serve the root index file directly
 			indexContent, err := fs.ReadFile(fileSystem, indexFile)
 			if err != nil {
 				http.Error(w, "Index file not found", http.StatusNotFound)
@@ -51,7 +47,6 @@ func StaticFileServer(fileSystem fs.FS, indexFile string) http.Handler {
 			dirIndexContent, err := fs.ReadFile(fileSystem, dirIndexPath)
 			if err == nil {
 				// Found index.html in the directory - serve it
-				log.InfoLog.Printf("Serving directory index: %s", dirIndexPath)
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 				w.WriteHeader(http.StatusOK)
@@ -60,7 +55,6 @@ func StaticFileServer(fileSystem fs.FS, indexFile string) http.Handler {
 			}
 
 			// No index.html in directory - serve root index.html for SPA routing
-			log.InfoLog.Printf("Serving %s for SPA route: %s (directory without index)", indexFile, cleanPath)
 			rootIndexContent, err := fs.ReadFile(fileSystem, indexFile)
 			if err != nil {
 				http.Error(w, "Index file not found", http.StatusNotFound)
