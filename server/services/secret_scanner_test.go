@@ -10,7 +10,7 @@ func TestScanForSecrets_NoFalsePositives(t *testing.T) {
 	}{
 		{
 			name: "Gradle flyway with RDS token variable (quoted)",
-			cmd: `./gradlew flywayRepair -Pflyway.url="jdbc:postgresql://host:5432/db" -Pflyway.user="fbg_migrations" -Pflyway.password="$RDS_TOKEN" -Pflyway.cleanDisabled=true`,
+			cmd:  `./gradlew flywayRepair -Pflyway.url="jdbc:postgresql://host:5432/db" -Pflyway.user="fbg_migrations" -Pflyway.password="$RDS_TOKEN" -Pflyway.cleanDisabled=true`,
 		},
 		{
 			name: "Flyway password as shell variable (unquoted)",
