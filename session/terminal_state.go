@@ -665,6 +665,57 @@ func (ts *TerminalState) linesEqual(other *TerminalState, row int) bool {
 	return true
 }
 
+// writeColorCode parses the internal color string representation and writes
+// the appropriate ANSI escape sequence to the provided strings.Builder.
+func writeColorCode(sb *strings.Builder, colorStr string, isBg bool) {
+	if colorStr == "" {
+		return
+	}
+
+	baseCode := 30
+	if isBg {
+		baseCode = 40
+	}
+
+	if strings.HasPrefix(colorStr, "color") && !strings.HasPrefix(colorStr, "color-") {
+		// Standard colors: color0 to color7
+		var code int
+		if _, err := fmt.Sscanf(colorStr, "color%d", &code); err == nil {
+			sb.WriteString(fmt.Sprintf("\x1b[%dm", baseCode+code))
+		}
+	} else if strings.HasPrefix(colorStr, "bright-color") {
+		// Bright standard colors: bright-color0 to bright-color7
+		brightBaseCode := 90
+		if isBg {
+			brightBaseCode = 100
+		}
+		var code int
+		if _, err := fmt.Sscanf(colorStr, "bright-color%d", &code); err == nil {
+			sb.WriteString(fmt.Sprintf("\x1b[%dm", brightBaseCode+code))
+		}
+	} else if strings.HasPrefix(colorStr, "color-") {
+		// 256 colors: color-0 to color-255
+		var code int
+		if _, err := fmt.Sscanf(colorStr, "color-%d", &code); err == nil {
+			extendedCode := 38
+			if isBg {
+				extendedCode = 48
+			}
+			sb.WriteString(fmt.Sprintf("\x1b[%d;5;%dm", extendedCode, code))
+		}
+	} else if strings.HasPrefix(colorStr, "rgb(") {
+		// RGB colors: rgb(r,g,b)
+		var r, g, b int
+		if _, err := fmt.Sscanf(colorStr, "rgb(%d,%d,%d)", &r, &g, &b); err == nil {
+			extendedCode := 38
+			if isBg {
+				extendedCode = 48
+			}
+			sb.WriteString(fmt.Sprintf("\x1b[%d;2;%d;%d;%dm", extendedCode, r, g, b))
+		}
+	}
+}
+
 // getLineText returns the text content of a line with ANSI codes
 func (ts *TerminalState) getLineText(row int) string {
 	if row >= ts.Rows {
@@ -679,25 +730,41 @@ func (ts *TerminalState) getLineText(row int) string {
 
 		// Add style codes if style changed
 		if cell.Style != currentStyle {
-			// Reset if needed
-			if currentStyle.Bold || currentStyle.Italic || currentStyle.Underline {
+			// Determine if we need a full reset
+			needsReset := false
+
+			if (currentStyle.Bold && !cell.Style.Bold) ||
+				(currentStyle.Italic && !cell.Style.Italic) ||
+				(currentStyle.Underline && !cell.Style.Underline) ||
+				(currentStyle.Reverse && !cell.Style.Reverse) ||
+				(currentStyle.FgColor != "" && cell.Style.FgColor == "") ||
+				(currentStyle.BgColor != "" && cell.Style.BgColor == "") {
+				needsReset = true
+			}
+
+			if needsReset {
 				sb.WriteString("\x1b[0m")
 				currentStyle = DefaultStyle()
 			}
 
 			// Apply new style
-			if cell.Style.Bold {
+			if cell.Style.Bold && !currentStyle.Bold {
 				sb.WriteString("\x1b[1m")
 			}
-			if cell.Style.Italic {
+			if cell.Style.Italic && !currentStyle.Italic {
 				sb.WriteString("\x1b[3m")
 			}
-			if cell.Style.Underline {
+			if cell.Style.Underline && !currentStyle.Underline {
 				sb.WriteString("\x1b[4m")
 			}
-			if cell.Style.FgColor != "" {
-				// Simplified: just output color code
-				// TODO: Parse and output proper ANSI color codes
+			if cell.Style.Reverse && !currentStyle.Reverse {
+				sb.WriteString("\x1b[7m")
+			}
+			if cell.Style.FgColor != currentStyle.FgColor && cell.Style.FgColor != "" {
+				writeColorCode(&sb, cell.Style.FgColor, false)
+			}
+			if cell.Style.BgColor != currentStyle.BgColor && cell.Style.BgColor != "" {
+				writeColorCode(&sb, cell.Style.BgColor, true)
 			}
 
 			currentStyle = cell.Style
@@ -707,7 +774,8 @@ func (ts *TerminalState) getLineText(row int) string {
 	}
 
 	// Reset style at end of line
-	if currentStyle.Bold || currentStyle.Italic || currentStyle.Underline {
+	if currentStyle.Bold || currentStyle.Italic || currentStyle.Underline ||
+		currentStyle.Reverse || currentStyle.FgColor != "" || currentStyle.BgColor != "" {
 		sb.WriteString("\x1b[0m")
 	}
 

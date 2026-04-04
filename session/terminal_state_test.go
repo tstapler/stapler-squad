@@ -472,6 +472,42 @@ func TestGetLineText_WithStyles(t *testing.T) {
 	}
 }
 
+func TestGetLineText_ComplexColorsAndStyles(t *testing.T) {
+	state := NewTerminalState(25, 80)
+
+	// Test case: bold -> bold + red fg -> bold + red fg + green bg -> yellow fg
+	// Note: 31 is red, 42 is green bg, 33 is yellow
+	input := "\x1b[1mA\x1b[31mB\x1b[42mC\x1b[33mD"
+	err := state.ProcessOutput([]byte(input))
+	if err != nil {
+		t.Fatalf("ProcessOutput failed: %v", err)
+	}
+
+	lineText := state.getLineText(0)
+
+	// Check if all output sequences are properly formatted
+	// Note: output may differ slightly from input since we normalize it
+	if !containsString(lineText, "\x1b[1mA") {
+		t.Errorf("Expected bold 'A', got %q", lineText)
+	}
+	// It should just add the red foreground color (31)
+	if !containsString(lineText, "\x1b[31mB") {
+		t.Errorf("Expected red 'B', got %q", lineText)
+	}
+	// It should just add the green background color (42)
+	if !containsString(lineText, "\x1b[42mC") {
+		t.Errorf("Expected green background 'C', got %q", lineText)
+	}
+	// It should change to yellow foreground (33)
+	if !containsString(lineText, "\x1b[33mD") {
+		t.Errorf("Expected yellow foreground 'D', got %q", lineText)
+	}
+	// Must end with reset
+	if !strings.HasSuffix(lineText, "\x1b[0m") {
+		t.Errorf("Expected line to end with reset, got %q", lineText)
+	}
+}
+
 func TestComplexOutput(t *testing.T) {
 	state := NewTerminalState(25, 80)
 
