@@ -23,6 +23,53 @@ on:
       - '**/BUILD.bazel'
 
 jobs:
+  # Bazel build and test (validates Bazel configuration)
+  bazel:
+    name: Bazel Build and Test
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.25'
+        cache: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+        cache-dependency-path: web-app/package-lock.json
+
+    - name: Install buf
+      run: go install github.com/bufbuild/buf/cmd/buf@latest
+
+    - name: Install Bazelisk
+      run: |
+        mkdir -p "$HOME/bin"
+        curl -fsSL https://github.com/bazelbuild/bazelisk/releases/download/v1.20.0/bazelisk-linux-amd64 -o "$HOME/bin/bazel"
+        chmod +x "$HOME/bin/bazel"
+        echo "$HOME/bin" >> $GITHUB_PATH
+
+    - name: Generate protobuf code
+      run: make proto-gen
+
+    - name: Build web UI
+      run: make web-build
+
+    - name: Build with Bazel
+      run: bazel build //:stapler-squad
+
+    - name: Run tests with Bazel
+      run: bazel test //... -short
+
+    - name: Verify binary
+      run: |
+        ls -la bazel-bin/stapler-squad
+        file bazel-bin/stapler-squad
+
   build:
     name: Build Binary and Test
     runs-on: ubuntu-latest
