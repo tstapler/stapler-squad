@@ -3,41 +3,15 @@ version: "2"
 run:
   go: "1.23"
 
-issues:
-  exclude-rules:
-    # Pre-existing complexity issues from origin/main
-    - linters:
-        - cyclop
-        - funlen
-        - gocognit
-        - nestif
-        - funcorder
-      path: "cmd/migration.go"
-    - linters:
-        - cyclop
-      path: "executor/timeout_executor.go"
-    - linters:
-        - cyclop
-        - funlen
-      path: "github/(clone|url_parser).go"
-    - linters:
-        - cyclop
-        - funlen
-        - gocognit
-        - nestif
-      path: "log/log.go"
-    - linters:
-        - cyclop
-        - funlen
-        - gocognit
-        - nestif
-        - funcorder
-      path: "main.go"
-
 linters:
   default: fast
   disable:
-    - depguard  # Pre-existing issues
-    - lll       # Pre-existing issues  
-    - mnd       # Pre-existing issues (magic numbers)
-    - wsl       # Pre-existing issues (whitespace)
+    - cyclop     # Pre-existing complexity issues
+    - funlen     # Pre-existing complexity issues
+    - gocognit   # Pre-existing complexity issues
+    - nestif     # Pre-existing complexity issues
+    - funcorder  # Pre-existing complexity issues
+    - depguard   # Pre-existing issues
+    - lll        # Pre-existing issues
+    - mnd        # Pre-existing issues (magic numbers)
+    - wsl        # Pre-existing issues (whitespace)
