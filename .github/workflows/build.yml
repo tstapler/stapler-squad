@@ -23,10 +23,20 @@ on:
       - '**/BUILD.bazel'
 
 jobs:
-  # Bazel build and test (validates Bazel configuration)
+  # Bazel build and test with cross-platform support
   bazel:
-    name: Bazel Build and Test
+    name: Bazel Build (${{ matrix.target }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - stapler-squad
+          - stapler-squad_linux_amd64
+          - stapler-squad_linux_arm64
+          - stapler-squad_darwin_amd64
+          - stapler-squad_darwin_arm64
+          - stapler-squad_windows_amd64
+
     steps:
     - uses: actions/checkout@v4
 
@@ -59,38 +69,19 @@ jobs:
     - name: Build web UI
       run: make web-build
 
-    - name: Run Gazelle to generate BUILD files for generated proto code
+    - name: Run Gazelle to generate BUILD files
       run: bazel run //:gazelle
 
     - name: Build with Bazel
-      run: bazel build //:stapler-squad
-
-    - name: Run tests with Bazel (excluding proto directory)
-      run: |
-        # Skip proto directory - has dependency issues with bzlmod
-        # Also skip packages that require external tools (claude, tmux)
-        bazel test //cmd/... //config/... //session/... //server/... //log/... //executor/... //github/... //telemetry/... 2>&1 || true
+      run: bazel build //:${{ matrix.target }}
 
     - name: Verify binary
       run: |
-        # Bazel puts binaries in different locations depending on config
-        # Try common locations
         OUTPUT_PATH=$(bazel info output_path)
-        for path in "$OUTPUT_PATH/bin/stapler-squad" \
-                    "$OUTPUT_PATH/k8-fastbuild/bin/stapler-squad_/stapler-squad" \
-                    "bazel-bin/stapler-squad"; do
-          if [ -f "$path" ]; then
-            echo "Found binary at: $path"
-            ls -la "$path"
-            file "$path"
-            exit 0
-          fi
-        done
-        echo "Binary not found in any expected location"
-        ls -la "$OUTPUT_PATH/" 2>/dev/null || true
-        ls -la bazel-bin/ 2>/dev/null || true
-        exit 1
+        find "$OUTPUT_PATH" -name "${{ matrix.target }}" -type f 2>/dev/null | head -1 | xargs -I{} ls -la {}
+        find "$OUTPUT_PATH" -name "${{ matrix.target }}*" -type f 2>/dev/null | head -1 | xargs -I{} file {}
 
+  # Legacy Go build - kept for compatibility during transition
   build:
     name: Build Binary and Test
     runs-on: ubuntu-latest

@@ -1,3 +1,5 @@
+# gazelle:prefix github.com/tstapler/stapler-squad
+
 load("@gazelle//:def.bzl", "gazelle")
 load("@rules_go//go:def.bzl", "go_binary", "go_library")
 
@@ -30,8 +32,50 @@ go_library(
     ],
 )
 
+# Default target - builds for host OS
 go_binary(
     name = "stapler-squad",
     embed = [":go_library"],
+    visibility = ["//visibility:public"],
+)
+
+# Platform-specific targets for cross-compilation
+go_binary(
+    name = "stapler-squad_linux_amd64",
+    embed = [":go_library"],
+    goos = "linux",
+    goarch = "amd64",
+    visibility = ["//visibility:public"],
+)
+
+go_binary(
+    name = "stapler-squad_linux_arm64",
+    embed = [":go_library"],
+    goos = "linux",
+    goarch = "arm64",
+    visibility = ["//visibility:public"],
+)
+
+go_binary(
+    name = "stapler-squad_darwin_amd64",
+    embed = [":go_library"],
+    goos = "darwin",
+    goarch = "amd64",
+    visibility = ["//visibility:public"],
+)
+
+go_binary(
+    name = "stapler-squad_darwin_arm64",
+    embed = [":go_library"],
+    goos = "darwin",
+    goarch = "arm64",
+    visibility = ["//visibility:public"],
+)
+
+go_binary(
+    name = "stapler-squad_windows_amd64",
+    embed = [":go_library"],
+    goos = "windows",
+    goarch = "amd64",
     visibility = ["//visibility:public"],
 )
