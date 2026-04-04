@@ -284,38 +284,31 @@ func recordToProto(r *notifications.NotificationRecord) *sessionv1.NotificationH
 	return record
 }
 
-// validateLocalhostOrigin ensures the request comes from localhost.
-// This is a security measure to prevent external actors from sending notifications.
+// validateLocalhostOrigin ensures the request comes from localhost by checking
+// the actual network connection's remote address.
 func validateLocalhostOrigin(ctx context.Context, req *connect.Request[sessionv1.SendNotificationRequest]) error {
-	// Get peer address from request headers or context
-	// ConnectRPC provides X-Forwarded-For or we can check the connection directly
-
-	// Check X-Real-IP header first (if behind a proxy)
-	realIP := req.Header().Get("X-Real-IP")
-	if realIP != "" {
-		if !isLocalhostIP(realIP) {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
-		}
-		return nil
-	}
-
-	// Check X-Forwarded-For header
-	forwardedFor := req.Header().Get("X-Forwarded-For")
-	if forwardedFor != "" {
-		// Take the first IP in the chain (original client)
-		ips := strings.Split(forwardedFor, ",")
-		if len(ips) > 0 {
-			clientIP := strings.TrimSpace(ips[0])
-			if !isLocalhostIP(clientIP) {
-				return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
-			}
-			return nil
+	peer := req.Peer()
+	if peer.Addr == "" {
+		// Fallback to context peer (e.g. for some test scenarios or interceptors)
+		if p, ok := connect.PeerFromContext(ctx); ok {
+			peer = p
 		}
 	}
 
-	// If no proxy headers, we're in direct connection mode
-	// The server already binds to localhost, so requests reaching here are local
-	// This is a defense-in-depth check
+	if peer.Addr == "" {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("unable to determine client IP"))
+	}
+
+	host, _, err := net.SplitHostPort(peer.Addr)
+	if err != nil {
+		// Fallback to the whole string if SplitHostPort fails (might happen if Addr is just an IP)
+		host = peer.Addr
+	}
+
+	if !isLocalhostIP(host) {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("notifications can only be sent from localhost"))
+	}
+
 	return nil
 }
 
