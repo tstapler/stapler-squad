@@ -218,7 +218,6 @@ func (sh *ClaudeSessionHistory) parseConversationFile(filePath string) (*ClaudeH
 			if entry.Project == "" && msg.CWD != "" {
 				entry.Project = msg.CWD
 			}
-
 		}
 	}
 

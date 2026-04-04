@@ -1222,7 +1222,8 @@ func TestCategorizeToolName(t *testing.T) {
 		// Built-in agent tools
 		{"ExitPlanMode", ToolCategoryBuiltinAgent},
 		{"EnterPlanMode", ToolCategoryBuiltinAgent},
-		{"AskUserQuestion", ToolCategoryBuiltinAgent},
+		// AskUserQuestion is intentionally NOT in builtinAgentTools - it should be escalated
+		{"AskUserQuestion", ToolCategoryBuiltin},
 		{"TodoWrite", ToolCategoryBuiltinAgent},
 		{"TaskCreate", ToolCategoryBuiltinAgent},
 		{"TaskUpdate", ToolCategoryBuiltinAgent},

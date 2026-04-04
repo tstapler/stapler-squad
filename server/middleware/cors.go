@@ -66,7 +66,7 @@ func CORSWithOrigins(allowedOrigins []string) func(http.Handler) http.Handler {
 			}
 
 			// Handle preflight OPTIONS request
-			if r.Method == "OPTIONS" {
+			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
