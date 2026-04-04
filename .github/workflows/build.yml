@@ -56,17 +56,17 @@ jobs:
     - name: Generate protobuf code
       run: make proto-gen
 
-    - name: Run Gazelle to generate BUILD files for generated proto code
-      run: bazel run //:gazelle
-
     - name: Build web UI
       run: make web-build
+
+    - name: Run Gazelle to generate BUILD files for generated proto code
+      run: bazel run //:gazelle
 
     - name: Build with Bazel
       run: bazel build //:stapler-squad
 
     - name: Run tests with Bazel
-      run: bazel test //... -short
+      run: bazel test //...
 
     - name: Verify binary
       run: |
