@@ -52,6 +52,9 @@ type TerminalState struct {
 	// Current text style for new characters
 	CurrentStyle CellStyle
 
+	// Tab stops (column index -> is set)
+	TabStops map[int]bool
+
 	// State version for delta tracking
 	Version uint64
 }
@@ -66,7 +69,13 @@ func NewTerminalState(rows, cols int) *TerminalState {
 		CursorCol:     0,
 		CursorVisible: true,
 		CurrentStyle:  DefaultStyle(),
+		TabStops:      make(map[int]bool),
 		Version:       0,
+	}
+
+	// Initialize default tab stops (every 8 columns)
+	for i := 8; i < cols; i += 8 {
+		state.TabStops[i] = true
 	}
 
 	// Initialize grid with empty cells
@@ -155,9 +164,16 @@ func (ts *TerminalState) ProcessOutput(data []byte) error {
 			if ts.CursorCol > 0 {
 				ts.CursorCol--
 			}
-		case '\t': // Tab (advance to next tab stop, typically 8 columns)
-			ts.CursorCol = ((ts.CursorCol / 8) + 1) * 8
-			if ts.CursorCol >= ts.Cols {
+		case '\t': // Tab (advance to next tab stop)
+			found := false
+			for i := ts.CursorCol + 1; i < ts.Cols; i++ {
+				if ts.TabStops[i] {
+					ts.CursorCol = i
+					found = true
+					break
+				}
+			}
+			if !found {
 				ts.CursorCol = ts.Cols - 1
 			}
 		default:
@@ -279,6 +295,14 @@ func (ts *TerminalState) handleCSI(params string, command string) {
 		if params == "?25" {
 			ts.CursorVisible = false
 		}
+	case "g": // Clear tab stops
+		n := parseIntParam(params, 0)
+		switch n {
+		case 0: // Clear tab stop at current column
+			delete(ts.TabStops, ts.CursorCol)
+		case 3: // Clear all tab stops
+			ts.TabStops = make(map[int]bool)
+		}
 	}
 }
 
@@ -303,7 +327,7 @@ func (ts *TerminalState) handleSimpleEscape(command string) {
 			ts.CursorRow = ts.Rows - 1
 		}
 	case "H": // Set tab stop
-		// TODO: Implement tab stops if needed
+		ts.TabStops[ts.CursorCol] = true
 	case "M": // Reverse line feed
 		ts.CursorRow--
 		if ts.CursorRow < 0 {
@@ -522,11 +546,22 @@ func (ts *TerminalState) Resize(rows, cols int) {
 			} else {
 				// Fill with empty cells
 				newGrid[i][j] = Cell{
-					Char:  ' ',
-					Style: DefaultStyle(),
+						Char:  ' ',
+						Style: DefaultStyle(),
 				}
 			}
 		}
+		}
+
+	// Add default tab stops for new columns if terminal grew
+	if cols > ts.Cols {
+		startCol := ts.Cols
+		if startCol%8 != 0 {
+			startCol = ((ts.Cols / 8) + 1) * 8
+		}
+		for i := startCol; i < cols; i += 8 {
+			ts.TabStops[i] = true
+	}
 	}
 
 	ts.Grid = newGrid
@@ -729,7 +764,12 @@ func (ts *TerminalState) Clone() *TerminalState {
 		CursorCol:     ts.CursorCol,
 		CursorVisible: ts.CursorVisible,
 		CurrentStyle:  ts.CurrentStyle,
+		TabStops:      make(map[int]bool, len(ts.TabStops)),
 		Version:       ts.Version,
+	}
+
+	for k, v := range ts.TabStops {
+		clone.TabStops[k] = v
 	}
 
 	// Deep copy grid

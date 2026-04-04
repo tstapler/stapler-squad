@@ -108,6 +108,79 @@ func TestProcessOutput_Tab(t *testing.T) {
 	}
 }
 
+func TestProcessOutput_SetTabStop(t *testing.T) {
+	state := NewTerminalState(25, 80)
+
+	// Move to col 4 and set tab stop
+	// \x1b[1;5H moves the cursor
+	// \x1bH sets the tab stop
+	state.ProcessOutput([]byte("\x1b[1;5H\x1bH"))
+
+	if !state.TabStops[4] {
+		t.Errorf("Expected tab stop at column 4 to be set")
+	}
+}
+
+func TestProcessOutput_ClearTabStop(t *testing.T) {
+	state := NewTerminalState(25, 80)
+
+	// Default tab stop at 8 should exist
+	if !state.TabStops[8] {
+		t.Errorf("Expected default tab stop at 8")
+	}
+
+	// Move to col 8 and clear tab stop
+	state.ProcessOutput([]byte("\x1b[1;9H\x1b[0g"))
+
+	if state.TabStops[8] {
+		t.Errorf("Expected tab stop at column 8 to be cleared")
+	}
+}
+
+func TestProcessOutput_ClearAllTabStops(t *testing.T) {
+	state := NewTerminalState(25, 80)
+
+	// Default tab stops should exist
+	if len(state.TabStops) == 0 {
+		t.Errorf("Expected default tab stops")
+	}
+
+	// Clear all tab stops
+	state.ProcessOutput([]byte("\x1b[3g"))
+
+	if len(state.TabStops) != 0 {
+		t.Errorf("Expected all tab stops to be cleared, got %d", len(state.TabStops))
+	}
+}
+
+func TestProcessOutput_TabWithCustomStops(t *testing.T) {
+	state := NewTerminalState(25, 80)
+
+	// Clear all tab stops
+	state.ProcessOutput([]byte("\x1b[3g"))
+
+	// Set custom tab stops at 4 and 12
+	state.ProcessOutput([]byte("\x1b[1;5H\x1bH"))
+	state.ProcessOutput([]byte("\x1b[1;13H\x1bH"))
+
+	// Go to origin and print A \t B \t C \t D
+	state.ProcessOutput([]byte("\x1b[1;1HA\tB\tC\tD"))
+
+	if state.Grid[0][0].Char != 'A' {
+		t.Errorf("Expected 'A' at column 0, got %c", state.Grid[0][0].Char)
+	}
+	if state.Grid[0][4].Char != 'B' {
+		t.Errorf("Expected 'B' at column 4, got %c", state.Grid[0][4].Char)
+	}
+	if state.Grid[0][12].Char != 'C' {
+		t.Errorf("Expected 'C' at column 12, got %c", state.Grid[0][12].Char)
+	}
+	// No more tab stops, D should be at the end of the line
+	if state.Grid[0][79].Char != 'D' {
+		t.Errorf("Expected 'D' at column 79, got %c", state.Grid[0][79].Char)
+	}
+}
+
 func TestProcessOutput_CursorMovement(t *testing.T) {
 	tests := []struct {
 		name        string
