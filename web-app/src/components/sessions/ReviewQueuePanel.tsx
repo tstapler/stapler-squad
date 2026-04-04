@@ -177,6 +177,8 @@ export function ReviewQueuePanel({
         return "Complete";
       case AttentionReason.STALE:
         return "Stale";
+      case AttentionReason.TESTS_FAILING:
+        return "Tests Failing";
       default:
         return "All";
     }
@@ -294,6 +296,7 @@ export function ReviewQueuePanel({
               AttentionReason.IDLE,
               AttentionReason.STALE,
               AttentionReason.TASK_COMPLETE,
+              AttentionReason.TESTS_FAILING,
             ].map((reason) => {
               const count = byReason.get(reason) ?? 0;
               return (

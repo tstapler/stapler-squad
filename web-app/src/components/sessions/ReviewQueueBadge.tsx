@@ -83,6 +83,8 @@ export function ReviewQueueBadge({
         return "Stale";
       case AttentionReason.WAITING_FOR_USER:
         return "Waiting";
+      case AttentionReason.TESTS_FAILING:
+        return "Tests Failing";
       default:
         return "Unknown";
     }
@@ -107,6 +109,8 @@ export function ReviewQueueBadge({
         return styles.reasonUnspecified;
       case AttentionReason.WAITING_FOR_USER:
         return styles.reasonInput;
+      case AttentionReason.TESTS_FAILING:
+        return styles.reasonError;
       default:
         return styles.reasonUnspecified;
     }
