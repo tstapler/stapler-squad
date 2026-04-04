@@ -70,8 +70,15 @@ jobs:
 
     - name: Verify binary
       run: |
-        ls -la bazel-bin/stapler-squad
-        file bazel-bin/stapler-squad
+        # Bazel puts binaries in bazel-bin or bazel-out depending on config
+        BINARY_PATH=$(bazel info output_path)/bin/stapler-squad
+        if [ -f "$BINARY_PATH" ]; then
+          ls -la "$BINARY_PATH"
+          file "$BINARY_PATH"
+        else
+          echo "Binary not found at $BINARY_PATH"
+          ls -la bazel-bin/ 2>/dev/null || echo "No bazel-bin directory"
+        fi
 
   build:
     name: Build Binary and Test
