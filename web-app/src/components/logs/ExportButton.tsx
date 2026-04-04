@@ -1,16 +1,9 @@
 "use client";
 
 import { useState, useRef, useEffect } from 'react';
+import type { LogEntry } from "@/gen/session/v1/session_pb";
+import { timestampDate } from "@bufbuild/protobuf/wkt";
 import styles from './ExportButton.module.css';
-
-interface LogEntry {
-  timestamp?: {
-    toDate(): Date;
-  };
-  level: string;
-  message: string;
-  source?: string;
-}
 
 interface ExportButtonProps {
   /** Logs to export */
@@ -46,7 +39,7 @@ export function ExportButton({ logs, disabled, className }: ExportButtonProps) {
 
   // Format log entry for export
   const formatLogEntry = (log: LogEntry) => ({
-    timestamp: log.timestamp?.toDate().toISOString() || '',
+    timestamp: log.timestamp ? timestampDate(log.timestamp).toISOString() : '',
     level: log.level,
     source: log.source || '',
     message: log.message,

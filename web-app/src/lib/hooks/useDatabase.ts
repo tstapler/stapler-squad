@@ -1,16 +1,21 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { DatabaseInfo } from "@/gen/session/v1/types_pb";
 import {
   ListDatabasesRequest,
+  ListDatabasesRequestSchema,
   GetCurrentDatabaseRequest,
+  GetCurrentDatabaseRequestSchema,
   SwitchDatabaseRequest,
+  SwitchDatabaseRequestSchema,
   MergeDatabaseRequest,
+  MergeDatabaseRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl } from "@/lib/config";
 
 interface MergeResult {
@@ -47,12 +52,12 @@ export function useDatabases(): UseDatabasesReturn {
   const [error, setError] = useState<string | null>(null);
 
   const clientRef = useRef<ReturnType<
-    typeof createPromiseClient<typeof SessionService>
+    typeof createClient<typeof SessionService>
   > | null>(null);
 
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
 
   const fetchDatabases = useCallback(async () => {
@@ -61,7 +66,7 @@ export function useDatabases(): UseDatabasesReturn {
     setError(null);
     try {
       const resp = await clientRef.current.listDatabases(
-        new ListDatabasesRequest()
+        create(ListDatabasesRequestSchema, {})
       );
       setDatabases(resp.databases ?? []);
       setCurrentId(resp.currentWorkspaceId ?? "");
@@ -89,7 +94,7 @@ export function useDatabases(): UseDatabasesReturn {
       setError(null);
       try {
         await clientRef.current.switchDatabase(
-          new SwitchDatabaseRequest({ configDir })
+          create(SwitchDatabaseRequestSchema, { configDir })
         );
       } catch (err) {
         // The server will restart, so a network error here is expected.
@@ -108,8 +113,8 @@ export function useDatabases(): UseDatabasesReturn {
       while (attempts < maxAttempts) {
         try {
           const transport = createConnectTransport({ baseUrl: apiBase });
-          const tempClient = createPromiseClient(SessionService, transport);
-          await tempClient.getCurrentDatabase(new GetCurrentDatabaseRequest());
+          const tempClient = createClient(SessionService, transport);
+          await tempClient.getCurrentDatabase(create(GetCurrentDatabaseRequestSchema, {}));
           serverBack = true;
           break;
         } catch {
@@ -135,7 +140,7 @@ export function useDatabases(): UseDatabasesReturn {
       setError(null);
       try {
         const resp = await clientRef.current.mergeDatabase(
-          new MergeDatabaseRequest({ configDir })
+          create(MergeDatabaseRequestSchema, { configDir })
         );
         await refresh();
         return {

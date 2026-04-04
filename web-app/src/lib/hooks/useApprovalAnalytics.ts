@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { AnalyticsSummaryProto, DailyBucketProto } from "@/gen/session/v1/types_pb";
-import { GetApprovalAnalyticsRequest } from "@/gen/session/v1/session_pb";
+import { GetApprovalAnalyticsRequest, GetApprovalAnalyticsRequestSchema } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl } from "@/lib/config";
 
 interface UseApprovalAnalyticsOptions {
@@ -36,11 +37,11 @@ export function useApprovalAnalytics(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
 
   const fetchAnalytics = useCallback(async () => {
@@ -48,7 +49,7 @@ export function useApprovalAnalytics(
     setLoading(true);
     setError(null);
     try {
-      const req = new GetApprovalAnalyticsRequest({ windowDays });
+      const req = create(GetApprovalAnalyticsRequestSchema, { windowDays });
       const resp = await clientRef.current.getApprovalAnalytics(req);
       setSummary(resp.summary ?? null);
       setDailyBuckets(resp.dailyBuckets ?? []);

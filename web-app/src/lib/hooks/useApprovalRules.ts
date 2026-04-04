@@ -1,15 +1,19 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
-import { ApprovalRuleProto, AutoDecision } from "@/gen/session/v1/types_pb";
+import { SessionService } from "@/gen/session/v1/session_pb";
+import { ApprovalRuleProto, ApprovalRuleProtoSchema, AutoDecision } from "@/gen/session/v1/types_pb";
 import {
   ListApprovalRulesRequest,
+  ListApprovalRulesRequestSchema,
   UpsertApprovalRuleRequest,
+  UpsertApprovalRuleRequestSchema,
   DeleteApprovalRuleRequest,
+  DeleteApprovalRuleRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl } from "@/lib/config";
 
 interface UseApprovalRulesOptions {
@@ -43,11 +47,11 @@ export function useApprovalRules(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
 
   const fetchRules = useCallback(async () => {
@@ -55,7 +59,7 @@ export function useApprovalRules(
     setLoading(true);
     setError(null);
     try {
-      const req = new ListApprovalRulesRequest();
+      const req = create(ListApprovalRulesRequestSchema, {});
       if (sourceFilter) {
         req.sourceFilter = sourceFilter;
       }
@@ -81,7 +85,7 @@ export function useApprovalRules(
   const upsertRule = useCallback(
     async (ruleData: Partial<ApprovalRuleProto> & { id: string }) => {
       if (!clientRef.current) return;
-      const rule = new ApprovalRuleProto({
+      const rule = create(ApprovalRuleProtoSchema, {
         id: ruleData.id,
         name: ruleData.name ?? "",
         toolName: ruleData.toolName ?? "",
@@ -96,7 +100,7 @@ export function useApprovalRules(
         enabled: ruleData.enabled ?? true,
         source: "user",
       });
-      const req = new UpsertApprovalRuleRequest({ rule });
+      const req = create(UpsertApprovalRuleRequestSchema, { rule });
       await clientRef.current.upsertApprovalRule(req);
       await refresh();
     },
@@ -106,7 +110,7 @@ export function useApprovalRules(
   const deleteRule = useCallback(
     async (id: string) => {
       if (!clientRef.current) return;
-      const req = new DeleteApprovalRuleRequest({ id });
+      const req = create(DeleteApprovalRuleRequestSchema, { id });
       await clientRef.current.deleteApprovalRule(req);
       // Optimistic update
       setRules((prev) => prev.filter((r) => r.id !== id));

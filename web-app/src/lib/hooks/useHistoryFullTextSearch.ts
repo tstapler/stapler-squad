@@ -1,16 +1,15 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { createPromiseClient, ConnectError, Code } from "@connectrpc/connect";
+import { createClient, ConnectError, Code } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import {
-  SearchClaudeHistoryRequest,
   SearchResult,
   SearchSnippet,
   HighlightRange,
 } from "@/gen/session/v1/session_pb";
-import { Timestamp } from "@bufbuild/protobuf";
+import { timestampFromDate, timestampDate } from "@bufbuild/protobuf/wkt";
 import { getApiBaseUrl } from "@/lib/config";
 import { useDebounce } from "./useDebounce";
 
@@ -111,13 +110,13 @@ export function useHistoryFullTextSearch(
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebounce(query, debounceMs);
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Initialize ConnectRPC client
   useEffect(() => {
     const transport = createConnectTransport({ baseUrl });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, [baseUrl]);
 
   // Convert protobuf SearchResult to our interface
@@ -135,13 +134,13 @@ export function useHistoryFullTextSearch(
           end: hr.end,
         })),
         messageRole: snippet.messageRole,
-        messageTime: snippet.messageTime ? snippet.messageTime.toDate() : null,
+        messageTime: snippet.messageTime ? timestampDate(snippet.messageTime) : null,
       })),
       metadata: {
         isMetadataMatch: result.metadata?.isMetadataMatch ?? false,
         matchSource: result.metadata?.matchSource ?? "",
         model: result.metadata?.model ?? "",
-        createdAt: result.metadata?.createdAt ? result.metadata.createdAt.toDate() : null,
+        createdAt: result.metadata?.createdAt ? timestampDate(result.metadata.createdAt) : null,
       },
     };
   }, []);
@@ -171,26 +170,15 @@ export function useHistoryFullTextSearch(
       setState((prev) => ({ ...prev, loading: true, error: null }));
 
       try {
-        const request: Partial<SearchClaudeHistoryRequest> = {
+        const response = await clientRef.current.searchClaudeHistory({
           query: searchOptions.query,
           limit: searchOptions.limit ?? 20,
           offset: searchOptions.offset ?? 0,
-        };
-
-        if (searchOptions.project) {
-          request.project = searchOptions.project;
-        }
-        if (searchOptions.model) {
-          request.model = searchOptions.model;
-        }
-        if (searchOptions.startTime) {
-          request.startTime = Timestamp.fromDate(searchOptions.startTime);
-        }
-        if (searchOptions.endTime) {
-          request.endTime = Timestamp.fromDate(searchOptions.endTime);
-        }
-
-        const response = await clientRef.current.searchClaudeHistory(request, {
+          project: searchOptions.project ?? "",
+          model: searchOptions.model ?? "",
+          startTime: searchOptions.startTime ? timestampFromDate(searchOptions.startTime) : undefined,
+          endTime: searchOptions.endTime ? timestampFromDate(searchOptions.endTime) : undefined,
+        }, {
           signal: abortControllerRef.current.signal,
         });
 

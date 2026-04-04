@@ -2,19 +2,23 @@
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { Session, ReviewItem } from "@/gen/session/v1/types_pb";
+import { Session, SessionSchema, ReviewItem } from "@/gen/session/v1/types_pb";
+import { create } from "@bufbuild/protobuf";
 import { ReviewQueuePanel } from "@/components/sessions/ReviewQueuePanel";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
 import { useSessionService } from "@/lib/hooks/useSessionService";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { getApiBaseUrl } from "@/lib/config";
+import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
+import { useKeyboard } from "@/lib/hooks/useKeyboard";
+import { KeyboardHints } from "@/components/ui/KeyboardHint";
 import styles from "./page.module.css";
 
 // Construct a minimal Session from ReviewItem data for immediate modal opening
 // before useSessionService has finished loading.
 function sessionFromReviewItem(item: ReviewItem): Session {
-  return new Session({
+  return create(SessionSchema, {
     id: item.sessionId,
     title: item.sessionName,
     path: item.path,
@@ -33,6 +37,19 @@ function ReviewQueueContent() {
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [selectedTab, setSelectedTab] = useState<SessionDetailTab>("terminal");
   const [isSessionFullscreen, setIsSessionFullscreen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
+
+  // Auto-advance preference (default: on), persisted to localStorage
+  const [autoAdvance, setAutoAdvance] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    const stored = localStorage.getItem("review-queue-auto-advance");
+    return stored === null ? true : stored === "true";
+  });
+  const autoAdvanceRef = useRef(autoAdvance);
+  useEffect(() => { autoAdvanceRef.current = autoAdvance; }, [autoAdvance]);
+
+  // Ref for focus trap inside the session-detail modal
+  const modalContentRef = useRef<HTMLDivElement>(null);
 
   // Use WebSocket streaming for real-time session updates
   const { sessions } = useSessionService({
@@ -55,6 +72,21 @@ function ReviewQueueContent() {
 
   useEffect(() => { reviewQueueItemsRef.current = reviewQueueItems; }, [reviewQueueItems]);
   useEffect(() => { selectedSessionRef.current = selectedSession; }, [selectedSession]);
+
+  // Trap focus inside the session-detail modal while it is open
+  useFocusTrap(modalContentRef, !!selectedSession);
+
+  // Global keyboard shortcuts for this page
+  useKeyboard({
+    "?": () => setIsHelpOpen((v) => !v),
+    Escape: () => {
+      if (isHelpOpen) {
+        setIsHelpOpen(false);
+      } else if (selectedSession) {
+        handleCloseSessionDetail();
+      }
+    },
+  });
 
   // Handle deep linking from notifications - auto-open session from URL.
   // Uses queueItems as fallback so the modal opens even before useSessionService loads.
@@ -136,6 +168,8 @@ function ReviewQueueContent() {
   //   to handle the race where WebSocket hasn't removed it yet).
   const handleAutoAdvance = useCallback((resolvedSessionId?: string) => {
     setTimeout(() => {
+      if (!autoAdvanceRef.current) return; // Auto-advance disabled by user preference
+
       const currentItems = reviewQueueItemsRef.current;
       const currentSelected = selectedSessionRef.current;
 
@@ -200,6 +234,20 @@ function ReviewQueueContent() {
   return (
     <div className={styles.page}>
       <main id="main-content" className={styles.main}>
+        {/* Auto-advance preference toolbar */}
+        <div className={styles.toolbar}>
+          <label className={styles.autoAdvanceLabel}>
+            <input
+              type="checkbox"
+              checked={autoAdvance}
+              onChange={(e) => {
+                setAutoAdvance(e.target.checked);
+                localStorage.setItem("review-queue-auto-advance", String(e.target.checked));
+              }}
+            />
+            Auto-advance after action
+          </label>
+        </div>
         <ReviewQueuePanel
           onSessionClick={handleSessionClick}
           onItemsChange={handleItemsChange}
@@ -211,8 +259,12 @@ function ReviewQueueContent() {
       {selectedSession && (
         <div className={styles.modal} onClick={handleCloseSessionDetail}>
           <div
+            ref={modalContentRef}
             className={`${styles.modalContent} ${isSessionFullscreen ? styles.modalContentFullscreen : ""}`}
             onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label={selectedSession.title}
           >
             <SessionDetail
               key={selectedSession.id}
@@ -231,6 +283,52 @@ function ReviewQueueContent() {
           </div>
         </div>
       )}
+
+      {/* Keyboard shortcuts help overlay */}
+      {isHelpOpen && (
+        <div className={styles.helpOverlay} onClick={() => setIsHelpOpen(false)}>
+          <div
+            className={styles.helpOverlayContent}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="review-queue-help-title"
+          >
+            <div className={styles.helpOverlayHeader}>
+              <h2 id="review-queue-help-title">Keyboard Shortcuts</h2>
+              <button
+                className={styles.helpOverlayCloseButton}
+                onClick={() => setIsHelpOpen(false)}
+                aria-label="Close keyboard shortcuts"
+              >
+                ✕
+              </button>
+            </div>
+            <KeyboardHints
+              hints={[
+                { keys: "?", description: "Show / hide this help" },
+                { keys: "Escape", description: "Close dialog or modal" },
+                { keys: "Enter", description: "Approve pending request (when 1 approval visible)" },
+                { keys: ["Shift", "Enter"], description: "Deny pending request (when 1 approval visible)" },
+                { keys: "]", description: "Next queue item" },
+                { keys: "[", description: "Previous queue item" },
+                { keys: ["Shift", "→"], description: "Next session (in modal)" },
+                { keys: ["Shift", "←"], description: "Previous session (in modal)" },
+              ]}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Floating help button */}
+      <button
+        className={styles.helpButton}
+        onClick={() => setIsHelpOpen(true)}
+        aria-label="Show keyboard shortcuts"
+        title="Keyboard shortcuts (?)"
+      >
+        ?
+      </button>
     </div>
   );
 }

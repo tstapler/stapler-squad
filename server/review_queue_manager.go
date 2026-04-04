@@ -238,9 +238,12 @@ func (rqm *ReactiveQueueManager) OnItemAdded(item *session.ReviewItem) {
 	}
 	rqm.publishToClients(event)
 
-	// Also publish an EventNotification to the EventBus so the notification history
-	// store captures this event. This unifies all notification sources through the EventBus.
-	if rqm.eventBus != nil {
+	// Publish an EventNotification to the EventBus so the notification history store
+	// captures this event — but skip APPROVAL_PENDING items. The ApprovalHandler already
+	// broadcasts a richer notification (with the actual command preview and approval UUID)
+	// when the HTTP hook fires. Publishing again here would create a duplicate card in the
+	// notification panel because APPROVAL_NEEDED records are never deduplicated server-side.
+	if rqm.eventBus != nil && item.Reason != session.ReasonApprovalPending {
 		notifType, notifPriority := rqm.mapReviewItemToNotification(item)
 		notifID := fmt.Sprintf("review-queue-%s-%d", item.SessionID, item.DetectedAt.UnixMilli())
 		title := fmt.Sprintf("%s: %s", item.Reason.String(), item.SessionName)

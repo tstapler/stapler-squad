@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { SessionService } from "@/gen/session/v1/session_connect";
-import { Timestamp } from "@bufbuild/protobuf";
+import { SessionService } from "@/gen/session/v1/session_pb";
+import type { LogEntry } from "@/gen/session/v1/session_pb";
+import { timestampFromDate, timestampDate } from "@bufbuild/protobuf/wkt";
 import { formatTimestamp, formatRelativeTime, getUserTimezone, TIME_RANGE_PRESETS } from "@/lib/utils/datetime";
 import { getApiBaseUrl } from "@/lib/config";
 import { useDebounce } from "@/lib/hooks/useDebounce";
@@ -17,15 +18,6 @@ import { SearchWithHistory } from "@/components/logs/SearchWithHistory";
 import { DensityToggle, type LogDensity } from "@/components/logs/DensityToggle";
 import { useLiveTail } from "@/lib/hooks/useLiveTail";
 import styles from "./page.module.css";
-
-interface LogEntry {
-  timestamp?: {
-    toDate(): Date;
-  };
-  level: string;
-  message: string;
-  source?: string;
-}
 
 export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -60,7 +52,7 @@ export default function LogsPage() {
   // Debounced search query
   const debouncedSearchQuery = useDebounce(searchQuery, 300);
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const logsContainerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -70,7 +62,7 @@ export default function LogsPage() {
       baseUrl: getApiBaseUrl(),
     });
 
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
 
   // Fetch logs from API
@@ -100,8 +92,8 @@ export default function LogsPage() {
         level: singleLevelFilter,
         limit: limit,
         offset: newOffset,
-        startTime: Timestamp.fromDate(timeRange.start),
-        endTime: Timestamp.fromDate(timeRange.end),
+        startTime: timestampFromDate(timeRange.start),
+        endTime: timestampFromDate(timeRange.end),
       });
 
       let entries = response.entries || [];
@@ -149,8 +141,8 @@ export default function LogsPage() {
         level: singleLevelFilter,
         limit: limit,
         offset: offset,
-        startTime: Timestamp.fromDate(timeRange.start),
-        endTime: Timestamp.fromDate(timeRange.end),
+        startTime: timestampFromDate(timeRange.start),
+        endTime: timestampFromDate(timeRange.end),
       });
 
       let entries = response.entries || [];
@@ -325,7 +317,7 @@ export default function LogsPage() {
 
   // Copy log to clipboard
   const copyLog = async (log: LogEntry) => {
-    const text = `[${log.timestamp?.toDate().toISOString()}] [${log.level}] [${log.source}] ${log.message}`;
+    const text = `[${log.timestamp ? timestampDate(log.timestamp).toISOString() : 'N/A'}] [${log.level}] [${log.source}] ${log.message}`;
     await navigator.clipboard.writeText(text);
   };
 
@@ -496,10 +488,10 @@ export default function LogsPage() {
                     </td>
                     <td
                       className={styles.timestamp}
-                      title={log.timestamp ? formatTimestamp(log.timestamp.toDate()) : 'N/A'}
+                      title={log.timestamp ? formatTimestamp(timestampDate(log.timestamp)) : 'N/A'}
                     >
                       {log.timestamp
-                        ? formatRelativeTime(log.timestamp.toDate().getTime())
+                        ? formatRelativeTime(timestampDate(log.timestamp).getTime())
                         : "N/A"}
                     </td>
                     <td
@@ -546,7 +538,7 @@ export default function LogsPage() {
                         <div className={styles.logDetail}>
                           <div className={styles.logDetailSection}>
                             <strong>Full Timestamp:</strong>
-                            <span>{log.timestamp ? formatTimestamp(log.timestamp.toDate()) : 'N/A'}</span>
+                            <span>{log.timestamp ? formatTimestamp(timestampDate(log.timestamp)) : 'N/A'}</span>
                           </div>
                           <div className={styles.logDetailSection}>
                             <strong>Level:</strong>

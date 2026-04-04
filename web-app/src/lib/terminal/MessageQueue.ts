@@ -17,7 +17,8 @@
  * ```
  */
 
-import { TerminalData } from "@/gen/session/v1/events_pb";
+import { TerminalData, TerminalDataSchema } from "@/gen/session/v1/events_pb";
+import { create } from "@bufbuild/protobuf";
 
 export class MessageQueue {
   private queue: TerminalData[] = [];
@@ -56,7 +57,7 @@ export class MessageQueue {
     if (this.resolve) {
       // Force unblock the iterator with a sentinel message
       // This message will be filtered out by the iterator and not sent to the server
-      this.resolve(new TerminalData({ sessionId: "", data: { case: undefined } }));
+      this.resolve(create(TerminalDataSchema, { sessionId: "", data: { case: undefined } }));
       this.resolve = null;
     }
   }

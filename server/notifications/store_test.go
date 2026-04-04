@@ -588,18 +588,19 @@ func TestDeduplicateExisting_MixedReadUnread(t *testing.T) {
 	}
 }
 
-// TestAppendDedup_ApprovalNeededNotDeduped verifies that APPROVAL_NEEDED notifications
-// (type 1) are never deduplicated, even when the same session has multiple unread records.
-// Each approval carries a unique ID that must equal the notification record ID for
-// SetMetadata outcome-stamping to work correctly.
-func TestAppendDedup_ApprovalNeededNotDeduped(t *testing.T) {
+// TestAppendDedup_ApprovalNeededDeduped verifies that APPROVAL_NEEDED notifications
+// (type 1) ARE deduplicated by (sessionID, notificationType) like other types, but
+// the record ID is updated to the latest approval UUID so SetMetadata outcome-stamping
+// continues to work. Three sequential approvals for the same unread session must
+// collapse into a single record with OccurrenceCount=3 and ID=third approval UUID.
+func TestAppendDedup_ApprovalNeededDeduped(t *testing.T) {
 	store := newTestStore(t)
 
-	// Three APPROVAL_NEEDED events for the same session — all should create separate records.
-	for i := 1; i <= 3; i++ {
-		r := makeRecord("approval-"+string(rune('0'+i)), "session-A", notifTypeApprovalNeededTest)
+	ids := []string{"approval-1", "approval-2", "approval-3"}
+	for _, id := range ids {
+		r := makeRecord(id, "session-A", notifTypeApprovalNeededTest)
 		if err := store.Append(r); err != nil {
-			t.Fatalf("Append %d: %v", i, err)
+			t.Fatalf("Append %s: %v", id, err)
 		}
 	}
 
@@ -607,17 +608,18 @@ func TestAppendDedup_ApprovalNeededNotDeduped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if total != 3 {
-		t.Errorf("expected 3 separate APPROVAL_NEEDED records (no dedup), got %d", total)
+	if total != 1 {
+		t.Errorf("expected 1 deduplicated APPROVAL_NEEDED record, got %d", total)
 	}
-	if len(records) != 3 {
-		t.Fatalf("expected 3 records in slice, got %d", len(records))
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record in slice, got %d", len(records))
 	}
-	// Each record should have OccurrenceCount=1 (no merging occurred)
-	for _, r := range records {
-		if r.OccurrenceCount != 1 {
-			t.Errorf("record %s: expected OccurrenceCount=1, got %d", r.ID, r.OccurrenceCount)
-		}
+	if records[0].OccurrenceCount != 3 {
+		t.Errorf("expected OccurrenceCount=3, got %d", records[0].OccurrenceCount)
+	}
+	// Record ID must be updated to the latest approval UUID for SetMetadata correlation.
+	if records[0].ID != "approval-3" {
+		t.Errorf("expected record ID='approval-3' (latest approval), got '%s'", records[0].ID)
 	}
 }
 
@@ -658,10 +660,11 @@ func TestSetMetadata_ApprovalDecisionStamping(t *testing.T) {
 	}
 }
 
-// TestSetMetadata_NoDedup_SecondApprovalStamped verifies that when two APPROVAL_NEEDED
-// notifications are created for the same session, SetMetadata correctly stamps each one
-// independently because they are not deduplicated.
-func TestSetMetadata_NoDedup_SecondApprovalStamped(t *testing.T) {
+// TestSetMetadata_Dedup_SecondApprovalStamped verifies that when two APPROVAL_NEEDED
+// notifications are created for the same unread session, they collapse into a single
+// record whose ID is updated to the second approval UUID. SetMetadata using that second
+// UUID must stamp the merged record correctly.
+func TestSetMetadata_Dedup_SecondApprovalStamped(t *testing.T) {
 	store := newTestStore(t)
 
 	approvalID1 := "approval-uuid-1"
@@ -689,30 +692,32 @@ func TestSetMetadata_NoDedup_SecondApprovalStamped(t *testing.T) {
 		t.Fatalf("Append r2: %v", err)
 	}
 
-	// Stamp the second approval's decision
-	if err := store.SetMetadata(approvalID2, "approval_decision", "deny"); err != nil {
-		t.Fatalf("SetMetadata: %v", err)
-	}
-
+	// Both approvals for the same unread session should collapse into one record
+	// whose ID is updated to the latest approval UUID.
 	records, _, err := store.List(ListOptions{Limit: 100})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(records) != 2 {
-		t.Fatalf("expected 2 records (no dedup), got %d", len(records))
+	if len(records) != 1 {
+		t.Fatalf("expected 1 deduplicated record, got %d", len(records))
+	}
+	if records[0].ID != approvalID2 {
+		t.Errorf("expected record ID=%s (latest approval UUID), got %s", approvalID2, records[0].ID)
+	}
+	if records[0].OccurrenceCount != 2 {
+		t.Errorf("expected OccurrenceCount=2, got %d", records[0].OccurrenceCount)
 	}
 
-	// Find the record with approval_id=approvalID2 and verify its stamp
-	var found bool
-	for _, r := range records {
-		if r.ID == approvalID2 {
-			found = true
-			if got := r.Metadata["approval_decision"]; got != "deny" {
-				t.Errorf("expected approval_decision='deny' on record %s, got '%s'", r.ID, got)
-			}
-		}
+	// Stamp the latest approval's decision via its UUID — must find the merged record.
+	if err := store.SetMetadata(approvalID2, "approval_decision", "deny"); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
 	}
-	if !found {
-		t.Errorf("could not find record with ID=%s; dedup may have incorrectly merged it", approvalID2)
+
+	records, _, err = store.List(ListOptions{Limit: 100})
+	if err != nil {
+		t.Fatalf("List after stamp: %v", err)
+	}
+	if got := records[0].Metadata["approval_decision"]; got != "deny" {
+		t.Errorf("expected approval_decision='deny', got '%s'", got)
 	}
 }

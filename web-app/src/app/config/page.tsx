@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { SessionService } from "@/gen/session/v1/session_connect";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import { ClaudeConfigFile } from "@/gen/session/v1/session_pb";
-import { createPromiseClient } from "@connectrpc/connect";
+import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import Editor, { OnMount } from "@monaco-editor/react";
 import type { editor } from "monaco-editor";
@@ -66,7 +66,7 @@ export default function ConfigEditorPage() {
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
-  const clientRef = useRef<ReturnType<typeof createPromiseClient<typeof SessionService>> | null>(null);
+  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof import("monaco-editor") | null>(null);
 
@@ -80,7 +80,7 @@ export default function ConfigEditorPage() {
     const transport = createConnectTransport({
       baseUrl: getApiBaseUrl(),
     });
-    clientRef.current = createPromiseClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, transport);
   }, []);
 
   // Load configs on mount

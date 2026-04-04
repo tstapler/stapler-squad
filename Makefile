@@ -12,39 +12,33 @@ WEB_FILES := $(shell find web-app/src -type f 2>/dev/null)
 PROTO_FILES := $(shell find proto -name "*.proto" 2>/dev/null)
 PROTO_STAMP := .proto-gen.stamp
 PROTO_OUT_DIRS := gen/proto/go web/src/gen
-
-# Tool detection and automatic installation
-MISSING_TOOLS :=
-ifeq ($(shell which go 2>/dev/null),)
-	MISSING_TOOLS += go
-endif
-ifeq ($(shell which buf 2>/dev/null),)
-	MISSING_TOOLS += buf
-endif
-ifeq ($(shell which npm 2>/dev/null),)
-	MISSING_TOOLS += nodejs
-endif
+ASDF_STAMP := .asdf-install.stamp
 
 .PHONY: ensure-tools
-ensure-tools: ## Automatically install missing system tools (go, buf, node) via asdf or Homebrew
+# ensure-tools runs asdf install only when .tool-versions changes
+ensure-tools: $(ASDF_STAMP) ## Automatically install missing system tools (go, buf, node) via asdf or Homebrew
+
+$(ASDF_STAMP): .tool-versions
 ifneq ($(wildcard .tool-versions),)
 	@if which asdf >/dev/null 2>&1; then \
 		echo "🔍 asdf detected, ensuring versions from .tool-versions are installed..."; \
 		asdf install; \
 	fi
 endif
-ifneq ($(MISSING_TOOLS),)
-	@if which brew >/dev/null 2>&1; then \
-		echo "🔍 Missing tools detected: $(MISSING_TOOLS)"; \
-		echo "🚀 Installing via Homebrew..."; \
-		brew install $(MISSING_TOOLS); \
+	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which npm >/dev/null 2>&1; then \
+		touch $(ASDF_STAMP); \
 	else \
-		echo "❌ Error: Missing tools: $(MISSING_TOOLS). Please install them or Homebrew/asdf."; \
-		exit 1; \
+		if which brew >/dev/null 2>&1; then \
+			echo "🔍 Missing tools, installing via Homebrew..."; \
+			brew install go buf nodejs; \
+		else \
+			echo "❌ Error: go/buf/npm not found. Install asdf or Homebrew."; \
+			exit 1; \
+		fi; \
+		touch $(ASDF_STAMP); \
 	fi
-endif
 
-.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile demo-video demo-post-process demo-gif bazel-build bazel-run bazel-test bazel-clean bazel-update-deps bazel-all
+.PHONY: help build test benchmark install-tools lint analyze nil-safety security format check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif bazel-build bazel-run bazel-test bazel-clean bazel-update-deps bazel-all
 
 # Default target
 help: ## Show this help message
@@ -60,10 +54,16 @@ stapler-squad: ensure-tools proto-gen server/web/dist $(GO_FILES) ## Build the G
 	go build -o stapler-squad .
 	@echo "✅ stapler-squad built successfully"
 
+# Install web-app npm dependencies when package-lock.json changes
+web-app/node_modules/.package-lock.json: web-app/package.json web-app/package-lock.json
+	@echo "Installing web-app npm dependencies..."
+	@cd web-app && npm install
+	@touch web-app/node_modules/.package-lock.json
+
 # Build Next.js app to web-app/out
-web-app/out: ensure-tools web-app/package.json $(WEB_FILES) web-app/next.config.ts
+web-app/out: ensure-tools web-app/node_modules/.package-lock.json $(WEB_FILES) web-app/next.config.ts
 	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@cd web-app && ([ -d node_modules ] || npm install) && NEXT_BUILD_MODE=development npm run build
+	@cd web-app && NEXT_BUILD_MODE=development npm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -78,6 +78,10 @@ web-build: server/web/dist ## Build the Next.js web UI (convenience target)
 
 build-all: build ## Build both web UI and Go application
 	@echo "✅ Full build complete (web + server)"
+
+qr: ensure-tools proto-gen ## Print remote access QR codes for phone setup
+	@[ -f ./stapler-squad ] || $(MAKE) build
+	@./stapler-squad print-qr-codes
 
 restart-web: build-all ## Rebuild and restart the web server
 	@echo "Stopping existing stapler-squad processes..."
@@ -118,14 +122,16 @@ install: ensure-tools ## Install stapler-squad locally
 	go install .
 
 # Protocol Buffer code generation
-proto-gen: ensure-tools ## Generate Go and TypeScript code from proto files
+proto-gen: ensure-tools web-app/node_modules/.package-lock.json ## Generate Go and TypeScript code from proto files
 	@echo "Checking if proto files need regeneration..."
-	@if [ ! -f $(PROTO_STAMP) ] || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ]; then \
+	@if [ ! -f $(PROTO_STAMP) ] \
+	   || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ] \
+	   || [ web-app/node_modules/.bin/protoc-gen-es -nt $(PROTO_STAMP) ]; then \
 		echo "Generating protocol buffer code..."; \
 		buf generate proto; \
 		echo "✅ Code generation complete"; \
 		echo "  Go code:         gen/proto/go/"; \
-		echo "  TypeScript code: web/src/gen/"; \
+		echo "  TypeScript code: web-app/src/gen/"; \
 		touch $(PROTO_STAMP); \
 	else \
 		echo "✅ Proto files unchanged, skipping generation"; \
