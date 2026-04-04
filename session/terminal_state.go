@@ -1,8 +1,8 @@
 package session
 
 import (
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"fmt"
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"regexp"
 	"strconv"
 	"strings"
@@ -546,12 +546,12 @@ func (ts *TerminalState) Resize(rows, cols int) {
 			} else {
 				// Fill with empty cells
 				newGrid[i][j] = Cell{
-						Char:  ' ',
-						Style: DefaultStyle(),
+					Char:  ' ',
+					Style: DefaultStyle(),
 				}
 			}
 		}
-		}
+	}
 
 	// Add default tab stops for new columns if terminal grew
 	if cols > ts.Cols {
@@ -561,7 +561,7 @@ func (ts *TerminalState) Resize(rows, cols int) {
 		}
 		for i := startCol; i < cols; i += 8 {
 			ts.TabStops[i] = true
-	}
+		}
 	}
 
 	ts.Grid = newGrid
