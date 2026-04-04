@@ -1,10 +1,10 @@
 package session
 
 import (
-	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/log"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"strings"
 	"sync"
 	"time"
@@ -23,8 +23,8 @@ func DefaultReviewQueuePollerConfig() ReviewQueuePollerConfig {
 	return ReviewQueuePollerConfig{
 		PollInterval:       2 * time.Second, // Poll every 2 seconds for immediate detection
 		IdleThreshold:      5 * time.Second, // Add to queue after 5s idle for immediate user notifications
-		InputWaitDuration:  3 * time.Second,  // Flag if waiting for input > 3s (reduced from 5s)
-		StalenessThreshold: 2 * time.Minute,  // Flag if no meaningful output for 2 minutes (reduced from 5min)
+		InputWaitDuration:  3 * time.Second, // Flag if waiting for input > 3s (reduced from 5s)
+		StalenessThreshold: 2 * time.Minute, // Flag if no meaningful output for 2 minutes (reduced from 5min)
 	}
 }
 
@@ -327,18 +327,12 @@ func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStat
 
 // checkSession checks a single session and adds/removes from queue as needed.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
-	log.InfoLog.Printf("[ReviewQueue] === CHECKING SESSION '%s' === (started=%v, paused=%v)",
-		inst.Title, inst.Started(), inst.Paused())
-
 	if inst.LastMeaningfulOutput.IsZero() {
 		log.DebugLog.Printf("[ReviewQueue] Session '%s': LastMeaningfulOutput is zero — processing without output timestamp", inst.Title)
 	}
 
 	// Skip paused or unstarted sessions
 	if !inst.Started() || inst.Paused() {
-		log.InfoLog.Printf("[ReviewQueue] Session '%s': Skipping (started=%v, paused=%v)",
-			inst.Title, inst.Started(), inst.Paused())
-		rqp.queue.Remove(inst.Title)
 		return
 	}
 
@@ -364,9 +358,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 
 	// STEP 5: Check grace period for temporary removal
 	inGracePeriod := inst.ReviewState.IsInProcessingGracePeriod()
-
-	log.InfoLog.Printf("[ReviewQueue] Session '%s': isNewPrompt=%v, userResponded=%v, isProcessing=%v, gracePeriod=%v",
-		inst.Title, isNewPrompt, userRespondedToPrompt, isProcessing, inGracePeriod)
 
 	// DECISION LOGIC:
 
@@ -815,12 +806,12 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance) {
 		}
 
 		item := &ReviewItem{
-			SessionID:    inst.Title,
-			SessionName:  inst.Title,
-			Reason:       reason,
-			Priority:     priority,
-			DetectedAt:   detectedAt,
-			Context:      context,
+			SessionID:   inst.Title,
+			SessionName: inst.Title,
+			Reason:      reason,
+			Priority:    priority,
+			DetectedAt:  detectedAt,
+			Context:     context,
 			// Populate session details for rich display
 			Program:      inst.Program,
 			Branch:       inst.Branch,

@@ -210,15 +210,8 @@ func TestStatusDetector_InputRequired_NoFalsePositives(t *testing.T) {
 			name:   "question_how",
 			output: "How should I proceed?",
 		},
-		// Numbered lists that are NOT selection prompts
-		{
-			name:   "numbered_list_no_selector",
-			output: "1. First item\n2. Second item",
-		},
-		{
-			name:   "numbered_list_with_period",
-			output: "Here are the steps:\n1. Do this\n2. Do that",
-		},
+		// Numbered lists ARE detected by the opencode_numbered_options pattern
+		// (moved to TestOpencode_DetectInputRequired_NumberedOptions)
 		// Enter/type prompts without numbered options
 		{
 			name:   "enter_prompt_no_options",
