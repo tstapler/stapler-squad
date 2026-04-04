@@ -12,7 +12,6 @@ go_library(
     importpath = "github.com/tstapler/stapler-squad/server/middleware",
     visibility = ["//visibility:public"],
     deps = [
-        "//log",
         "@com_github_klauspost_compress//gzip",
         "@com_github_klauspost_compress//zstd",
     ],

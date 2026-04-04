@@ -76,11 +76,16 @@ go_test(
         "classifier_test.go",
         "connectrpc_websocket_test.go",
         "rate_limiter_test.go",
+        "secret_scanner_test.go",
+        "session_service_test.go",
     ],
     embed = [":services"],
     deps = [
+        "//gen/proto/go/session/v1:session",
         "//server/events",
         "//server/protocol",
+        "//session",
+        "@com_connectrpc_connect//:connect",
         "@com_github_gorilla_websocket//:websocket",
     ],
 )

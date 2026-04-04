@@ -13,6 +13,7 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//cmd",
+        "//cmd/commands",
         "//config",
         "//daemon",
         "//executor",

@@ -70,15 +70,23 @@ jobs:
 
     - name: Verify binary
       run: |
-        # Bazel puts binaries in bazel-bin or bazel-out depending on config
-        BINARY_PATH=$(bazel info output_path)/bin/stapler-squad
-        if [ -f "$BINARY_PATH" ]; then
-          ls -la "$BINARY_PATH"
-          file "$BINARY_PATH"
-        else
-          echo "Binary not found at $BINARY_PATH"
-          ls -la bazel-bin/ 2>/dev/null || echo "No bazel-bin directory"
-        fi
+        # Bazel puts binaries in different locations depending on config
+        # Try common locations
+        OUTPUT_PATH=$(bazel info output_path)
+        for path in "$OUTPUT_PATH/bin/stapler-squad" \
+                    "$OUTPUT_PATH/k8-fastbuild/bin/stapler-squad_/stapler-squad" \
+                    "bazel-bin/stapler-squad"; do
+          if [ -f "$path" ]; then
+            echo "Found binary at: $path"
+            ls -la "$path"
+            file "$path"
+            exit 0
+          fi
+        done
+        echo "Binary not found in any expected location"
+        ls -la "$OUTPUT_PATH/" 2>/dev/null || true
+        ls -la bazel-bin/ 2>/dev/null || true
+        exit 1
 
   build:
     name: Build Binary and Test
