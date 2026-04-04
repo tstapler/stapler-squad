@@ -23,7 +23,7 @@ func CORS(next http.Handler) http.Handler {
 		// Access-Control-Allow-Origin must be a specific origin (not "*") when
 		// Access-Control-Allow-Credentials is "true".
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, "+http.MethodOptions)
 		w.Header().Set("Access-Control-Allow-Headers", allowedCORSHeaders)
 		w.Header().Set("Access-Control-Expose-Headers", "Connect-Protocol-Version, Connect-Timeout-Ms")
 		w.Header().Set("Access-Control-Allow-Credentials", "true")
@@ -31,7 +31,7 @@ func CORS(next http.Handler) http.Handler {
 		w.Header().Set("Vary", "Origin")
 
 		// Handle preflight OPTIONS request
-		if r.Method == "OPTIONS" {
+		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -58,7 +58,7 @@ func CORSWithOrigins(allowedOrigins []string) func(http.Handler) http.Handler {
 
 			if allowed {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, "+http.MethodOptions)
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Connect-Protocol-Version, Connect-Timeout-Ms")
 				w.Header().Set("Access-Control-Expose-Headers", "Connect-Protocol-Version, Connect-Timeout-Ms")
 				w.Header().Set("Access-Control-Allow-Credentials", "true")

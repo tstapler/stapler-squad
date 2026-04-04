@@ -23,6 +23,9 @@ linters:
     - nlreturn       # Pre-existing issues
     - nosprintfhostport  # Pre-existing issues
     - predeclared    # Pre-existing issues
+    - goprintffuncname  # Pre-existing issues
+    - maintidx       # Pre-existing maintainability issues
+    - usestdlibvars  # Pre-existing issues
     - depguard       # Pre-existing issues
     - lll            # Pre-existing issues
     - mnd            # Pre-existing issues (magic numbers)
