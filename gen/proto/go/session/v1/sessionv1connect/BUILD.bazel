@@ -1,0 +1,12 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sessionv1connect",
+    srcs = ["session.connect.go"],
+    importpath = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//gen/proto/go/session/v1:session",
+        "@com_connectrpc_connect//:connect",
+    ],
+)
