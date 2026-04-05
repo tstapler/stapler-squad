@@ -40,6 +40,7 @@ jobs:
     - name: Generate Code
       run: |
         go run github.com/bufbuild/buf/cmd/buf@latest generate proto
+        mkdir -p server/web/dist && touch server/web/dist/index.html
 
     - name: Run tests
       run: go test -v ./...

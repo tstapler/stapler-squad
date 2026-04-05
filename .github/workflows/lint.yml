@@ -30,7 +30,9 @@ jobs:
           cache: false
 
       - name: Generate Code
-        run: go run github.com/bufbuild/buf/cmd/buf@latest generate proto
+        run: |
+          go run github.com/bufbuild/buf/cmd/buf@latest generate proto
+          mkdir -p server/web/dist && touch server/web/dist/index.html
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6
