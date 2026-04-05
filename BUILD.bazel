@@ -43,39 +43,39 @@ go_binary(
 go_binary(
     name = "stapler-squad_linux_amd64",
     embed = [":go_library"],
-    goos = "linux",
     goarch = "amd64",
+    goos = "linux",
     visibility = ["//visibility:public"],
 )
 
 go_binary(
     name = "stapler-squad_linux_arm64",
     embed = [":go_library"],
-    goos = "linux",
     goarch = "arm64",
+    goos = "linux",
     visibility = ["//visibility:public"],
 )
 
 go_binary(
     name = "stapler-squad_darwin_amd64",
     embed = [":go_library"],
-    goos = "darwin",
     goarch = "amd64",
+    goos = "darwin",
     visibility = ["//visibility:public"],
 )
 
 go_binary(
     name = "stapler-squad_darwin_arm64",
     embed = [":go_library"],
-    goos = "darwin",
     goarch = "arm64",
+    goos = "darwin",
     visibility = ["//visibility:public"],
 )
 
 go_binary(
     name = "stapler-squad_windows_amd64",
     embed = [":go_library"],
-    goos = "windows",
     goarch = "amd64",
+    goos = "windows",
     visibility = ["//visibility:public"],
 )

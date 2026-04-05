@@ -80,6 +80,7 @@ go_test(
         "session_service_test.go",
     ],
     embed = [":services"],
+    tags = ["manual"],  # Requires actual tmux session for DeleteSession test
     deps = [
         "//gen/proto/go/session/v1:session",
         "//server/events",

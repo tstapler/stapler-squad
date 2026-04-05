@@ -7,3 +7,11 @@ build --repository_cache=~/.bazel-cache/repository
 
 # Test settings
 test --test_output=errors
+
+# Mark tests that require special environment (tmux, go) as manual
+# These tests require external dependencies not available in standard sandbox
+test --test_tag_filters=-manual
+build --build_tag_filters=-manual
+
+# Make Go available in test environment (used by integration tests)
+test --test_env=PATH=/home/tstapler/.asdf/installs/golang/1.25.0/go/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/bin:/usr/sbin:/sbin:/bin

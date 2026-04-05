@@ -120,6 +120,7 @@ go_test(
         "test_helpers_test.go",
     ],
     embed = [":session"],
+    tags = ["manual"],  # Some tests spawn tmux sessions
     deps = [
         "//gen/proto/go/session/v1:session",
         "//log",

@@ -88,4 +88,5 @@ go_test(
         "tmux_options_test.go",
     ],
     embed = [":mux"],
+    tags = ["manual"],  # Requires tmux
 )

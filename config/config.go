@@ -87,6 +87,11 @@ const (
 
 // isTestMode detects if the application is running in test/benchmark mode
 func isTestMode() bool {
+	// Bazel sets TEST_SRCDIR when running tests
+	if os.Getenv("TEST_SRCDIR") != "" {
+		return true
+	}
+
 	// Check command line arguments for test/benchmark indicators
 	for _, arg := range os.Args {
 		// Match test binary names and flags

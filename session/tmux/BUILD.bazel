@@ -84,6 +84,7 @@ go_test(
         "tmux_test.go",
     ],
     embed = [":tmux"],
+    tags = ["manual"],  # Requires tmux session for integration tests
     deps = [
         "//executor",
         "@com_github_stretchr_testify//require",
