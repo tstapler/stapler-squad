@@ -3,14 +3,14 @@
 package ent
 
 import (
-	"github.com/tstapler/stapler-squad/session/ent/claudesession"
-	"github.com/tstapler/stapler-squad/session/ent/session"
 	"fmt"
 	"strings"
 	"time"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/tstapler/stapler-squad/session/ent/claudesession"
+	"github.com/tstapler/stapler-squad/session/ent/session"
 )
 
 // ClaudeSession is the model entity for the ClaudeSession schema.

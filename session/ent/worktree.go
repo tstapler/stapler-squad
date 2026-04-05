@@ -3,13 +3,13 @@
 package ent
 
 import (
-	"github.com/tstapler/stapler-squad/session/ent/session"
-	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"fmt"
 	"strings"
 
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
+	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
 
 // Worktree is the model entity for the Worktree schema.

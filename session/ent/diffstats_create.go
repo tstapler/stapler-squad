@@ -3,14 +3,14 @@
 package ent
 
 import (
-	"github.com/tstapler/stapler-squad/session/ent/diffstats"
-	"github.com/tstapler/stapler-squad/session/ent/session"
 	"context"
 	"errors"
 	"fmt"
 
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/session"
 )
 
 // DiffStatsCreate is the builder for creating a DiffStats entity.

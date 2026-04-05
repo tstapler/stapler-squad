@@ -3,12 +3,6 @@
 package ent
 
 import (
-	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
-	"github.com/tstapler/stapler-squad/session/ent/claudesession"
-	"github.com/tstapler/stapler-squad/session/ent/diffstats"
-	"github.com/tstapler/stapler-squad/session/ent/session"
-	"github.com/tstapler/stapler-squad/session/ent/tag"
-	"github.com/tstapler/stapler-squad/session/ent/worktree"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +12,12 @@ import (
 	"entgo.io/ent"
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
+	"github.com/tstapler/stapler-squad/session/ent/claudesession"
+	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
 
 // ent aliases to avoid import conflicts in user's code.
