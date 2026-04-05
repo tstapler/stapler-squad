@@ -69,8 +69,11 @@ jobs:
     - name: Build web UI
       run: make web-build
 
-    - name: Run Gazelle to generate BUILD files
-      run: bazel run //:gazelle
+    - name: Run tests
+      run: go test -short ./...
+
+    # Skip Gazelle in CI - BUILD files are already committed
+    # Run manually when adding new packages: bazel run //:gazelle
 
     - name: Build with Bazel
       run: bazel build //:${{ matrix.target }}
