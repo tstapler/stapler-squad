@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	inviteTTL     = 15 * time.Minute
+	inviteTTL      = 15 * time.Minute
 	inviteMaxSlots = 5
 )
 

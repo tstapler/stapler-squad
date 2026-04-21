@@ -49,7 +49,7 @@ type StoredCredentialInfo struct {
 	DisplayName string     `json:"display_name"`
 	CreatedAt   time.Time  `json:"created_at"`
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
-	SignCount    uint32     `json:"sign_count"`
+	SignCount   uint32     `json:"sign_count"`
 }
 
 // NewCredentialStore creates or loads the credential store from the workspace
