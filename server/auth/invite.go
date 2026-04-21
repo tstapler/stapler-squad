@@ -94,6 +94,8 @@ func (m *InviteManager) Consume(candidate string) (label string, ok bool) {
 
 func (m *InviteManager) evictExpiredLocked() {
 	now := time.Now()
+	// Reuse the backing array to avoid an allocation. Safe because `range`
+	// copies each element into `e` before `kept` can overwrite it.
 	kept := m.entries[:0]
 	for _, e := range m.entries {
 		if now.Before(e.expiresAt) {

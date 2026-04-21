@@ -159,6 +159,11 @@ func (h *httpHandlers) finishRegistration(w http.ResponseWriter, r *http.Request
 	// Consume the setup/invite token BEFORE FinishRegistration to prevent two
 	// concurrent callers with the same token from both registering a credential.
 	// Consume is mutex-protected: only the first caller wins.
+	//
+	// Trade-off: if FinishRegistration subsequently fails (e.g., attestation
+	// error, network interruption), the invite token is permanently burned and
+	// the user must generate a new one. This is acceptable for the expected
+	// LAN/Tailscale environment where WebAuthn ceremony failures are rare.
 	var displayName string
 	if setupToken := r.URL.Query().Get("setup_token"); setupToken != "" {
 		consumed := h.setup.Consume(setupToken)
@@ -377,7 +382,12 @@ func (h *httpHandlers) generateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Defense-in-depth: verify Origin matches the expected HTTPS origin.
-	// Browsers omit the port for the default HTTPS port (443), so accept both forms.
+	// The primary CSRF defence is SameSite=Strict on the session cookie; this
+	// Origin check is a secondary layer for non-browser clients.
+	//
+	// Browsers omit the port for the default HTTPS port (443), so both forms
+	// are accepted. When primaryDomain is empty (e.g., localhost-only mode)
+	// we skip the check entirely — SameSite=Strict remains in effect.
 	if origin := r.Header.Get("Origin"); origin != "" && h.primaryDomain != "" {
 		domain := h.primaryDomain
 		withPort := fmt.Sprintf("https://%s:%d", domain, h.remotePort)

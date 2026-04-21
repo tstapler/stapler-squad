@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -118,7 +119,7 @@ func (cs *CredentialStore) UpdateCredential(cred webauthn.Credential) error {
 	defer cs.mu.Unlock()
 
 	for i, sc := range cs.data.Credentials {
-		if bytesEqual(sc.ID, cred.ID) {
+		if bytes.Equal(sc.ID, cred.ID) {
 			cs.data.Credentials[i].Authenticator = cred.Authenticator
 			now := time.Now().UTC()
 			cs.data.Credentials[i].LastUsedAt = &now
@@ -157,7 +158,7 @@ func (cs *CredentialStore) RemoveCredential(credID []byte) error {
 	defer cs.mu.Unlock()
 
 	for i, sc := range cs.data.Credentials {
-		if bytesEqual(sc.ID, credID) {
+		if bytes.Equal(sc.ID, credID) {
 			cs.data.Credentials = append(cs.data.Credentials[:i], cs.data.Credentials[i+1:]...)
 			return cs.save()
 		}
@@ -214,16 +215,4 @@ func (cs *CredentialStore) save() error {
 
 	log.InfoLog.Printf("auth: saved %d passkey credential(s)", len(cs.data.Credentials))
 	return nil
-}
-
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

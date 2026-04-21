@@ -305,8 +305,13 @@ export default function AccountPage() {
 
   const handleRevoke = async (cred: CredentialInfo) => {
     try {
-      await revokeCredential(cred.id);
+      const result = await revokeCredential(cred.id);
       setRevoking(null);
+      if (result.last_credential) {
+        // Session cookie was invalidated server-side; redirect to login.
+        router.replace(routes.login);
+        return;
+      }
       await loadCredentials();
     } catch (e) {
       setCredsError(e instanceof Error ? e.message : String(e));
