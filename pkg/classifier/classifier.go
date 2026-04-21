@@ -1447,18 +1447,19 @@ func SeedRules() []Rule {
 
 		{
 			// tmux is a terminal multiplexer used extensively in development workflows:
-			// running sessions, monitoring output, and in integration test suites.
-			// All tmux subcommands are allowed because tmux only manages terminal windows
-			// on the local machine and poses no persistent risk.
+			// Only read-only tmux subcommands are auto-allowed. Subcommands like
+			// new-session, run-shell, and send-keys can execute arbitrary shell code
+			// and must not bypass the normal Bash rule evaluation.
 			ID:       "seed-allow-bash-tmux",
-			Name:     "Allow tmux terminal multiplexer",
+			Name:     "Allow tmux read-only subcommands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"tmux"},
+				Programs:    []string{"tmux"},
+				Subcommands: []string{"list-sessions", "ls", "list-windows", "list-panes", "display-message", "show-options", "show-environment", "info", "has-session"},
 			},
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
-			Reason:    "tmux manages terminal sessions for development workflows.",
+			Reason:    "Read-only tmux queries pose no execution risk.",
 			Priority:  100,
 			Enabled:   true,
 			Source:    "seed",

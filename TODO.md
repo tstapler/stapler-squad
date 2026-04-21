@@ -163,7 +163,7 @@
 ### Bug Summary Statistics
 
 **Total Tracked**: 13 (including review-queue gaps)
-**Fixed**: 6 (BUG-001, BUG-002, BUG-003, BUG-009, RQ-BUG-001, RQ-BUG-002, RQ-BUG-003)
+**Fixed**: 7 (BUG-001, BUG-002, BUG-003, BUG-009, RQ-BUG-001, RQ-BUG-002, RQ-BUG-003)
 **Open - High**: 2 (BUG-010, BUG-013)
 **Open - Medium**: 1 (BUG-012)
 **Open - Low**: 4 (GAP-001..004)

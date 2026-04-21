@@ -837,20 +837,22 @@ var safeStdlibModules = map[string]bool{
 //
 // Two categories:
 //  1. Dangerous builtins: can execute arbitrary code or open files without an import.
-//  2. Pathlib write methods: Path mutates the filesystem; read methods (read_text,
-//     iterdir, exists, glob, …) are safe and deliberately excluded from this list.
-//
-// Note: .replace( is intentionally omitted — it is ubiquitous on str objects and
-// Path.replace() (rename) can be expressed more clearly with .rename( instead.
+//  2. Filesystem write methods: Path/io methods that mutate the filesystem; read
+//     methods (read_text, iterdir, exists, glob, …) are safe and excluded.
 var bannedInlinePythonPatterns = []string{
 	// Dangerous builtins
 	"eval(", "exec(", "open(", "__import__(", "compile(",
 	// pathlib.Path write methods
 	".write_text(", ".write_bytes(",
 	".unlink(", ".rmdir(", ".mkdir(",
-	".touch(", ".rename(",
+	".touch(", ".rename(", ".replace(", // .replace() is Path rename, not str.replace
 	".symlink_to(", ".hardlink_to(", ".link_to(",
 	".chmod(", ".chown(",
+	// open() with write/append modes (catches pathlib .open('w') and io.open)
+	".open('w'", ".open('a'", ".open('wb'", ".open('ab'",
+	`.open("w"`, `.open("a"`, `.open("wb"`, `.open("ab"`,
+	// io write wrappers
+	"io.FileIO(", "io.open(", "io.TextIOWrapper(",
 }
 
 // topLevelPackage returns the top-level package name from a potentially dotted module path.
