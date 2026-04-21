@@ -75,7 +75,7 @@ func TestAcknowledgeSession_UpdatesLiveInstance(t *testing.T) {
 	found := poller.FindInstance("sess-1")
 	require.NotNil(t, found, "instance should still be in poller after acknowledge")
 	if found != sentinel {
-		t.Error("AcknowledgeSession replaced the live poller instance with a fresh copy; "+
+		t.Error("AcknowledgeSession replaced the live poller instance with a fresh copy; " +
 			"the sentinel pointer must remain unchanged so live state is preserved",
 		)
 	}

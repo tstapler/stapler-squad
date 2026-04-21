@@ -432,8 +432,8 @@ func TestPTYDiscovery_DiscoverOrphanedPTYs_UsesLister(t *testing.T) {
 // the test environment and returns an empty slice gracefully).
 func TestPTYDiscovery_DiscoverOrphanedPTYs_FallbackWhenUnhealthy(t *testing.T) {
 	tests := []struct {
-		name    string
-		lister  *fakeSessionLister
+		name   string
+		lister *fakeSessionLister
 	}{
 		{
 			name:   "unhealthy lister",
