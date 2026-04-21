@@ -93,7 +93,8 @@ func (h *Handler) BeginRegistration(r *http.Request) (*webauthn.SessionData, int
 }
 
 // FinishRegistration completes the registration ceremony.
-func (h *Handler) FinishRegistration(ceremonyKey string, r *http.Request) (string, error) {
+// displayName is the label provided during invite generation; empty string is accepted.
+func (h *Handler) FinishRegistration(ceremonyKey string, r *http.Request, displayName string) (string, error) {
 	wa, err := h.webauthnForHost(r)
 	if err != nil {
 		return "", err
@@ -110,7 +111,7 @@ func (h *Handler) FinishRegistration(ceremonyKey string, r *http.Request) (strin
 		return "", fmt.Errorf("finish registration: %w", err)
 	}
 
-	if err := h.store.AddCredential(*cred, ""); err != nil {
+	if err := h.store.AddCredential(*cred, displayName); err != nil {
 		return "", fmt.Errorf("persist credential: %w", err)
 	}
 

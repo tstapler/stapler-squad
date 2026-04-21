@@ -3,6 +3,7 @@ package testutil
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"os/exec"
 )
 
 // TmuxWaiter provides utilities for waiting on tmux operations

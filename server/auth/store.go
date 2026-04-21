@@ -47,7 +47,7 @@ type storedCredential struct {
 type StoredCredentialInfo struct {
 	ID          string     `json:"id"`
 	DisplayName string     `json:"display_name"`
-	CreatedAt   time.Time  `json:"created_at"`
+	CreatedAt   *time.Time `json:"created_at,omitempty"`
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
 	SignCount   uint32     `json:"sign_count"`
 }
@@ -135,10 +135,15 @@ func (cs *CredentialStore) ListCredentials() []StoredCredentialInfo {
 
 	out := make([]StoredCredentialInfo, 0, len(cs.data.Credentials))
 	for _, sc := range cs.data.Credentials {
+		var createdAt *time.Time
+		if !sc.CreatedAt.IsZero() {
+			t := sc.CreatedAt
+			createdAt = &t
+		}
 		out = append(out, StoredCredentialInfo{
 			ID:          fmt.Sprintf("%x", sc.ID),
 			DisplayName: sc.DisplayName,
-			CreatedAt:   sc.CreatedAt,
+			CreatedAt:   createdAt,
 			LastUsedAt:  sc.LastUsedAt,
 			SignCount:   sc.Authenticator.SignCount,
 		})

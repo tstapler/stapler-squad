@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
+import { routes } from "@/lib/routes";
 import {
   generateInvite,
   listCredentials,
@@ -279,7 +280,7 @@ export default function AccountPage() {
 
   useEffect(() => {
     if (!authLoading && authEnabled && !authenticated) {
-      router.replace("/login");
+      router.replace(routes.login);
     }
   }, [authLoading, authEnabled, authenticated, router]);
 
@@ -297,10 +298,10 @@ export default function AccountPage() {
   }, []);
 
   useEffect(() => {
-    if (!authLoading && authenticated) {
+    if (!authLoading && authEnabled && authenticated) {
       loadCredentials();
     }
-  }, [authLoading, authenticated, loadCredentials]);
+  }, [authLoading, authEnabled, authenticated, loadCredentials]);
 
   const handleRevoke = async (cred: CredentialInfo) => {
     try {

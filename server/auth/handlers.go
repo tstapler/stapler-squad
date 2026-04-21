@@ -159,10 +159,15 @@ func (h *httpHandlers) finishRegistration(w http.ResponseWriter, r *http.Request
 	// Consume the setup/invite token BEFORE FinishRegistration to prevent two
 	// concurrent callers with the same token from both registering a credential.
 	// Consume is mutex-protected: only the first caller wins.
+	var displayName string
 	if setupToken := r.URL.Query().Get("setup_token"); setupToken != "" {
 		consumed := h.setup.Consume(setupToken)
 		if !consumed && h.invites != nil {
-			_, consumed = h.invites.Consume(setupToken)
+			var label string
+			label, consumed = h.invites.Consume(setupToken)
+			if consumed {
+				displayName = label
+			}
 		}
 		if !consumed {
 			http.Error(w, "setup token invalid or already used", http.StatusUnauthorized)
@@ -170,7 +175,7 @@ func (h *httpHandlers) finishRegistration(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	token, err := h.wa.FinishRegistration(ceremonyKey, r)
+	token, err := h.wa.FinishRegistration(ceremonyKey, r, displayName)
 	if err != nil {
 		log.ErrorLog.Printf("auth: finish registration failed: %v", err)
 		http.Error(w, fmt.Sprintf("registration failed: %v", err), http.StatusBadRequest)
@@ -372,9 +377,12 @@ func (h *httpHandlers) generateInvite(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Defense-in-depth: verify Origin matches the expected HTTPS origin.
-	if origin := r.Header.Get("Origin"); origin != "" {
-		expected := fmt.Sprintf("https://%s:%d", h.primaryDomain, h.remotePort)
-		if !strings.EqualFold(origin, expected) {
+	// Browsers omit the port for the default HTTPS port (443), so accept both forms.
+	if origin := r.Header.Get("Origin"); origin != "" && h.primaryDomain != "" {
+		domain := h.primaryDomain
+		withPort := fmt.Sprintf("https://%s:%d", domain, h.remotePort)
+		withoutPort := fmt.Sprintf("https://%s", domain)
+		if !strings.EqualFold(origin, withPort) && !strings.EqualFold(origin, withoutPort) {
 			http.Error(w, "forbidden: origin mismatch", http.StatusForbidden)
 			return
 		}
@@ -383,7 +391,10 @@ func (h *httpHandlers) generateInvite(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Label string `json:"label"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	token, expiresAt, err := h.invites.Generate(body.Label)
 	if err != nil {
