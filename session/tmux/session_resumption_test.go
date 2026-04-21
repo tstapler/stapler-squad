@@ -51,7 +51,7 @@ func testExistingSessionReuse(t *testing.T) {
 		},
 	}
 
-	session := newTmuxSession("existing-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
+	session := newTmuxSessionWithSocket("existing-session", "pwd", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
 
 	// This should succeed instead of failing with "tmux session already exists"
 	err := session.Start("/tmp")
@@ -97,7 +97,7 @@ func testExistingSessionWithCleanup(t *testing.T) {
 		},
 	}
 
-	session := newTmuxSession("existing-with-cleanup", "pwd", ptyFactory, cmdExec, TmuxPrefix)
+	session := newTmuxSessionWithSocket("existing-with-cleanup", "pwd", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
 
 	// StartWithCleanup should succeed and return a valid cleanup function
 	cleanup, err := session.StartWithCleanup("/tmp")
@@ -144,7 +144,7 @@ func testNewSessionCreation(t *testing.T) {
 		},
 	}
 
-	session := newTmuxSession("new-session", "pwd", ptyFactory, cmdExec, TmuxPrefix)
+	session := newTmuxSessionWithSocket("new-session", "pwd", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
 
 	// This should create a new session
 	err := session.Start("/tmp")
@@ -193,7 +193,7 @@ func TestSessionResumptionBehaviorComparison(t *testing.T) {
 			},
 		}
 
-		session := newTmuxSession("resumption-test", "pwd", ptyFactory, cmdExec, TmuxPrefix)
+		session := newTmuxSessionWithSocket("resumption-test", "pwd", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
 
 		// NEW behavior: this succeeds by reusing existing session
 		err := session.Start("/tmp")
@@ -235,7 +235,7 @@ func TestSessionResumptionIntegration(t *testing.T) {
 	}
 
 	// Use the exact session name from the error logs
-	session := newTmuxSession("postgres-connection-pooling", "/Users/tylerstapler/.asdf/shims/claude", ptyFactory, cmdExec, TmuxPrefix)
+	session := newTmuxSessionWithSocket("postgres-connection-pooling", "/Users/tylerstapler/.asdf/shims/claude", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
 
 	// This should succeed (reproducing the fix for the reported issue)
 	err := session.Start("/Users/tylerstapler/IdeaProjects/pgbouncer-images")

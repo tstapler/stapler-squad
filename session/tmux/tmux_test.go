@@ -89,7 +89,7 @@ func TestStartTmuxSession(t *testing.T) {
 	}
 
 	workdir := t.TempDir()
-	session := newTmuxSession("test-session", "echo", ptyFactory, cmdExec, TmuxPrefix)
+	session := newTmuxSessionWithSocket("test-session", "echo", ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
 
 	err := session.Start(workdir)
 	require.NoError(t, err)

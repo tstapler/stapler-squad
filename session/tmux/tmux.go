@@ -418,8 +418,10 @@ func NewTmuxSessionWithServerSocketAndCleanup(name string, program string, prefi
 }
 
 // NewTmuxSessionWithDeps creates a new TmuxSession with provided dependencies for testing.
+// WithRegistry(nil) is passed so DoesSessionExist() uses cmdExec (the mock) instead of the
+// global TmuxServerRegistry, which connects to real tmux and would bypass the mock executor.
 func NewTmuxSessionWithDeps(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor) *TmuxSession {
-	return newTmuxSession(name, program, ptyFactory, cmdExec, TmuxPrefix)
+	return newTmuxSessionWithSocket(name, program, ptyFactory, cmdExec, TmuxPrefix, "", WithRegistry(nil))
 }
 
 func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string) *TmuxSession {
