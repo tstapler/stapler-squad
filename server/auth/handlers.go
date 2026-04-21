@@ -2,12 +2,14 @@ package auth
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -16,14 +18,17 @@ import (
 // RegisterRoutes registers all /auth/* endpoints on mux.
 // primaryDomain is the hostname used in the CA download filename so clients
 // know which server issued the cert (e.g. "myhost.local").
-func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionManager, store *CredentialStore, setup *SetupManager, tlsCAPath, primaryDomain string) {
+// remotePort is the HTTPS port used when building invite URLs.
+func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionManager, store *CredentialStore, setup *SetupManager, invites *InviteManager, tlsCAPath, primaryDomain string, remotePort int) {
 	h := &httpHandlers{
 		wa:            waHandler,
 		sessions:      sessions,
 		store:         store,
 		setup:         setup,
+		invites:       invites,
 		caPath:        tlsCAPath,
 		primaryDomain: primaryDomain,
+		remotePort:    remotePort,
 	}
 
 	mux.HandleFunc("/auth/status", h.status)
@@ -33,6 +38,9 @@ func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionMan
 	mux.HandleFunc("/auth/login/finish", h.finishLogin)
 	mux.HandleFunc("/auth/logout", h.logout)
 	mux.HandleFunc("/auth/ca.pem", h.serveCACert)
+	mux.HandleFunc("POST /auth/invite/generate", h.generateInvite)
+	mux.HandleFunc("GET /auth/credentials", h.listCredentials)
+	mux.HandleFunc("POST /auth/credentials/{id}/revoke", h.revokeCredential)
 
 	log.InfoLog.Printf("auth: registered /auth/* routes")
 }
@@ -42,8 +50,10 @@ type httpHandlers struct {
 	sessions      *SessionManager
 	store         *CredentialStore
 	setup         *SetupManager
+	invites       *InviteManager
 	caPath        string
 	primaryDomain string
+	remotePort    int
 }
 
 // isLocalhostRequest returns true when the request originates from the loopback
@@ -146,16 +156,25 @@ func (h *httpHandlers) finishRegistration(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Consume the setup/invite token BEFORE FinishRegistration to prevent two
+	// concurrent callers with the same token from both registering a credential.
+	// Consume is mutex-protected: only the first caller wins.
+	if setupToken := r.URL.Query().Get("setup_token"); setupToken != "" {
+		consumed := h.setup.Consume(setupToken)
+		if !consumed && h.invites != nil {
+			_, consumed = h.invites.Consume(setupToken)
+		}
+		if !consumed {
+			http.Error(w, "setup token invalid or already used", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	token, err := h.wa.FinishRegistration(ceremonyKey, r)
 	if err != nil {
 		log.ErrorLog.Printf("auth: finish registration failed: %v", err)
 		http.Error(w, fmt.Sprintf("registration failed: %v", err), http.StatusBadRequest)
 		return
-	}
-
-	// Consume the setup token now that registration succeeded.
-	if setupToken := r.URL.Query().Get("setup_token"); setupToken != "" {
-		h.setup.Consume(setupToken)
 	}
 
 	setAuthCookie(w, token)
@@ -278,21 +297,35 @@ func (h *httpHandlers) serveCACert(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// isAuthorised returns true if the request carries a valid auth session token
-// OR a valid setup token in the query string. The setup token is NOT consumed
-// here — call setup.Consume() after the ceremony completes successfully.
+// isAuthorised returns true if the request carries a valid auth session token,
+// a valid setup token, or a valid invite token in the query string.
+// Tokens are NOT consumed here — consume them explicitly after the ceremony.
 func (h *httpHandlers) isAuthorised(r *http.Request) bool {
 	if token, err := getAuthToken(r); err == nil {
 		if h.sessions.ValidateAuthSession(token) {
 			return true
 		}
 	}
-	// Allow setup token via query param for first-time registration flow.
-	// Use IsValid (non-consuming) so the token remains valid across begin→finish.
 	if setupToken := r.URL.Query().Get("setup_token"); setupToken != "" {
-		return h.setup.IsValid(setupToken)
+		if h.setup.IsValid(setupToken) {
+			return true
+		}
+		if h.invites != nil && h.invites.IsValid(setupToken) {
+			return true
+		}
 	}
 	return false
+}
+
+// isAuthorisedBySession returns true only when the request has a valid
+// long-lived auth session cookie or Bearer token (not a setup/invite token).
+// Used for endpoints that require an already-authenticated user.
+func (h *httpHandlers) isAuthorisedBySession(r *http.Request) bool {
+	token, err := getAuthToken(r)
+	if err != nil {
+		return false
+	}
+	return h.sessions.ValidateAuthSession(token)
 }
 
 // getAuthToken extracts the auth token from the cookie or Authorization header.
@@ -319,6 +352,128 @@ func setAuthCookie(w http.ResponseWriter, token string) {
 		HttpOnly: true,
 		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
+	})
+}
+
+// generateInvite creates a new one-time invite token. Requires an authenticated
+// session (not a setup/invite token). Includes CSRF protection via Origin header.
+func (h *httpHandlers) generateInvite(w http.ResponseWriter, r *http.Request) {
+	if h.caPath == "" {
+		http.Error(w, "invite generation requires TLS (HTTP-only mode active)", http.StatusServiceUnavailable)
+		return
+	}
+	if h.invites == nil {
+		http.Error(w, "invite manager not configured", http.StatusServiceUnavailable)
+		return
+	}
+	if !h.isAuthorisedBySession(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Defense-in-depth: verify Origin matches the expected HTTPS origin.
+	if origin := r.Header.Get("Origin"); origin != "" {
+		expected := fmt.Sprintf("https://%s:%d", h.primaryDomain, h.remotePort)
+		if !strings.EqualFold(origin, expected) {
+			http.Error(w, "forbidden: origin mismatch", http.StatusForbidden)
+			return
+		}
+	}
+
+	var body struct {
+		Label string `json:"label"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+
+	token, expiresAt, err := h.invites.Generate(body.Label)
+	if err != nil {
+		log.ErrorLog.Printf("auth: generate invite: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	domain := h.primaryDomain
+	if domain == "" {
+		domain = "localhost"
+	}
+	registrationURL := fmt.Sprintf("https://%s:%d/login?setup_token=%s", domain, h.remotePort, token)
+	caURL := fmt.Sprintf("https://%s:%d/auth/ca.pem", domain, h.remotePort)
+	ttlSeconds := int(time.Until(expiresAt).Seconds())
+
+	// Render QR PNGs inline as base64 data URIs to avoid a second round-trip.
+	regQRPNG, err := GenerateQRPNG(registrationURL)
+	if err != nil {
+		log.ErrorLog.Printf("auth: generate registration QR: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	caQRPNG, err := GenerateQRPNG(caURL)
+	if err != nil {
+		log.ErrorLog.Printf("auth: generate CA QR: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"token":            token,
+		"registration_url": registrationURL,
+		"ca_url":           caURL,
+		"reg_qr_data_url":  "data:image/png;base64," + base64.StdEncoding.EncodeToString(regQRPNG),
+		"ca_qr_data_url":   "data:image/png;base64," + base64.StdEncoding.EncodeToString(caQRPNG),
+		"expires_at":       expiresAt.UTC().Format(time.RFC3339),
+		"ttl_seconds":      ttlSeconds,
+	})
+}
+
+// listCredentials returns all registered passkeys for the authenticated user.
+func (h *httpHandlers) listCredentials(w http.ResponseWriter, r *http.Request) {
+	if !h.isAuthorisedBySession(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	creds := h.store.ListCredentials()
+	jsonResponse(w, map[string]interface{}{"credentials": creds})
+}
+
+// revokeCredential removes a passkey by its hex-encoded ID.
+// If the last credential is removed, all auth sessions are revoked.
+func (h *httpHandlers) revokeCredential(w http.ResponseWriter, r *http.Request) {
+	if !h.isAuthorisedBySession(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	idHex := r.PathValue("id")
+	if idHex == "" {
+		http.Error(w, "missing credential id", http.StatusBadRequest)
+		return
+	}
+	credID, err := hex.DecodeString(idHex)
+	if err != nil {
+		http.Error(w, "invalid credential id: must be hex", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.store.RemoveCredential(credID); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			http.Error(w, "credential not found", http.StatusNotFound)
+			return
+		}
+		log.ErrorLog.Printf("auth: revoke credential: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	lastCredential := !h.store.HasCredentials()
+	if lastCredential {
+		h.sessions.RevokeAllSessions()
+		log.InfoLog.Printf("auth: last credential revoked — all sessions invalidated")
+	}
+
+	jsonResponse(w, map[string]interface{}{
+		"ok":              true,
+		"last_credential": lastCredential,
 	})
 }
 

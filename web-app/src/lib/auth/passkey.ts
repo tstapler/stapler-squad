@@ -115,3 +115,62 @@ export async function logout(): Promise<void> {
     credentials: "include",
   });
 }
+
+export interface InviteResponse {
+  token: string;
+  registration_url: string;
+  ca_url: string;
+  reg_qr_data_url: string;
+  ca_qr_data_url: string;
+  expires_at: string;
+  ttl_seconds: number;
+}
+
+export interface CredentialInfo {
+  id: string;
+  display_name: string;
+  created_at: string;
+  last_used_at: string | null;
+  sign_count: number;
+}
+
+/** Generate a new one-time invite (requires authenticated session). */
+export async function generateInvite(label: string): Promise<InviteResponse> {
+  const resp = await fetch(`${authBase()}/invite/generate`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`generate invite failed: ${text}`);
+  }
+  return resp.json();
+}
+
+/** List all registered passkeys (requires authenticated session). */
+export async function listCredentials(): Promise<CredentialInfo[]> {
+  const resp = await fetch(`${authBase()}/credentials`, {
+    credentials: "include",
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`list credentials failed: ${text}`);
+  }
+  const data = await resp.json();
+  return data.credentials ?? [];
+}
+
+/** Revoke a passkey by its hex ID (requires authenticated session). */
+export async function revokeCredential(id: string): Promise<{ ok: boolean; last_credential: boolean }> {
+  const resp = await fetch(`${authBase()}/credentials/${id}/revoke`, {
+    method: "POST",
+    credentials: "include",
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`revoke credential failed: ${text}`);
+  }
+  return resp.json();
+}

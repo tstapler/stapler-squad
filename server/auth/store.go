@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
@@ -30,11 +31,25 @@ type credentialData struct {
 }
 
 // storedCredential is a JSON-serialisable wrapper around webauthn.Credential.
+// DisplayName, CreatedAt, and LastUsedAt are additive fields: existing records
+// without them will zero-value gracefully on load.
 type storedCredential struct {
 	ID              []byte                 `json:"id"`
 	PublicKey       []byte                 `json:"public_key"`
 	AttestationType string                 `json:"attestation_type"`
 	Authenticator   webauthn.Authenticator `json:"authenticator"`
+	DisplayName     string                 `json:"display_name,omitempty"`
+	CreatedAt       time.Time              `json:"created_at,omitempty"`
+	LastUsedAt      *time.Time             `json:"last_used_at,omitempty"`
+}
+
+// StoredCredentialInfo is the public view of a stored credential for the HTTP API.
+type StoredCredentialInfo struct {
+	ID          string     `json:"id"`
+	DisplayName string     `json:"display_name"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	SignCount    uint32     `json:"sign_count"`
 }
 
 // NewCredentialStore creates or loads the credential store from the workspace
@@ -80,7 +95,8 @@ func (cs *CredentialStore) GetCredentials() []webauthn.Credential {
 }
 
 // AddCredential persists a new credential atomically.
-func (cs *CredentialStore) AddCredential(cred webauthn.Credential) error {
+// displayName is stored as-is; callers may pass an empty string.
+func (cs *CredentialStore) AddCredential(cred webauthn.Credential, displayName string) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -89,12 +105,14 @@ func (cs *CredentialStore) AddCredential(cred webauthn.Credential) error {
 		PublicKey:       cred.PublicKey,
 		AttestationType: cred.AttestationType,
 		Authenticator:   cred.Authenticator,
+		DisplayName:     displayName,
+		CreatedAt:       time.Now().UTC(),
 	})
 
 	return cs.save()
 }
 
-// UpdateCredential updates the sign count of an existing credential.
+// UpdateCredential updates the sign count and last-used timestamp of an existing credential.
 func (cs *CredentialStore) UpdateCredential(cred webauthn.Credential) error {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -102,10 +120,30 @@ func (cs *CredentialStore) UpdateCredential(cred webauthn.Credential) error {
 	for i, sc := range cs.data.Credentials {
 		if bytesEqual(sc.ID, cred.ID) {
 			cs.data.Credentials[i].Authenticator = cred.Authenticator
+			now := time.Now().UTC()
+			cs.data.Credentials[i].LastUsedAt = &now
 			return cs.save()
 		}
 	}
 	return fmt.Errorf("credential %x not found", cred.ID)
+}
+
+// ListCredentials returns credential metadata for all stored credentials.
+func (cs *CredentialStore) ListCredentials() []StoredCredentialInfo {
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+
+	out := make([]StoredCredentialInfo, 0, len(cs.data.Credentials))
+	for _, sc := range cs.data.Credentials {
+		out = append(out, StoredCredentialInfo{
+			ID:          fmt.Sprintf("%x", sc.ID),
+			DisplayName: sc.DisplayName,
+			CreatedAt:   sc.CreatedAt,
+			LastUsedAt:  sc.LastUsedAt,
+			SignCount:   sc.Authenticator.SignCount,
+		})
+	}
+	return out
 }
 
 // RemoveCredential removes a credential by ID.

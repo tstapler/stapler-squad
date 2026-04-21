@@ -110,7 +110,7 @@ func (h *Handler) FinishRegistration(ceremonyKey string, r *http.Request) (strin
 		return "", fmt.Errorf("finish registration: %w", err)
 	}
 
-	if err := h.store.AddCredential(*cred); err != nil {
+	if err := h.store.AddCredential(*cred, ""); err != nil {
 		return "", fmt.Errorf("persist credential: %w", err)
 	}
 

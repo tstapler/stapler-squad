@@ -13,6 +13,7 @@ export const routes = {
   settings: "/settings",
   settingsDefaults: "/settings/defaults",
   login: "/login",
+  account: "/account",
   sessionDetail: (id: string) => `/sessions/${id}`,
 } as const;
 
