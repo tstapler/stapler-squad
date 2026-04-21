@@ -189,10 +189,12 @@ var (
 // `rtk git status` → git status with token-saving wrappers). Adding a blanket
 // AutoAllow for rtk would be unsafe; instead, rtk is unwrapped so `rtk rm -rf /`
 // still triggers the deny rule and `rtk git push` still escalates.
+// proxy is rtk's explicit proxy sub-mode (`rtk proxy <cmd>` → `proxy <cmd>`);
+// it must also be unwrapped so the underlying command is evaluated by normal rules.
 var wrapperCommands = map[string]bool{
 	"sudo": true, "exec": true, "time": true, "nice": true,
 	"nohup": true, "env": true, "watch": true,
-	"rtk": true,
+	"rtk": true, "proxy": true,
 }
 
 // deepSubcommandPrograms is the set of programs that use two-level subcommand hierarchies
@@ -783,6 +785,74 @@ func isSensitivePath(path string) bool {
 		}
 	}
 	return false
+}
+
+// safeStdlibModules is the set of Python standard-library top-level package names
+// that are considered safe for inline (-c) execution without manual review.
+//
+// Inclusion criterion: pure computation with no direct file-system writes, no network
+// I/O, and no subprocess spawning. Modules that expose system-call wrappers (os,
+// subprocess, socket, ctypes, multiprocessing, pty) are intentionally excluded even
+// though many of their sub-functions are safe — the risk of os.system/os.popen/
+// socket.connect makes the entire top-level package ineligible.
+//
+// In addition to this list, SafePythonImportsOnly in CommandCriteria also checks for
+// banned builtin call patterns (eval, exec, open, __import__, compile).
+var safeStdlibModules = map[string]bool{
+	// Data & text processing
+	"json": true, "re": true, "csv": true, "xml": true, "html": true, "glob": true,
+	// Filesystem — read-only subset allowed; write methods are blocked by bannedInlinePythonPatterns.
+	// pathlib.Path arithmetic, .exists(), .read_text(), .iterdir(), .glob() etc. are safe.
+	// pathlib.Path.write_text(), .unlink(), .mkdir() etc. are blocked below.
+	"pathlib": true,
+	"string":  true, "textwrap": true, "pprint": true, "struct": true,
+	"codecs": true, "unicodedata": true, "io": true, "difflib": true,
+	// Math & numerics
+	"math": true, "cmath": true, "decimal": true, "fractions": true,
+	"numbers": true, "statistics": true, "random": true,
+	// Data structures & algorithms
+	"collections": true, "heapq": true, "bisect": true, "array": true,
+	"queue": true, "itertools": true, "functools": true, "operator": true,
+	// Hashing & encoding (no network)
+	"hashlib": true, "hmac": true, "base64": true, "binascii": true, "secrets": true,
+	// Type system & introspection (no side effects)
+	"typing": true, "types": true, "abc": true, "dataclasses": true,
+	"enum": true, "copy": true, "contextlib": true,
+	// Parsing (no execution side-effects)
+	"ast": true, "tokenize": true, "keyword": true, "token": true,
+	// Time (read-only)
+	"datetime": true, "time": true, "calendar": true,
+	// System info readable by any process (no write/exec access)
+	"sys": true,
+	// Logging & diagnostics (no network)
+	"logging": true, "warnings": true, "traceback": true,
+	// CLI argument parsing (no I/O side effects)
+	"argparse": true, "shlex": true,
+	// Formatting
+	"uuid": true, "locale": true,
+}
+
+// bannedInlinePythonPatterns lists substrings that, if present in a python -c command,
+// indicate dangerous behaviour regardless of which modules are imported.
+//
+// Two categories:
+//  1. Dangerous builtins: can execute arbitrary code or open files without an import.
+//  2. Filesystem write methods: Path/io methods that mutate the filesystem; read
+//     methods (read_text, iterdir, exists, glob, …) are safe and excluded.
+var bannedInlinePythonPatterns = []string{
+	// Dangerous builtins
+	"eval(", "exec(", "open(", "__import__(", "compile(",
+	// pathlib.Path write methods
+	".write_text(", ".write_bytes(",
+	".unlink(", ".rmdir(", ".mkdir(",
+	".touch(", ".rename(", ".replace(", // .replace() is Path rename, not str.replace
+	".symlink_to(", ".hardlink_to(", ".link_to(",
+	".chmod(", ".chown(",
+	// open() with write/append modes (catches pathlib .open('w') and io.open)
+	".open('w'", ".open('a'", ".open('wb'", ".open('ab'",
+	`.open("w"`, `.open("a"`, `.open("wb"`, `.open("ab"`,
+	// io write wrappers
+	"io.FileIO(", "io.open(", "io.TextIOWrapper(",
 }
 
 // topLevelPackage returns the top-level package name from a potentially dotted module path.

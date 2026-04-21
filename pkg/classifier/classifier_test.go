@@ -465,11 +465,26 @@ func TestClassify_PythonInline_Escalate(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	ctx := ClassificationContext{}
 
-	// python -c inline code execution should NOT be auto-allowed.
+	// python -c inline code that is not stdlib-only must NOT be auto-allowed.
 	cmds := []string{
+		// No imports — bare code cannot be proven safe.
 		`python -c "print('hello')"`,
+		// os is excluded from the safelist (os.system, os.popen, etc.).
 		`python3 -c "import os; os.system('id')"`,
+		// No imports, uses dangerous builtin open().
 		`python3.11 -c "open('/etc/passwd').read()"`,
+		// Third-party network library.
+		`python3 -c "import requests; r = requests.get('http://example.com')"`,
+		// Banned builtin eval() even though json is safe.
+		`python3 -c "import json; eval(input())"`,
+		// Banned builtin exec().
+		`python3 -c "import json; exec('import os')"`,
+		// pathlib write methods must escalate even though pathlib is in the safelist.
+		`python3 -c "import pathlib; pathlib.Path('/tmp/x').write_text('hello')"`,
+		`python3 -c "import pathlib; pathlib.Path('/tmp/x').unlink()"`,
+		`python3 -c "import pathlib; pathlib.Path('/tmp/dir').mkdir()"`,
+		`python3 -c "import pathlib; pathlib.Path('/tmp/x').touch()"`,
+		`python3 -c "import pathlib; pathlib.Path('/old').rename('/new')"`,
 	}
 	for _, cmd := range cmds {
 		payload := PermissionRequestPayload{
@@ -479,6 +494,42 @@ func TestClassify_PythonInline_Escalate(t *testing.T) {
 		result := c.Classify(payload, ctx)
 		if result.Decision == AutoAllow {
 			t.Errorf("cmd %q: expected non-AutoAllow for python -c, got AutoAllow (rule=%s)", cmd, result.RuleID)
+		}
+	}
+}
+
+func TestClassify_PythonInline_SafeStdlib_Allow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	// python -c that imports only from the stdlib safelist and avoids dangerous builtins
+	// should be auto-allowed by seed-allow-python-inline-stdlib.
+	cmds := []string{
+		`python3 -c "import json; print(json.dumps({'key': 'val'}))"`,
+		`python3 -c "import re; print(re.findall(r'\d+', 'abc 123'))"`,
+		`python3 -c "import json, sys; print(json.dumps(sys.argv))"`,
+		`python3 -c "import math; print(math.sqrt(2))"`,
+		`python3 -c "import hashlib; print(hashlib.sha256(b'hello').hexdigest())"`,
+		`python3 -c "import collections; c = collections.Counter('hello'); print(c)"`,
+		`python3 -c "import datetime; print(datetime.date.today())"`,
+		// pathlib read-only operations are safe and should auto-allow.
+		`python3 -c "import pathlib; print(list(pathlib.Path('.').iterdir()))"`,
+		`python3 -c "import pathlib; p = pathlib.Path('.'); print(p.exists())"`,
+		`python3 -c "import pathlib; print(pathlib.Path('/tmp').glob('*.txt'))"`,
+		`python3 -c "import pathlib; print(pathlib.Path('a/b').parent)"`,
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("cmd %q: expected AutoAllow for stdlib-only python -c, got %v (rule=%s, reason=%s)",
+				cmd, result.Decision, result.RuleID, result.Reason)
+		}
+		if result.RuleID != "seed-allow-python-inline-stdlib" {
+			t.Errorf("cmd %q: expected rule seed-allow-python-inline-stdlib, got %s", cmd, result.RuleID)
 		}
 	}
 }

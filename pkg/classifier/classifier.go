@@ -167,6 +167,11 @@ type CommandCriteria struct {
 	// Valid values: "inline" (-c), "module" (-m), "version" (-V/--version), "script" (*.py).
 	// Empty means no Python-mode check is performed.
 	PythonModes []string
+	// SafePythonImportsOnly restricts inline Python (-c) matches to commands whose
+	// import statements use only known-safe stdlib modules (see safeStdlibModules).
+	// When true the rule will not match if any import is outside the safelist, or if
+	// the invocation is not inline. Combine with PythonModes: ["inline"].
+	SafePythonImportsOnly bool
 	// RedirectionPattern matches against any file paths targeted by shell redirections.
 	RedirectionPattern *regexp.Regexp
 }
@@ -260,6 +265,35 @@ func (cc *CommandCriteria) Matches(pc ParsedCommand) bool {
 		}
 		if !found {
 			return false
+		}
+	}
+
+	// SafePythonImportsOnly: inline Python is safe only when every import is from the
+	// curated stdlib safelist AND the code avoids dangerous builtin call patterns.
+	if cc.SafePythonImportsOnly {
+		pyInfo := ParsePythonCommand(pc.Raw)
+		if !pyInfo.IsInline {
+			return false
+		}
+		// Require at least one import statement — bare code (e.g. print('hello'))
+		// uses builtins whose safety cannot be determined without deeper analysis.
+		if len(pyInfo.Imports) == 0 {
+			return false
+		}
+		// All imports must be from the curated safelist.
+		for _, imp := range pyInfo.Imports {
+			if !safeStdlibModules[imp] {
+				return false
+			}
+		}
+		// Reject code that contains dangerous call patterns even if imports are safe.
+		// Covers: dangerous builtins (eval, exec, open, …) and pathlib write methods
+		// (.write_text, .unlink, .mkdir, …). See bannedInlinePythonPatterns for the
+		// full list and the rationale for each entry.
+		for _, banned := range bannedInlinePythonPatterns {
+			if strings.Contains(pc.Raw, banned) {
+				return false
+			}
 		}
 	}
 
@@ -820,6 +854,14 @@ func SeedRules() []Rule {
 					"issue create", "issue close", "issue edit", "issue comment",
 					"repo create", "repo delete", "repo fork",
 					"release create", "release delete", "release upload",
+					// CI/CD write operations.
+					"workflow run",
+					// Secrets and variables (write).
+					"secret set", "secret delete",
+					"env set", "env delete",
+					"variable set", "variable delete",
+					// Auth state changes.
+					"auth login", "auth logout",
 				},
 			},
 			Decision:  Escalate,
@@ -952,6 +994,9 @@ func SeedRules() []Rule {
 					"status", "log", "diff", "show", "branch", "remote",
 					"fetch", "tag", "describe", "rev-parse", "ls-files",
 					"shortlog", "blame", "stash", "worktree",
+					// Additional read-only plumbing and inspection subcommands.
+					"merge-base", "ls-tree", "grep", "check-ignore",
+					"diff-tree", "cat-file", "for-each-ref", "count-objects",
 				},
 			},
 			Decision:  AutoAllow,
@@ -1018,6 +1063,7 @@ func SeedRules() []Rule {
 			// Criteria-based matching correctly handles git -C <path> <subcmd>.
 			// "pull" is included: it is fetch+merge and part of standard workflow.
 			// "push" is intentionally excluded — it escalates via seed-escalate-git-push.
+			// "git reset --hard" is denied at 1000; plain "git reset" (e.g. HEAD~1) is allowed here.
 			ID:       "seed-allow-git-write",
 			Name:     "Allow standard git write operations",
 			ToolName: "Bash",
@@ -1026,6 +1072,8 @@ func SeedRules() []Rule {
 				Subcommands: []string{
 					"add", "commit", "checkout", "switch", "stash", "pull",
 					"merge", "rebase", "restore", "reset",
+					// Additional standard workflow subcommands.
+					"cherry-pick", "rm", "apply", "mv", "submodule",
 				},
 			},
 			Decision:  AutoAllow,
@@ -1055,7 +1103,7 @@ func SeedRules() []Rule {
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"go"},
-				Subcommands: []string{"build", "test", "run", "fmt", "vet", "mod", "list", "env", "version", "clean", "generate", "tool"},
+				Subcommands: []string{"build", "test", "run", "fmt", "vet", "mod", "list", "env", "version", "clean", "generate", "tool", "install", "get", "work"},
 			},
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
@@ -1091,6 +1139,27 @@ func SeedRules() []Rule {
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
 			Reason:    "Python running a project script or module. Inline -c execution escalates for review.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// python -c "..." that only imports from the safe stdlib safelist (safeStdlibModules)
+			// is auto-allowed. If any import falls outside the safelist the rule does not match,
+			// and the escalate rule at priority 50 fires instead.
+			// Examples that auto-allow: python3 -c "import json, sys; print(json.dumps(sys.argv))"
+			// Examples that escalate: python3 -c "import requests; r = requests.get(url)"
+			ID:       "seed-allow-python-inline-stdlib",
+			Name:     "Allow python -c with stdlib-only imports",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:              []string{"python", "python2", "python3", "pypy", "pypy3"},
+				PythonModes:           []string{"inline"},
+				SafePythonImportsOnly: true,
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "Inline Python using only safe stdlib modules poses no network or execution risk.",
 			Priority:  100,
 			Enabled:   true,
 			Source:    "seed",
@@ -1245,6 +1314,10 @@ func SeedRules() []Rule {
 					"repo view", "repo list",
 					"workflow view", "workflow list",
 					"auth status",
+					"secret list",
+					"label list",
+					"milestone list",
+					"codespace list",
 				},
 			},
 			Decision:  AutoAllow,
@@ -1372,10 +1445,168 @@ func SeedRules() []Rule {
 			Source:    "seed",
 		},
 
+		{
+			// tmux is a terminal multiplexer used extensively in development workflows:
+			// Only read-only tmux subcommands are auto-allowed. Subcommands like
+			// new-session, run-shell, and send-keys can execute arbitrary shell code
+			// and must not bypass the normal Bash rule evaluation.
+			ID:       "seed-allow-bash-tmux",
+			Name:     "Allow tmux read-only subcommands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"tmux"},
+				Subcommands: []string{"list-sessions", "ls", "list-windows", "list-panes", "display-message", "show-options", "show-environment", "info", "has-session"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "Read-only tmux queries pose no execution risk.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// pixi is a conda-compatible package manager that creates isolated project
+			// environments. Its standard operations mirror those of npm/pip.
+			ID:       "seed-allow-bash-pixi",
+			Name:     "Allow pixi package manager",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"pixi"},
+				Subcommands: []string{"run", "install", "add", "remove", "list", "search", "info", "init", "task", "shell", "update", "clean", "global", "auth"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "pixi manages isolated project environments (conda-compatible).",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// mktemp only creates a temporary filename/directory; it does not execute code
+			// or write data. Cleanup is automatic on the next system reboot at latest.
+			ID:       "seed-allow-bash-mktemp",
+			Name:     "Allow mktemp",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"mktemp"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "mktemp creates temporary files/directories with no lasting side effects.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// Read-only systemctl queries check service state without modifying it.
+			// Write operations (start, stop, restart, enable, daemon-reload, …) escalate
+			// at priority 50 via seed-escalate-systemctl-write.
+			ID:       "seed-allow-bash-systemctl-read",
+			Name:     "Allow systemctl read-only operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"systemctl"},
+				Subcommands: []string{"status", "is-active", "is-enabled", "is-failed", "cat", "list-units", "list-unit-files", "list-sockets", "list-timers", "show"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "Read-only systemctl commands check service state without modifying it.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// hugo is a static site generator. build/serve are standard local dev operations.
+			ID:       "seed-allow-bash-hugo",
+			Name:     "Allow hugo static site generator",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"hugo"},
+				Subcommands: []string{"build", "serve", "server", "new", "list", "version", "config", "gen", "convert", "completion"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "hugo is a static site generator; build and serve are standard dev operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// tailscale read-only queries inspect VPN status and routing without changing them.
+			ID:       "seed-allow-bash-tailscale-read",
+			Name:     "Allow tailscale read-only commands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"tailscale"},
+				Subcommands: []string{"status", "ip", "dns", "ping", "netcheck", "version", "whois"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "Read-only tailscale commands inspect VPN state without modifying it.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+
 		// ══════════════════════════════════════════════════════════════════════════
 		// Escalate catch-all (Priority 50) — no allow rule exists; provides a reason
 		// ══════════════════════════════════════════════════════════════════════════
 
+		{
+			// rm (without -rf on root/home) is not caught by the deny rule, but it still
+			// deletes files permanently. Escalate with a helpful reason so reviewers can
+			// confirm the target before proceeding.
+			ID:       "seed-escalate-rm",
+			Name:     "Escalate rm (file deletion)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"rm", "rmdir"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "rm deletes files permanently. Confirm the target path before proceeding.",
+			Alternative: "Move the file to /tmp first if you want a recoverable deletion.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// python3 -c with imports outside the stdlib safelist should be reviewed.
+			// Inline code that only uses safe stdlib modules is auto-allowed at priority 100
+			// by seed-allow-python-inline-stdlib. This rule catches the rest.
+			ID:       "seed-escalate-python-inline",
+			Name:     "Escalate python -c with non-stdlib imports",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"python", "python2", "python3", "pypy", "pypy3"},
+				PythonModes: []string{"inline"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "python -c with non-stdlib imports (e.g. requests, httpx) can make network calls or execute arbitrary code.",
+			Alternative: "Write the code to a .py file and run it with python script.py instead.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// systemctl write operations modify service state. Read-only subcommands are
+			// allowed at priority 100 by seed-allow-bash-systemctl-read.
+			ID:       "seed-escalate-systemctl-write",
+			Name:     "Escalate systemctl write operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"systemctl"},
+				Subcommands: []string{"start", "stop", "restart", "reload", "enable", "disable", "mask", "unmask", "daemon-reload", "daemon-reexec", "reset-failed"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "systemctl write operations modify service state and should be reviewed.",
+			Alternative: "Confirm the service name and intended state change before proceeding.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
 		{
 			// All git push operations escalate; force pushes are denied at priority 1000.
 			ID:       "seed-escalate-git-push",

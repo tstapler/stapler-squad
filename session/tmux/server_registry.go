@@ -352,9 +352,9 @@ func (r *TmuxServerRegistry) reconnectLoop() {
 
 // debounce state for %sessions-changed handling.
 var (
-	debounceTimer   *time.Timer
-	debounceMu      sync.Mutex
-	debounceDelay   = 50 * time.Millisecond
+	debounceTimer *time.Timer
+	debounceMu    sync.Mutex
+	debounceDelay = 50 * time.Millisecond
 )
 
 // readLines processes control-mode event lines from scanner until the scanner

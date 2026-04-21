@@ -251,9 +251,17 @@ func (s *TmuxTestServer) ListSessions() ([]string, error) {
 		return nil, fmt.Errorf("failed to list sessions: %w", err)
 	}
 
-	// Parse session names (one per line)
-	names := strings.Split(strings.TrimSpace(string(output)), "\n")
-	if len(names) == 1 && names[0] == "" {
+	// Parse session names (one per line), filtering the registry keepalive session
+	// created by TmuxServerRegistry.startControlMode() which should not be visible
+	// to test assertions about isolated server state.
+	keepaliveName := tmux.TmuxPrefix + "keepalive"
+	var names []string
+	for _, name := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if name != "" && name != keepaliveName {
+			names = append(names, name)
+		}
+	}
+	if names == nil {
 		return []string{}, nil
 	}
 	return names, nil

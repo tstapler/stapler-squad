@@ -236,13 +236,13 @@ func TestDeny_AllSourceStatuses(t *testing.T) {
 		from       Status
 		expectPass bool
 	}{
-		{"Creating->Paused", Creating, false},    // not in allowed transitions
-		{"Ready->Paused", Ready, true},           // allowed: worktree-deletion recovery path
+		{"Creating->Paused", Creating, false}, // not in allowed transitions
+		{"Ready->Paused", Ready, true},        // allowed: worktree-deletion recovery path
 		{"Running->Paused", Running, true},
-		{"Paused->Paused", Paused, false},        // self-transition
+		{"Paused->Paused", Paused, false}, // self-transition
 		{"NeedsApproval->Paused", NeedsApproval, true},
-		{"Loading->Paused", Loading, true},        // allowed: worktree-deletion recovery path
-		{"Stopped->Paused", Stopped, false},      // terminal
+		{"Loading->Paused", Loading, true},  // allowed: worktree-deletion recovery path
+		{"Stopped->Paused", Stopped, false}, // terminal
 	}
 
 	for _, tt := range tests {
