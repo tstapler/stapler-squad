@@ -805,7 +805,7 @@ var safeStdlibModules = map[string]bool{
 	// pathlib.Path arithmetic, .exists(), .read_text(), .iterdir(), .glob() etc. are safe.
 	// pathlib.Path.write_text(), .unlink(), .mkdir() etc. are blocked below.
 	"pathlib": true,
-	"string": true, "textwrap": true, "pprint": true, "struct": true,
+	"string":  true, "textwrap": true, "pprint": true, "struct": true,
 	"codecs": true, "unicodedata": true, "io": true, "difflib": true,
 	// Math & numerics
 	"math": true, "cmath": true, "decimal": true, "fractions": true,
