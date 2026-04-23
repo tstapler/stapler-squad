@@ -506,3 +506,18 @@ var globalRegistryMu sync.Mutex
 
 // globalRegistries holds one registry per socket string.
 var globalRegistries = make(map[string]*TmuxServerRegistry)
+
+// RemoveServerRegistry stops and removes the TmuxServerRegistry for the given socket.
+// This is primarily used in tests to clean up ephemeral registries.
+func RemoveServerRegistry(socket string) {
+	globalRegistryMu.Lock()
+	r, ok := globalRegistries[socket]
+	if ok {
+		delete(globalRegistries, socket)
+	}
+	globalRegistryMu.Unlock()
+
+	if ok {
+		r.Stop()
+	}
+}

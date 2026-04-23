@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"sync"
 	"time"
 
@@ -188,7 +189,7 @@ func (l *PostgresAdvisoryLock) Close() error {
 // Uses FNV-1a hash combined with namespace to create a unique key.
 func (l *PostgresAdvisoryLock) hashResource(resource string) int64 {
 	h := fnv.New64a()
-	h.Write([]byte(resource))
+	_, _ = io.WriteString(h, resource)
 	hash := h.Sum64()
 
 	// Combine with namespace (XOR to preserve distribution)

@@ -137,7 +137,7 @@ func scanMetaSubdirs(dir string) []WorkspaceMeta {
 // Should be called once at server startup. Skips test mode directories.
 func EnsureWorkspaceMeta() {
 	// Don't write meta for test mode (isolated per-PID directories)
-	if isTestMode() {
+	if IsTestMode() {
 		return
 	}
 

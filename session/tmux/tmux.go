@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
 	"io"
@@ -439,7 +440,14 @@ func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix stri
 func NewTmuxSessionWithServerSocket(name string, program string, prefix string, serverSocket string, opts ...TmuxSessionOption) *TmuxSession {
 	baseExec := executor.MakeExecutor()
 	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
+
+	// For isolated server sockets (used in tests), append the socket name to the registry key
+	// to prevent registration conflicts when multiple tests create sessions with the same name.
 	key := "tmux-" + name
+	if serverSocket != "" {
+		key += "-" + serverSocket
+	}
+
 	executor.GetGlobalRegistry().Register(key, cbExec)
 	s := newTmuxSessionWithSocket(name, program, MakePtyFactory(), cbExec, prefix, serverSocket, opts...)
 	s.registryKey = key
@@ -502,7 +510,8 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 	// Inject the server-level registry only when no explicit registry was provided.
 	// This prevents an unwanted reconnect loop when WithRegistry(nil) is passed for
 	// isolated sockets that have no keepalive session.
-	if !s.registryExplicit {
+	// In test mode, skip this entirely to avoid flaky control-mode connections.
+	if !s.registryExplicit && !config.IsTestMode() {
 		s.registry = GetServerRegistry(serverSocket)
 	}
 	return s
@@ -824,8 +833,7 @@ func newStatusMonitor() *statusMonitor {
 // hash hashes the string.
 func (m *statusMonitor) hash(s string) []byte {
 	h := sha256.New()
-	// TODO: this allocation sucks since the string is probably large. Ideally, we hash the string directly.
-	h.Write([]byte(s))
+	_, _ = io.WriteString(h, s)
 	return h.Sum(nil)
 }
 

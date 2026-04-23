@@ -70,8 +70,8 @@ const (
 	defaultProgram = "proxy-claude"
 )
 
-// isTestMode detects if the application is running in test/benchmark mode
-func isTestMode() bool {
+// IsTestMode detects if the application is running in test/benchmark mode
+func IsTestMode() bool {
 
 	// Check command line arguments for test/benchmark indicators
 	for _, arg := range os.Args {
@@ -133,7 +133,7 @@ func GetConfigDir() (string, error) {
 	// Priority 3: Test mode auto-detection (automatic isolation)
 	// Must be checked before the preferred workspace file so that a workspace
 	// preference set by a production instance cannot leak into test runs.
-	if isTestMode() {
+	if IsTestMode() {
 		// Each test/benchmark process gets its own isolated state
 		pid := os.Getpid()
 		return filepath.Join(baseDir, "test", fmt.Sprintf("test-%d", pid)), nil
