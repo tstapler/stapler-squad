@@ -776,8 +776,7 @@ func newStatusMonitor() *statusMonitor {
 // hash hashes the string.
 func (m *statusMonitor) hash(s string) []byte {
 	h := sha256.New()
-	// TODO: this allocation sucks since the string is probably large. Ideally, we hash the string directly.
-	h.Write([]byte(s))
+	_, _ = io.WriteString(h, s)
 	return h.Sum(nil)
 }
 
