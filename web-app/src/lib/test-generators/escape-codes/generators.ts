@@ -151,24 +151,32 @@ export class EscapeCodeFrameGenerator {
         validation.textContent = ['CURSOR'];
         break;
 
-      case 'Erase': // Screen/line clearing
-        // Fill area with X's
-        content += '\x1b[6;1H' + 'X'.repeat(this.config.width - 1) + '\n';
-        content += '\x1b[7;1H' + 'X'.repeat(this.config.width - 1) + '\n';
-        content += '\x1b[8;1H' + 'X'.repeat(this.config.width - 1) + '\n';
+      case 'Erase': { // Screen/line clearing
+        const FILL_CHAR = 'X';
+        const fillLine = FILL_CHAR.repeat(this.config.width - 1);
+
+        // Fill area with background characters
+        content += '\x1b[6;1H' + fillLine + '\n';
+        content += '\x1b[7;1H' + fillLine + '\n';
+        content += '\x1b[8;1H' + fillLine + '\n';
 
         // Position cursor and erase
         if (code.humanReadable.includes('End of Line')) {
-          content += '\x1b[7;20H'; // Position in middle
+          const startCol = 20;
+          content += `\x1b[7;${startCol}H`; // Position in middle
           content += code.sequence;
-          content += '\x1b[9;1HErased from position 20 to end\n';
-          validation.textAbsent = ['XXXXXXXXXXXXXXXXXXXX']; // Should be erased
+          content += `\x1b[9;1HErased from position ${startCol} to end\n`;
+
+          // Validation: Ensure the characters from the start position to the end are erased
+          const erasedLength = Math.max(1, this.config.width - startCol);
+          validation.textAbsent = [FILL_CHAR.repeat(erasedLength)];
         } else if (code.humanReadable.includes('Full Screen')) {
           content += code.sequence;
           content += '\x1b[1;1HScreen cleared\n';
-          validation.textAbsent = ['XXXXXX'];
+          validation.textAbsent = [FILL_CHAR.repeat(Math.min(10, this.config.width - 1))];
         }
         break;
+      }
 
       case 'Scroll': // Scroll region
         // Set up content
