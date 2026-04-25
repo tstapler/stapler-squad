@@ -50,6 +50,9 @@ export interface OmnibarFormState {
   parentDir: string;
   projectName: string;
   newProjectSessionType: "directory" | "new_worktree";
+  // Opt-in: when the path doesn't exist yet, create the directory and
+  // initialize a new git repository. Only applies to directory / new_worktree.
+  createIfMissing: boolean;
 }
 
 const INITIAL_FORM_STATE: OmnibarFormState = {
@@ -66,6 +69,7 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   parentDir: "",
   projectName: "",
   newProjectSessionType: "new_worktree",
+  createIfMissing: false,
 };
 
 // Consolidated UI state
@@ -95,7 +99,7 @@ export interface OmnibarSessionData {
   oneOff?: boolean;
   // New project mode: tells the context layer to use SESSION_TYPE_NEW_PROJECT
   isNewProject?: boolean;
-  // Directory mode confirmation: retry with directory creation enabled
+  // Explicit opt-in to create the directory + git repo if `path` doesn't exist.
   createIfMissing?: boolean;
 }
 
@@ -149,7 +153,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
   // Convenience aliases for existing code
   // Destructure only fields needed for validation/submission logic in Omnibar.tsx
-  const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType } = formState;
+  const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType, createIfMissing } = formState;
   const { showAdvanced } = uiState;
   const { dropdownIndex, dropdownDismissed, resultHighlightIndex } = uiState;
   // Used in detection auto-fill effects
@@ -595,6 +599,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     return INPUT_TYPE_INFO[detection.type];
   }, [detection]);
 
+  // True only after path completion has resolved and the path is missing.
+  // Also requires that we're working with a local path (GitHub URLs are
+  // resolved server-side, so existence isn't meaningful here).
+  const pathDoesNotExist =
+    isPathInput && !isCompletionLoading && pathExists === false;
+
   // Check if we can submit
   const canSubmit = useMemo(() => {
     // One-off mode: only session name is required (no path needed).
@@ -626,10 +636,21 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     } else if (sessionType === "existing_worktree") {
       // Existing worktree path is required
       if (!existingWorktree.trim()) return false;
+      // existing_worktree requires the parent repo path to actually exist
+      if (pathDoesNotExist) return false;
+    }
+
+    // For directory / new_worktree: missing path requires explicit opt-in
+    if (
+      pathDoesNotExist &&
+      (sessionType === "directory" || sessionType === "new_worktree") &&
+      !createIfMissing
+    ) {
+      return false;
     }
 
     return true;
-  }, [input, sessionName, detection, sessionType, branch, useTitleAsBranch, existingWorktree, parentDir, projectName, newProjectSessionType]);
+  }, [input, sessionName, detection, sessionType, branch, useTitleAsBranch, existingWorktree, pathDoesNotExist, createIfMissing, parentDir, projectName, newProjectSessionType]);
 
   // Handle form submission
   const handleSubmit = useCallback(async () => {
@@ -691,6 +712,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           existingWorktree: sessionType === "one_off" ? undefined : (existingWorktree.trim() || undefined),
           workingDir: sessionType === "one_off" ? undefined : (workingDir.trim() || undefined),
           oneOff: sessionType === "one_off" ? true : undefined,
+          // Only forward when relevant (non-existent path + opt-in checked).
+          createIfMissing: pathDoesNotExist && createIfMissing ? true : undefined,
         };
 
         // Handle GitHub URLs - path will be resolved server-side
@@ -750,6 +773,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     parentDir,
     projectName,
     newProjectSessionType,
+    pathDoesNotExist,
+    createIfMissing,
     isPathInput,
     saveHistory,
     onCreateSession,
@@ -833,8 +858,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 : undefined
             }
           />
-          {/* Path existence indicator */}
-          {isPathInput && !isDiscoveryMode && input.trim() && sessionType !== "one_off" && (
+          {/* Path existence indicator. When the path is missing and the user
+              has opted in to create it, swap ✗ for + so the affordance reads
+              as "create" rather than "broken". */}
+          {isPathInput && !isDiscoveryMode && input.trim() && (
             <span
               className={pathIndicator}
               aria-live="polite"
@@ -843,6 +870,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                   ? "Checking path"
                   : pathExists
                   ? "Path exists"
+                  : createIfMissing
+                  ? "New repository will be created"
                   : "Path does not exist"
               }
             >
@@ -850,6 +879,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 <span className={pathIndicatorLoading} aria-hidden="true">⟳</span>
               ) : pathExists ? (
                 <span className={pathIndicatorValid} aria-hidden="true">✓</span>
+              ) : createIfMissing ? (
+                <span className={pathIndicatorValid} aria-hidden="true">+</span>
               ) : (
                 <span className={pathIndicatorInvalid} aria-hidden="true">✗</span>
               )}
@@ -923,6 +954,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             path={modeState.type === "creation_with_repo" ? modeState.path : undefined}
             uploadBaseUrl={uploadBaseUrl}
             onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
+            pathDoesNotExist={pathDoesNotExist}
           />
         )}
 

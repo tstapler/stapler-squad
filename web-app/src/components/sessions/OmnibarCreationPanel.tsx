@@ -102,6 +102,8 @@ export interface OmnibarCreationPanelProps {
   uploadBaseUrl?: string;
   /** Called whenever the set of attached image server paths changes. */
   onAttachedImagesChange?: (paths: string[]) => void;
+  /** True when path completion has resolved and the typed path doesn't exist on disk. */
+  pathDoesNotExist?: boolean;
 }
 
 function truncatePath(p: string, maxLen = 50): string {
@@ -140,12 +142,22 @@ export function OmnibarCreationPanel({
   path,
   uploadBaseUrl = "/api",
   onAttachedImagesChange,
+  pathDoesNotExist,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
-    parentDir, projectName, newProjectSessionType,
+    parentDir, projectName, newProjectSessionType, createIfMissing,
   } = formState;
+
+  // "Create new repository" affordance is only meaningful for session types
+  // that operate on the path itself. existing_worktree expects a real parent
+  // repo; we surface a different (blocking) message there.
+  const showCreateRepoNotice =
+    pathDoesNotExist === true &&
+    (sessionType === "directory" || sessionType === "new_worktree");
+  const showExistingWorktreePathError =
+    pathDoesNotExist === true && sessionType === "existing_worktree";
 
   // ─── Load default parentDir from config when new_project mode is first selected ──
   useEffect(() => {
@@ -241,6 +253,69 @@ export function OmnibarCreationPanel({
       {path && (
         <div className={styles.pathDisplay} title={path}>
           {truncatePath(path)}
+        </div>
+      )}
+
+      {/* Opt-in: create directory + initialize git repo when the path is missing */}
+      {showCreateRepoNotice && (
+        <div
+          className={[styles.createRepoNotice, createIfMissing ? styles.createRepoNoticeActive : ""]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          <div className={styles.createRepoNoticeRow}>
+            <span className={styles.createRepoNoticeIcon} aria-hidden="true">
+              +
+            </span>
+            <div className={styles.createRepoNoticeBody}>
+              <div className={styles.createRepoNoticeTitle}>
+                Path doesn&rsquo;t exist yet
+              </div>
+              <div className={styles.createRepoNoticeDesc}>
+                Stapler Squad can create the directory and initialize a fresh
+                git repository (with an initial commit) at this location before
+                starting the session.
+              </div>
+            </div>
+          </div>
+          <label className={checkboxClass}>
+            <input
+              type="checkbox"
+              checked={createIfMissing}
+              onChange={(e) => setFormField("createIfMissing", e.target.checked)}
+            />
+            <span>Create a new git repository here</span>
+          </label>
+          {!createIfMissing && (
+            <div className={styles.createRepoNoticeBlocked} role="status">
+              Check the box above to create the repository, or pick an existing
+              path to continue.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* existing_worktree can't fall back to creation — keep the error tight */}
+      {showExistingWorktreePathError && (
+        <div className={styles.createRepoNotice}>
+          <div className={styles.createRepoNoticeRow}>
+            <span
+              className={`${styles.createRepoNoticeIcon} ${styles.createRepoNoticeIconError}`}
+              aria-hidden="true"
+            >
+              !
+            </span>
+            <div className={styles.createRepoNoticeBody}>
+              <div className={styles.createRepoNoticeTitle}>
+                Repository path doesn&rsquo;t exist
+              </div>
+              <div className={styles.createRepoNoticeDesc}>
+                &ldquo;Use Worktree&rdquo; needs a real parent repository.
+                Switch to &ldquo;Directory&rdquo; or &ldquo;New Worktree&rdquo;
+                if you want to create a new repo here.
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
