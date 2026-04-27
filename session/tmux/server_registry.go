@@ -25,6 +25,16 @@ var _ SessionLister = (*TmuxServerRegistry)(nil)
 var _ PaneExitSubscriber = (*TmuxServerRegistry)(nil)
 var _ TmuxStatePort = (*TmuxServerRegistry)(nil)
 
+// paneExitSub is a single pane-exit subscriber. sync.Once ensures the channel
+// is closed exactly once regardless of which code path (ctx cancel, firePaneExit,
+// or Stop) reaches the close first.
+type paneExitSub struct {
+	ch   chan struct{}
+	once sync.Once
+}
+
+func (s *paneExitSub) close() { s.once.Do(func() { close(s.ch) }) }
+
 // TmuxServerRegistry maintains a single tmux control-mode connection to a tmux
 // server and pushes session-lifecycle events into an in-memory map. Callers
 // query the map directly instead of forking tmux subprocesses.
@@ -35,9 +45,9 @@ type TmuxServerRegistry struct {
 	sessions map[string]bool
 
 	// subsMu guards subscribers. CRITICAL: never close(ch) while holding subsMu.
-	// Copy channels out under the lock, release the lock, then close outside.
+	// Copy subscribers out under the lock, release the lock, then close outside.
 	subsMu      sync.Mutex
-	subscribers map[string][]chan struct{}
+	subscribers map[string][]*paneExitSub
 
 	healthMu sync.RWMutex
 	healthy  bool
@@ -53,7 +63,7 @@ func NewTmuxServerRegistry(serverSocket string) *TmuxServerRegistry {
 	return &TmuxServerRegistry{
 		serverSocket: serverSocket,
 		sessions:     make(map[string]bool),
-		subscribers:  make(map[string][]chan struct{}),
+		subscribers:  make(map[string][]*paneExitSub),
 		ctx:          ctx,
 		cancel:       cancel,
 	}
@@ -90,17 +100,17 @@ func (r *TmuxServerRegistry) Start(ctx context.Context) error {
 func (r *TmuxServerRegistry) Stop() {
 	r.cancel()
 
-	// Copy all subscriber channels under the lock, then close outside.
+	// Copy all subscribers under the lock, then close outside.
 	r.subsMu.Lock()
-	var allChs []chan struct{}
-	for _, chs := range r.subscribers {
-		allChs = append(allChs, chs...)
+	var allSubs []*paneExitSub
+	for _, subs := range r.subscribers {
+		allSubs = append(allSubs, subs...)
 	}
-	r.subscribers = make(map[string][]chan struct{})
+	r.subscribers = make(map[string][]*paneExitSub)
 	r.subsMu.Unlock()
 
-	for _, ch := range allChs {
-		close(ch)
+	for _, sub := range allSubs {
+		sub.close()
 	}
 
 	r.healthMu.Lock()
@@ -136,22 +146,23 @@ func (r *TmuxServerRegistry) IsHealthy() bool {
 // SubscribePaneExit implements PaneExitSubscriber. The returned channel is
 // closed when the named session/pane exits or when ctx is cancelled.
 func (r *TmuxServerRegistry) SubscribePaneExit(ctx context.Context, sessionName string) <-chan struct{} {
-	ch := make(chan struct{}, 1)
+	sub := &paneExitSub{ch: make(chan struct{}, 1)}
 
 	r.subsMu.Lock()
-	r.subscribers[sessionName] = append(r.subscribers[sessionName], ch)
+	r.subscribers[sessionName] = append(r.subscribers[sessionName], sub)
 	r.subsMu.Unlock()
 
 	go func() {
 		select {
 		case <-ctx.Done():
-			// Remove our channel from the subscriber list and close it.
+			// Remove our subscriber from the list; close via Once (safe if
+			// firePaneExit already closed it concurrently).
 			r.subsMu.Lock()
 			existing := r.subscribers[sessionName]
 			filtered := existing[:0]
-			for _, c := range existing {
-				if c != ch {
-					filtered = append(filtered, c)
+			for _, s := range existing {
+				if s != sub {
+					filtered = append(filtered, s)
 				}
 			}
 			if len(filtered) == 0 {
@@ -160,27 +171,27 @@ func (r *TmuxServerRegistry) SubscribePaneExit(ctx context.Context, sessionName 
 				r.subscribers[sessionName] = filtered
 			}
 			r.subsMu.Unlock()
-			close(ch)
-		case <-ch:
-			// Closed by firePaneExit; nothing to do.
+			sub.close()
+		case <-sub.ch:
+			// Closed by firePaneExit or Stop; nothing to do.
 		case <-r.ctx.Done():
 			// Registry is stopping; channel will be closed by Stop().
 		}
 	}()
 
-	return ch
+	return sub.ch
 }
 
 // firePaneExit closes all subscriber channels for sessionName. It copies the
-// channels out under the lock and then closes them outside to prevent deadlock.
+// subscribers out under the lock and then closes them outside to prevent deadlock.
 func (r *TmuxServerRegistry) firePaneExit(sessionName string) {
 	r.subsMu.Lock()
-	chs := r.subscribers[sessionName]
+	subs := r.subscribers[sessionName]
 	delete(r.subscribers, sessionName)
 	r.subsMu.Unlock()
 	// Lock NOT held here — close outside the critical section.
-	for _, ch := range chs {
-		close(ch)
+	for _, sub := range subs {
+		sub.close()
 	}
 }
 

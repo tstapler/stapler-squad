@@ -1,0 +1,12 @@
+{
+  "id": "session-create-omnibar",
+  "type": "frontend",
+  "component": "Omnibar",
+  "path": "web-app/src/components/sessions/Omnibar.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/tests/e2e/session-create-omnibar.spec.ts"
+  ],
+  "lastModified": "2026-04-24T00:00:00Z"
+}

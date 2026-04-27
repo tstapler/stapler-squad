@@ -1,0 +1,14 @@
+{
+  "id": "approval:list-rules",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListApprovalRules",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestListApprovalRules_ReturnsSeedRules",
+    "TestListApprovalRules_SourceFilter"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

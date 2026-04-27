@@ -236,6 +236,23 @@ service SessionService {
   // Used by the Omnibar to populate the "Use Existing Worktree" dropdown.
   rpc ListWorktrees(ListWorktreesRequest) returns (ListWorktreesResponse) {}
 
+  // Prompt history RPCs (S1)
+  rpc ListPromptHistory(ListPromptHistoryRequest) returns (ListPromptHistoryResponse) {}
+  rpc DeletePromptHistory(DeletePromptHistoryRequest) returns (DeletePromptHistoryResponse) {}
+
+  // Batch session creation (S2)
+  rpc BatchCreateSessions(BatchCreateSessionsRequest) returns (BatchCreateSessionsResponse) {}
+
+  // One-shot PR creation (S3)
+  rpc RunOneShot(RunOneShotRequest) returns (RunOneShotResponse) {}
+
+  // Project CRUD (S4)
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {}
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse) {}
+  rpc UpdateProject(UpdateProjectRequest) returns (UpdateProjectResponse) {}
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse) {}
+  rpc AssignSessionsToProject(AssignSessionsToProjectRequest) returns (AssignSessionsToProjectResponse) {}
+
   // ListBranches returns the git branches for a given repository path.
   // Used by the SessionWizard branch autocomplete field.
   rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse) {}
@@ -258,6 +275,9 @@ message ListSessionsRequest {
 
   // Search query for fuzzy matching across title, path, branch.
   optional string search_query = 4;
+
+  // Filter by project ID (only return sessions in this project).
+  optional string project_id = 5;
 }
 
 message ListSessionsResponse {
@@ -314,6 +334,19 @@ message CreateSessionRequest {
   // Optional: Session type (directory, new_worktree, existing_worktree).
   // If not specified, backend will infer from other fields (branch, existing_worktree).
   SessionType session_type = 13;
+
+  // Optional: If true, ignore the path field and generate a fresh directory
+  // under one_off_base_dir. The session title is still required.
+  bool one_off = 14;
+
+  // Optional: Initial prompt to inject via CLAUDE.md (no size limit; shell-safe).
+  string initial_prompt = 15;
+
+  // Optional: Run claude in one-shot mode (-p flag); session exits after task completes.
+  bool one_shot = 16;
+
+  // Optional: Associate session with a project ID.
+  string project_id = 17;
 }
 
 message CreateSessionResponse {
@@ -1388,6 +1421,7 @@ message SessionDefaultsConfig {
   string cli_flags = 5;
   map<string, ProfileDefaultsProto> profiles = 6;
   repeated DirectoryRuleProto directory_rules = 7;
+  string one_off_base_dir = 8;
 }
 
 // GetSessionDefaults
@@ -1426,6 +1460,7 @@ message UpdateGlobalDefaultsRequest {
   repeated string tags = 3;
   map<string, string> env_vars = 4;
   string cli_flags = 5;
+  string one_off_base_dir = 6;
 }
 
 message UpdateGlobalDefaultsResponse {
@@ -1486,6 +1521,148 @@ message WorktreeEntry {
 
 message ListWorktreesResponse {
   repeated WorktreeEntry worktrees = 1;
+}
+
+// ============================================================================
+// S1: Prompt History Messages
+// ============================================================================
+
+message PromptHistoryEntry {
+  string id = 1;
+  string text = 2;
+  string label = 3;
+  int32 used_count = 4;
+  google.protobuf.Timestamp last_used = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ListPromptHistoryRequest {
+  int32 limit = 1;
+}
+
+message ListPromptHistoryResponse {
+  repeated PromptHistoryEntry entries = 1;
+}
+
+message DeletePromptHistoryRequest {
+  string id = 1;
+}
+
+message DeletePromptHistoryResponse {}
+
+// ============================================================================
+// S2: Batch Session Creation Messages
+// ============================================================================
+
+message BatchSessionRequest {
+  string title = 1;
+  string path = 2;
+  string working_dir = 3;
+  string branch = 4;
+  string program = 5;
+  string category = 6;
+  string initial_prompt = 7;
+  bool auto_yes = 8;
+  SessionType session_type = 9;
+  string project_id = 10;
+  repeated string tags = 11;
+}
+
+message BatchCreateResult {
+  bool success = 1;
+  string session_id = 2;
+  string error = 3;
+  string title = 4;
+}
+
+message BatchCreateSessionsRequest {
+  repeated BatchSessionRequest sessions = 1;
+  // Max concurrent worktree creations (capped at 3 server-side).
+  int32 max_concurrency = 2;
+}
+
+message BatchCreateSessionsResponse {
+  repeated BatchCreateResult results = 1;
+  int32 succeeded = 2;
+  int32 failed = 3;
+}
+
+// ============================================================================
+// S3: One-Shot PR Creation Messages
+// ============================================================================
+
+message RunOneShotRequest {
+  string session_id = 1;
+  string prompt = 2;
+  // Timeout in seconds (default: 120, max: 300).
+  int32 timeout_seconds = 3;
+}
+
+message RunOneShotResponse {
+  string output = 1;
+  string error = 2;
+  int32 exit_code = 3;
+  string pr_url = 4;
+  bool branch_diverged_from_base = 5;
+}
+
+// ============================================================================
+// S4: Project Messages
+// ============================================================================
+
+message Project {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp updated_at = 5;
+  // Aggregate session counts.
+  int32 session_count = 6;
+  int32 running_count = 7;
+  int32 complete_count = 8;
+  int32 review_ready_count = 9;
+}
+
+message CreateProjectRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message CreateProjectResponse {
+  Project project = 1;
+}
+
+message ListProjectsRequest {}
+
+message ListProjectsResponse {
+  repeated Project projects = 1;
+}
+
+message UpdateProjectRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message UpdateProjectResponse {
+  Project project = 1;
+}
+
+message DeleteProjectRequest {
+  string id = 1;
+}
+
+message DeleteProjectResponse {
+  bool success = 1;
+}
+
+message AssignSessionsToProjectRequest {
+  string project_id = 1;
+  repeated string session_ids = 2;
+}
+
+message AssignSessionsToProjectResponse {
+  int32 updated_count = 1;
 }
 
 // ListBranches

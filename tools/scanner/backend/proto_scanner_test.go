@@ -94,6 +94,39 @@ func TestScanProto_RealLikeFixture(t *testing.T) {
 	}
 }
 
+// TestScanProto_NoUnmappedMethods verifies that every RPC in the real session.proto
+// has an explicit entry in methodToID. Without a mapping the ID falls back to the raw
+// method name (no colon), which breaks the per-feature file path convention and causes
+// validate-registry.sh to diverge. Add new methods to methodToID whenever this fails.
+func TestScanProto_NoUnmappedMethods(t *testing.T) {
+	_, file, _, _ := runtime.Caller(0)
+	repoRoot := filepath.Join(filepath.Dir(file), "..", "..", "..")
+	protoPath := filepath.Join(repoRoot, "proto", "session", "v1", "session.proto")
+
+	features, err := ScanProto(protoPath)
+	if err != nil {
+		t.Skipf("real proto not found at %s: %v", protoPath, err)
+	}
+
+	var unmapped []string
+	for _, f := range features {
+		hasColon := false
+		for _, c := range f.ID {
+			if c == ':' {
+				hasColon = true
+				break
+			}
+		}
+		if !hasColon {
+			unmapped = append(unmapped, f.Method)
+		}
+	}
+	if len(unmapped) > 0 {
+		t.Errorf("%d RPC(s) have no methodToID entry — add them to proto_scanner.go: %v",
+			len(unmapped), unmapped)
+	}
+}
+
 func writeFile(path, content string) error {
 	f, err := openFileCreate(path)
 	if err != nil {

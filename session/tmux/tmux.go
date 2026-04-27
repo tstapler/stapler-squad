@@ -113,11 +113,12 @@ type TmuxSession struct {
 	// Control mode command dispatch (Phase 2)
 	// cmdSendMu serializes (enqueue + write-to-stdin) pairs so tmux receives commands
 	// in the same order as channels are added to pendingCmds.
-	cmdSendMu   sync.Mutex        // serializes enqueue+write in sendCMCommand and stdin close in StopControlMode
-	pendingCmds []chan cmdResult   // FIFO of pending response channels; protected by controlModeSubMu
-	cmdBodyBuf  strings.Builder   // body accumulator between %begin and %end; reader goroutine only
-	curCmdCh    chan cmdResult     // current in-flight response channel; reader goroutine only
-	inCmdResp   bool              // true while inside a %begin/%end block; reader goroutine only
+	cmdSendMu   sync.Mutex       // serializes enqueue+write in sendCMCommand and stdin close in StopControlMode
+	pendingCmds []chan cmdResult // FIFO of pending response channels; protected by controlModeSubMu
+	cmdBodyBuf  strings.Builder  // body accumulator between %begin and %end; reader goroutine only
+	curCmdCh    chan cmdResult   // current in-flight response channel; reader goroutine only
+	inCmdResp   bool             // true while inside a %begin/%end block; reader goroutine only
+
 
 	// Exit detection: fired when the session exits unexpectedly (not via StopControlMode).
 	// onExit is called at most once per TmuxSession lifetime (guarded by onExitOnce).
@@ -141,7 +142,7 @@ const LegacyTmuxPrefix = "claudesquad_"
 const (
 	sessionExistsTimeout        = 3 * time.Second
 	sessionExistsNoCacheTimeout = 5 * time.Second
-	existsCacheDefaultTTL       = 500 * time.Millisecond
+	existsCacheDefaultTTL       = 5 * time.Second // registry fast-path is push-based; this is only the subprocess fallback
 	sessionCreateTimeout        = 10 * time.Second
 	sessionPollInitialDelay     = 5 * time.Millisecond
 )
@@ -214,7 +215,7 @@ var ErrServerDown = errors.New("tmux server not running")
 // Returns ErrServerDown when the tmux server is not running.
 func ListAllSessions(serverSocket string) (map[string]bool, error) {
 	args := prependSocket(serverSocket, []string{"list-sessions", "-F", "#{session_name}"})
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command(Binary(), args...)
 	out, err := cmd.Output()
 	if err != nil {
 		// Collect stderr for server-down detection
@@ -241,7 +242,7 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 // and returns true if the server is not running.
 func checkServerNotRunning(serverSocket string) bool {
 	args := prependSocket(serverSocket, []string{"list-sessions"})
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command(Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	return err != nil && serverNotRunning(out)
 }
@@ -263,7 +264,7 @@ func EnsureServerRunning(serverSocket string) error {
 		return nil // server is already running
 	}
 	args := prependSocket(serverSocket, []string{"start-server"})
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command(Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
@@ -296,7 +297,7 @@ func SetExitEmpty(serverSocket string, enabled bool) error {
 		value = "on"
 	}
 	args := prependSocket(serverSocket, []string{"set-option", "-g", "exit-empty", value})
-	cmd := exec.Command("tmux", args...)
+	cmd := exec.Command(Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("tmux set-option exit-empty %s failed: %w (output: %s)", value, err, out)
@@ -312,13 +313,13 @@ func CreateKeepaliveSession(serverSocket string) error {
 
 	// Check if already exists
 	hasArgs := prependSocket(serverSocket, []string{"has-session", "-t", keepaliveName})
-	if exec.Command("tmux", hasArgs...).Run() == nil {
+	if exec.Command(Binary(), hasArgs...).Run() == nil {
 		return nil // already exists
 	}
 
 	// Create a detached session with an idle shell
 	newArgs := prependSocket(serverSocket, []string{"new-session", "-d", "-s", keepaliveName})
-	cmd := exec.Command("tmux", newArgs...)
+	cmd := exec.Command(Binary(), newArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create keepalive session: %w (output: %s)", err, out)
@@ -534,7 +535,7 @@ func (t *TmuxSession) buildTmuxCommand(args ...string) *exec.Cmd {
 	// Add the actual tmux command arguments
 	cmdArgs = append(cmdArgs, args...)
 
-	return exec.Command("tmux", cmdArgs...)
+	return exec.Command(Binary(), cmdArgs...)
 }
 
 // buildAttachCommand creates a tmux attach-session command for PTY operations.
@@ -821,11 +822,11 @@ func (t *TmuxSession) GetPTY() (*os.File, error) {
 
 // HasUpdated checks if the tmux pane content has changed since the last tick. It also returns true if
 // the tmux pane has a prompt for aider or claude code.
-func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
+func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, content string) {
 	content, err := t.CapturePaneContent()
 	if err != nil {
 		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
-		return false, false
+		return false, false, ""
 	}
 
 	// Filter out the tmux status line (bottom line with clock) before checking for updates
@@ -837,9 +838,9 @@ func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool) {
 
 	if !bytes.Equal(t.monitor.hash(contentWithoutStatusLine), t.monitor.prevOutputHash) {
 		t.monitor.prevOutputHash = t.monitor.hash(contentWithoutStatusLine)
-		return true, hasPrompt
+		return true, hasPrompt, content
 	}
-	return false, hasPrompt
+	return false, hasPrompt, content
 }
 
 // filterStatusLine removes the tmux status line (last line) from the content
@@ -1399,13 +1400,13 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 	} else {
 		cmdArgs = []string{"list-sessions", "-F", "#{session_name}"}
 	}
-	cmd := exec.CommandContext(ctx, "tmux", cmdArgs...)
+	cmd := exec.CommandContext(ctx, Binary(), cmdArgs...)
 	output, err := t.cmdExec.CombinedOutput(cmd)
 	// If the circuit breaker is open, fall back to direct exec.
 	// "No sessions" (exit 1 when server running but empty) can cause false circuit
 	// breaker trips; the fallback ensures checks always work regardless of breaker state.
 	if errors.Is(err, executor.ErrCircuitOpen) {
-		cmd = exec.CommandContext(ctx, "tmux", cmdArgs...)
+		cmd = exec.CommandContext(ctx, Binary(), cmdArgs...)
 		output, err = cmd.CombinedOutput()
 	}
 	return output, err
@@ -1771,9 +1772,9 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 	// First try to list sessions
 	var cmd *exec.Cmd
 	if serverSocket != "" {
-		cmd = exec.Command("tmux", "-L", serverSocket, "ls")
+		cmd = exec.Command(Binary(), "-L", serverSocket, "ls")
 	} else {
-		cmd = exec.Command("tmux", "ls")
+		cmd = exec.Command(Binary(), "ls")
 	}
 	output, err := cmdExec.Output(cmd)
 
@@ -1796,9 +1797,9 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 		log.InfoLog.Printf("cleaning up session: %s", match)
 		var killCmd *exec.Cmd
 		if serverSocket != "" {
-			killCmd = exec.Command("tmux", "-L", serverSocket, "kill-session", "-t", match)
+			killCmd = exec.Command(Binary(), "-L", serverSocket, "kill-session", "-t", match)
 		} else {
-			killCmd = exec.Command("tmux", "kill-session", "-t", match)
+			killCmd = exec.Command(Binary(), "kill-session", "-t", match)
 		}
 		if err := cmdExec.Run(killCmd); err != nil {
 			return fmt.Errorf("failed to kill tmux session %s: %v", match, err)

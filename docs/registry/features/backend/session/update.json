@@ -1,0 +1,12 @@
+{
+  "id": "session:update",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UpdateSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": ["TestUpdateSession_MissingID", "TestUpdateSession_NotFound", "TestUpdateSession_TagsUpdate", "TestUpdateSession_TagsUpdate_Replaces", "TestUpdateSession_TitleConflict", "TestUpdateSession_HandlerOrdering_MetadataBeforeStatus"],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

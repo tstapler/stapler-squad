@@ -1,0 +1,11 @@
+{
+  "id": "session:get-diff",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetSessionDiff",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": ["TestGetSessionDiff_FindsByUUID", "TestGetSessionDiff_FindsByTitle", "TestGetSessionDiff_UnknownIDReturnsNotFound"],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

@@ -19,17 +19,20 @@ export function dispatchOmnibarAction(
       deps.navigate(action.sessionId);
       deps.close();
       return;
-    case "create_session":
+    case "create_session": {
+      const isOneOff = action.sessionType === "one_off";
       void deps.createSession({
         title: action.title ?? "",
         path: action.path,
-        sessionType: action.sessionType as "directory" | "new_worktree" | "existing_worktree",
+        sessionType: isOneOff ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree",
         branch: action.branch,
-        program: action.program ?? "claude",
+        program: action.program ?? "",
         autoYes: false,
+        oneOff: isOneOff,
       });
       deps.close();
       return;
+    }
     case "clone_session":
       void deps.createSession({
         title: `${action.label} (clone)`,

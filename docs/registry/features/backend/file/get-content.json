@@ -1,0 +1,11 @@
+{
+  "id": "file:get-content",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetFileContent",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": ["TestGetFileContent_TextFile", "TestGetFileContent_NotFound", "TestGetFileContent_BinaryFile", "TestGetFileContent_FileTooLarge", "TestGetFileContent_PathTraversal", "TestGetFileContent_Truncation"],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

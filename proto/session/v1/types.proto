@@ -142,9 +142,15 @@ message Session {
   // Matches the UUID in the JSONL filename under ~/.claude/projects/<dir>/<uuid>.jsonl.
   string claude_conversation_uuid = 42;
 
+  // Project ID this session belongs to (empty if not in a project).
+  string project_id = 43;
+
+  // Initial prompt that was injected into CLAUDE.md at session creation.
+  string initial_prompt = 44;
+
   // Full launch command as passed to tmux on session start, including injected flags
   // (e.g. --resume <id>, --mcp-server ..., -y, initial prompt). Empty for external sessions.
-  string launch_command = 43;
+  string launch_command = 45;
 }
 
 // SessionStatus represents the current state of a session.
@@ -357,6 +363,13 @@ message ReviewItem {
   // This is the actual last activity time, used for sorting and display.
   // Used instead of detected_at for showing when the session was last active.
   google.protobuf.Timestamp last_activity = 17;
+
+  // GitHub PR URL for the session (empty if no PR exists yet).
+  string github_pr_url = 18;
+
+  // True if the session's branch has diverged from the base branch (main/master).
+  // Populated by RunOneShot pre-check; shows warning badge in review queue UI.
+  bool branch_diverged_from_base = 19;
 }
 
 // Priority levels for review queue items (highest to lowest urgency).
@@ -1000,4 +1013,57 @@ message CheckpointProto {
 
   // When the checkpoint was created.
   google.protobuf.Timestamp timestamp = 9;
+}
+
+// ScanStatus indicates the result quality of the last unfinished-work scan.
+enum ScanStatus {
+  SCAN_STATUS_UNSPECIFIED = 0;
+  SCAN_STATUS_OK          = 1;
+  SCAN_STATUS_TIMEOUT     = 2;
+  SCAN_STATUS_PERMISSION  = 3;
+  SCAN_STATUS_ERROR       = 4;
+}
+
+// UnfinishedWorktree represents a single git worktree that has unfinished work.
+message UnfinishedWorktree {
+  // Composite key fields
+  string repo_path    = 1;  // Absolute path to the repo root
+  string branch       = 2;  // Branch name (e.g., "feature-auth")
+  string worktree_path = 3; // Absolute path to the worktree directory
+
+  // Display fields
+  string repo_name    = 4;  // Derived from remote URL basename or dir basename
+  string display_path = 5;  // Worktree path with ~ substitution
+
+  // Status flags
+  bool has_uncommitted  = 6;  // git status --porcelain non-empty
+  int32 commits_ahead   = 7;  // commits in HEAD not in default branch
+  int32 commits_behind  = 8;  // commits in default branch not in HEAD
+  string default_branch = 9;  // resolved default branch (main/master/etc.)
+
+  // Expanded detail fields
+  int32 changed_files  = 10;
+  int32 lines_added    = 11;
+  int32 lines_removed  = 12;
+  repeated string ahead_commit_messages = 13; // Up to 5 short messages
+
+  // Timestamps
+  google.protobuf.Timestamp last_modified = 14; // mtime of worktree dir
+  google.protobuf.Timestamp scan_time     = 15; // when this result was computed
+
+  // Scan status
+  ScanStatus scan_status  = 16;
+  string scan_error_msg   = 17; // human-readable error, empty on success
+
+  // Action state
+  bool is_dismissed  = 18;
+  bool is_snoozed    = 19;
+  string session_id  = 20; // non-empty if an active session covers this branch
+}
+
+// UnfinishedWorkConfig holds user-configurable source settings.
+message UnfinishedWorkConfig {
+  bool   auto_spider_sessions = 1; // default: true
+  repeated string watch_dirs  = 2;
+  repeated string pinned_repos = 3;
 }

@@ -61,11 +61,12 @@ jobs:
       - name: Run Tier 1 benchmarks
         run: |
           go test \
-            -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer|BenchmarkSessionService_List|BenchmarkSessionService_Get|BenchmarkSessionService_Stream' \
+            -bench='BenchmarkEventBus|BenchmarkDeltaGenerat|BenchmarkCircularBuffer' \
+            -run='^$' \
             -benchmem \
             -count=8 \
             -timeout=10m \
-            ./... | tee tier1-bench.txt
+            ./server/events ./server/terminal ./session/scrollback | tee tier1-bench.txt
 
       - name: Compare against baseline (PR only)
         if: github.event_name == 'pull_request'
@@ -149,6 +150,7 @@ jobs:
         run: |
           go test \
             -bench=. \
+            -run='^$' \
             -benchmem \
             -count=8 \
             -timeout=30m \

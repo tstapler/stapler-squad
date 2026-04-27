@@ -96,6 +96,8 @@ interface SessionCardProps {
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
+  onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
+  onRunOneShot?: (sessionId: string) => Promise<void>;
   selectMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: () => void;
@@ -117,6 +119,8 @@ export function SessionCard({
   onUpdateTags,
   onCreateCheckpoint,
   onListCheckpoints,
+  onForkFromCheckpoint,
+  onRunOneShot,
   selectMode = false,
   isSelected = false,
   onToggleSelect,
@@ -132,6 +136,14 @@ export function SessionCard({
   const [isCheckpointOpen, setIsCheckpointOpen] = useState(false);
   const [checkpointLabel, setCheckpointLabel] = useState("");
   const [isCreatingCheckpoint, setIsCreatingCheckpoint] = useState(false);
+  const [isForkOpen, setIsForkOpen] = useState(false);
+  const [forkCheckpoints, setForkCheckpoints] = useState<CheckpointProto[]>([]);
+  const [forkTitle, setForkTitle] = useState("");
+  const [activeForkCheckpointId, setActiveForkCheckpointId] = useState("");
+  const [isForking, setIsForking] = useState(false);
+  const [isRunningOneShot, setIsRunningOneShot] = useState(false);
+  const [oneShotResult, setOneShotResult] = useState<string | null>(null);
+  const [isRenaming, setIsRenaming] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isInlineEditing, setIsInlineEditing] = useState(false);
@@ -140,6 +152,7 @@ export function SessionCard({
   const inlineSavingRef = useRef(false);
   const [checkpointError, setCheckpointError] = useState("");
   const [isSnapshotOpen, setIsSnapshotOpen] = useState(false);
+  const [forkError, setForkError] = useState("");
 
   // Refs for focus trap: dialog containers and the buttons that trigger them
   const restartDialogRef = useRef<HTMLDivElement>(null);
@@ -424,6 +437,55 @@ export function SessionCard({
     setIsCheckpointOpen(false);
     setCheckpointError("");
   };
+
+  const handleForkClick = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const cps = await onListCheckpoints?.(session.id) ?? [];
+    setForkCheckpoints(cps);
+    setForkTitle(`${session.title}-fork`);
+    setActiveForkCheckpointId(cps.length > 0 ? cps[cps.length - 1].id : "");
+    setIsForkOpen(true);
+  };
+
+  const handleForkSubmit = async (checkpointId: string) => {
+    if (!forkTitle.trim() || !checkpointId) return;
+    setIsForking(true);
+    setForkError("");
+    try {
+      const result = await onForkFromCheckpoint?.(session.id, checkpointId, forkTitle.trim());
+      if (result) {
+        setIsForkOpen(false);
+      } else {
+        setForkError("Failed to fork session");
+      }
+    } catch (error) {
+      setForkError(error instanceof Error ? error.message : "Failed to fork session");
+    } finally {
+      setIsForking(false);
+    }
+  };
+
+  const handleForkCancel = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsForkOpen(false);
+    setForkError("");
+  };
+
+  const handleRunOneShot = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onRunOneShot) return;
+    setIsRunningOneShot(true);
+    setOneShotResult(null);
+    try {
+      await onRunOneShot(session.id);
+      setOneShotResult("done");
+    } catch {
+      setOneShotResult("error");
+    } finally {
+      setIsRunningOneShot(false);
+    }
+  };
+
 
   return (
     <>
@@ -1034,6 +1096,17 @@ export function SessionCard({
               aria-label={`Clone session ${session.title}`}
             >
               <span aria-hidden="true">⊕</span> Clone
+            </button>
+          )}
+          {onRunOneShot && (
+            <button
+              className={actionButton}
+              onClick={handleRunOneShot}
+              disabled={isRunningOneShot}
+              title="Run claude one-shot to create a PR for this session"
+              aria-label={`Create PR for session ${session.title}`}
+            >
+              {isRunningOneShot ? "Creating PR…" : oneShotResult === "done" ? "✅ PR Created" : oneShotResult === "error" ? "❌ Failed – Retry?" : "🚀 Create PR"}
             </button>
           )}
           <button

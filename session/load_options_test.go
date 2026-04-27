@@ -44,7 +44,7 @@ func TestSelectiveLoading(t *testing.T) {
 		ClaudeSession: ClaudeSessionData{
 			ConversationUUID: "claude-123",
 			SquadSessionID:   "conv-456",
-			ProjectName:    "my-project",
+			ProjectName:      "my-project",
 		},
 	}
 

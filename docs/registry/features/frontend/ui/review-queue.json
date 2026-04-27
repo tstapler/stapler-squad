@@ -1,0 +1,10 @@
+{
+  "id": "review-queue",
+  "type": "frontend",
+  "component": "ReviewQueuePage",
+  "path": "web-app/src/app/review-queue/page.tsx",
+  "markerLine": 2,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-04-18T17:28:17.609Z"
+}

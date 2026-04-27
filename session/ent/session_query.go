@@ -15,6 +15,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
@@ -31,6 +32,8 @@ type SessionQuery struct {
 	withDiffStats     *DiffStatsQuery
 	withTags          *TagQuery
 	withClaudeSession *ClaudeSessionQuery
+	withProject       *ProjectQuery
+	withFKs           bool
 	// intermediate query (i.e. traversal path).
 	sql  *sql.Selector
 	path func(context.Context) (*sql.Selector, error)
@@ -148,6 +151,28 @@ func (_q *SessionQuery) QueryClaudeSession() *ClaudeSessionQuery {
 			sqlgraph.From(session.Table, session.FieldID, selector),
 			sqlgraph.To(claudesession.Table, claudesession.FieldID),
 			sqlgraph.Edge(sqlgraph.O2O, false, session.ClaudeSessionTable, session.ClaudeSessionColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryProject chains the current query on the "project" edge.
+func (_q *SessionQuery) QueryProject() *ProjectQuery {
+	query := (&ProjectClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(session.Table, session.FieldID, selector),
+			sqlgraph.To(project.Table, project.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, session.ProjectTable, session.ProjectColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -351,6 +376,7 @@ func (_q *SessionQuery) Clone() *SessionQuery {
 		withDiffStats:     _q.withDiffStats.Clone(),
 		withTags:          _q.withTags.Clone(),
 		withClaudeSession: _q.withClaudeSession.Clone(),
+		withProject:       _q.withProject.Clone(),
 		// clone intermediate query.
 		sql:  _q.sql.Clone(),
 		path: _q.path,
@@ -398,6 +424,17 @@ func (_q *SessionQuery) WithClaudeSession(opts ...func(*ClaudeSessionQuery)) *Se
 		opt(query)
 	}
 	_q.withClaudeSession = query
+	return _q
+}
+
+// WithProject tells the query-builder to eager-load the nodes that are connected to
+// the "project" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *SessionQuery) WithProject(opts ...func(*ProjectQuery)) *SessionQuery {
+	query := (&ProjectClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withProject = query
 	return _q
 }
 
@@ -478,14 +515,22 @@ func (_q *SessionQuery) prepareQuery(ctx context.Context) error {
 func (_q *SessionQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Session, error) {
 	var (
 		nodes       = []*Session{}
+		withFKs     = _q.withFKs
 		_spec       = _q.querySpec()
-		loadedTypes = [4]bool{
+		loadedTypes = [5]bool{
 			_q.withWorktree != nil,
 			_q.withDiffStats != nil,
 			_q.withTags != nil,
 			_q.withClaudeSession != nil,
+			_q.withProject != nil,
 		}
 	)
+	if _q.withProject != nil {
+		withFKs = true
+	}
+	if withFKs {
+		_spec.Node.Columns = append(_spec.Node.Columns, session.ForeignKeys...)
+	}
 	_spec.ScanValues = func(columns []string) ([]any, error) {
 		return (*Session).scanValues(nil, columns)
 	}
@@ -526,6 +571,12 @@ func (_q *SessionQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*Sess
 	if query := _q.withClaudeSession; query != nil {
 		if err := _q.loadClaudeSession(ctx, query, nodes, nil,
 			func(n *Session, e *ClaudeSession) { n.Edges.ClaudeSession = e }); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withProject; query != nil {
+		if err := _q.loadProject(ctx, query, nodes, nil,
+			func(n *Session, e *Project) { n.Edges.Project = e }); err != nil {
 			return nil, err
 		}
 	}
@@ -674,6 +725,38 @@ func (_q *SessionQuery) loadClaudeSession(ctx context.Context, query *ClaudeSess
 			return fmt.Errorf(`unexpected referenced foreign-key "session_claude_session" returned %v for node %v`, *fk, n.ID)
 		}
 		assign(node, n)
+	}
+	return nil
+}
+func (_q *SessionQuery) loadProject(ctx context.Context, query *ProjectQuery, nodes []*Session, init func(*Session), assign func(*Session, *Project)) error {
+	ids := make([]int, 0, len(nodes))
+	nodeids := make(map[int][]*Session)
+	for i := range nodes {
+		if nodes[i].project_sessions == nil {
+			continue
+		}
+		fk := *nodes[i].project_sessions
+		if _, ok := nodeids[fk]; !ok {
+			ids = append(ids, fk)
+		}
+		nodeids[fk] = append(nodeids[fk], nodes[i])
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	query.Where(project.IDIn(ids...))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		nodes, ok := nodeids[n.ID]
+		if !ok {
+			return fmt.Errorf(`unexpected foreign-key "project_sessions" returned %v`, n.ID)
+		}
+		for i := range nodes {
+			assign(nodes[i], n)
+		}
 	}
 	return nil
 }

@@ -1,0 +1,12 @@
+{
+  "id": "session-create-wizard",
+  "type": "frontend",
+  "component": "SessionWizard",
+  "path": "web-app/src/components/sessions/SessionWizard.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/tests/e2e/session-create-wizard.spec.ts"
+  ],
+  "lastModified": "2026-04-24T00:00:00Z"
+}

@@ -11,6 +11,7 @@ type tokenBucket struct {
 	tokens   map[string]*bucket
 	rate     float64 // tokens added per second
 	capacity float64 // max tokens
+	now      func() time.Time
 }
 
 type bucket struct {
@@ -23,6 +24,7 @@ func newTokenBucket(rate, capacity float64) *tokenBucket {
 		tokens:   make(map[string]*bucket),
 		rate:     rate,
 		capacity: capacity,
+		now:      time.Now,
 	}
 }
 
@@ -33,11 +35,11 @@ func (tb *tokenBucket) allow(key string) bool {
 
 	b, ok := tb.tokens[key]
 	if !ok {
-		b = &bucket{tokens: tb.capacity, lastRefil: time.Now()}
+		b = &bucket{tokens: tb.capacity, lastRefil: tb.now()}
 		tb.tokens[key] = b
 	}
 
-	now := time.Now()
+	now := tb.now()
 	elapsed := now.Sub(b.lastRefil).Seconds()
 	added := elapsed * tb.rate
 	if b.tokens+added > tb.capacity {

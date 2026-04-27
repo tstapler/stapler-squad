@@ -18,6 +18,7 @@ const SESSION_TYPES = [
   { value: "new_worktree", label: "New Worktree" },
   { value: "directory", label: "Directory" },
   { value: "existing_worktree", label: "Use Worktree" },
+  { value: "one_off", label: "One-off" },
 ] as const;
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
@@ -146,8 +147,16 @@ export function OmnibarCreationPanel({
             {sessionType === "new_worktree" && "Creates an isolated git worktree for this session"}
             {sessionType === "existing_worktree" && "Uses an existing worktree at a specific path"}
             {sessionType === "directory" && "Works directly in the repository without worktree isolation"}
+            {sessionType === "one_off" && "A fresh directory will be created automatically — no path needed"}
           </span>
         </div>
+
+        {/* One-off informational banner */}
+        {sessionType === "one_off" && (
+          <div className={hint} style={{ marginTop: 0 }}>
+            Directory will be created in your one-off base directory (default: <code>~/oneoff</code>) with format <code>YYYYMMDD-word-word-NN</code>. Configure in Settings → Defaults.
+          </div>
+        )}
 
         {/* Branch controls (for new worktree) */}
         {sessionType === "new_worktree" && (
@@ -223,20 +232,22 @@ export function OmnibarCreationPanel({
         )}
 
         {/* Working Directory */}
-        <div className={field}>
-          <label className={labelClass} htmlFor="omnibar-working-dir">
-            Working Directory
-          </label>
-          <input
-            id="omnibar-working-dir"
-            type="text"
-            className={fieldInput}
-            placeholder="src/api (optional)"
-            value={workingDir}
-            onChange={(e) => setFormField("workingDir", e.target.value)}
-          />
-          <span className={hint}>Optional: Start in a subdirectory (relative path)</span>
-        </div>
+        {sessionType !== "one_off" && (
+          <div className={field}>
+            <label className={labelClass} htmlFor="omnibar-working-dir">
+              Working Directory
+            </label>
+            <input
+              id="omnibar-working-dir"
+              type="text"
+              className={fieldInput}
+              placeholder="src/api (optional)"
+              value={workingDir}
+              onChange={(e) => setFormField("workingDir", e.target.value)}
+            />
+            <span className={hint}>Optional: Start in a subdirectory (relative path)</span>
+          </div>
+        )}
 
         {/* Advanced Options */}
         <div className={collapsible}>

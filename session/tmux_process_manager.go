@@ -203,9 +203,9 @@ func (tm *TmuxProcessManager) TapEnter() error {
 }
 
 // HasUpdated reports whether the pane content has changed since the last check.
-func (tm *TmuxProcessManager) HasUpdated() (updated bool, hasPrompt bool) {
+func (tm *TmuxProcessManager) HasUpdated() (updated bool, hasPrompt bool, content string) {
 	if tm.session == nil {
-		return false, false
+		return false, false, ""
 	}
 	return tm.session.HasUpdated()
 }
@@ -365,7 +365,7 @@ type TmuxManager interface {
 	SetWindowSize(cols, rows int) error
 	RefreshClient() error
 	TapEnter() error
-	HasUpdated() (updated bool, hasPrompt bool)
+	HasUpdated() (updated bool, hasPrompt bool, content string)
 	RestoreWithWorkDir(workDir string) error
 	Start(dir string) error
 	FilterBanners(content string) (string, int)

@@ -45,6 +45,39 @@ describe("dispatchOmnibarAction", () => {
       );
       expect(deps.close).toHaveBeenCalled();
     });
+
+    it("dispatchOmnibarAction_should_passEmptyProgram_When_programNotSpecified", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = {
+        type: "create_session",
+        path: "/home/user/repo",
+        sessionType: "directory",
+        title: "My Session",
+        // program intentionally omitted - backend should use config default
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ program: "" })
+      );
+    });
+  });
+
+  describe("create_session (one-off)", () => {
+    it("dispatchOmnibarAction_should_setOneOffTrue_When_sessionTypeIsOneOff", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = {
+        type: "create_session",
+        path: "",
+        sessionType: "one_off",
+        title: "scratch session",
+        program: "claude",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ oneOff: true, sessionType: undefined })
+      );
+      expect(deps.close).toHaveBeenCalled();
+    });
   });
 
   describe("clone_session", () => {

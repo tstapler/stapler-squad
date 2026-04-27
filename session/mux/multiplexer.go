@@ -631,9 +631,13 @@ func (m *Multiplexer) monitorTmuxSessionPolling() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			// Check if the tmux session still exists
-			checkCmd := exec.Command("tmux", "has-session", "-t", m.tmuxSession)
-			if err := checkCmd.Run(); err != nil {
+			// Check if the tmux session still exists (2s timeout prevents goroutine accumulation
+			// when tmux is slow or the process table is under pressure).
+			pollCtx, pollCancel := context.WithTimeout(m.ctx, 2*time.Second)
+			checkCmd := exec.CommandContext(pollCtx, "tmux", "has-session", "-t", m.tmuxSession)
+			checkErr := checkCmd.Run()
+			pollCancel()
+			if checkErr != nil {
 				// Session no longer exists - subprocess likely exited
 				// Trigger shutdown of the multiplexer
 				m.Shutdown()
@@ -642,8 +646,10 @@ func (m *Multiplexer) monitorTmuxSessionPolling() {
 
 			// Check if there are any running processes in the tmux session
 			// This catches cases where the session exists but the command has exited
-			listCmd := exec.Command("tmux", "list-panes", "-t", m.tmuxSession, "-F", "#{pane_dead}")
+			listCtx, listCancel := context.WithTimeout(m.ctx, 2*time.Second)
+			listCmd := exec.CommandContext(listCtx, "tmux", "list-panes", "-t", m.tmuxSession, "-F", "#{pane_dead}")
 			output, err := listCmd.Output()
+			listCancel()
 			if err == nil && len(output) > 0 {
 				// Check if all panes are dead (1 means dead, 0 means alive)
 				allDead := true

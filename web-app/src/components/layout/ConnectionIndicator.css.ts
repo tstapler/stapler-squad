@@ -53,6 +53,6 @@ const labelBase = style({
 
 export const labels = styleVariants({
   connected: [labelBase, { color: vars.color.success }],
-  stale: [labelBase, { color: vars.color.warning }],
-  disconnected: [labelBase, { color: vars.color.error }],
+  stale: [labelBase, { color: vars.color.warningText }],
+  disconnected: [labelBase, { color: vars.color.errorText }],
 });

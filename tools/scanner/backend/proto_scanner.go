@@ -78,6 +78,29 @@ var methodToID = map[string]string{
 	"SearchFiles":              "file:search",
 	"ListPathCompletions":      "path:list-completions",
 	"ListWorktrees":            "worktree:list",
+	// Project management RPCs
+	"CreateProject":           "project:create",
+	"ListProjects":            "project:list",
+	"UpdateProject":           "project:update",
+	"DeleteProject":           "project:delete",
+	"AssignSessionsToProject": "project:assign-sessions",
+	// Prompt history RPCs
+	"ListPromptHistory":   "session:list-prompt-history",
+	"DeletePromptHistory": "session:delete-prompt-history",
+	// Session execution RPCs
+	"RunOneShot":          "session:run-one-shot",
+	"BatchCreateSessions": "session:batch-create",
+	"GetTerminalSnapshot": "session:get-terminal-snapshot",
+	"ListBranches":        "session:list-branches",
+	// Profile and defaults RPCs
+	"UpsertProfile":        "profile:upsert",
+	"DeleteProfile":        "profile:delete",
+	"GetSessionDefaults":   "defaults:get",
+	"UpdateGlobalDefaults": "defaults:update-global",
+	"ResolveDefaults":      "defaults:resolve",
+	// Directory rules RPCs
+	"UpsertDirectoryRule": "directory-rule:upsert",
+	"DeleteDirectoryRule": "directory-rule:delete",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

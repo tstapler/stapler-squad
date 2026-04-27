@@ -5,41 +5,54 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/tools/scanner/backend"
 )
 
-// Registry is the top-level JSON structure written to the output file.
-type Registry struct {
-	Version     string          `json:"version"`
-	GeneratedAt time.Time       `json:"generatedAt"`
-	Features    []RegistryEntry `json:"features"`
+// FeatureDoc is the per-feature JSON file written to docs/registry/features/backend/<domain>/<action>.json.
+// Flat structure — no nesting — keeps the files simple and diff-friendly.
+type FeatureDoc struct {
+	ID           string    `json:"id"`
+	Type         string    `json:"type"`
+	Service      string    `json:"service"`
+	Method       string    `json:"method"`
+	ProtoFile    string    `json:"protoFile"`
+	MarkerFound  bool      `json:"markerFound"`
+	HandlerFile  string    `json:"handlerFile,omitempty"`
+	Tested       bool      `json:"tested"`
+	TestIDs      []string  `json:"testIds"`
+	LastModified time.Time `json:"lastModified"`
 }
 
-// BackendDetails holds backend-specific fields nested under "backend" in the JSON.
-type BackendDetails struct {
-	Service     string `json:"service"`
-	Method      string `json:"method"`
-	ProtoFile   string `json:"protoFile"`
-	MarkerFound bool   `json:"markerFound"`
-	HandlerFile string `json:"handlerFile,omitempty"`
+// featureIDToPath converts "session:create" → "<baseDir>/session/create.json".
+func featureIDToPath(baseDir, id string) string {
+	domain, action, found := strings.Cut(id, ":")
+	if !found {
+		// No colon — place directly under baseDir.
+		return filepath.Join(baseDir, id+".json")
+	}
+	return filepath.Join(baseDir, domain, action+".json")
 }
 
-// RegistryEntry is a single feature entry in the registry JSON.
-type RegistryEntry struct {
-	ID           string         `json:"id"`
-	Type         string         `json:"type"`
-	Backend      BackendDetails `json:"backend"`
-	Tested       bool           `json:"tested"`
-	TestIDs      []string       `json:"testIds"`
-	LastModified time.Time      `json:"lastModified"`
+// loadExisting reads a per-feature file if it exists, returning its testIds and tested flag.
+func loadExisting(path string) ([]string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return []string{}, false
+	}
+	var doc FeatureDoc
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return []string{}, false
+	}
+	return doc.TestIDs, doc.Tested
 }
 
 func main() {
 	protoFile := "proto/session/v1/session.proto"
 	servicesDir := "server/services/"
-	outputFile := "docs/registry/backend-features.json"
+	outputDir := "docs/registry/features/backend"
 
 	if len(os.Args) >= 2 {
 		protoFile = os.Args[1]
@@ -48,7 +61,7 @@ func main() {
 		servicesDir = os.Args[2]
 	}
 	if len(os.Args) >= 4 {
-		outputFile = os.Args[3]
+		outputDir = os.Args[3]
 	}
 
 	features, err := backend.ScanProto(protoFile)
@@ -63,49 +76,50 @@ func main() {
 		os.Exit(1)
 	}
 
-	var entries []RegistryEntry
+	written := 0
 	for _, f := range features {
-		entry := RegistryEntry{
-			ID:   f.ID,
-			Type: f.Type,
-			Backend: BackendDetails{
-				Service:   f.Service,
-				Method:    f.Method,
-				ProtoFile: f.ProtoFile,
-			},
+		doc := FeatureDoc{
+			ID:           f.ID,
+			Type:         f.Type,
+			Service:      f.Service,
+			Method:       f.Method,
+			ProtoFile:    f.ProtoFile,
 			Tested:       f.Tested,
 			TestIDs:      f.TestIDs,
 			LastModified: f.LastModified,
 		}
 		if m, ok := markers[f.ID]; ok {
-			entry.Backend.MarkerFound = true
-			entry.Backend.HandlerFile = m.FilePath
+			doc.MarkerFound = true
+			doc.HandlerFile = m.FilePath
 		}
-		entries = append(entries, entry)
+
+		outPath := featureIDToPath(outputDir, f.ID)
+
+		// Preserve human-editable testIds from any existing file.
+		existingIDs, existingTested := loadExisting(outPath)
+		if len(existingIDs) > 0 {
+			doc.TestIDs = existingIDs
+			doc.Tested = existingTested
+		}
+
+		if err := os.MkdirAll(filepath.Dir(outPath), 0755); err != nil {
+			fmt.Fprintf(os.Stderr, "error creating directory %s: %v\n", filepath.Dir(outPath), err)
+			os.Exit(1)
+		}
+
+		data, err := json.MarshalIndent(doc, "", "  ")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error marshaling %s: %v\n", f.ID, err)
+			os.Exit(1)
+		}
+		data = append(data, '\n')
+
+		if err := os.WriteFile(outPath, data, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "error writing %s: %v\n", outPath, err)
+			os.Exit(1)
+		}
+		written++
 	}
 
-	registry := Registry{
-		Version:     "1",
-		GeneratedAt: time.Now().UTC(),
-		Features:    entries,
-	}
-
-	// Ensure output directory exists.
-	if err := os.MkdirAll(filepath.Dir(outputFile), 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "error creating output directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	data, err := json.MarshalIndent(registry, "", "  ")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error marshaling JSON: %v\n", err)
-		os.Exit(1)
-	}
-
-	if err := os.WriteFile(outputFile, data, 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "error writing output file: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Wrote %d features to %s\n", len(entries), outputFile)
+	fmt.Printf("Wrote %d feature files to %s\n", written, outputDir)
 }

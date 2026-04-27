@@ -1,0 +1,10 @@
+{
+  "id": "approval-rules",
+  "type": "frontend",
+  "component": "RulesPage",
+  "path": "web-app/src/app/rules/page.tsx",
+  "markerLine": 2,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-04-18T17:28:17.610Z"
+}

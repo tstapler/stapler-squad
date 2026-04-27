@@ -87,6 +87,19 @@ type Repository interface {
 	RecordAnalytics(ctx context.Context, data AnalyticsData) error
 	// ListAnalytics retrieves recent classification decisions.
 	ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error)
+
+	// --- Projects ---
+
+	// CreateProject inserts a new project.
+	CreateProject(ctx context.Context, data ProjectData) (*ProjectData, error)
+	// ListProjects returns all projects.
+	ListProjects(ctx context.Context) ([]ProjectData, error)
+	// UpdateProject modifies an existing project.
+	UpdateProject(ctx context.Context, data ProjectData) (*ProjectData, error)
+	// DeleteProject removes a project by name; sessions are unassigned.
+	DeleteProject(ctx context.Context, name string) error
+	// AssignSessionsToProject links sessions (by title) to a project (by name).
+	AssignSessionsToProject(ctx context.Context, projectName string, sessionTitles []string) error
 }
 
 // ApprovalRuleData is the domain model for an auto-approval rule.
@@ -129,6 +142,16 @@ type AnalyticsData struct {
 	CommandSubcategory string
 	PythonImports      []string
 	CreatedAt          time.Time
+}
+
+// ProjectData is the domain model for a project that groups sessions.
+type ProjectData struct {
+	// ID is the unique project name (used as string external identifier)
+	ID          string
+	Name        string
+	Description string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // RepositoryOption is a function that configures a repository

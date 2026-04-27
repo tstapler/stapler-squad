@@ -8,6 +8,8 @@ import { Session, SessionStatus, NotificationPriority } from "@/gen/session/v1/t
 import {
   CreateSessionRequest,
   UpdateSessionRequest,
+  PromptHistoryEntry,
+  RunOneShotResponse,
 } from "@/gen/session/v1/session_pb";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
@@ -48,6 +50,8 @@ interface UseSessionServiceReturn {
   createSession: (request: Partial<CreateSessionRequest>) => Promise<Session | null>;
   updateSession: (id: string, updates: Partial<UpdateSessionRequest>) => Promise<Session | null>;
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
+  runOneShot: (sessionId: string, prompt: string, timeoutSeconds?: number) => Promise<RunOneShotResponse | null>;
+  listPromptHistory: (limit?: number) => Promise<PromptHistoryEntry[]>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
@@ -157,6 +161,7 @@ export function useSessionService(
           autoYes: request.autoYes,
           existingWorktree: request.existingWorktree,
           sessionType: request.sessionType,
+          oneOff: request.oneOff ?? false,
         });
 
         // Add to store (with duplicate check handled by entity adapter upsertOne)
@@ -376,6 +381,43 @@ export function useSessionService(
     [dispatch]
   );
 
+  // Run one-shot claude command for a session (S3)
+  const runOneShot = useCallback(
+    async (sessionId: string, prompt: string, timeoutSeconds?: number): Promise<RunOneShotResponse | null> => {
+      if (!clientRef.current) return null;
+
+      dispatch(setError(null));
+
+      try {
+        const response = await clientRef.current.runOneShot({
+          sessionId,
+          prompt,
+          timeoutSeconds: timeoutSeconds ?? 0,
+        });
+        return response;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to run one-shot"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // List prompt history entries (S1)
+  const listPromptHistory = useCallback(
+    async (limit?: number): Promise<PromptHistoryEntry[]> => {
+      if (!clientRef.current) return [];
+
+      try {
+        const response = await clientRef.current.listPromptHistory({ limit: limit ?? 20 });
+        return response.entries;
+      } catch {
+        return [];
+      }
+    },
+    []
+  );
+
   // Handle session events from watch stream
   const handleSessionEvent = useCallback((event: SessionEvent) => {
     // Handle different event types based on oneof case
@@ -562,6 +604,8 @@ export function useSessionService(
     createCheckpoint,
     listCheckpoints,
     forkSession,
+    runOneShot,
+    listPromptHistory,
     watchSessions,
     stopWatching,
   };

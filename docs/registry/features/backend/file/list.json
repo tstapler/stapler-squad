@@ -1,0 +1,11 @@
+{
+  "id": "file:list",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListFiles",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": ["TestListFiles_NotFound", "TestListFiles_DirectoriesFirst", "TestListFiles_GitignoreFiltering", "TestListFiles_HardSkipDirs", "TestListFiles_NodeCap", "TestListFiles_PathTraversalRejected"],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

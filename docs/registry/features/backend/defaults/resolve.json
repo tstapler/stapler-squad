@@ -1,0 +1,11 @@
+{
+  "id": "defaults:resolve",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ResolveDefaults",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

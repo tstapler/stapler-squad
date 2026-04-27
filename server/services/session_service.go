@@ -22,6 +22,8 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/namegen"
+	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
 
 	"connectrpc.com/connect"
@@ -78,6 +80,12 @@ type SessionService struct {
 
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
+
+	// projectSvc handles Project CRUD RPCs.
+	projectSvc *ProjectService
+
+	// promptStore persists prompt history for the "initial prompt" dropdown.
+	promptStore *prompts.PromptStore
 
 	// scrollbackMgr provides access to per-session scrollback sequence numbers
 	// for checkpoint creation. May be nil if not wired (seq defaults to 0).
@@ -177,7 +185,19 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 		fileSvc:           NewFileService(workspaceSvc),
 		pathCompletionSvc: NewPathCompletionService(),
 		defaultsSvc:       NewDefaultsService(),
+		projectSvc:        NewProjectService(concStorage),
+		promptStore:       newPromptStore(),
 	}
+}
+
+// newPromptStore creates a PromptStore backed by ~/.stapler-squad/prompts.json.
+func newPromptStore() *prompts.PromptStore {
+	dir, err := config.GetConfigDir()
+	if err != nil {
+		log.WarningLog.Printf("[PromptStore] Failed to get config dir: %v", err)
+		return prompts.NewPromptStore(os.TempDir() + "/stapler-squad-prompts.json")
+	}
+	return prompts.NewPromptStore(dir + "/prompts.json")
 }
 
 // loadInstancesWithWiring loads instances from storage and wires up dependencies.
@@ -519,7 +539,7 @@ func (s *SessionService) CreateSession(
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
-	if req.Msg.Path == "" {
+	if !req.Msg.OneOff && req.Msg.Path == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
 
@@ -560,6 +580,20 @@ func (s *SessionService) CreateSession(
 		log.InfoLog.Printf("[CreateSession] Resolved to local path: %s (branch: %s)", resolvedPath, branch)
 	}
 
+	// One-off session: generate a fresh directory and override resolvedPath.
+	if req.Msg.OneOff {
+		cfg := config.LoadConfig()
+		baseDir, err := cfg.OneOffBaseDirOrDefault()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve one_off_base_dir: %w", err))
+		}
+		generatedPath, err := namegen.GenerateAndCreate(baseDir, 10)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create one-off directory: %w", err))
+		}
+		resolvedPath = generatedPath
+	}
+
 	// Resolve session defaults (global → directory → profile), then apply explicit request fields on top.
 	// skip_defaults bypasses this for scripted or explicit-empty sessions.
 	program := req.Msg.Program
@@ -581,28 +615,7 @@ func (s *SessionService) CreateSession(
 	}
 
 	// Determine session type - use explicit session_type if provided, otherwise infer from fields
-	var sessionType session.SessionType
-	if req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
-		// Use explicit session_type from request
-		switch req.Msg.SessionType {
-		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-			sessionType = session.SessionTypeDirectory
-		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-			sessionType = session.SessionTypeNewWorktree
-		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-			sessionType = session.SessionTypeExistingWorktree
-		default:
-			sessionType = session.SessionTypeDirectory
-		}
-	} else {
-		// Fall back to inference logic for backward compatibility
-		sessionType = session.SessionTypeDirectory
-		if req.Msg.ExistingWorktree != "" {
-			sessionType = session.SessionTypeExistingWorktree
-		} else if branch != "" {
-			sessionType = session.SessionTypeNewWorktree
-		}
-	}
+	sessionType := resolveSessionType(req.Msg, branch)
 
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
@@ -618,6 +631,8 @@ func (s *SessionService) CreateSession(
 		SessionType:      sessionType,
 		TmuxPrefix:       "", // Use default from config
 		ResumeId:         req.Msg.ResumeId,
+		OneShot:          req.Msg.OneShot,
+		ProjectID:        req.Msg.ProjectId,
 		MCPServerURL:     s.mcpServerURL,
 	}
 
@@ -672,12 +687,46 @@ func (s *SessionService) CreateSession(
 		log.InfoLog.Printf("[ReviewQueue] Added new session '%s' to poller", instance.Title)
 	}
 
+	// Record initial_prompt in prompt history so it appears in the recent-prompts dropdown.
+	if req.Msg.InitialPrompt != "" {
+		s.promptStore.RecordUsage(req.Msg.InitialPrompt)
+	}
+
 	// Publish SessionCreated event to all watchers
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: adapters.InstanceToProto(instance),
 	}), nil
+}
+
+// resolveSessionType maps a CreateSessionRequest + resolved branch to a session.SessionType.
+// Priority: one_off (always directory) > explicit session_type > inference from branch/existing_worktree.
+func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) session.SessionType {
+	var st session.SessionType
+	if msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
+		switch msg.SessionType {
+		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
+			st = session.SessionTypeDirectory
+		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
+			st = session.SessionTypeNewWorktree
+		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
+			st = session.SessionTypeExistingWorktree
+		default:
+			st = session.SessionTypeDirectory
+		}
+	} else {
+		st = session.SessionTypeDirectory
+		if msg.ExistingWorktree != "" {
+			st = session.SessionTypeExistingWorktree
+		} else if branch != "" {
+			st = session.SessionTypeNewWorktree
+		}
+	}
+	if msg.OneOff {
+		st = session.SessionTypeDirectory
+	}
+	return st
 }
 
 // UpdateSession modifies session properties (pause/resume, category, title).
@@ -2123,6 +2172,338 @@ func (s *SessionService) SearchFiles(
 	req *connect.Request[sessionv1.SearchFilesRequest],
 ) (*connect.Response[sessionv1.SearchFilesResponse], error) {
 	return s.fileSvc.SearchFiles(ctx, req)
+}
+
+// ─── Prompt History ───────────────────────────────────────────────────────────
+
+// +api: session:list-prompt-history
+// ListPromptHistory returns saved prompt history entries.
+func (s *SessionService) ListPromptHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListPromptHistoryRequest],
+) (*connect.Response[sessionv1.ListPromptHistoryResponse], error) {
+	entries, err := s.promptStore.Load()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load prompt history: %w", err))
+	}
+	protos := make([]*sessionv1.PromptHistoryEntry, len(entries))
+	for i, e := range entries {
+		protos[i] = &sessionv1.PromptHistoryEntry{
+			Id:        e.ID,
+			Text:      e.Text,
+			Label:     e.Label,
+			UsedCount: int32(e.UsedCount),
+			LastUsed:  timestamppb.New(e.LastUsed),
+		}
+	}
+	return connect.NewResponse(&sessionv1.ListPromptHistoryResponse{Entries: protos}), nil
+}
+
+// +api: session:delete-prompt-history
+// DeletePromptHistory removes a saved prompt from history.
+func (s *SessionService) DeletePromptHistory(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeletePromptHistoryRequest],
+) (*connect.Response[sessionv1.DeletePromptHistoryResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
+	}
+	if err := s.promptStore.Delete(req.Msg.Id); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete prompt history entry: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.DeletePromptHistoryResponse{}), nil
+}
+
+// ─── Batch Session Creation ───────────────────────────────────────────────────
+
+// +api: session:batch-create
+// BatchCreateSessions creates multiple sessions with bounded concurrency (max 3) and
+// per-repo serialization to prevent git worktree races.
+func (s *SessionService) BatchCreateSessions(
+	ctx context.Context,
+	req *connect.Request[sessionv1.BatchCreateSessionsRequest],
+) (*connect.Response[sessionv1.BatchCreateSessionsResponse], error) {
+	if len(req.Msg.Sessions) == 0 {
+		return connect.NewResponse(&sessionv1.BatchCreateSessionsResponse{}), nil
+	}
+
+	// Server-side cap: never more than 3 concurrent worktree creations.
+	maxConc := int(req.Msg.MaxConcurrency)
+	if maxConc <= 0 || maxConc > 3 {
+		maxConc = 3
+	}
+
+	// Pre-check: load existing sessions to detect title conflicts before spawning goroutines.
+	existing, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+	existingTitles := make(map[string]struct{}, len(existing))
+	for _, inst := range existing {
+		existingTitles[inst.Title] = struct{}{}
+	}
+
+	results := make([]*sessionv1.BatchCreateResult, len(req.Msg.Sessions))
+	seenTitles := make(map[string]struct{}, len(req.Msg.Sessions))
+	var pendingIdx []int
+
+	// Validate and dedup all requests upfront; fail-fast invalid ones without goroutines.
+	for i, sess := range req.Msg.Sessions {
+		var earlyErr string
+		switch {
+		case sess.Title == "":
+			earlyErr = "title is required"
+		case sess.Path == "":
+			earlyErr = "path is required"
+		default:
+			if _, exists := existingTitles[sess.Title]; exists {
+				earlyErr = fmt.Sprintf("session '%s' already exists", sess.Title)
+			} else if _, dup := seenTitles[sess.Title]; dup {
+				earlyErr = fmt.Sprintf("duplicate title '%s' in batch request", sess.Title)
+			}
+		}
+		if earlyErr != "" {
+			results[i] = &sessionv1.BatchCreateResult{Success: false, Title: sess.Title, Error: earlyErr}
+			continue
+		}
+		seenTitles[sess.Title] = struct{}{}
+		pendingIdx = append(pendingIdx, i)
+	}
+
+	// Semaphore bounds concurrent goroutines.
+	sem := make(chan struct{}, maxConc)
+
+	// Per-repo mutex serializes git worktree creation within the same repo directory.
+	var repoMutexes sync.Map // map[string]*sync.Mutex
+
+	var wg sync.WaitGroup
+	for _, idx := range pendingIdx {
+		sess := req.Msg.Sessions[idx]
+		wg.Add(1)
+		go func(i int, batchReq *sessionv1.BatchSessionRequest) {
+			defer wg.Done()
+
+			sem <- struct{}{} // acquire slot
+			defer func() { <-sem }()
+
+			// Serialize worktree creation per repo to avoid git conflicts.
+			muIface, _ := repoMutexes.LoadOrStore(batchReq.Path, &sync.Mutex{})
+			repoLock := muIface.(*sync.Mutex)
+			repoLock.Lock()
+			defer repoLock.Unlock()
+
+			createReq := connect.NewRequest(&sessionv1.CreateSessionRequest{
+				Title:       batchReq.Title,
+				Path:        batchReq.Path,
+				WorkingDir:  batchReq.WorkingDir,
+				Branch:      batchReq.Branch,
+				Program:     batchReq.Program,
+				Category:    batchReq.Category,
+				AutoYes:     batchReq.AutoYes,
+				SessionType: batchReq.SessionType,
+				ProjectId:   batchReq.ProjectId,
+			})
+
+			resp, createErr := s.CreateSession(ctx, createReq)
+			// Each goroutine writes to a distinct index, so no mutex needed.
+			if createErr != nil {
+				results[i] = &sessionv1.BatchCreateResult{
+					Success: false,
+					Title:   batchReq.Title,
+					Error:   createErr.Error(),
+				}
+			} else {
+				results[i] = &sessionv1.BatchCreateResult{
+					Success:   true,
+					Title:     batchReq.Title,
+					SessionId: resp.Msg.Session.Id,
+				}
+			}
+		}(idx, sess)
+	}
+	wg.Wait()
+
+	// Tally final counts from results.
+	var succeeded, failed int32
+	for _, r := range results {
+		if r == nil {
+			continue
+		}
+		if r.Success {
+			succeeded++
+		} else {
+			failed++
+		}
+	}
+
+	return connect.NewResponse(&sessionv1.BatchCreateSessionsResponse{
+		Results:   results,
+		Succeeded: succeeded,
+		Failed:    failed,
+	}), nil
+}
+
+// ─── One-Shot ─────────────────────────────────────────────────────────────────
+
+// +api: session:run-one-shot
+// RunOneShot executes `claude -p <prompt>` in the session's worktree and returns
+// the combined output along with an extracted PR URL and branch divergence status.
+func (s *SessionService) RunOneShot(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RunOneShotRequest],
+) (*connect.Response[sessionv1.RunOneShotResponse], error) {
+	if req.Msg.SessionId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+	if req.Msg.Prompt == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("prompt is required"))
+	}
+
+	inst := s.findInstance(req.Msg.SessionId)
+	if inst == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
+	}
+
+	workDir := inst.GetEffectiveRootDir()
+	if workDir == "" {
+		workDir = inst.Path
+	}
+
+	// Clamp timeout: default 120 s, max 300 s.
+	timeoutSecs := int(req.Msg.TimeoutSeconds)
+	if timeoutSecs <= 0 {
+		timeoutSecs = 120
+	}
+	if timeoutSecs > 300 {
+		timeoutSecs = 300
+	}
+
+	claudeBin, err := exec.LookPath("claude")
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("claude binary not found in PATH: %w", err))
+	}
+
+	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSecs)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, claudeBin, "-p", req.Msg.Prompt)
+	cmd.Dir = workDir
+
+	output, runErr := cmd.CombinedOutput()
+	exitCode := 0
+	errMsg := ""
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			errMsg = runErr.Error()
+		}
+	}
+
+	outputStr := string(output)
+	prURL := extractPRURL(outputStr)
+	branchDiverged := checkBranchDivergence(workDir)
+
+	// Persist the PR URL back to the session record so the GitHub badge appears.
+	if prURL != "" {
+		inst.GitHubPRURL = prURL
+		if err := s.storage.SaveInstances(s.allInstances()); err != nil {
+			log.WarningLog.Printf("RunOneShot: failed to persist PR URL for session '%s': %v", inst.Title, err)
+		} else {
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"github_pr_url"}))
+		}
+	}
+
+	return connect.NewResponse(&sessionv1.RunOneShotResponse{
+		Output:                 outputStr,
+		Error:                  errMsg,
+		ExitCode:               int32(exitCode),
+		PrUrl:                  prURL,
+		BranchDivergedFromBase: branchDiverged,
+	}), nil
+}
+
+// extractPRURL scans the last 10 non-empty lines of output for a GitHub PR URL
+// of the form https://github.com/…/pull/NNN.
+func extractPRURL(output string) string {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	start := len(lines) - 10
+	if start < 0 {
+		start = 0
+	}
+	for i := len(lines) - 1; i >= start; i-- {
+		line := strings.TrimSpace(lines[i])
+		if strings.Contains(line, "github.com/") && strings.Contains(line, "/pull/") {
+			for _, word := range strings.Fields(line) {
+				if strings.Contains(word, "github.com/") && strings.Contains(word, "/pull/") {
+					return strings.Trim(word, ".,;:\"'()")
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// checkBranchDivergence returns true when the current branch has commits not
+// present on origin/HEAD (i.e., the branch has diverged / is ahead).
+func checkBranchDivergence(workDir string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", "origin/HEAD..HEAD")
+	cmd.Dir = workDir
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	count := strings.TrimSpace(string(out))
+	return count != "" && count != "0"
+}
+
+// ─── Projects ─────────────────────────────────────────────────────────────────
+
+// +api: project:create
+// CreateProject creates a new project for grouping sessions.
+func (s *SessionService) CreateProject(
+	ctx context.Context,
+	req *connect.Request[sessionv1.CreateProjectRequest],
+) (*connect.Response[sessionv1.CreateProjectResponse], error) {
+	return s.projectSvc.CreateProject(ctx, req)
+}
+
+// +api: project:list
+// ListProjects returns all projects.
+func (s *SessionService) ListProjects(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListProjectsRequest],
+) (*connect.Response[sessionv1.ListProjectsResponse], error) {
+	return s.projectSvc.ListProjects(ctx, req)
+}
+
+// +api: project:update
+// UpdateProject updates an existing project's metadata.
+func (s *SessionService) UpdateProject(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpdateProjectRequest],
+) (*connect.Response[sessionv1.UpdateProjectResponse], error) {
+	return s.projectSvc.UpdateProject(ctx, req)
+}
+
+// +api: project:delete
+// DeleteProject removes a project (sessions are unassigned, not deleted).
+func (s *SessionService) DeleteProject(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteProjectRequest],
+) (*connect.Response[sessionv1.DeleteProjectResponse], error) {
+	return s.projectSvc.DeleteProject(ctx, req)
+}
+
+// +api: project:assign-sessions
+// AssignSessionsToProject assigns one or more sessions to a project.
+func (s *SessionService) AssignSessionsToProject(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AssignSessionsToProjectRequest],
+) (*connect.Response[sessionv1.AssignSessionsToProjectResponse], error) {
+	return s.projectSvc.AssignSessionsToProject(ctx, req)
 }
 
 // checkpointToProto converts a session.Checkpoint to a proto CheckpointProto.

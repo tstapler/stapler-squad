@@ -597,3 +597,56 @@ func TestSaveConfigAtomic(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, loaded.ConfigVersion)
 }
+
+func TestOneOffBaseDirOrDefault_Empty(t *testing.T) {
+	cfg := &Config{}
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	result, err := cfg.OneOffBaseDirOrDefault()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "oneoff"), result)
+}
+
+func TestOneOffBaseDirOrDefault_TildeExpansion(t *testing.T) {
+	cfg := &Config{OneOffBaseDir: "~/my-oneoffs"}
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	result, err := cfg.OneOffBaseDirOrDefault()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, "my-oneoffs"), result)
+	assert.False(t, strings.HasPrefix(result, "~"), "result must not contain literal tilde")
+}
+
+func TestOneOffBaseDirOrDefault_CustomAbsolutePath(t *testing.T) {
+	cfg := &Config{OneOffBaseDir: "/tmp/my-custom-oneoffs"}
+
+	result, err := cfg.OneOffBaseDirOrDefault()
+	require.NoError(t, err)
+	assert.Equal(t, "/tmp/my-custom-oneoffs", result)
+}
+
+func TestOneOffBaseDir_JSONRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	cfg := &Config{OneOffBaseDir: "~/oneoff"}
+	require.NoError(t, saveConfig(cfg, path))
+
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+	assert.Equal(t, "~/oneoff", loaded.OneOffBaseDir)
+
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"one_off_base_dir"`)
+
+	// omitempty: empty value omits key
+	emptyCfg := &Config{}
+	emptyPath := filepath.Join(dir, "empty-config.json")
+	require.NoError(t, saveConfig(emptyCfg, emptyPath))
+	emptyRaw, err := os.ReadFile(emptyPath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(emptyRaw), `"one_off_base_dir"`)
+}

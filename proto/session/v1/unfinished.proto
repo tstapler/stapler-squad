@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+import "session/v1/types.proto";
+
+// UnfinishedWorkService manages detection, display, and dismissal of
+// unfinished git worktrees across all configured sources.
+service UnfinishedWorkService {
+  // ListUnfinishedWork returns the current snapshot of all unfinished worktrees.
+  rpc ListUnfinishedWork(ListUnfinishedWorkRequest) returns (ListUnfinishedWorkResponse) {}
+
+  // WatchUnfinishedWork streams real-time updates as worktrees are scanned.
+  // Sends initial snapshot then emits events on each scan result change.
+  rpc WatchUnfinishedWork(WatchUnfinishedWorkRequest) returns (stream UnfinishedWorkEvent) {}
+
+  // ScanUnfinishedWork triggers an immediate scan of all sources.
+  rpc ScanUnfinishedWork(ScanUnfinishedWorkRequest) returns (ScanUnfinishedWorkResponse) {}
+
+  // DismissWorktree permanently hides a worktree from the Unfinished list.
+  rpc DismissWorktree(DismissWorktreeRequest) returns (DismissWorktreeResponse) {}
+
+  // UndismissWorktree removes the dismiss record so the worktree reappears.
+  rpc UndismissWorktree(UndismissWorktreeRequest) returns (UndismissWorktreeResponse) {}
+
+  // SnoozeWorktree hides a worktree until its HEAD SHA changes.
+  rpc SnoozeWorktree(SnoozeWorktreeRequest) returns (SnoozeWorktreeResponse) {}
+
+  // GetWorktreeAISummary generates (or returns cached) an AI summary for a worktree.
+  rpc GetWorktreeAISummary(GetWorktreeAISummaryRequest) returns (GetWorktreeAISummaryResponse) {}
+
+  // QuickCommitPush stages all changes, commits, and pushes in one operation.
+  rpc QuickCommitPush(QuickCommitPushRequest) returns (QuickCommitPushResponse) {}
+
+  // GetUnfinishedWorkConfig retrieves current source configuration.
+  rpc GetUnfinishedWorkConfig(GetUnfinishedWorkConfigRequest) returns (GetUnfinishedWorkConfigResponse) {}
+
+  // UpdateUnfinishedWorkConfig adds/removes watch dirs and pinned repos.
+  rpc UpdateUnfinishedWorkConfig(UpdateUnfinishedWorkConfigRequest) returns (UpdateUnfinishedWorkConfigResponse) {}
+}
+
+// --- Request / Response pairs ---
+
+message ListUnfinishedWorkRequest {}
+message ListUnfinishedWorkResponse {
+  repeated UnfinishedWorktree worktrees = 1;
+  google.protobuf.Timestamp   last_scan  = 2;
+}
+
+message WatchUnfinishedWorkRequest {}
+message UnfinishedWorkEvent {
+  oneof payload {
+    UnfinishedWorktree worktree_updated = 1;
+    UnfinishedWorktree worktree_removed = 2;
+    ScanCompleted      scan_completed   = 3;
+  }
+}
+message ScanCompleted { google.protobuf.Timestamp completed_at = 1; }
+
+message ScanUnfinishedWorkRequest {}
+message ScanUnfinishedWorkResponse { google.protobuf.Timestamp scan_started_at = 1; }
+
+message DismissWorktreeRequest  { string repo_path = 1; string branch = 2; }
+message DismissWorktreeResponse {}
+
+message UndismissWorktreeRequest  { string repo_path = 1; string branch = 2; }
+message UndismissWorktreeResponse {}
+
+message SnoozeWorktreeRequest  { string repo_path = 1; string branch = 2; }
+message SnoozeWorktreeResponse {}
+
+message GetWorktreeAISummaryRequest  { string repo_path = 1; string branch = 2; }
+message GetWorktreeAISummaryResponse {
+  string summary    = 1;
+  bool   from_cache = 2;
+}
+
+message QuickCommitPushRequest {
+  string repo_path      = 1;
+  string branch         = 2;
+  string commit_message = 3;
+}
+message QuickCommitPushResponse {
+  bool   success       = 1;
+  string error_message = 2;
+}
+
+message GetUnfinishedWorkConfigRequest {}
+message GetUnfinishedWorkConfigResponse { UnfinishedWorkConfig config = 1; }
+
+message UpdateUnfinishedWorkConfigRequest {
+  UnfinishedWorkConfig config = 1;
+}
+message UpdateUnfinishedWorkConfigResponse { UnfinishedWorkConfig config = 1; }

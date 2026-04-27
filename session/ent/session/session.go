@@ -64,6 +64,10 @@ const (
 	FieldLastAcknowledged = "last_acknowledged"
 	// FieldMcpServerURL holds the string denoting the mcp_server_url field in the database.
 	FieldMcpServerURL = "mcp_server_url"
+	// FieldInitialPrompt holds the string denoting the initial_prompt field in the database.
+	FieldInitialPrompt = "initial_prompt"
+	// FieldOneShot holds the string denoting the one_shot field in the database.
+	FieldOneShot = "one_shot"
 	// EdgeWorktree holds the string denoting the worktree edge name in mutations.
 	EdgeWorktree = "worktree"
 	// EdgeDiffStats holds the string denoting the diff_stats edge name in mutations.
@@ -72,6 +76,8 @@ const (
 	EdgeTags = "tags"
 	// EdgeClaudeSession holds the string denoting the claude_session edge name in mutations.
 	EdgeClaudeSession = "claude_session"
+	// EdgeProject holds the string denoting the project edge name in mutations.
+	EdgeProject = "project"
 	// Table holds the table name of the session in the database.
 	Table = "sessions"
 	// WorktreeTable is the table that holds the worktree relation/edge.
@@ -100,6 +106,13 @@ const (
 	ClaudeSessionInverseTable = "claude_sessions"
 	// ClaudeSessionColumn is the table column denoting the claude_session relation/edge.
 	ClaudeSessionColumn = "session_claude_session"
+	// ProjectTable is the table that holds the project relation/edge.
+	ProjectTable = "sessions"
+	// ProjectInverseTable is the table name for the Project entity.
+	// It exists in this package in order to avoid circular dependency with the "project" package.
+	ProjectInverseTable = "projects"
+	// ProjectColumn is the table column denoting the project relation/edge.
+	ProjectColumn = "project_sessions"
 )
 
 // Columns holds all SQL columns for session fields.
@@ -130,6 +143,14 @@ var Columns = []string{
 	FieldLastViewed,
 	FieldLastAcknowledged,
 	FieldMcpServerURL,
+	FieldInitialPrompt,
+	FieldOneShot,
+}
+
+// ForeignKeys holds the SQL foreign-keys that are owned by the "sessions"
+// table and are not defined as standalone fields in the schema.
+var ForeignKeys = []string{
+	"project_sessions",
 }
 
 var (
@@ -142,6 +163,11 @@ var (
 func ValidColumn(column string) bool {
 	for i := range Columns {
 		if column == Columns[i] {
+			return true
+		}
+	}
+	for i := range ForeignKeys {
+		if column == ForeignKeys[i] {
 			return true
 		}
 	}
@@ -167,6 +193,8 @@ var (
 	ProgramValidator func(string) error
 	// DefaultIsExpanded holds the default value on creation for the "is_expanded" field.
 	DefaultIsExpanded bool
+	// DefaultOneShot holds the default value on creation for the "one_shot" field.
+	DefaultOneShot bool
 )
 
 // OrderOption defines the ordering options for the Session queries.
@@ -302,6 +330,16 @@ func ByMcpServerURL(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMcpServerURL, opts...).ToFunc()
 }
 
+// ByInitialPrompt orders the results by the initial_prompt field.
+func ByInitialPrompt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldInitialPrompt, opts...).ToFunc()
+}
+
+// ByOneShot orders the results by the one_shot field.
+func ByOneShot(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldOneShot, opts...).ToFunc()
+}
+
 // ByWorktreeField orders the results by worktree field.
 func ByWorktreeField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -336,6 +374,13 @@ func ByClaudeSessionField(field string, opts ...sql.OrderTermOption) OrderOption
 		sqlgraph.OrderByNeighborTerms(s, newClaudeSessionStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByProjectField orders the results by project field.
+func ByProjectField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newProjectStep(), sql.OrderByField(field, opts...))
+	}
+}
 func newWorktreeStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -362,5 +407,12 @@ func newClaudeSessionStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ClaudeSessionInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2O, false, ClaudeSessionTable, ClaudeSessionColumn),
+	)
+}
+func newProjectStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(ProjectInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, true, ProjectTable, ProjectColumn),
 	)
 }

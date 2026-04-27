@@ -1,6 +1,10 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService, Project } from "@/gen/session/v1/session_pb";
+import { getApiBaseUrl } from "@/lib/config";
 import { AppLink } from "@/components/ui/AppLink";
 import { Session, SessionStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
@@ -59,6 +63,8 @@ interface SessionListProps {
   onNewSession?: () => void;
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
+  onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
+  onRunOneShot?: (sessionId: string) => Promise<void>;
 }
 
 type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt';
@@ -117,6 +123,8 @@ export function SessionList({
   onNewSession,
   onCreateCheckpoint,
   onListCheckpoints,
+  onForkFromCheckpoint,
+  onRunOneShot,
 }: SessionListProps) {
   // Review queue items indexed by session ID for badge display on session cards
   const { items: reviewItems } = useReviewQueueContext();
@@ -161,6 +169,67 @@ export function SessionList({
 
   // Mobile filter panel toggle
   const [filtersOpen, setFiltersOpen] = useState(false);
+
+  // S4: Project data for grouping headers and "Group as..." functionality
+  const [projects, setProjects] = useState<Project[]>([]);
+  const projectClientRef = useRef(
+    createClient(SessionService, createConnectTransport({ baseUrl: getApiBaseUrl() }))
+  );
+
+  // Fetch projects from API (called on mount and after mutations)
+  const fetchProjects = useCallback(async () => {
+    try {
+      const response = await projectClientRef.current.listProjects({});
+      setProjects(response.projects ?? []);
+    } catch {
+      // Projects are non-critical; ignore fetch errors
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
+
+  // S4-4: Group selected sessions into a project
+  const handleGroupAs = useCallback(async (projectName: string) => {
+    const sessionIds = Array.from(selectedSessions);
+    if (sessionIds.length === 0) return;
+
+    let projectId: string;
+    const existing = projects.find((p) => p.name.toLowerCase() === projectName.toLowerCase());
+    if (existing) {
+      projectId = existing.id;
+    } else {
+      const created = await projectClientRef.current.createProject({ name: projectName, description: "" });
+      projectId = created.project?.id ?? "";
+      if (!projectId) return;
+    }
+
+    await projectClientRef.current.assignSessionsToProject({ projectId, sessionIds });
+    await fetchProjects();
+    showFeedback(`${sessionIds.length} session${sessionIds.length !== 1 ? "s" : ""} grouped as "${projectName}"`);
+    setSelectedSessions(new Set());
+    setSelectMode(false);
+  }, [selectedSessions, projects, fetchProjects]);
+
+  // S4-5: Inline rename/delete state for project group headers
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+
+  const handleProjectRename = useCallback(async (projectId: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    await projectClientRef.current.updateProject({ id: projectId, name: trimmed });
+    setRenamingProjectId(null);
+    await fetchProjects();
+  }, [fetchProjects]);
+
+  const handleProjectDelete = useCallback(async (projectId: string) => {
+    await projectClientRef.current.deleteProject({ id: projectId });
+    setDeletingProjectId(null);
+    await fetchProjects();
+  }, [fetchProjects]);
 
   // Persist filter preferences to local storage whenever they change
   useEffect(() => {
@@ -583,6 +652,7 @@ export function SessionList({
           onSelectAll={handleSelectAll}
           onClearSelection={handleClearSelection}
           feedback={bulkFeedback}
+          onGroupAs={handleGroupAs}
         />
       )}
 
@@ -633,10 +703,110 @@ export function SessionList({
         </div>
       ) : (
         <div className={sessionList}>
-          {groupedSessions.map(({ groupKey, displayName, sessions: groupSessions }) => (
+          {groupedSessions.map(({ groupKey, displayName, sessions: groupSessions }) => {
+            // S4-5: Enhanced project group headers when GroupByProject is active
+            const isProjectGrouping = groupingStrategy === GroupingStrategy.Project;
+            const projectData = isProjectGrouping
+              ? projects.find((p) => p.id === groupKey || p.name === displayName)
+              : undefined;
+            const isUngrouped = groupKey === "No Project";
+
+            return (
             <div key={groupKey} className={categoryGroup}>
-              <h3 className={categoryTitle}>
-                {displayName} ({groupSessions.length})
+              <h3 className={categoryTitle} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                {/* Inline rename input for project groups */}
+                {isProjectGrouping && projectData && renamingProjectId === projectData.id ? (
+                  <form
+                    style={{ display: "flex", gap: "6px", alignItems: "center" }}
+                    onSubmit={(e) => { e.preventDefault(); handleProjectRename(projectData.id, renameValue); }}
+                  >
+                    <input
+                      autoFocus
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Escape") setRenamingProjectId(null); }}
+                      style={{
+                        padding: "2px 6px",
+                        border: "1px solid var(--input-focus-border)",
+                        borderRadius: "4px",
+                        fontSize: "inherit",
+                        fontWeight: "inherit",
+                        background: "var(--input-background)",
+                        color: "var(--text-primary)",
+                      }}
+                    />
+                    <button type="submit" style={{ background: "none", border: "none", cursor: "pointer", color: "var(--success)", fontSize: "1rem" }} title="Save">✓</button>
+                    <button type="button" onClick={() => setRenamingProjectId(null)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "1rem" }} title="Cancel">✕</button>
+                  </form>
+                ) : (
+                  <>
+                    <span>{displayName} ({groupSessions.length})</span>
+                    {/* Project stats pills */}
+                    {isProjectGrouping && projectData && (
+                      <>
+                        {projectData.runningCount > 0 && (
+                          <span style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--success-bg)", color: "var(--success)", borderRadius: "10px" }}>
+                            {projectData.runningCount} Running
+                          </span>
+                        )}
+                        {projectData.completeCount > 0 && (
+                          <span style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--primary)", color: "white", borderRadius: "10px", opacity: 0.85 }}>
+                            {projectData.completeCount} Complete
+                          </span>
+                        )}
+                        {projectData.reviewReadyCount > 0 && (
+                          <span style={{ fontSize: "0.75rem", padding: "1px 6px", background: "var(--warning-bg)", color: "var(--warning)", borderRadius: "10px" }}>
+                            {projectData.reviewReadyCount} Review
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {/* Inline rename/delete actions for project groups */}
+                    {isProjectGrouping && projectData && !isUngrouped && (
+                      <span style={{ marginLeft: "auto", display: "flex", gap: "4px" }}>
+                        <button
+                          type="button"
+                          onClick={() => { setRenamingProjectId(projectData.id); setRenameValue(projectData.name); }}
+                          title="Rename project"
+                          aria-label={`Rename project ${displayName}`}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "0.875rem", padding: "2px" }}
+                        >
+                          ✏️
+                        </button>
+                        {deletingProjectId === projectData.id ? (
+                          <span style={{ display: "flex", gap: "4px", alignItems: "center", fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                            Remove project? {groupSessions.length} session{groupSessions.length !== 1 ? "s" : ""} will become ungrouped.
+                            <button
+                              type="button"
+                              onClick={() => handleProjectDelete(projectData.id)}
+                              style={{ background: "var(--error)", color: "white", border: "none", borderRadius: "4px", cursor: "pointer", padding: "2px 6px", fontSize: "0.75rem" }}
+                            >
+                              Delete
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setDeletingProjectId(null)}
+                              style={{ background: "none", border: "1px solid var(--border-color)", borderRadius: "4px", cursor: "pointer", padding: "2px 6px", fontSize: "0.75rem", color: "var(--text-secondary)" }}
+                            >
+                              Cancel
+                            </button>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingProjectId(projectData.id)}
+                            title="Delete project"
+                            aria-label={`Delete project ${displayName}`}
+                            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-secondary)", fontSize: "0.875rem", padding: "2px" }}
+                          >
+                            🗑️
+                          </button>
+                        )}
+                      </span>
+                    )}
+                  </>
+                )}
               </h3>
               <div className={categoryContent}>
                 {groupSessions.map((session, index) => (
@@ -654,6 +824,8 @@ export function SessionList({
                       onUpdateTags={onUpdateTags}
                       onCreateCheckpoint={onCreateCheckpoint}
                       onListCheckpoints={onListCheckpoints}
+                      onForkFromCheckpoint={onForkFromCheckpoint}
+                      onRunOneShot={onRunOneShot}
                       selectMode={selectMode}
                       isSelected={selectedSessions.has(session.id)}
                       onToggleSelect={() => handleToggleSession(session.id)}
@@ -665,7 +837,8 @@ export function SessionList({
                 ))}
               </div>
             </div>
-          ))}
+          );
+          })}
         </div>
       )}
 

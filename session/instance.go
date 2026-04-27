@@ -182,6 +182,12 @@ type Instance struct {
 	ActiveCheckpoint string
 	ForkedFromID     string
 
+	// OneShot runs claude in -p mode; the session exits after the task completes.
+	OneShot bool
+
+	// ProjectID is the optional project this session belongs to.
+	ProjectID string
+
 	// HistoryFilePath is the path to the Claude conversation JSONL history file.
 	// Set by HistoryLinker when it correlates this session to an open JSONL file.
 	HistoryFilePath string
@@ -306,6 +312,10 @@ func (i *Instance) ToInstanceData() InstanceData {
 		ForkedFromID:     i.ForkedFromID,
 		// History file linkage
 		HistoryFilePath: i.HistoryFilePath,
+		// One-shot mode
+		OneShot: i.OneShot,
+		// Project association
+		ProjectID: i.ProjectID,
 		// Full launch command for diagnostics
 		LaunchCommand: i.LaunchCommand,
 		// MCP server URL for re-injection on restart
@@ -444,6 +454,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		ForkedFromID:     data.ForkedFromID,
 		// History file linkage
 		HistoryFilePath: data.HistoryFilePath,
+		// One-shot mode
+		OneShot: data.OneShot,
+		// Project association
+		ProjectID: data.ProjectID,
 		// Launch command for diagnostics
 		LaunchCommand: data.LaunchCommand,
 		// MCP server URL for re-injection on restart
@@ -596,6 +610,13 @@ type InstanceOptions struct {
 	// ResumeId is the Claude conversation ID to resume (from history browser).
 	// When set, the session will start with --resume <id> flag.
 	ResumeId string
+
+	// OneShot runs claude in -p mode; the session exits after the task completes.
+	OneShot bool
+
+	// ProjectID associates the session with a project.
+	ProjectID string
+
 	// MCPServerURL, when non-empty and the program is claude, passes
 	// --mcp-config '{"stapler-squad":{"type":"http","url":"<MCPServerURL>"}}' so the
 	// session can call back into stapler-squad without any file injection.
@@ -674,7 +695,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		GitHubRepo:      opts.GitHubRepo,
 		GitHubSourceRef: opts.GitHubSourceRef,
 		ClonedRepoPath:  opts.ClonedRepoPath,
-		MCPServerURL:    opts.MCPServerURL,
+		// One-shot mode and project
+		OneShot:      opts.OneShot,
+		ProjectID:    opts.ProjectID,
+		MCPServerURL: opts.MCPServerURL,
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice
@@ -696,7 +720,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	if opts.ResumeId != "" {
 		instance.claudeSession = &ClaudeSessionData{
 			ConversationUUID: opts.ResumeId,
-			LastAttached: t,
+			LastAttached:     t,
 			Metadata: map[string]string{
 				"resumed_from_history": "true",
 			},
@@ -1277,16 +1301,13 @@ func (i *Instance) HasUpdated() (updated bool, hasPrompt bool) {
 		return false, false
 	}
 
-	updated, hasPrompt = i.tmuxManager.HasUpdated()
+	var content string
+	updated, hasPrompt, content = i.tmuxManager.HasUpdated()
 
-	// Update timestamps when content has actually changed
-	// This ensures LastMeaningfulOutput is updated even when no web UI client is connected,
-	// preventing false "stale session" notifications in the review queue.
-	if updated {
-		// Capture content for timestamp update (forceUpdate=false to respect banner filtering)
-		if content, err := i.tmuxManager.CapturePaneContent(); err == nil {
-			i.UpdateTerminalTimestamps(content, false)
-		}
+	// Update timestamps when content has actually changed.
+	// HasUpdated returns the already-captured content, so no second CapturePaneContent call needed.
+	if updated && content != "" {
+		i.UpdateTerminalTimestamps(content, false)
 	}
 
 	return updated, hasPrompt
@@ -2075,10 +2096,10 @@ func (i *Instance) createNewClaudeSession() error {
 	// Update the instance's Claude session data
 	i.claudeSession = &ClaudeSessionData{
 		ConversationUUID: newSession.ID,
-		SquadSessionID: newSession.ConversationID,
-		ProjectName:    newSession.ProjectName,
-		LastAttached:   time.Now(),
-		Settings:       i.claudeSession.Settings, // Preserve existing settings
+		SquadSessionID:   newSession.ConversationID,
+		ProjectName:      newSession.ProjectName,
+		LastAttached:     time.Now(),
+		Settings:         i.claudeSession.Settings, // Preserve existing settings
 		Metadata: map[string]string{
 			"working_dir": newSession.WorkingDir,
 			"created_at":  time.Now().Format(time.RFC3339),

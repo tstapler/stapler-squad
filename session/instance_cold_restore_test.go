@@ -57,7 +57,7 @@ func TestColdRestore_WithUUID(t *testing.T) {
 	// separately in claude_command_builder_test.go.
 	inst.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: "550e8400-e29b-41d4-a716-446655440000",
-		LastAttached: time.Now(),
+		LastAttached:     time.Now(),
 	})
 
 	// tmux session does NOT exist at this point (simulates post-reboot state).

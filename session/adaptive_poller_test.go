@@ -13,8 +13,8 @@ func newTestPoller(t *testing.T, fastInterval, slowInterval time.Duration) (*Rev
 	t.Helper()
 	queue := NewReviewQueue()
 	config := ReviewQueuePollerConfig{
-		PollInterval:     fastInterval,
-		SlowPollInterval: slowInterval,
+		PollInterval:      fastInterval,
+		SlowPollInterval:  slowInterval,
 		ReconcileInterval: 0, // disable reconciliation
 	}
 	poller := NewReviewQueuePollerWithConfig(queue, nil, nil, config)
@@ -45,22 +45,21 @@ func TestAdaptivePoller_BackoffToIdleInterval(t *testing.T) {
 	poller.Start(ctx)
 	defer poller.Stop()
 
-	// After 2 fast intervals the loop should have fired once and backed off.
-	// If still on fastInterval it would fire a second time within 3×fastInterval.
-	// Wait 3×fastInterval + margin and count actual poll ticks via a sentinel approach:
-	// we add and immediately remove a session to create a measurable signal without
-	// side effects (the poller only pops Running sessions, so a Paused entry is inert
-	// for queue logic but counts zero ticks). Instead, we observe tick timing directly
-	// via the tickCount field (unexported but accessible within the same package).
-
-	// Wait for first tick to happen (fast interval).
-	time.Sleep(fastInterval + 10*time.Millisecond)
+	// Wait for the first tick to actually land, with a generous timeout.
+	// A fixed sleep risks failing if goroutine scheduling delays the first timer fire.
+	firstTickDeadline := time.Now().Add(500 * time.Millisecond)
+	for poller.tickCount.Load() == 0 && time.Now().Before(firstTickDeadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if poller.tickCount.Load() == 0 {
+		t.Fatal("timed out waiting for the first poll tick to fire")
+	}
 	firstTickCount := poller.tickCount.Load()
 
-	// At this point the queue is empty and the activity channel is wired.
-	// The next tick should be at slowInterval, not fastInterval.
-	// After another fastInterval, the tick count should NOT have increased.
-	time.Sleep(fastInterval + 10*time.Millisecond)
+	// The queue is empty and the activity channel is wired, so the loop should have
+	// backed off to slowInterval. After another fastInterval + margin, the tick count
+	// must NOT have increased (the next tick won't fire for ~slowInterval more).
+	time.Sleep(fastInterval + 20*time.Millisecond)
 	tickAfterFast := poller.tickCount.Load()
 
 	if tickAfterFast != firstTickCount {

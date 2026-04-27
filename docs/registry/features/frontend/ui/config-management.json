@@ -1,0 +1,10 @@
+{
+  "id": "config-management",
+  "type": "frontend",
+  "component": "ConfigEditorPage",
+  "path": "web-app/src/app/config/page.tsx",
+  "markerLine": 2,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-04-18T17:28:17.611Z"
+}

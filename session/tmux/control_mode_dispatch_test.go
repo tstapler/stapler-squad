@@ -165,7 +165,10 @@ func TestCMDispatch_ConcurrentSendCMCommand(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	type res struct{ body string; err error }
+	type res struct {
+		body string
+		err  error
+	}
 	results := make([]chan res, n)
 	for i := range results {
 		results[i] = make(chan res, 1)

@@ -39,7 +39,7 @@ export interface OmnibarFormState {
   category: string;
   autoYes: boolean;
   useTitleAsBranch: boolean;
-  sessionType: "directory" | "new_worktree" | "existing_worktree";
+  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off";
   existingWorktree: string;
   workingDir: string;
 }
@@ -47,7 +47,7 @@ export interface OmnibarFormState {
 const INITIAL_FORM_STATE: OmnibarFormState = {
   sessionName: "",
   branch: "",
-  program: "claude",
+  program: "",
   category: "",
   autoYes: false,
   useTitleAsBranch: true,
@@ -80,6 +80,7 @@ export interface OmnibarSessionData {
   sessionType?: "directory" | "new_worktree" | "existing_worktree";
   existingWorktree?: string;
   workingDir?: string;
+  oneOff?: boolean;
 }
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
@@ -549,6 +550,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
   // Check if we can submit
   const canSubmit = useMemo(() => {
+    // One-off mode: only session name is required (no path needed).
+    if (sessionType === "one_off") {
+      return !!sessionName.trim();
+    }
+
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
     if (!detection || detection.type === InputType.Unknown || detection.type === InputType.SessionSearch) return false;
@@ -581,18 +587,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
       const sessionData: OmnibarSessionData = {
         title: sessionName.trim(),
-        path: detection?.localPath || "",
-        branch: finalBranch || undefined,
+        path: sessionType === "one_off" ? "" : (detection?.localPath || ""),
+        branch: sessionType === "one_off" ? undefined : (finalBranch || undefined),
         program,
         category: category.trim() || undefined,
         autoYes,
-        sessionType,
-        existingWorktree: existingWorktree.trim() || undefined,
-        workingDir: workingDir.trim() || undefined,
+        sessionType: sessionType === "one_off" ? "directory" : sessionType,
+        existingWorktree: sessionType === "one_off" ? undefined : (existingWorktree.trim() || undefined),
+        workingDir: sessionType === "one_off" ? undefined : (workingDir.trim() || undefined),
+        oneOff: sessionType === "one_off" ? true : undefined,
       };
 
       // Handle GitHub URLs - path will be resolved server-side
-      if (detection?.gitHubRef) {
+      if (sessionType !== "one_off" && detection?.gitHubRef) {
         sessionData.gitHubOwner = detection.gitHubRef.owner;
         sessionData.gitHubRepo = detection.gitHubRef.repo;
         sessionData.gitHubPRNumber = detection.gitHubRef.prNumber;
@@ -605,7 +612,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
       await onCreateSession(sessionData);
       // Persist the chosen path to history for future completions.
-      if (isPathInput && detection?.localPath) {
+      if (isPathInput && detection?.localPath && sessionType !== "one_off") {
         saveHistory(detection.localPath);
       }
       onClose();
@@ -665,14 +672,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         {/* Main Input */}
         <div className={inputContainer}>
           <span className={typeIndicator} aria-hidden="true">
-            {typeInfo.icon}
+            {sessionType === "one_off" ? "⚡" : typeInfo.icon}
           </span>
           <input
             ref={inputRef}
             type="text"
             className={inputClass}
             placeholder={
-              isDiscoveryMode
+              sessionType === "one_off"
+                ? "Session title is the only thing needed…"
+                : isDiscoveryMode
                 ? "Jump to session or search repos..."
                 : "Enter path, GitHub URL, or owner/repo..."
             }
@@ -710,7 +719,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             }
           />
           {/* Path existence indicator */}
-          {isPathInput && !isDiscoveryMode && input.trim() && (
+          {isPathInput && !isDiscoveryMode && input.trim() && sessionType !== "one_off" && (
             <span
               className={pathIndicator}
               aria-live="polite"
@@ -751,7 +760,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         )}
 
         {/* Creation mode: path completion dropdown (existing, unchanged) */}
-        {!isDiscoveryMode && isDropdownVisible && (
+        {!isDiscoveryMode && isDropdownVisible && sessionType !== "one_off" && (
           <PathCompletionDropdown
             id="path-completion-listbox"
             entries={mergedEntries}
@@ -770,7 +779,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         )}
 
         {/* Detection Badge */}
-        {input.trim() && !isDiscoveryMode && (
+        {input.trim() && !isDiscoveryMode && sessionType !== "one_off" && (
           <div className={detectionInfo}>
             <span
               className={`${detectionBadge} ${

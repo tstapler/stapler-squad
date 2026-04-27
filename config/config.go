@@ -237,6 +237,9 @@ type Config struct {
 	SessionDefaults SessionDefaults `json:"session_defaults,omitempty"`
 	// Notifications holds the user's notification delivery preferences.
 	Notifications NotificationPrefs `json:"notifications,omitempty"`
+	// OneOffBaseDir is the base directory where one-off session directories are created.
+	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
+	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
 }
 
 // SessionDefaults is the top-level container for all session default configuration.
@@ -320,6 +323,31 @@ func DefaultConfig() *Config {
 		VCSPreference:                 "auto", // Default to auto-detection (prefer JJ if available)
 		AvailablePrograms:             availablePrograms,
 	}
+}
+
+// OneOffBaseDirOrDefault returns the resolved one-off base directory.
+// If OneOffBaseDir is empty, it returns "~/oneoff" with ~ expanded to the
+// current user's home directory. The directory is NOT created here — call
+// namegen.GenerateAndCreate to create it on first use.
+func (c *Config) OneOffBaseDirOrDefault() (string, error) {
+	dir := c.OneOffBaseDir
+	if dir == "" {
+		dir = "~/oneoff"
+	}
+	if strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand home dir: %w", err)
+		}
+		dir = filepath.Join(home, dir[2:])
+	} else if dir == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand home dir: %w", err)
+		}
+		dir = home
+	}
+	return dir, nil
 }
 
 // GetClaudeCommand attempts to find the "claude" command in the user's shell

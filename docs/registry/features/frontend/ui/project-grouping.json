@@ -1,0 +1,12 @@
+{
+  "id": "project-grouping",
+  "type": "frontend",
+  "component": "BulkActions",
+  "path": "web-app/src/components/sessions/BulkActions.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "web-app/tests/e2e/project-grouping.spec.ts"
+  ],
+  "lastModified": "2026-04-24T00:00:00Z"
+}

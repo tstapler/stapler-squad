@@ -12,6 +12,9 @@ global.ResizeObserver = class ResizeObserver {
   disconnect() {}
 };
 
+// Polyfill scrollIntoView for jsdom (not implemented by default)
+window.HTMLElement.prototype.scrollIntoView = function () {};
+
 // Polyfill window.matchMedia for jsdom (not implemented by default)
 Object.defineProperty(window, 'matchMedia', {
   writable: true,

@@ -1,0 +1,16 @@
+{
+  "id": "checkpoint:create",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CreateCheckpoint",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestCreateCheckpoint_MissingSessionID",
+    "TestCreateCheckpoint_MissingLabel",
+    "TestCreateCheckpoint_SessionNotFound",
+    "TestCreateCheckpoint_SessionNotStarted"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

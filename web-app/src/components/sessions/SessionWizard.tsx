@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-create-wizard session-title-autogen session-create-github-url
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useForm, Controller } from "react-hook-form";
@@ -13,10 +14,13 @@ import { useBranchSuggestions } from "@/lib/hooks/useBranchSuggestions";
 import { useSessionDefaults } from "@/lib/hooks/useSessionDefaults";
 import { sessionSchema, SessionFormData, defaultValues } from "@/lib/validation/sessionSchema";
 import { getProgramDisplay, PROGRAMS, DEFAULT_PROGRAM } from "@/lib/constants/programs";
+import { parseGitHubRef, isGitHubRef } from "@/lib/github/urlParser";
+import { generateUniqueName } from "@/utils/sessionNameUtils";
 import { SourceBadge } from "./SourceBadge";
 import {
   SessionService,
   ProfileDefaultsProtoSchema,
+  PromptHistoryEntry,
 } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl } from "@/lib/config";
 import * as styles from "./SessionWizard.css";
@@ -25,9 +29,10 @@ interface SessionWizardProps {
   onComplete: (data: SessionFormData) => Promise<void>;
   onCancel: () => void;
   initialData?: Partial<SessionFormData>;
+  existingTitles?: string[];
 }
 
-export function SessionWizard({ onComplete, onCancel, initialData }: SessionWizardProps) {
+export function SessionWizard({ onComplete, onCancel, initialData, existingTitles = [] }: SessionWizardProps) {
   const [step, setStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -44,6 +49,13 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
   const [saveProfileError, setSaveProfileError] = useState<string | null>(null);
   const [saveProfileSuccess, setSaveProfileSuccess] = useState<string | null>(null);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
+
+  // Recent prompts state for S1-5
+  const [recentPrompts, setRecentPrompts] = useState<PromptHistoryEntry[]>([]);
+  const [loadingPrompts, setLoadingPrompts] = useState(false);
+
+  // File input ref for S1-5 "Load from file" button
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Track which fields the user has manually edited
   const editedFieldsRef = useRef<Set<keyof SessionFormData>>(new Set());
@@ -70,6 +82,8 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
 
   // Watch the program field to show/hide custom command input
   const selectedProgram = watch("program");
+  // S5-2: Terminal session preset — hides AI-specific fields
+  const isTerminalSession = selectedProgram === "bash";
 
   // Watch the repository path to update branch suggestions and defaults
   const repositoryPath = watch("path");
@@ -110,6 +124,45 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
   const trackEdit = useCallback((fieldName: keyof SessionFormData) => {
     editedFieldsRef.current.add(fieldName);
   }, []);
+
+  // S1-5: Lazy-load recent prompts on first focus
+  const loadRecentPrompts = useCallback(async () => {
+    if (recentPrompts.length > 0 || loadingPrompts) return;
+    setLoadingPrompts(true);
+    try {
+      const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+      const client = createClient(SessionService, transport);
+      const response = await client.listPromptHistory({ limit: 10 });
+      setRecentPrompts(response.entries);
+    } catch {
+      // Recent prompts are optional — ignore errors
+    } finally {
+      setLoadingPrompts(false);
+    }
+  }, [recentPrompts.length, loadingPrompts]);
+
+  // S5-1: Auto-populate title from repo name when path changes and title is pristine
+  useEffect(() => {
+    if (!repositoryPath) return;
+    if (editedFieldsRef.current.has("title")) return;
+
+    let repoName: string;
+    if (isGitHubRef(repositoryPath)) {
+      const parsed = parseGitHubRef(repositoryPath);
+      repoName = parsed?.repo || repositoryPath.split("/").pop() || "";
+    } else {
+      repoName = repositoryPath.split("/").pop() || "";
+    }
+    if (!repoName) return;
+
+    // Strip .git suffix if present
+    repoName = repoName.replace(/\.git$/, "");
+
+    // 4 random lowercase alphanumeric chars
+    const suffix = Math.random().toString(36).slice(2, 6).replace(/[^a-z0-9]/g, "x").padEnd(4, "x");
+    const suggested = generateUniqueName(`${repoName}-${suffix}`, existingTitles);
+    setValue("title", suggested);
+  }, [repositoryPath, existingTitles, setValue]);
 
   // Apply resolved defaults to form, preserving user-edited fields
   useEffect(() => {
@@ -447,13 +500,15 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
         {step === 2 && (
           <div className={styles.step}>
             <h2>
-              Configuration
-              {hasDefaults && (
+              {isTerminalSession ? "Terminal Configuration" : "Configuration"}
+              {hasDefaults && !isTerminalSession && (
                 <span className={styles.defaultsNotice}>Pre-filled from defaults</span>
               )}
             </h2>
             <p className={styles.description}>
-              Configure the AI assistant program and optional startup settings.
+              {isTerminalSession
+                ? "Configure the terminal session settings."
+                : "Configure the AI assistant program and optional startup settings."}
             </p>
 
             {availableProfiles.length > 0 && (
@@ -519,41 +574,130 @@ export function SessionWizard({ onComplete, onCancel, initialData }: SessionWiza
               </div>
             )}
 
-            <div className={styles.field}>
-              <label htmlFor="prompt">Initial Prompt</label>
-              <textarea
-                id="prompt"
-                {...register("prompt", {
-                  onChange: () => trackEdit("prompt"),
-                })}
-                placeholder="Optional: Initial message to send to the AI"
-                rows={3}
-              />
-              <span className={styles.hint}>
-                Optional: Message sent when session starts
-              </span>
-            </div>
-
-            <div className={styles.field}>
-              <label className={styles.checkbox}>
-                <input
-                  type="checkbox"
-                  data-testid="auto-yes-checkbox"
-                  {...register("autoYes", {
-                    onChange: () => trackEdit("autoYes"),
-                  })}
-                />
-                <span>Auto-approve prompts (experimental mode)</span>
-              </label>
-              <span className={styles.hint}>
-                Automatically approve all AI suggestions without confirmation
-              </span>
-              {formValues.autoYes && (
-                <span style={{ color: 'var(--warning, #d97706)', fontSize: '0.8125rem', marginTop: '0.25rem', display: 'block' }} role="alert">
-                  Warning: Claude will execute file changes and run commands without asking for your approval.
+            {/* S1-5: InitialPrompt — injected via CLAUDE.md; hidden for terminal sessions */}
+            {!isTerminalSession && (
+              <div className={styles.field}>
+                <label htmlFor="initialPrompt">Initial Prompt</label>
+                {recentPrompts.length > 0 && (
+                  <select
+                    defaultValue=""
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setValue("initialPrompt", e.target.value);
+                        trackEdit("initialPrompt");
+                      }
+                    }}
+                  >
+                    <option value="">📋 Load a recent prompt…</option>
+                    {recentPrompts.map((p) => (
+                      <option key={p.id} value={p.text}>
+                        {(p.label || p.text).slice(0, 80)}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <div style={{ display: "flex", gap: "8px", alignItems: "flex-start" }}>
+                  <textarea
+                    id="initialPrompt"
+                    data-testid="initial-prompt-textarea"
+                    {...register("initialPrompt", {
+                      onChange: () => trackEdit("initialPrompt"),
+                    })}
+                    placeholder="Optional: Full task description or context injected via CLAUDE.md (up to 10,000 chars)"
+                    rows={5}
+                    onFocus={loadRecentPrompts}
+                    style={{ flex: 1 }}
+                  />
+                  <div>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".txt,.md"
+                      style={{ display: "none" }}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = (ev) => {
+                          const content = ev.target?.result as string;
+                          setValue("initialPrompt", content);
+                          trackEdit("initialPrompt");
+                        };
+                        reader.readAsText(file);
+                        // Reset so the same file can be re-selected
+                        e.target.value = "";
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      title="Load from file (.txt, .md)"
+                      style={{
+                        background: "none",
+                        border: `1px solid var(--border-color)`,
+                        borderRadius: "6px",
+                        padding: "6px 8px",
+                        cursor: "pointer",
+                        fontSize: "1rem",
+                        lineHeight: 1,
+                      }}
+                    >
+                      📎
+                    </button>
+                  </div>
+                </div>
+                {errors.initialPrompt && (
+                  <span className={styles.errorMessage}>{errors.initialPrompt.message}</span>
+                )}
+                <span className={styles.hint}>
+                  {(formValues.initialPrompt || "").length > 0
+                    ? `${(formValues.initialPrompt || "").length.toLocaleString()} / 10,000 characters`
+                    : "Optional: Context injected via CLAUDE.md at session start"}
                 </span>
-              )}
-            </div>
+              </div>
+            )}
+
+            {/* Legacy quick prompt — hidden for terminal sessions */}
+            {!isTerminalSession && (
+              <div className={styles.field}>
+                <label htmlFor="prompt">Quick Prompt</label>
+                <textarea
+                  id="prompt"
+                  {...register("prompt", {
+                    onChange: () => trackEdit("prompt"),
+                  })}
+                  placeholder="Optional: Short message appended as CLI argument"
+                  rows={2}
+                />
+                <span className={styles.hint}>
+                  Optional: Short message passed directly to the CLI (max 1,000 chars)
+                </span>
+              </div>
+            )}
+
+            {/* Auto-approve — hidden for terminal sessions */}
+            {!isTerminalSession && (
+              <div className={styles.field}>
+                <label className={styles.checkbox}>
+                  <input
+                    type="checkbox"
+                    data-testid="auto-yes-checkbox"
+                    {...register("autoYes", {
+                      onChange: () => trackEdit("autoYes"),
+                    })}
+                  />
+                  <span>Auto-approve prompts (experimental mode)</span>
+                </label>
+                <span className={styles.hint}>
+                  Automatically approve all AI suggestions without confirmation
+                </span>
+                {formValues.autoYes && (
+                  <span style={{ color: 'var(--warning, #d97706)', fontSize: '0.8125rem', marginTop: '0.25rem', display: 'block' }} role="alert">
+                    Warning: Claude will execute file changes and run commands without asking for your approval.
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         )}
 

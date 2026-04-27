@@ -126,6 +126,33 @@ otlp_config:
 - `cache.hit`, `cache.refresh_duration_ms` - Cache performance
 - `sync.sessions_added`, `sync.sessions_updated` - Index sync metrics
 
+### Bundling tmux (optional, for single-binary deployment)
+
+Stapler Squad can bundle a pinned tmux 3.4 binary directly into the `stapler-squad` binary so
+deployment requires no external tmux installation.
+
+```bash
+# One-time setup: build tmux 3.4 from the third_party/tmux git submodule
+git submodule update --init third_party/tmux  # required once after clone
+make build-tmux                               # compiles tmux (~30s); Bazel caches artifacts
+
+# Copy the built binary into the embed dir and build an embedded stapler-squad
+make build-embedded         # equivalent to: make build-tmux-embed && go build -tags embed_tmux .
+
+# At runtime, the embedded binary is extracted to ~/.cache/stapler-squad/tmux/ on first start.
+# TMUX_BIN env var overrides the embedded binary (useful for tests or debugging):
+TMUX_BIN=/path/to/tmux ./stapler-squad
+```
+
+Without the `embed_tmux` tag (the default `make build`), the binary uses `TMUX_BIN` env var or
+falls back to the system `tmux` in `PATH`.
+
+```bash
+# Run tests against the pinned tmux binary (reproducible across machines):
+make test-with-pinned-tmux
+# Equivalent: TMUX_BIN=$(pwd)/bin/tmux go test -race ./...
+```
+
 ### Testing
 ```bash
 # Build first (generates proto files) then run all tests
@@ -836,6 +863,27 @@ Add via: `gh pr edit <number> --add-label "patch"` (create label first if it doe
 4. Run `make generate-proto` to regenerate code
 5. Test with `make restart-web`
 
+### Feature Testing Registry
+
+This project uses two complementary registries that must be kept in sync when adding any new omnibar capability. See `.claude/rules/feature-testing-registry.md` for the complete guide and checklists.
+
+**1. OmnibarAction discriminated union** (`web-app/src/lib/omnibar/actions/`)
+- `types.ts` — the exhaustive union of all omnibar actions (`navigate_session`, `create_session`, `clone_session`, etc.)
+- `dispatch.ts` — one `switch` case per action type; TypeScript's exhaustiveness check catches any missing case at compile time
+- `dispatch.test.ts` — one `describe` block per action type; every registered action must have a test
+
+**2. DetectorRegistry** (`web-app/src/lib/omnibar/detector.ts`)
+- `DetectorRegistry` class with `register()` + priority ordering
+- `createDefaultRegistry()` — the canonical list of all registered detectors (GitHub PR, branch, repo, path, session search, etc.)
+- `detector.test.ts` — tests named `DetectorName_should_action_When_condition` with structured test IDs (`T-UNIT-TS-*`, `T-PITFALL-*`)
+
+**When adding a new omnibar feature:**
+1. If it needs a new user-triggerable action → add to `OmnibarAction` union + `dispatch.ts` case + `dispatch.test.ts` describe block
+2. If it auto-detects a new input pattern → add a `Detector` class + register in `createDefaultRegistry()` + add tests
+3. If it is a new session creation mode → also see the 7-point backend checklist in `.claude/rules/session-creation-registry.md`
+
+**One-off session** is the reference implementation for a creation mode that does NOT need a new detector (UI-only selection) but DOES need handling in `dispatch.ts` when `sessionType: "one_off"` arrives via a `create_session` action — it maps to `oneOff: true` with `sessionType: undefined`.
+
 ### New Session Filters
 1. Add filter parameters to ConnectRPC service definitions
 2. Implement filter logic in `session/storage.go` or service layer
@@ -848,6 +896,25 @@ Add via: `gh pr edit <number> --add-label "patch"` (create label first if it doe
 3. Register handler in `server/server.go`
 4. Generate client code with `make generate-proto`
 5. Call from web UI
+
+### Modifying the ent ORM Schema
+
+**CRITICAL**: Always use the command from `session/ent/generate.go`, not the bare `ent generate` command.
+The `--feature sql/upsert` flag is required or `OnConflictColumns` will be missing and builds will fail.
+
+```bash
+# CORRECT - includes required sql/upsert feature flag
+go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema
+
+# WRONG - generates code without OnConflictColumns, breaks UpsertRule and similar methods
+go run entgo.io/ent/cmd/ent generate ./session/ent/schema
+```
+
+Workflow for schema changes:
+1. Edit `session/ent/schema/<entity>.go`
+2. Run the correct generate command above from the repo root
+3. Verify with `go build ./...`
+4. Commit all changed files under `session/ent/` together
 
 ## Performance Optimization
 
@@ -905,8 +972,10 @@ make ci           # Full CI pipeline: proto check → web build → Go build →
 1. Verifies proto-generated files are up to date (no uncommitted regeneration needed)
 2. Builds the Next.js web UI (`npm run build` in `web-app/`)
 3. Builds the Go binary
-4. Runs all Go tests (`go test ./...`)
+4. Runs all Go tests (`go test ./...`) — requires `tmux` on PATH (install via `brew install tmux` or `apt-get install tmux`)
 5. Runs `golangci-lint`
+
+For reproducible tmux tests across machines, use `make test-with-pinned-tmux` instead (requires `make build-tmux` first).
 
 Frontend tests (Jest) are **not** part of `make ci` — run them separately:
 ```bash
@@ -941,28 +1010,47 @@ make clean-tools  # Remove installed tools (caution)
 
 ## Feature Registry
 
-The project maintains a static feature registry in `docs/registry/` that maps backend RPCs and frontend components to feature IDs. This registry is committed to the repo and validated in CI.
+The project maintains a per-feature registry under `docs/registry/features/` that maps backend RPCs and frontend components to feature IDs. Each feature is **one file** — this prevents merge conflicts when multiple branches add features simultaneously.
 
-### Registry files
-- `docs/registry/backend-features.json` — all proto RPCs with handler file locations and marker status
-- `docs/registry/frontend-features.json` — all React pages/components with `// +feature:` markers
-- `docs/registry/coverage-gaps.json` — advisory cross-registry coverage report (best-effort)
-- `docs/registry/schema.json` — JSON schema for validation
+### Registry layout
+```
+docs/registry/features/
+  backend/<domain>/<action>.json   ← one file per RPC  (committed, source of truth)
+  frontend/<type>/<id>.json        ← one file per UI component (committed, source of truth)
+docs/registry/schema.json          ← JSON schema for validation
+```
+
+The monolithic `backend-features.json` / `frontend-features.json` are **gitignored generated aggregates**.
+Rebuild them locally with `make registry-aggregate` (needed by some tooling).
 
 ### Keeping the registry current
 ```bash
-make registry-generate          # Regenerate both registries from source
+make registry-generate          # Scan source → update per-feature files + aggregate monolithic
 make registry-generate-backend  # Backend only
 make registry-generate-frontend # Frontend only
-make registry-diff              # Show what would change (dry run, no writes)
+make registry-aggregate         # Assemble monolithic JSON from per-feature files (local use only)
+make registry-diff              # Show what would change vs committed files (dry run)
 ```
 
-**Run `make registry-generate` and commit the updated JSON files whenever you:**
+**Run `make registry-generate` and commit the changed per-feature files whenever you:**
 - Add or rename a proto RPC in `proto/session/v1/session.proto`
 - Add a new React page or component
 - Add or move a `// +api:` or `// +feature:` marker
 
-CI will warn (non-blocking until 2026-05-02, then blocking) if the committed registry diverges >2% from what the scanner would generate.
+CI warns (non-blocking until 2026-05-02, then blocking) if committed per-feature files diverge >2%
+from what the scanner would generate. CI also reports features with no `testIds` as coverage gaps.
+
+### Adding test coverage to a feature
+Edit the feature's JSON file directly to add test IDs — the scanner preserves these on regeneration:
+```json
+// docs/registry/features/backend/session/create.json
+{
+  "id": "session:create",
+  ...
+  "tested": true,
+  "testIds": ["TestCreateSession_Success", "TestCreateSession_InvalidInput"]
+}
+```
 
 ### Backend markers (`// +api:`)
 Add to the handler method in `server/services/` to confirm the RPC is intentionally implemented:
@@ -985,6 +1073,7 @@ The backend convention is `domain:verb` (e.g. `session:create`, `review-queue:ge
 > **Known limitation**: the gap reporter in `docs/registry/coverage-gaps.json` uses domain-prefix
 > matching between the two namespaces. It is advisory only — false negatives are expected for
 > multi-word domains (e.g. `review-queue:get` ↔ `review-queue`).
+
 
 ---
 

@@ -27,6 +27,7 @@ import {
 
 export function GlobalDefaultsForm() {
   const [program, setProgram] = useState("");
+  const [oneOffBaseDir, setOneOffBaseDir] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
@@ -53,6 +54,7 @@ export function GlobalDefaultsForm() {
       const defaults = response.defaults;
       if (defaults) {
         setProgram(defaults.program);
+        setOneOffBaseDir(defaults.oneOffBaseDir);
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
         const vars = Object.entries(defaults.envVars).map(([key, value]) => ({
@@ -82,6 +84,7 @@ export function GlobalDefaultsForm() {
       }
       await clientRef.current.updateGlobalDefaults({
         program,
+        oneOffBaseDir,
         tags,
         envVars: envVarsMap,
         cliFlags,
@@ -160,13 +163,27 @@ export function GlobalDefaultsForm() {
             value={program}
             onChange={(e) => setProgram(e.target.value)}
           >
-            <option value="">Default (claude)</option>
             {PROGRAMS.map((p) => (
               <option key={p.value} value={p.value}>
                 {p.label}
               </option>
             ))}
           </select>
+        </div>
+
+        {/* One-off Base Directory */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-one-off-base-dir">
+            One-off Session Directory
+          </label>
+          <input
+            id="global-one-off-base-dir"
+            type="text"
+            className={input}
+            placeholder="~/oneoff"
+            value={oneOffBaseDir}
+            onChange={(e) => setOneOffBaseDir(e.target.value)}
+          />
         </div>
 
         {/* Tags */}

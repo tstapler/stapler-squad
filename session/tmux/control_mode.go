@@ -31,14 +31,13 @@ var (
 )
 
 // cmCommandsEnabled gates the CM command dispatch path.
-// Set STAPLER_SQUAD_CM_COMMANDS=true to enable.
+// Enabled by default; set STAPLER_SQUAD_CM_COMMANDS=false to opt out.
 var cmCommandsEnabled atomic.Bool
 
 func init() {
-	if os.Getenv("STAPLER_SQUAD_CM_COMMANDS") == "true" {
-		cmCommandsEnabled.Store(true)
-	}
+	cmCommandsEnabled.Store(os.Getenv("STAPLER_SQUAD_CM_COMMANDS") != "false")
 }
+
 
 // StartControlMode begins streaming terminal output via tmux control mode (-C flag).
 // This is the proper way to get real-time terminal output from tmux, replacing pipe-pane + FIFO.

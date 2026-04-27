@@ -53,11 +53,21 @@ function ReviewQueueContent() {
   const modalContentRef = useRef<HTMLDivElement>(null);
 
   // Use WebSocket streaming for real-time session updates
-  const { sessions } = useSessionService({
+  const { sessions, runOneShot } = useSessionService({
     baseUrl: getApiBaseUrl(),
     autoWatch: true, // Enable WebSocket streaming for session list
     enabled: !authLoading && (!authEnabled || authenticated),
   });
+
+  // S3-3: Adapter from RunOneShotResponse to the shape ReviewQueuePanel expects
+  const handleRunOneShot = useCallback(
+    async (sessionId: string, prompt: string) => {
+      const response = await runOneShot(sessionId, prompt, 0);
+      if (!response) return null;
+      return { prUrl: response.prUrl || undefined, error: response.error || undefined };
+    },
+    [runOneShot]
+  );
 
   // Acknowledge function for dismissing sessions from the modal
   const { acknowledgeSession } = useReviewQueueContext();
@@ -253,6 +263,7 @@ function ReviewQueueContent() {
           onSessionClick={handleSessionClick}
           onItemsChange={handleItemsChange}
           onAcknowledged={handleAcknowledged}
+          onRunOneShot={handleRunOneShot}
         />
       </main>
 

@@ -1,0 +1,14 @@
+{
+  "id": "session:list",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListSessions",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestListSessions_EmptyStorage"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

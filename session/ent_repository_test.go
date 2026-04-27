@@ -252,8 +252,8 @@ func TestEntRepository_ClaudeSession(t *testing.T) {
 	session.ClaudeSession = ClaudeSessionData{
 		ConversationUUID: "claude-123",
 		SquadSessionID:   "conv-456",
-		ProjectName:    "test-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "test-project",
+		LastAttached:     time.Now(),
 		Settings: ClaudeSettings{
 			AutoReattach:          true,
 			PreferredSessionName:  "my-session",

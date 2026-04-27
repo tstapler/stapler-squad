@@ -3,13 +3,14 @@ package session
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/detection"
-	"github.com/tstapler/stapler-squad/session/tmux"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // ReviewQueuePollerConfig contains configuration for the review queue poller.
@@ -86,6 +87,7 @@ type ReviewQueuePoller struct {
 	// Backoff state: tracks consecutive poll errors to apply exponential delay.
 	consecutiveErrors int
 	// tickCount tracks poll loop iterations for reconciliation scheduling.
+	// Accessed concurrently (pollLoop writes, tests read), so must be atomic.
 	tickCount atomic.Int64
 }
 
@@ -405,6 +407,11 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 	}
 }
 
+// checkSessionsConcurrency caps the number of sessions checked simultaneously,
+// limiting concurrent subprocess (capture-pane) calls to avoid fork exhaustion
+// on macOS (kern.maxprocperuid).
+const checkSessionsConcurrency = 5
+
 // checkSessions checks all instances and updates the review queue.
 func (rqp *ReviewQueuePoller) checkSessions() {
 	rqp.mu.RLock()
@@ -412,9 +419,18 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 	copy(instances, rqp.instances)
 	rqp.mu.RUnlock()
 
+	sem := make(chan struct{}, checkSessionsConcurrency)
+	var wg sync.WaitGroup
 	for _, inst := range instances {
-		rqp.checkSession(inst)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(i *Instance) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rqp.checkSession(i)
+		}(inst)
 	}
+	wg.Wait()
 }
 
 // detectProcessing checks if session is actively processing after user interaction.

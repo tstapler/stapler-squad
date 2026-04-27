@@ -1,4 +1,5 @@
 "use client";
+// +feature: review-queue-pr-creation
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
@@ -68,6 +69,7 @@ interface ReviewQueuePanelProps {
   refreshInterval?: number;
   onItemsChange?: (items: ReviewItem[]) => void; // Callback to expose queue items for navigation
   onAcknowledged?: (sessionId: string) => void; // Notifies parent when a session is acknowledged (for auto-advance)
+  onRunOneShot?: (sessionId: string, prompt: string) => Promise<{ prUrl?: string; error?: string } | null>; // S3-3
 }
 
 /**
@@ -87,6 +89,8 @@ interface ReviewQueuePanelProps {
  * />
  * ```
  */
+const DEFAULT_PR_PROMPT = "Create a pull request for the changes in this session. Use a descriptive title and include a summary of the changes made.";
+
 export function ReviewQueuePanel({
   onSessionClick,
   onSkipSession,
@@ -94,7 +98,12 @@ export function ReviewQueuePanel({
   refreshInterval = 5000,
   onItemsChange,
   onAcknowledged,
+  onRunOneShot,
 }: ReviewQueuePanelProps) {
+  // S3-3: PR creation modal state
+  const [prModal, setPrModal] = useState<{ sessionId: string; prompt: string } | null>(null);
+  const [prRunning, setPrRunning] = useState(false);
+  const [prResult, setPrResult] = useState<{ prUrl?: string; error?: string } | null>(null);
   const [priorityFilter, setPriorityFilter] = useState<Priority | undefined>(
     undefined
   );
@@ -648,6 +657,41 @@ export function ReviewQueuePanel({
                       ⏭ Skip
                     </Button>
                   )}
+                  {/* S3-3: Create PR button — only for TASK_COMPLETE items without an existing PR URL */}
+                  {queueItem.reason === AttentionReason.TASK_COMPLETE &&
+                    !queueItem.githubPrUrl &&
+                    onRunOneShot && (
+                      <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                        {queueItem.branchDivergedFromBase && (
+                          <span
+                            style={{
+                              fontSize: "0.75rem",
+                              padding: "2px 6px",
+                              background: "var(--warning-bg)",
+                              color: "var(--warning)",
+                              borderRadius: "4px",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            ⚠ Diverged from main
+                          </span>
+                        )}
+                        <Button
+                          intent="primary"
+                          size="md"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPrResult(null);
+                            setPrModal({ sessionId: queueItem.sessionId, prompt: DEFAULT_PR_PROMPT });
+                          }}
+                          title="Create a pull request for this session"
+                          aria-label="Create PR"
+                          data-testid={`create-pr-${queueItem.sessionId}`}
+                        >
+                          🔀 Create PR
+                        </Button>
+                      </div>
+                    )}
                 </div>
               </div>
             ))}
@@ -655,6 +699,122 @@ export function ReviewQueuePanel({
           </>
         )}
       </div>
+
+      {/* S3-3: Create PR confirmation modal */}
+      {prModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "var(--overlay-background)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            if (!prRunning) {
+              setPrModal(null);
+              setPrResult(null);
+            }
+          }}
+        >
+          <div
+            style={{
+              background: "var(--modal-background)",
+              border: "1px solid var(--modal-border)",
+              borderRadius: "8px",
+              padding: "1.5rem",
+              maxWidth: "520px",
+              width: "90%",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+            }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Create Pull Request"
+          >
+            <h3 style={{ margin: 0, fontSize: "1.125rem", fontWeight: 600, color: "var(--text-primary)" }}>
+              Create Pull Request
+            </h3>
+            <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-secondary)" }}>
+              Review and edit the prompt that will be used to create the PR. This may take up to 30 seconds.
+            </p>
+            <textarea
+              value={prModal.prompt}
+              onChange={(e) => setPrModal((m) => m ? { ...m, prompt: e.target.value } : null)}
+              disabled={prRunning}
+              rows={5}
+              style={{
+                padding: "0.625rem 0.875rem",
+                border: "1px solid var(--modal-border)",
+                borderRadius: "6px",
+                fontSize: "0.875rem",
+                resize: "vertical",
+                background: "var(--input-background)",
+                color: "var(--text-primary)",
+                fontFamily: "inherit",
+              }}
+            />
+            {prRunning && (
+              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--text-secondary)", fontStyle: "italic" }}>
+                ⏳ Creating PR, this may take up to 30 seconds…
+              </p>
+            )}
+            {prResult?.prUrl && (
+              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--success)" }}>
+                ✓ PR created:{" "}
+                <a href={prResult.prUrl} target="_blank" rel="noopener noreferrer" style={{ color: "var(--primary)" }}>
+                  {prResult.prUrl}
+                </a>
+              </p>
+            )}
+            {prResult?.error && (
+              <p style={{ margin: 0, fontSize: "0.875rem", color: "var(--error)" }}>
+                ✗ {prResult.error}
+              </p>
+            )}
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
+              <Button
+                intent="secondary"
+                size="md"
+                onClick={() => { setPrModal(null); setPrResult(null); }}
+                disabled={prRunning}
+              >
+                {prResult?.prUrl ? "Close" : "Cancel"}
+              </Button>
+              {!prResult?.prUrl && (
+                <Button
+                  intent="primary"
+                  size="md"
+                  disabled={prRunning || !prModal.prompt.trim()}
+                  onClick={async () => {
+                    if (!onRunOneShot) return;
+                    setPrRunning(true);
+                    setPrResult(null);
+                    try {
+                      const result = await onRunOneShot(prModal.sessionId, prModal.prompt);
+                      if (result?.prUrl) {
+                        setPrResult({ prUrl: result.prUrl });
+                      } else {
+                        setPrResult({ error: result?.error || "No PR URL found in output. The command may have failed." });
+                      }
+                    } catch (err) {
+                      setPrResult({ error: err instanceof Error ? err.message : "An unexpected error occurred." });
+                    } finally {
+                      setPrRunning(false);
+                    }
+                  }}
+                >
+                  {prRunning ? "Creating…" : "Run"}
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

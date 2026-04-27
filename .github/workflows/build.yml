@@ -15,6 +15,9 @@ on:
       - 'web-app/package-lock.json'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
+      - '.gitmodules'
+      - 'third_party/tmux/**'
+  workflow_dispatch:
   pull_request:
     branches: [ main ]
     paths:
@@ -29,6 +32,8 @@ on:
       - 'web-app/package-lock.json'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
+      - '.gitmodules'
+      - 'third_party/tmux/**'
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -76,8 +81,22 @@ jobs:
         with:
           name: generated-files
 
-      - name: Run tests
-        run: go test -race -v ./...
+      - name: Install tmux build dependencies
+        run: sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
+
+      - name: Cache pinned tmux binary
+        uses: actions/cache@v4
+        id: tmux-cache
+        with:
+          path: bin/tmux
+          key: tmux-3.4-${{ runner.os }}-v1
+
+      - name: Build pinned tmux 3.4
+        if: steps.tmux-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-tmux.sh
+
+      - name: Run tests (pinned tmux 3.4)
+        run: TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...
 
       - name: Set up Node.js (for coverage report)
         uses: actions/setup-node@v4

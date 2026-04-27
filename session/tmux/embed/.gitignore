@@ -1,0 +1,4 @@
+# Embedded tmux binaries are built locally via: make build-tmux-embed
+# They are NOT committed — each developer/CI builds them from the submodule.
+tmux
+tmux_*

@@ -1,0 +1,11 @@
+{
+  "id": "path:list-completions",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListPathCompletions",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": ["TestListPathCompletions_BasicListing", "TestListPathCompletions_FilterByPrefix", "TestListPathCompletions_DirectoriesOnly", "TestListPathCompletions_HiddenFilesHidden", "TestListPathCompletions_HiddenFilesShownWhenPrefixStartsWithDot", "TestListPathCompletions_NonexistentBaseDir", "TestListPathCompletions_TildeExpansion", "TestListPathCompletions_TildeAlone", "TestListPathCompletions_Truncation", "TestListPathCompletions_MaxResultsHardCap", "TestListPathCompletions_DefaultMaxResults", "TestListPathCompletions_NoTruncationUnderLimit", "TestListPathCompletions_PathExists", "TestListPathCompletions_PathExists_FileIsNotDir", "TestListPathCompletions_EntryPathCorrectness", "TestListPathCompletions_BaseDirInResponse", "TestListPathCompletions_Symlink_ToDirectory", "TestListPathCompletions_Symlink_ToFile", "TestListPathCompletions_Symlink_ToFile_ExcludedByDirOnly", "TestListPathCompletions_BrokenSymlink_Skipped", "TestListPathCompletions_ContextCancellation"],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

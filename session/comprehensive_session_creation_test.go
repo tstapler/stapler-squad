@@ -34,7 +34,7 @@ func newMockTmuxExecutor() *mockTmuxExecutor {
 
 func (m *mockTmuxExecutor) Run(cmd *exec.Cmd) error {
 	// Mock tmux commands to always succeed
-	if len(cmd.Args) > 0 && cmd.Args[0] == "tmux" {
+	if len(cmd.Args) > 0 && filepath.Base(cmd.Args[0]) == "tmux" {
 		// Track session creation
 		for i, arg := range cmd.Args {
 			if arg == "new-session" {
@@ -67,7 +67,7 @@ func (m *mockTmuxExecutor) Run(cmd *exec.Cmd) error {
 
 func (m *mockTmuxExecutor) Output(cmd *exec.Cmd) ([]byte, error) {
 	// Mock tmux command output
-	if len(cmd.Args) > 0 && cmd.Args[0] == "tmux" {
+	if len(cmd.Args) > 0 && filepath.Base(cmd.Args[0]) == "tmux" {
 		// Check if this is a list-sessions command for session existence checking
 		for i, arg := range cmd.Args {
 			if arg == "list-sessions" {

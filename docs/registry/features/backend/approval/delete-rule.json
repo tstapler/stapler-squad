@@ -1,0 +1,15 @@
+{
+  "id": "approval:delete-rule",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DeleteApprovalRule",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestDeleteApprovalRule_Success",
+    "TestDeleteApprovalRule_EmptyID",
+    "TestDeleteApprovalRule_NotFound"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

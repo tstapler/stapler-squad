@@ -2,12 +2,14 @@ package server
 
 import (
 	"fmt"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/unfinished"
 	"os"
 	"path/filepath"
 	"time"
@@ -31,6 +33,11 @@ type ServerDependencies struct {
 	ExternalDiscovery       *session.ExternalSessionDiscovery
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
 	HistoryLinker           *session.HistoryLinker
+
+	// Unfinished work scanning.
+	UnfinishedScanner     *unfinished.Scanner
+	UnfinishedStateStore  *unfinished.StateStore
+	UnfinishedWorkService *services.UnfinishedWorkService
 }
 
 // BuildDependencies constructs and wires all server dependencies in the correct order.
@@ -77,6 +84,9 @@ func BuildDependencies() (*ServerDependencies, error) {
 		ExternalDiscovery:       rt.ExternalDiscovery,
 		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
 		HistoryLinker:           rt.HistoryLinker,
+		UnfinishedScanner:       rt.UnfinishedScanner,
+		UnfinishedStateStore:    rt.UnfinishedStateStore,
+		UnfinishedWorkService:   rt.UnfinishedWorkService,
 	}, nil
 }
 
@@ -348,6 +358,11 @@ type RuntimeDeps struct {
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
 	PRStatusPoller          *session.PRStatusPoller
 	HistoryLinker           *session.HistoryLinker
+
+	// Unfinished work scanning.
+	UnfinishedScanner     *unfinished.Scanner
+	UnfinishedStateStore  *unfinished.StateStore
+	UnfinishedWorkService *services.UnfinishedWorkService
 }
 
 // BuildRuntimeDeps constructs Phase 3 dependencies using Phase 2 outputs.
@@ -562,6 +577,27 @@ func BuildRuntimeDeps(svc *ServiceDeps) (*RuntimeDeps, error) {
 	// (moved from server.go to keep all dependency wiring in BuildRuntimeDeps)
 	sessionService.SetExternalDiscovery(externalDiscovery)
 
+	// Initialize UnfinishedWork scanner and state store.
+	var (
+		unfinishedScanner    *unfinished.Scanner
+		unfinishedStateStore *unfinished.StateStore
+		unfinishedWorkSvc    *services.UnfinishedWorkService
+	)
+	if configDir, configErr := config.GetConfigDir(); configErr == nil {
+		statePath := filepath.Join(configDir, "unfinished_state.json")
+		unfinishedStateStore, _ = unfinished.NewStateStore(statePath)
+		if unfinishedStateStore == nil {
+			unfinishedStateStore, _ = unfinished.NewStateStore(statePath)
+		}
+		if unfinishedStateStore != nil {
+			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
+			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus)
+			log.InfoLog.Printf("UnfinishedWorkService initialized (state: %s)", statePath)
+		}
+	} else {
+		log.WarningLog.Printf("Could not initialize UnfinishedWork state store: %v", configErr)
+	}
+
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
 		Instances:               instances,
@@ -572,5 +608,8 @@ func BuildRuntimeDeps(svc *ServiceDeps) (*RuntimeDeps, error) {
 		ExternalApprovalMonitor: externalApprovalMonitor,
 		PRStatusPoller:          svc.PRStatusPoller,
 		HistoryLinker:           historyLinker,
+		UnfinishedScanner:       unfinishedScanner,
+		UnfinishedStateStore:    unfinishedStateStore,
+		UnfinishedWorkService:   unfinishedWorkSvc,
 	}, nil
 }

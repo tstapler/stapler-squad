@@ -78,6 +78,12 @@ func (Session) Fields() []ent.Field {
 			Nillable(),
 		field.String("mcp_server_url").
 			Optional(),
+		field.String("initial_prompt").
+			Optional().
+			Comment("Prompt injected via CLAUDE.md at first-time session creation."),
+		field.Bool("one_shot").
+			Default(false).
+			Comment("When true, runs claude in -p mode; session exits after task completes."),
 	}
 }
 
@@ -97,6 +103,11 @@ func (Session) Edges() []ent.Edge {
 
 		// One-to-one relationship with ClaudeSession
 		edge.To("claude_session", ClaudeSession.Type).
+			Unique(),
+
+		// Many-to-one relationship with Project (nullable FK)
+		edge.From("project", Project.Type).
+			Ref("sessions").
 			Unique(),
 	}
 }

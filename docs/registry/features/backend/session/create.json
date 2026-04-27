@@ -1,0 +1,15 @@
+{
+  "id": "session:create",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CreateSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestCreateSession_MissingTitle",
+    "TestCreateSession_MissingPath"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

@@ -47,6 +47,7 @@ type IdleDetector struct {
 	statusDetector *StatusDetector
 	ptyAccess      PTYReader
 	config         IdleDetectorConfig
+	now            func() time.Time // injectable for testing; defaults to time.Now
 
 	// State tracking
 	currentState    IdleState
@@ -54,6 +55,14 @@ type IdleDetector struct {
 	lastActivity    time.Time
 
 	mu sync.RWMutex
+}
+
+// timeNow returns the current time using the injected clock or time.Now.
+func (id *IdleDetector) timeNow() time.Time {
+	if id.now != nil {
+		return id.now()
+	}
+	return time.Now()
 }
 
 // NewIdleDetector creates a new idle detector for a session.
@@ -99,9 +108,9 @@ func (id *IdleDetector) DetectState() IdleState {
 	// Apply debouncing to prevent rapid state changes
 	// BUT: if current state is Unknown, always transition immediately
 	if newState != id.currentState {
-		if id.currentState == IdleStateUnknown || time.Since(id.lastStateChange) >= id.config.DebounceDelay {
+		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay {
 			id.currentState = newState
-			id.lastStateChange = time.Now()
+			id.lastStateChange = id.timeNow()
 		}
 		// If debouncing, keep current state
 	}
@@ -133,9 +142,9 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 	// Apply debouncing to prevent rapid state changes
 	// BUT: if current state is Unknown, always transition immediately
 	if newState != id.currentState {
-		if id.currentState == IdleStateUnknown || time.Since(id.lastStateChange) >= id.config.DebounceDelay {
+		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay {
 			id.currentState = newState
-			id.lastStateChange = time.Now()
+			id.lastStateChange = id.timeNow()
 		}
 		// If debouncing, keep current state
 	}
@@ -148,17 +157,17 @@ func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 	switch status {
 	case StatusActive:
 		// Actively executing commands - update activity timestamp
-		id.lastActivity = time.Now()
+		id.lastActivity = id.timeNow()
 		return IdleStateActive
 
 	case StatusProcessing:
 		// Processing but not showing active indicators - still consider active
-		id.lastActivity = time.Now()
+		id.lastActivity = id.timeNow()
 		return IdleStateActive
 
 	case StatusIdle, StatusReady:
 		// Waiting for input - check if we've been idle too long
-		idleDuration := time.Since(id.lastActivity)
+		idleDuration := id.timeNow().Sub(id.lastActivity)
 		if idleDuration > id.config.IdleThreshold {
 			return IdleStateTimeout
 		}
@@ -209,7 +218,7 @@ func (id *IdleDetector) GetLastActivity() time.Time {
 func (id *IdleDetector) GetIdleDuration() time.Duration {
 	id.mu.RLock()
 	defer id.mu.RUnlock()
-	return time.Since(id.lastActivity)
+	return id.timeNow().Sub(id.lastActivity)
 }
 
 // GetStateInfo returns comprehensive state information for debugging and display.
@@ -220,7 +229,7 @@ func (id *IdleDetector) GetStateInfo() IdleStateInfo {
 	return IdleStateInfo{
 		State:           id.currentState,
 		LastActivity:    id.lastActivity,
-		IdleDuration:    time.Since(id.lastActivity),
+		IdleDuration:    id.timeNow().Sub(id.lastActivity),
 		LastStateChange: id.lastStateChange,
 		SessionName:     id.sessionName,
 	}
@@ -239,10 +248,10 @@ const minActivityInterval = 500 * time.Millisecond
 func (id *IdleDetector) RecordActivity() {
 	id.mu.Lock()
 	defer id.mu.Unlock()
-	if time.Since(id.lastActivity) < minActivityInterval {
+	if id.timeNow().Sub(id.lastActivity) < minActivityInterval {
 		return
 	}
-	id.lastActivity = time.Now()
+	id.lastActivity = id.timeNow()
 }
 
 // Reset resets the idle detector's state tracking.
@@ -251,7 +260,7 @@ func (id *IdleDetector) Reset() {
 	id.mu.Lock()
 	defer id.mu.Unlock()
 
-	now := time.Now()
+	now := id.timeNow()
 	id.currentState = IdleStateUnknown
 	id.lastStateChange = now
 	id.lastActivity = now
@@ -284,7 +293,7 @@ func (id *IdleDetector) InitializeFromTimestamp(timestamp time.Time) {
 		return
 	}
 
-	now := time.Now()
+	now := id.timeNow()
 
 	// Reject future timestamps (clock skew protection)
 	if timestamp.After(now) {

@@ -1,0 +1,29 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "configure_make")
+
+# All tmux source files — Bazel tracks changes and rebuilds only when they change
+filegroup(
+    name = "all_srcs",
+    srcs = glob(
+        ["**"],
+        exclude = [
+            "BUILD.bazel",
+            ".git/**",
+        ],
+    ),
+    visibility = ["//visibility:public"],
+)
+
+# Build tmux with autoconf/make, output the binary.
+# Run with: bazel build //third_party/tmux:tmux
+# The built binary lands at: bazel-bin/third_party/tmux/tmux.runfiles/...
+# Use `bazel run //third_party/tmux:tmux -- -V` to verify version.
+configure_make(
+    name = "tmux",
+    configure_options = [
+        "--disable-utf8proc",
+    ],
+    lib_source = ":all_srcs",
+    out_binaries = ["tmux"],
+    targets = [""],
+    visibility = ["//visibility:public"],
+)

@@ -1,0 +1,11 @@
+{
+  "id": "session:fork",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ForkSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": ["TestForkSession_Success", "TestForkSession_MissingSessionID", "TestForkSession_MissingNewTitle", "TestForkSession_SessionNotFound", "TestForkSession_DuplicateTitle", "TestForkSession_MissingCheckpointID", "TestForkSession_CheckpointNotFound"],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

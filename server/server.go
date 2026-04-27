@@ -109,6 +109,12 @@ func NewServer(addr string) *Server {
 		go deps.HistoryLinker.Start(serverCtx)
 		log.InfoLog.Printf("HistoryLinker started")
 
+		// Start UnfinishedWork scanner.
+		if deps.UnfinishedScanner != nil {
+			deps.UnfinishedScanner.Start(serverCtx)
+			log.InfoLog.Printf("UnfinishedWork scanner started")
+		}
+
 		// Register shutdown hook: capture pane working dirs and persist instance
 		// state so cold restore can find the right directory on next start.
 		// Uses HistoryLinker.Instances() (not the startup snapshot) so externally
@@ -203,6 +209,14 @@ func NewServer(addr string) *Server {
 		path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, ConnectOptions()...)
 		apiPath := "/api" + path
 		srv.RegisterConnectHandler(apiPath, http.StripPrefix("/api", handler))
+
+		// Register UnfinishedWorkService handler.
+		if deps.UnfinishedWorkService != nil {
+			uwPath, uwHandler := sessionv1connect.NewUnfinishedWorkServiceHandler(deps.UnfinishedWorkService, ConnectOptions()...)
+			uwAPIPath := "/api" + uwPath
+			srv.RegisterConnectHandler(uwAPIPath, http.StripPrefix("/api", uwHandler))
+			log.InfoLog.Printf("Registered UnfinishedWorkService handler at %s", uwAPIPath)
+		}
 
 		// Wire external session support into the unified WebSocket handler
 		wsHandler.SetExternalSessionSupport(deps.ExternalDiscovery)

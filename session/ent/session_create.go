@@ -13,6 +13,7 @@ import (
 	"entgo.io/ent/schema/field"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
@@ -344,6 +345,34 @@ func (_c *SessionCreate) SetNillableMcpServerURL(v *string) *SessionCreate {
 	return _c
 }
 
+// SetInitialPrompt sets the "initial_prompt" field.
+func (_c *SessionCreate) SetInitialPrompt(v string) *SessionCreate {
+	_c.mutation.SetInitialPrompt(v)
+	return _c
+}
+
+// SetNillableInitialPrompt sets the "initial_prompt" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableInitialPrompt(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetInitialPrompt(*v)
+	}
+	return _c
+}
+
+// SetOneShot sets the "one_shot" field.
+func (_c *SessionCreate) SetOneShot(v bool) *SessionCreate {
+	_c.mutation.SetOneShot(v)
+	return _c
+}
+
+// SetNillableOneShot sets the "one_shot" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableOneShot(v *bool) *SessionCreate {
+	if v != nil {
+		_c.SetOneShot(*v)
+	}
+	return _c
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_c *SessionCreate) SetWorktreeID(id int) *SessionCreate {
 	_c.mutation.SetWorktreeID(id)
@@ -416,6 +445,25 @@ func (_c *SessionCreate) SetClaudeSession(v *ClaudeSession) *SessionCreate {
 	return _c.SetClaudeSessionID(v.ID)
 }
 
+// SetProjectID sets the "project" edge to the Project entity by ID.
+func (_c *SessionCreate) SetProjectID(id int) *SessionCreate {
+	_c.mutation.SetProjectID(id)
+	return _c
+}
+
+// SetNillableProjectID sets the "project" edge to the Project entity by ID if the given value is not nil.
+func (_c *SessionCreate) SetNillableProjectID(id *int) *SessionCreate {
+	if id != nil {
+		_c = _c.SetProjectID(*id)
+	}
+	return _c
+}
+
+// SetProject sets the "project" edge to the Project entity.
+func (_c *SessionCreate) SetProject(v *Project) *SessionCreate {
+	return _c.SetProjectID(v.ID)
+}
+
 // Mutation returns the SessionMutation object of the builder.
 func (_c *SessionCreate) Mutation() *SessionMutation {
 	return _c.mutation
@@ -471,6 +519,10 @@ func (_c *SessionCreate) defaults() {
 		v := session.DefaultIsExpanded
 		_c.mutation.SetIsExpanded(v)
 	}
+	if _, ok := _c.mutation.OneShot(); !ok {
+		v := session.DefaultOneShot
+		_c.mutation.SetOneShot(v)
+	}
 }
 
 // check runs all checks and user-defined validators on the builder.
@@ -513,6 +565,9 @@ func (_c *SessionCreate) check() error {
 	}
 	if _, ok := _c.mutation.IsExpanded(); !ok {
 		return &ValidationError{Name: "is_expanded", err: errors.New(`ent: missing required field "Session.is_expanded"`)}
+	}
+	if _, ok := _c.mutation.OneShot(); !ok {
+		return &ValidationError{Name: "one_shot", err: errors.New(`ent: missing required field "Session.one_shot"`)}
 	}
 	return nil
 }
@@ -641,6 +696,14 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 		_spec.SetField(session.FieldMcpServerURL, field.TypeString, value)
 		_node.McpServerURL = value
 	}
+	if value, ok := _c.mutation.InitialPrompt(); ok {
+		_spec.SetField(session.FieldInitialPrompt, field.TypeString, value)
+		_node.InitialPrompt = value
+	}
+	if value, ok := _c.mutation.OneShot(); ok {
+		_spec.SetField(session.FieldOneShot, field.TypeBool, value)
+		_node.OneShot = value
+	}
 	if nodes := _c.mutation.WorktreeIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2O,
@@ -703,6 +766,23 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 		for _, k := range nodes {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.ProjectIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   session.ProjectTable,
+			Columns: []string{session.ProjectColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(project.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.project_sessions = &nodes[0]
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec
@@ -1162,6 +1242,36 @@ func (u *SessionUpsert) UpdateMcpServerURL() *SessionUpsert {
 // ClearMcpServerURL clears the value of the "mcp_server_url" field.
 func (u *SessionUpsert) ClearMcpServerURL() *SessionUpsert {
 	u.SetNull(session.FieldMcpServerURL)
+	return u
+}
+
+// SetInitialPrompt sets the "initial_prompt" field.
+func (u *SessionUpsert) SetInitialPrompt(v string) *SessionUpsert {
+	u.Set(session.FieldInitialPrompt, v)
+	return u
+}
+
+// UpdateInitialPrompt sets the "initial_prompt" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateInitialPrompt() *SessionUpsert {
+	u.SetExcluded(session.FieldInitialPrompt)
+	return u
+}
+
+// ClearInitialPrompt clears the value of the "initial_prompt" field.
+func (u *SessionUpsert) ClearInitialPrompt() *SessionUpsert {
+	u.SetNull(session.FieldInitialPrompt)
+	return u
+}
+
+// SetOneShot sets the "one_shot" field.
+func (u *SessionUpsert) SetOneShot(v bool) *SessionUpsert {
+	u.Set(session.FieldOneShot, v)
+	return u
+}
+
+// UpdateOneShot sets the "one_shot" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateOneShot() *SessionUpsert {
+	u.SetExcluded(session.FieldOneShot)
 	return u
 }
 
@@ -1683,6 +1793,41 @@ func (u *SessionUpsertOne) UpdateMcpServerURL() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearMcpServerURL() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearMcpServerURL()
+	})
+}
+
+// SetInitialPrompt sets the "initial_prompt" field.
+func (u *SessionUpsertOne) SetInitialPrompt(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetInitialPrompt(v)
+	})
+}
+
+// UpdateInitialPrompt sets the "initial_prompt" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateInitialPrompt() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateInitialPrompt()
+	})
+}
+
+// ClearInitialPrompt clears the value of the "initial_prompt" field.
+func (u *SessionUpsertOne) ClearInitialPrompt() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearInitialPrompt()
+	})
+}
+
+// SetOneShot sets the "one_shot" field.
+func (u *SessionUpsertOne) SetOneShot(v bool) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetOneShot(v)
+	})
+}
+
+// UpdateOneShot sets the "one_shot" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateOneShot() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateOneShot()
 	})
 }
 
@@ -2370,6 +2515,41 @@ func (u *SessionUpsertBulk) UpdateMcpServerURL() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearMcpServerURL() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearMcpServerURL()
+	})
+}
+
+// SetInitialPrompt sets the "initial_prompt" field.
+func (u *SessionUpsertBulk) SetInitialPrompt(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetInitialPrompt(v)
+	})
+}
+
+// UpdateInitialPrompt sets the "initial_prompt" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateInitialPrompt() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateInitialPrompt()
+	})
+}
+
+// ClearInitialPrompt clears the value of the "initial_prompt" field.
+func (u *SessionUpsertBulk) ClearInitialPrompt() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearInitialPrompt()
+	})
+}
+
+// SetOneShot sets the "one_shot" field.
+func (u *SessionUpsertBulk) SetOneShot(v bool) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetOneShot(v)
+	})
+}
+
+// UpdateOneShot sets the "one_shot" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateOneShot() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateOneShot()
 	})
 }
 

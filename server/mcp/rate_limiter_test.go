@@ -19,7 +19,10 @@ func TestTokenBucketAllow(t *testing.T) {
 }
 
 func TestTokenBucketRefill(t *testing.T) {
+	fakeNow := time.Now()
 	tb := newTokenBucket(1, 3)
+	tb.now = func() time.Time { return fakeNow }
+
 	// Drain the bucket.
 	for i := 0; i < 3; i++ {
 		tb.allow("key")
@@ -28,8 +31,8 @@ func TestTokenBucketRefill(t *testing.T) {
 		t.Fatal("bucket should be empty after draining")
 	}
 
-	// Wait for more than 1 token to refill.
-	time.Sleep(1100 * time.Millisecond)
+	// Advance fake clock by 1.1s so more than 1 token refills.
+	fakeNow = fakeNow.Add(1100 * time.Millisecond)
 
 	if !tb.allow("key") {
 		t.Error("expected allow to return true after refill, got false")

@@ -5,6 +5,7 @@ import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
+import { UnfinishedNavBadge } from "@/components/unfinished/UnfinishedNavBadge";
 import { DebugMenu } from "@/components/ui/DebugMenu";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
@@ -84,6 +85,14 @@ export function Header() {
               onClick={handleNavLinkClick}
             >
               Sessions
+            </AppLink>
+            <AppLink
+              href={routes.unfinished}
+              className={`${styles.navLink} ${pathname === routes.unfinished ? styles.active : ""}`}
+              onClick={handleNavLinkClick}
+            >
+              <span>Unfinished</span>
+              <UnfinishedNavBadge inline={true} />
             </AppLink>
             <AppLink
               href={routes.reviewQueue}

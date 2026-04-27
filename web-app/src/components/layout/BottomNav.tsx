@@ -12,6 +12,7 @@ import * as styles from "./BottomNav.css";
 
 const primaryItems = [
   { href: routes.home, label: "Sessions", icon: "⊞" },
+  { href: routes.unfinished, label: "Unfinished", icon: "✎" },
   { href: routes.reviewQueue, label: "Review", icon: "📋" },
 ] as const;
 

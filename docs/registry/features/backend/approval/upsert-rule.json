@@ -1,0 +1,16 @@
+{
+  "id": "approval:upsert-rule",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UpsertApprovalRule",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestUpsertApprovalRule_Success",
+    "TestUpsertApprovalRule_UpdateExisting",
+    "TestUpsertApprovalRule_NilRule",
+    "TestUpsertApprovalRule_EmptyID"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

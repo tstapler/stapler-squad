@@ -241,9 +241,9 @@ func (csm *ClaudeSessionManager) CreateSessionData(session ClaudeSession, settin
 	return ClaudeSessionData{
 		ConversationUUID: session.ID,
 		SquadSessionID:   session.ConversationID,
-		ProjectName:    session.ProjectName,
-		LastAttached:   time.Now(),
-		Settings:       settings,
+		ProjectName:      session.ProjectName,
+		LastAttached:     time.Now(),
+		Settings:         settings,
 		Metadata: map[string]string{
 			"working_dir": session.WorkingDir,
 			"is_active":   fmt.Sprintf("%t", session.IsActive),

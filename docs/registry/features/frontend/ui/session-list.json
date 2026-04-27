@@ -1,0 +1,10 @@
+{
+  "id": "session-list",
+  "type": "frontend",
+  "component": "Home",
+  "path": "web-app/src/app/page.tsx",
+  "markerLine": 2,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-04-18T17:28:17.608Z"
+}

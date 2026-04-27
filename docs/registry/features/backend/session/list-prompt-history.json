@@ -1,0 +1,16 @@
+{
+  "id": "session:list-prompt-history",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListPromptHistory",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestListPromptHistory_EmptyInitially",
+    "TestListPromptHistory_ReturnsEntriesAfterRecord",
+    "TestListPromptHistory_EntryFieldsPopulated"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

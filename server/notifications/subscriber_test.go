@@ -56,10 +56,10 @@ func TestCoalescing_SameKeyWithinWindow(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Use a short coalescing interval for testing
-	StartSubscriberWithInterval(ctx, bus, appender, 50*time.Millisecond)
+	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
 
 	// Allow subscriber goroutine to start
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Publish 10 events for the same key rapidly
 	for i := 0; i < 10; i++ {
@@ -67,11 +67,11 @@ func TestCoalescing_SameKeyWithinWindow(t *testing.T) {
 	}
 
 	// Wait for flush (coalescing interval + buffer)
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
 
 	// Cancel to trigger final flush
 	cancel()
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(8 * time.Millisecond)
 
 	records := appender.getRecords()
 	if len(records) != 1 {
@@ -91,9 +91,9 @@ func TestCoalescing_DifferentKeysFlushIndependently(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	StartSubscriberWithInterval(ctx, bus, appender, 50*time.Millisecond)
+	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
 
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Publish events for 3 different keys
 	publishNotification(bus, "session-A", 1, "notif-a1")
@@ -102,10 +102,10 @@ func TestCoalescing_DifferentKeysFlushIndependently(t *testing.T) {
 	publishNotification(bus, "session-A", 2, "notif-a3") // different type
 
 	// Wait for flush
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
 
 	cancel()
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(8 * time.Millisecond)
 
 	records := appender.getRecords()
 	if len(records) != 3 {
@@ -128,7 +128,7 @@ func TestCoalescing_ContextCancellationFlushes(t *testing.T) {
 	// Use a very long coalescing interval so it won't fire naturally during the test
 	StartSubscriberWithInterval(ctx, bus, appender, 10*time.Second)
 
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Publish an event
 	publishNotification(bus, "session-A", 1, "notif-1")
@@ -161,9 +161,9 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	StartSubscriberWithInterval(ctx, bus, appender, 50*time.Millisecond)
+	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
 
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Publish multiple events with different metadata for the same key
 	bus.Publish(&events.Event{
@@ -195,10 +195,10 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 	})
 
 	// Wait for flush
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
 
 	cancel()
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(8 * time.Millisecond)
 
 	records := appender.getRecords()
 	if len(records) != 1 {
@@ -226,9 +226,9 @@ func TestCoalescing_NonNotificationEventsIgnored(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	StartSubscriberWithInterval(ctx, bus, appender, 50*time.Millisecond)
+	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
 
-	time.Sleep(10 * time.Millisecond)
+	time.Sleep(2 * time.Millisecond)
 
 	// Publish a non-notification event
 	bus.Publish(&events.Event{
@@ -237,10 +237,10 @@ func TestCoalescing_NonNotificationEventsIgnored(t *testing.T) {
 		SessionID: "session-A",
 	})
 
-	time.Sleep(120 * time.Millisecond)
+	time.Sleep(15 * time.Millisecond)
 
 	cancel()
-	time.Sleep(30 * time.Millisecond)
+	time.Sleep(8 * time.Millisecond)
 
 	records := appender.getRecords()
 	if len(records) != 0 {

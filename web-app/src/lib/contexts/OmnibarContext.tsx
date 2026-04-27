@@ -11,6 +11,7 @@ const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
   new_worktree: SessionType.NEW_WORKTREE,
   existing_worktree: SessionType.EXISTING_WORKTREE,
+  one_off: SessionType.DIRECTORY, // one-off is a directory session; type overridden server-side
 };
 
 interface OmnibarContextValue {
@@ -105,6 +106,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         workingDir: data.workingDir,
         existingWorktree: data.existingWorktree,
         sessionType: data.sessionType ? sessionTypeMap[data.sessionType] : undefined,
+        oneOff: data.oneOff ?? false,
       });
 
       if (session) {

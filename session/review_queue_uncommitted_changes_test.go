@@ -321,7 +321,10 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	// Create review queue with poller
 	queue := NewReviewQueue()
 	statusManager := NewInstanceStatusManager()
-	poller := NewReviewQueuePoller(queue, statusManager, nil)
+	pollerCfg := DefaultReviewQueuePollerConfig()
+	pollerCfg.PollInterval = 100 * time.Millisecond
+	pollerCfg.SlowPollInterval = 100 * time.Millisecond
+	poller := NewReviewQueuePollerWithConfig(queue, statusManager, nil, pollerCfg)
 	poller.AddInstance(instance)
 
 	// Start polling in background
@@ -332,7 +335,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	defer poller.Stop()
 
 	// Wait for initial check
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(150 * time.Millisecond)
 
 	// Verify initially clean (not in queue)
 	if queue.Has(instance.Title) {
@@ -349,7 +352,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	worktree.InvalidateDirtyCache()
 
 	// Wait for poller to detect changes
-	time.Sleep(3 * time.Second)
+	time.Sleep(300 * time.Millisecond)
 
 	// Verify detected and added to queue
 	if !queue.Has(instance.Title) {
@@ -371,7 +374,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 	}
 
 	// Wait for poller to detect committed state
-	time.Sleep(3 * time.Second)
+	time.Sleep(300 * time.Millisecond)
 
 	// Verify removed from queue (or reason changed)
 	if queue.Has(instance.Title) {

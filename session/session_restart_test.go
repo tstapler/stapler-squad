@@ -43,8 +43,8 @@ func testRestartWithValidClaudeSession(t *testing.T) {
 	instance.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
-		ProjectName:    "test-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "test-project",
+		LastAttached:     time.Now(),
 		Settings: ClaudeSettings{
 			AutoReattach:          true,
 			CreateNewOnMissing:    true,
@@ -143,8 +143,8 @@ func testRestartWithInvalidUUID(t *testing.T) {
 	instance.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: invalidSessionID,
 		SquadSessionID:   "conv-123",
-		ProjectName:    "test-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "test-project",
+		LastAttached:     time.Now(),
 	})
 
 	// Start the session - should succeed but skip --resume
@@ -185,8 +185,8 @@ func testRestartNonClaudeProgram(t *testing.T) {
 	instance.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-123",
-		ProjectName:    "test-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "test-project",
+		LastAttached:     time.Now(),
 	})
 
 	// Start the session
@@ -227,8 +227,8 @@ func testHealthCheckerAutoRestart(t *testing.T) {
 	instance.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-456",
-		ProjectName:    "health-check-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "health-check-project",
+		LastAttached:     time.Now(),
 	})
 
 	// Start the session (first time)
@@ -286,8 +286,8 @@ func testLazyRecoveryRestart(t *testing.T) {
 	instance.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-789",
-		ProjectName:    "lazy-recovery-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "lazy-recovery-project",
+		LastAttached:     time.Now(),
 	})
 
 	// Start the session (first time)
@@ -401,8 +401,8 @@ func testCommandEnrichmentFlow(t *testing.T) {
 				instance.SetClaudeSession(&ClaudeSessionData{
 					ConversationUUID: tc.sessionID,
 					SquadSessionID:   "conv-test",
-					ProjectName:    "test-project",
-					LastAttached:   time.Now(),
+					ProjectName:      "test-project",
+					LastAttached:     time.Now(),
 				})
 			}
 
@@ -449,8 +449,8 @@ func testMultipleRestartCycles(t *testing.T) {
 	instance.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-multi",
-		ProjectName:    "multi-restart-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "multi-restart-project",
+		LastAttached:     time.Now(),
 	})
 
 	// Perform 3 restart cycles
@@ -511,8 +511,8 @@ func testSessionDataPersistence(t *testing.T) {
 	originalSession := &ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-persist",
-		ProjectName:    "persistence-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "persistence-project",
+		LastAttached:     time.Now(),
 		Settings: ClaudeSettings{
 			AutoReattach:          true,
 			CreateNewOnMissing:    true,
@@ -595,8 +595,8 @@ func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
 	instance.SetClaudeSession(&ClaudeSessionData{
 		ConversationUUID: validSessionID,
 		SquadSessionID:   "conv-worktree",
-		ProjectName:    "worktree-project",
-		LastAttached:   time.Now(),
+		ProjectName:      "worktree-project",
+		LastAttached:     time.Now(),
 	})
 
 	// Start the session (creates worktree)

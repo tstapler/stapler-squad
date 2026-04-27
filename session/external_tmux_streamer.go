@@ -214,6 +214,7 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 	go s.readControlMode(stdout)
 
 	// Goroutine: drain stderr
+	s.wg.Add(1)
 	go s.drainStderr(stderr)
 
 	return true
@@ -358,6 +359,7 @@ func (s *ExternalTmuxStreamer) debounceCaptures(notifyCh <-chan struct{}) {
 
 // drainStderr reads and logs stderr from the control mode process.
 func (s *ExternalTmuxStreamer) drainStderr(stderr io.ReadCloser) {
+	defer s.wg.Done()
 	defer stderr.Close()
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {

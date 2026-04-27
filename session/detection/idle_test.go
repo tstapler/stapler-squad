@@ -5,6 +5,20 @@ import (
 	"time"
 )
 
+// newDetectorWithFakeClock creates an IdleDetector whose clock is controlled by the
+// returned advance function. Calling advance(d) moves the fake clock forward by d
+// without sleeping — tests that previously used time.Sleep(d) can replace those calls
+// with advance(d) for instant, deterministic execution.
+func newDetectorWithFakeClock(name string, buf PTYReader, config IdleDetectorConfig) (*IdleDetector, func(time.Duration)) {
+	t0 := time.Now()
+	fakeNow := t0
+	d := NewIdleDetectorWithConfig(name, buf, config)
+	d.now = func() time.Time { return fakeNow }
+	d.lastStateChange = t0
+	d.lastActivity = t0
+	return d, func(dur time.Duration) { fakeNow = fakeNow.Add(dur) }
+}
+
 // mockPTYReader is a simple PTYReader implementation for testing.
 // It replaces session.PTYAccess / session.CircularBuffer to avoid circular imports.
 type mockPTYReader struct {
@@ -105,7 +119,7 @@ func TestIdleDetector_StateTransitions(t *testing.T) {
 		DebounceDelay: 50 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test", buffer, config)
+	detector, advance := newDetectorWithFakeClock("test", buffer, config)
 
 	// Start with idle state
 	buffer.Write([]byte("— INSERT —\n"))
@@ -124,8 +138,8 @@ func TestIdleDetector_StateTransitions(t *testing.T) {
 		t.Errorf("expected debounced waiting state, got %v", state)
 	}
 
-	// Wait for debounce
-	time.Sleep(60 * time.Millisecond)
+	// Advance past debounce
+	advance(60 * time.Millisecond)
 	state = detector.DetectState()
 
 	if state != IdleStateActive {
@@ -142,7 +156,7 @@ func TestIdleDetector_TimeoutDetection(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test", buffer, config)
+	detector, advance := newDetectorWithFakeClock("test", buffer, config)
 
 	// Start idle
 	buffer.Write([]byte("$ "))
@@ -153,8 +167,8 @@ func TestIdleDetector_TimeoutDetection(t *testing.T) {
 		t.Error("expected waiting state initially")
 	}
 
-	// Wait for timeout
-	time.Sleep(200 * time.Millisecond)
+	// Advance past idle threshold
+	advance(200 * time.Millisecond)
 	state := detector.DetectState()
 
 	if state != IdleStateTimeout {
@@ -171,7 +185,7 @@ func TestIdleDetector_ActivityTracking(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test", buffer, config)
+	detector, advance := newDetectorWithFakeClock("test", buffer, config)
 
 	// Initial activity
 	buffer.Write([]byte("Running... (esc to interrupt)"))
@@ -179,8 +193,8 @@ func TestIdleDetector_ActivityTracking(t *testing.T) {
 
 	lastActivity1 := detector.GetLastActivity()
 
-	// Short wait
-	time.Sleep(50 * time.Millisecond)
+	// Advance time so the second detection records a later timestamp
+	advance(50 * time.Millisecond)
 
 	// More activity
 	buffer.Clear()
@@ -204,25 +218,23 @@ func TestIdleDetector_GetIdleDuration(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test", buffer, config)
+	detector, advance := newDetectorWithFakeClock("test", buffer, config)
 
 	// Initial activity
 	buffer.Write([]byte("Running..."))
 	detector.DetectState()
 
-	// Wait a bit
-	time.Sleep(100 * time.Millisecond)
+	// Advance time (activity was at t0; now at t0+110ms)
+	advance(110 * time.Millisecond)
 
-	// Become idle
+	// Become idle (lastActivity stays at t0 since pattern is no longer Active)
 	buffer.Clear()
 	buffer.Write([]byte("— INSERT —"))
 	detector.DetectState()
 
-	time.Sleep(20 * time.Millisecond)
-
 	duration := detector.GetIdleDuration()
 
-	// Should be at least 100ms (from activity to idle transition)
+	// Idle duration = fakeNow - lastActivity = 110ms
 	if duration < 100*time.Millisecond {
 		t.Errorf("expected idle duration >= 100ms, got %v", duration)
 	}
@@ -237,21 +249,20 @@ func TestIdleDetector_IsIdle(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test", buffer, config)
+	detector, advance := newDetectorWithFakeClock("test", buffer, config)
 
-	// Active state
+	// Active state (Unknown→Active: no debounce)
 	buffer.Write([]byte("Running... (esc to interrupt)"))
-	time.Sleep(20 * time.Millisecond)
 	detector.DetectState()
 
 	if detector.IsIdle() {
 		t.Error("expected not idle when actively running")
 	}
 
-	// Idle state
+	// Advance past debounce delay then detect Idle
 	buffer.Clear()
 	buffer.Write([]byte("— INSERT —"))
-	time.Sleep(20 * time.Millisecond)
+	advance(20 * time.Millisecond)
 	detector.DetectState()
 
 	if !detector.IsIdle() {
@@ -268,21 +279,20 @@ func TestIdleDetector_IsActive(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test", buffer, config)
+	detector, advance := newDetectorWithFakeClock("test", buffer, config)
 
-	// Active state
+	// Active state (Unknown→Active: no debounce)
 	buffer.Write([]byte("Running... (esc to interrupt)"))
-	time.Sleep(20 * time.Millisecond)
 	detector.DetectState()
 
 	if !detector.IsActive() {
 		t.Error("expected active when running")
 	}
 
-	// Idle state
+	// Advance past debounce delay then detect Idle
 	buffer.Clear()
 	buffer.Write([]byte("— INSERT —"))
-	time.Sleep(20 * time.Millisecond)
+	advance(20 * time.Millisecond)
 	detector.DetectState()
 
 	if detector.IsActive() {
@@ -326,7 +336,6 @@ func TestIdleDetector_GetStateInfo(t *testing.T) {
 	detector := NewIdleDetectorWithConfig("test-session", buffer, config)
 
 	buffer.Write([]byte("— INSERT —"))
-	time.Sleep(20 * time.Millisecond)
 	detector.DetectState()
 
 	info := detector.GetStateInfo()
@@ -353,7 +362,7 @@ func TestIdleDetector_ConfigUpdate(t *testing.T) {
 		DebounceDelay: 10 * time.Millisecond,
 		BufferSize:    4096,
 	}
-	detector := NewIdleDetectorWithConfig("test", buffer, config)
+	detector, advance := newDetectorWithFakeClock("test", buffer, config)
 
 	// Update config
 	newConfig := IdleDetectorConfig{
@@ -367,7 +376,7 @@ func TestIdleDetector_ConfigUpdate(t *testing.T) {
 	buffer.Write([]byte("$ "))
 	detector.DetectState()
 
-	time.Sleep(150 * time.Millisecond)
+	advance(150 * time.Millisecond)
 	state := detector.DetectState()
 
 	// Should still be waiting (not timed out yet with 200ms threshold)
@@ -375,8 +384,8 @@ func TestIdleDetector_ConfigUpdate(t *testing.T) {
 		t.Errorf("expected waiting state with updated threshold, got %v", state)
 	}
 
-	// Wait longer
-	time.Sleep(100 * time.Millisecond)
+	// Advance past the 200ms threshold
+	advance(100 * time.Millisecond)
 	state = detector.DetectState()
 
 	// Now should be timed out
@@ -548,11 +557,11 @@ func TestIdleDetector_InitializeFromTimestamp_Idempotent(t *testing.T) {
 // TestIdleDetector_RecordActivity tests the event-driven activity recording.
 func TestIdleDetector_RecordActivity(t *testing.T) {
 	buffer := &mockPTYReader{}
-	detector := NewIdleDetector("test", buffer)
+	detector, advance := newDetectorWithFakeClock("test", buffer, DefaultIdleDetectorConfig())
 
 	// First call should update lastActivity
 	before := detector.GetLastActivity()
-	time.Sleep(600 * time.Millisecond) // Exceed minActivityInterval
+	advance(600 * time.Millisecond) // Exceed minActivityInterval
 	detector.RecordActivity()
 	after := detector.GetLastActivity()
 

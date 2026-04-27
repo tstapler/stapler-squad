@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/schema"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
@@ -120,6 +121,22 @@ func init() {
 	diffstatsDescRemoved := diffstatsFields[1].Descriptor()
 	// diffstats.DefaultRemoved holds the default value on creation for the removed field.
 	diffstats.DefaultRemoved = diffstatsDescRemoved.Default.(int)
+	projectFields := schema.Project{}.Fields()
+	_ = projectFields
+	// projectDescName is the schema descriptor for name field.
+	projectDescName := projectFields[0].Descriptor()
+	// project.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	project.NameValidator = projectDescName.Validators[0].(func(string) error)
+	// projectDescCreatedAt is the schema descriptor for created_at field.
+	projectDescCreatedAt := projectFields[2].Descriptor()
+	// project.DefaultCreatedAt holds the default value on creation for the created_at field.
+	project.DefaultCreatedAt = projectDescCreatedAt.Default.(func() time.Time)
+	// projectDescUpdatedAt is the schema descriptor for updated_at field.
+	projectDescUpdatedAt := projectFields[3].Descriptor()
+	// project.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	project.DefaultUpdatedAt = projectDescUpdatedAt.Default.(func() time.Time)
+	// project.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	project.UpdateDefaultUpdatedAt = projectDescUpdatedAt.UpdateDefault.(func() time.Time)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescTitle is the schema descriptor for title field.
@@ -156,6 +173,10 @@ func init() {
 	sessionDescIsExpanded := sessionFields[15].Descriptor()
 	// session.DefaultIsExpanded holds the default value on creation for the is_expanded field.
 	session.DefaultIsExpanded = sessionDescIsExpanded.Default.(bool)
+	// sessionDescOneShot is the schema descriptor for one_shot field.
+	sessionDescOneShot := sessionFields[26].Descriptor()
+	// session.DefaultOneShot holds the default value on creation for the one_shot field.
+	session.DefaultOneShot = sessionDescOneShot.Default.(bool)
 	tagFields := schema.Tag{}.Fields()
 	_ = tagFields
 	// tagDescName is the schema descriptor for name field.

@@ -1,0 +1,16 @@
+{
+  "id": "project:list",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListProjects",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestListProjects_EmptyInitially",
+    "TestListProjects_AfterCreate",
+    "TestListProjects_NilStorageReturnsEmpty"
+  ],
+  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+}

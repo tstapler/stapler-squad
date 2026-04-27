@@ -14,8 +14,13 @@ export const sessionSchema = z.object({
     .string()
     .min(1, "Repository path is required")
     .refine(
-      (path) => path.startsWith("/") || path.startsWith("~"),
-      "Path must be an absolute path (start with / or ~)"
+      (path) =>
+        path.startsWith("/") ||
+        path.startsWith("~") ||
+        path.includes("github.com/") ||
+        path.startsWith("git@github.com:") ||
+        path.startsWith("ssh://"),
+      "Path must be an absolute path (start with / or ~) or a GitHub URL"
     ),
 
   workingDir: z
@@ -50,6 +55,11 @@ export const sessionSchema = z.object({
   prompt: z
     .string()
     .max(1000, "Prompt must be less than 1000 characters")
+    .optional(),
+
+  initialPrompt: z
+    .string()
+    .max(10000, "Initial prompt must be less than 10000 characters")
     .optional(),
 
   autoYes: z.boolean().optional(),
@@ -96,6 +106,7 @@ export const defaultValues: Partial<SessionFormData> = {
   branch: "",
   category: "",
   prompt: "",
+  initialPrompt: "",
   existingWorktree: "",
   sessionType: "new_worktree",
   useTitleAsBranch: true,

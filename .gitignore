@@ -51,3 +51,9 @@ build/
 tools/scanner/cmd
 tools/scanner/backend/cmd/scanner
 coverage.html
+
+# Monolithic registry files — generated aggregates, not source of truth.
+# Source of truth: docs/registry/features/<backend|frontend>/<domain>/<action>.json
+docs/registry/backend-features.json
+docs/registry/frontend-features.json
+docs/registry/coverage-gaps.json

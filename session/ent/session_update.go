@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
+	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
@@ -483,6 +484,40 @@ func (_u *SessionUpdate) ClearMcpServerURL() *SessionUpdate {
 	return _u
 }
 
+// SetInitialPrompt sets the "initial_prompt" field.
+func (_u *SessionUpdate) SetInitialPrompt(v string) *SessionUpdate {
+	_u.mutation.SetInitialPrompt(v)
+	return _u
+}
+
+// SetNillableInitialPrompt sets the "initial_prompt" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableInitialPrompt(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetInitialPrompt(*v)
+	}
+	return _u
+}
+
+// ClearInitialPrompt clears the value of the "initial_prompt" field.
+func (_u *SessionUpdate) ClearInitialPrompt() *SessionUpdate {
+	_u.mutation.ClearInitialPrompt()
+	return _u
+}
+
+// SetOneShot sets the "one_shot" field.
+func (_u *SessionUpdate) SetOneShot(v bool) *SessionUpdate {
+	_u.mutation.SetOneShot(v)
+	return _u
+}
+
+// SetNillableOneShot sets the "one_shot" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableOneShot(v *bool) *SessionUpdate {
+	if v != nil {
+		_u.SetOneShot(*v)
+	}
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdate) SetWorktreeID(id int) *SessionUpdate {
 	_u.mutation.SetWorktreeID(id)
@@ -555,6 +590,25 @@ func (_u *SessionUpdate) SetClaudeSession(v *ClaudeSession) *SessionUpdate {
 	return _u.SetClaudeSessionID(v.ID)
 }
 
+// SetProjectID sets the "project" edge to the Project entity by ID.
+func (_u *SessionUpdate) SetProjectID(id int) *SessionUpdate {
+	_u.mutation.SetProjectID(id)
+	return _u
+}
+
+// SetNillableProjectID sets the "project" edge to the Project entity by ID if the given value is not nil.
+func (_u *SessionUpdate) SetNillableProjectID(id *int) *SessionUpdate {
+	if id != nil {
+		_u = _u.SetProjectID(*id)
+	}
+	return _u
+}
+
+// SetProject sets the "project" edge to the Project entity.
+func (_u *SessionUpdate) SetProject(v *Project) *SessionUpdate {
+	return _u.SetProjectID(v.ID)
+}
+
 // Mutation returns the SessionMutation object of the builder.
 func (_u *SessionUpdate) Mutation() *SessionMutation {
 	return _u.mutation
@@ -596,6 +650,12 @@ func (_u *SessionUpdate) RemoveTags(v ...*Tag) *SessionUpdate {
 // ClearClaudeSession clears the "claude_session" edge to the ClaudeSession entity.
 func (_u *SessionUpdate) ClearClaudeSession() *SessionUpdate {
 	_u.mutation.ClearClaudeSession()
+	return _u
+}
+
+// ClearProject clears the "project" edge to the Project entity.
+func (_u *SessionUpdate) ClearProject() *SessionUpdate {
+	_u.mutation.ClearProject()
 	return _u
 }
 
@@ -799,6 +859,15 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if _u.mutation.McpServerURLCleared() {
 		_spec.ClearField(session.FieldMcpServerURL, field.TypeString)
 	}
+	if value, ok := _u.mutation.InitialPrompt(); ok {
+		_spec.SetField(session.FieldInitialPrompt, field.TypeString, value)
+	}
+	if _u.mutation.InitialPromptCleared() {
+		_spec.ClearField(session.FieldInitialPrompt, field.TypeString)
+	}
+	if value, ok := _u.mutation.OneShot(); ok {
+		_spec.SetField(session.FieldOneShot, field.TypeBool, value)
+	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2O,
@@ -924,6 +993,35 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(claudesession.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ProjectCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   session.ProjectTable,
+			Columns: []string{session.ProjectColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(project.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ProjectIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   session.ProjectTable,
+			Columns: []string{session.ProjectColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(project.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
@@ -1402,6 +1500,40 @@ func (_u *SessionUpdateOne) ClearMcpServerURL() *SessionUpdateOne {
 	return _u
 }
 
+// SetInitialPrompt sets the "initial_prompt" field.
+func (_u *SessionUpdateOne) SetInitialPrompt(v string) *SessionUpdateOne {
+	_u.mutation.SetInitialPrompt(v)
+	return _u
+}
+
+// SetNillableInitialPrompt sets the "initial_prompt" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableInitialPrompt(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetInitialPrompt(*v)
+	}
+	return _u
+}
+
+// ClearInitialPrompt clears the value of the "initial_prompt" field.
+func (_u *SessionUpdateOne) ClearInitialPrompt() *SessionUpdateOne {
+	_u.mutation.ClearInitialPrompt()
+	return _u
+}
+
+// SetOneShot sets the "one_shot" field.
+func (_u *SessionUpdateOne) SetOneShot(v bool) *SessionUpdateOne {
+	_u.mutation.SetOneShot(v)
+	return _u
+}
+
+// SetNillableOneShot sets the "one_shot" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableOneShot(v *bool) *SessionUpdateOne {
+	if v != nil {
+		_u.SetOneShot(*v)
+	}
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdateOne) SetWorktreeID(id int) *SessionUpdateOne {
 	_u.mutation.SetWorktreeID(id)
@@ -1474,6 +1606,25 @@ func (_u *SessionUpdateOne) SetClaudeSession(v *ClaudeSession) *SessionUpdateOne
 	return _u.SetClaudeSessionID(v.ID)
 }
 
+// SetProjectID sets the "project" edge to the Project entity by ID.
+func (_u *SessionUpdateOne) SetProjectID(id int) *SessionUpdateOne {
+	_u.mutation.SetProjectID(id)
+	return _u
+}
+
+// SetNillableProjectID sets the "project" edge to the Project entity by ID if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableProjectID(id *int) *SessionUpdateOne {
+	if id != nil {
+		_u = _u.SetProjectID(*id)
+	}
+	return _u
+}
+
+// SetProject sets the "project" edge to the Project entity.
+func (_u *SessionUpdateOne) SetProject(v *Project) *SessionUpdateOne {
+	return _u.SetProjectID(v.ID)
+}
+
 // Mutation returns the SessionMutation object of the builder.
 func (_u *SessionUpdateOne) Mutation() *SessionMutation {
 	return _u.mutation
@@ -1515,6 +1666,12 @@ func (_u *SessionUpdateOne) RemoveTags(v ...*Tag) *SessionUpdateOne {
 // ClearClaudeSession clears the "claude_session" edge to the ClaudeSession entity.
 func (_u *SessionUpdateOne) ClearClaudeSession() *SessionUpdateOne {
 	_u.mutation.ClearClaudeSession()
+	return _u
+}
+
+// ClearProject clears the "project" edge to the Project entity.
+func (_u *SessionUpdateOne) ClearProject() *SessionUpdateOne {
+	_u.mutation.ClearProject()
 	return _u
 }
 
@@ -1748,6 +1905,15 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	if _u.mutation.McpServerURLCleared() {
 		_spec.ClearField(session.FieldMcpServerURL, field.TypeString)
 	}
+	if value, ok := _u.mutation.InitialPrompt(); ok {
+		_spec.SetField(session.FieldInitialPrompt, field.TypeString, value)
+	}
+	if _u.mutation.InitialPromptCleared() {
+		_spec.ClearField(session.FieldInitialPrompt, field.TypeString)
+	}
+	if value, ok := _u.mutation.OneShot(); ok {
+		_spec.SetField(session.FieldOneShot, field.TypeBool, value)
+	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{
 			Rel:     sqlgraph.O2O,
@@ -1873,6 +2039,35 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(claudesession.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.ProjectCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   session.ProjectTable,
+			Columns: []string{session.ProjectColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(project.FieldID, field.TypeInt),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.ProjectIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   session.ProjectTable,
+			Columns: []string{session.ProjectColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(project.FieldID, field.TypeInt),
 			},
 		}
 		for _, k := range nodes {
