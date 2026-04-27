@@ -151,7 +151,10 @@ export const navLink = style({
 });
 
 export const active = style({
-  color: vars.color.primary,
+  // Use textPrimary (overridden to #ededed inside the dark header) instead of
+  // vars.color.primary (#0070f3) which fails WCAG AA on the dark header backdrop.
+  // The blue underline still signals the active state visually.
+  color: vars.color.textPrimary,
   fontWeight: 700,
 
   selectors: {

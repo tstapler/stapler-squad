@@ -221,9 +221,12 @@ func (s *TmuxTestServer) CreateSession(sessionName string, command string) (*tmu
 	defer s.mu.Unlock()
 
 	// Use tmux dependency injection to create session on isolated server
-	// Use a test-specific prefix to avoid conflicts with production sessions
+	// Use a test-specific prefix to avoid conflicts with production sessions.
+	// WithRegistry(nil) prevents a background reconnect loop from running against
+	// the isolated socket — the loop tries attach-session on a keepalive that
+	// doesn't exist here, causing flaky new-session failures under CI load.
 	prefix := "test_"
-	session := tmux.NewTmuxSessionWithServerSocket(sessionName, command, prefix, s.socketName)
+	session := tmux.NewTmuxSessionWithServerSocket(sessionName, command, prefix, s.socketName, tmux.WithRegistry(nil))
 
 	// Start the session with current directory
 	workDir := "."
@@ -238,7 +241,7 @@ func (s *TmuxTestServer) CreateSession(sessionName string, command string) (*tmu
 // This is useful for testing timeout and hang scenarios.
 func (s *TmuxTestServer) CreateSessionWithoutStarting(sessionName string, command string, prefix string) *tmux.TmuxSession {
 	s.t.Helper()
-	return tmux.NewTmuxSessionWithServerSocket(sessionName, command, prefix, s.socketName)
+	return tmux.NewTmuxSessionWithServerSocket(sessionName, command, prefix, s.socketName, tmux.WithRegistry(nil))
 }
 
 // ListSessions returns all session names on this isolated server
