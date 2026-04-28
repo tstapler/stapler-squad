@@ -30,63 +30,63 @@ FAIL	github.com/tstapler/stapler-squad/testutil [setup failed]
    Console: stderr (level: ERROR)
 ═══════════════════════════════════════════════════════════════
 
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:31 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:31 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:31 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:31 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:32 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:33 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:33 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:33 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:33 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:34 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
-[pid-8925-1777295191] ERROR:2026/04/27 13:06:35 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:47 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:48 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:48 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:48 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:48 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:49 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:50 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:50 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:50 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:50 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
+[pid-8812-1777318607] ERROR:2026/04/27 19:36:51 config.go:287: failed to get claude command: claude command not found in aliases or PATH
 PASS
-ok  	github.com/tstapler/stapler-squad/config	4.840s
+ok  	github.com/tstapler/stapler-squad/config	4.926s
 PASS
-ok  	github.com/tstapler/stapler-squad/executor	31.080s
+ok  	github.com/tstapler/stapler-squad/executor	31.085s
 PASS
-ok  	github.com/tstapler/stapler-squad/github	0.013s
+ok  	github.com/tstapler/stapler-squad/github	0.012s
 PASS
 ok  	github.com/tstapler/stapler-squad/log	0.006s
 PASS
-ok  	github.com/tstapler/stapler-squad/pkg/classifier	0.514s
+ok  	github.com/tstapler/stapler-squad/pkg/classifier	0.622s
 ?   	github.com/tstapler/stapler-squad/profiling	[no test files]
 PASS
-ok  	github.com/tstapler/stapler-squad/server/analytics	0.007s
+ok  	github.com/tstapler/stapler-squad/server/analytics	0.005s
 ?   	github.com/tstapler/stapler-squad/server/auth	[no test files]
 PASS
-ok  	github.com/tstapler/stapler-squad/server/compression	0.110s
+ok  	github.com/tstapler/stapler-squad/server/compression	0.074s
 PASS
-ok  	github.com/tstapler/stapler-squad/server/handlers	0.011s
+ok  	github.com/tstapler/stapler-squad/server/handlers	0.010s
 ?   	github.com/tstapler/stapler-squad/server/middleware	[no test files]
 PASS
-ok  	github.com/tstapler/stapler-squad/server/protocol	0.006s
+ok  	github.com/tstapler/stapler-squad/server/protocol	0.004s
 PASS
-ok  	github.com/tstapler/stapler-squad/session/detection	11.728s
+ok  	github.com/tstapler/stapler-squad/session/detection	11.706s
 PASS
-ok  	github.com/tstapler/stapler-squad/session/detection/ratelimit	9.242s
+ok  	github.com/tstapler/stapler-squad/session/detection/ratelimit	9.237s
 ?   	github.com/tstapler/stapler-squad/session/ent	[no test files]
 ?   	github.com/tstapler/stapler-squad/session/ent/approvalrule	[no test files]
 ?   	github.com/tstapler/stapler-squad/session/ent/classificationanalytics	[no test files]
@@ -103,77 +103,77 @@ ok  	github.com/tstapler/stapler-squad/session/detection/ratelimit	9.242s
 ?   	github.com/tstapler/stapler-squad/session/ent/tag	[no test files]
 ?   	github.com/tstapler/stapler-squad/session/ent/worktree	[no test files]
 PASS
-ok  	github.com/tstapler/stapler-squad/session/git	4.163s
+ok  	github.com/tstapler/stapler-squad/session/git	4.018s
 PASS
-ok  	github.com/tstapler/stapler-squad/session/mux	4.051s
+ok  	github.com/tstapler/stapler-squad/session/mux	3.968s
 ?   	github.com/tstapler/stapler-squad/session/procinfo	[no test files]
 ?   	github.com/tstapler/stapler-squad/session/queue	[no test files]
 goos: linux
 goarch: amd64
 pkg: github.com/tstapler/stapler-squad/session/scrollback
-cpu: AMD EPYC 7763 64-Core Processor                
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  364161	      4127 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  317943	      4000 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  294676	      3567 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  337980	      3619 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  344238	      3719 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  340338	      3675 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  302965	      3836 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  347732	      3603 ns/op	    6208 B/op	       2 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	   10000	    101341 ns/op	 631.53 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	   10000	    105911 ns/op	 604.28 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	    9908	    105840 ns/op	 604.69 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	   10000	    106455 ns/op	 601.19 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	   10000	    106691 ns/op	 599.86 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	    9992	    105942 ns/op	 604.10 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	    9916	    106164 ns/op	 602.84 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_BurstAppend-4            	   10000	    106692 ns/op	 599.86 MB/s	   64000 B/op	    1000 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   68043	     17341 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   71895	     16511 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   70890	     16566 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   73581	     16631 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   68457	     16739 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   70963	     16729 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   70376	     17041 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   70185	     16094 ns/op	   57344 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  120763	      9556 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  126144	      9354 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  129580	      9532 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  120067	      9552 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  122156	      9512 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  125874	     10334 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  111277	      9599 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBuffer_GetRange_Sequential-4    	  126988	     11057 ns/op	   28672 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	11957112	       100.3 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	12264312	        97.24 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	12237391	        98.95 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	12358538	        98.15 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	12028770	        98.41 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	11620626	        97.43 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	12323601	        97.60 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferAppend-4                  	12285540	        97.57 ns/op	      24 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  499990	      2180 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  630783	      1763 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  660489	      1751 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  647220	      1769 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  650283	      1791 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  675112	      1764 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  660924	      1797 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferGetLastN-4                	  682605	      1817 ns/op	    6144 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8751934	       134.9 ns/op	      32 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8767438	       132.9 ns/op	      32 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8966668	       134.1 ns/op	      32 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8929620	       132.2 ns/op	      32 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8980437	       132.1 ns/op	      32 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8763870	       132.8 ns/op	      32 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8886362	       130.8 ns/op	      32 B/op	       1 allocs/op
-BenchmarkCircularBufferConcurrentAppend-4        	 8754001	       134.7 ns/op	      32 B/op	       1 allocs/op
+cpu: AMD EPYC 9V74 80-Core Processor                
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  400381	      3171 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  343195	      3237 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  389823	      3212 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  383616	      3175 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  367594	      3146 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  410719	      3143 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  376450	      3167 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_ConcurrentReadWrite-4    	  387396	      3148 ns/op	    6208 B/op	       2 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	   10000	    104075 ns/op	 614.94 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	    9975	    104739 ns/op	 611.04 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	    9986	    106083 ns/op	 603.30 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	   10000	    106035 ns/op	 603.58 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	   10000	    104916 ns/op	 610.01 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	   10000	    104606 ns/op	 611.82 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	    9921	    105040 ns/op	 609.29 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_BurstAppend-4            	    9759	    104676 ns/op	 611.41 MB/s	   64000 B/op	    1000 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   68738	     17642 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   72304	     17045 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   73546	     17084 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   70965	     16948 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   71412	     17450 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   68574	     17060 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   73978	     17204 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetLastN_LargeBuffer-4   	   67623	     16821 ns/op	   57344 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  127186	     10132 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  127504	      9993 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  126062	      9366 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  128943	     10108 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  107473	     10124 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  111057	      9879 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  128888	     10349 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBuffer_GetRange_Sequential-4    	  128835	      9843 ns/op	   28672 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11286902	       105.5 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11388864	       105.5 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11209011	       105.2 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11310968	       105.3 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11397460	       105.2 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11334598	       105.4 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11329878	       105.2 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferAppend-4                  	11328469	       105.4 ns/op	      24 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  627862	      1968 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  623038	      2010 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  613755	      1965 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  611118	      1913 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  638347	      1914 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  595233	      1904 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  574036	      1964 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferGetLastN-4                	  637647	      1902 ns/op	    6144 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8554830	       136.6 ns/op	      32 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8646438	       135.9 ns/op	      32 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8537488	       135.9 ns/op	      32 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8626104	       137.2 ns/op	      32 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8627826	       137.1 ns/op	      32 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8590544	       136.0 ns/op	      32 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8668814	       138.5 ns/op	      32 B/op	       1 allocs/op
+BenchmarkCircularBufferConcurrentAppend-4        	 8616043	       135.8 ns/op	      32 B/op	       1 allocs/op
 PASS
-ok  	github.com/tstapler/stapler-squad/session/scrollback	71.669s
+ok  	github.com/tstapler/stapler-squad/session/scrollback	71.960s
 PASS
-ok  	github.com/tstapler/stapler-squad/session/tmux	330.832s
+ok  	github.com/tstapler/stapler-squad/session/tmux	330.890s
 PASS
-ok  	github.com/tstapler/stapler-squad/session/vc	2.475s
+ok  	github.com/tstapler/stapler-squad/session/vc	2.564s
 ?   	github.com/tstapler/stapler-squad/session/vcs	[no test files]
 ?   	github.com/tstapler/stapler-squad/telemetry	[no test files]
 FAIL

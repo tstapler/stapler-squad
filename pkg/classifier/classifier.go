@@ -58,6 +58,12 @@ type ClassificationContext struct {
 	IsGitRepo  bool
 	RepoRoot   string
 	IsWorktree bool
+	// Env is an optional map of environment variable names to values used to expand
+	// $VAR and ${VAR} references in Bash commands before classification. This is
+	// primarily useful in tests and CI to evaluate commands that contain dynamic
+	// variables (e.g. BRANCH=main "git checkout $BRANCH" → "git checkout main").
+	// Variables not present in the map are left unexpanded.
+	Env map[string]string
 }
 
 // Classifier classifies a PermissionRequestPayload to determine the action to take.
@@ -384,18 +390,37 @@ func (c *RuleBasedClassifier) Rules() []Rule {
 	return out
 }
 
-// Classify evaluates rules in priority order and returns the first match.
-// For Bash commands, compound commands (with &&, |, ;, $(), etc.) are evaluated
-// using classifyCompound to ensure every sub-command is covered.
+// maxRecursionDepth limits how deeply recursive-eval wrappers (xargs, sudo, rtk, …)
+// can be nested. Prevents infinite loops from pathological input like `xargs xargs xargs`.
+const maxRecursionDepth = 5
+
+// Classify acquires the read lock and evaluates payload against all rules.
+// For Bash commands, compound commands (&&, |, ;, $(), etc.) are split and each
+// sub-command evaluated independently. Recursive-eval programs (xargs, sudo, rtk, …)
+// have their inner command extracted and classified through the full rule engine.
 // If no rule matches, returns Escalate for human review.
 func (c *RuleBasedClassifier) Classify(payload PermissionRequestPayload, ctx ClassificationContext) ClassificationResult {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	return c.classifyInternal(payload, ctx, 0)
+}
 
+// classifyInternal is the lock-free recursive implementation. depth tracks the current
+// recursion level to prevent infinite loops from chained recursive-eval programs.
+// Must be called with c.mu at least RLocked.
+func (c *RuleBasedClassifier) classifyInternal(payload PermissionRequestPayload, ctx ClassificationContext, depth int) ClassificationResult {
 	if strings.EqualFold(payload.ToolName, "Bash") {
 		cmd, _ := payload.ToolInput["command"].(string)
 		if cmd != "" {
-			// Perform deep security audit via AST analysis
+			// Expand $VAR / ${VAR} references, mirroring Python os.path.expandvars:
+			// ctx.Env overrides take precedence, then the real OS environment is used
+			// as a fallback. Only applied when ctx.Env is non-nil (opt-in).
+			if ctx.Env != nil {
+				cmd = ExpandEnvVars(cmd, ctx.Env)
+				payload = payloadWithCommand(payload, cmd)
+			}
+
+			// Deep security audit via AST analysis — runs on every level.
 			findings := AuditCommand(cmd, ctx.Cwd)
 			for _, f := range findings {
 				if f.RiskLevel == RiskCritical {
@@ -412,7 +437,30 @@ func (c *RuleBasedClassifier) Classify(payload PermissionRequestPayload, ctx Cla
 
 			cmds := ExtractAllCommands(cmd)
 			if len(cmds) > 1 {
-				return c.classifyCompound(payload, cmds)
+				return c.classifyCompound(payload, cmds, ctx, depth)
+			}
+
+			// Single command: if it is a recursive-eval wrapper (xargs, sudo, rtk, …),
+			// extract the inner command and classify it through the full rule engine.
+			if len(cmds) == 1 && depth < maxRecursionDepth {
+				pc := cmds[0]
+
+				// Shell expansion as program: $VAR or $(cmd) after path-stripping means
+				// the actual executable cannot be determined statically. Escalate with a
+				// specific, actionable reason instead of the generic "no matching rule".
+				if pc.HasShellExpansionProgram {
+					return ClassificationResult{
+						Decision:    Escalate,
+						RiskLevel:   RiskMedium,
+						Reason:      fmt.Sprintf("Command program is a shell expansion (%q); cannot determine the actual executable without evaluating the shell. Review the command before approving.", pc.Program),
+						Alternative: "Use the concrete program name directly, or expand the variable in a separate step.",
+						RuleID:      "shell-expansion-program",
+					}
+				}
+
+				if innerCmd := ExtractInnerCommand(pc.Program, pc.Args); innerCmd != "" {
+					return c.classifyInternal(payloadWithCommand(payload, innerCmd), ctx, depth+1)
+				}
 			}
 		}
 	}
@@ -444,69 +492,86 @@ func (c *RuleBasedClassifier) classifySingle(payload PermissionRequestPayload) C
 	}
 }
 
+// classifyOneSubCmd classifies a single parsed sub-command from a compound expression.
+// If the sub-command is a recursive-eval wrapper (xargs, sudo, rtk, …), the inner
+// command is extracted and classified recursively. Otherwise, static rule matching is used.
+func (c *RuleBasedClassifier) classifyOneSubCmd(sub ParsedCommand, payload PermissionRequestPayload, ctx ClassificationContext, depth int) ClassificationResult {
+	// Shell expansion as program: always escalate with a specific reason regardless
+	// of whether this sub-command came from the top level or a compound expression.
+	if sub.HasShellExpansionProgram {
+		return ClassificationResult{
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      fmt.Sprintf("Command program is a shell expansion (%q); cannot determine the actual executable without evaluating the shell. Review the command before approving.", sub.Program),
+			Alternative: "Use the concrete program name directly, or expand the variable in a separate step.",
+			RuleID:      "shell-expansion-program",
+		}
+	}
+	if depth < maxRecursionDepth {
+		if innerCmd := ExtractInnerCommand(sub.Program, sub.Args); innerCmd != "" {
+			return c.classifyInternal(payloadWithCommand(payload, innerCmd), ctx, depth+1)
+		}
+	}
+	return c.classifySingle(payloadWithCommand(payload, sub.Raw))
+}
+
 // classifyCompound evaluates each sub-command extracted from a compound Bash command.
-// Pass 1: any deny/escalate decision on any sub-command wins immediately.
-// Pass 2: every sub-command must be matched by an allow rule; otherwise escalate.
-func (c *RuleBasedClassifier) classifyCompound(payload PermissionRequestPayload, cmds []ParsedCommand) ClassificationResult {
+// Recursive-eval wrappers (xargs, sudo, rtk, …) have their inner command extracted and
+// classified through the full rule engine.
+//
+// Commands extracted from inside $(...) substitutions (FromCmdSubst=true) are treated
+// differently: they produce argument values for the outer command rather than executing
+// independently. The rules are:
+//   - Pass 1 (deny/escalate): CmdSubst inner commands skip catch-all escalations (RuleID=="")
+//     but still block on explicit deny/escalate rules — e.g. make $(git push) still escalates.
+//   - Pass 2 (require AutoAllow): CmdSubst inner commands are exempt; only top-level
+//     commands must have an explicit AutoAllow rule.
+func (c *RuleBasedClassifier) classifyCompound(payload PermissionRequestPayload, cmds []ParsedCommand, ctx ClassificationContext, depth int) ClassificationResult {
 	// Pass 1: deny/escalate takes priority.
 	for _, sub := range cmds {
-		subPayload := payloadWithCommand(payload, sub.Raw)
-		for _, rule := range c.rules {
-			if !rule.Enabled {
+		result := c.classifyOneSubCmd(sub, payload, ctx, depth)
+		if result.Decision == AutoDeny || result.Decision == Escalate {
+			// CmdSubst inner commands: only block on explicit rules, not catch-all escalations.
+			// Catch-all escalations (RuleID=="" and reason="No matching rule…") mean the inner
+			// command is simply unknown — not dangerous. E.g. make $(TARGET) should not escalate
+			// because TARGET has no seed rule; it's just a value producer.
+			if sub.FromCmdSubst && result.RuleID == "" && result.Decision == Escalate {
 				continue
 			}
-			if c.matchesRule(rule, subPayload) {
-				if rule.Decision == AutoDeny || rule.Decision == Escalate {
-					return ClassificationResult{
-						Decision:    rule.Decision,
-						RiskLevel:   rule.RiskLevel,
-						Reason:      fmt.Sprintf("Sub-command %q matched: %s", sub.Raw, rule.Reason),
-						Alternative: rule.Alternative,
-						RuleID:      rule.ID,
-						RuleName:    rule.Name,
-					}
-				}
-				// Allow found — stop checking rules for this sub-command.
-				break
+			return ClassificationResult{
+				Decision:    result.Decision,
+				RiskLevel:   result.RiskLevel,
+				Reason:      fmt.Sprintf("Sub-command %q: %s", sub.Raw, result.Reason),
+				Alternative: result.Alternative,
+				RuleID:      result.RuleID,
+				RuleName:    result.RuleName,
 			}
 		}
 	}
 
-	// Pass 2: every sub-command must be covered by an allow rule.
-	var firstAllowRule *Rule
+	// Pass 2: every top-level sub-command must produce AutoAllow.
+	// CmdSubst inner commands are exempt — they are argument producers, not independent commands.
+	var firstResult *ClassificationResult
 	for _, sub := range cmds {
-		subPayload := payloadWithCommand(payload, sub.Raw)
-		covered := false
-		for i, rule := range c.rules {
-			if !rule.Enabled {
-				continue
-			}
-			if rule.Decision == AutoAllow && c.matchesRule(rule, subPayload) {
-				covered = true
-				if firstAllowRule == nil {
-					firstAllowRule = &c.rules[i]
-				}
-				break
-			}
+		if sub.FromCmdSubst {
+			continue // exempt from AutoAllow requirement
 		}
-		if !covered {
+		result := c.classifyOneSubCmd(sub, payload, ctx, depth)
+		if result.Decision != AutoAllow {
 			return ClassificationResult{
 				Decision:  Escalate,
 				RiskLevel: RiskMedium,
 				Reason:    fmt.Sprintf("Sub-command %q has no matching allow rule; escalated for manual review.", sub.Raw),
 			}
 		}
+		if firstResult == nil {
+			r := result
+			firstResult = &r
+		}
 	}
 
-	if firstAllowRule != nil {
-		return ClassificationResult{
-			Decision:    AutoAllow,
-			RiskLevel:   firstAllowRule.RiskLevel,
-			Reason:      firstAllowRule.Reason,
-			Alternative: firstAllowRule.Alternative,
-			RuleID:      firstAllowRule.ID,
-			RuleName:    firstAllowRule.Name,
-		}
+	if firstResult != nil {
+		return *firstResult
 	}
 	return ClassificationResult{
 		Decision:  AutoAllow,
@@ -872,6 +937,24 @@ func SeedRules() []Rule {
 			Source:    "seed",
 		},
 		{
+			// git filter-repo and filter-branch rewrite history, potentially discarding commits
+			// and making backups mandatory. These must fire at 500 to override the git allow rules.
+			ID:       "seed-escalate-git-filter-history",
+			Name:     "Escalate git history-rewrite operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"git"},
+				Subcommands: []string{"filter-repo", "filter-branch"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskHigh,
+			Reason:      "git filter-repo/filter-branch rewrites history and cannot be undone without a backup.",
+			Alternative: "Ensure a complete backup exists (e.g. git clone --mirror) before proceeding.",
+			Priority:    500,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
 			// curl with file output flags (-o/-O/--output) writes response bodies to disk.
 			// Must fire at 500 to override seed-allow-curl-read at 100.
 			ID:             "seed-escalate-curl-output",
@@ -997,6 +1080,8 @@ func SeedRules() []Rule {
 					// Additional read-only plumbing and inspection subcommands.
 					"merge-base", "ls-tree", "grep", "check-ignore",
 					"diff-tree", "cat-file", "for-each-ref", "count-objects",
+					// Configuration and remote inspection.
+					"config", "ls-remote",
 				},
 			},
 			Decision:  AutoAllow,
@@ -1465,6 +1550,122 @@ func SeedRules() []Rule {
 			Source:    "seed",
 		},
 		{
+			// javap disassembles Java .class files to show their bytecode and signatures.
+			// It is a read-only inspection tool — no files are created or modified.
+			ID:       "seed-allow-bash-javap",
+			Name:     "Allow javap (Java bytecode disassembler)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"javap"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "javap disassembles Java class files; it is a read-only inspection tool.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// jar is the standard Java archive tool used for creating, listing, and
+			// extracting JARs/AARs/WARs. All forms (tf=list, xf=extract, cf=create) are
+			// standard build-step operations. The deny rules protect .env and .git.
+			ID:       "seed-allow-bash-jar",
+			Name:     "Allow jar (Java archive tool)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"jar"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "jar creates, lists, and extracts Java archives; a standard build step.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// unzip is commonly used in JVM/Android workflows to inspect AAR/APK archives
+			// and in general for extracting downloaded packages.
+			ID:       "seed-allow-bash-unzip",
+			Name:     "Allow unzip archive extraction",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"unzip"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "unzip extracts archives; a standard build and inspection step.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// jest and vitest are the standard JavaScript/TypeScript test runners.
+			// They mirror the pytest rule and should be auto-allowed.
+			ID:       "seed-allow-bash-jest",
+			Name:     "Allow jest and vitest test runners",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"jest", "vitest"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "jest/vitest runs JavaScript/TypeScript project tests.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// buf is the standard Protocol Buffer toolchain used for code generation,
+			// linting, and format checking. All operations are local build steps.
+			ID:       "seed-allow-bash-buf",
+			Name:     "Allow buf Protocol Buffer tooling",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"buf"},
+				Subcommands: []string{"generate", "lint", "format", "build", "dep", "check", "breaking", "config", "registry", "beta", "alpha", "push"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "buf generates and validates Protocol Buffer definitions; a standard build step.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// jfr (Java Flight Recorder) CLI reads JVM recording files for profiling.
+			// summary, print, view, metadata, and disassemble are all read-only operations.
+			ID:       "seed-allow-bash-jfr",
+			Name:     "Allow jfr (Java Flight Recorder) read-only commands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"jfr"},
+				Subcommands: []string{"summary", "print", "view", "metadata", "assemble", "disassemble"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "jfr reads JVM flight recording files; summary and print are read-only.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// aapt/aapt2 is the Android Asset Packaging Tool used to inspect APKs.
+			// dump, list, and version are read-only operations on the archive.
+			ID:       "seed-allow-bash-aapt",
+			Name:     "Allow aapt/aapt2 APK inspection",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"aapt", "aapt2"},
+				Subcommands: []string{"dump", "list", "version", "v"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "aapt dump reads APK metadata without modifying it.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
 			// pixi is a conda-compatible package manager that creates isolated project
 			// environments. Its standard operations mirror those of npm/pip.
 			ID:       "seed-allow-bash-pixi",
@@ -1546,6 +1747,86 @@ func SeedRules() []Rule {
 			Priority:  100,
 			Enabled:   true,
 			Source:    "seed",
+		},
+
+		{
+			// ip read-only: inspection commands (route, addr, link, neigh, rule) that
+			// show current network state without modifying it.
+			//
+			// Because ip is in deepSubcommandPrograms, extractSubcommand captures two
+			// tokens (e.g., "route show", "addr add"). BlockedSubcommands lists all
+			// known write verb pairs so that ip route add, ip addr add, ip link set, etc.
+			// do NOT match this rule and fall through to seed-escalate-ip-networking at 50.
+			//
+			// Bare invocations (ip route, ip addr) capture only one token ("route") which
+			// is not blocked, so they auto-allow (bare = show).
+			ID:       "seed-allow-bash-ip-read",
+			Name:     "Allow ip read-only network inspection",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"ip"},
+				BlockedSubcommands: []string{
+					// route write ops
+					"route add", "route del", "route delete", "route change",
+					"route replace", "route flush", "route append",
+					// addr write ops
+					"addr add", "addr del", "addr delete", "addr change",
+					"addr flush", "addr replace",
+					// link write ops
+					"link set", "link add", "link delete", "link change",
+					// neigh write ops
+					"neigh add", "neigh del", "neigh delete", "neigh change",
+					"neigh flush", "neigh replace",
+					// rule write ops
+					"rule add", "rule del", "rule delete",
+					// short-alias write ops (ip a, ip r, ip n, ip l)
+					"a add", "a del", "a delete", "a change", "a flush",
+					"r add", "r del", "r delete", "r change", "r replace", "r flush",
+					"n add", "n del", "n delete", "n change", "n flush",
+					"l set", "l add", "l delete", "l change",
+				},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "Read-only ip commands inspect network state without modifying it.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// pacman read-only: -Q (query installed packages) and -F (file database query)
+			// are information-only operations. All other modes (-S install, -R remove,
+			// -U upgrade, -D database write) are caught by seed-escalate-pacman at 50.
+			//
+			// Matches any -Q variant (-Qs, -Qi, -Ql, -Qo, -Qe, -Qm, etc.) and -F variants.
+			ID:             "seed-allow-bash-pacman-query",
+			Name:           "Allow pacman read-only query operations",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`^pacman\s+(-Q[a-zA-Z]*\b|--query\b|-F[a-zA-Z]*\b|--files\b|-[Vh]\b|--version\b|--help\b)`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "pacman -Q and -F operations query installed packages without modifying them.",
+			Priority:       100,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// sqlite3 read-only: allow a safe subset of dot commands that only inspect
+			// schema and metadata. SQL queries and DML (INSERT, UPDATE, DELETE) are not
+			// matched and fall through to seed-escalate-sqlite3 at priority 50.
+			//
+			// Matched: .tables, .schema [table], .indexes [table], .databases, .pragma <name>
+			// NOT matched: "SELECT ...", "INSERT INTO ...", bare invocations without dot cmds.
+			ID:             "seed-allow-bash-sqlite3-read",
+			Name:           "Allow sqlite3 read-only schema inspection",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bsqlite3\b\s+\S+\s+["']?\.(tables|databases?|schema(\s+\w+)?|indexes?(\s+\w+)?|pragma\s+\w+)["']?\s*$`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "sqlite3 dot commands (.tables, .schema, .indexes, .pragma) are read-only metadata inspection.",
+			Priority:       100,
+			Enabled:        true,
+			Source:         "seed",
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
@@ -1694,6 +1975,63 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "Changing file permissions or ownership can affect system security.",
 			Alternative: "Confirm the intended permissions and target files before proceeding.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// sqlite3 is an interactive/batch database CLI. Queries can be read-only
+			// (SELECT) or destructive (DROP, DELETE, INSERT). Escalate so the user can
+			// confirm the query before it runs against a production database.
+			ID:       "seed-escalate-sqlite3",
+			Name:     "Escalate sqlite3 database CLI",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"sqlite3"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "sqlite3 can read or modify databases; review the query before proceeding.",
+			Alternative: "Add '.mode readonly' at the start of the script for safe inspection.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// seed-escalate-xvfb-run removed: xvfb-run is now in recursiveEvalPrograms.
+			// Its inner command is extracted and classified through the full rule engine.
+			// pacman is the Arch Linux system package manager. Installing or removing
+			// packages modifies system-wide state and should be reviewed.
+			ID:       "seed-escalate-pacman",
+			Name:     "Escalate pacman Arch package manager",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"pacman"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "pacman installs or modifies system packages.",
+			Alternative: "Review the package name and its dependencies before installing.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// ip is the Linux IP networking tool. While read-only invocations (ip route,
+			// ip neigh) are common, ip can also add/delete routes and addresses. Because
+			// the first positional argument (e.g., "route") does not distinguish show from
+			// add/del, we escalate all ip operations rather than allow potentially
+			// destructive network changes.
+			ID:       "seed-escalate-ip-networking",
+			Name:     "Escalate ip networking commands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"ip"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "ip can modify network routing, addresses, and interfaces; review before proceeding.",
+			Alternative: "Use 'ip route show' or 'ip addr show' to confirm current state first.",
 			Priority:    50,
 			Enabled:     true,
 			Source:      "seed",

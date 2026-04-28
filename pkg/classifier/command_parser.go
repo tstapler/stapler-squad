@@ -34,11 +34,24 @@ type ParsedCommand struct {
 	Raw string
 	// Redirections lists the targets of any shell redirections (e.g., "> file", ">> file").
 	Redirections []string
+	// FromCmdSubst is true when this command was extracted from inside a $(...) or `...`
+	// substitution. Such commands are evaluated as argument values for the outer command,
+	// not as independent top-level commands.
+	FromCmdSubst bool
+	// HasShellExpansionProgram is true when the program token itself is an unresolvable
+	// shell expansion — either a simple variable ($VAR, ${VAR}) or a command substitution
+	// ($(cmd)) that could not be resolved to a known program name by path-stripping.
+	// Examples: "$SCRIPT", "$(which python)", "${CMD}".
+	HasShellExpansionProgram bool
 }
 
 // ExtractAllCommands parses cmd with mvdan.cc/sh and recursively walks the AST,
 // returning all CallExpr nodes — including those inside $(), backticks, and process
 // substitutions. Falls back to splitCommandParts() on parse error.
+//
+// Commands extracted from inside $(...) substitutions have FromCmdSubst=true.
+// Commands whose program token is itself a shell expansion ($VAR, $(cmd)) have
+// HasShellExpansionProgram=true.
 func ExtractAllCommands(cmd string) []ParsedCommand {
 	r := strings.NewReader(cmd)
 	f, err := syntax.NewParser().Parse(r, "")
@@ -52,6 +65,21 @@ func ExtractAllCommands(cmd string) []ParsedCommand {
 		}
 		return result
 	}
+
+	// First pass: collect all Stmt nodes that appear directly inside a CmdSubst
+	// (i.e., inside $(...) or `...`). These are argument-value producers, not
+	// independent commands.
+	cmdSubstStmts := make(map[*syntax.Stmt]bool)
+	syntax.Walk(f, func(node syntax.Node) bool {
+		cs, ok := node.(*syntax.CmdSubst)
+		if !ok {
+			return true
+		}
+		for _, s := range cs.Stmts {
+			cmdSubstStmts[s] = true
+		}
+		return true
+	})
 
 	var cmds []ParsedCommand
 	syntax.Walk(f, func(node syntax.Node) bool {
@@ -94,14 +122,21 @@ func ExtractAllCommands(cmd string) []ParsedCommand {
 		}
 
 		prog := tokens[0]
-		// Strip path prefix (/usr/bin/git → git).
+		// Strip path prefix (/usr/bin/git → git, $HOME/bin/git → git).
 		if idx := strings.LastIndex(prog, "/"); idx >= 0 {
 			prog = prog[idx+1:]
 		}
 
-		// Unwrap transparent proxy commands (sudo, rtk, env, etc.) to find the
-		// real underlying program. Handles chained wrappers and env-var prefixes
-		// between wrappers (e.g., `sudo KEY=VAL git status` → git).
+		// Detect when the program itself is an unresolvable shell expansion.
+		// After path-stripping, a program that still starts with '$' means the
+		// executable name cannot be determined statically.
+		// Examples: "$SCRIPT" → prog="$SCRIPT"; "$(which python)" → prog="$(which python)"
+		// Contrast: "$HOME/bin/git" → prog="git" (path-stripped; NOT an expansion).
+		hasExpansionProg := len(prog) > 0 && prog[0] == '$'
+
+		// wrapperCommands is now empty; this loop is a no-op and exists for forward
+		// compatibility. Recursive-eval programs (sudo, xargs, rtk, etc.) are handled
+		// by classifyInternal via ExtractInnerCommand after the AST walk completes.
 		startIdx := 1
 		for wrapperCommands[strings.ToLower(prog)] && startIdx < len(tokens) {
 			// Skip env-var assignments (KEY=VALUE) before the real program.
@@ -120,10 +155,12 @@ func ExtractAllCommands(cmd string) []ParsedCommand {
 
 		raw := strings.Join(tokens, " ")
 		cmds = append(cmds, ParsedCommand{
-			Program:      prog,
-			Args:         tokens[startIdx:],
-			Raw:          raw,
-			Redirections: redirects,
+			Program:                  prog,
+			Args:                     tokens[startIdx:],
+			Raw:                      raw,
+			Redirections:             redirects,
+			FromCmdSubst:             cmdSubstStmts[stmt],
+			HasShellExpansionProgram: hasExpansionProg,
 		})
 		return true
 	})
@@ -137,6 +174,36 @@ func ExtractAllCommands(cmd string) []ParsedCommand {
 		}
 	}
 	return cmds
+}
+
+// envVarRefPattern matches $VAR and ${VAR} shell variable references.
+// Group 1 captures the name from ${VAR}; group 2 captures the name from $VAR.
+var envVarRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)`)
+
+// ExpandEnvVars replaces $VAR and ${VAR} references in cmd, mirroring Python's
+// os.path.expandvars behaviour:
+//   1. env map (caller overrides) — checked first.
+//   2. OS environment (os.LookupEnv) — fallback, so real env vars work without
+//      having to enumerate them in the map.
+//   3. Unknown variables are left verbatim (original $VAR / ${VAR} form preserved).
+//
+// Command substitutions ($(...)) are not expanded — only simple variable references.
+func ExpandEnvVars(cmd string, env map[string]string) string {
+	return envVarRefPattern.ReplaceAllStringFunc(cmd, func(m string) string {
+		var name string
+		if strings.HasPrefix(m, "${") {
+			name = m[2 : len(m)-1]
+		} else {
+			name = m[1:]
+		}
+		if val, ok := env[name]; ok {
+			return val
+		}
+		if val, ok := os.LookupEnv(name); ok {
+			return val
+		}
+		return m // leave unexpanded, preserving original $VAR / ${VAR} form
+	})
 }
 
 // stripOuterQuotes removes a single layer of surrounding single or double quotes.
@@ -183,18 +250,265 @@ var (
 	pythonImportPattern = regexp.MustCompile(`(?m)(?:from\s+(\S+)\s+import|import\s+([^#\n;]+))`)
 )
 
-// wrapperCommands are programs that take another command as their argument.
-// We skip these when looking for the "primary" program.
-// rtk is a transparent CLI proxy that rewrites commands before execution (e.g.,
-// `rtk git status` → git status with token-saving wrappers). Adding a blanket
-// AutoAllow for rtk would be unsafe; instead, rtk is unwrapped so `rtk rm -rf /`
-// still triggers the deny rule and `rtk git push` still escalates.
-// proxy is rtk's explicit proxy sub-mode (`rtk proxy <cmd>` → `proxy <cmd>`);
-// it must also be unwrapped so the underlying command is evaluated by normal rules.
-var wrapperCommands = map[string]bool{
-	"sudo": true, "exec": true, "time": true, "nice": true,
-	"nohup": true, "env": true, "watch": true,
-	"rtk": true, "proxy": true,
+// wrapperCommands formerly held programs that wrap an inner command via simple
+// token-stripping. All entries have been migrated to recursiveEvalPrograms, which
+// classifies inner commands through the full rule engine instead of a static
+// allowlist. The map is kept empty so the AST walker loop below is a no-op without
+// requiring structural changes to ExtractAllCommands.
+var wrapperCommands = map[string]bool{}
+
+// recursiveEvalSpec describes how to extract the inner command from a wrapper program.
+type recursiveEvalSpec struct {
+	// flagArgs maps flag names (e.g. "-n", "--max-args") to true when that flag
+	// consumes the next token as its value. Boolean flags are handled automatically
+	// by the generic "-" prefix skip and need not be listed here.
+	flagArgs map[string]bool
+	// skipPositionals is the number of positional (non-flag) arguments to consume
+	// and discard after all flags, before the inner command begins.
+	// Example: timeout has a mandatory DURATION positional before the command.
+	skipPositionals int
+	// skipEnvAssignments, when true, skips any KEY=value tokens immediately after
+	// the flags/positionals before the inner command begins.
+	// Required for `env VAR=val cmd` where env-var assignments precede the command.
+	skipEnvAssignments bool
+	// passthroughSubcmds lists first-token subcommand names that are themselves
+	// transparent pass-through modes of the wrapper. When the first inner token
+	// matches an entry here it is skipped so the actual command can be found.
+	// Example: "rtk proxy git status" — proxy is rtk's pass-through sub-mode;
+	// skip "proxy" to get the actual inner command "git status".
+	passthroughSubcmds map[string]bool
+}
+
+// recursiveEvalPrograms defines programs whose inner command should be extracted and
+// classified through the full rule engine rather than matched against a static allowlist.
+// Adding a program here enables transparent wrapper support: `xargs git push` escalates
+// because `git push` escalates; `sudo go test ./...` auto-allows because `go test` does.
+var recursiveEvalPrograms = map[string]recursiveEvalSpec{
+
+	// ── stdin parallelism ─────────────────────────────────────────────────────
+	"xargs": {flagArgs: map[string]bool{
+		"-n": true, "--max-args": true,
+		"-P": true, "--max-procs": true,
+		"-s": true, "--max-chars": true,
+		"-L": true, "-l": true, "--max-lines": true,
+		"-I": true, "--replace": true,
+		"-d": true, "--delimiter": true,
+		"-E": true, "--eof": true,
+		"-a": true, "--arg-file": true,
+	}},
+	// GNU parallel — same role as xargs but with richer job-control flags.
+	"parallel": {flagArgs: map[string]bool{
+		"-j": true, "--jobs": true,
+		"-n": true, "--max-args": true,
+		"-N": true,
+		"-I": true, "--replace": true,
+		"-d": true, "--delimiter": true,
+		"--timeout": true,
+		"--sshlogin": true, "-S": true,
+		"--sshloginfile": true,
+		"--basefile": true, "--trc": true,
+		"--results": true, "--joblog": true,
+		"--delay": true, "--retries": true,
+	}},
+
+	// ── timing / resource limits ──────────────────────────────────────────────
+	// timeout DURATION COMMAND [ARGS] — skipPositionals=1 skips the DURATION value.
+	"timeout": {
+		flagArgs: map[string]bool{
+			"-k": true, "--kill-after": true,
+			"-s": true, "--signal": true,
+		},
+		skipPositionals: 1,
+	},
+	// nice [-n ADJUSTMENT] COMMAND [ARGS]
+	"nice": {flagArgs: map[string]bool{
+		"-n": true, "--adjustment": true,
+	}},
+
+	// ── I/O buffering ─────────────────────────────────────────────────────────
+	"stdbuf": {flagArgs: map[string]bool{
+		"-i": true, "--input": true,
+		"-o": true, "--output": true,
+		"-e": true, "--error": true,
+	}},
+
+	// ── virtual display ───────────────────────────────────────────────────────
+	"xvfb-run": {flagArgs: map[string]bool{
+		"-n": true, "--server-num": true,
+		"-e": true, "--error-file": true,
+		"-f": true, "--auth-file": true,
+		"-s": true, "--server-args": true,
+		"-w": true, "--wait": true,
+	}},
+
+	// ── I/O scheduling ────────────────────────────────────────────────────────
+	// ionice [-c class] [-n level] COMMAND [ARGS]  (when not in -p/--pid mode)
+	"ionice": {flagArgs: map[string]bool{
+		"-c": true, "--class": true,
+		"-n": true, "--classdata": true,
+	}},
+
+	// ── session / process control ─────────────────────────────────────────────
+	"setsid":    {flagArgs: map[string]bool{}}, // boolean flags only (-w/-c/-f)
+	"catchsegv": {flagArgs: map[string]bool{}}, // no flags before command
+	"nohup":     {flagArgs: map[string]bool{}}, // no flags before command
+
+	// ── environment control ───────────────────────────────────────────────────
+	// env [-i] [-0] [-u NAME] [-C DIR] [VAR=val...] COMMAND [ARGS]
+	"env": {
+		flagArgs: map[string]bool{
+			"-u": true, "--unset": true,
+			"-C": true, "--chdir": true,
+		},
+		skipEnvAssignments: true,
+	},
+
+	// ── periodic execution ────────────────────────────────────────────────────
+	// watch [-n secs] [-d] [-t] ... COMMAND
+	"watch": {flagArgs: map[string]bool{
+		"-n": true, "--interval": true,
+	}},
+
+	// ── timing (GNU time / bash builtin) ─────────────────────────────────────
+	// GNU time: time [-apqvV] [-f FORMAT] [-o FILE] COMMAND
+	"time": {flagArgs: map[string]bool{
+		"-f": true, "--format": true,
+		"-o": true, "--output": true,
+	}},
+
+	// ── shell execution control ───────────────────────────────────────────────
+	// exec [-cl] [-a name] COMMAND [ARGS]
+	"exec": {flagArgs: map[string]bool{
+		"-a": true, // exec -a name cmd: sets argv[0]
+	}},
+	// command [-pVv] COMMAND [ARGS]  — POSIX shell builtin, boolean flags only
+	"command": {flagArgs: map[string]bool{}},
+
+	// ── privilege escalation ──────────────────────────────────────────────────
+	// sudo [-u user] [-g group] ... COMMAND [ARGS]
+	"sudo": {flagArgs: map[string]bool{
+		"-u": true, "--user": true,
+		"-g": true, "--group": true,
+		"-C": true, "--close-from": true,
+		"-D": true, "--chdir": true,
+		"-T": true, "--command-timeout": true,
+		"-p": true, "--prompt": true,
+		"-h": true, "--host": true,
+		"-r": true, "--role": true,
+		"-t": true, "--type": true,
+		"-U": true, "--other-user": true,
+	}},
+	// doas [-u user] [-C config] COMMAND [ARGS]
+	"doas": {flagArgs: map[string]bool{
+		"-u": true, "--user": true,
+		"-C": true,
+	}},
+	// run0 (systemd's sudo replacement) uses --key=value form; inline "=" is handled
+	// automatically so no explicit flagArgs entries are needed.
+	"run0": {flagArgs: map[string]bool{}},
+
+	// ── rtk transparent proxy ─────────────────────────────────────────────────
+	// rtk is a token-saving CLI proxy: `rtk git status` → git status.
+	// `rtk proxy git status` is rtk's explicit pass-through sub-mode; skip "proxy"
+	// to reach the actual inner command.
+	"rtk": {
+		flagArgs:           map[string]bool{},
+		passthroughSubcmds: map[string]bool{"proxy": true},
+	},
+}
+
+// ExtractInnerCommand extracts the inner command string from a recursive-eval wrapper
+// invocation (e.g. xargs, parallel, timeout, sudo, nice, env, rtk). It skips the
+// wrapper's own flags (and value tokens for flagArgs entries), then any skipPositionals
+// tokens, then any env-var assignments (when skipEnvAssignments is true), then any
+// leading passthroughSubcmds token. Returns the remaining tokens joined as a string.
+//
+// Returns "" when:
+//   - prog is not in recursiveEvalPrograms
+//   - no inner command remains after skipping flags/positionals/env-vars
+//   - a parallel input separator (:::) appears before any inner command token
+func ExtractInnerCommand(prog string, args []string) string {
+	spec, ok := recursiveEvalPrograms[strings.ToLower(prog)]
+	if !ok {
+		return ""
+	}
+
+	i := 0
+
+	// Phase 1: skip the wrapper's own flags (and their value tokens).
+	for i < len(args) {
+		arg := args[i]
+
+		// "--" explicitly ends this program's own flags; inner command follows.
+		if arg == "--" {
+			i++
+			break
+		}
+
+		// parallel uses ::: / :::: to separate command from input sources.
+		// If ::: appears before any non-flag token, there is no explicit inner command.
+		if arg == ":::" || arg == "::::" {
+			return ""
+		}
+
+		if strings.HasPrefix(arg, "-") {
+			// Long flags with inline value (e.g. --max-args=5): the value is in the
+			// same token — only skip this one token.
+			flagKey := arg
+			if eqIdx := strings.Index(arg, "="); eqIdx > 0 {
+				flagKey = arg[:eqIdx]
+			}
+			if spec.flagArgs[flagKey] && flagKey != arg {
+				i++ // inline value form
+				continue
+			}
+			if spec.flagArgs[flagKey] {
+				i += 2 // two-token form: flag + value
+				continue
+			}
+			// Boolean flag or combined short flag with inline value (e.g. -n1, -I{}):
+			// self-contained, skip just this token.
+			i++
+			continue
+		}
+
+		// First non-flag token marks the end of the flags section.
+		break
+	}
+
+	// Phase 2: skip positional arguments that belong to the wrapper itself
+	// (e.g. the DURATION in "timeout 30 git status").
+	for skip := 0; skip < spec.skipPositionals && i < len(args); skip++ {
+		i++
+	}
+
+	// Phase 3: skip env-var assignments that belong to the wrapper
+	// (e.g. "env KEY=val git status" — skip KEY=val).
+	if spec.skipEnvAssignments {
+		for i < len(args) && envVarPattern.MatchString(args[i]) {
+			i++
+		}
+	}
+
+	if i >= len(args) {
+		return ""
+	}
+
+	// Collect inner command tokens, stopping at a parallel input separator.
+	var parts []string
+	for j := i; j < len(args); j++ {
+		if args[j] == ":::" || args[j] == "::::" {
+			break
+		}
+		parts = append(parts, args[j])
+	}
+
+	// Phase 4: skip pass-through subcommands (e.g. "proxy" in "rtk proxy git status").
+	if len(parts) > 0 && spec.passthroughSubcmds[strings.ToLower(parts[0])] {
+		parts = parts[1:]
+	}
+
+	return strings.Join(parts, " ")
 }
 
 // deepSubcommandPrograms is the set of programs that use two-level subcommand hierarchies
@@ -211,6 +525,7 @@ var deepSubcommandPrograms = map[string]bool{
 	"kubectl": true, // kubectl get pods, kubectl apply
 	"docker":  true, // docker container run, docker image pull
 	"heroku":  true, // heroku apps:info, heroku config:set
+	"ip":      true, // ip route show, ip addr add, ip link set
 }
 
 // prefixFlagArgs maps programs to the set of flags that each consume one additional
@@ -464,8 +779,11 @@ func extractProgramAndSubcommand(cmd string) (prog, sub string) {
 			if shellKeywords[bare] {
 				continue
 			}
-			// Skip wrapper commands (sudo, exec, time, …) that take another command as arg.
+			// Skip wrapper/recursive-eval programs so the underlying command is returned.
 			if wrapperCommands[bare] {
+				continue
+			}
+			if _, ok := recursiveEvalPrograms[bare]; ok {
 				continue
 			}
 			prog = bare
