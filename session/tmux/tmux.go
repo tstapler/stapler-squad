@@ -83,6 +83,10 @@ type TmuxSession struct {
 	// control-mode event stream. When healthy, DoesSessionExist queries it directly
 	// instead of forking a tmux subprocess. Nil means use the exec fallback.
 	registry SessionExistenceChecker
+	// registryExplicit is set to true by WithRegistry so that newTmuxSessionWithSocket
+	// knows to skip the GetServerRegistry call.  Without this flag, GetServerRegistry
+	// would always start a reconnect loop even when the caller intends to use nil.
+	registryExplicit bool
 
 	// registryKey is the key used to register this session's circuit breaker executor
 	// in the global registry. Stored here so Close() can unregister it on teardown.
@@ -442,9 +446,13 @@ func newTmuxSession(name string, program string, ptyFactory PtyFactory, cmdExec 
 type TmuxSessionOption func(*TmuxSession)
 
 // WithRegistry injects a SessionExistenceChecker; used in tests to avoid
-// the global GetServerRegistry accessor.
+// the global GetServerRegistry accessor. Passing nil suppresses the
+// automatic GetServerRegistry call so no reconnect loop is started.
 func WithRegistry(r SessionExistenceChecker) TmuxSessionOption {
-	return func(t *TmuxSession) { t.registry = r }
+	return func(t *TmuxSession) {
+		t.registry = r
+		t.registryExplicit = true
+	}
 }
 
 // newTmuxSessionWithSocket creates a TmuxSession with both prefix and server socket isolation
@@ -461,11 +469,16 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 	}
 	s.lastKnownCols.Store(defaultAttachCols)
 	s.lastKnownRows.Store(defaultAttachRows)
-	// Inject the server-level registry for fork-free session existence checks.
-	// Tests may override this via WithRegistry.
-	s.registry = GetServerRegistry(serverSocket)
+	// Apply opts first so WithRegistry can set registryExplicit before we
+	// call GetServerRegistry (which starts a background reconnect loop).
 	for _, opt := range opts {
 		opt(s)
+	}
+	// Inject the server-level registry only when no explicit registry was provided.
+	// This prevents an unwanted reconnect loop when WithRegistry(nil) is passed for
+	// isolated sockets that have no keepalive session.
+	if !s.registryExplicit {
+		s.registry = GetServerRegistry(serverSocket)
 	}
 	return s
 }
