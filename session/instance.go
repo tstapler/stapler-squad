@@ -531,9 +531,12 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			tmuxPrefix = "staplersquad_" // Default fallback
 		}
 
-		// Use server socket isolation if specified, otherwise use prefix-only isolation
+		// Use server socket isolation if specified, otherwise use prefix-only isolation.
+		// WithRegistry(nil) prevents a background reconnect loop on isolated sockets —
+		// the loop tries attach-session on a keepalive that doesn't exist there, causing
+		// intermittent exit status 1 from concurrent new-session calls.
 		if instance.TmuxServerSocket != "" {
-			instance.tmuxManager.SetSession(tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, tmuxPrefix, instance.TmuxServerSocket))
+			instance.tmuxManager.SetSession(tmux.NewTmuxSessionWithServerSocket(instance.Title, instance.Program, tmuxPrefix, instance.TmuxServerSocket, tmux.WithRegistry(nil)))
 		} else {
 			instance.tmuxManager.SetSession(tmux.NewTmuxSessionWithPrefix(instance.Title, instance.Program, tmuxPrefix))
 		}
@@ -1080,7 +1083,7 @@ func (i *Instance) initTmuxSession() {
 
 	var session *tmux.TmuxSession
 	if i.TmuxServerSocket != "" {
-		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket)
+		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil))
 	} else {
 		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
 	}
@@ -1686,7 +1689,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 
 	// Use server socket isolation if specified, otherwise use prefix-only isolation
 	if i.TmuxServerSocket != "" {
-		i.tmuxManager.SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket))
+		i.tmuxManager.SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
 	} else {
 		i.tmuxManager.SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
 	}
