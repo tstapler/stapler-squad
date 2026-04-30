@@ -258,6 +258,11 @@ func NewServer(addr string) *Server {
 		hookReceiver.RegisterRoutes(srv.mux)
 		log.InfoLog.Printf("Registered Claude Code hook receivers at /api/hooks/{stop,pre-tool-use,post-tool-use,prompt-submit}")
 
+		// Register session-aware image upload endpoint (multipart/form-data, saves to worktree).
+		sessionUploadHandler := services.NewSessionImageUploadHandler(deps.Storage)
+		srv.mux.HandleFunc("POST /api/v1/upload-image", sessionUploadHandler.HandleUpload)
+		log.InfoLog.Printf("Registered session image upload handler at POST /api/v1/upload-image")
+
 		// Register MCP HTTP transport at /mcp so Claude sessions can connect
 		// without spawning a subprocess. The URL is passed via --mcp-server to
 		// claude when creating new sessions (no settings-file injection needed).

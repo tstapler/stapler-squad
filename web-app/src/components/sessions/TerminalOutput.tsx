@@ -155,6 +155,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const [pasteError, setPasteError] = useState<string | null>(null);
   const pasteErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Image upload state for the camera/file-picker toolbar button.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const uploadErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Mobile keyboard visibility — persisted in localStorage
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(() => {
     if (typeof window === 'undefined') return true;
@@ -349,6 +355,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       if (pasteErrorTimerRef.current) {
         clearTimeout(pasteErrorTimerRef.current);
         pasteErrorTimerRef.current = null;
+      }
+
+      if (uploadErrorTimerRef.current) {
+        clearTimeout(uploadErrorTimerRef.current);
+        uploadErrorTimerRef.current = null;
       }
 
       if (sizeStabilityTimeoutRef.current) {
@@ -819,6 +830,54 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   };
 
+  // Synchronous handler — MUST NOT have await before .click() (iOS Safari requirement).
+  const handleImageButtonClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const handleFileUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Reset input so the same file can trigger onChange again.
+    e.target.value = "";
+
+    setIsUploading(true);
+    setUploadError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("session_id", sessionId);
+      formData.append("file", file);
+
+      // Do NOT set Content-Type header — browser sets it with multipart boundary.
+      const resp = await fetch(`${baseUrl}/v1/upload-image`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (resp.ok) {
+        const data = await resp.json() as { path: string; filename: string };
+        // Insert path into terminal with trailing space so user can type after it.
+        handleTerminalData(data.path + " ");
+      } else {
+        let msg = "Upload failed";
+        if (resp.status === 413) msg = "File too large (max 10 MB)";
+        else if (resp.status === 400 || resp.status === 415) msg = "Invalid image type";
+        else if (resp.status === 404) msg = "Session not found";
+        setUploadError(msg);
+        if (uploadErrorTimerRef.current) clearTimeout(uploadErrorTimerRef.current);
+        uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 3000);
+      }
+    } catch {
+      setUploadError("Network error");
+      if (uploadErrorTimerRef.current) clearTimeout(uploadErrorTimerRef.current);
+      uploadErrorTimerRef.current = setTimeout(() => setUploadError(null), 3000);
+    } finally {
+      setIsUploading(false);
+    }
+  }, [sessionId, baseUrl, handleTerminalData]);
+
   const handleClear = () => {
     if (xtermRef.current && xtermRef.current.terminal) {
       const terminal = xtermRef.current.terminal;
@@ -1000,6 +1059,24 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 aria-label="Paste from clipboard"
               >
                 {pasteError ? `⚠️ ${pasteError}` : '📎 Paste'}
+              </button>
+              {/* Hidden file input — no capture attribute so iOS shows camera+library+browse */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={handleFileUpload}
+                aria-hidden="true"
+              />
+              <button
+                className={styles.toolbarButton}
+                onClick={handleImageButtonClick}
+                disabled={isUploading}
+                title="Upload image from camera or photo library — saves to session directory and inserts path"
+                aria-label={isUploading ? "Uploading image..." : "Attach image from camera or gallery"}
+              >
+                {isUploading ? "⏳ Uploading..." : uploadError ? `⚠️ ${uploadError}` : "📷 Image"}
               </button>
               <button
                 className={styles.toolbarButton}

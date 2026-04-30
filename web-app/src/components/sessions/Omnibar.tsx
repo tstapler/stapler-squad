@@ -148,6 +148,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Stable ref so handleKeyDown can always call the latest handleSubmit without
   // a circular declaration-order dependency (handleKeyDown is declared before handleSubmit).
   const handleSubmitRef = useRef<() => void>(() => {});
+  // Holds the latest attached image paths from OmnibarCreationPanel without causing re-renders.
+  const attachedImagePathsRef = useRef<string[]>([]);
+
+  // API base URL for pre-session image uploads.
+  const uploadBaseUrl = typeof window !== "undefined"
+    ? `${window.location.origin}/api`
+    : "/api";
 
   // Determine whether completions should be active.
   const isPathInput =
@@ -585,12 +592,17 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         finalBranch = sessionName.trim();
       }
 
+      // Build prompt from attached image paths (pre-session uploads go to temp dir).
+      const imagePaths = attachedImagePathsRef.current;
+      const finalPrompt = imagePaths.length > 0 ? imagePaths.join(" ") : undefined;
+
       const sessionData: OmnibarSessionData = {
         title: sessionName.trim(),
         path: sessionType === "one_off" ? "" : (detection?.localPath || ""),
         branch: sessionType === "one_off" ? undefined : (finalBranch || undefined),
         program,
         category: category.trim() || undefined,
+        prompt: finalPrompt,
         autoYes,
         sessionType: sessionType === "one_off" ? "directory" : sessionType,
         existingWorktree: sessionType === "one_off" ? undefined : (existingWorktree.trim() || undefined),
@@ -805,6 +817,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             showAdvanced={showAdvanced}
             onToggleAdvanced={() => setUIField("showAdvanced", !uiState.showAdvanced)}
             path={modeState.type === "creation_with_repo" ? modeState.path : undefined}
+            uploadBaseUrl={uploadBaseUrl}
+            onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
           />
         )}
 

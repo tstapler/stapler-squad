@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useRef, useCallback, useEffect } from "react";
 import type { KeyboardEvent } from "react";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
@@ -84,11 +85,31 @@ export interface OmnibarCreationPanelProps {
   onToggleAdvanced: () => void;
   /** Pre-selected repo path (creation_with_repo mode). Shown read-only above form. */
   path?: string;
+  /** API base URL (e.g. /api) used for pre-session image uploads. */
+  uploadBaseUrl?: string;
+  /** Called whenever the set of attached image server paths changes. */
+  onAttachedImagesChange?: (paths: string[]) => void;
 }
 
 function truncatePath(p: string, maxLen = 50): string {
   if (p.length <= maxLen) return p;
   return "…" + p.slice(-(maxLen - 1));
+}
+
+// Helper: file → base64 string (strips data URL prefix).
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve((reader.result as string).split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+interface AttachedImage {
+  file: File;
+  path: string;       // absolute server path returned from upload
+  previewUrl: string; // object URL for thumbnail preview
 }
 
 export function OmnibarCreationPanel({
@@ -103,11 +124,79 @@ export function OmnibarCreationPanel({
   showAdvanced,
   onToggleAdvanced,
   path,
+  uploadBaseUrl = "/api",
+  onAttachedImagesChange,
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
   } = formState;
+
+  // ─── Image attachment state ───────────────────────────────────────────────
+  const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
+  const [isAttaching, setIsAttaching] = useState(false);
+  const attachInputRef = useRef<HTMLInputElement>(null);
+
+  // Notify parent when attached images change.
+  useEffect(() => {
+    onAttachedImagesChange?.(attachedImages.map((img) => img.path));
+  }, [attachedImages, onAttachedImagesChange]);
+
+  // Revoke object URLs on unmount.
+  useEffect(() => {
+    return () => {
+      attachedImages.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+    };
+    // Only run on unmount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleAttachFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (!files.length) return;
+
+    const available = 3 - attachedImages.length;
+    const toUpload = files.slice(0, available);
+
+    setIsAttaching(true);
+    setAttachError(null);
+
+    const results: AttachedImage[] = [];
+    for (const file of toUpload) {
+      const previewUrl = URL.createObjectURL(file);
+      try {
+        const base64 = await fileToBase64(file);
+        const resp = await fetch(`${uploadBaseUrl}/upload/image`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ data: base64, contentType: file.type }),
+        });
+        if (!resp.ok) {
+          URL.revokeObjectURL(previewUrl);
+          setAttachError("Upload failed");
+          break;
+        }
+        const data = await resp.json() as { path: string };
+        results.push({ file, path: data.path, previewUrl });
+      } catch {
+        URL.revokeObjectURL(previewUrl);
+        setAttachError("Upload failed");
+        break;
+      }
+    }
+
+    setAttachedImages((prev) => [...prev, ...results]);
+    setIsAttaching(false);
+  }, [attachedImages.length, uploadBaseUrl]);
+
+  const removeImage = useCallback((index: number) => {
+    setAttachedImages((prev) => {
+      URL.revokeObjectURL(prev[index].previewUrl);
+      return prev.filter((_, i) => i !== index);
+    });
+  }, []);
 
   return (
     <>
@@ -246,6 +335,58 @@ export function OmnibarCreationPanel({
               onChange={(e) => setFormField("workingDir", e.target.value)}
             />
             <span className={hint}>Optional: Start in a subdirectory (relative path)</span>
+          </div>
+        )}
+
+        {/* Image Attachment */}
+        <div className={styles.attachArea}>
+          {/* Hidden file input — no capture attribute so iOS shows camera+library+browse */}
+          <input
+            ref={attachInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            style={{ display: "none" }}
+            onChange={handleAttachFiles}
+            aria-hidden="true"
+          />
+          <button
+            type="button"
+            className={styles.attachButton}
+            onClick={() => attachInputRef.current?.click()}
+            disabled={isAttaching || attachedImages.length >= 3}
+            aria-label="Attach image (up to 3)"
+          >
+            {isAttaching ? "⏳ Uploading..." : "📎 Attach image"}
+          </button>
+          {attachedImages.length >= 3 && (
+            <span className={styles.attachLimit}>Max 3 images</span>
+          )}
+          {attachError && (
+            <span className={styles.attachError}>{attachError}</span>
+          )}
+        </div>
+
+        {/* Thumbnail previews */}
+        {attachedImages.length > 0 && (
+          <div className={styles.thumbnailRow}>
+            {attachedImages.map((img, i) => (
+              <div key={img.path} className={styles.thumbnail}>
+                <img
+                  src={img.previewUrl}
+                  alt={img.file.name}
+                  className={styles.thumbnailImg}
+                />
+                <button
+                  type="button"
+                  className={styles.thumbnailRemove}
+                  onClick={() => removeImage(i)}
+                  aria-label={`Remove ${img.file.name}`}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
           </div>
         )}
 
