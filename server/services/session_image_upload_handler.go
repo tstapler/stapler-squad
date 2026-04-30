@@ -67,10 +67,16 @@ func sanitizeFilename(name string) string {
 		}
 		return r
 	}, name)
-	// Limit to 100 characters preserving the extension.
+	// Limit to 100 characters preserving the extension when feasible.
 	if len(name) > 100 {
 		ext := filepath.Ext(name)
-		name = name[:100-len(ext)] + ext
+		prefixLen := 100 - len(ext)
+		if prefixLen > 0 {
+			name = name[:prefixLen] + ext
+		} else {
+			// Extension itself is too long — truncate the whole thing.
+			name = name[:100]
+		}
 	}
 	if name == "" || name == "." || name == ".." {
 		name = "upload"
@@ -86,8 +92,8 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 		return
 	}
 
-	// Limit body to 10 MB + form overhead.
-	r.Body = http.MaxBytesReader(w, r.Body, sessionUploadMaxBytes)
+	// Limit body to 10 MB file + multipart overhead (boundaries, headers, session_id field).
+	r.Body = http.MaxBytesReader(w, r.Body, sessionUploadMaxBytes+64*1024)
 	if err := r.ParseMultipartForm(sessionUploadMaxBytes); err != nil {
 		if strings.Contains(err.Error(), "request body too large") {
 			http.Error(w, "file too large (max 10 MB)", http.StatusRequestEntityTooLarge)

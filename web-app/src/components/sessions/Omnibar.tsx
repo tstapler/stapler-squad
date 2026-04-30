@@ -5,6 +5,7 @@ import Fuse from "fuse.js";
 import { detect, InputType, INPUT_TYPE_INFO, DetectionResult } from "@/lib/omnibar";
 import { useModeReducer, OmnibarModeState } from "@/lib/omnibar/modes/useModeReducer";
 import { PROGRAMS } from "@/lib/constants/programs";
+import { getApiBaseUrl } from "@/lib/config";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { usePathHistory } from "@/lib/hooks/usePathHistory";
 import { useWorktreeSuggestions } from "@/lib/hooks/useWorktreeSuggestions";
@@ -151,10 +152,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Holds the latest attached image paths from OmnibarCreationPanel without causing re-renders.
   const attachedImagePathsRef = useRef<string[]>([]);
 
-  // API base URL for pre-session image uploads.
-  const uploadBaseUrl = typeof window !== "undefined"
-    ? `${window.location.origin}/api`
-    : "/api";
+  // API base URL for pre-session image uploads — uses shared helper for SSR/dev consistency.
+  const uploadBaseUrl = getApiBaseUrl();
 
   // Determine whether completions should be active.
   const isPathInput =

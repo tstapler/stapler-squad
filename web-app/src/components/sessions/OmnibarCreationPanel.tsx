@@ -134,22 +134,24 @@ export function OmnibarCreationPanel({
 
   // ─── Image attachment state ───────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
+  // Mirror of attachedImages kept in a ref so the unmount cleanup can revoke
+  // object URLs without capturing stale closure values.
+  const attachedImagesRef = useRef<AttachedImage[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isAttaching, setIsAttaching] = useState(false);
   const attachInputRef = useRef<HTMLInputElement>(null);
 
-  // Notify parent when attached images change.
+  // Keep ref in sync with state so the unmount cleanup always sees current images.
   useEffect(() => {
+    attachedImagesRef.current = attachedImages;
     onAttachedImagesChange?.(attachedImages.map((img) => img.path));
   }, [attachedImages, onAttachedImagesChange]);
 
-  // Revoke object URLs on unmount.
+  // Revoke object URLs on unmount via ref — avoids stale closure over empty array.
   useEffect(() => {
     return () => {
-      attachedImages.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      attachedImagesRef.current.forEach((img) => URL.revokeObjectURL(img.previewUrl));
     };
-    // Only run on unmount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleAttachFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {

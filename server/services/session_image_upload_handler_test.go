@@ -196,8 +196,10 @@ func TestSessionImageUpload_OversizedFile(t *testing.T) {
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store)
 
-	// Build a body slightly over 10 MB.
-	oversize := make([]byte, sessionUploadMaxBytes+2048)
+	// Build a file clearly over the 10 MB file limit (MaxBytesReader adds 64 KB
+	// overhead allowance for multipart boundaries/headers, so the file must
+	// exceed 10 MB + 64 KB to trigger the 413).
+	oversize := make([]byte, sessionUploadMaxBytes+128*1024)
 	copy(oversize, jpegMagic())
 
 	req := buildUploadRequest(t, "session-123", "big.jpg", oversize)
@@ -385,6 +387,12 @@ func TestSessionImageUpload_ConcurrentUploads(t *testing.T) {
 	store, _ := fixtureStore(t)
 	h := NewSessionImageUploadHandler(store)
 
+	// Build requests before spawning goroutines — t.Fatal is not safe inside goroutines.
+	reqs := []*http.Request{
+		buildUploadRequest(t, "session-123", "photo.jpg", jpegMagic()),
+		buildUploadRequest(t, "session-123", "photo.jpg", jpegMagic()),
+	}
+
 	type result struct {
 		code int
 		path string
@@ -395,9 +403,8 @@ func TestSessionImageUpload_ConcurrentUploads(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
-			req := buildUploadRequest(t, "session-123", "photo.jpg", jpegMagic())
 			rr := httptest.NewRecorder()
-			h.HandleUpload(rr, req)
+			h.HandleUpload(rr, reqs[idx])
 			results[idx].code = rr.Code
 			if rr.Code == http.StatusOK {
 				var resp sessionImageUploadResponse

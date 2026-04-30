@@ -46,6 +46,11 @@ function buildProps(overrides: Partial<OmnibarCreationPanelProps> = {}): Omnibar
 const createdObjectUrls: string[] = [];
 const revokedObjectUrls: string[] = [];
 
+// Save originals so they can be restored — jest.restoreAllMocks() won't revert
+// direct property assignments on global.URL.
+const _origCreateObjectURL = global.URL.createObjectURL;
+const _origRevokeObjectURL = global.URL.revokeObjectURL;
+
 // ── Setup / Teardown ──────────────────────────────────────────────────────────
 
 beforeEach(() => {
@@ -72,6 +77,8 @@ beforeEach(() => {
 
 afterEach(() => {
   jest.restoreAllMocks();
+  global.URL.createObjectURL = _origCreateObjectURL;
+  global.URL.revokeObjectURL = _origRevokeObjectURL;
 });
 
 // ── FT3-01: Renders "Attach image" button ─────────────────────────────────────
