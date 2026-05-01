@@ -1526,7 +1526,7 @@ func SeedRules() []Rule {
 				Subcommands: []string{
 					"pr view", "pr list", "pr show", "pr status", "pr checks", "pr diff",
 					"issue view", "issue list", "issue show",
-					"run view", "run list", "run log", "run watch",
+					"run view", "run list", "run log", "run watch", "run download", "run rerun",
 					"release view", "release list",
 					"repo view", "repo list",
 					"workflow view", "workflow list",
