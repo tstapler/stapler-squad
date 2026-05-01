@@ -2,6 +2,7 @@ package classifier
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"sort"
@@ -593,9 +594,23 @@ func payloadWithCommand(payload PermissionRequestPayload, cmd string) Permission
 	}
 }
 
-// BuildContext detects git repository state for the given working directory.
+// BuildContext detects git repository state for the given working directory and
+// populates Env from the current OS environment so that simple variable expansions
+// ($VAR, ${VAR}) in Bash commands are resolved before classification. This lets
+// commands like "$RUSTC --version" expand to "rustc --version" and match seed rules
+// instead of hitting the generic HasShellExpansionProgram escalation path.
 func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 	ctx := ClassificationContext{Cwd: cwd}
+
+	// Populate Env from the current process environment.
+	envSlice := os.Environ()
+	ctx.Env = make(map[string]string, len(envSlice))
+	for _, kv := range envSlice {
+		if idx := strings.IndexByte(kv, '='); idx >= 0 {
+			ctx.Env[kv[:idx]] = kv[idx+1:]
+		}
+	}
+
 	if cwd == "" {
 		return ctx
 	}

@@ -51,7 +51,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  check   - Classify a single request from JSON on stdin")
 	fmt.Fprintln(os.Stderr, "  serve   - Start an HTTP server for remote classification")
 	fmt.Fprintln(os.Stderr, "  proxy   - Check permissions before executing a command")
-	fmt.Fprintln(os.Stderr, "  install - Install shell wrappers or hooks for specific CLIs")
+	fmt.Fprintln(os.Stderr, "  install - Install binary and register hooks (targets: claude, gemini, open-code, service)")
 	fmt.Fprintln(os.Stderr, "  version - Print version information")
 }
 
@@ -83,7 +83,51 @@ func handleCheck() {
 	// Record analytics
 	recordResult(storage, payload, result, 0)
 
-	json.NewEncoder(os.Stdout).Encode(result)
+	writeHookDecision(result)
+}
+
+// hookOutput is the Claude Code PreToolUse hook response format.
+type hookOutput struct {
+	HookSpecificOutput hookSpecificOutput `json:"hookSpecificOutput"`
+}
+
+type hookSpecificOutput struct {
+	HookEventName          string `json:"hookEventName"`
+	PermissionDecision     string `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
+}
+
+// writeHookDecision writes the Claude Code PreToolUse hook JSON for allow/deny decisions.
+// For Escalate, it writes nothing — Claude Code then shows its own permission prompt.
+func writeHookDecision(result classifier.ClassificationResult) {
+	switch result.Decision {
+	case classifier.AutoAllow:
+		reason := result.Reason
+		if result.RuleName != "" {
+			reason = result.RuleName + ": " + reason
+		}
+		json.NewEncoder(os.Stdout).Encode(hookOutput{
+			HookSpecificOutput: hookSpecificOutput{
+				HookEventName:            "PreToolUse",
+				PermissionDecision:       "allow",
+				PermissionDecisionReason: reason,
+			},
+		})
+	case classifier.AutoDeny:
+		reason := result.Reason
+		if result.Alternative != "" {
+			reason += " " + result.Alternative
+		}
+		json.NewEncoder(os.Stdout).Encode(hookOutput{
+			HookSpecificOutput: hookSpecificOutput{
+				HookEventName:            "PreToolUse",
+				PermissionDecision:       "deny",
+				PermissionDecisionReason: reason,
+			},
+		})
+	default:
+		// Escalate: write nothing; Claude Code shows its own permission prompt.
+	}
 }
 
 func handleServe() {
@@ -341,12 +385,14 @@ func shellEscape(arg string) string {
 func handleInstall() {
 	if len(os.Args) < 3 {
 		fmt.Fprintln(os.Stderr, "Usage: ssq-hooks install <target>")
-		fmt.Fprintln(os.Stderr, "Targets: gemini, open-code, service")
+		fmt.Fprintln(os.Stderr, "Targets: claude, gemini, open-code, service")
 		os.Exit(1)
 	}
 
 	target := os.Args[2]
 	switch target {
+	case "claude":
+		installClaude()
 	case "gemini":
 		installGemini()
 	case "open-code":
@@ -357,6 +403,139 @@ func handleInstall() {
 		fmt.Fprintf(os.Stderr, "Unknown install target: %s\n", target)
 		os.Exit(1)
 	}
+}
+
+// installClaude copies the ssq-hooks binary to ~/.local/bin and registers it as
+// a PreToolUse hook in ~/.claude/settings.json. Safe to run multiple times.
+func installClaude() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving home directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 1. Copy binary to ~/.local/bin/ssq-hooks.
+	binDir := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating %s: %v\n", binDir, err)
+		os.Exit(1)
+	}
+	destBin := filepath.Join(binDir, "ssq-hooks")
+	srcBin, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving current binary: %v\n", err)
+		os.Exit(1)
+	}
+	// Resolve symlinks so we copy the real binary.
+	if resolved, err := filepath.EvalSymlinks(srcBin); err == nil {
+		srcBin = resolved
+	}
+	if err := copyBinary(srcBin, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error copying binary to %s: %v\n", destBin, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Installed binary: %s\n", destBin)
+
+	// 2. Patch ~/.claude/settings.json.
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := patchClaudeSettings(settingsPath, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", settingsPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Updated hook:     %s\n", settingsPath)
+	fmt.Println("Done. Restart Claude Code for the hook to take effect.")
+}
+
+// copyBinary copies src to dst as an executable file, replacing dst if it exists.
+func copyBinary(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	// Write to a temp file first, then atomically rename to avoid partial writes.
+	tmp := dst + ".tmp"
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	defer func() { os.Remove(tmp) }() //nolint:errcheck
+
+	if _, err := out.ReadFrom(in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
+// patchClaudeSettings adds the ssq-hooks PreToolUse entry to settingsPath.
+// The hook entry is prepended to the PreToolUse array so it runs before other
+// hooks (e.g. rtk-rewrite). Idempotent: no-ops if the entry already exists.
+func patchClaudeSettings(settingsPath, binPath string) error {
+	hookCmd := binPath + " check"
+
+	// Read existing settings (create minimal file if absent).
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		raw = []byte("{}")
+	}
+
+	var settings map[string]interface{}
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return fmt.Errorf("parsing %s: %w", settingsPath, err)
+	}
+
+	// Navigate to hooks.PreToolUse, creating intermediate maps as needed.
+	hooks, _ := settings["hooks"].(map[string]interface{})
+	if hooks == nil {
+		hooks = map[string]interface{}{}
+		settings["hooks"] = hooks
+	}
+	preToolUse, _ := hooks["PreToolUse"].([]interface{})
+
+	// Check if the hook is already present (idempotency).
+	for _, entry := range preToolUse {
+		m, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		hookList, _ := m["hooks"].([]interface{})
+		for _, h := range hookList {
+			hm, ok := h.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if cmd, _ := hm["command"].(string); cmd == hookCmd {
+				fmt.Println("Hook already present, nothing to do.")
+				return nil
+			}
+		}
+	}
+
+	// Prepend the ssq-hooks entry so it gets first say.
+	newEntry := map[string]interface{}{
+		"matcher": ".*",
+		"hooks": []interface{}{
+			map[string]interface{}{
+				"type":    "command",
+				"command": hookCmd,
+			},
+		},
+	}
+	hooks["PreToolUse"] = append([]interface{}{newEntry}, preToolUse...)
+
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(settingsPath, append(out, '\n'), 0644)
 }
 
 func installGemini() {

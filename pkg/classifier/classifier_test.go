@@ -2590,6 +2590,39 @@ func TestExpandEnvVars(t *testing.T) {
 	}
 }
 
+// TestBuildContext_PopulatesEnvFromOS verifies that BuildContext populates ctx.Env
+// from the current OS environment so that simple variable expansions ($VAR, ${VAR})
+// in Bash commands are resolved before classification. This is the plumbing that
+// prevents Claude Code from showing "Contains simple_expansion" for commands like
+// "$RUSTC --version" when the variable is known in the process environment.
+func TestBuildContext_PopulatesEnvFromOS(t *testing.T) {
+	const testKey = "SSQ_TEST_BUILDCONTEXT_ENV_KEY"
+	const testVal = "go"
+	t.Setenv(testKey, testVal)
+
+	c := NewRuleBasedClassifier()
+	ctx := c.BuildContext("") // cwd="" skips git detection
+
+	if ctx.Env == nil {
+		t.Fatal("BuildContext: ctx.Env is nil; expected OS environment to be populated")
+	}
+	if got, ok := ctx.Env[testKey]; !ok || got != testVal {
+		t.Errorf("BuildContext: ctx.Env[%q] = %q, want %q", testKey, got, testVal)
+	}
+
+	// Confirm end-to-end: $SSQ_TEST_BUILDCONTEXT_ENV_KEY expands to "go", program
+	// becomes "go", which matches seed-allow-bash-go-safe → AutoAllow.
+	payload := PermissionRequestPayload{
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": "$" + testKey + " test ./..."},
+	}
+	result := c.Classify(payload, ctx)
+	if result.Decision != AutoAllow {
+		t.Errorf("expected AutoAllow after env expansion, got %v (rule=%s, reason=%s)",
+			result.Decision, result.RuleID, result.Reason)
+	}
+}
+
 // TestClassify_EnvExpansion verifies that ClassificationContext.Env causes $VAR
 // references in Bash commands to be expanded before classification, converting
 // an otherwise-unresolvable shell expansion into a known program name.
