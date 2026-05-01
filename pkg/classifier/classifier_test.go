@@ -1497,6 +1497,20 @@ func TestClassify_GhApi_Escalate(t *testing.T) {
 		"gh api repos/owner/repo/issues/1/comments --field body='comment text'",
 		// --input flag (reads body from file → write operation)
 		"gh api repos/owner/repo/milestones --input /tmp/milestone.json",
+		// -f with --jq: 515 guard catches -f before the 510 --jq allow fires
+		"gh api repos/owner/repo/issues -f title='new issue' --jq '.id'",
+		// --field with --paginate: same bypass attempt, 515 fires first
+		"gh api repos/owner/repo/pulls --field state=closed --paginate",
+		// -F (multipart) field combined with --jq
+		"gh api repos/owner/repo/releases -F tag_name=v1.0 --jq '.id'",
+		// staged graphql: -f query=$(cat /tmp/...) — caught by 515 -f guard
+		`gh api graphql -f query="$(cat /tmp/review-threads.graphql)" -f owner="myorg" -f repo="myrepo" -F pr=42`,
+		// replies endpoint with DELETE method — 525 guard fires before 520 allow
+		"gh api repos/owner/repo/pulls/1/comments/42/replies -X DELETE",
+		// replies endpoint with PUT method
+		"gh api repos/owner/repo/pulls/1/comments/42/replies --method PUT -f body='updated'",
+		// replies endpoint with --input
+		"gh api repos/$OWNER/$REPO/pulls/$PR_NUMBER/comments/$COMMENT_ID/replies --input /tmp/reply.json",
 	}
 	for _, cmd := range cmds {
 		payload := PermissionRequestPayload{
@@ -1564,9 +1578,8 @@ func TestClassify_GhApiPRReviewWorkflow_AutoAllow(t *testing.T) {
 		// posting a reply with shell variables (as the skill uses them)
 		"gh api repos/$OWNER/$REPO/pulls/$PR_NUMBER/comments/$COMMENT_ID/replies -f body='Good catch, addressed.'",
 		// resolveReviewThread mutation (inline, as the skill uses it)
+		// This uses -f query=... so it must be at 520 above the 515 -f guard.
 		"gh api graphql -f query='mutation($id: ID!) { resolveReviewThread(input: {threadId: $id}) { thread { isResolved } } }' -f id='RT_kwDOAbc123'",
-		// staged graphql query from /tmp (as the skill uses for the read query)
-		`gh api graphql -f query="$(cat /tmp/review-threads.graphql)" -f owner="myorg" -f repo="myrepo" -F pr=42`,
 	}
 	for _, cmd := range cmds {
 		payload := PermissionRequestPayload{
@@ -1598,6 +1611,28 @@ func TestClassify_Base64_AutoAllow(t *testing.T) {
 		result := c.Classify(payload, ctx)
 		if result.Decision != AutoAllow {
 			t.Errorf("cmd %q: expected AutoAllow, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+func TestClassify_Base64FileOutput_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		// BSD/macOS: -o writes decoded output to a file instead of stdout
+		"base64 -o /tmp/decoded.bin /tmp/encoded.b64",
+		// long form
+		"base64 --output /tmp/decoded.bin /tmp/encoded.b64",
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != Escalate {
+			t.Errorf("cmd %q: expected Escalate, got %v (rule=%s, reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
 		}
 	}
 }
