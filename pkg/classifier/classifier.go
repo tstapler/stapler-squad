@@ -807,6 +807,113 @@ func SeedRules() []Rule {
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
+		// AutoAllow-before-escalate (Priority 520/515/510) — targeted allow/escalate
+		// overrides for the generic gh api escalation at priority 500.
+		// 520: allow — specific known-safe write operations (PR review workflow)
+		// 515: safety guard — escalate gh api calls that carry explicit write intent
+		//      (fires before the 510 allow rules to prevent write+read-indicator combos)
+		// 510: allow — specific read-only gh api operations
+		// ══════════════════════════════════════════════════════════════════════════
+
+		{
+			// Posting a reply to a PR review comment is a low-risk write: the only
+			// effect is adding a text comment to a specific review thread. This is the
+			// standard reply step in the address-review-comments skill workflow.
+			// Must be at 520 (above the 515 escalate guard) because it uses -f body=.
+			// Matches both literal paths (repos/owner/repo/pulls/123/comments/456/replies)
+			// and shell-variable forms (repos/$OWNER/$REPO/pulls/$PR_NUMBER/...).
+			ID:             "seed-allow-gh-api-pr-review-replies",
+			Name:           "Allow gh api to post PR review comment replies",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\brepos/[^/\s]+/[^/\s]+/pulls/[^/\s]+/comments/[^/\s]+/replies\b`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "Posting replies to PR review comments is a standard PR review workflow operation.",
+			Priority:       520,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// Safety guard: if gh api carries an explicit HTTP write method (-X POST/PUT/
+			// DELETE/PATCH, --method POST/...), an explicit request body (--field body=,
+			// -f body=), or reads body from a file (--input), always escalate — even if
+			// a lower-priority 510 allow rule would otherwise match.
+			// This lets the 510 --jq / --paginate rules safely assume GET semantics.
+			ID:             "seed-escalate-gh-api-explicit-write",
+			Name:           "Escalate gh api calls with explicit write HTTP method or body",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*(\s-X\s+(POST|PUT|DELETE|PATCH)\b|\s--method\s+(POST|PUT|DELETE|PATCH)\b|\s--field\s+body=|\s-f\s+body=|\s--input\b)`),
+			Decision:       Escalate,
+			RiskLevel:      RiskMedium,
+			Reason:         "gh api calls with explicit write HTTP methods or body fields can modify GitHub resources and should be reviewed.",
+			Priority:       515,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// gh api REST calls that include --jq are always GET + jq filter: --jq is a
+			// response post-processor and has no effect on the HTTP method. Without an
+			// explicit -X / --method flag (caught above at 515), the call is read-only.
+			// Covers the most common analytics pattern: gh api repos/.../X --jq '...'
+			ID:             "seed-allow-gh-api-rest-jq",
+			Name:           "Allow read-only gh api calls with --jq",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\s--jq\b`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "gh api with --jq filters a GET response; without an explicit write method this is a read-only GitHub API operation.",
+			Priority:       510,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// gh api REST calls with --paginate read all pages of a resource; --paginate
+			// has no HTTP method implication and is used exclusively for large reads.
+			ID:             "seed-allow-gh-api-rest-paginate",
+			Name:           "Allow read-only gh api calls with --paginate",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\s--paginate\b`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "gh api --paginate reads all pages of a resource and is a read-only GitHub API operation.",
+			Priority:       510,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// Resolving a PR review thread marks it as done so it no longer blocks the
+			// merge. The resolveReviewThread GraphQL mutation is the only way to do this
+			// via the API and is a normal step in the address-review-comments skill.
+			ID:             "seed-allow-gh-api-graphql-resolve-thread",
+			Name:           "Allow gh api graphql resolveReviewThread mutation",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bgh\s+api\s+graphql\b.*\bresolveReviewThread\b`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "Resolving a PR review thread is a standard PR review workflow operation.",
+			Priority:       510,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// The address-review-comments skill writes the GraphQL read query to a /tmp
+			// file first (via the Write tool, which is auto-allowed), then passes it to
+			// gh api graphql via $(cat /tmp/...). Because the query was explicitly staged
+			// in /tmp before this call, the content was already visible to the user and
+			// this call is effectively a known read-only fetch.
+			ID:             "seed-allow-gh-api-graphql-staged-query",
+			Name:           "Allow gh api graphql with pre-staged /tmp query file",
+			ToolName:       "Bash",
+			CommandPattern: regexp.MustCompile(`\bgh\s+api\s+graphql\b.*\$\(cat\s+/tmp/`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "gh api graphql using a pre-staged query from /tmp is a controlled, explicitly prepared operation.",
+			Priority:       510,
+			Enabled:        true,
+			Source:         "seed",
+		},
+
+		// ══════════════════════════════════════════════════════════════════════════
 		// Escalate-before-allow (Priority 500) — override the allow rules at 100
 		// ══════════════════════════════════════════════════════════════════════════
 
@@ -1298,11 +1405,13 @@ func SeedRules() []Rule {
 		{
 			// Note: "sed" is included here for read-only pipeline use (stdout only).
 			// The escalate rule at 500 catches "sed -i" (in-place editing) first.
+			// "base64" encodes/decodes data (e.g. GitHub API returns file contents as
+			// base64; decoding with "base64 -d" is a common pipeline step).
 			ID:       "seed-allow-bash-text-proc",
 			Name:     "Allow text processing tools",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"jq", "awk", "tr", "sort", "uniq", "cut", "paste", "column", "tee", "sed"},
+				Programs: []string{"jq", "awk", "tr", "sort", "uniq", "cut", "paste", "column", "tee", "sed", "base64"},
 			},
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
