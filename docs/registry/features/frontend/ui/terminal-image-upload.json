@@ -1,0 +1,20 @@
+{
+  "id": "terminal-image-upload",
+  "type": "frontend",
+  "component": "TerminalOutput",
+  "path": "web-app/src/components/sessions/TerminalOutput.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "FT2-01: renders upload button in terminal toolbar",
+    "FT2-02: clicking upload button triggers hidden file input synchronously",
+    "FT2-03: successful upload inserts path into terminal with trailing space",
+    "FT2-04: 413 response shows file-too-large error",
+    "FT2-05: 400/415 response shows invalid-image-type error",
+    "FT2-06: network error shows error message",
+    "FT2-07: error message auto-clears after 3 seconds",
+    "FT2-08: button is disabled while upload is in progress",
+    "FT2-09: selecting the same file twice fires onChange both times"
+  ],
+  "lastModified": "2026-04-30T00:00:00Z"
+}

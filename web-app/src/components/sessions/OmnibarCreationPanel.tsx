@@ -1,4 +1,5 @@
 "use client";
+// +feature: session-image-attach
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { KeyboardEvent } from "react";

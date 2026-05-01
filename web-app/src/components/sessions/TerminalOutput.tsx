@@ -1,5 +1,5 @@
 "use client";
-// +feature: terminal-pre-sizing terminal-dimension-cache
+// +feature: terminal-pre-sizing terminal-dimension-cache terminal-image-upload
 
 import { useEffect, useRef, useCallback, useState } from "react";
 

@@ -1,0 +1,20 @@
+{
+  "id": "session-image-attach",
+  "type": "frontend",
+  "component": "OmnibarCreationPanel",
+  "path": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "markerLine": 2,
+  "tested": true,
+  "testIds": [
+    "FT3-01: renders 'Attach image' button in creation panel",
+    "FT3-02: clicking attach button triggers hidden file input",
+    "FT3-03: successful upload shows thumbnail preview",
+    "FT3-04: maximum 3 images enforced — attach button disabled at limit",
+    "FT3-05: selecting 4 files silently truncates to 3",
+    "FT3-06: removing an attachment revokes its object URL",
+    "FT3-07: upload failure shows error message",
+    "FT3-08: onAttachedImagesChange called with correct paths after attach",
+    "FT3-09: onAttachedImagesChange called with empty array after removal"
+  ],
+  "lastModified": "2026-04-30T00:00:00Z"
+}
