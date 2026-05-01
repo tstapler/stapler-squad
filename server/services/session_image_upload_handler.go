@@ -84,7 +84,6 @@ func sanitizeFilename(name string) string {
 	return name
 }
 
-// +api: upload:image
 // HandleUpload processes a multipart/form-data POST with fields "session_id" and "file",
 // saves the image to <session_path>/uploads/ and returns the absolute path as JSON.
 func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
