@@ -7,6 +7,12 @@
   "markerFound": true,
   "handlerFile": "server/services/session_service.go",
   "tested": true,
-  "testIds": ["TestWorkspaceService_SwitchWorkspace_MissingID", "TestWorkspaceService_SwitchWorkspace_MissingTarget", "TestWorkspaceService_ConcurrentSwitchReturnsUnavailable", "TestWorkspaceService_SwitchGuardCleansUpOnCompletion", "TestWorkspaceService_SwitchGuardIsPerSession"],
-  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+  "testIds": [
+    "TestWorkspaceService_SwitchWorkspace_MissingID",
+    "TestWorkspaceService_SwitchWorkspace_MissingTarget",
+    "TestWorkspaceService_ConcurrentSwitchReturnsUnavailable",
+    "TestWorkspaceService_SwitchGuardCleansUpOnCompletion",
+    "TestWorkspaceService_SwitchGuardIsPerSession"
+  ],
+  "lastModified": "2026-04-29T09:02:34.379221068-07:00"
 }

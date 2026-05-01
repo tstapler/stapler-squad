@@ -12,6 +12,7 @@
 #   2 - Usage/setup error
 
 set -euo pipefail
+export LC_ALL=C
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"

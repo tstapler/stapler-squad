@@ -7,6 +7,11 @@
   "markerFound": true,
   "handlerFile": "server/services/session_service.go",
   "tested": true,
-  "testIds": ["TestDeleteSession_ByUUID", "TestDeleteSession_EmptyId", "TestDeleteSession_NonExistentSession", "TestDeleteSession_RemovesFromReviewQueue"],
-  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+  "testIds": [
+    "TestDeleteSession_ByUUID",
+    "TestDeleteSession_EmptyId",
+    "TestDeleteSession_NonExistentSession",
+    "TestDeleteSession_RemovesFromReviewQueue"
+  ],
+  "lastModified": "2026-04-29T09:02:34.379221068-07:00"
 }

@@ -13,12 +13,15 @@ import (
 
 // FeatureDoc is the per-feature JSON file written to docs/registry/features/backend/<domain>/<action>.json.
 // Flat structure — no nesting — keeps the files simple and diff-friendly.
+// Proto-derived entries populate ProtoFile; HTTP handler entries populate HTTPMethod and HTTPPath.
 type FeatureDoc struct {
 	ID           string    `json:"id"`
 	Type         string    `json:"type"`
 	Service      string    `json:"service"`
 	Method       string    `json:"method"`
-	ProtoFile    string    `json:"protoFile"`
+	ProtoFile    string    `json:"protoFile,omitempty"`
+	HTTPMethod   string    `json:"httpMethod,omitempty"`
+	HTTPPath     string    `json:"httpPath,omitempty"`
 	MarkerFound  bool      `json:"markerFound"`
 	HandlerFile  string    `json:"handlerFile,omitempty"`
 	Tested       bool      `json:"tested"`
@@ -76,6 +79,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Discover plain HTTP handlers declared with // +http: markers.
+	httpHandlers, err := backend.ScanHTTPHandlers(servicesDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error scanning HTTP handlers: %v\n", err)
+		os.Exit(1)
+	}
+	features = append(features, httpHandlers...)
+
 	written := 0
 	for _, f := range features {
 		doc := FeatureDoc{
@@ -84,6 +95,10 @@ func main() {
 			Service:      f.Service,
 			Method:       f.Method,
 			ProtoFile:    f.ProtoFile,
+			HTTPMethod:   f.HTTPMethod,
+			HTTPPath:     f.HTTPPath,
+			MarkerFound:  f.MarkerFound,
+			HandlerFile:  f.HandlerFile,
 			Tested:       f.Tested,
 			TestIDs:      f.TestIDs,
 			LastModified: f.LastModified,

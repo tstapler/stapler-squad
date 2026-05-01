@@ -6,6 +6,10 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
   "tested": true,
-  "testIds": ["TestGetSessionDiff_FindsByUUID", "TestGetSessionDiff_FindsByTitle", "TestGetSessionDiff_UnknownIDReturnsNotFound"],
-  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+  "testIds": [
+    "TestGetSessionDiff_FindsByUUID",
+    "TestGetSessionDiff_FindsByTitle",
+    "TestGetSessionDiff_UnknownIDReturnsNotFound"
+  ],
+  "lastModified": "2026-04-29T09:02:34.379221068-07:00"
 }

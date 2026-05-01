@@ -6,6 +6,10 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
   "tested": true,
-  "testIds": ["TestWorkspaceService_GetVCSStatus_FindsByUUID", "TestWorkspaceService_GetVCSStatus_FindsByTitle", "TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound"],
-  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+  "testIds": [
+    "TestWorkspaceService_GetVCSStatus_FindsByUUID",
+    "TestWorkspaceService_GetVCSStatus_FindsByTitle",
+    "TestWorkspaceService_GetVCSStatus_UnknownIDReturnsNotFound"
+  ],
+  "lastModified": "2026-04-29T09:02:34.379221068-07:00"
 }

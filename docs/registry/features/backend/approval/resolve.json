@@ -6,6 +6,14 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
   "tested": true,
-  "testIds": ["TestApprovalFlow_Allow", "TestApprovalFlow_Deny", "TestApprovalFlow_Timeout", "TestApprovalFlow_MethodNotAllowed", "TestApprovalFlow_ParseError", "TestApprovalFlow_SessionIDFromHeader", "TestApprovalFlow_AskUserQuestion_DeferToNativeDialog"],
-  "lastModified": "2026-04-23T21:58:51.909634295-07:00"
+  "testIds": [
+    "TestApprovalFlow_Allow",
+    "TestApprovalFlow_Deny",
+    "TestApprovalFlow_Timeout",
+    "TestApprovalFlow_MethodNotAllowed",
+    "TestApprovalFlow_ParseError",
+    "TestApprovalFlow_SessionIDFromHeader",
+    "TestApprovalFlow_AskUserQuestion_DeferToNativeDialog"
+  ],
+  "lastModified": "2026-04-29T09:02:34.379221068-07:00"
 }

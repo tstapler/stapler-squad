@@ -1,0 +1,27 @@
+{
+  "id": "upload:image",
+  "type": "backend",
+  "service": "HTTPHandler",
+  "method": "POST /api/v1/upload-image",
+  "httpMethod": "POST",
+  "httpPath": "/api/v1/upload-image",
+  "markerFound": true,
+  "handlerFile": "server/services/session_image_upload_handler.go",
+  "tested": true,
+  "testIds": [
+    "TestSessionImageUpload_Success_JPEG",
+    "TestSessionImageUpload_Success_PNG",
+    "TestSessionImageUpload_Success_WebP",
+    "TestSessionImageUpload_OversizedFile",
+    "TestSessionImageUpload_InvalidMIMEType",
+    "TestSessionImageUpload_EmptyFile",
+    "TestSessionImageUpload_SessionNotFound",
+    "TestSessionImageUpload_MissingSessionID",
+    "TestSessionImageUpload_MissingFile",
+    "TestSessionImageUpload_PathTraversal",
+    "TestSessionImageUpload_SessionNoPath",
+    "TestSessionImageUpload_SessionPathMissing",
+    "TestSessionImageUpload_ConcurrentUploads"
+  ],
+  "lastModified": "2026-04-30T19:05:52.077592599-07:00"
+}
