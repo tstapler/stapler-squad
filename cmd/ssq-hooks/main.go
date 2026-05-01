@@ -493,10 +493,20 @@ func patchClaudeSettings(settingsPath, binPath string) error {
 	}
 
 	// Navigate to hooks.PreToolUse, creating intermediate maps as needed.
+	if existing, ok := settings["hooks"]; ok {
+		if _, ok := existing.(map[string]interface{}); !ok {
+			return fmt.Errorf("parsing %s: \"hooks\" field is not an object", settingsPath)
+		}
+	}
 	hooks, _ := settings["hooks"].(map[string]interface{})
 	if hooks == nil {
 		hooks = map[string]interface{}{}
 		settings["hooks"] = hooks
+	}
+	if existing, ok := hooks["PreToolUse"]; ok {
+		if _, ok := existing.([]interface{}); !ok {
+			return fmt.Errorf("parsing %s: hooks.\"PreToolUse\" field is not an array", settingsPath)
+		}
 	}
 	preToolUse, _ := hooks["PreToolUse"].([]interface{})
 
@@ -533,6 +543,10 @@ func patchClaudeSettings(settingsPath, binPath string) error {
 
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
+		return err
+	}
+	// Ensure parent directory exists (e.g. ~/.claude/ may not exist yet).
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
 		return err
 	}
 	return os.WriteFile(settingsPath, append(out, '\n'), 0644)
