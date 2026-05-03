@@ -7,21 +7,27 @@ import { OmnibarProvider } from "@/lib/contexts/OmnibarContext";
 import { ReviewQueueProvider } from "@/lib/contexts/ReviewQueueContext";
 import { ApprovalsProvider } from "@/lib/contexts/ApprovalsContext";
 import { GlobalSessionServiceProvider } from "@/lib/contexts/SessionServiceContext";
+import { NavigationProvider } from "@/lib/contexts/NavigationContext";
+import { ThemeProvider } from "@/lib/contexts/ThemeContext";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <Provider store={store}>
-      <NotificationProvider>
-        <GlobalSessionServiceProvider>
-          <OmnibarProvider>
-            <ReviewQueueProvider>
-              <ApprovalsProvider>
-                {children}
-              </ApprovalsProvider>
-            </ReviewQueueProvider>
-          </OmnibarProvider>
-        </GlobalSessionServiceProvider>
-      </NotificationProvider>
+      <ThemeProvider>
+        <NavigationProvider>
+          <NotificationProvider>
+            <GlobalSessionServiceProvider>
+              <OmnibarProvider>
+                <ReviewQueueProvider>
+                  <ApprovalsProvider>
+                    {children}
+                  </ApprovalsProvider>
+                </ReviewQueueProvider>
+              </OmnibarProvider>
+            </GlobalSessionServiceProvider>
+          </NotificationProvider>
+        </NavigationProvider>
+      </ThemeProvider>
     </Provider>
   );
 }

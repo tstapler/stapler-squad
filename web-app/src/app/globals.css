@@ -1,3 +1,13 @@
+/*
+ * Story 1.5 COMPLETE — all legacy CSS var consumers have been migrated to vanilla-extract
+ * or bridge-mapped below. The @media (prefers-color-scheme: dark) block has been removed;
+ * theme switching is now class-based via ThemeContext + vanilla-extract createTheme.
+ *
+ * Bridge variables below map legacy names to vanilla-extract custom properties so that
+ * any remaining inline-style or utility-class references still resolve correctly.
+ * They are set in :root and overridden on the theme class elements by VE at build time.
+ */
+
 :root {
   /* Light mode colors (default) */
   --background: #ffffff;
@@ -165,101 +175,11 @@
   }
 }
 
-/* Dark mode override */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --card-background: #1a1a1a;
-    --border-color: #333333;
-    --hover-background: #2a2a2a;
-
-    /* Text colors with proper contrast for dark mode */
-    --text-primary: #ededed;
-    --text-secondary: #b4b4b4;
-    --text-muted: #8a8a8a;
-    --text-disabled: #767676; /* minimum #767676 for WCAG AA 4.5:1 on dark backgrounds */
-
-    /* Interactive elements */
-    --primary: #2d9cdb;
-    --primary-hover: #3ba9e6;
-    --primary-active: #52b9f0;
-    --primary-text: #ffffff;
-
-    /* Status colors */
-    --success: #10b981;
-    --success-bg: #064e3b;
-    --warning: #f59e0b;
-    --warning-bg: #78350f;
-    --error: #ef4444;
-    --error-bg: #7f1d1d;
-    --error-text: #fca5a5;
-
-    /* Modal/Overlay */
-    --modal-background: #1a1a1a;
-    --modal-border: #333333;
-    --overlay-background: rgba(0, 0, 0, 0.7);
-
-    /* Input elements */
-    --input-background: #2a2a2a;
-    --input-border: #404040;
-    --input-focus-border: #2d9cdb;
-    --input-text: #ededed;
-
-    /* Tertiary text — #808080 gives 4.64:1 on #1a1a1a (card bg) — WCAG AA */
-    --text-tertiary: #808080;
-
-    /* Accent tinted backgrounds */
-    --accent-bg: rgba(45, 156, 219, 0.1);
-    --accent-hover: rgba(45, 156, 219, 0.2);
-
-    /* Extended status variants */
-    --error-dark: #ef4444;
-    --warning-text: #fbbf24;
-    --primary-dark: #1a7fc1;
-    --border-hover: #6b7280;
-
-    /* Surface tokens */
-    --surface-subtle: #1f2937;
-    --surface-muted: #374151;
-
-    /* Extended border tokens */
-    --border-subtle: #374151;
-    --border-muted: #4b5563;
-    --border-strong: #6b7280;
-
-    /* Panel secondary surface */
-    --panel-bg-secondary: #2a2a2a;
-
-    /* Code block backgrounds */
-    --code-hover-bg: #374151;
-
-    /* Placeholder text */
-    --placeholder-color: #6b7280;
-    --placeholder-color-dark: #4b5563;
-
-    /* Status badge color tokens — dark mode overrides */
-    --status-badge-approval-bg: #450a0a;
-    --status-badge-approval-fg: #fca5a5;
-    --status-badge-approval-border: #7f1d1d;
-    --status-badge-input-bg: #1e3a5f;
-    --status-badge-input-fg: #93c5fd;
-    --status-badge-input-border: #2563eb;
-    --status-badge-complete-bg: #14532d;
-    --status-badge-complete-fg: #86efac;
-    --status-badge-complete-border: #166534;
-    --status-badge-uncommitted-bg: #78350f;
-    --status-badge-uncommitted-fg: #fbbf24;
-    --status-badge-uncommitted-border: #b45309;
-    --status-badge-idle-bg: #1f2937;
-    --status-badge-idle-fg: #9ca3af;
-    --status-badge-idle-border: #374151;
-    --status-badge-stale-fg: #6b7280;
-    --status-badge-processing-bg: #312e81;
-    --status-badge-processing-fg: #a5b4fc;
-    --status-badge-processing-border: #4338ca;
-  }
-}
+/*
+ * NOTE: Dark mode is now handled exclusively by vanilla-extract class-based themes.
+ * The @media (prefers-color-scheme: dark) block has been removed (Story 1.5.3).
+ * Theme switching is controlled by ThemeContext — see web-app/src/lib/contexts/ThemeContext.tsx.
+ */
 
 * {
   box-sizing: border-box;

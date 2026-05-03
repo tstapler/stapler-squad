@@ -1,14 +1,10 @@
 import { style, keyframes, globalStyle, styleVariants } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { pulseGlowKeyframes } from "@/styles/animations.css";
 
 const cardFadeSlideIn = keyframes({
   from: { opacity: 0, transform: "translateY(8px)" },
   to: { opacity: 1, transform: "translateY(0)" },
-});
-
-const attentionPulse = keyframes({
-  "0%, 100%": { boxShadow: "0 0 0 0 rgba(239, 68, 68, 0)" },
-  "50%": { boxShadow: "0 0 0 4px rgba(239, 68, 68, 0.3)" },
 });
 
 const fadeIn = keyframes({
@@ -41,7 +37,8 @@ export const card = style({
   selectors: {
     "&:hover": {
       borderColor: vars.color.borderHover,
-      boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+      // Story 4.2: Theme-aware glow on hover
+      boxShadow: `0 2px 8px rgba(0, 0, 0, 0.1), 0 0 0 1px ${vars.color.glowSecondary}`,
     },
   },
 });
@@ -211,19 +208,15 @@ export const statusLoading = style({
 });
 
 export const statusNeedsApproval = style({
-  background: "#fecaca",
-  color: "#991b1b",
-  animationName: attentionPulse,
-  animationDuration: "2s",
-  animationTimingFunction: "ease-in-out",
-  animationIterationCount: "infinite",
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  // Story 4.2: Use theme-aware glow pulse from animations.css.ts
   "@media": {
-    "(prefers-color-scheme: dark)": {
-      background: "#991b1b",
-      color: "#fecaca",
-    },
-    "(prefers-reduced-motion: reduce)": {
-      animationName: "none",
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: pulseGlowKeyframes,
+      animationDuration: "2s",
+      animationTimingFunction: "ease-in-out",
+      animationIterationCount: "infinite",
     },
   },
 });

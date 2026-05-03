@@ -9,6 +9,7 @@ function makeDeps(): jest.Mocked<ActionDeps> {
     resumeSession: jest.fn().mockResolvedValue(undefined),
     deleteSession: jest.fn().mockResolvedValue(undefined),
     close: jest.fn(),
+    setTheme: jest.fn(),
   };
 }
 
@@ -128,6 +129,16 @@ describe("dispatchOmnibarAction", () => {
       const action: OmnibarAction = { type: "delete_session", sessionId: "s1", label: "Session 1" };
       dispatchOmnibarAction(action, deps);
       expect(deps.deleteSession).toHaveBeenCalledWith("s1");
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("set_theme", () => {
+    it("dispatchOmnibarAction_should_callSetTheme_When_setThemeAction", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = { type: "set_theme", themeName: "matrix" };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.setTheme).toHaveBeenCalledWith("matrix");
       expect(deps.close).toHaveBeenCalled();
     });
   });

@@ -3,12 +3,12 @@ import { vars } from "@/styles/theme.css";
 
 export const container = style({
   width: "100%",
-  maxWidth: "1200px",
-  margin: "0 auto",
-  padding: vars.space["6"],
+  // Story 2.2.2: max-width removed — the session list now lives in a fixed 280px
+  // column; constraining width further would waste space.
+  padding: vars.space["4"],
   "@media": {
     "(max-width: 768px)": {
-      padding: vars.space["4"],
+      padding: vars.space["3"],
     },
   },
 });
@@ -261,9 +261,23 @@ export const categoryTitle = style({
   fontSize: "1rem",
   fontWeight: 600,
   color: vars.color.textPrimary,
+  // Story 4.3: sticky group headers — stick to top of scrolling column
+  position: "sticky",
+  top: 0,
+  zIndex: 10,
   background: vars.color.surfaceSubtle,
   borderLeft: `4px solid ${vars.color.primary}`,
   borderRadius: vars.radii.sm,
+  // Subtle glow on group header accent border
+  boxShadow: `inset 4px 0 0 ${vars.color.glowSecondary}`,
+  cursor: "pointer",
+  userSelect: "none",
+  selectors: {
+    "&:hover": {
+      background: vars.color.hoverBackground,
+    },
+  },
+  transition: "background 0.15s ease",
 });
 
 export const categoryContent = style({

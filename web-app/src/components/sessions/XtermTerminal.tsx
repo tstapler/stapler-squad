@@ -443,7 +443,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   }), []);
 
   return (
-    <div className={styles.container}>
+    <div className={styles.container} data-context="terminal">
       <div ref={containerRef} className={styles.terminal} />
     </div>
   );

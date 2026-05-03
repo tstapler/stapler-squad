@@ -1,10 +1,9 @@
-import { style, keyframes } from "@vanilla-extract/css";
+import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
+import { slideInFromBottom, pulseGlowKeyframes } from "@/styles/animations.css";
 
-const pulse = keyframes({
-  "0%, 100%": { opacity: 1 },
-  "50%": { opacity: 0.7 },
-});
+// Legacy pulse retained for countdownUrgent — uses theme-aware glow via pulseGlowKeyframes
+const pulse = pulseGlowKeyframes;
 
 export const cardExpired = style({
   opacity: 0.6,
@@ -12,19 +11,27 @@ export const cardExpired = style({
 });
 
 export const card = style({
-  background: vars.color.background,
+  background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,
-  borderLeft: "3px solid #f59e0b",
+  // Story 5.4: warning accent on left border, uses theme warning color
+  borderLeft: `3px solid ${vars.color.warning}`,
   borderRadius: vars.radii.lg,
   padding: vars.space["4"],
   transition: "all 0.2s ease",
   selectors: {
     "&:hover": {
       borderColor: vars.color.borderHover,
-      boxShadow: "0 2px 8px rgba(0, 0, 0, 0.1)",
+      boxShadow: `0 2px 8px rgba(0, 0, 0, 0.1), 0 0 0 1px ${vars.color.glowSecondary}`,
     },
   },
+  // Story 5.4: slide-in animation for new approval cards + mobile padding
   "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: slideInFromBottom,
+      animationDuration: "0.3s",
+      animationTimingFunction: "ease-out",
+      animationFillMode: "both",
+    },
     "(max-width: 640px)": {
       padding: vars.space["3"],
     },
@@ -87,31 +94,21 @@ export const countdownNormal = style({
 });
 
 export const countdownWarning = style({
-  background: "#fef3c7",
-  color: "#92400e",
-  border: "1px solid #fcd34d",
-  "@media": {
-    "(prefers-color-scheme: dark)": {
-      background: "#78350f",
-      color: "#fef3c7",
-      borderColor: "#92400e",
-    },
-  },
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
 });
 
 export const countdownUrgent = style({
-  background: "#fee2e2",
-  color: "#991b1b",
-  border: "1px solid #fca5a5",
-  animationName: pulse,
-  animationDuration: "1.5s",
-  animationTimingFunction: "ease-in-out",
-  animationIterationCount: "infinite",
+  background: vars.color.errorBg,
+  color: vars.color.errorText,
+  border: `1px solid ${vars.color.error}`,
   "@media": {
-    "(prefers-color-scheme: dark)": {
-      background: "#7f1d1d",
-      color: "#fecaca",
-      borderColor: "#991b1b",
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: pulse,
+      animationDuration: "1.5s",
+      animationTimingFunction: "ease-in-out",
+      animationIterationCount: "infinite",
     },
   },
 });

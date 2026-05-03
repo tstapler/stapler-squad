@@ -66,6 +66,12 @@ export const vars = createThemeContract({
     terminalTabsBg: null,
     terminalTextMuted: null,
     terminalHoverBg: null,
+
+    // Cyberpunk / glow tokens
+    glowPrimary: null,
+    glowSecondary: null,
+    scanlineColor: null,
+    terminalCursor: null,
   },
   statusBadge: {
     approvalBg: null,
@@ -91,6 +97,7 @@ export const vars = createThemeContract({
   font: {
     mono: null,
     sans: null,
+    display: null,
   },
   space: {
     "0": null,

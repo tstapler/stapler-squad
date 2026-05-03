@@ -16,16 +16,14 @@ export const toast = style({
   background: vars.color.modalBackground,
   border: `2px solid var(--priority-color, ${vars.color.primary})`,
   borderRadius: "12px",
-  boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1)",
+  // Story 5.3: Theme-aware glow on toast border
+  boxShadow: `0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px ${vars.color.glowSecondary}`,
   zIndex: 10000,
   overflow: "hidden",
   transform: "translateX(450px)",
   opacity: 0,
   transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   "@media": {
-    "(prefers-color-scheme: dark)": {
-      boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05)",
-    },
     "screen and (max-width: 768px)": {
       left: "16px",
       right: "16px",

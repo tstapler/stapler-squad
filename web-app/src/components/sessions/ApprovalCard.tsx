@@ -102,7 +102,7 @@ export function ApprovalCard({ approval, onApprove, onDeny, sessionTitle }: Appr
   const isExpired = secondsLeft <= 0;
 
   return (
-    <div className={`${card} ${isExpired ? cardExpired : ""}`} data-testid={`approval-card-${approval.id}`}>
+    <div className={`${card} ${isExpired ? cardExpired : ""}`} data-testid={`approval-card-${approval.id}`} data-context="approval">
       <div className={header}>
         <div className={toolName}>
           <span className={toolIcon} aria-hidden="true">&#x1F527;</span>

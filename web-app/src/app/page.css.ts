@@ -2,11 +2,15 @@ import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const page = style({
-  minHeight: "var(--viewport-height, 100dvh)",
+  // Story 2.2.2: fill remaining height inside CockpitShell so the cockpit grid
+  // can use height: 100% to fill the viewport without scrolling.
+  flex: 1,
   display: "flex",
   flexDirection: "column",
+  minHeight: 0,
   backgroundColor: vars.color.background,
   color: vars.color.textPrimary,
+  overflow: "hidden",
 });
 
 export const main = style({
@@ -18,7 +22,6 @@ export const main = style({
   "@media": {
     "screen and (max-width: 900px)": {
       padding: "1rem",
-      // Ensure content clears the bottom nav on mobile
       paddingBottom: "calc(var(--bottom-nav-height, 56px) + max(env(safe-area-inset-bottom, 0px), 0px) + 1rem)",
     },
   },

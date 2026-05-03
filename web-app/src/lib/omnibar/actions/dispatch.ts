@@ -1,5 +1,6 @@
 import { OmnibarAction } from "./types";
 import { OmnibarSessionData } from "@/components/sessions/Omnibar";
+import { ThemeName } from "@/lib/contexts/ThemeContext";
 
 export interface ActionDeps {
   navigate: (sessionId: string) => void;
@@ -8,6 +9,7 @@ export interface ActionDeps {
   resumeSession: (id: string) => Promise<void>;
   deleteSession: (id: string) => Promise<void>;
   close: () => void;
+  setTheme: (name: ThemeName) => void;
 }
 
 export function dispatchOmnibarAction(
@@ -53,6 +55,10 @@ export function dispatchOmnibarAction(
       return;
     case "delete_session":
       void deps.deleteSession(action.sessionId);
+      deps.close();
+      return;
+    case "set_theme":
+      deps.setTheme(action.themeName);
       deps.close();
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅

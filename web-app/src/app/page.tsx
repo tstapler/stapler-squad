@@ -7,15 +7,20 @@ import { Session } from "@/gen/session/v1/types_pb";
 import { SessionList } from "@/components/sessions/SessionList";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
 import { SessionDetail, SessionDetailTab } from "@/components/sessions/SessionDetail";
+import { SessionDetailBar } from "@/components/sessions/SessionDetailBar";
 import { SessionWizard } from "@/components/sessions/SessionWizard";
 import { ResumeSessionModal } from "@/components/sessions/ResumeSessionModal";
 import { ErrorState } from "@/components/ui/ErrorState";
 import { KeyboardHints } from "@/components/ui/KeyboardHint";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
-import { useAuth } from "@/lib/contexts/AuthContext";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { SessionFormData } from "@/lib/validation/sessionSchema";
+import {
+  cockpitGrid,
+  sessionListColumn,
+  detailColumn,
+} from "@/styles/sessionCockpit.css";
 import * as styles from "./page.css";
 
 function HomeContent() {
@@ -27,13 +32,15 @@ function HomeContent() {
   const [isHelpOpen, setShowHelp] = useState(false);
   const [isSessionFullscreen, setIsSessionFullscreen] = useState(false);
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
+  // j/k keyboard navigation index within the session list
+  const [focusedSessionIndex, setFocusedSessionIndex] = useState<number>(-1);
 
-  // Keep the last visible session alive so SessionDetail doesn't unmount on modal close
+  // Keep the last visible session alive so SessionDetail doesn't unmount on deselect
   const lastVisibleSessionRef = useRef<Session | null>(null);
   if (selectedSession) {
     lastVisibleSessionRef.current = selectedSession;
   }
-  const modalSession = lastVisibleSessionRef.current;
+  const detailSession = lastVisibleSessionRef.current;
 
   // Resume modal state
   const [resumeTarget, setResumeTarget] = useState<Session | null>(null);
@@ -45,17 +52,17 @@ function HomeContent() {
   const openedViaQueryParam = useRef(false);
 
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
-  const sessionModalContentRef = useRef<HTMLDivElement>(null);
+  const sessionDetailRef = useRef<HTMLDivElement>(null);
   const wizardModalContentRef = useRef<HTMLDivElement>(null);
   const helpModalContentRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const wizardTriggerRef = useRef<HTMLElement | null>(null);
   const helpTriggerRef = useRef<HTMLElement | null>(null);
 
-  // Focus session modal when it opens; return focus on close
+  // Focus detail panel when session opens; return focus on close
   useEffect(() => {
     if (selectedSession) {
-      sessionModalContentRef.current?.focus();
+      sessionDetailRef.current?.focus();
     } else if (sessionTriggerRef.current) {
       sessionTriggerRef.current.focus();
       sessionTriggerRef.current = null;
@@ -107,64 +114,33 @@ function HomeContent() {
   } = useSessionServiceContext();
 
   // Helper function to find a session by ID with fuzzy matching for external sessions
-  // This handles multiple matching scenarios:
-  // 1. Exact ID match (session title)
-  // 2. ID prefix match (for suffixed session IDs like "session (External)")
-  // 3. External metadata tmux session name match
-  // 4. Tmux session name with prefix stripped (e.g., "claudesquad_foo" → "foo")
-  // 5. Path-based matching (for notifications from hooks using cwd)
   const findSessionById = useCallback((sessionId: string): Session | undefined => {
-    // Try exact ID match first
     let session = sessions.find((s) => s.id === sessionId);
     if (session) return session;
 
-    // If no exact match, try fuzzy matching for external sessions
     session = sessions.find((s) => {
-      // Check if the session ID starts with the search ID
-      if (s.id.startsWith(sessionId)) {
-        return true;
-      }
-      // Check external metadata for tmux session name match
-      if (s.externalMetadata?.tmuxSessionName === sessionId) {
-        return true;
-      }
-      // Check if the search ID is contained in the session path (for cwd-based lookups)
-      // This handles cases where hooks send the full directory path
-      if (sessionId.includes("/") && s.path && s.path.includes(sessionId)) {
-        return true;
-      }
-      // Check if the session path ends with the search ID (directory name matching)
-      if (s.path && s.path.endsWith(`/${sessionId}`)) {
-        return true;
-      }
+      if (s.id.startsWith(sessionId)) return true;
+      if (s.externalMetadata?.tmuxSessionName === sessionId) return true;
+      if (sessionId.includes("/") && s.path && s.path.includes(sessionId)) return true;
+      if (s.path && s.path.endsWith(`/${sessionId}`)) return true;
       return false;
     });
 
-    // If still no match, try stripping tmux prefix and matching
-    // Handle cases where notification sends "claudesquad_foo" but session.id is "foo"
     if (!session && sessionId.includes("_")) {
-      const withoutPrefix = sessionId.split("_").slice(1).join("_"); // Strip first part before underscore
+      const withoutPrefix = sessionId.split("_").slice(1).join("_");
       session = sessions.find((s) => s.id === withoutPrefix || s.title === withoutPrefix);
     }
 
-    // If still no match, try matching by title or path basename
     if (!session) {
       const searchLower = sessionId.toLowerCase();
       session = sessions.find((s) => {
-        // Title match (case-insensitive)
-        if (s.title.toLowerCase() === searchLower) {
-          return true;
-        }
-        // Path basename match
+        if (s.title.toLowerCase() === searchLower) return true;
         const pathBasename = s.path?.split("/").pop()?.toLowerCase();
-        if (pathBasename === searchLower) {
-          return true;
-        }
+        if (pathBasename === searchLower) return true;
         return false;
       });
     }
 
-    // Log if no session found for debugging
     if (!session) {
       console.warn(`[findSessionById] No session found for ID: ${sessionId}`, {
         availableSessions: sessions.map(s => ({ id: s.id, title: s.title, path: s.path }))
@@ -178,10 +154,8 @@ function HomeContent() {
   useEffect(() => {
     if (pendingSessionId && sessions.length > 0) {
       const session = findSessionById(pendingSessionId);
-
       if (session) {
         setSelectedSession(session);
-        // Navigate to terminal tab for notifications (user likely needs to see/interact with terminal)
         setActiveTab("terminal");
         updateUrl(session.id, "terminal");
       } else {
@@ -191,7 +165,7 @@ function HomeContent() {
     }
   }, [pendingSessionId, sessions]);
 
-  // Handle direct session selection from URL (e.g., from review queue, deep links)
+  // Handle direct session selection from URL
   useEffect(() => {
     const sessionId = searchParams.get("session");
     const tabParam = searchParams.get("tab");
@@ -199,11 +173,9 @@ function HomeContent() {
       const session = findSessionById(sessionId);
       if (session) {
         setSelectedSession(session);
-        // Set tab from URL or default to "terminal" for notification deep links
         if (isValidTab(tabParam)) {
           setActiveTab(tabParam);
         } else {
-          // Default to terminal tab for deep links (notifications)
           setActiveTab("terminal");
         }
       } else {
@@ -224,13 +196,10 @@ function HomeContent() {
       setWizardInitialData(undefined);
       setShowWizard(true);
       openedViaQueryParam.current = true;
-      // Clean the URL immediately so refresh doesn't re-open the wizard
       router.replace("/", { scroll: false });
     } else if (duplicateId) {
       openedViaQueryParam.current = true;
-      // Clean the URL immediately before async session load
       router.replace("/", { scroll: false });
-      // Load session data for duplication
       getSession(duplicateId).then((session) => {
         if (session) {
           setWizardInitialData({
@@ -246,7 +215,6 @@ function HomeContent() {
         }
         setShowWizard(true);
       }).catch(() => {
-        // If loading the session fails, still open wizard without initial data
         setShowWizard(true);
       });
     } else if (worktreePath) {
@@ -286,19 +254,16 @@ function HomeContent() {
     updateUrl(null, null);
   };
 
-  // Handle session deletion - close modal first if this session is selected
+  // Handle session deletion
   const handleDeleteSession = async (sessionId: string) => {
-    // Close modal if we're deleting the currently selected session
-    // This ensures WebSocket cleanup happens before deletion
     if (selectedSession?.id === sessionId) {
       closeSession();
-      // Small delay to let cleanup complete
       await new Promise(resolve => setTimeout(resolve, 100));
     }
     await deleteSession(sessionId);
   };
 
-  // Handle new workspace on same project - open wizard with path/program/category pre-filled but fresh title
+  // Handle new workspace on same project
   const handleNewWorkspaceSession = (sessionId: string) => {
     wizardTriggerRef.current = document.activeElement as HTMLElement;
     openedViaQueryParam.current = false;
@@ -322,12 +287,10 @@ function HomeContent() {
     });
   };
 
-  // Handle session clone - open omnibar in creation mode
   const handleCloneSession = useCallback((_sessionId: string) => {
     openInCreationMode();
   }, [openInCreationMode]);
 
-  // Handle new session - open wizard modal
   const handleNewSession = () => {
     wizardTriggerRef.current = document.activeElement as HTMLElement;
     openedViaQueryParam.current = false;
@@ -335,11 +298,8 @@ function HomeContent() {
     setShowWizard(true);
   };
 
-  // Handle wizard completion
   const handleWizardComplete = async (data: SessionFormData) => {
-    // If useTitleAsBranch is checked, use the session title as the branch name
     const branchName = data.useTitleAsBranch ? data.title : (data.branch || "");
-
     await createSession({
       title: data.title,
       path: data.path,
@@ -352,7 +312,6 @@ function HomeContent() {
       autoYes: data.autoYes,
       existingWorktree: data.existingWorktree || "",
     });
-
     setShowWizard(false);
     setWizardInitialData(undefined);
     if (openedViaQueryParam.current) {
@@ -361,7 +320,6 @@ function HomeContent() {
     }
   };
 
-  // Handle wizard cancel
   const handleWizardCancel = () => {
     setShowWizard(false);
     setWizardInitialData(undefined);
@@ -371,31 +329,24 @@ function HomeContent() {
     }
   };
 
-  // Handle tag updates - sends non-empty tag arrays; clearing all tags is not yet supported
-  // (proto3 repeated fields cannot distinguish "not set" from "empty array")
   const handleUpdateTags = async (sessionId: string, tags: string[]) => {
     if (tags.length > 0) {
       await updateSession(sessionId, { tags });
     }
   };
 
-  // Handle one-shot PR creation (S3-3)
   const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
     await runOneShot(sessionId, "Create a pull request for the changes in this session.", 0);
   }, [runOneShot]);
 
-  // Handle resume request - show modal for user to edit title/tags before resuming
   const handleResumeRequest = useCallback((session: Session) => {
     setResumeTarget(session);
   }, []);
 
-  // Handle direct resume (bulk mode) - resume immediately without showing the modal
   const handleDirectResume = useCallback((session: Session) => {
     resumeSession(session.id, { title: session.title, tags: [...(session.tags || [])] });
   }, [resumeSession]);
 
-  // Handle resume confirm - apply updates and resume session
-  // Only close the modal on success; keep it open on error so the user can retry
   const handleResumeConfirm = useCallback(async (updates: { title: string; tags: string[] }) => {
     if (!resumeTarget) return;
     try {
@@ -406,12 +357,10 @@ function HomeContent() {
     }
   }, [resumeTarget, resumeSession]);
 
-  // Handle resume cancel
   const handleResumeCancel = useCallback(() => {
     setResumeTarget(null);
   }, []);
 
-  // Handle session selection with URL update
   const handleSessionClick = (session: Session) => {
     sessionTriggerRef.current = document.activeElement as HTMLElement;
     if (typeof performance !== "undefined") {
@@ -422,7 +371,6 @@ function HomeContent() {
     updateUrl(session.id, "info");
   };
 
-  // Handle tab changes with URL update
   const handleTabChange = (tab: SessionDetailTab) => {
     setActiveTab(tab);
     if (selectedSession) {
@@ -430,7 +378,9 @@ function HomeContent() {
     }
   };
 
-  // Keyboard shortcuts
+  // Story 3.2 — j/k keyboard navigation in session list
+  // When no session is open, j/k move the focus index; Enter opens the focused session.
+  // When a session is open, p/r/d act on the currently-open session.
   useKeyboard({
     "?": () => { helpTriggerRef.current = document.activeElement as HTMLElement; setShowHelp(true); },
     Escape: () => {
@@ -445,66 +395,119 @@ function HomeContent() {
       }
     },
     "R": () => !loading && listSessions(),
+    // j/k navigation (only when no modal is open)
+    "j": () => {
+      if (showWizard || isHelpOpen || resumeTarget) return;
+      setFocusedSessionIndex(prev =>
+        sessions.length === 0 ? -1 : Math.min(prev + 1, sessions.length - 1)
+      );
+    },
+    "k": () => {
+      if (showWizard || isHelpOpen || resumeTarget) return;
+      setFocusedSessionIndex(prev =>
+        sessions.length === 0 ? -1 : Math.max(prev - 1, 0)
+      );
+    },
+    Enter: () => {
+      if (showWizard || isHelpOpen || resumeTarget) return;
+      if (!selectedSession && focusedSessionIndex >= 0 && sessions[focusedSessionIndex]) {
+        handleSessionClick(sessions[focusedSessionIndex]);
+      }
+    },
+    // p/r/d act on the open session
+    "p": () => {
+      if (selectedSession && !showWizard && !isHelpOpen) {
+        pauseSession(selectedSession.id);
+      }
+    },
+    "r": () => {
+      if (selectedSession && !showWizard && !isHelpOpen) {
+        handleResumeRequest(selectedSession);
+      }
+    },
+    "d": () => {
+      if (selectedSession && !showWizard && !isHelpOpen) {
+        handleDeleteSession(selectedSession.id);
+      }
+    },
+    // t — jump to terminal tab
+    "t": () => {
+      if (selectedSession && !showWizard && !isHelpOpen) {
+        handleTabChange("terminal");
+      }
+    },
   });
 
   return (
     <div className={styles.page}>
-      <main id="main-content" className={styles.main}>
-        {loading && <SessionListSkeleton count={4} />}
-        {error && !loading && (
-          <ErrorState
-            error={error}
-            title="Failed to Load Sessions"
-            message="Unable to connect to the server. Please check that the server is running and try again."
-            onRetry={() => listSessions()}
-          />
-        )}
-        {!loading && !error && (
-          <SessionList
-            sessions={sessions}
-            onSessionClick={handleSessionClick}
-            onDeleteSession={handleDeleteSession}
-            onPauseSession={pauseSession}
-            onResumeSession={handleResumeRequest}
-            onDirectResumeSession={handleDirectResume}
-            onCloneSession={handleCloneSession}
-            onNewWorkspaceSession={handleNewWorkspaceSession}
-            onRenameSession={renameSession}
-            onRestartSession={restartSession}
-            onUpdateTags={handleUpdateTags}
-            onNewSession={handleNewSession}
-            onCreateCheckpoint={createCheckpoint}
-            onListCheckpoints={listCheckpoints}
-            onForkFromCheckpoint={forkSession}
-            onRunOneShot={handleRunOneShot}
-          />
-        )}
-      </main>
-
-      {/* Session detail modal - kept alive across close/reopen to preserve xterm.js terminals */}
+      {/* 3-column cockpit grid: session list | detail panel | (context panel future) */}
       <div
-        className={styles.modal}
-        aria-hidden={!selectedSession}
-        style={{ display: selectedSession ? undefined : 'none' }}
-        onClick={closeSession}
+        className={cockpitGrid({ contextPanelOpen: false })}
+        style={{ flex: 1, minHeight: 0 }}
       >
-        <div
-          ref={sessionModalContentRef}
-          tabIndex={-1}
-          role="dialog"
-          aria-modal="true"
-          aria-label="Session detail"
-          className={`${styles.modalContent} ${isSessionFullscreen ? styles.modalContentFullscreen : ""}`}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {modalSession && (
-            <SessionDetail
-              session={modalSession}
-              onClose={closeSession}
-              onFullscreenChange={setIsSessionFullscreen}
-              onTabChange={handleTabChange}
-              initialTab={activeTab}
+        {/* Column 1 — session list */}
+        <div className={sessionListColumn}>
+          {loading && <SessionListSkeleton count={4} />}
+          {error && !loading && (
+            <ErrorState
+              error={error}
+              title="Failed to Load Sessions"
+              message="Unable to connect to the server. Please check that the server is running and try again."
+              onRetry={() => listSessions()}
             />
+          )}
+          {!loading && !error && (
+            <SessionList
+              sessions={sessions}
+              onSessionClick={handleSessionClick}
+              onDeleteSession={handleDeleteSession}
+              onPauseSession={pauseSession}
+              onResumeSession={handleResumeRequest}
+              onDirectResumeSession={handleDirectResume}
+              onCloneSession={handleCloneSession}
+              onNewWorkspaceSession={handleNewWorkspaceSession}
+              onRenameSession={renameSession}
+              onRestartSession={restartSession}
+              onUpdateTags={handleUpdateTags}
+              onNewSession={handleNewSession}
+              onCreateCheckpoint={createCheckpoint}
+              onListCheckpoints={listCheckpoints}
+              onForkFromCheckpoint={forkSession}
+              onRunOneShot={handleRunOneShot}
+            />
+          )}
+        </div>
+
+        {/* Column 2 — session detail / terminal */}
+        <div className={detailColumn}>
+          {detailSession ? (
+            <>
+              {/* Story 2.2.4 — compact session detail bar above terminal */}
+              <SessionDetailBar
+                branch={detailSession.branch}
+                path={detailSession.path}
+                onBack={closeSession}
+              />
+              <div
+                ref={sessionDetailRef}
+                tabIndex={-1}
+                role="region"
+                aria-label="Session detail"
+                style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}
+              >
+                <SessionDetail
+                  session={detailSession}
+                  onClose={closeSession}
+                  onFullscreenChange={setIsSessionFullscreen}
+                  onTabChange={handleTabChange}
+                  initialTab={activeTab}
+                />
+              </div>
+            </>
+          ) : (
+            <div className={styles.placeholder}>
+              Select a session to view details
+            </div>
           )}
         </div>
       </div>
@@ -564,16 +567,20 @@ function HomeContent() {
               <KeyboardHints
                 hints={[
                   { keys: "?", description: "Show keyboard shortcuts" },
-                  { keys: "Escape", description: "Close modal / dialog" },
+                  { keys: "Escape", description: "Close detail panel / dialog" },
                   { keys: "R", description: "Refresh session list" },
-                  { keys: "Enter", description: "Open selected session" },
+                  { keys: "j / k", description: "Navigate session list up / down" },
+                  { keys: "Enter", description: "Open focused session" },
+                  { keys: "t", description: "Jump to terminal tab" },
+                  { keys: "p", description: "Pause open session" },
+                  { keys: "r", description: "Resume open session" },
+                  { keys: "d", description: "Delete open session" },
                 ]}
               />
             </div>
           </div>
         </div>
       )}
-
     </div>
   );
 }
