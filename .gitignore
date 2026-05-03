@@ -20,6 +20,7 @@ web/src/gen/
 /web-app/.next
 /web-app/node_modules/
 /web-app/out/
+/web-app/storybook-static/
 /server/web/dist/
 /.playwright-mcp
 

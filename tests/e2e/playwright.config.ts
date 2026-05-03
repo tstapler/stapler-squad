@@ -37,7 +37,7 @@ export default defineConfig({
 
   // Global test setup
   use: {
-    // Base URL for tests — isolated test server on 8544; override with TEST_SERVER_URL
+    // Base URL for tests — dynamically assigned by global-setup; override with TEST_SERVER_URL
     baseURL: process.env.TEST_SERVER_URL || 'http://localhost:8544',
 
     // Browser trace on failure

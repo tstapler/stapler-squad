@@ -1,5 +1,5 @@
 import { FullConfig } from '@playwright/test';
-import { startGlobalTestServer } from './helpers/test-server';
+import { startGlobalTestServer, getGlobalTestServer } from './helpers/test-server';
 
 /**
  * Global setup runs once before all tests
@@ -10,6 +10,10 @@ async function globalSetup(config: FullConfig) {
 
   try {
     await startGlobalTestServer();
+    // Propagate dynamic URL to workers — process.env mutations here are
+    // inherited by Playwright worker processes (spawned after global-setup).
+    process.env.TEST_SERVER_URL = getGlobalTestServer().getBaseUrl();
+    console.log(`Test server URL exported: ${process.env.TEST_SERVER_URL}`);
   } catch (error) {
     console.error('Failed to start test server:', error);
     throw error;

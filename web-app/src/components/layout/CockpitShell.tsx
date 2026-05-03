@@ -33,6 +33,14 @@ export function CockpitShell({ children }: CockpitShellProps) {
     action: toggleDrawer,
   });
 
+  // Global: ? → open keyboard shortcut overlay
+  useShortcut("shortcuts:open", {
+    key: "?",
+    context: "global",
+    label: "Show keyboard shortcuts",
+    action: openShortcuts,
+  });
+
   return (
     <>
       <div className={cockpitRoot}>

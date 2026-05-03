@@ -1,15 +1,30 @@
 import { exec, spawn, ChildProcess } from 'child_process';
 import { promisify } from 'util';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as path from 'path';
+import { SessionClient } from './session-client';
 
 const execPromise = promisify(exec);
+
+function findFreePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, () => {
+      const port = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(port));
+    });
+  });
+}
 
 export interface TestServerConfig {
   port: number;
   testDir: string;
   buildPath: string;
   seedSessions: number;
+  liveSeedSessions: number;
 }
 
 export class TestServer {
@@ -18,12 +33,14 @@ export class TestServer {
 
   constructor(config: Partial<TestServerConfig> = {}) {
     const pid = process.pid;
-    const port = config.port || parseInt(process.env.TEST_SERVER_PORT || '8544', 10);
+    // 0 means "pick a free port at start() time"; TEST_SERVER_PORT overrides for CI
+    const port = config.port ?? parseInt(process.env.TEST_SERVER_PORT || '0', 10);
     this.config = {
       port,
       testDir: config.testDir || process.env.TEST_SERVER_DIR || `/tmp/stapler-squad-test-${pid}`,
       buildPath: config.buildPath || path.join(__dirname, '../../../stapler-squad'),
       seedSessions: config.seedSessions ?? 6,
+      liveSeedSessions: config.liveSeedSessions ?? 3,
     };
   }
 
@@ -31,6 +48,9 @@ export class TestServer {
    * Start the test server with isolated data directory and seeded demo sessions.
    */
   async start(): Promise<void> {
+    if (this.config.port === 0) {
+      this.config.port = await findFreePort();
+    }
     console.log(`Starting test server on port ${this.config.port}...`);
     console.log(`Test data directory: ${this.config.testDir}`);
 
@@ -51,6 +71,7 @@ export class TestServer {
     });
 
     await this.waitForServer();
+    await this.seedLiveSessions();
 
     console.log(`✅ Test server started on http://localhost:${this.config.port}`);
   }
@@ -141,6 +162,43 @@ export class TestServer {
       console.log('✅ Demo sessions seeded');
     } catch (err) {
       console.warn(`Warning: Failed to seed demo data: ${err}`);
+    }
+  }
+
+  /**
+   * Create real tmux-backed bash sessions via the live API so the review queue
+   * has items for tests that assert on queue presence and acknowledge behaviour.
+   * Sessions run `bash` in isolated temp directories; the review queue poller
+   * flags them as idle (ReasonIdle) within ~5 seconds of inactivity.
+   */
+  private async seedLiveSessions(): Promise<void> {
+    if (this.config.liveSeedSessions <= 0) return;
+
+    const client = new SessionClient(this.getBaseUrl());
+    const liveDir = path.join(this.config.testDir, 'live');
+    await fs.promises.mkdir(liveDir, { recursive: true });
+
+    let created = 0;
+    for (let i = 1; i <= this.config.liveSeedSessions; i++) {
+      const title = `e2e-review-${i}`;
+      const sessionPath = path.join(liveDir, `s${i}`);
+      await fs.promises.mkdir(sessionPath, { recursive: true });
+
+      try {
+        await client.createIdleSession(title, sessionPath, { category: 'E2E Test', tags: ['e2e'] });
+        created++;
+        console.log(`  ✓ Created live session: ${title}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`  Warning: Failed to create live session ${title}: ${msg}`);
+      }
+    }
+
+    if (created > 0) {
+      // Review queue poller fires every 2s; idle threshold is 5s. Wait 12s to be safe.
+      console.log(`Waiting for review queue poller to detect ${created} idle sessions...`);
+      await new Promise(resolve => setTimeout(resolve, 12000));
+      console.log('✅ Live sessions seeded for review queue tests');
     }
   }
 
