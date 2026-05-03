@@ -636,10 +636,9 @@ export function SessionCard({
       data-testid="session-card"
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
-      role="button"
+      role="article"
       tabIndex={0}
       aria-label={`Session ${session.title}, status: ${getStatusText(session.status)}, program: ${session.program}`}
-      aria-pressed={selectMode ? isSelected : undefined}
     >
       <div className={checkbox} onClick={handleCheckboxClick}>
         <input

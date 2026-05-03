@@ -352,7 +352,7 @@ export function NotificationPanel() {
                     <div className={itemHeader}>
                       <div className={itemTitle}>
                         {!notification.isRead && (
-                          <span className={unreadDot} aria-label="Unread" />
+                          <span className={unreadDot} role="img" aria-label="Unread" />
                         )}
                         <span className={typeIcon}>{getTypeIcon(notification.notificationType)}</span>
                         <strong>{primaryTitle}</strong>

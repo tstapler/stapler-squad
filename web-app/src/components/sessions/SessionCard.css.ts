@@ -274,19 +274,13 @@ export const editTagsButton = style({
   fontSize: "0.6875rem",
   fontWeight: 600,
   background: "transparent",
-  color: "#1e40af",
-  border: "1px solid #1e40af",
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.primary}`,
   borderRadius: vars.radii.full,
   cursor: "pointer",
   transition: "all 0.2s ease",
   selectors: {
-    "&:hover": { background: "#1e40af", color: "#dbeafe" },
-  },
-  "@media": {
-    "(prefers-color-scheme: dark)": {
-      color: "#dbeafe",
-      borderColor: "#1e40af",
-    },
+    "&:hover": { background: vars.color.primary, color: vars.color.primaryText },
   },
 });
 
