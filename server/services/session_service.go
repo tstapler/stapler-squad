@@ -214,6 +214,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		if s.statusManager != nil {
 			inst.SetStatusManager(s.statusManager)
 		}
+		s.wireRateLimitCallbacks(inst)
 	}
 
 	return instances, nil
@@ -539,7 +540,9 @@ func (s *SessionService) CreateSession(
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
-	if !req.Msg.OneOff && req.Msg.Path == "" {
+	if !req.Msg.OneOff &&
+		req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
+		req.Msg.Path == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("path is required"))
 	}
 
@@ -617,6 +620,18 @@ func (s *SessionService) CreateSession(
 	// Determine session type - use explicit session_type if provided, otherwise infer from fields
 	sessionType := resolveSessionType(req.Msg, branch)
 
+	// For Directory mode: if path does not exist and create_if_missing is not set, return
+	// CodeNotFound so the frontend can show a confirmation dialog.
+	if sessionType == session.SessionTypeDirectory {
+		if _, err := os.Stat(resolvedPath); os.IsNotExist(err) {
+			if !req.Msg.CreateIfMissing {
+				return nil, connect.NewError(connect.CodeNotFound,
+					fmt.Errorf("path does not exist: %s", resolvedPath))
+			}
+			// create_if_missing=true: fall through; setupFirstTimeWorktree handles creation
+		}
+	}
+
 	// Build instance options
 	instanceOpts := session.InstanceOptions{
 		Title:            req.Msg.Title,
@@ -634,6 +649,7 @@ func (s *SessionService) CreateSession(
 		OneShot:          req.Msg.OneShot,
 		ProjectID:        req.Msg.ProjectId,
 		MCPServerURL:     s.mcpServerURL,
+		CreateIfMissing:  req.Msg.CreateIfMissing,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -660,6 +676,9 @@ func (s *SessionService) CreateSession(
 		log.ForSession(instance.Title).Error("[CreateSession] failed to start: %v", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to start session: %w", err))
 	}
+
+	// Wire rate limit event callbacks so detection/recovery fire server-level notifications.
+	s.wireRateLimitCallbacks(instance)
 
 	// Inject Claude Code HTTP hook config for remote approval from the web UI.
 	// Non-fatal: session is fully functional even without this config.
@@ -712,6 +731,8 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) sess
 			st = session.SessionTypeNewWorktree
 		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
 			st = session.SessionTypeExistingWorktree
+		case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
+			st = session.SessionTypeNewProject
 		default:
 			st = session.SessionTypeDirectory
 		}
@@ -814,6 +835,19 @@ func (s *SessionService) UpdateSession(
 	if req.Msg.WorkingDir != nil {
 		instance.WorkingDir = *req.Msg.WorkingDir
 		updatedFields = append(updatedFields, "working_dir")
+	}
+
+	// Handle rate limit enabled toggle. SetRateLimitEnabled persists to the
+	// struct field. Also apply to the live poller instance (which has a running
+	// controller) so the change takes effect immediately without a restart.
+	if req.Msg.RateLimitEnabled != nil {
+		instance.SetRateLimitEnabled(*req.Msg.RateLimitEnabled)
+		if s.reviewQueuePoller != nil {
+			if liveInst := s.reviewQueuePoller.FindInstance(req.Msg.Id); liveInst != nil {
+				liveInst.SetRateLimitEnabled(*req.Msg.RateLimitEnabled)
+			}
+		}
+		updatedFields = append(updatedFields, "rate_limit_enabled")
 	}
 
 	// Handle status change (pause/resume) LAST - after all metadata updates.
@@ -2601,6 +2635,58 @@ func (s *SessionService) LogClientEvents(
 		logClientEntry(entry)
 	}
 	return connect.NewResponse(&sessionv1.LogClientEventsResponse{}), nil
+}
+
+// wireRateLimitCallbacks registers server-level callbacks on an Instance so that
+// rate-limit detection and recovery events are published to the event bus and
+// trigger desktop push notifications.
+func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	inst.SetRateLimitCallbacks(
+		// onDetected: called when rate limit is detected.
+		func(sessionID string, resetTime time.Time) {
+			var resetMsg string
+			if !resetTime.IsZero() {
+				resetMsg = fmt.Sprintf(" — resumes at %s", resetTime.Format("3:04 PM"))
+			}
+			title := fmt.Sprintf("Session \"%s\" rate limited%s", inst.Title, resetMsg)
+			notifID := fmt.Sprintf("rl-detect-%s", sessionID)
+			s.eventBus.Publish(events.NewNotificationEvent(
+				sessionID, inst.Title, notifID,
+				int32(8),  // NotificationType_WARNING
+				int32(3),  // NotificationPriority_HIGH
+				title,
+				fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
+				nil,
+			))
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state", "rate_limit_reset_time"}))
+		},
+		// onRecovery: called when recovery completes (success or failure).
+		func(sessionID string, success bool, errMsg string) {
+			var title, message string
+			notifID := fmt.Sprintf("rl-recover-%s", sessionID)
+			if success {
+				title = fmt.Sprintf("Session \"%s\" resumed after rate limit", inst.Title)
+				message = "Session auto-resumed after rate limit expiry."
+			} else {
+				title = fmt.Sprintf("Session \"%s\" failed to resume after rate limit", inst.Title)
+				message = fmt.Sprintf("Auto-resume failed: %s", errMsg)
+			}
+			notifType := int32(10) // NotificationType_INFO
+			if !success {
+				notifType = int32(9) // NotificationType_FAILURE
+			}
+			s.eventBus.Publish(events.NewNotificationEvent(
+				sessionID, inst.Title, notifID,
+				notifType,
+				int32(2), // NotificationPriority_MEDIUM
+				title, message, nil,
+			))
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"rate_limit_state"}))
+		},
+	)
 }
 
 // logClientEntry writes a single browser log entry to the server log.

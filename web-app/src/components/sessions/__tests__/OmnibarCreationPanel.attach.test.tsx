@@ -22,6 +22,9 @@ const DEFAULT_FORM_STATE: OmnibarFormState = {
   sessionType: "new_worktree",
   existingWorktree: "",
   workingDir: "",
+  parentDir: "",
+  projectName: "",
+  newProjectSessionType: "new_worktree",
 };
 
 function buildProps(overrides: Partial<OmnibarCreationPanelProps> = {}): OmnibarCreationPanelProps {

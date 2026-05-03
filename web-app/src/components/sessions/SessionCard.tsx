@@ -98,6 +98,7 @@ interface SessionCardProps {
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
+  onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   selectMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: () => void;
@@ -121,6 +122,7 @@ export function SessionCard({
   onListCheckpoints,
   onForkFromCheckpoint,
   onRunOneShot,
+  onSetRateLimitEnabled,
   selectMode = false,
   isSelected = false,
   onToggleSelect,
@@ -222,12 +224,20 @@ export function SessionCard({
     }
   };
 
+  const formatResetTime = (ts?: { seconds: bigint; nanos: number }): string => {
+    if (!ts || ts.seconds === BigInt(0)) return "";
+    const date = new Date(Number(ts.seconds) * 1000);
+    return "until " + date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
   const getRateLimitStateText = (state: RateLimitState): string => {
     switch (state) {
       case RateLimitState.NONE:
         return "";
-      case RateLimitState.WAITING:
-        return "Rate Limited";
+      case RateLimitState.WAITING: {
+        const resetStr = formatResetTime(session.rateLimitResetTime);
+        return resetStr ? `Rate limited ${resetStr}` : "Rate Limited";
+      }
       case RateLimitState.RECOVERING:
         return "Recovering...";
       case RateLimitState.RECOVERED:
@@ -1012,6 +1022,16 @@ export function SessionCard({
                 >
                   <span aria-hidden="true">🏷️</span> Edit Tags
                 </button>
+                {onSetRateLimitEnabled && (
+                  <button
+                    role="menuitem"
+                    className={overflowMenuItem}
+                    onClick={(e) => { e.stopPropagation(); setShowOverflow(false); onSetRateLimitEnabled(session.id, !session.rateLimitEnabled); }}
+                    aria-label={session.rateLimitEnabled ? `Disable auto-resume for ${session.title}` : `Enable auto-resume for ${session.title}`}
+                  >
+                    <span aria-hidden="true">{session.rateLimitEnabled ? "⏸" : "▶"}</span> {session.rateLimitEnabled ? "Disable auto-resume" : "Enable auto-resume"}
+                  </button>
+                )}
                 <button
                   role="menuitem"
                   className={overflowMenuItem}

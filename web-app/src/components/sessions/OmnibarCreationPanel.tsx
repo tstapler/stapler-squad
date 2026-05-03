@@ -3,9 +3,13 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import type { KeyboardEvent } from "react";
+import { createClient } from "@connectrpc/connect";
+import { createConnectTransport } from "@connectrpc/connect-web";
+import { SessionService } from "@/gen/session/v1/session_pb";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
 import type { OmnibarFormState } from "./Omnibar";
 import { PROGRAMS } from "@/lib/constants/programs";
+import { getApiBaseUrl } from "@/lib/config";
 import {
   body, field, label as labelClass, fieldInput, hint, select as selectClass,
   checkbox as checkboxClass, collapsible, collapsibleHeader, collapsibleTitle, collapsibleIcon, expanded,
@@ -21,9 +25,16 @@ const SESSION_TYPES = [
   { value: "directory", label: "Directory" },
   { value: "existing_worktree", label: "Use Worktree" },
   { value: "one_off", label: "One-off" },
+  { value: "new_project", label: "New Project" },
 ] as const;
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
+
+// Radio options for the "Open as" sub-selector inside New Project mode.
+const NEW_PROJECT_OPEN_AS = [
+  { value: "new_worktree", label: "New Worktree" },
+  { value: "directory", label: "Directory" },
+] as const;
 
 interface SessionTypeRadioGroupProps {
   value: SessionTypeValue;
@@ -133,7 +144,28 @@ export function OmnibarCreationPanel({
   const {
     sessionName, branch, program, category, autoYes,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
+    parentDir, projectName, newProjectSessionType,
   } = formState;
+
+  // ─── Load default parentDir from config when new_project mode is first selected ──
+  useEffect(() => {
+    if (sessionType !== "new_project" || parentDir) return;
+    const load = async () => {
+      try {
+        const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+        const client = createClient(SessionService, transport);
+        const resp = await client.getSessionDefaults({});
+        const dir = resp.defaults?.newProjectBaseDir;
+        if (dir && !parentDir) {
+          setFormField("parentDir", dir);
+        }
+      } catch {
+        // Non-critical: falls back to empty; user can type manually
+      }
+    };
+    void load();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionType]);
 
   // ─── Image attachment state ───────────────────────────────────────────────
   const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
@@ -242,6 +274,7 @@ export function OmnibarCreationPanel({
             {sessionType === "existing_worktree" && "Uses an existing worktree at a specific path"}
             {sessionType === "directory" && "Works directly in the repository without worktree isolation"}
             {sessionType === "one_off" && "A fresh directory will be created automatically — no path needed"}
+            {sessionType === "new_project" && "Creates a new directory, runs git init, makes an initial commit, then opens a session"}
           </span>
         </div>
 
@@ -250,6 +283,114 @@ export function OmnibarCreationPanel({
           <div className={hint} style={{ marginTop: 0 }}>
             Directory will be created in your one-off base directory (default: <code>~/oneoff</code>) with format <code>YYYYMMDD-word-word-NN</code>. Configure in Settings → Defaults.
           </div>
+        )}
+
+        {/* New Project mode UI */}
+        {sessionType === "new_project" && (
+          <>
+            {/* Parent Directory */}
+            <div className={field}>
+              <label className={labelClass} htmlFor="omnibar-parent-dir">
+                Parent Directory *
+              </label>
+              <input
+                id="omnibar-parent-dir"
+                type="text"
+                className={fieldInput}
+                placeholder="~/Projects"
+                value={parentDir}
+                onChange={(e) => setFormField("parentDir", e.target.value)}
+              />
+              <span className={hint}>Directory where the new project folder will be created</span>
+            </div>
+
+            {/* Project Name */}
+            <div className={field}>
+              <label className={labelClass} htmlFor="omnibar-project-name">
+                Project Name *
+              </label>
+              <input
+                id="omnibar-project-name"
+                type="text"
+                className={fieldInput}
+                placeholder="my-awesome-project"
+                value={projectName}
+                onChange={(e) => setFormField("projectName", e.target.value)}
+              />
+              <span className={hint}>Name of the new project directory (no path separators)</span>
+            </div>
+
+            {/* Resolved Path Preview */}
+            {parentDir.trim() && projectName.trim() && (
+              <div className={styles.pathDisplay} title={`${parentDir.trim().replace(/\/$/, "")}/${projectName.trim()}`}>
+                {parentDir.trim().replace(/\/$/, "")}/{projectName.trim()}
+              </div>
+            )}
+
+            {/* Open as radio group */}
+            <div className={field}>
+              <label className={labelClass} id="omnibar-open-as-label">
+                Open as
+              </label>
+              <div role="radiogroup" aria-labelledby="omnibar-open-as-label" className={styles.radioGroup}>
+                {NEW_PROJECT_OPEN_AS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    role="radio"
+                    aria-checked={newProjectSessionType === opt.value}
+                    tabIndex={newProjectSessionType === opt.value ? 0 : -1}
+                    type="button"
+                    onClick={() => setFormField("newProjectSessionType", opt.value)}
+                    className={[styles.radioBtn, newProjectSessionType === opt.value ? styles.radioBtnActive : ""]
+                      .filter(Boolean)
+                      .join(" ")}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              <span className={hint}>
+                {newProjectSessionType === "new_worktree"
+                  ? "Creates an isolated git worktree for this session"
+                  : "Opens the project directory directly without worktree isolation"}
+              </span>
+            </div>
+
+            {/* Branch field for new_worktree open-as */}
+            {newProjectSessionType === "new_worktree" && (
+              <>
+                <label className={checkboxClass}>
+                  <input
+                    type="checkbox"
+                    checked={useTitleAsBranch}
+                    onChange={(e) => setFormField("useTitleAsBranch", e.target.checked)}
+                  />
+                  <span>Use session name as branch name</span>
+                </label>
+
+                <div className={field}>
+                  <label className={labelClass} htmlFor="omnibar-np-branch">
+                    Git Branch {!useTitleAsBranch && "*"}
+                  </label>
+                  <input
+                    id="omnibar-np-branch"
+                    type="text"
+                    className={fieldInput}
+                    placeholder={useTitleAsBranch ? sessionName || "Enter session name first" : "main"}
+                    value={useTitleAsBranch ? sessionName : branch}
+                    onChange={(e) => !useTitleAsBranch && setFormField("branch", e.target.value)}
+                    disabled={useTitleAsBranch}
+                    style={{ opacity: useTitleAsBranch ? 0.6 : 1 }}
+                  />
+                  <span className={hint}>
+                    {useTitleAsBranch
+                      ? `Branch name will be: ${sessionName || "(enter session name)"}`
+                      : "Branch to create for the new worktree"}
+                  </span>
+                </div>
+              </>
+            )}
+          </>
         )}
 
         {/* Branch controls (for new worktree) */}
@@ -332,7 +473,7 @@ export function OmnibarCreationPanel({
         )}
 
         {/* Working Directory */}
-        {sessionType !== "one_off" && (
+        {sessionType !== "one_off" && sessionType !== "new_project" && (
           <div className={field}>
             <label className={labelClass} htmlFor="omnibar-working-dir">
               Working Directory

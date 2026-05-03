@@ -167,6 +167,59 @@ func getHeadCommitSHA(path string) (string, error) {
 	return commitSHA, nil
 }
 
+// InitializeProjectDirectory creates a directory and initializes it as a git repository.
+// Behavior by pre-existing state:
+//   - Path does not exist: creates with os.MkdirAll(path, 0755), runs git init, commits.
+//   - Path exists, no .git: runs git init in place, commits.
+//   - Path exists, already a git repo: no-op, returns nil.
+//   - Path exists but is a regular file: returns an error.
+//
+// On partial failure (dir created, git init failed): attempts os.RemoveAll to roll back
+// the newly created directory. Logs a warning if rollback also fails.
+func InitializeProjectDirectory(path string) error {
+	// 1. Check if already a git repo (open succeeds) → no-op
+	if _, err := git.PlainOpen(path); err == nil {
+		return nil
+	}
+
+	// 2. Check for file collision
+	if info, err := os.Stat(path); err == nil && !info.IsDir() {
+		return fmt.Errorf("path exists and is not a directory: %s", path)
+	}
+
+	// 3. Track whether we created the directory so we can roll back on failure
+	dirCreated := false
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.MkdirAll(path, 0755); err != nil {
+			return fmt.Errorf("failed to create directory: %w", err)
+		}
+		dirCreated = true
+	}
+
+	// 4. git init
+	repo, err := git.PlainInit(path, false)
+	if err != nil {
+		if dirCreated {
+			if rmErr := os.RemoveAll(path); rmErr != nil {
+				log.ErrorLog.Printf("InitializeProjectDirectory: rollback failed for %s: %v", path, rmErr)
+			}
+		}
+		return fmt.Errorf("failed to init git repo: %w", err)
+	}
+
+	// 5. Initial commit (reuses the existing createInitialCommit helper)
+	if err := createInitialCommit(repo, path); err != nil {
+		if dirCreated {
+			if rmErr := os.RemoveAll(path); rmErr != nil {
+				log.ErrorLog.Printf("InitializeProjectDirectory: rollback failed for %s: %v", path, rmErr)
+			}
+		}
+		return fmt.Errorf("failed to create initial commit: %w", err)
+	}
+
+	return nil
+}
+
 // createInitialCommit creates an initial commit in a new git repository
 // This is required because git worktrees need at least one commit to exist
 func createInitialCommit(repo *git.Repository, repoPath string) error {

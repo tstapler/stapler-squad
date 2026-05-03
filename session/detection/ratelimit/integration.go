@@ -165,6 +165,19 @@ func (pc *PTYConsumer) GetRateLimitState() RateLimitState {
 	return StateNone
 }
 
+// GetResetTime returns the current rate limit reset time from the underlying manager.
+func (pc *PTYConsumer) GetResetTime() time.Time {
+	if pc.manager != nil {
+		return pc.manager.GetResetTime()
+	}
+	return time.Time{}
+}
+
+// GetManager returns the underlying Manager for advanced callback wiring.
+func (pc *PTYConsumer) GetManager() *Manager {
+	return pc.manager
+}
+
 func (pc *PTYConsumer) SetEnabled(enabled bool) {
 	if pc.manager != nil {
 		pc.manager.SetEnabled(enabled)

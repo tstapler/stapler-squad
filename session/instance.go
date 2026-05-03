@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -124,6 +125,10 @@ type Instance struct {
 	IsExpanded bool
 	// SessionType determines the session workflow (directory, new_worktree, existing_worktree)
 	SessionType SessionType
+	// CreateIfMissing: when SessionTypeDirectory, create the directory and run git init
+	// if the path does not exist. Set from the request's create_if_missing field.
+	// Not persisted — only relevant during initial session start.
+	CreateIfMissing bool `json:"-"`
 	// TmuxPrefix is the prefix to use for tmux session names
 	TmuxPrefix string
 	// TmuxServerSocket is the server socket name for tmux isolation (used with -L flag)
@@ -202,6 +207,11 @@ type Instance struct {
 	// first start and updated on restart. Empty for external (mux-discovered) sessions.
 	LaunchCommand string `json:"launch_command,omitempty"`
 
+	// RateLimitAutoResume controls whether the rate-limit manager will automatically
+	// send recovery input when a rate limit expires. Persisted so the setting survives
+	// server restarts. Defaults to true (enabled) when zero value.
+	RateLimitAutoResume *bool `json:"rate_limit_auto_resume,omitempty"`
+
 	// historyDetector is used by tryExtractConversationUUID. When nil the
 	// production inspector is used. Set in tests to inject a fake home dir.
 	historyDetector *HistoryFileDetector
@@ -257,6 +267,15 @@ type Instance struct {
 	// lifecycleListeners receives EventStarted / EventExited notifications.
 	lifecycleListeners   []LifecycleListener
 	lifecycleListenersMu sync.Mutex
+
+	// rateLimitCallbacksMu protects the rate limit event callback fields below.
+	rateLimitCallbacksMu sync.Mutex
+	// onRateLimitDetected is called (in a goroutine) when rate limit is detected.
+	// Wired by the server layer to publish events to the server event bus.
+	onRateLimitDetected func(sessionID string, resetTime time.Time)
+	// onRateLimitRecovery is called (in a goroutine) when recovery completes.
+	// success=true means recovery input was sent; false means it failed.
+	onRateLimitRecovery func(sessionID string, success bool, errMsg string)
 }
 
 // ToInstanceData converts an Instance to its serializable form
@@ -587,12 +606,16 @@ const (
 	SessionTypeNewWorktree SessionType = "new_worktree"
 	// SessionTypeExistingWorktree uses an existing git worktree
 	SessionTypeExistingWorktree SessionType = "existing_worktree"
+	// SessionTypeNewProject creates a new directory, initializes a git repo with an
+	// initial commit, and opens the session. The directory need not exist beforehand.
+	SessionTypeNewProject SessionType = "new_project"
 )
 
 // IsValid reports whether st is a recognized session type.
 func (st SessionType) IsValid() bool {
 	switch st {
-	case SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree:
+	case SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree,
+		SessionTypeNewProject:
 		return true
 	default:
 		return false
@@ -652,6 +675,10 @@ type InstanceOptions struct {
 	// --mcp-config '{"stapler-squad":{"type":"http","url":"<MCPServerURL>"}}' so the
 	// session can call back into stapler-squad without any file injection.
 	MCPServerURL string
+
+	// CreateIfMissing: when SessionTypeDirectory, create the directory and run git init
+	// if the path does not exist. Only set when the user has confirmed the action.
+	CreateIfMissing bool
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -687,8 +714,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		sessionType = SessionTypeDirectory
 	}
 	if !sessionType.IsValid() {
-		return nil, fmt.Errorf("invalid session type %q: must be one of %q, %q, %q",
-			sessionType, SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree)
+		return nil, fmt.Errorf("invalid session type %q: must be one of %q, %q, %q, %q",
+			sessionType, SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree, SessionTypeNewProject)
 	}
 
 	instance := &Instance{
@@ -730,6 +757,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		OneShot:      opts.OneShot,
 		ProjectID:    opts.ProjectID,
 		MCPServerURL: opts.MCPServerURL,
+		// Directory creation on missing path (R2 confirmation flow)
+		CreateIfMissing: opts.CreateIfMissing,
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice
@@ -1171,8 +1200,23 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		i.gitManager.SetWorktree(gitWorktree)
 		i.Branch = gitWorktree.GetBranchName()
 		log.InfoLog.Printf("Connected to existing worktree for instance '%s', branch: '%s'", i.Title, i.Branch)
+	case SessionTypeNewProject:
+		log.InfoLog.Printf("New project session for instance '%s' at '%s', initializing git repo", i.Title, i.Path)
+		if err := git.InitializeProjectDirectory(i.Path); err != nil {
+			return fmt.Errorf("new_project initialization failed: %w", err)
+		}
+		i.gitManager.SetWorktree(nil)
+		i.Branch = ""
+		log.InfoLog.Printf("New project initialized at '%s'", i.Path)
 	default: // SessionTypeDirectory and unknown types → no worktree
 		log.InfoLog.Printf("Directory session for instance '%s' at '%s' (no git worktree)", i.Title, i.Path)
+		if i.CreateIfMissing {
+			if _, err := os.Stat(i.Path); os.IsNotExist(err) {
+				if err := git.InitializeProjectDirectory(i.Path); err != nil {
+					return fmt.Errorf("failed to create directory for session: %w", err)
+				}
+			}
+		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
 	}
@@ -2662,6 +2706,9 @@ func (i *Instance) StartController() error {
 	// Register with status manager and store controller
 	i.controllerManager.RegisterController(i.Title, controller)
 
+	// Wire rate limit callbacks from the server layer (if already set).
+	i.wireRateLimitCallbacks()
+
 	log.InfoLog.Printf("Started ClaudeController for instance %s", i.Title)
 	return nil
 }
@@ -2728,21 +2775,90 @@ func (i *Instance) GetRateLimitState() int {
 	return int(ctrl.GetRateLimitState())
 }
 
-// SetRateLimitEnabled enables or disables rate limit detection.
+// GetRateLimitResetTime returns the time when the rate limit is expected to reset.
+// Returns zero time if no controller is active or no reset time is known.
+func (i *Instance) GetRateLimitResetTime() time.Time {
+	ctrl := i.GetController()
+	if ctrl == nil {
+		return time.Time{}
+	}
+	return ctrl.GetRateLimitResetTime()
+}
+
+// SetRateLimitEnabled enables or disables rate limit auto-resume.
+// The setting is persisted in RateLimitAutoResume so it survives restarts,
+// and is applied immediately to the running controller if one exists.
 func (i *Instance) SetRateLimitEnabled(enabled bool) {
+	i.RateLimitAutoResume = &enabled
 	ctrl := i.GetController()
 	if ctrl != nil {
 		ctrl.SetRateLimitEnabled(enabled)
 	}
 }
 
-// IsRateLimitEnabled returns whether rate limit detection is enabled.
-func (i *Instance) IsRateLimitEnabled() bool {
+// SetRateLimitCallbacks registers server-layer callbacks for rate limit events.
+// onDetected is called when a rate limit is detected; onRecovery is called when
+// recovery completes. Both are invoked from goroutines in the ratelimit package.
+// Safe to call before or after the controller is started; callbacks are wired at
+// controller start time via wireRateLimitCallbacks.
+func (i *Instance) SetRateLimitCallbacks(
+	onDetected func(sessionID string, resetTime time.Time),
+	onRecovery func(sessionID string, success bool, errMsg string),
+) {
+	i.rateLimitCallbacksMu.Lock()
+	i.onRateLimitDetected = onDetected
+	i.onRateLimitRecovery = onRecovery
+	i.rateLimitCallbacksMu.Unlock()
+
+	// If a controller is already running, wire immediately.
+	i.wireRateLimitCallbacks()
+}
+
+// wireRateLimitCallbacks wires the instance-level callbacks to the rate limit manager
+// inside the controller. Called both from SetRateLimitCallbacks and from controller startup.
+func (i *Instance) wireRateLimitCallbacks() {
 	ctrl := i.GetController()
 	if ctrl == nil {
-		return true // Default to enabled
+		return
 	}
-	return ctrl.IsRateLimitEnabled()
+	handler := ctrl.GetRateLimitHandler()
+	if handler == nil {
+		return
+	}
+	mgr := handler.GetManager()
+	if mgr == nil {
+		return
+	}
+
+	i.rateLimitCallbacksMu.Lock()
+	onDetected := i.onRateLimitDetected
+	onRecovery := i.onRateLimitRecovery
+	i.rateLimitCallbacksMu.Unlock()
+
+	sessionID := i.GetStableID()
+	if onDetected != nil {
+		mgr.SetDetectionCallback(func(det ratelimit.Detection) {
+			onDetected(sessionID, det.ResetTime)
+		})
+	}
+	if onRecovery != nil {
+		mgr.SetRecoveryCallback(func(success bool, _ ratelimit.Detection) {
+			var errMsg string
+			if !success {
+				errMsg = "recovery input failed"
+			}
+			onRecovery(sessionID, success, errMsg)
+		})
+	}
+}
+
+// IsRateLimitEnabled returns whether rate limit auto-resume is enabled.
+// Returns the persisted RateLimitAutoResume field (default: true when nil).
+func (i *Instance) IsRateLimitEnabled() bool {
+	if i.RateLimitAutoResume == nil {
+		return true
+	}
+	return *i.RateLimitAutoResume
 }
 
 // GetPermissions returns the permissions for this instance based on its type

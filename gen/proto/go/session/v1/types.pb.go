@@ -106,6 +106,8 @@ const (
 	SessionType_SESSION_TYPE_NEW_WORKTREE SessionType = 2
 	// Reuse existing git worktree.
 	SessionType_SESSION_TYPE_EXISTING_WORKTREE SessionType = 3
+	// Create a directory, run git init, and start a session in the new repo.
+	SessionType_SESSION_TYPE_NEW_PROJECT SessionType = 4
 )
 
 // Enum value maps for SessionType.
@@ -115,12 +117,14 @@ var (
 		1: "SESSION_TYPE_DIRECTORY",
 		2: "SESSION_TYPE_NEW_WORKTREE",
 		3: "SESSION_TYPE_EXISTING_WORKTREE",
+		4: "SESSION_TYPE_NEW_PROJECT",
 	}
 	SessionType_value = map[string]int32{
 		"SESSION_TYPE_UNSPECIFIED":       0,
 		"SESSION_TYPE_DIRECTORY":         1,
 		"SESSION_TYPE_NEW_WORKTREE":      2,
 		"SESSION_TYPE_EXISTING_WORKTREE": 3,
+		"SESSION_TYPE_NEW_PROJECT":       4,
 	}
 )
 
@@ -1046,6 +1050,11 @@ type Session struct {
 	// Rate limit detection state
 	// Indicates if session is experiencing rate limiting from LLM provider
 	RateLimitState RateLimitState `protobuf:"varint,40,opt,name=rate_limit_state,json=rateLimitState,proto3,enum=session.v1.RateLimitState" json:"rate_limit_state,omitempty"`
+	// When the rate limit is expected to reset (populated when rate_limit_state == WAITING).
+	RateLimitResetTime *timestamppb.Timestamp `protobuf:"bytes,46,opt,name=rate_limit_reset_time,json=rateLimitResetTime,proto3" json:"rate_limit_reset_time,omitempty"`
+	// Whether automatic rate limit recovery is enabled for this session.
+	// Defaults to true. Set to false to disable auto-resume for this session.
+	RateLimitEnabled bool `protobuf:"varint,47,opt,name=rate_limit_enabled,json=rateLimitEnabled,proto3" json:"rate_limit_enabled,omitempty"`
 	// Path to the Claude Code JSONL history file for this session.
 	// Populated by HistoryLinker once the session's open files are detected.
 	// Used to pass --resume <uuid> when reattaching after server restart.
@@ -1374,6 +1383,20 @@ func (x *Session) GetRateLimitState() RateLimitState {
 		return x.RateLimitState
 	}
 	return RateLimitState_RATE_LIMIT_STATE_UNSPECIFIED
+}
+
+func (x *Session) GetRateLimitResetTime() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RateLimitResetTime
+	}
+	return nil
+}
+
+func (x *Session) GetRateLimitEnabled() bool {
+	if x != nil {
+		return x.RateLimitEnabled
+	}
+	return false
 }
 
 func (x *Session) GetHistoryFilePath() string {
@@ -4774,7 +4797,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x96\x10\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x93\x11\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -4823,7 +4846,9 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x18github_changes_req_count\x18% \x01(\x05R\x15githubChangesReqCount\x126\n" +
 	"\x17github_check_conclusion\x18& \x01(\tR\x15githubCheckConclusion\x12K\n" +
 	"\x14last_pr_status_check\x18' \x01(\v2\x1a.google.protobuf.TimestampR\x11lastPrStatusCheck\x12D\n" +
-	"\x10rate_limit_state\x18( \x01(\x0e2\x1a.session.v1.RateLimitStateR\x0erateLimitState\x12*\n" +
+	"\x10rate_limit_state\x18( \x01(\x0e2\x1a.session.v1.RateLimitStateR\x0erateLimitState\x12M\n" +
+	"\x15rate_limit_reset_time\x18. \x01(\v2\x1a.google.protobuf.TimestampR\x12rateLimitResetTime\x12,\n" +
+	"\x12rate_limit_enabled\x18/ \x01(\bR\x10rateLimitEnabled\x12*\n" +
 	"\x11history_file_path\x18) \x01(\tR\x0fhistoryFilePath\x128\n" +
 	"\x18claude_conversation_uuid\x18* \x01(\tR\x16claudeConversationUuid\x12\x1d\n" +
 	"\n" +
@@ -5190,12 +5215,13 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x15SESSION_STATUS_PAUSED\x10\x04\x12!\n" +
 	"\x1dSESSION_STATUS_NEEDS_APPROVAL\x10\x05\x12\x1b\n" +
 	"\x17SESSION_STATUS_CREATING\x10\x06\x12\x1a\n" +
-	"\x16SESSION_STATUS_STOPPED\x10\a*\x8a\x01\n" +
+	"\x16SESSION_STATUS_STOPPED\x10\a*\xa8\x01\n" +
 	"\vSessionType\x12\x1c\n" +
 	"\x18SESSION_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SESSION_TYPE_DIRECTORY\x10\x01\x12\x1d\n" +
 	"\x19SESSION_TYPE_NEW_WORKTREE\x10\x02\x12\"\n" +
-	"\x1eSESSION_TYPE_EXISTING_WORKTREE\x10\x03*d\n" +
+	"\x1eSESSION_TYPE_EXISTING_WORKTREE\x10\x03\x12\x1c\n" +
+	"\x18SESSION_TYPE_NEW_PROJECT\x10\x04*d\n" +
 	"\fInstanceType\x12\x1d\n" +
 	"\x19INSTANCE_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15INSTANCE_TYPE_MANAGED\x10\x01\x12\x1a\n" +
@@ -5382,68 +5408,69 @@ var file_session_v1_types_proto_depIdxs = []int32{
 	16, // 10: session.v1.Session.external_metadata:type_name -> session.v1.ExternalInstanceMetadata
 	55, // 11: session.v1.Session.last_pr_status_check:type_name -> google.protobuf.Timestamp
 	4,  // 12: session.v1.Session.rate_limit_state:type_name -> session.v1.RateLimitState
-	3,  // 13: session.v1.Session.working_state:type_name -> session.v1.WorkingState
-	55, // 14: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
-	55, // 15: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
-	55, // 16: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
-	20, // 17: session.v1.ClaudeSession.settings:type_name -> session.v1.ClaudeSettings
-	48, // 18: session.v1.ClaudeSession.metadata:type_name -> session.v1.ClaudeSession.MetadataEntry
-	6,  // 19: session.v1.ReviewItem.reason:type_name -> session.v1.AttentionReason
-	5,  // 20: session.v1.ReviewItem.priority:type_name -> session.v1.Priority
-	55, // 21: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
-	49, // 22: session.v1.ReviewItem.metadata:type_name -> session.v1.ReviewItem.MetadataEntry
-	0,  // 23: session.v1.ReviewItem.status:type_name -> session.v1.SessionStatus
-	17, // 24: session.v1.ReviewItem.diff_stats:type_name -> session.v1.DiffStats
-	55, // 25: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
-	3,  // 26: session.v1.ReviewItem.working_state:type_name -> session.v1.WorkingState
-	55, // 27: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
-	55, // 28: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	55, // 29: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
-	21, // 30: session.v1.ReviewQueue.items:type_name -> session.v1.ReviewItem
-	50, // 31: session.v1.ReviewQueue.by_priority:type_name -> session.v1.ReviewQueue.ByPriorityEntry
-	51, // 32: session.v1.ReviewQueue.by_reason:type_name -> session.v1.ReviewQueue.ByReasonEntry
-	7,  // 33: session.v1.Notification.notification_type:type_name -> session.v1.NotificationType
-	8,  // 34: session.v1.Notification.priority:type_name -> session.v1.NotificationPriority
-	55, // 35: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
-	52, // 36: session.v1.Notification.metadata:type_name -> session.v1.Notification.MetadataEntry
-	10, // 37: session.v1.FileChange.status:type_name -> session.v1.FileStatus
-	9,  // 38: session.v1.VCSStatus.type:type_name -> session.v1.VCSType
-	26, // 39: session.v1.VCSStatus.staged_files:type_name -> session.v1.FileChange
-	26, // 40: session.v1.VCSStatus.unstaged_files:type_name -> session.v1.FileChange
-	26, // 41: session.v1.VCSStatus.untracked_files:type_name -> session.v1.FileChange
-	26, // 42: session.v1.VCSStatus.conflict_files:type_name -> session.v1.FileChange
-	55, // 43: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
-	9,  // 44: session.v1.AvailableWorkspaceTargets.vcs_type:type_name -> session.v1.VCSType
-	28, // 45: session.v1.AvailableWorkspaceTargets.bookmarks:type_name -> session.v1.BookmarkTarget
-	29, // 46: session.v1.AvailableWorkspaceTargets.recent_revisions:type_name -> session.v1.RevisionTarget
-	30, // 47: session.v1.AvailableWorkspaceTargets.worktrees:type_name -> session.v1.WorktreeTarget
-	9,  // 48: session.v1.VCSInfo.vcs_type:type_name -> session.v1.VCSType
-	53, // 49: session.v1.PendingApprovalProto.tool_input:type_name -> session.v1.PendingApprovalProto.ToolInputEntry
-	55, // 50: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
-	55, // 51: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
-	13, // 52: session.v1.ApprovalRuleProto.decision:type_name -> session.v1.AutoDecision
-	55, // 53: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
-	54, // 54: session.v1.AnalyticsSummaryProto.decision_counts:type_name -> session.v1.AnalyticsSummaryProto.DecisionCountsEntry
-	36, // 55: session.v1.AnalyticsSummaryProto.top_tools:type_name -> session.v1.ToolStatProto
-	37, // 56: session.v1.AnalyticsSummaryProto.top_denied_commands:type_name -> session.v1.CommandStatProto
-	38, // 57: session.v1.AnalyticsSummaryProto.top_triggered_rules:type_name -> session.v1.RuleStatProto
-	55, // 58: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
-	55, // 59: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
-	39, // 60: session.v1.AnalyticsSummaryProto.top_command_programs:type_name -> session.v1.ProgramStatProto
-	40, // 61: session.v1.AnalyticsSummaryProto.top_python_imports:type_name -> session.v1.ImportStatProto
-	36, // 62: session.v1.AnalyticsSummaryProto.top_uncovered_tools:type_name -> session.v1.ToolStatProto
-	39, // 63: session.v1.AnalyticsSummaryProto.top_uncovered_programs:type_name -> session.v1.ProgramStatProto
-	41, // 64: session.v1.AnalyticsSummaryProto.command_subcommand_stats:type_name -> session.v1.SubcommandStatProto
-	55, // 65: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
-	55, // 66: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
-	55, // 67: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
-	55, // 68: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
-	14, // 69: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
-	70, // [70:70] is the sub-list for method output_type
-	70, // [70:70] is the sub-list for method input_type
-	70, // [70:70] is the sub-list for extension type_name
-	70, // [70:70] is the sub-list for extension extendee
-	0,  // [0:70] is the sub-list for field type_name
+	55, // 13: session.v1.Session.rate_limit_reset_time:type_name -> google.protobuf.Timestamp
+	3,  // 14: session.v1.Session.working_state:type_name -> session.v1.WorkingState
+	55, // 15: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
+	55, // 16: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
+	55, // 17: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
+	20, // 18: session.v1.ClaudeSession.settings:type_name -> session.v1.ClaudeSettings
+	48, // 19: session.v1.ClaudeSession.metadata:type_name -> session.v1.ClaudeSession.MetadataEntry
+	6,  // 20: session.v1.ReviewItem.reason:type_name -> session.v1.AttentionReason
+	5,  // 21: session.v1.ReviewItem.priority:type_name -> session.v1.Priority
+	55, // 22: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
+	49, // 23: session.v1.ReviewItem.metadata:type_name -> session.v1.ReviewItem.MetadataEntry
+	0,  // 24: session.v1.ReviewItem.status:type_name -> session.v1.SessionStatus
+	17, // 25: session.v1.ReviewItem.diff_stats:type_name -> session.v1.DiffStats
+	55, // 26: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
+	3,  // 27: session.v1.ReviewItem.working_state:type_name -> session.v1.WorkingState
+	55, // 28: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
+	55, // 29: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 30: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
+	21, // 31: session.v1.ReviewQueue.items:type_name -> session.v1.ReviewItem
+	50, // 32: session.v1.ReviewQueue.by_priority:type_name -> session.v1.ReviewQueue.ByPriorityEntry
+	51, // 33: session.v1.ReviewQueue.by_reason:type_name -> session.v1.ReviewQueue.ByReasonEntry
+	7,  // 34: session.v1.Notification.notification_type:type_name -> session.v1.NotificationType
+	8,  // 35: session.v1.Notification.priority:type_name -> session.v1.NotificationPriority
+	55, // 36: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
+	52, // 37: session.v1.Notification.metadata:type_name -> session.v1.Notification.MetadataEntry
+	10, // 38: session.v1.FileChange.status:type_name -> session.v1.FileStatus
+	9,  // 39: session.v1.VCSStatus.type:type_name -> session.v1.VCSType
+	26, // 40: session.v1.VCSStatus.staged_files:type_name -> session.v1.FileChange
+	26, // 41: session.v1.VCSStatus.unstaged_files:type_name -> session.v1.FileChange
+	26, // 42: session.v1.VCSStatus.untracked_files:type_name -> session.v1.FileChange
+	26, // 43: session.v1.VCSStatus.conflict_files:type_name -> session.v1.FileChange
+	55, // 44: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
+	9,  // 45: session.v1.AvailableWorkspaceTargets.vcs_type:type_name -> session.v1.VCSType
+	28, // 46: session.v1.AvailableWorkspaceTargets.bookmarks:type_name -> session.v1.BookmarkTarget
+	29, // 47: session.v1.AvailableWorkspaceTargets.recent_revisions:type_name -> session.v1.RevisionTarget
+	30, // 48: session.v1.AvailableWorkspaceTargets.worktrees:type_name -> session.v1.WorktreeTarget
+	9,  // 49: session.v1.VCSInfo.vcs_type:type_name -> session.v1.VCSType
+	53, // 50: session.v1.PendingApprovalProto.tool_input:type_name -> session.v1.PendingApprovalProto.ToolInputEntry
+	55, // 51: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
+	55, // 52: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
+	13, // 53: session.v1.ApprovalRuleProto.decision:type_name -> session.v1.AutoDecision
+	55, // 54: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
+	54, // 55: session.v1.AnalyticsSummaryProto.decision_counts:type_name -> session.v1.AnalyticsSummaryProto.DecisionCountsEntry
+	36, // 56: session.v1.AnalyticsSummaryProto.top_tools:type_name -> session.v1.ToolStatProto
+	37, // 57: session.v1.AnalyticsSummaryProto.top_denied_commands:type_name -> session.v1.CommandStatProto
+	38, // 58: session.v1.AnalyticsSummaryProto.top_triggered_rules:type_name -> session.v1.RuleStatProto
+	55, // 59: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
+	55, // 60: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
+	39, // 61: session.v1.AnalyticsSummaryProto.top_command_programs:type_name -> session.v1.ProgramStatProto
+	40, // 62: session.v1.AnalyticsSummaryProto.top_python_imports:type_name -> session.v1.ImportStatProto
+	36, // 63: session.v1.AnalyticsSummaryProto.top_uncovered_tools:type_name -> session.v1.ToolStatProto
+	39, // 64: session.v1.AnalyticsSummaryProto.top_uncovered_programs:type_name -> session.v1.ProgramStatProto
+	41, // 65: session.v1.AnalyticsSummaryProto.command_subcommand_stats:type_name -> session.v1.SubcommandStatProto
+	55, // 66: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
+	55, // 67: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
+	55, // 68: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
+	55, // 69: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
+	14, // 70: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
+	71, // [71:71] is the sub-list for method output_type
+	71, // [71:71] is the sub-list for method input_type
+	71, // [71:71] is the sub-list for extension type_name
+	71, // [71:71] is the sub-list for extension extendee
+	0,  // [0:71] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_types_proto_init() }
