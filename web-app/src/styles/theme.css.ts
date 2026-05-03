@@ -306,9 +306,9 @@ export const matrixTheme = createTheme(vars, {
     uncommittedFg: "#ffaa00",
     uncommittedBorder: "#442200",
     idleBg: "#0a0a0a",
-    idleFg: "#004d18",
+    idleFg: "#00cc33", /* was #004d18 — 1.95:1 fails WCAG AA; #00cc33 = 9.1:1 on #0a0a0a ✅ */
     idleBorder: "#002200",
-    staleFg: "#003300",
+    staleFg: "#00b32d", /* was #003300 — fails WCAG AA; #00b32d = 7.0:1 on #0a0a0a ✅ */
     processingBg: "#001a0a",
     processingFg: "#00cc33",
     processingBorder: "#003300",
