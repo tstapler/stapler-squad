@@ -43,6 +43,7 @@ export const modal = style({
   maxWidth: 600,
   boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
   overflow: "hidden",
+  position: "relative",
   animation: `${slideDown} 0.2s ease-out`,
   "@media": {
     "(prefers-color-scheme: light)": {

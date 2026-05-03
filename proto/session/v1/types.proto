@@ -182,6 +182,8 @@ enum SessionType {
   SESSION_TYPE_NEW_WORKTREE = 2;
   // Reuse existing git worktree.
   SESSION_TYPE_EXISTING_WORKTREE = 3;
+  // Create a directory, run git init, and start a session in the new repo.
+  SESSION_TYPE_NEW_PROJECT = 4;
 }
 
 // InstanceType indicates whether a session is managed by claude-squad or external.

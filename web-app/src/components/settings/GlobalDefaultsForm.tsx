@@ -28,6 +28,7 @@ import {
 export function GlobalDefaultsForm() {
   const [program, setProgram] = useState("");
   const [oneOffBaseDir, setOneOffBaseDir] = useState("");
+  const [newProjectBaseDir, setNewProjectBaseDir] = useState("");
   const [tags, setTags] = useState<string[]>([]);
   const [tagInput, setTagInput] = useState("");
   const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>([]);
@@ -55,6 +56,7 @@ export function GlobalDefaultsForm() {
       if (defaults) {
         setProgram(defaults.program);
         setOneOffBaseDir(defaults.oneOffBaseDir);
+        setNewProjectBaseDir(defaults.newProjectBaseDir);
         setTags([...defaults.tags]);
         setCliFlags(defaults.cliFlags);
         const vars = Object.entries(defaults.envVars).map(([key, value]) => ({
@@ -85,6 +87,7 @@ export function GlobalDefaultsForm() {
       await clientRef.current.updateGlobalDefaults({
         program,
         oneOffBaseDir,
+        newProjectBaseDir,
         tags,
         envVars: envVarsMap,
         cliFlags,
@@ -183,6 +186,21 @@ export function GlobalDefaultsForm() {
             placeholder="~/oneoff"
             value={oneOffBaseDir}
             onChange={(e) => setOneOffBaseDir(e.target.value)}
+          />
+        </div>
+
+        {/* New Project Base Directory */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="global-new-project-base-dir">
+            New Project Base Directory
+          </label>
+          <input
+            id="global-new-project-base-dir"
+            type="text"
+            className={input}
+            placeholder="~/Projects"
+            value={newProjectBaseDir}
+            onChange={(e) => setNewProjectBaseDir(e.target.value)}
           />
         </div>
 

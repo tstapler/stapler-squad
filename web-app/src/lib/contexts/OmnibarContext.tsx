@@ -12,6 +12,7 @@ const sessionTypeMap: Record<string, SessionType> = {
   new_worktree: SessionType.NEW_WORKTREE,
   existing_worktree: SessionType.EXISTING_WORKTREE,
   one_off: SessionType.DIRECTORY, // one-off is a directory session; type overridden server-side
+  new_project: SessionType.NEW_PROJECT, // new-project mode: backend initializes git repo
 };
 
 interface OmnibarContextValue {
@@ -94,6 +95,15 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // Handle session creation
   const handleCreateSession = useCallback(
     async (data: OmnibarSessionData) => {
+      // Determine effective session type:
+      // - isNewProject flag overrides the sessionType to NEW_PROJECT regardless of the
+      //   "open as" sub-selection (which is passed via data.sessionType for branch resolution).
+      const effectiveSessionType = data.isNewProject
+        ? SessionType.NEW_PROJECT
+        : data.sessionType
+        ? sessionTypeMap[data.sessionType]
+        : undefined;
+
       // createSession throws on error, so no null check needed
       const session = await createSession({
         title: data.title,
@@ -105,8 +115,9 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         autoYes: data.autoYes,
         workingDir: data.workingDir,
         existingWorktree: data.existingWorktree,
-        sessionType: data.sessionType ? sessionTypeMap[data.sessionType] : undefined,
+        sessionType: effectiveSessionType,
         oneOff: data.oneOff ?? false,
+        createIfMissing: data.createIfMissing ?? false,
       });
 
       if (session) {

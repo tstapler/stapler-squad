@@ -170,6 +170,7 @@ export function useSessionService(
           existingWorktree: request.existingWorktree,
           sessionType: request.sessionType,
           oneOff: request.oneOff ?? false,
+          createIfMissing: request.createIfMissing ?? false,
         });
 
         // Add to store (with duplicate check handled by entity adapter upsertOne)

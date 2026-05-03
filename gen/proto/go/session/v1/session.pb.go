@@ -275,9 +275,13 @@ type CreateSessionRequest struct {
 	// Optional: Run claude in one-shot mode (-p flag); session exits after task completes.
 	OneShot bool `protobuf:"varint,16,opt,name=one_shot,json=oneShot,proto3" json:"one_shot,omitempty"`
 	// Optional: Associate session with a project ID.
-	ProjectId     string `protobuf:"bytes,17,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ProjectId string `protobuf:"bytes,17,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`
+	// Optional: When session_type is DIRECTORY and the path does not exist,
+	// setting this to true will create the directory and initialize a git repo.
+	// The backend returns CodeNotFound when path is missing and this is false.
+	CreateIfMissing bool `protobuf:"varint,18,opt,name=create_if_missing,json=createIfMissing,proto3" json:"create_if_missing,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *CreateSessionRequest) Reset() {
@@ -427,6 +431,13 @@ func (x *CreateSessionRequest) GetProjectId() string {
 		return x.ProjectId
 	}
 	return ""
+}
+
+func (x *CreateSessionRequest) GetCreateIfMissing() bool {
+	if x != nil {
+		return x.CreateIfMissing
+	}
+	return false
 }
 
 type CreateSessionResponse struct {
@@ -7087,8 +7098,10 @@ type SessionDefaultsConfig struct {
 	Profiles       map[string]*ProfileDefaultsProto `protobuf:"bytes,6,rep,name=profiles,proto3" json:"profiles,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	DirectoryRules []*DirectoryRuleProto            `protobuf:"bytes,7,rep,name=directory_rules,json=directoryRules,proto3" json:"directory_rules,omitempty"`
 	OneOffBaseDir  string                           `protobuf:"bytes,8,opt,name=one_off_base_dir,json=oneOffBaseDir,proto3" json:"one_off_base_dir,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Base directory where new project folders are created. Defaults to ~/Projects.
+	NewProjectBaseDir string `protobuf:"bytes,9,opt,name=new_project_base_dir,json=newProjectBaseDir,proto3" json:"new_project_base_dir,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *SessionDefaultsConfig) Reset() {
@@ -7173,6 +7186,13 @@ func (x *SessionDefaultsConfig) GetDirectoryRules() []*DirectoryRuleProto {
 func (x *SessionDefaultsConfig) GetOneOffBaseDir() string {
 	if x != nil {
 		return x.OneOffBaseDir
+	}
+	return ""
+}
+
+func (x *SessionDefaultsConfig) GetNewProjectBaseDir() string {
+	if x != nil {
+		return x.NewProjectBaseDir
 	}
 	return ""
 }
@@ -7426,8 +7446,10 @@ type UpdateGlobalDefaultsRequest struct {
 	EnvVars       map[string]string      `protobuf:"bytes,4,rep,name=env_vars,json=envVars,proto3" json:"env_vars,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	CliFlags      string                 `protobuf:"bytes,5,opt,name=cli_flags,json=cliFlags,proto3" json:"cli_flags,omitempty"`
 	OneOffBaseDir string                 `protobuf:"bytes,6,opt,name=one_off_base_dir,json=oneOffBaseDir,proto3" json:"one_off_base_dir,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Base directory where new project folders are created. Defaults to ~/Projects.
+	NewProjectBaseDir string `protobuf:"bytes,7,opt,name=new_project_base_dir,json=newProjectBaseDir,proto3" json:"new_project_base_dir,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *UpdateGlobalDefaultsRequest) Reset() {
@@ -7498,6 +7520,13 @@ func (x *UpdateGlobalDefaultsRequest) GetCliFlags() string {
 func (x *UpdateGlobalDefaultsRequest) GetOneOffBaseDir() string {
 	if x != nil {
 		return x.OneOffBaseDir
+	}
+	return ""
+}
+
+func (x *UpdateGlobalDefaultsRequest) GetNewProjectBaseDir() string {
+	if x != nil {
+		return x.NewProjectBaseDir
 	}
 	return ""
 }
@@ -9729,7 +9758,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11GetSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"C\n" +
 	"\x12GetSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xa1\x04\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xcd\x04\n" +
 	"\x14CreateSessionRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +
@@ -9750,7 +9779,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x0einitial_prompt\x18\x0f \x01(\tR\rinitialPrompt\x12\x19\n" +
 	"\bone_shot\x18\x10 \x01(\bR\aoneShot\x12\x1d\n" +
 	"\n" +
-	"project_id\x18\x11 \x01(\tR\tprojectId\"F\n" +
+	"project_id\x18\x11 \x01(\tR\tprojectId\x12*\n" +
+	"\x11create_if_missing\x18\x12 \x01(\bR\x0fcreateIfMissing\"F\n" +
 	"\x15CreateSessionResponse\x12-\n" +
 	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xb1\x02\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
@@ -10268,7 +10298,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x12DirectoryRuleProto\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x18\n" +
 	"\aprofile\x18\x02 \x01(\tR\aprofile\x12>\n" +
-	"\toverrides\x18\x03 \x01(\v2 .session.v1.ProfileDefaultsProtoR\toverrides\"\xa2\x04\n" +
+	"\toverrides\x18\x03 \x01(\v2 .session.v1.ProfileDefaultsProtoR\toverrides\"\xd3\x04\n" +
 	"\x15SessionDefaultsConfig\x12\x18\n" +
 	"\aprogram\x18\x01 \x01(\tR\aprogram\x12\x19\n" +
 	"\bauto_yes\x18\x02 \x01(\bR\aautoYes\x12\x12\n" +
@@ -10277,7 +10307,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\tcli_flags\x18\x05 \x01(\tR\bcliFlags\x12K\n" +
 	"\bprofiles\x18\x06 \x03(\v2/.session.v1.SessionDefaultsConfig.ProfilesEntryR\bprofiles\x12G\n" +
 	"\x0fdirectory_rules\x18\a \x03(\v2\x1e.session.v1.DirectoryRuleProtoR\x0edirectoryRules\x12'\n" +
-	"\x10one_off_base_dir\x18\b \x01(\tR\roneOffBaseDir\x1a:\n" +
+	"\x10one_off_base_dir\x18\b \x01(\tR\roneOffBaseDir\x12/\n" +
+	"\x14new_project_base_dir\x18\t \x01(\tR\x11newProjectBaseDir\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\x1a]\n" +
@@ -10304,14 +10335,15 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11matched_directory\x18\t \x01(\tR\x10matchedDirectory\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xb9\x02\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xea\x02\n" +
 	"\x1bUpdateGlobalDefaultsRequest\x12\x18\n" +
 	"\aprogram\x18\x01 \x01(\tR\aprogram\x12\x19\n" +
 	"\bauto_yes\x18\x02 \x01(\bR\aautoYes\x12\x12\n" +
 	"\x04tags\x18\x03 \x03(\tR\x04tags\x12O\n" +
 	"\benv_vars\x18\x04 \x03(\v24.session.v1.UpdateGlobalDefaultsRequest.EnvVarsEntryR\aenvVars\x12\x1b\n" +
 	"\tcli_flags\x18\x05 \x01(\tR\bcliFlags\x12'\n" +
-	"\x10one_off_base_dir\x18\x06 \x01(\tR\roneOffBaseDir\x1a:\n" +
+	"\x10one_off_base_dir\x18\x06 \x01(\tR\roneOffBaseDir\x12/\n" +
+	"\x14new_project_base_dir\x18\a \x01(\tR\x11newProjectBaseDir\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"]\n" +

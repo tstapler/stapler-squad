@@ -352,6 +352,11 @@ message CreateSessionRequest {
 
   // Optional: Associate session with a project ID.
   string project_id = 17;
+
+  // Optional: When session_type is DIRECTORY and the path does not exist,
+  // setting this to true will create the directory and initialize a git repo.
+  // The backend returns CodeNotFound when path is missing and this is false.
+  bool create_if_missing = 18;
 }
 
 message CreateSessionResponse {
@@ -1427,6 +1432,8 @@ message SessionDefaultsConfig {
   map<string, ProfileDefaultsProto> profiles = 6;
   repeated DirectoryRuleProto directory_rules = 7;
   string one_off_base_dir = 8;
+  // Base directory where new project folders are created. Defaults to ~/Projects.
+  string new_project_base_dir = 9;
 }
 
 // GetSessionDefaults
@@ -1466,6 +1473,8 @@ message UpdateGlobalDefaultsRequest {
   map<string, string> env_vars = 4;
   string cli_flags = 5;
   string one_off_base_dir = 6;
+  // Base directory where new project folders are created. Defaults to ~/Projects.
+  string new_project_base_dir = 7;
 }
 
 message UpdateGlobalDefaultsResponse {

@@ -69,6 +69,7 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 	cfg.SessionDefaults.Tags = req.Msg.Tags
 	cfg.SessionDefaults.CLIFlags = req.Msg.CliFlags
 	cfg.OneOffBaseDir = req.Msg.OneOffBaseDir
+	cfg.NewProjectBaseDir = req.Msg.NewProjectBaseDir
 	if req.Msg.EnvVars != nil {
 		cfg.SessionDefaults.EnvVars = req.Msg.EnvVars
 	} else {
@@ -250,8 +251,9 @@ func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig
 		EnvVars:        sd.EnvVars,
 		CliFlags:       sd.CLIFlags,
 		Profiles:       make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules: make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir:  cfg.OneOffBaseDir,
+		DirectoryRules:   make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:    cfg.OneOffBaseDir,
+		NewProjectBaseDir: cfg.NewProjectBaseDir,
 	}
 	if proto.EnvVars == nil {
 		proto.EnvVars = make(map[string]string)
