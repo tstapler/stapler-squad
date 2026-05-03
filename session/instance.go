@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -257,6 +258,15 @@ type Instance struct {
 	// lifecycleListeners receives EventStarted / EventExited notifications.
 	lifecycleListeners   []LifecycleListener
 	lifecycleListenersMu sync.Mutex
+
+	// rateLimitCallbacksMu protects the rate limit event callback fields below.
+	rateLimitCallbacksMu sync.Mutex
+	// onRateLimitDetected is called (in a goroutine) when rate limit is detected.
+	// Wired by the server layer to publish events to the server event bus.
+	onRateLimitDetected func(sessionID string, resetTime time.Time)
+	// onRateLimitRecovery is called (in a goroutine) when recovery completes.
+	// success=true means recovery input was sent; false means it failed.
+	onRateLimitRecovery func(sessionID string, success bool, errMsg string)
 }
 
 // ToInstanceData converts an Instance to its serializable form
@@ -2658,6 +2668,9 @@ func (i *Instance) StartController() error {
 	// Register with status manager and store controller
 	i.controllerManager.RegisterController(i.Title, controller)
 
+	// Wire rate limit callbacks from the server layer (if already set).
+	i.wireRateLimitCallbacks()
+
 	log.InfoLog.Printf("Started ClaudeController for instance %s", i.Title)
 	return nil
 }
@@ -2724,11 +2737,77 @@ func (i *Instance) GetRateLimitState() int {
 	return int(ctrl.GetRateLimitState())
 }
 
+// GetRateLimitResetTime returns the time when the rate limit is expected to reset.
+// Returns zero time if no controller is active or no reset time is known.
+func (i *Instance) GetRateLimitResetTime() time.Time {
+	ctrl := i.GetController()
+	if ctrl == nil {
+		return time.Time{}
+	}
+	return ctrl.GetRateLimitResetTime()
+}
+
 // SetRateLimitEnabled enables or disables rate limit detection.
 func (i *Instance) SetRateLimitEnabled(enabled bool) {
 	ctrl := i.GetController()
 	if ctrl != nil {
 		ctrl.SetRateLimitEnabled(enabled)
+	}
+}
+
+// SetRateLimitCallbacks registers server-layer callbacks for rate limit events.
+// onDetected is called when a rate limit is detected; onRecovery is called when
+// recovery completes. Both are invoked from goroutines in the ratelimit package.
+// Safe to call before or after the controller is started; callbacks are wired at
+// controller start time via wireRateLimitCallbacks.
+func (i *Instance) SetRateLimitCallbacks(
+	onDetected func(sessionID string, resetTime time.Time),
+	onRecovery func(sessionID string, success bool, errMsg string),
+) {
+	i.rateLimitCallbacksMu.Lock()
+	i.onRateLimitDetected = onDetected
+	i.onRateLimitRecovery = onRecovery
+	i.rateLimitCallbacksMu.Unlock()
+
+	// If a controller is already running, wire immediately.
+	i.wireRateLimitCallbacks()
+}
+
+// wireRateLimitCallbacks wires the instance-level callbacks to the rate limit manager
+// inside the controller. Called both from SetRateLimitCallbacks and from controller startup.
+func (i *Instance) wireRateLimitCallbacks() {
+	ctrl := i.GetController()
+	if ctrl == nil {
+		return
+	}
+	handler := ctrl.GetRateLimitHandler()
+	if handler == nil {
+		return
+	}
+	mgr := handler.GetManager()
+	if mgr == nil {
+		return
+	}
+
+	i.rateLimitCallbacksMu.Lock()
+	onDetected := i.onRateLimitDetected
+	onRecovery := i.onRateLimitRecovery
+	i.rateLimitCallbacksMu.Unlock()
+
+	sessionID := i.GetStableID()
+	if onDetected != nil {
+		mgr.SetDetectionCallback(func(det ratelimit.Detection) {
+			onDetected(sessionID, det.ResetTime)
+		})
+	}
+	if onRecovery != nil {
+		mgr.SetRecoveryCallback(func(success bool, _ ratelimit.Detection) {
+			var errMsg string
+			if !success {
+				errMsg = "recovery input failed"
+			}
+			onRecovery(sessionID, success, errMsg)
+		})
 	}
 }
 

@@ -133,6 +133,13 @@ message Session {
   // Indicates if session is experiencing rate limiting from LLM provider
   RateLimitState rate_limit_state = 40;
 
+  // When the rate limit is expected to reset (populated when rate_limit_state == WAITING).
+  google.protobuf.Timestamp rate_limit_reset_time = 46;
+
+  // Whether automatic rate limit recovery is enabled for this session.
+  // Defaults to true. Set to false to disable auto-resume for this session.
+  bool rate_limit_enabled = 47;
+
   // Path to the Claude Code JSONL history file for this session.
   // Populated by HistoryLinker once the session's open files are detected.
   // Used to pass --resume <uuid> when reattaching after server restart.

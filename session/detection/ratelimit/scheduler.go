@@ -13,6 +13,7 @@ type Scheduler struct {
 	sessionID     string
 	timer         *time.Timer
 	resetTime     time.Time
+	fireTime      time.Time // actual time the timer will fire (for inspection/testing)
 	bufferSeconds int
 
 	onRecovery func() error
@@ -55,7 +56,8 @@ func (s *Scheduler) ScheduleRecovery(resetTime time.Time) {
 
 	var waitDuration time.Duration
 	if resetTime.IsZero() {
-		waitDuration = time.Duration(s.bufferSeconds) * time.Second
+		// No reset time known — fall back to 30 minutes so we don't spam the session.
+		waitDuration = DefaultFallbackWait
 	} else {
 		waitDuration = time.Until(resetTime)
 		if waitDuration < 0 {
@@ -68,6 +70,7 @@ func (s *Scheduler) ScheduleRecovery(resetTime time.Time) {
 	log.InfoLog.Printf("[RateLimit] Scheduling recovery for session %s in %v", s.sessionID, waitDuration)
 
 	s.resetTime = resetTime
+	s.fireTime = time.Now().Add(waitDuration)
 	s.timer = time.AfterFunc(waitDuration, func() {
 		s.executeRecovery()
 	})
@@ -108,6 +111,18 @@ func (s *Scheduler) GetScheduledTime() (time.Time, bool) {
 	defer s.mu.Unlock()
 	if s.timer != nil {
 		return s.resetTime, true
+	}
+	return time.Time{}, false
+}
+
+// GetFireTime returns the actual time the scheduled timer will fire.
+// Returns zero time and false when no timer is scheduled.
+// Useful for testing the fallback wait duration.
+func (s *Scheduler) GetFireTime() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.timer != nil {
+		return s.fireTime, true
 	}
 	return time.Time{}, false
 }

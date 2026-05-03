@@ -98,6 +98,10 @@ type Manager struct {
 	enabled      bool
 	cooldown     time.Duration
 	currentInput []byte
+
+	// External callbacks: wired from Instance/server layer to publish to the server event bus.
+	onDetectionCallback func(Detection)
+	onRecoveryCallback  func(success bool, det Detection)
 }
 
 func NewManager(sessionID string, instance SessionAccessor) *Manager {
@@ -200,7 +204,13 @@ func (m *Manager) handleDetection(det Detection) {
 		Provider:  det.Provider,
 		Timestamp: time.Now(),
 	})
+	externalCallback := m.onDetectionCallback
 	m.mu.Unlock()
+
+	// Fire external callback (e.g. to publish server-level events/notifications).
+	if externalCallback != nil {
+		go externalCallback(det)
+	}
 
 	m.scheduler.ScheduleRecovery(det.ResetTime)
 }
@@ -225,9 +235,15 @@ func (m *Manager) executeRecovery() error {
 	err := recovery.Execute(input)
 
 	m.mu.Lock()
+	var recoveryCallback func(success bool, det Detection)
+	lastDet := Detection{InputToSend: currentInput}
 	if err != nil {
 		if detector != nil {
 			detector.SetState(StateFailed)
+			// Reset to StateNone after failure so subsequent rate-limit messages
+			// can trigger a fresh detection cycle. The cooldown (lastDetection +
+			// d.cooldown) already prevents an immediate re-detection tight loop.
+			detector.SetState(StateNone)
 		}
 		m.eventBus.Publish(RateLimitEvent{
 			Type:      eventRecoveryFail,
@@ -235,17 +251,28 @@ func (m *Manager) executeRecovery() error {
 			Timestamp: time.Now(),
 			Error:     err,
 		})
+		recoveryCallback = m.onRecoveryCallback
 	} else {
 		if detector != nil {
 			detector.SetState(StateRecovered)
+			// Reset to StateNone after success so re-detection works if Claude
+			// immediately shows another rate-limit message.
+			detector.SetState(StateNone)
 		}
 		m.eventBus.Publish(RateLimitEvent{
 			Type:      eventRecoveryDone,
 			SessionID: m.sessionID,
 			Timestamp: time.Now(),
 		})
+		recoveryCallback = m.onRecoveryCallback
 	}
 	m.mu.Unlock()
+
+	// Fire external recovery callback (e.g. to publish server-level notifications).
+	if recoveryCallback != nil {
+		success := err == nil
+		go recoveryCallback(success, lastDet)
+	}
 
 	return err
 }
@@ -291,4 +318,30 @@ func (m *Manager) GetState() RateLimitState {
 		return m.detector.GetState()
 	}
 	return StateNone
+}
+
+// GetResetTime returns the current rate limit reset time, delegating to the detector.
+func (m *Manager) GetResetTime() time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.detector != nil {
+		return m.detector.GetResetTime()
+	}
+	return time.Time{}
+}
+
+// SetDetectionCallback registers an external callback to fire when a rate limit is detected.
+// Called in addition to the internal event bus publish. Safe to call with nil to clear.
+func (m *Manager) SetDetectionCallback(fn func(Detection)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onDetectionCallback = fn
+}
+
+// SetRecoveryCallback registers an external callback to fire when recovery completes.
+// success=true means recovery input was sent successfully; false means it failed.
+func (m *Manager) SetRecoveryCallback(fn func(success bool, det Detection)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.onRecoveryCallback = fn
 }

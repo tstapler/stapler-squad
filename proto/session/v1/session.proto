@@ -380,6 +380,9 @@ message UpdateSessionRequest {
 
   // Update working directory. Empty string clears the override (uses workspace root).
   optional string working_dir = 7;
+
+  // Update whether rate limit auto-resume is enabled for this session.
+  optional bool rate_limit_enabled = 8;
 }
 
 message UpdateSessionResponse {
