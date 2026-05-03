@@ -343,11 +343,9 @@ export function ReviewQueuePanel({
         <div className={titleRow}>
           <h2 className={title}>
             Review Queue{" "}
-            {totalItems > 0 && (
-              <span className={count} data-testid="review-queue-badge">
-                ({totalItems})
-              </span>
-            )}
+            <span className={count} data-testid="review-queue-badge">
+              {totalItems}
+            </span>
           </h2>
           <button
             onClick={refreshSnapshot}

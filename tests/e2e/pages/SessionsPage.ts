@@ -25,10 +25,10 @@ export class SessionsPage {
   }
 
   getSessionCard(title: string): Locator {
-    return this.page.locator(`[data-testid="session-card"], [class="sessionCard"], [class="session-card"]`).filter({ hasText: title });
+    return this.page.locator('[data-testid="session-card"]').filter({ hasText: title });
   }
 
   getSessionCards(): Locator {
-    return this.page.locator('[data-testid="session-card"], [class="sessionCard"], [class="session-card"]');
+    return this.page.locator('[data-testid="session-card"]');
   }
 }

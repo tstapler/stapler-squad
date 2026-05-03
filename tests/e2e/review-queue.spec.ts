@@ -35,7 +35,7 @@ test.describe('Review Queue Smoke Tests', () => {
 
     // Badge should show a number (even if 0)
     const text = await badge.textContent();
-    expect(text).toMatch(/^\d+$/);
+    expect(text?.trim()).toMatch(/^\d+$/);
   });
 
   test('review queue panel renders without errors', async ({ page }) => {
@@ -56,11 +56,11 @@ test.describe('Session Creation Flow (UI Only)', () => {
   test('session creation wizard has all steps', async ({ page }) => {
     await page.goto(`${BASE_URL}/sessions/new`);
 
-    // Verify wizard steps are present (using more specific selectors to avoid multiple matches)
-    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Basic Info' })).toBeVisible();
-    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Repository' })).toBeVisible();
-    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Configuration' })).toBeVisible();
-    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Review' })).toBeVisible();
+    // Verify wizard steps are present
+    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Basic Info' })).toBeVisible();
+    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Repository' })).toBeVisible();
+    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Configuration' })).toBeVisible();
+    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Review' })).toBeVisible();
   });
 
   test('session creation form has required test IDs', async ({ page }) => {

@@ -623,6 +623,7 @@ export function SessionCard({
         isExternal ? cardExternal : "",
         isDeleting ? cardDeleting : "",
       ].filter(Boolean).join(" ")}
+      data-testid="session-card"
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       role="button"
