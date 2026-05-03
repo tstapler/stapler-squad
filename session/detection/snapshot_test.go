@@ -125,7 +125,7 @@ var snapshotTests = []snapshotTest{
 		fixture:     "claude_baked_idle.txt",
 		expected:    StatusSuccess,
 		program:     "claude",
-		description: "Claude completed a /loop turn — '◉ Baked for 10s' visible, '> ▌' prompt, no 'esc to interrupt'",
+		description: "Claude completed a /loop turn — '◉ <PastTenseVerb> for <duration>' visible (verb rotates), '> ▌' prompt, no 'esc to interrupt'",
 	},
 
 	// ── False-positive guards ─────────────────────────────────────────────────

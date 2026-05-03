@@ -763,6 +763,25 @@ func TestStatusDetector_DetectActive_ThinkingVerb(t *testing.T) {
 	}
 }
 
+// TestStatusDetector_DetectSuccess_VerbDurationCompletion verifies the turn-completion
+// bullet pattern handles both ✻ and ◉ bullets with any past-tense verb.
+func TestStatusDetector_DetectSuccess_VerbDurationCompletion(t *testing.T) {
+	sd := NewStatusDetector()
+	cases := []string{
+		"✻ Cooked for 2m",
+		"◉ Baked for 10s",
+		"◉ Pondered for 45s",
+		"◉ Synthesized for 1m",
+		"✻ Analyzed for 3h",
+	}
+	for _, c := range cases {
+		status := sd.Detect([]byte(c))
+		if status != StatusSuccess {
+			t.Errorf("Detect(%q) = %v, want StatusSuccess", c, status)
+		}
+	}
+}
+
 // TestDetectWithContextFromLines_StaleScrollback is the core regression guard for
 // the scrollback poisoning problem: a session that completed its turn (showing
 // "? for shortcuts" on the last line) must NOT be misclassified as Active because

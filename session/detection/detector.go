@@ -584,9 +584,10 @@ func getDefaultPatterns() StatusPatterns {
 			{
 				Name: "verb_duration_completion",
 				// ✻ (asterism U+273B) and ◉ (fisheye U+25C9) are both used as the
-				// turn-completion bullet depending on Claude Code version/theme.
+				// turn-completion bullet. The verb is a random past-tense word that
+				// rotates each turn (Baked, Cooked, Pondered, Synthesized, etc.).
 				Pattern:     `[✻◉]\s+\w+\s+for\s+\d+[hms]`,
-				Description: "Claude completed task (verb + duration format)",
+				Description: "Claude turn complete — '<PastTenseVerb> for <duration>' format",
 				Priority:    21,
 			},
 			{
