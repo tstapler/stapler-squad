@@ -496,6 +496,7 @@ export function ReviewQueuePanel({
           )
         ) : (
           <>
+            {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
             {items.map((queueItem, index) => (
               <div
                 key={queueItem.sessionId}
@@ -693,7 +694,6 @@ export function ReviewQueuePanel({
                 </div>
               </div>
             ))}
-            {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
           </>
         )}
       </div>

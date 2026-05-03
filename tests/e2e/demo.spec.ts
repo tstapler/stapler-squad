@@ -33,7 +33,7 @@ import * as fs from 'fs';
  *   09 - Unfinished Work       surface pending changes across worktrees
  */
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 const SNAP_DIR = process.env.PLAYWRIGHT_VIDEO_OUTPUT_DIR || '/tmp/demo-video-output';
 
 function snap(page: import('@playwright/test').Page, name: string) {

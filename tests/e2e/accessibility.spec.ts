@@ -6,7 +6,7 @@
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 test.describe('Accessibility (WCAG 2.1 AA)', () => {
   test('IT-5.1: Main page has no critical or serious accessibility violations', async ({ page }) => {

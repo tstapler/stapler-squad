@@ -2,7 +2,7 @@
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 test.describe('Workspace Management', () => {
   test('e2e:workspace-list - Workspace information is accessible', async ({ page }) => {

@@ -1,7 +1,7 @@
 // @feature terminal-mobile-overflow-menu
 import { test, expect } from '@playwright/test';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 const MOBILE_VIEWPORT = { width: 390, height: 844 };
 const DESKTOP_VIEWPORT = { width: 1280, height: 800 };

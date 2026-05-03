@@ -2,10 +2,13 @@ import { defineConfig, devices } from '@playwright/test';
 
 /**
  * Playwright configuration for terminal flickering tests
- * Tests run against production server at localhost:8543
+ * Tests spin up a dedicated isolated backend on port 8544 via global-setup.ts.
+ * Set TEST_SERVER_URL env var to override the target (e.g. for CI with a pre-started server).
  */
 
 export default defineConfig({
+  globalSetup: './global-setup.ts',
+  globalTeardown: './global-teardown.ts',
   testDir: './',
 
   // Test timeout (individual test)
@@ -34,8 +37,8 @@ export default defineConfig({
 
   // Global test setup
   use: {
-    // Base URL for tests (production server)
-    baseURL: 'http://localhost:8543',
+    // Base URL for tests — isolated test server on 8544; override with TEST_SERVER_URL
+    baseURL: process.env.TEST_SERVER_URL || 'http://localhost:8544',
 
     // Browser trace on failure
     trace: 'on-first-retry',

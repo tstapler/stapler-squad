@@ -6,7 +6,7 @@
  * (and the bottom nav bar it sits above) meets the 44×44 px minimum
  * required by Apple HIG and WCAG 2.5.5 Success Criterion.
  *
- * Runs against a live server (localhost:8543) in the same way all E2E
+ * Runs against a live server (localhost:8544) in the same way all E2E
  * tests do. Tests that require a session view are skipped when no session
  * is open rather than failing.
  */

@@ -1,7 +1,7 @@
 // @feature session:create-existing-worktree
 import { test, expect } from '@playwright/test';
 
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 async function openInCreationMode(page: import('@playwright/test').Page) {
   await page.goto(BASE_URL, { waitUntil: 'domcontentloaded', timeout: 10000 });

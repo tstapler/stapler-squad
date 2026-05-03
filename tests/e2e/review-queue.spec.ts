@@ -14,8 +14,8 @@
 
 import { test, expect } from '@playwright/test';
 
-// Base URL falls back to the production server port; playwright.config.ts sets baseURL
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
+// Base URL falls back to the test server port; playwright.config.ts sets baseURL
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 test.describe('Review Queue Smoke Tests', () => {
   test('review queue page loads successfully', async ({ page }) => {
@@ -24,13 +24,13 @@ test.describe('Review Queue Smoke Tests', () => {
 
     // Verify page elements are present
     await expect(page.locator('[data-testid="review-queue"]')).toBeVisible();
-    await expect(page.locator('[data-testid="review-queue-badge"]')).toBeVisible();
+    await expect(page.locator('[data-testid="review-queue"] [data-testid="review-queue-badge"]')).toBeVisible();
   });
 
   test('review queue badge is visible', async ({ page }) => {
     await page.goto(`${BASE_URL}/review-queue`);
 
-    const badge = page.locator('[data-testid="review-queue-badge"]');
+    const badge = page.locator('[data-testid="review-queue"] [data-testid="review-queue-badge"]');
     await expect(badge).toBeVisible();
 
     // Badge should show a number (even if 0)
@@ -116,7 +116,7 @@ test.describe('Review Queue Acknowledge Flow — UI Contract', () => {
   test('when queue has items, each carries acknowledge data-testid', async ({ page }) => {
     // +feature: ui:review-queue
     await page.goto(`${BASE_URL}/review-queue`);
-    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000, state: 'attached' });
 
     const items = await page.locator('[data-testid^="review-item-"]').all();
 
@@ -140,7 +140,7 @@ test.describe('Review Queue Acknowledge Flow — UI Contract', () => {
   test('acknowledge button removes item from DOM (optimistic UI)', async ({ page }) => {
     // +feature: ui:review-queue
     await page.goto(`${BASE_URL}/review-queue`);
-    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000, state: 'attached' });
 
     const items = await page.locator('[data-testid^="review-item-"]').all();
 
