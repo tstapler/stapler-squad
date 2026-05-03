@@ -2,9 +2,9 @@ package adapters
 
 import (
 	"testing"
-	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
@@ -39,20 +39,43 @@ func TestInstanceToProto_NilReturnsNil(t *testing.T) {
 	}
 }
 
-func TestRateLimitResetTime_ZeroIsNil(t *testing.T) {
-	// When time is zero, rateLimitResetTime should not be set in proto.
-	// The logic in InstanceToProto is: if t := inst.GetRateLimitResetTime(); !t.IsZero() { ... }
-	// Verify zero time would skip setting the field.
-	var zeroTime time.Time
-	if !zeroTime.IsZero() {
-		t.Error("expected IsZero() == true for zero time; RateLimitResetTime would incorrectly be set")
+// TestInstanceToProto_RateLimitEnabled verifies that the RateLimitEnabled field
+// is populated correctly from the Instance struct field.
+func TestInstanceToProto_RateLimitEnabled_DefaultTrue(t *testing.T) {
+	inst := &session.Instance{} // nil RateLimitAutoResume → defaults to true
+	proto := InstanceToProto(inst)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if !proto.RateLimitEnabled {
+		t.Errorf("expected RateLimitEnabled=true (default), got false")
 	}
 }
 
-func TestRateLimitResetTime_NonZeroIsSet(t *testing.T) {
-	// Verify that a non-zero time would be considered for setting.
-	futureTime := time.Now().Add(1 * time.Hour)
-	if futureTime.IsZero() {
-		t.Error("expected non-zero future time")
+func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
+	disabled := false
+	inst := &session.Instance{
+		RateLimitAutoResume: &disabled,
+	}
+	proto := InstanceToProto(inst)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RateLimitEnabled {
+		t.Errorf("expected RateLimitEnabled=false when explicitly disabled, got true")
+	}
+}
+
+func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
+	inst := &session.Instance{} // no controller → state is None
+	proto := InstanceToProto(inst)
+	if proto == nil {
+		t.Fatal("expected non-nil proto for non-nil instance")
+	}
+	if proto.RateLimitState != sessionv1.RateLimitState_RATE_LIMIT_STATE_NONE {
+		t.Errorf("expected RATE_LIMIT_STATE_NONE for fresh instance, got %v", proto.RateLimitState)
+	}
+	if proto.RateLimitResetTime != nil {
+		t.Errorf("expected nil RateLimitResetTime for fresh instance, got %v", proto.RateLimitResetTime)
 	}
 }

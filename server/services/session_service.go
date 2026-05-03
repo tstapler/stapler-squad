@@ -214,6 +214,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		if s.statusManager != nil {
 			inst.SetStatusManager(s.statusManager)
 		}
+		s.wireRateLimitCallbacks(inst)
 	}
 
 	return instances, nil
@@ -819,9 +820,16 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "working_dir")
 	}
 
-	// Handle rate limit enabled toggle
+	// Handle rate limit enabled toggle. SetRateLimitEnabled persists to the
+	// struct field. Also apply to the live poller instance (which has a running
+	// controller) so the change takes effect immediately without a restart.
 	if req.Msg.RateLimitEnabled != nil {
 		instance.SetRateLimitEnabled(*req.Msg.RateLimitEnabled)
+		if s.reviewQueuePoller != nil {
+			if liveInst := s.reviewQueuePoller.FindInstance(req.Msg.Id); liveInst != nil {
+				liveInst.SetRateLimitEnabled(*req.Msg.RateLimitEnabled)
+			}
+		}
 		updatedFields = append(updatedFields, "rate_limit_enabled")
 	}
 

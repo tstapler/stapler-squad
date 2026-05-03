@@ -507,9 +507,11 @@ func TestParseTimeWithTZ_Abbreviation_PST(t *testing.T) {
 	if result.IsZero() {
 		t.Fatal("expected non-zero time for '11pm PST'")
 	}
-	la, _ := time.LoadLocation("America/Los_Angeles")
-	if result.In(la).Hour() != 23 {
-		t.Errorf("expected hour 23 in LA, got %d", result.In(la).Hour())
+	// PST is a fixed UTC-8 offset; check the time in its own fixed zone, not in
+	// America/Los_Angeles which is DST-aware and may differ by one hour.
+	pst := time.FixedZone("PST", -8*3600)
+	if result.In(pst).Hour() != 23 {
+		t.Errorf("expected hour 23 in PST (UTC-8), got %d", result.In(pst).Hour())
 	}
 }
 
@@ -527,10 +529,12 @@ func TestParseTimeWithTZ_CommonName_Pacific(t *testing.T) {
 	}
 }
 
-func TestParseTimeWithTZ_UnknownTZ_FallsBackToLocal(t *testing.T) {
+func TestParseTimeWithTZ_UnknownTZ_ReturnsZero(t *testing.T) {
+	// Unknown timezone strings should return zero so the scheduler uses its
+	// 30-minute fallback rather than scheduling at a potentially wrong time.
 	result := parseTimeWithTZ("11pm", "FakeZone")
-	if result.IsZero() {
-		t.Fatal("expected non-zero time when falling back to local timezone")
+	if !result.IsZero() {
+		t.Errorf("expected zero time for unknown timezone 'FakeZone', got %v", result)
 	}
 }
 

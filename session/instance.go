@@ -203,6 +203,11 @@ type Instance struct {
 	// first start and updated on restart. Empty for external (mux-discovered) sessions.
 	LaunchCommand string `json:"launch_command,omitempty"`
 
+	// RateLimitAutoResume controls whether the rate-limit manager will automatically
+	// send recovery input when a rate limit expires. Persisted so the setting survives
+	// server restarts. Defaults to true (enabled) when zero value.
+	RateLimitAutoResume *bool `json:"rate_limit_auto_resume,omitempty"`
+
 	// historyDetector is used by tryExtractConversationUUID. When nil the
 	// production inspector is used. Set in tests to inject a fake home dir.
 	historyDetector *HistoryFileDetector
@@ -2747,8 +2752,11 @@ func (i *Instance) GetRateLimitResetTime() time.Time {
 	return ctrl.GetRateLimitResetTime()
 }
 
-// SetRateLimitEnabled enables or disables rate limit detection.
+// SetRateLimitEnabled enables or disables rate limit auto-resume.
+// The setting is persisted in RateLimitAutoResume so it survives restarts,
+// and is applied immediately to the running controller if one exists.
 func (i *Instance) SetRateLimitEnabled(enabled bool) {
+	i.RateLimitAutoResume = &enabled
 	ctrl := i.GetController()
 	if ctrl != nil {
 		ctrl.SetRateLimitEnabled(enabled)
@@ -2811,13 +2819,13 @@ func (i *Instance) wireRateLimitCallbacks() {
 	}
 }
 
-// IsRateLimitEnabled returns whether rate limit detection is enabled.
+// IsRateLimitEnabled returns whether rate limit auto-resume is enabled.
+// Returns the persisted RateLimitAutoResume field (default: true when nil).
 func (i *Instance) IsRateLimitEnabled() bool {
-	ctrl := i.GetController()
-	if ctrl == nil {
-		return true // Default to enabled
+	if i.RateLimitAutoResume == nil {
+		return true
 	}
-	return ctrl.IsRateLimitEnabled()
+	return *i.RateLimitAutoResume
 }
 
 // GetPermissions returns the permissions for this instance based on its type

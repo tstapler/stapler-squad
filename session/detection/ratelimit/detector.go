@@ -94,22 +94,30 @@ var defaultTimestampPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)resets\s+(\d{1,2}(?::\d{2})?(?:am|pm))\s*\(?([^)\s]+)\)?`),
 }
 
-// tzAbbreviations maps common timezone abbreviations and names to IANA timezone names.
-var tzAbbreviations = map[string]string{
-	"PST":     "America/Los_Angeles",
-	"PDT":     "America/Los_Angeles",
-	"Pacific": "America/Los_Angeles",
-	"MST":     "America/Denver",
-	"MDT":     "America/Denver",
+// tzFixedOffsets maps timezone abbreviations to their fixed UTC offsets in seconds.
+// Abbreviations denote a specific offset, not a DST-aware region — "PST" always
+// means UTC-8, whether or not it is currently summer in Los Angeles.
+var tzFixedOffsets = map[string]int{
+	"PST": -8 * 3600,
+	"PDT": -7 * 3600,
+	"MST": -7 * 3600,
+	"MDT": -6 * 3600,
+	"CST": -6 * 3600,
+	"CDT": -5 * 3600,
+	"EST": -5 * 3600,
+	"EDT": -4 * 3600,
+	"UTC": 0,
+	"GMT": 0,
+}
+
+// tzCommonNames maps informal timezone names to IANA location names.
+// These use DST-aware regions because the common name (e.g. "Pacific")
+// is understood to follow local daylight rules.
+var tzCommonNames = map[string]string{
+	"Pacific":  "America/Los_Angeles",
 	"Mountain": "America/Denver",
-	"CST":     "America/Chicago",
-	"CDT":     "America/Chicago",
-	"Central": "America/Chicago",
-	"EST":     "America/New_York",
-	"EDT":     "America/New_York",
-	"Eastern": "America/New_York",
-	"UTC":     "UTC",
-	"GMT":     "UTC",
+	"Central":  "America/Chicago",
+	"Eastern":  "America/New_York",
 }
 
 var providerSpecificPatterns = map[Provider][]*regexp.Regexp{
@@ -284,16 +292,23 @@ func parseTimeWithTZ(timeStr, tzStr string) time.Time {
 	tzStr = strings.Trim(tzStr, "()")
 	tzStr = strings.TrimSpace(tzStr)
 
-	// Resolve the location
-	loc, err := time.LoadLocation(tzStr)
-	if err != nil {
-		// Try abbreviation/name map
-		if ianaName, ok := tzAbbreviations[tzStr]; ok {
-			loc, err = time.LoadLocation(ianaName)
+	// Resolve the location. Priority:
+	//   1. IANA name directly (e.g. "America/Los_Angeles")
+	//   2. Fixed-offset abbreviation (e.g. "PST" → UTC-8, always)
+	//   3. Common informal name (e.g. "Pacific" → DST-aware IANA zone)
+	//   4. Unknown → return zero so the scheduler falls back to 30-min wait
+	var loc *time.Location
+	if l, err := time.LoadLocation(tzStr); err == nil {
+		loc = l
+	} else if offsetSecs, ok := tzFixedOffsets[tzStr]; ok {
+		loc = time.FixedZone(tzStr, offsetSecs)
+	} else if ianaName, ok := tzCommonNames[tzStr]; ok {
+		if l, err := time.LoadLocation(ianaName); err == nil {
+			loc = l
 		}
-		if err != nil || loc == nil {
-			loc = time.Local
-		}
+	}
+	if loc == nil {
+		return time.Time{}
 	}
 
 	// Try parsing with various time-of-day formats (case-insensitive)
