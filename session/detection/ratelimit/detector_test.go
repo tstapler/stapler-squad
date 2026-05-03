@@ -705,50 +705,38 @@ func TestManager_SetDetectionCallback_IsCalled(t *testing.T) {
 	manager := NewManager("test-session", nil)
 	manager.SetEnabled(true)
 
-	var called bool
-	var calledDet Detection
+	done := make(chan Detection, 1)
 	manager.SetDetectionCallback(func(det Detection) {
-		called = true
-		calledDet = det
+		done <- det
 	})
 
 	output := "You've hit your limit - resets 11pm (America/Los_Angeles)\n/extra-usage to finish what you're working on.\n"
 	manager.ProcessOutput([]byte(output))
 
-	// Wait for the goroutines
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for !called && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-done:
+		// callback fired — pass
+	case <-time.After(500 * time.Millisecond):
+		t.Error("expected external detection callback to be called within 500ms")
 	}
-
-	if !called {
-		t.Error("expected external detection callback to be called")
-	}
-	_ = calledDet
 }
 
 func TestManager_SetRecoveryCallback_IsCalled(t *testing.T) {
-	manager := NewManager("test-session", nil) // nil instance → recovery fails
+	manager := NewManager("test-session", nil) // nil instance → sendRecoveryInput returns nil
 	manager.SetEnabled(true)
 
-	var called bool
-	var calledSuccess bool
+	done := make(chan bool, 1)
 	manager.SetRecoveryCallback(func(success bool, _ Detection) {
-		called = true
-		calledSuccess = success
+		done <- success
 	})
 
 	// Directly invoke executeRecovery (simulating scheduler fire with nil instance)
 	_ = manager.executeRecovery()
 
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for !called && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-done:
+		// callback fired — pass
+	case <-time.After(500 * time.Millisecond):
+		t.Error("expected external recovery callback to be called within 500ms")
 	}
-
-	if !called {
-		t.Error("expected external recovery callback to be called")
-	}
-	// With nil instance, sendRecoveryInput returns nil error (see manager.go)
-	_ = calledSuccess
 }
