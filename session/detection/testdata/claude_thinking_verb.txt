@@ -1,0 +1,5 @@
+* Moonwalking… (4m 18s · ↓ 2.0k tokens · thinking)
+  └ Tip: Use /btw to ask a quick side question without interrupting Claude's current work
+
+> ▌
+esc to interrupt                                                    10% until auto-compact

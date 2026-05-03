@@ -43,6 +43,7 @@ func ReviewItemToProto(item *session.ReviewItem, extraMetadata map[string]string
 		Tags:         item.Tags,
 		Category:     item.Category,
 		LastActivity: timestamppb.New(item.LastActivity),
+		WorkingState: MapIdleStateToWorkingState(item.IdleState),
 	}
 
 	// Add diff stats if available

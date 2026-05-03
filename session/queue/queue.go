@@ -170,6 +170,10 @@ type ReviewItem struct {
 	DiffStats    *git.DiffStats `json:"diff_stats"`    // Git diff statistics (nullable)
 	LastActivity time.Time      `json:"last_activity"` // Last meaningful output time (used for sorting and display)
 
+	// IdleState is the active-work state at the time this item was last evaluated.
+	// Used to populate WorkingState in the proto response for frontend filtering.
+	IdleState detection.IdleState `json:"idle_state,omitempty"`
+
 	// Score is set by the Fixer after a successful Sweep quality gate.
 	// Nil if the Sweep has not yet completed or was not triggered.
 	Score *Score `json:"score,omitempty"`

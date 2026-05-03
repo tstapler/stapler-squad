@@ -3,6 +3,7 @@ package adapters
 import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -199,6 +200,20 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 		return sessionv1.InstanceType_INSTANCE_TYPE_EXTERNAL
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
+	}
+}
+
+// MapIdleStateToWorkingState converts a detection.IdleState to the proto WorkingState enum.
+func MapIdleStateToWorkingState(s detection.IdleState) sessionv1.WorkingState {
+	switch s {
+	case detection.IdleStateActive:
+		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
+	case detection.IdleStateWaiting:
+		return sessionv1.WorkingState_WORKING_STATE_IDLE
+	case detection.IdleStateTimeout:
+		return sessionv1.WorkingState_WORKING_STATE_WAITING
+	default:
+		return sessionv1.WorkingState_WORKING_STATE_UNSPECIFIED
 	}
 }
 

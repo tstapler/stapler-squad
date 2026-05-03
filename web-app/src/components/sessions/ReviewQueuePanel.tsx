@@ -6,7 +6,7 @@ import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
-import { Priority, AttentionReason, ReviewItem } from "@/gen/session/v1/types_pb";
+import { Priority, AttentionReason, ReviewItem, WorkingState } from "@/gen/session/v1/types_pb";
 import {
   panel,
   header,
@@ -161,9 +161,32 @@ export function ReviewQueuePanel({
   }, [allItems, refresh]);
   // ─────────────────────────────────────────────────────────────────────────
 
-  // Apply client-side filtering to all live items
+  // Separate working sessions from waiting sessions for count display.
+  const workingCount = useMemo(
+    () =>
+      allItems.filter(
+        (item) =>
+          item.workingState === WorkingState.ACTIVE ||
+          item.workingState === WorkingState.PROCESSING
+      ).length,
+    [allItems]
+  );
+  const stuckCount = useMemo(
+    () =>
+      allItems.filter(
+        (item) => item.workingState === WorkingState.WAITING
+      ).length,
+    [allItems]
+  );
+
+  // Apply client-side filtering to all live items, excluding actively-working sessions
+  // so the queue only shows sessions that need user attention.
   const allFilteredItems = useMemo(() => {
-    let filtered = allItems;
+    let filtered = allItems.filter(
+      (item) =>
+        item.workingState !== WorkingState.ACTIVE &&
+        item.workingState !== WorkingState.PROCESSING
+    );
     if (priorityFilter !== undefined) {
       filtered = filtered.filter((item) => item.priority === priorityFilter);
     }
@@ -364,6 +387,13 @@ export function ReviewQueuePanel({
             <span className={stat} data-testid="total-items">
               {summaryCount || `${totalItems} ${totalItems === 1 ? "item" : "items"}`}
             </span>
+            {(workingCount > 0 || stuckCount > 0) && (
+              <span className={stat} data-testid="working-state-counts">
+                {items.length} waiting
+                {workingCount > 0 && ` · ${workingCount} working`}
+                {stuckCount > 0 && ` · ${stuckCount} stuck`}
+              </span>
+            )}
           </div>
         )}
 

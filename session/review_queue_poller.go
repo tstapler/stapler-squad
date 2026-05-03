@@ -3,7 +3,6 @@ package session
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -491,28 +490,13 @@ func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusI
 		return true
 	}
 
-	// Signal 4: Processing patterns in recent content (last 50 lines)
-	processingPatterns := []string{
-		"Thinking...",
-		"Processing...",
-		"Executing...",
-		"Running...",
-		"Working...",
-		"Analyzing...",
-		"esc to interrupt",
-		"Synthesizing",
-	}
-
-	// Only check recent content (last ~50 lines) to avoid false positives from old output
-	lines := strings.Split(content, "\n")
-	recentLines := lines
-	if len(lines) > 50 {
-		recentLines = lines[len(lines)-50:]
-	}
-	recentContent := strings.Join(recentLines, "\n")
-
-	for _, pattern := range processingPatterns {
-		if strings.Contains(recentContent, pattern) {
+	// Signal 4: Detect active/processing status via ANSI-stripped tail window.
+	// This replaces the previous hardcoded string-match list and ensures the same
+	// detection pipeline (CR collapsing + ANSI stripping + regex) is used everywhere.
+	if content != "" {
+		detector := detection.NewStatusDetector()
+		status := detector.DetectRecent([]byte(content), detection.StatusDetectionTailBytes)
+		if status == detection.StatusActive || status == detection.StatusProcessing {
 			return true
 		}
 	}
@@ -1146,6 +1130,8 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			Category:     inst.Category,
 			DiffStats:    inst.GetDiffStats(),
 			LastActivity: lastActivity,
+			// Populate idle state for WorkingState mapping in the proto response.
+			IdleState: statusInfo.IdleState.State,
 		}
 
 		// Enrich approval items with hook metadata from ApprovalStore (Story 3, Task 3.2).
