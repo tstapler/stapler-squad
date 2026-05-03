@@ -9,6 +9,11 @@ async function openInCreationMode(page: import('@playwright/test').Page) {
   await expect(page.getByRole('radiogroup', { name: 'Session type' })).toBeVisible({ timeout: 5000 });
 }
 
+// The confirmation overlay uses role="dialog" aria-labelledby="path-confirm-title"
+// Use the accessible name to distinguish it from the omnibar's own dialog wrapper.
+const pathConfirmDialog = (page: import('@playwright/test').Page) =>
+  page.getByRole('dialog', { name: 'Create directory?' });
+
 test.describe('new project session creation', () => {
   test('T-E2E-NP-001: New Project radio button is visible in creation panel', async ({ page }) => {
     await openInCreationMode(page);
@@ -106,8 +111,7 @@ test.describe('new project session creation', () => {
     await openInCreationMode(page);
     await page.getByRole('radio', { name: 'New Project' }).click();
 
-    // The main detection input (used for directory/worktree modes) should not be relevant
-    // Working Directory field also hidden for new_project
+    // Working Directory field hidden for new_project mode
     await expect(page.getByLabel('Working Directory')).not.toBeVisible();
   });
 });
@@ -124,9 +128,9 @@ test.describe('directory mode path confirmation', () => {
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
 
-    // Confirmation dialog must appear
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
-    await expect(page.getByText(/doesn't exist|does not exist/i)).toBeVisible();
+    // Confirmation overlay must appear — identified by its accessible name, not generic dialog role
+    await expect(pathConfirmDialog(page)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/does not exist/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /create|confirm/i })).toBeVisible();
     await expect(page.getByRole('button', { name: /cancel/i })).toBeVisible();
   });
@@ -140,10 +144,10 @@ test.describe('directory mode path confirmation', () => {
 
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
     await page.getByRole('button', { name: 'Create Session' }).click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
+    await expect(pathConfirmDialog(page)).toBeVisible({ timeout: 5000 });
 
     await page.getByRole('button', { name: /cancel/i }).click();
-    await expect(page.getByRole('dialog')).not.toBeVisible({ timeout: 3000 });
+    await expect(pathConfirmDialog(page)).not.toBeVisible({ timeout: 3000 });
 
     // Creation panel should still be open (user can correct the path)
     await expect(page.getByRole('radiogroup', { name: 'Session type' })).toBeVisible();
@@ -157,15 +161,18 @@ test.describe('directory mode path confirmation', () => {
     await page.getByLabel('Session Name').fill('e2e-dir-confirm-create');
 
     await expect(page.getByRole('button', { name: 'Create Session' })).toBeEnabled({ timeout: 3000 });
+    await page.getByRole('button', { name: 'Create Session' }).click();
 
-    // Intercept the retried request (after confirmation)
+    // Wait for the confirmation dialog to appear before setting up the request intercept.
+    // This ensures we capture the retried request (with createIfMissing=true) rather than
+    // the initial request that returns CodeNotFound.
+    await expect(pathConfirmDialog(page)).toBeVisible({ timeout: 5000 });
+
     const requestPromise = page.waitForRequest(
       (req) => req.url().includes('CreateSession') && req.method() === 'POST',
       { timeout: 10000 }
     );
 
-    await page.getByRole('button', { name: 'Create Session' }).click();
-    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 5000 });
     await page.getByRole('button', { name: /create|confirm/i }).click();
 
     const request = await requestPromise;

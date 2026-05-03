@@ -95,11 +95,15 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   // Handle session creation
   const handleCreateSession = useCallback(
     async (data: OmnibarSessionData) => {
-      // Determine effective session type:
-      // - isNewProject flag overrides the sessionType to NEW_PROJECT regardless of the
-      //   "open as" sub-selection (which is passed via data.sessionType for branch resolution).
+      // Determine effective session type.
+      // For new_project + "open as new_worktree": use NEW_WORKTREE — findGitRepoRoot already
+      // handles mkdir + git init + initial commit for non-existent paths, so no special type needed.
+      // For new_project + "open as directory": use NEW_PROJECT so the backend initialises the repo
+      // and opens the session without a worktree.
       const effectiveSessionType = data.isNewProject
-        ? SessionType.NEW_PROJECT
+        ? data.sessionType === "new_worktree"
+          ? sessionTypeMap["new_worktree"]
+          : SessionType.NEW_PROJECT
         : data.sessionType
         ? sessionTypeMap[data.sessionType]
         : undefined;

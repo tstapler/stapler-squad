@@ -907,6 +907,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         {/* R2: Confirmation dialog for Directory mode with non-existent path */}
         {showPathConfirmation && pendingSessionData && (
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="path-confirm-title"
             style={{
               position: "absolute",
               inset: 0,
@@ -930,7 +933,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 margin: "16px",
               }}
             >
-              <div style={{ fontWeight: 600, fontSize: "1rem", marginBottom: "8px" }}>
+              <div id="path-confirm-title" style={{ fontWeight: 600, fontSize: "1rem", marginBottom: "8px" }}>
                 Create directory?
               </div>
               <div style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginBottom: "16px" }}>
