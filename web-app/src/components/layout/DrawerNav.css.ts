@@ -20,6 +20,10 @@ export const drawer = recipe({
       "(prefers-reduced-motion: reduce)": {
         transition: "none",
       },
+      /* On mobile BottomNav handles navigation — hide sidebar entirely */
+      "(max-width: 768px)": {
+        display: "none",
+      },
     },
   },
   variants: {
@@ -53,7 +57,7 @@ export const navItem = recipe({
     cursor: "pointer",
     whiteSpace: "nowrap",
     userSelect: "none",
-    minHeight: "40px",
+    minHeight: "44px", /* WCAG 2.1 AA touch target minimum */
     "@media": {
       "(prefers-reduced-motion: reduce)": {
         transition: "none",
@@ -134,6 +138,8 @@ export const toggleButton = style({
   justifyContent: "center",
   margin: vars.space[2],
   padding: vars.space[2],
+  minHeight: "44px", /* WCAG 2.1 AA touch target minimum */
+  minWidth: "44px",
   background: "transparent",
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,

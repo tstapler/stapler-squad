@@ -27,8 +27,8 @@ const sharedTokens = {
     full: "9999px",
   },
   fontSize: {
-    xs: "11px",
-    sm: "12px",
+    xs: "12px",  /* WCAG: minimum legible size; was 11px */
+    sm: "14px",  /* WCAG: body/label minimum; was 12px */
     base: "14px",
     lg: "16px",
     xl: "20px",
@@ -233,7 +233,7 @@ export const matrixTheme = createTheme(vars, {
   color: {
     textPrimary: "#00ff41",
     textSecondary: "#00cc33",
-    textMuted: "#004d18",
+    textMuted: "#00b32d", /* was #004d18 — 1.32:1 fails WCAG AA; #00b32d = 5.12:1 on #0a0a0a ✅ */
     textDisabled: "#002b0e",
     textTertiary: "#006622",
     textInverse: "#000000",
@@ -331,7 +331,7 @@ export const cyberpunk77Theme = createTheme(vars, {
   color: {
     textPrimary: "#fcee09",
     textSecondary: "#c8be08",
-    textMuted: "#7a7405",
+    textMuted: "#aaaa00", /* was #7a7405 — 1.83:1 fails WCAG AA on #12122a; #aaaa00 = 7.38:1 ✅ */
     textDisabled: "#4a4603",
     textTertiary: "#8a8006",
     textInverse: "#0d0d1a",
@@ -349,14 +349,14 @@ export const cyberpunk77Theme = createTheme(vars, {
     borderSubtle: "#14143a",
     borderMuted: "#222250",
     borderStrong: "#2d2d6e",
-    borderHover: "#ff2d78",
+    borderHover: "#cc245f",
     modalBorder: "#1a1a3e",
     inputBorder: "#2d2d6e",
     inputFocusBorder: "#fcee09",
 
-    primary: "#ff2d78",
-    primaryHover: "#ff5090",
-    primaryActive: "#cc2460",
+    primary: "#cc245f", /* was #ff2d78 — #fff on #ff2d78 = 3.56:1 fails WCAG AA; #cc245f = 5.27:1 ✅ */
+    primaryHover: "#e02d6e",
+    primaryActive: "#aa1e50",
     primaryDark: "#7a1540",
     primaryText: "#ffffff",
 
@@ -429,7 +429,7 @@ export const wh40kTheme = createTheme(vars, {
   color: {
     textPrimary: "#c8b89a",
     textSecondary: "#a89878",
-    textMuted: "#786858",
+    textMuted: "#a08870", /* was #786858 — 3.38:1 fails WCAG AA on #1a1510; #a08870 = 5.39:1 ✅ */
     textDisabled: "#484038",
     textTertiary: "#908070",
     textInverse: "#0c0a08",

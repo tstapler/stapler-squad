@@ -56,8 +56,48 @@ export default defineConfig({
     navigationTimeout: 15000,
   },
 
+  // Snapshot path template for visual regression tests
+  snapshotPathTemplate: 'tests/snapshots/{projectName}/{testFilePath}/{arg}{ext}',
+
   // Test projects (browsers)
   projects: [
+    // Visual regression projects — one per theme
+    {
+      name: 'visual-matrix',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'tests/e2e/fixtures/matrix-theme.json',
+        viewport: { width: 1280, height: 800 },
+      },
+      testMatch: '**/visual-regression.spec.ts',
+    },
+    {
+      name: 'visual-cyberpunk77',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'tests/e2e/fixtures/cyberpunk77-theme.json',
+        viewport: { width: 1280, height: 800 },
+      },
+      testMatch: '**/visual-regression.spec.ts',
+    },
+    {
+      name: 'visual-wh40k',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'tests/e2e/fixtures/wh40k-theme.json',
+        viewport: { width: 1280, height: 800 },
+      },
+      testMatch: '**/visual-regression.spec.ts',
+    },
+    {
+      name: 'visual-clean',
+      use: {
+        ...devices['Desktop Chrome'],
+        storageState: 'tests/e2e/fixtures/clean-theme.json',
+        viewport: { width: 1280, height: 800 },
+      },
+      testMatch: '**/visual-regression.spec.ts',
+    },
     {
       name: 'chromium',
       use: {

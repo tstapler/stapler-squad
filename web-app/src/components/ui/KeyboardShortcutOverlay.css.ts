@@ -10,6 +10,13 @@ export const backdrop = style({
   alignItems: "center",
   justifyContent: "center",
   padding: vars.space[4],
+  "@media": {
+    /* Mobile: no padding so dialog fills the screen */
+    "(max-width: 768px)": {
+      padding: 0,
+      alignItems: "stretch",
+    },
+  },
 });
 
 export const dialog = style({
@@ -23,6 +30,16 @@ export const dialog = style({
   flexDirection: "column",
   overflow: "hidden",
   boxShadow: vars.shadow.lg,
+  "@media": {
+    /* Mobile: full screen, scrollable, no border-radius clipping */
+    "(max-width: 768px)": {
+      maxWidth: "100%",
+      maxHeight: "100%",
+      height: "100%",
+      borderRadius: 0,
+      overflowY: "auto",
+    },
+  },
 });
 
 export const dialogHeader = style({
@@ -45,8 +62,8 @@ export const closeButton = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  width: "32px",
-  height: "32px",
+  width: "44px",  /* WCAG 2.1 AA touch target minimum; was 32px */
+  height: "44px",
   background: "transparent",
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.md,

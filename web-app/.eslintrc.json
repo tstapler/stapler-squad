@@ -34,6 +34,10 @@
       {
         "selector": "TemplateElement[value.raw=/\\b100vh\\b/]",
         "message": "Use var(--viewport-height) instead of '100vh' in template literals. See project_plans/ux-overhaul/."
+      },
+      {
+        "selector": "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > Literal[value=/^#[0-9a-fA-F]{3,8}$/]",
+        "message": "Use vars.color.* tokens from theme.css.ts instead of hardcoded hex values in style props."
       }
     ],
     "boundaries/dependencies": [
