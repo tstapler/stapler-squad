@@ -28,11 +28,11 @@ func (l ForkPressureLevel) String() string {
 }
 
 const (
-	forkPressureWindow        = 30 * time.Second
-	forkAlertCooldown         = 2 * time.Minute
+	forkPressureWindow         = 30 * time.Second
+	forkAlertCooldown          = 2 * time.Minute
 	spawnFailureAlertThreshold = 5  // failures/window → critical
-	spawnRateWarnThreshold    = 60  // spawns/window → warning (2/s avg)
-	zombieAlertThreshold      = 3   // zombie children/window → alert
+	spawnRateWarnThreshold     = 60 // spawns/window → warning (2/s avg)
+	zombieAlertThreshold       = 3  // zombie children/window → alert
 )
 
 // ForkPressureStats is a point-in-time snapshot of fork pressure metrics.

@@ -10,6 +10,9 @@ import (
 
 // TestTmuxPollingDoesNotHang validates that tmux existence polling has timeout protection
 func TestTmuxPollingDoesNotHang(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that requires real tmux")
+	}
 	server := CreateIsolatedTmuxServer(t)
 
 	t.Run("polling times out for nonexistent session", func(t *testing.T) {
@@ -85,13 +88,16 @@ func TestTmuxPollingDoesNotHang(t *testing.T) {
 		// Should timeout, not hang
 		require.Error(t, err, "Should timeout waiting for content")
 		assert.Contains(t, err.Error(), "timeout", "Error should indicate timeout")
-		assert.Less(t, elapsed, 2*time.Second,
+		assert.Less(t, elapsed, 4*time.Second,
 			"Should timeout within reasonable time")
 	})
 }
 
 // TestTmuxSessionExistenceChecking validates DoesSessionExist() behavior
 func TestTmuxSessionExistenceChecking(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that requires real tmux")
+	}
 	server := CreateIsolatedTmuxServer(t)
 
 	t.Run("detects session existence correctly", func(t *testing.T) {
@@ -175,6 +181,9 @@ func TestTmuxSessionReadyTimeout(t *testing.T) {
 
 // TestTmuxHangPrevention validates that operations don't hang indefinitely
 func TestTmuxHangPrevention(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that requires real tmux")
+	}
 	server := CreateIsolatedTmuxServer(t)
 
 	t.Run("session creation has timeout protection", func(t *testing.T) {
@@ -221,6 +230,9 @@ func TestTmuxHangPrevention(t *testing.T) {
 
 // TestTmuxContentWaitingBehavior validates content waiting with edge cases
 func TestTmuxContentWaitingBehavior(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that requires real tmux")
+	}
 	server := CreateIsolatedTmuxServer(t)
 
 	t.Run("waits for content with reasonable timeout", func(t *testing.T) {

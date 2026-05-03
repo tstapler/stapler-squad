@@ -25,8 +25,8 @@ type cmdResult struct {
 
 // cmSendReq is an outgoing command queued for the priority sender goroutine.
 type cmSendReq struct {
-	line     string          // full tmux command line (e.g. "send-keys -t sess -H 61")
-	resultCh chan cmdResult  // buffered(1) channel for the response
+	line     string         // full tmux command line (e.g. "send-keys -t sess -H 61")
+	resultCh chan cmdResult // buffered(1) channel for the response
 }
 
 var (
@@ -43,7 +43,6 @@ var cmCommandsEnabled atomic.Bool
 func init() {
 	cmCommandsEnabled.Store(os.Getenv("STAPLER_SQUAD_CM_COMMANDS") != "false")
 }
-
 
 // StartControlMode begins streaming terminal output via tmux control mode (-C flag).
 // This is the proper way to get real-time terminal output from tmux, replacing pipe-pane + FIFO.
@@ -493,15 +492,9 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 
 // sendCMCommand enqueues a normal-priority command and waits for its response.
 // Background operations (capture-pane, resize, display-message) use this path.
-// User input uses sendCMCommandHighPri so it always jumps ahead in the queue.
+// User input calls SendInputViaControlMode which enqueues directly to highPriSendCh.
 func (t *TmuxSession) sendCMCommand(ctx context.Context, args ...string) (string, error) {
 	return t.enqueueCMCommand(ctx, t.normPriSendCh, args...)
-}
-
-// sendCMCommandHighPri enqueues a high-priority command that is always processed
-// before any pending normal-priority commands. Used for interactive send-keys.
-func (t *TmuxSession) sendCMCommandHighPri(ctx context.Context, args ...string) (string, error) {
-	return t.enqueueCMCommand(ctx, t.highPriSendCh, args...)
 }
 
 // enqueueCMCommand is the shared implementation: builds the request, sends it to
@@ -629,14 +622,31 @@ func (t *TmuxSession) UnsubscribeFromControlModeUpdates(subscriberID string) {
 // SendInputViaControlMode sends raw bytes to the active pane through the already-open
 // control mode connection. Uses the HIGH-PRIORITY queue so user keystrokes always
 // jump ahead of any queued background operations (capture-pane, resize, etc.).
+//
+// Fire-and-forget: enqueues the send-keys command and returns immediately without
+// waiting for the tmux %begin/%end ack. The ack is consumed by the reader goroutine
+// and discarded. This eliminates one CM round-trip from the interactive input path.
 func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) error {
 	if len(data) == 0 {
 		return nil
+	}
+	ch := t.highPriSendCh
+	if ch == nil {
+		return ErrControlModeNotRunning
 	}
 	args := []string{"send-keys", "-t", t.sanitizedName, "-H"}
 	for _, b := range data {
 		args = append(args, fmt.Sprintf("%02x", b))
 	}
-	_, err := t.sendCMCommandHighPri(ctx, args...)
-	return err
+	// resultCh is buffered(1): the reader goroutine delivers the ack into it and
+	// moves on; nobody reads it, and Go GCs it. Safe because all send sites use
+	// `select { case ch <- result: default: }` (non-blocking).
+	resultCh := make(chan cmdResult, 1)
+	req := cmSendReq{line: strings.Join(args, " "), resultCh: resultCh}
+	select {
+	case ch <- req:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

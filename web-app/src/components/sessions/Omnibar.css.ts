@@ -47,6 +47,7 @@ export const modal = style({
   // Story 6.1: Theme-aware glow border on omnibar
   boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px ${vars.color.glowSecondary}`,
   overflow: "hidden",
+  position: "relative",
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
       animationName: scanlineReveal,

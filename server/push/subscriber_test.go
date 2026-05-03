@@ -203,7 +203,11 @@ func TestSubscriberExitsOnContextCancel(t *testing.T) {
 	n := &mockNotifier{name: "test"}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
+	// Record count before starting, then immediately start subscriber.
+	// We capture before+StartDeliverySubscriber atomically so the baseline
+	// is not contaminated by goroutines from other parallel tests.
 	before := runtime.NumGoroutine()
 	StartDeliverySubscriber(ctx, bus, []Notifier{n})
 
@@ -212,6 +216,7 @@ func TestSubscriberExitsOnContextCancel(t *testing.T) {
 	}, testutil.FastWaitConfig()))
 	assert.Greater(t, runtime.NumGoroutine(), before)
 
+	// Cancel the context and poll until the goroutine exits.
 	cancel()
 	require.NoError(t, testutil.WaitForCondition(func() bool {
 		return runtime.NumGoroutine() <= before+1

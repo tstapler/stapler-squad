@@ -331,6 +331,260 @@ func TestInstanceDataLoadWithDiffContent(t *testing.T) {
 	assert.Empty(t, data.DiffStats.Content, "diff content should be empty after loading old state")
 }
 
+// newTestInstance returns a minimal Paused Instance ready for AddInstance.
+func newTestInstance(title string) *Instance {
+	inst := &Instance{
+		Title:     title,
+		Path:      "/tmp/test",
+		Status:    Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	inst.started = true
+	return inst
+}
+
+// TestStorage_UpdateInstanceTimestampsOnly verifies that calling
+// UpdateInstanceTimestampsOnly persists the terminal timestamps and optionally
+// LastViewed to the underlying repository.
+func TestStorage_UpdateInstanceTimestampsOnly(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("ts-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	lastTerminal := time.Now().Add(-5 * time.Second).Truncate(time.Millisecond)
+	lastMeaningful := time.Now().Add(-3 * time.Second).Truncate(time.Millisecond)
+	lastViewed := time.Now().Add(-1 * time.Second).Truncate(time.Millisecond)
+	sig := "abc123sig"
+
+	err := storage.UpdateInstanceTimestampsOnly("ts-session", lastTerminal, lastMeaningful, sig, lastViewed)
+	require.NoError(t, err)
+
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	got := rows[0]
+	assert.Equal(t, sig, got.LastOutputSignature, "LastOutputSignature should be updated")
+	assert.WithinDuration(t, lastViewed, got.LastViewed, time.Second, "LastViewed should be updated")
+}
+
+// TestStorage_UpdateInstanceTimestampsOnly_ZeroLastViewed verifies that
+// passing a zero LastViewed does NOT overwrite the existing value.
+func TestStorage_UpdateInstanceTimestampsOnly_ZeroLastViewed(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("ts-zero-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	// Set an initial LastViewed via a first call.
+	original := time.Now().Add(-10 * time.Second).Truncate(time.Millisecond)
+	require.NoError(t, storage.UpdateInstanceTimestampsOnly("ts-zero-session", time.Time{}, time.Time{}, "", original))
+
+	// Now call again with zero LastViewed — it must not overwrite.
+	require.NoError(t, storage.UpdateInstanceTimestampsOnly("ts-zero-session", time.Time{}, time.Time{}, "", time.Time{}))
+
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	assert.WithinDuration(t, original, rows[0].LastViewed, time.Second,
+		"LastViewed must not be overwritten by a zero value")
+}
+
+// TestStorage_UpdateInstanceLastAddedToQueue verifies the partial-field update
+// for LastAddedToQueue.
+func TestStorage_UpdateInstanceLastAddedToQueue(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("queue-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	queueTime := time.Now().Truncate(time.Millisecond)
+	err := storage.UpdateInstanceLastAddedToQueue("queue-session", queueTime)
+	require.NoError(t, err)
+
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.WithinDuration(t, queueTime, rows[0].LastAddedToQueue, time.Second,
+		"LastAddedToQueue should be updated")
+}
+
+// TestStorage_UpdateInstanceLastUserResponse verifies the partial-field update
+// for LastUserResponse.
+//
+// NOTE: LastUserResponse is not yet in the Ent schema, so it cannot be
+// persisted to SQLite by the current EntRepository backend. This test verifies
+// that the call succeeds without error (the mutation is a no-op at the DB
+// level). Persistence will be enabled once the Ent schema is extended with
+// this column.
+func TestStorage_UpdateInstanceLastUserResponse(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("response-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	responseTime := time.Now().Truncate(time.Millisecond)
+	err := storage.UpdateInstanceLastUserResponse("response-session", responseTime)
+	require.NoError(t, err, "UpdateInstanceLastUserResponse must not return an error")
+
+	// Verify the call does not corrupt the existing record.
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "session must still exist after the update call")
+	assert.Equal(t, "response-session", rows[0].Title)
+}
+
+// TestStorage_UpdateInstanceAcknowledged verifies that UpdateInstanceAcknowledged
+// sets LastAcknowledged to a non-zero time.
+func TestStorage_UpdateInstanceAcknowledged(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("ack-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	// Confirm it starts at zero.
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.True(t, rows[0].LastAcknowledged.IsZero(), "LastAcknowledged should be zero before acknowledging")
+
+	before := time.Now()
+	err = storage.UpdateInstanceAcknowledged("ack-session")
+	require.NoError(t, err)
+	after := time.Now()
+
+	rows, err = storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.False(t, rows[0].LastAcknowledged.IsZero(), "LastAcknowledged should be non-zero after acknowledging")
+	assert.True(t, !rows[0].LastAcknowledged.Before(before) && !rows[0].LastAcknowledged.After(after),
+		"LastAcknowledged should be within the before/after window")
+}
+
+// TestStorage_UpdateInstanceProcessingGrace verifies the partial-field update
+// for ProcessingGraceUntil.
+//
+// NOTE: ProcessingGraceUntil is not yet in the Ent schema, so it cannot be
+// persisted to SQLite by the current EntRepository backend. This test verifies
+// that the call succeeds without error (the mutation is a no-op at the DB
+// level). Persistence will be enabled once the Ent schema is extended with
+// this column.
+func TestStorage_UpdateInstanceProcessingGrace(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("grace-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	graceTime := time.Now().Add(30 * time.Second).Truncate(time.Millisecond)
+	err := storage.UpdateInstanceProcessingGrace("grace-session", graceTime)
+	require.NoError(t, err, "UpdateInstanceProcessingGrace must not return an error")
+
+	// Verify the call does not corrupt the existing record.
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1, "session must still exist after the update call")
+	assert.Equal(t, "grace-session", rows[0].Title)
+}
+
+// TestStorage_UpdateInstance verifies that UpdateInstance replaces all fields
+// (not a partial update) for an existing instance.
+func TestStorage_UpdateInstance(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("update-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	// Mutate fields that the Ent schema supports.
+	inst.Tags = []string{"alpha", "beta"}
+	inst.Category = "refactor-tests"
+
+	err := storage.UpdateInstance(inst)
+	require.NoError(t, err)
+
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"alpha", "beta"}, rows[0].Tags, "Tags should be persisted by UpdateInstance")
+	assert.Equal(t, "refactor-tests", rows[0].Category, "Category should be persisted by UpdateInstance")
+}
+
+// TestStorage_ListInstanceData verifies that ListInstanceData returns raw
+// InstanceData entries without constructing Instance objects.
+func TestStorage_ListInstanceData(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst1 := newTestInstance("list-session-1")
+	inst2 := newTestInstance("list-session-2")
+	require.NoError(t, storage.AddInstance(inst1))
+	require.NoError(t, storage.AddInstance(inst2))
+
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	assert.Len(t, rows, 2, "ListInstanceData should return both added instances")
+
+	titles := make(map[string]bool)
+	for _, r := range rows {
+		titles[r.Title] = true
+	}
+	assert.True(t, titles["list-session-1"], "list-session-1 should be present")
+	assert.True(t, titles["list-session-2"], "list-session-2 should be present")
+}
+
+// TestStorage_DeleteAllInstances verifies that DeleteAllInstances removes every
+// stored instance, leaving an empty repository.
+func TestStorage_DeleteAllInstances(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	require.NoError(t, storage.AddInstance(newTestInstance("del-session-1")))
+	require.NoError(t, storage.AddInstance(newTestInstance("del-session-2")))
+
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 2, "precondition: 2 instances should exist before delete")
+
+	err = storage.DeleteAllInstances()
+	require.NoError(t, err)
+
+	rows, err = storage.ListInstanceData()
+	require.NoError(t, err)
+	assert.Empty(t, rows, "ListInstanceData should return empty after DeleteAllInstances")
+}
+
+// TestStorage_SaveInstancesSync verifies that SaveInstancesSync persists
+// mutated instance state to the repository synchronously.
+func TestStorage_SaveInstancesSync(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	inst := newTestInstance("sync-session")
+	require.NoError(t, storage.AddInstance(inst))
+
+	// Mutate fields that the Ent schema supports.
+	inst.Tags = []string{"sync-tag"}
+	inst.Category = "sync-category"
+	err := storage.SaveInstancesSync([]*Instance{inst})
+	require.NoError(t, err)
+
+	rows, err := storage.ListInstanceData()
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, []string{"sync-tag"}, rows[0].Tags, "Tags should be persisted by SaveInstancesSync")
+	assert.Equal(t, "sync-category", rows[0].Category, "Category should be persisted by SaveInstancesSync")
+}
+
 // TestDiffStatsDataRoundTrip verifies that save/load cycle preserves metadata
 // but excludes content (the desired behavior for BUG-003 fix).
 func TestDiffStatsDataRoundTrip(t *testing.T) {

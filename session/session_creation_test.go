@@ -13,6 +13,9 @@ import (
 
 // TestSessionCreationDoesNotHang tests that session creation completes within reasonable time
 func TestSessionCreationDoesNotHang(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
 	tempDir := t.TempDir()
 
 	t.Run("DirectorySessionCreation", func(t *testing.T) {
@@ -92,6 +95,9 @@ func TestSessionCreationDoesNotHang(t *testing.T) {
 
 // TestSessionCreationWithRealPrograms tests session creation with actual programs if available
 func TestSessionCreationWithRealPrograms(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
 	tempDir := t.TempDir()
 
 	// Test cases for different programs
@@ -162,6 +168,9 @@ func TestSessionCreationWithRealPrograms(t *testing.T) {
 
 // TestSessionCreationWithWorktree tests session creation with git worktrees
 func TestSessionCreationWithWorktree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
 	tempRepo := setupTestRepository(t)
 	defer os.RemoveAll(tempRepo)
 

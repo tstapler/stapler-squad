@@ -92,8 +92,8 @@ type hookOutput struct {
 }
 
 type hookSpecificOutput struct {
-	HookEventName          string `json:"hookEventName"`
-	PermissionDecision     string `json:"permissionDecision,omitempty"`
+	HookEventName            string `json:"hookEventName"`
+	PermissionDecision       string `json:"permissionDecision,omitempty"`
 	PermissionDecisionReason string `json:"permissionDecisionReason,omitempty"`
 }
 

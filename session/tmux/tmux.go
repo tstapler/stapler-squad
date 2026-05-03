@@ -109,7 +109,7 @@ type TmuxSession struct {
 	controlModeCmd         *exec.Cmd              // tmux -C attach process
 	controlModeStdout      io.ReadCloser          // stdout pipe for control mode notifications
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
-	controlModeDone        chan struct{}           // Signal channel for control mode termination
+	controlModeDone        chan struct{}          // Signal channel for control mode termination
 	controlModeSubscribers map[string]chan []byte // WebSocket clients subscribed to control mode updates
 	controlModeSubMu       sync.RWMutex           // Protects controlModeSubscribers, controlModeExited, and pendingCmds
 	controlModeExited      bool                   // True after readControlModeOutput exits; new subscribers get pre-closed channel
@@ -119,15 +119,14 @@ type TmuxSession struct {
 	// requests (interactive user input) always jump ahead of low-priority ones
 	// (background polling, resize, capture-pane). The goroutine drains highPriSendCh
 	// before touching normPriSendCh.
-	highPriSendCh chan cmSendReq   // user send-keys — processed before normPriSendCh
-	normPriSendCh chan cmSendReq   // background commands (polling, resize, capture-pane)
+	highPriSendCh  chan cmSendReq   // user send-keys — processed before normPriSendCh
+	normPriSendCh  chan cmSendReq   // background commands (polling, resize, capture-pane)
 	cmSenderExited chan struct{}    // closed when runCMSender exits; lets StopControlMode know stdin is safe to close
-	cmdSendMu     sync.Mutex       // guards stdin-close in StopControlMode vs sender goroutine writes
-	pendingCmds   []chan cmdResult // FIFO of pending response channels; protected by controlModeSubMu
-	cmdBodyBuf    strings.Builder  // body accumulator between %begin and %end; reader goroutine only
-	curCmdCh      chan cmdResult   // current in-flight response channel; reader goroutine only
-	inCmdResp     bool             // true while inside a %begin/%end block; reader goroutine only
-
+	cmdSendMu      sync.Mutex       // guards stdin-close in StopControlMode vs sender goroutine writes
+	pendingCmds    []chan cmdResult // FIFO of pending response channels; protected by controlModeSubMu
+	cmdBodyBuf     strings.Builder  // body accumulator between %begin and %end; reader goroutine only
+	curCmdCh       chan cmdResult   // current in-flight response channel; reader goroutine only
+	inCmdResp      bool             // true while inside a %begin/%end block; reader goroutine only
 
 	// Exit detection: fired when the session exits unexpectedly (not via StopControlMode).
 	// onExit is called at most once per TmuxSession lifetime (guarded by onExitOnce).
@@ -1324,22 +1323,12 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 // This is particularly useful for web terminal integration where the browser controls the size.
 // This method executes the resize immediately by calling both PTY and tmux resize commands.
 func (t *TmuxSession) SetWindowSize(cols, rows int) error {
-	log.InfoLog.Printf("🔧 SetWindowSize called for session '%s': target %dx%d", t.sanitizedName, cols, rows)
-
-	// Get current dimensions for comparison
-	currentWidth, currentHeight, _ := t.GetPaneDimensions()
-	log.InfoLog.Printf("📏 Current tmux pane dimensions for '%s': %dx%d", t.sanitizedName, currentWidth, currentHeight)
-
 	// First resize the PTY using the existing method
 	if err := t.updateWindowSize(cols, rows); err != nil {
-		// Log warning but don't fail - PTY resize might not be critical
-		log.WarningLog.Printf("⚠️ Failed to resize PTY for session '%s': %v", t.sanitizedName, err)
-	} else {
-		log.InfoLog.Printf("✅ PTY resized successfully for session '%s'", t.sanitizedName)
+		log.WarningLog.Printf("Failed to resize PTY for session '%s': %v", t.sanitizedName, err)
 	}
 
 	// Also resize the tmux window itself to ensure the dimensions are applied.
-	log.InfoLog.Printf("🔧 Running tmux resize-window command for '%s' to %dx%d", t.sanitizedName, cols, rows)
 	colsStr := fmt.Sprintf("%d", cols)
 	rowsStr := fmt.Sprintf("%d", rows)
 	if t.cmEnabledForBackground() {
@@ -1347,43 +1336,26 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 		defer cancel()
 		if _, cmErr := t.sendCMCommand(ctx,
 			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr != nil {
-			log.DebugLog.Printf("SetWindowSize CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-			// Fall through to subprocess below.
+			if log.DebugLog != nil {
+				log.DebugLog.Printf("SetWindowSize CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
+			}
 			cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
 			if err := t.cmdExec.Run(cmd); err != nil {
-				log.ErrorLog.Printf("❌ tmux resize-window failed for '%s': %v", t.sanitizedName, err)
+				log.ErrorLog.Printf("tmux resize-window failed for '%s': %v", t.sanitizedName, err)
 				return fmt.Errorf("failed to resize tmux window: %w", err)
 			}
 		}
 	} else {
 		cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
 		if err := t.cmdExec.Run(cmd); err != nil {
-			log.ErrorLog.Printf("❌ tmux resize-window failed for '%s': %v", t.sanitizedName, err)
+			log.ErrorLog.Printf("tmux resize-window failed for '%s': %v", t.sanitizedName, err)
 			return fmt.Errorf("failed to resize tmux window: %w", err)
 		}
 	}
 
-	// Verify the resize actually worked and save the actual dimensions for future
-	// PTY attach connections (via attach-session -x/-y).
-	newWidth, newHeight, err := t.GetPaneDimensions()
-	if err != nil {
-		log.WarningLog.Printf("⚠️ Could not verify resize for '%s': %v", t.sanitizedName, err)
-		// Store requested dims — resize-window succeeded even if we can't verify.
-		t.lastKnownCols.Store(int32(cols))
-		t.lastKnownRows.Store(int32(rows))
-	} else {
-		log.InfoLog.Printf("📏 New tmux pane dimensions for '%s': %dx%d (expected %dx%d)",
-			t.sanitizedName, newWidth, newHeight, cols, rows)
-		if newWidth != cols || newHeight != rows {
-			log.ErrorLog.Printf("❌ Dimension mismatch after resize for '%s': got %dx%d, expected %dx%d",
-				t.sanitizedName, newWidth, newHeight, cols, rows)
-		}
-		// Store actual dimensions so reconnects start at the real size.
-		t.lastKnownCols.Store(int32(newWidth))
-		t.lastKnownRows.Store(int32(newHeight))
-	}
-
-	log.InfoLog.Printf("✅ Resized tmux session '%s' to %dx%d", t.sanitizedName, cols, rows)
+	// Store requested dimensions for future PTY attach connections (via attach-session -x/-y).
+	t.lastKnownCols.Store(int32(cols))
+	t.lastKnownRows.Store(int32(rows))
 	return nil
 }
 

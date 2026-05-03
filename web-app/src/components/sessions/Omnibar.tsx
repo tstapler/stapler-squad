@@ -40,9 +40,13 @@ export interface OmnibarFormState {
   category: string;
   autoYes: boolean;
   useTitleAsBranch: boolean;
-  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off";
+  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off" | "new_project";
   existingWorktree: string;
   workingDir: string;
+  // New project mode fields
+  parentDir: string;
+  projectName: string;
+  newProjectSessionType: "directory" | "new_worktree";
 }
 
 const INITIAL_FORM_STATE: OmnibarFormState = {
@@ -55,6 +59,10 @@ const INITIAL_FORM_STATE: OmnibarFormState = {
   sessionType: "new_worktree",
   existingWorktree: "",
   workingDir: "",
+  // New project mode defaults
+  parentDir: "",
+  projectName: "",
+  newProjectSessionType: "new_worktree",
 };
 
 // Consolidated UI state
@@ -82,6 +90,16 @@ export interface OmnibarSessionData {
   existingWorktree?: string;
   workingDir?: string;
   oneOff?: boolean;
+  // New project mode: tells the context layer to use SESSION_TYPE_NEW_PROJECT
+  isNewProject?: boolean;
+  // Directory mode confirmation: retry with directory creation enabled
+  createIfMissing?: boolean;
+}
+
+// Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
+function isValidProjectName(name: string): boolean {
+  if (!name.trim()) return false;
+  return !/[/\\<>:"|?*\x00]/.test(name) && !/^\.|\.$|^ | $/.test(name);
 }
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
@@ -119,9 +137,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Mode state machine
   const [modeState, dispatchMode] = useModeReducer();
 
+  // Confirmation dialog state for Directory mode with non-existent path
+  const [showPathConfirmation, setShowPathConfirmation] = useState(false);
+  const [pendingSessionData, setPendingSessionData] = useState<OmnibarSessionData | null>(null);
+
   // Convenience aliases for existing code
   // Destructure only fields needed for validation/submission logic in Omnibar.tsx
-  const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir } = formState;
+  const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType } = formState;
   const { showAdvanced } = uiState;
   const { dropdownIndex, dropdownDismissed, resultHighlightIndex } = uiState;
   // Used in detection auto-fill effects
@@ -574,6 +596,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       return !!sessionName.trim();
     }
 
+    // New project mode: requires parentDir + projectName (valid), no path detection.
+    if (sessionType === "new_project") {
+      if (!sessionName.trim()) return false;
+      if (!parentDir.trim()) return false;
+      if (!projectName.trim()) return false;
+      if (!isValidProjectName(projectName)) return false;
+      if (newProjectSessionType === "new_worktree" && !useTitleAsBranch && !branch.trim()) return false;
+      return true;
+    }
+
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
     if (!detection || detection.type === InputType.Unknown || detection.type === InputType.SessionSearch) return false;
@@ -588,7 +620,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     }
 
     return true;
-  }, [input, sessionName, detection, sessionType, branch, useTitleAsBranch, existingWorktree]);
+  }, [input, sessionName, detection, sessionType, branch, useTitleAsBranch, existingWorktree, parentDir, projectName, newProjectSessionType]);
 
   // Handle form submission
   const handleSubmit = useCallback(async () => {
@@ -600,7 +632,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     try {
       // Determine final branch name
       let finalBranch = branch.trim();
-      if (sessionType === "new_worktree" && useTitleAsBranch) {
+      if ((sessionType === "new_worktree" || (sessionType === "new_project" && newProjectSessionType === "new_worktree")) && useTitleAsBranch) {
         finalBranch = sessionName.trim();
       }
 
@@ -608,33 +640,67 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       const imagePaths = attachedImagePathsRef.current;
       const finalPrompt = imagePaths.length > 0 ? imagePaths.join(" ") : undefined;
 
-      const sessionData: OmnibarSessionData = {
-        title: sessionName.trim(),
-        path: sessionType === "one_off" ? "" : (detection?.localPath || ""),
-        branch: sessionType === "one_off" ? undefined : (finalBranch || undefined),
-        program,
-        category: category.trim() || undefined,
-        prompt: finalPrompt,
-        autoYes,
-        sessionType: sessionType === "one_off" ? "directory" : sessionType,
-        existingWorktree: sessionType === "one_off" ? undefined : (existingWorktree.trim() || undefined),
-        workingDir: sessionType === "one_off" ? undefined : (workingDir.trim() || undefined),
-        oneOff: sessionType === "one_off" ? true : undefined,
-      };
+      let sessionData: OmnibarSessionData;
 
-      // Handle GitHub URLs - path will be resolved server-side
-      if (sessionType !== "one_off" && detection?.gitHubRef) {
-        sessionData.gitHubOwner = detection.gitHubRef.owner;
-        sessionData.gitHubRepo = detection.gitHubRef.repo;
-        sessionData.gitHubPRNumber = detection.gitHubRef.prNumber;
+      if (sessionType === "new_project") {
+        // New project mode: build the resolved path from parentDir + projectName
+        const resolvedPath = `${parentDir.trim().replace(/\/$/, "")}/${projectName.trim()}`;
+        sessionData = {
+          title: sessionName.trim(),
+          path: resolvedPath,
+          branch: newProjectSessionType === "new_worktree" ? (finalBranch || undefined) : undefined,
+          program,
+          category: category.trim() || undefined,
+          prompt: finalPrompt,
+          autoYes,
+          sessionType: newProjectSessionType,
+          isNewProject: true,
+        };
+      } else {
+        sessionData = {
+          title: sessionName.trim(),
+          path: sessionType === "one_off" ? "" : (detection?.localPath || ""),
+          branch: sessionType === "one_off" ? undefined : (finalBranch || undefined),
+          program,
+          category: category.trim() || undefined,
+          prompt: finalPrompt,
+          autoYes,
+          sessionType: sessionType === "one_off" ? "directory" : sessionType,
+          existingWorktree: sessionType === "one_off" ? undefined : (existingWorktree.trim() || undefined),
+          workingDir: sessionType === "one_off" ? undefined : (workingDir.trim() || undefined),
+          oneOff: sessionType === "one_off" ? true : undefined,
+        };
 
-        // For GitHub URLs, set path to the parsed value for server-side cloning
-        if (!sessionData.path) {
-          sessionData.path = detection.parsedValue;
+        // Handle GitHub URLs - path will be resolved server-side
+        if (sessionType !== "one_off" && detection?.gitHubRef) {
+          sessionData.gitHubOwner = detection.gitHubRef.owner;
+          sessionData.gitHubRepo = detection.gitHubRef.repo;
+          sessionData.gitHubPRNumber = detection.gitHubRef.prNumber;
+
+          // For GitHub URLs, set path to the parsed value for server-side cloning
+          if (!sessionData.path) {
+            sessionData.path = detection.parsedValue;
+          }
         }
       }
 
-      await onCreateSession(sessionData);
+      try {
+        await onCreateSession(sessionData);
+      } catch (err) {
+        // R2: Directory mode with non-existent path → show confirmation dialog
+        if (
+          sessionType === "directory" &&
+          err instanceof Error &&
+          (err.message.includes("not found") || err.message.includes("CodeNotFound") || err.message.includes("path does not exist"))
+        ) {
+          setPendingSessionData(sessionData);
+          setShowPathConfirmation(true);
+          setIsSubmitting(false);
+          return;
+        }
+        throw err;
+      }
+
       // Persist the chosen path to history for future completions.
       if (isPathInput && detection?.localPath && sessionType !== "one_off") {
         saveHistory(detection.localPath);
@@ -659,6 +725,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     autoYes,
     existingWorktree,
     workingDir,
+    parentDir,
+    projectName,
+    newProjectSessionType,
     isPathInput,
     saveHistory,
     onCreateSession,
@@ -833,6 +902,96 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             uploadBaseUrl={uploadBaseUrl}
             onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
           />
+        )}
+
+        {/* R2: Confirmation dialog for Directory mode with non-existent path */}
+        {showPathConfirmation && pendingSessionData && (
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="path-confirm-title"
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "rgba(0,0,0,0.5)",
+              zIndex: 10,
+              borderRadius: "inherit",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                background: "var(--card-background)",
+                border: "1px solid var(--border-color)",
+                borderRadius: "8px",
+                padding: "24px",
+                maxWidth: "420px",
+                width: "100%",
+                margin: "16px",
+              }}
+            >
+              <div id="path-confirm-title" style={{ fontWeight: 600, fontSize: "1rem", marginBottom: "8px" }}>
+                Create directory?
+              </div>
+              <div style={{ fontSize: "0.875rem", color: "var(--text-secondary)", marginBottom: "16px" }}>
+                The path <code style={{ fontFamily: "monospace", padding: "0 4px" }}>{pendingSessionData.path}</code> does not exist.
+                Create it and initialize a git repository?
+              </div>
+              <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                <button
+                  type="button"
+                  style={{
+                    padding: "6px 14px",
+                    fontSize: "0.875rem",
+                    borderRadius: "6px",
+                    border: "1px solid var(--border-color)",
+                    background: "transparent",
+                    color: "var(--text-primary)",
+                    cursor: "pointer",
+                  }}
+                  onClick={() => {
+                    setShowPathConfirmation(false);
+                    setPendingSessionData(null);
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  style={{
+                    padding: "6px 14px",
+                    fontSize: "0.875rem",
+                    borderRadius: "6px",
+                    border: "none",
+                    background: "var(--primary)",
+                    color: "var(--primary-text)",
+                    cursor: "pointer",
+                  }}
+                  onClick={async () => {
+                    setShowPathConfirmation(false);
+                    const retryData = { ...pendingSessionData, createIfMissing: true };
+                    setPendingSessionData(null);
+                    setIsSubmitting(true);
+                    setError(null);
+                    try {
+                      await onCreateSession(retryData);
+                      onClose();
+                    } catch (err) {
+                      const message = err instanceof Error ? err.message : "Failed to create session";
+                      setError(message);
+                    } finally {
+                      setIsSubmitting(false);
+                    }
+                  }}
+                >
+                  Create &amp; Open
+                </button>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* Keyboard Shortcuts */}

@@ -182,10 +182,10 @@ var envVarRefPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-
 
 // ExpandEnvVars replaces $VAR and ${VAR} references in cmd, mirroring Python's
 // os.path.expandvars behaviour:
-//   1. env map (caller overrides) — checked first.
-//   2. OS environment (os.LookupEnv) — fallback, so real env vars work without
-//      having to enumerate them in the map.
-//   3. Unknown variables are left verbatim (original $VAR / ${VAR} form preserved).
+//  1. env map (caller overrides) — checked first.
+//  2. OS environment (os.LookupEnv) — fallback, so real env vars work without
+//     having to enumerate them in the map.
+//  3. Unknown variables are left verbatim (original $VAR / ${VAR} form preserved).
 //
 // Command substitutions ($(...)) are not expanded — only simple variable references.
 func ExpandEnvVars(cmd string, env map[string]string) string {
@@ -303,10 +303,10 @@ var recursiveEvalPrograms = map[string]recursiveEvalSpec{
 		"-N": true,
 		"-I": true, "--replace": true,
 		"-d": true, "--delimiter": true,
-		"--timeout": true,
+		"--timeout":  true,
 		"--sshlogin": true, "-S": true,
 		"--sshloginfile": true,
-		"--basefile": true, "--trc": true,
+		"--basefile":     true, "--trc": true,
 		"--results": true, "--joblog": true,
 		"--delay": true, "--retries": true,
 	}},

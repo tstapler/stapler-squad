@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata" // Embed IANA timezone database (~500KB); needed for time.LoadLocation on systems without system tzdata.
 
 	"github.com/tstapler/stapler-squad/log"
 )
@@ -14,6 +15,8 @@ const (
 	DefaultCooldown      = 30 * time.Second
 	DefaultResetBuffer   = 5
 	DefaultRecoveryInput = "1\n"
+	// DefaultFallbackWait is how long to wait before retrying when no reset time is known.
+	DefaultFallbackWait = 30 * time.Minute
 )
 
 type Provider string
@@ -71,6 +74,7 @@ var defaultRateLimitPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)Usage limit reached`),
 	regexp.MustCompile(`(?i)rate limit reached`),
 	regexp.MustCompile(`(?i)quota exceeded`),
+	regexp.MustCompile(`(?i)you'?ve hit your (usage )?limit`),
 }
 
 var defaultContinuePatterns = []*regexp.Regexp{
@@ -79,12 +83,41 @@ var defaultContinuePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)continue.*\?.*\[y/n\]`),
 	regexp.MustCompile(`(?i)\*?\s*\d+\.\s*(Keep|Try|Continue|Retry)`),
 	regexp.MustCompile(`(?i)Access resets at`),
+	regexp.MustCompile(`(?i)/extra-usage`),
 }
 
 var defaultTimestampPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(?:reset at|Access resets at) (.+?)(?:\s*$|PT|PDT)`),
 	regexp.MustCompile(`(?i)retry\s*after\s*(\d+)\s*(second|minute|hour)s?`),
 	regexp.MustCompile(`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})`),
+	// Two-group pattern: captures time and timezone separately, e.g. "resets 11pm (America/Los_Angeles)"
+	regexp.MustCompile(`(?i)resets\s+(\d{1,2}(?::\d{2})?(?:am|pm))\s*\(?([^)\s]+)\)?`),
+}
+
+// tzFixedOffsets maps timezone abbreviations to their fixed UTC offsets in seconds.
+// Abbreviations denote a specific offset, not a DST-aware region — "PST" always
+// means UTC-8, whether or not it is currently summer in Los Angeles.
+var tzFixedOffsets = map[string]int{
+	"PST": -8 * 3600,
+	"PDT": -7 * 3600,
+	"MST": -7 * 3600,
+	"MDT": -6 * 3600,
+	"CST": -6 * 3600,
+	"CDT": -5 * 3600,
+	"EST": -5 * 3600,
+	"EDT": -4 * 3600,
+	"UTC": 0,
+	"GMT": 0,
+}
+
+// tzCommonNames maps informal timezone names to IANA location names.
+// These use DST-aware regions because the common name (e.g. "Pacific")
+// is understood to follow local daylight rules.
+var tzCommonNames = map[string]string{
+	"Pacific":  "America/Los_Angeles",
+	"Mountain": "America/Denver",
+	"Central":  "America/Chicago",
+	"Eastern":  "America/New_York",
 }
 
 var providerSpecificPatterns = map[Provider][]*regexp.Regexp{
@@ -231,13 +264,73 @@ func (d *Detector) identifyProvider(output string) Provider {
 func (d *Detector) parseResetTime(output string) time.Time {
 	for _, pattern := range d.timestampPatterns {
 		matches := pattern.FindStringSubmatch(output)
+		// Two-group match: time string + timezone string (e.g. "11pm" + "America/Los_Angeles")
+		if len(matches) == 3 && matches[1] != "" && matches[2] != "" {
+			parsed := parseTimeWithTZ(matches[1], matches[2])
+			if !parsed.IsZero() {
+				d.currentResetTime = parsed
+				return parsed
+			}
+		}
 		if len(matches) > 1 && matches[1] != "" {
 			parsed := d.parseTimestamp(matches[1])
 			if !parsed.IsZero() {
+				d.currentResetTime = parsed
 				return parsed
 			}
 		}
 	}
+	return time.Time{}
+}
+
+// parseTimeWithTZ parses a time-of-day string with an explicit timezone.
+// tzStr can be an IANA location name ("America/Los_Angeles"), a common abbreviation
+// ("PDT", "EST"), or a common name ("Pacific"). Falls back to time.Local if unknown.
+// If the resulting time is in the past, it adds 24h (next-day rollover).
+func parseTimeWithTZ(timeStr, tzStr string) time.Time {
+	// Strip surrounding parentheses from tzStr
+	tzStr = strings.Trim(tzStr, "()")
+	tzStr = strings.TrimSpace(tzStr)
+
+	// Resolve the location. Priority:
+	//   1. IANA name directly (e.g. "America/Los_Angeles")
+	//   2. Fixed-offset abbreviation (e.g. "PST" → UTC-8, always)
+	//   3. Common informal name (e.g. "Pacific" → DST-aware IANA zone)
+	//   4. Unknown → return zero so the scheduler falls back to 30-min wait
+	var loc *time.Location
+	if l, err := time.LoadLocation(tzStr); err == nil {
+		loc = l
+	} else if offsetSecs, ok := tzFixedOffsets[tzStr]; ok {
+		loc = time.FixedZone(tzStr, offsetSecs)
+	} else if ianaName, ok := tzCommonNames[tzStr]; ok {
+		if l, err := time.LoadLocation(ianaName); err == nil {
+			loc = l
+		}
+	}
+	if loc == nil {
+		return time.Time{}
+	}
+
+	// Try parsing with various time-of-day formats (case-insensitive)
+	normalizedTime := strings.ToUpper(strings.TrimSpace(timeStr))
+	formats := []string{"3PM", "3:04PM", "3 PM", "3:04 PM"}
+
+	now := time.Now().In(loc)
+	for _, format := range formats {
+		parsed, parseErr := time.ParseInLocation(format, normalizedTime, loc)
+		if parseErr != nil {
+			continue
+		}
+		// Anchor result to today in the target location
+		result := time.Date(now.Year(), now.Month(), now.Day(),
+			parsed.Hour(), parsed.Minute(), parsed.Second(), 0, loc)
+		// If the time has already passed today, roll to tomorrow
+		if result.Before(now) {
+			result = result.AddDate(0, 0, 1)
+		}
+		return result
+	}
+
 	return time.Time{}
 }
 
@@ -319,6 +412,11 @@ func (d *Detector) SetState(state RateLimitState) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.currentState = state
+	// Clear the reset time when returning to StateNone so stale time does not
+	// leak into the proto after recovery.
+	if state == StateNone {
+		d.currentResetTime = time.Time{}
+	}
 }
 
 func (d *Detector) GetResetTime() time.Time {

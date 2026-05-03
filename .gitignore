@@ -30,6 +30,9 @@ worktrees/
 # outputs
 coverage.out
 coverage.html
+cov_*.out
+coverage_*.out
+*.test
 web-app/tsconfig.tsbuildinfo
 test-results/
 tests/playwright-report/

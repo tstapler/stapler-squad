@@ -208,8 +208,13 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 	// Drive idle detector from PTY events so lastActivity reflects actual output time.
 	// This replaces polling-only updates: lastActivity now resets on every PTY read,
 	// giving accurate idle duration even when active patterns persist in old scrollback.
+	// Also notify the rate limit handler so it processes output immediately rather than
+	// waiting for the 500ms polling interval.
 	cc.responseStream.SetOnOutput(func() {
 		cc.idleDetector.RecordActivity()
+		if cc.rateLimitHandler != nil {
+			cc.rateLimitHandler.NotifyOutput()
+		}
 	})
 
 	// Wire PTY-EOF callback so the owning Instance can transition state when the
@@ -756,6 +761,26 @@ func (cc *ClaudeController) GetExitContent() []byte {
 		return nil
 	}
 	return cc.responseStream.GetExitTail()
+}
+
+// GetRateLimitResetTime returns the reset time from the rate limit handler.
+// Returns zero time if no handler is active or no reset time is known.
+func (cc *ClaudeController) GetRateLimitResetTime() time.Time {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+
+	if cc.rateLimitHandler != nil {
+		return cc.rateLimitHandler.GetResetTime()
+	}
+	return time.Time{}
+}
+
+// GetRateLimitHandler returns the rate limit PTY consumer (for callback wiring).
+// Returns nil if the controller has not been started yet.
+func (cc *ClaudeController) GetRateLimitHandler() *ratelimit.PTYConsumer {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+	return cc.rateLimitHandler
 }
 
 // SetRateLimitEnabled enables or disables rate limit detection.

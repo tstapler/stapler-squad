@@ -180,6 +180,9 @@ func waitForContent(t *testing.T, getter func() (string, error), expectedText st
 // TestSessionRecoveryScenarios tests the real-world session recovery scenarios
 // that happen when tmux sessions are killed and need to be restored
 func TestSessionRecoveryScenarios(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration tests that start real tmux sessions")
+	}
 	// Create a temporary git repository for testing
 	tempRepo := setupTestRepository(t)
 	defer os.RemoveAll(tempRepo)

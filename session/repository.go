@@ -57,6 +57,18 @@ type Repository interface {
 	// without the read-modify-write overhead of a full Get+Update cycle.
 	UpdateReviewQueueState(ctx context.Context, title string, lastUserResponse, processingGraceUntil, lastPromptDetected time.Time, lastPromptSignature string) error
 
+	// UpdateLastAddedToQueue sets only the last_added_to_queue field for a session.
+	// Issues a single UPDATE WHERE title=? without a prior SELECT.
+	UpdateLastAddedToQueue(ctx context.Context, title string, t time.Time) error
+
+	// UpdateLastAcknowledged sets only the last_acknowledged field for a session.
+	// Issues a single UPDATE WHERE title=? without a prior SELECT.
+	UpdateLastAcknowledged(ctx context.Context, title string, t time.Time) error
+
+	// UpdateLastViewed sets only the last_viewed field for a session.
+	// Issues a single UPDATE WHERE title=? without a prior SELECT.
+	UpdateLastViewed(ctx context.Context, title string, t time.Time) error
+
 	// Close performs cleanup and releases resources
 	Close() error
 

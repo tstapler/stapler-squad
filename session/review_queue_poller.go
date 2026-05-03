@@ -73,11 +73,11 @@ type ReviewQueuePoller struct {
 	// `tmux list-panes -a` call (fetched once per checkSessions tick) is the change
 	// signal. A capture-pane subprocess is spawned only when that timestamp advances.
 	// A 30s TTL acts as a safety fallback when list-panes is unavailable.
-	cacheMu               sync.Mutex
-	lastSeenActivity      map[string]time.Time // per-session: last IdleDetector.lastActivity seen
-	lastSeenPaneActivity  map[string]time.Time // per-session: last #{pane_last_activity} seen
-	cachedContent         map[string]string    // per-session: content from last Preview() call
-	lastPreviewTime       map[string]time.Time // per-session: fallback TTL timestamp
+	cacheMu              sync.Mutex
+	lastSeenActivity     map[string]time.Time // per-session: last IdleDetector.lastActivity seen
+	lastSeenPaneActivity map[string]time.Time // per-session: last #{pane_last_activity} seen
+	cachedContent        map[string]string    // per-session: content from last Preview() call
+	lastPreviewTime      map[string]time.Time // per-session: fallback TTL timestamp
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -91,8 +91,7 @@ type ReviewQueuePoller struct {
 
 	// Backoff state: tracks consecutive poll errors to apply exponential delay.
 	consecutiveErrors int
-	// tickCount tracks poll loop iterations for reconciliation scheduling.
-	// Accessed concurrently (pollLoop writes, tests read), so must be atomic.
+	// tickCount counts poll loop iterations; atomic because pollLoop writes and tests read concurrently.
 	tickCount atomic.Int64
 }
 
@@ -106,16 +105,16 @@ func NewReviewQueuePoller(queue *ReviewQueue, statusManager *InstanceStatusManag
 // The storage parameter is optional (can be nil) but required for persisting LastAddedToQueue timestamps.
 func NewReviewQueuePollerWithConfig(queue *ReviewQueue, statusManager *InstanceStatusManager, storage *Storage, config ReviewQueuePollerConfig) *ReviewQueuePoller {
 	return &ReviewQueuePoller{
-		queue:                 queue,
-		statusManager:         statusManager,
-		storage:               storage,
-		instances:             make([]*Instance, 0),
-		config:                config,
-		statusDetector:        detection.NewStatusDetector(),
-		lastSeenActivity:      make(map[string]time.Time),
-		lastSeenPaneActivity:  make(map[string]time.Time),
-		cachedContent:         make(map[string]string),
-		lastPreviewTime:       make(map[string]time.Time),
+		queue:                queue,
+		statusManager:        statusManager,
+		storage:              storage,
+		instances:            make([]*Instance, 0),
+		config:               config,
+		statusDetector:       detection.NewStatusDetector(),
+		lastSeenActivity:     make(map[string]time.Time),
+		lastSeenPaneActivity: make(map[string]time.Time),
+		cachedContent:        make(map[string]string),
+		lastPreviewTime:      make(map[string]time.Time),
 	}
 }
 
@@ -603,6 +602,8 @@ func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStat
 // checkSession checks a single session and adds/removes from queue as needed.
 // paneActivity is the snapshot from batchPaneActivity(); nil falls back to TTL cache.
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[string]time.Time) {
+	debugLog := log.DebugLog
+
 	// Skip paused, stopped, or unstarted sessions
 	if !inst.Started() || inst.Paused() || inst.Status == Stopped {
 		return
@@ -651,7 +652,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	if userRespondedToPrompt && !isProcessing {
 		if inGracePeriod {
 			// Already in grace period - keep off queue
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': In grace period, keeping off queue", inst.Title)
+			if debugLog != nil {
+				debugLog.Printf("[ReviewQueue] Session '%s': In grace period, keeping off queue", inst.Title)
+			}
 			rqp.queue.Remove(inst.Title)
 			return
 		}
@@ -693,12 +696,13 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	if statusInfo.IsControllerActive {
 		controller, exists := rqp.statusManager.GetController(inst.Title)
 		if exists && controller != nil {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Checking idle state (controller active)", inst.Title)
-
 			// Get idle state from controller
 			idleState, lastActivity := controller.GetIdleState()
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected idle state=%s, lastActivity=%s",
-				inst.Title, idleState.String(), detection.FormatDuration(time.Since(lastActivity)))
+			if debugLog != nil {
+				debugLog.Printf("[ReviewQueue] Session '%s': Checking idle state (controller active)", inst.Title)
+				debugLog.Printf("[ReviewQueue] Session '%s': Detected idle state=%s, lastActivity=%s",
+					inst.Title, idleState.String(), detection.FormatDuration(time.Since(lastActivity)))
+			}
 
 			// IMPORTANT: Check Claude status FIRST before idle state handling.
 			// Status-based conditions (approval, input required, error) take priority over
@@ -716,8 +720,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				} else {
 					context = "Waiting for approval to proceed"
 				}
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Approval needed (status=%s, pendingApprovals=%d) - %s",
-					inst.Title, statusInfo.ClaudeStatus.String(), statusInfo.PendingApprovals, context)
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Approval needed (status=%s, pendingApprovals=%d) - %s",
+						inst.Title, statusInfo.ClaudeStatus.String(), statusInfo.PendingApprovals, context)
+				}
 			}
 
 			// Check for input required (explicit prompts asking for user input)
@@ -731,7 +737,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				} else {
 					context = "Waiting for explicit user input"
 				}
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Input required - %s", inst.Title, context)
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Input required - %s", inst.Title, context)
+				}
 			}
 
 			// Check for errors (highest priority)
@@ -745,7 +753,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				} else {
 					context = "Error state detected"
 				}
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Error detected - %s", inst.Title, context)
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Error detected - %s", inst.Title, context)
+				}
 			}
 
 			// Check for tests failing (high priority - actionable failures)
@@ -782,13 +792,17 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				switch idleState {
 				case detection.IdleStateActive:
 					// Actively working, remove from queue (but only if no prompt detected above)
-					log.DebugLog.Printf("[ReviewQueue] Session '%s': Active state with no prompts - removing from queue", inst.Title)
+					if debugLog != nil {
+						debugLog.Printf("[ReviewQueue] Session '%s': Active state with no prompts - removing from queue", inst.Title)
+					}
 					rqp.queue.Remove(inst.Title)
 					return
 
 				case detection.IdleStateWaiting:
 					// Normal idle state (e.g., INSERT mode) - don't add by default
-					log.DebugLog.Printf("[ReviewQueue] Session '%s': Waiting state - will check for specific issues", inst.Title)
+					if debugLog != nil {
+						debugLog.Printf("[ReviewQueue] Session '%s': Waiting state - will check for specific issues", inst.Title)
+					}
 					shouldAdd = false
 
 				case detection.IdleStateTimeout:
@@ -799,7 +813,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 					shouldAdd = true
 					idleDuration := time.Since(lastActivity)
 					context = "Session idle - ready for next task"
-					log.DebugLog.Printf("[ReviewQueue] Session '%s': Idle detected - idle for %s", inst.Title, detection.FormatDuration(idleDuration))
+					if debugLog != nil {
+						debugLog.Printf("[ReviewQueue] Session '%s': Idle detected - idle for %s", inst.Title, detection.FormatDuration(idleDuration))
+					}
 				}
 			}
 
@@ -808,7 +824,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
 				worktree, err := inst.GetGitWorktree()
 				if err != nil {
-					log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
+					if debugLog != nil {
+						debugLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
+					}
 				} else if worktree != nil {
 					isDirty, err := worktree.IsDirty()
 					if err != nil {
@@ -823,13 +841,23 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 							context = "Uncommitted changes ready to commit"
 							log.InfoLog.Printf("[ReviewQueue] Session '%s': Uncommitted changes detected", inst.Title)
 						}
+					} else {
+						// Worktree is clean — if session was queued solely for uncommitted
+						// changes, remove it immediately so it doesn't persist through the
+						// rate-limiter window after a commit.
+						if existing, exists := rqp.queue.Get(inst.Title); exists && existing.Reason == ReasonUncommittedChanges {
+							log.InfoLog.Printf("[ReviewQueue] Session '%s': Changes committed - removing UncommittedChanges entry", inst.Title)
+							rqp.queue.Remove(inst.Title)
+						}
 					}
 				}
 			}
 		}
 	} else {
 		// No controller - but we can still detect status from terminal content
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': No active controller - using terminal-based status detection", inst.Title)
+		if debugLog != nil {
+			debugLog.Printf("[ReviewQueue] Session '%s': No active controller - using terminal-based status detection", inst.Title)
+		}
 
 		// IMPORTANT: Check terminal content for approval/input prompts.
 		// 'content' was already fetched at STEP 1 via getContent(); for no-controller
@@ -837,8 +865,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		if content != "" {
 			// Detect status from terminal content using the shared status detector
 			detectedStatus, statusContext := rqp.statusDetector.DetectWithContext([]byte(content))
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Detected status=%s from terminal content",
-				inst.Title, detectedStatus.String())
+			if debugLog != nil {
+				debugLog.Printf("[ReviewQueue] Session '%s': Detected status=%s from terminal content",
+					inst.Title, detectedStatus.String())
+			}
 
 			// Check for approval needs (highest priority for user prompts)
 			if detectedStatus == detection.StatusNeedsApproval {
@@ -881,7 +911,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 
 			// If actively processing, don't add to queue
 			if detectedStatus == detection.StatusActive || detectedStatus == detection.StatusProcessing {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Active/processing state detected - not adding to queue", inst.Title)
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Active/processing state detected - not adding to queue", inst.Title)
+				}
 				rqp.queue.Remove(inst.Title)
 				return
 			}
@@ -899,8 +931,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				priority = PriorityLow
 				shouldAdd = true
 				context = "Session idle - ready for next task"
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Basic idle check - %s since UpdatedAt",
-					inst.Title, detection.FormatDuration(idleDuration))
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Basic idle check - %s since UpdatedAt",
+						inst.Title, detection.FormatDuration(idleDuration))
+				}
 			}
 		}
 
@@ -909,7 +943,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		if (!shouldAdd || priority == PriorityLow) && inst.HasGitWorktree() {
 			worktree, err := inst.GetGitWorktree()
 			if err != nil {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Failed to get git worktree: %v", inst.Title, err)
+				}
 			} else if worktree != nil {
 				isDirty, err := worktree.IsDirty()
 				if err != nil {
@@ -923,6 +959,14 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 						shouldAdd = true
 						context = "Uncommitted changes ready to commit"
 						log.InfoLog.Printf("[ReviewQueue] Session '%s': Uncommitted changes detected", inst.Title)
+					}
+				} else {
+					// Worktree is clean — if session was queued solely for uncommitted
+					// changes, remove it immediately so it doesn't persist through the
+					// rate-limiter window after a commit.
+					if existing, exists := rqp.queue.Get(inst.Title); exists && existing.Reason == ReasonUncommittedChanges {
+						log.InfoLog.Printf("[ReviewQueue] Session '%s': Changes committed - removing UncommittedChanges entry", inst.Title)
+						rqp.queue.Remove(inst.Title)
 					}
 				}
 			}
@@ -990,7 +1034,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// When a live process generates a new prompt, LastMeaningfulOutput is updated, so
 	// IsAcknowledgedAfterOutput() returns false and the session correctly resurfaces.
 	if inst.IsAcknowledgedAfterOutput() {
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': User acknowledged (snoozed until new output), removing from queue", inst.Title)
+		if debugLog != nil {
+			debugLog.Printf("[ReviewQueue] Session '%s': User acknowledged (snoozed until new output), removing from queue", inst.Title)
+		}
 		rqp.queue.Remove(inst.Title)
 		return
 	}
@@ -1003,8 +1049,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			gracePeriod := 5 * time.Minute
 			timeSinceAck := time.Since(inst.LastAcknowledged)
 			if timeSinceAck < gracePeriod {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Still in grace period (%s / %s since acknowledgment), skipping queue add",
-					inst.Title, detection.FormatDuration(timeSinceAck), detection.FormatDuration(gracePeriod))
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Still in grace period (%s / %s since acknowledgment), skipping queue add",
+						inst.Title, detection.FormatDuration(timeSinceAck), detection.FormatDuration(gracePeriod))
+				}
 				rqp.queue.Remove(inst.Title)
 				return
 			}
@@ -1033,8 +1081,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 					log.InfoLog.Printf("[ReviewQueue] Session '%s': Priority escalation (%s → %s) - bypassing rate limit",
 						inst.Title, existingItem.Priority.String(), priority.String())
 				} else {
-					log.DebugLog.Printf("[ReviewQueue] Session '%s': Skipping queue add (too soon - last added %v ago, minimum %v)",
-						inst.Title, time.Since(inst.LastAddedToQueue), minReAddInterval)
+					if debugLog != nil {
+						debugLog.Printf("[ReviewQueue] Session '%s': Skipping queue add (too soon - last added %v ago, minimum %v)",
+							inst.Title, time.Since(inst.LastAddedToQueue), minReAddInterval)
+					}
 					return
 				}
 			}
@@ -1058,10 +1108,14 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				existingItem.Priority == priority &&
 				existingItem.Context == context {
 				detectedAt = existingItem.DetectedAt
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Updating existing queue item (no changes, preserving timestamp)", inst.Title)
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Updating existing queue item (no changes, preserving timestamp)", inst.Title)
+				}
 			} else {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Updating queue item (reason changed from %s to %s, priority %s to %s)",
-					inst.Title, existingItem.Reason.String(), reason.String(), existingItem.Priority.String(), priority.String())
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Updating queue item (reason changed from %s to %s, priority %s to %s)",
+						inst.Title, existingItem.Reason.String(), reason.String(), existingItem.Priority.String(), priority.String())
+				}
 			}
 		}
 
@@ -1138,10 +1192,14 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			if err := rqp.storage.UpdateInstanceLastAddedToQueue(inst.Title, inst.LastAddedToQueue); err != nil {
 				log.ErrorLog.Printf("[ReviewQueue] Session '%s': Failed to persist LastAddedToQueue: %v", inst.Title, err)
 			} else {
-				log.DebugLog.Printf("[ReviewQueue] Session '%s': Successfully persisted LastAddedToQueue timestamp", inst.Title)
+				if debugLog != nil {
+					debugLog.Printf("[ReviewQueue] Session '%s': Successfully persisted LastAddedToQueue timestamp", inst.Title)
+				}
 			}
 		} else {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Storage not available, LastAddedToQueue will not persist", inst.Title)
+			if debugLog != nil {
+				debugLog.Printf("[ReviewQueue] Session '%s': Storage not available, LastAddedToQueue will not persist", inst.Title)
+			}
 		}
 
 		if !isUpdate {
@@ -1151,7 +1209,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	} else {
 		// Remove from queue - log only if it was actually in the queue
 		if rqp.queue.Has(inst.Title) {
-			log.DebugLog.Printf("[ReviewQueue] Session '%s': Removing from queue (shouldAdd=false)", inst.Title)
+			if debugLog != nil {
+				debugLog.Printf("[ReviewQueue] Session '%s': Removing from queue (shouldAdd=false)", inst.Title)
+			}
 			rqp.queue.Remove(inst.Title)
 		}
 	}

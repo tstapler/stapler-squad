@@ -59,9 +59,9 @@ test.describe('directory session creation', () => {
 
     const request = await requestPromise;
     const body = request.postDataJSON();
-    // sessionType 1 = SESSION_TYPE_DIRECTORY in proto; ConnectRPC JSON may send integer or name
-    expect(body.sessionType ?? 0).not.toBe(2); // not NEW_WORKTREE
-    expect(body.sessionType ?? 0).not.toBe(3); // not EXISTING_WORKTREE
+    // sessionType 1 = SESSION_TYPE_DIRECTORY in proto; ConnectRPC JSON may omit it (defaults to 0/1) or send integer
+    const sessionType = body.sessionType ?? 0;
+    expect([0, 1]).toContain(sessionType); // must be UNSPECIFIED(0) or DIRECTORY(1)
     expect(body.oneOff).toBeFalsy();
     expect(body.path).toBeTruthy();
   });

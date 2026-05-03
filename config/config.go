@@ -241,6 +241,10 @@ type Config struct {
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
+	// NewProjectBaseDir is the base directory where new project directories are created.
+	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
+	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
+	NewProjectBaseDir string `json:"new_project_base_dir,omitempty"`
 }
 
 // SessionDefaults is the top-level container for all session default configuration.
@@ -334,6 +338,29 @@ func (c *Config) OneOffBaseDirOrDefault() (string, error) {
 	dir := c.OneOffBaseDir
 	if dir == "" {
 		dir = "~/oneoff"
+	}
+	if strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand home dir: %w", err)
+		}
+		dir = filepath.Join(home, dir[2:])
+	} else if dir == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand home dir: %w", err)
+		}
+		dir = home
+	}
+	return dir, nil
+}
+
+// NewProjectBaseDirOrDefault returns the resolved new-project base directory.
+// If NewProjectBaseDir is empty, it defaults to "~/Projects" with ~ expanded.
+func (c *Config) NewProjectBaseDirOrDefault() (string, error) {
+	dir := c.NewProjectBaseDir
+	if dir == "" {
+		dir = "~/Projects"
 	}
 	if strings.HasPrefix(dir, "~/") {
 		home, err := os.UserHomeDir()

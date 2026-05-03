@@ -61,12 +61,18 @@ func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
 	hashFile := filepath.Join(configDir, certHashFileName)
 
 	// Step 1: ensure a stable CA (only regenerate if absent or near expiry).
-	caKey, caCert, err := ensureCA(paths.CAFile)
+	caKey, caCert, caChanged, err := ensureCA(paths.CAFile)
 	if err != nil {
 		return nil, fmt.Errorf("ensure CA: %w", err)
 	}
 
-	// Step 2: reuse the server cert if SANs and expiry are still valid.
+	// Step 2: reuse the server cert if SANs and expiry are still valid AND the CA
+	// has not been rotated. If the CA changed, the existing server cert is no longer
+	// trusted by clients that imported the new CA, so force regeneration.
+	if caChanged {
+		_ = os.Remove(hashFile) // invalidate cached SAN hash so certCurrent returns false
+		log.InfoLog.Printf("tls: CA rotated — forcing server certificate regeneration")
+	}
 	want := sanHash(hostnames)
 	if certCurrent(paths.CertFile, hashFile, want) {
 		log.InfoLog.Printf("tls: reusing existing certificate at %s", paths.CertFile)
@@ -99,39 +105,43 @@ func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
 // The CA private key file is stored alongside the CA cert as tls-ca-key.pem.
 const caKeyFileName = "tls-ca-key.pem"
 
-func ensureCA(caFile string) (*ecdsa.PrivateKey, *x509.Certificate, error) {
+// ensureCA loads the CA from disk if it exists and is not nearing expiry.
+// Otherwise it generates a new CA, writes it to disk, and returns it.
+// caChanged is true when a new CA was generated; the caller must then
+// regenerate the server certificate to keep them in sync.
+func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate, caChanged bool, err error) {
 	configDir := filepath.Dir(caFile)
 	caKeyFile := filepath.Join(configDir, caKeyFileName)
 
 	// Try to load existing CA.
-	if caKey, caCert, ok := loadCA(caFile, caKeyFile); ok {
+	if k, c, ok := loadCA(caFile, caKeyFile); ok {
 		// Regenerate only if within 30 days of expiry.
-		if time.Now().Add(30 * 24 * time.Hour).Before(caCert.NotAfter) {
-			log.InfoLog.Printf("tls: reusing existing CA (expires %s)", caCert.NotAfter.Format("2006-01-02"))
-			return caKey, caCert, nil
+		if time.Now().Add(30 * 24 * time.Hour).Before(c.NotAfter) {
+			log.InfoLog.Printf("tls: reusing existing CA (expires %s)", c.NotAfter.Format("2006-01-02"))
+			return k, c, false, nil
 		}
-		log.InfoLog.Printf("tls: CA near expiry (%s), regenerating", caCert.NotAfter.Format("2006-01-02"))
+		log.InfoLog.Printf("tls: CA near expiry (%s), regenerating", c.NotAfter.Format("2006-01-02"))
 	}
 
 	log.InfoLog.Printf("tls: generating new CA certificate")
 	caKey, caCert, caCertPEM, err := generateCA()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	if err := os.WriteFile(caFile, caCertPEM, 0644); err != nil {
-		return nil, nil, fmt.Errorf("write CA cert: %w", err)
+		return nil, nil, false, fmt.Errorf("write CA cert: %w", err)
 	}
 
 	caKeyDER, err := x509.MarshalECPrivateKey(caKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("marshal CA key: %w", err)
+		return nil, nil, false, fmt.Errorf("marshal CA key: %w", err)
 	}
 	caKeyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: caKeyDER})
 	if err := os.WriteFile(caKeyFile, caKeyPEM, 0600); err != nil {
-		return nil, nil, fmt.Errorf("write CA key: %w", err)
+		return nil, nil, false, fmt.Errorf("write CA key: %w", err)
 	}
 
-	return caKey, caCert, nil
+	return caKey, caCert, true, nil
 }
 
 // loadCA reads the CA cert and key from disk. Returns (nil, nil, false) on any error.

@@ -1182,7 +1182,7 @@ func SeedRules() []Rule {
 			Name:     "Allow ls, pwd, echo, and inspection commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"ls", "pwd", "echo", "printenv", "which", "type", "date", "whoami", "id", "hostname", "command"},
+				Programs: []string{"ls", "pwd", "echo", "printenv", "which", "type", "date", "whoami", "id", "hostname"},
 			},
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
@@ -2033,11 +2033,12 @@ func SeedRules() []Rule {
 		{
 			// pkill/killall send signals to processes matched by name or pattern.
 			// A broad pattern (pkill -f "gradle") can inadvertently kill unrelated processes.
+			// `kill` is excluded: PID-targeted signals are safe and common in scripts.
 			ID:       "seed-escalate-pkill",
 			Name:     "Escalate pkill/killall (process termination by name)",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"pkill", "killall", "kill"},
+				Programs: []string{"pkill", "killall"},
 			},
 			Decision:    Escalate,
 			RiskLevel:   RiskMedium,

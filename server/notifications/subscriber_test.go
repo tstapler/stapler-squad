@@ -169,9 +169,10 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	StartSubscriberWithInterval(ctx, bus, appender, 5*time.Millisecond)
+	// Use a long flush interval so both events land before any flush fires.
+	StartSubscriberWithInterval(ctx, bus, appender, 100*time.Millisecond)
 
-	// Publish multiple events with different metadata for the same key
+	// Publish both events back-to-back before the first flush window closes.
 	bus.Publish(&events.Event{
 		Type:                 events.EventNotification,
 		Timestamp:            time.Now(),
@@ -198,7 +199,7 @@ func TestCoalescing_LatestEventWins(t *testing.T) {
 		NotificationMetadata: map[string]string{"approval_id": "new"},
 	})
 
-	// Wait for flush (coalesced to 1 record)
+	// Wait for the flush window to fire.
 	if err := testutil.WaitForCondition(func() bool {
 		return len(appender.getRecords()) >= 1
 	}, testutil.FastWaitConfig()); err != nil {

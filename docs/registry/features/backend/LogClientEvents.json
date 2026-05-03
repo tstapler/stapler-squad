@@ -1,0 +1,11 @@
+{
+  "id": "LogClientEvents",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "LogClientEvents",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-02T18:54:29.248784855-07:00"
+}

@@ -298,14 +298,14 @@ func (s *Storage) UpdateInstanceTimestampsOnly(title string, lastTerminalUpdate,
 		return err
 	}
 	if !lastViewed.IsZero() {
-		return s.updateFieldInRepo(title, func(d *InstanceData) { d.LastViewed = lastViewed })
+		return s.repo.UpdateLastViewed(context.Background(), title, lastViewed)
 	}
 	return nil
 }
 
 // UpdateInstanceLastAddedToQueue updates ONLY the LastAddedToQueue field for a specific instance.
 func (s *Storage) UpdateInstanceLastAddedToQueue(title string, lastAddedToQueue time.Time) error {
-	return s.updateFieldInRepo(title, func(d *InstanceData) { d.LastAddedToQueue = lastAddedToQueue })
+	return s.repo.UpdateLastAddedToQueue(context.Background(), title, lastAddedToQueue)
 }
 
 // UpdateInstanceLastUserResponse persists the LastUserResponse timestamp for a session.
@@ -317,8 +317,7 @@ func (s *Storage) UpdateInstanceLastUserResponse(title string, lastUserResponse 
 // UpdateInstanceAcknowledged sets the LastAcknowledged timestamp to now for a specific instance.
 // Used by AcknowledgeSession when the instance is not available in the live poller.
 func (s *Storage) UpdateInstanceAcknowledged(title string) error {
-	now := time.Now()
-	return s.updateFieldInRepo(title, func(d *InstanceData) { d.LastAcknowledged = now })
+	return s.repo.UpdateLastAcknowledged(context.Background(), title, time.Now())
 }
 
 // UpdateInstanceProcessingGrace persists the ProcessingGraceUntil timestamp.

@@ -14,6 +14,9 @@ import (
 // TestSessionRestartWithConversationContinuity verifies that sessions restart
 // with the --resume flag when Claude session data is available
 func TestSessionRestartWithConversationContinuity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
 	t.Run("RestartWithValidClaudeSession", testRestartWithValidClaudeSession)
 	t.Run("RestartWithoutClaudeSession", testRestartWithoutClaudeSession)
 	t.Run("RestartWithInvalidUUID", testRestartWithInvalidUUID)
@@ -322,6 +325,9 @@ func testLazyRecoveryRestart(t *testing.T) {
 // TestClaudeCommandBuilderIntegration verifies the integration of ClaudeCommandBuilder
 // with the instance lifecycle
 func TestClaudeCommandBuilderIntegration(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
 	t.Run("CommandEnrichmentFlow", testCommandEnrichmentFlow)
 	t.Run("MultipleRestartCycles", testMultipleRestartCycles)
 	t.Run("SessionDataPersistence", testSessionDataPersistence)
@@ -566,6 +572,9 @@ func testSessionDataPersistence(t *testing.T) {
 
 // TestInstanceWithWorktreeAndClaudeSession verifies Claude sessions work with git worktrees
 func TestInstanceWithWorktreeAndClaudeSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts real tmux sessions")
+	}
 	validSessionID := "550e8400-e29b-41d4-a716-446655440000"
 
 	// Create a git repository

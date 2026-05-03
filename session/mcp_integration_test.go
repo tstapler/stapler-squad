@@ -42,12 +42,12 @@ func TestSessionStartInWorktreeWithMCP(t *testing.T) {
 	mcpURL := "http://localhost:8543/mcp"
 
 	opts := InstanceOptions{
-		Title:       "integration-test-mcp",
-		Path:        repoDir,
-		Program:     "claude",
-		SessionType: SessionTypeNewWorktree,
+		Title:        "integration-test-mcp",
+		Path:         repoDir,
+		Program:      "claude",
+		SessionType:  SessionTypeNewWorktree,
 		MCPServerURL: mcpURL,
-		TmuxPrefix:  "sstest_",
+		TmuxPrefix:   "sstest_",
 	}
 
 	inst, err := NewInstance(opts)

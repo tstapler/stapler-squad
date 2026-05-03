@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -281,6 +282,243 @@ func TestReviewQueue_SortsByLastActivity(t *testing.T) {
 	t.Logf("  3. %s - Last activity: %s ago", items[2].SessionID, detection.FormatDuration(time.Since(items[2].LastActivity)))
 }
 
+// newSimpleTestPoller creates a ReviewQueuePoller wired with a fresh queue and status manager,
+// with nil storage (no persistence). Safe to use in unit tests.
+func newSimpleTestPoller() *ReviewQueuePoller {
+	queue := NewReviewQueue()
+	statusMgr := NewInstanceStatusManager()
+	return NewReviewQueuePoller(queue, statusMgr, nil)
+}
+
+// newTestPollerInstance creates a minimal started/paused Instance for use in poller tests.
+func newTestPollerInstance(title, uuid string) *Instance {
+	inst := &Instance{
+		Title:   title,
+		UUID:    uuid,
+		Status:  Paused,
+		Program: "claude",
+	}
+	inst.started = true
+	return inst
+}
+
+// --- Instance management tests ---
+
+// TestReviewQueuePoller_SetInstances_ReplacesAll verifies that SetInstances replaces
+// all previously tracked instances with the provided slice.
+func TestReviewQueuePoller_SetInstances_ReplacesAll(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	first := newTestPollerInstance("session-a", "uuid-a")
+	second := newTestPollerInstance("session-b", "uuid-b")
+	poller.SetInstances([]*Instance{first, second})
+
+	replacement := newTestPollerInstance("session-c", "uuid-c")
+	poller.SetInstances([]*Instance{replacement})
+
+	got := poller.GetInstances()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 instance after SetInstances, got %d", len(got))
+	}
+	if got[0].Title != "session-c" {
+		t.Errorf("expected instance 'session-c', got %q", got[0].Title)
+	}
+}
+
+// TestReviewQueuePoller_AddInstance_AppendsWithoutReplacing verifies that AddInstance
+// appends a new instance without removing existing ones.
+func TestReviewQueuePoller_AddInstance_AppendsWithoutReplacing(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	first := newTestPollerInstance("session-a", "uuid-a")
+	poller.SetInstances([]*Instance{first})
+
+	second := newTestPollerInstance("session-b", "uuid-b")
+	poller.AddInstance(second)
+
+	got := poller.GetInstances()
+	if len(got) != 2 {
+		t.Fatalf("expected 2 instances after AddInstance, got %d", len(got))
+	}
+}
+
+// TestReviewQueuePoller_RemoveInstance_ByTitle verifies that RemoveInstance removes
+// the instance matching the given title and leaves others intact.
+func TestReviewQueuePoller_RemoveInstance_ByTitle(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	a := newTestPollerInstance("session-a", "uuid-a")
+	b := newTestPollerInstance("session-b", "uuid-b")
+	poller.SetInstances([]*Instance{a, b})
+
+	poller.RemoveInstance("session-a")
+
+	got := poller.GetInstances()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 instance after RemoveInstance, got %d", len(got))
+	}
+	if got[0].Title != "session-b" {
+		t.Errorf("expected remaining instance 'session-b', got %q", got[0].Title)
+	}
+}
+
+// TestReviewQueuePoller_RemoveInstance_NotFound_NoError verifies that calling
+// RemoveInstance with an unknown ID does not panic and leaves the list unchanged.
+func TestReviewQueuePoller_RemoveInstance_NotFound_NoError(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	a := newTestPollerInstance("session-a", "uuid-a")
+	poller.SetInstances([]*Instance{a})
+
+	// Should not panic.
+	poller.RemoveInstance("nonexistent")
+
+	got := poller.GetInstances()
+	if len(got) != 1 {
+		t.Errorf("expected list unchanged (1 instance), got %d", len(got))
+	}
+}
+
+// TestReviewQueuePoller_GetMonitoredCount verifies that GetMonitoredCount returns
+// the number of currently tracked instances.
+func TestReviewQueuePoller_GetMonitoredCount(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	if poller.GetMonitoredCount() != 0 {
+		t.Fatalf("expected 0 monitored instances initially, got %d", poller.GetMonitoredCount())
+	}
+
+	poller.SetInstances([]*Instance{
+		newTestPollerInstance("session-a", "uuid-a"),
+		newTestPollerInstance("session-b", "uuid-b"),
+		newTestPollerInstance("session-c", "uuid-c"),
+	})
+
+	if got := poller.GetMonitoredCount(); got != 3 {
+		t.Errorf("expected 3 monitored instances, got %d", got)
+	}
+}
+
+// TestReviewQueuePoller_FindInstance_ByTitle verifies that FindInstance returns
+// the correct instance when looked up by title.
+func TestReviewQueuePoller_FindInstance_ByTitle(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	a := newTestPollerInstance("session-a", "uuid-a")
+	b := newTestPollerInstance("session-b", "uuid-b")
+	poller.SetInstances([]*Instance{a, b})
+
+	found := poller.FindInstance("session-a")
+	if found == nil {
+		t.Fatal("expected to find instance 'session-a', got nil")
+	}
+	if found.Title != "session-a" {
+		t.Errorf("expected Title 'session-a', got %q", found.Title)
+	}
+}
+
+// TestReviewQueuePoller_FindInstance_ByUUID verifies that FindInstance returns
+// the correct instance when looked up by UUID.
+func TestReviewQueuePoller_FindInstance_ByUUID(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	a := newTestPollerInstance("session-a", "uuid-a")
+	b := newTestPollerInstance("session-b", "uuid-b")
+	poller.SetInstances([]*Instance{a, b})
+
+	found := poller.FindInstance("uuid-b")
+	if found == nil {
+		t.Fatal("expected to find instance by UUID 'uuid-b', got nil")
+	}
+	if found.UUID != "uuid-b" {
+		t.Errorf("expected UUID 'uuid-b', got %q", found.UUID)
+	}
+}
+
+// TestReviewQueuePoller_FindInstance_NotFound verifies that FindInstance returns
+// nil when the given ID does not match any tracked instance.
+func TestReviewQueuePoller_FindInstance_NotFound(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	poller.SetInstances([]*Instance{
+		newTestPollerInstance("session-a", "uuid-a"),
+	})
+
+	found := poller.FindInstance("nonexistent")
+	if found != nil {
+		t.Errorf("expected nil for unknown ID, got %+v", found)
+	}
+}
+
+// --- Lifecycle tests ---
+
+// TestReviewQueuePoller_IsRunning_InitiallyFalse verifies that a newly created
+// poller reports IsRunning() == false before Start is called.
+func TestReviewQueuePoller_IsRunning_InitiallyFalse(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	if poller.IsRunning() {
+		t.Error("expected IsRunning() == false before Start(), got true")
+	}
+}
+
+// TestReviewQueuePoller_StartStop verifies that Start() transitions the poller to
+// running and Stop() cleanly shuts it down.
+func TestReviewQueuePoller_StartStop(t *testing.T) {
+	// Use a fast poll interval so the goroutine does minimal work during the test.
+	queue := NewReviewQueue()
+	statusMgr := NewInstanceStatusManager()
+	cfg := DefaultReviewQueuePollerConfig()
+	cfg.PollInterval = 100 * time.Millisecond
+	cfg.ReconcileInterval = 0 // disable reconciliation to avoid tmux calls
+	poller := NewReviewQueuePollerWithConfig(queue, statusMgr, nil, cfg)
+
+	ctx := context.Background()
+	poller.Start(ctx)
+	t.Cleanup(poller.Stop)
+
+	if !poller.IsRunning() {
+		t.Error("expected IsRunning() == true after Start(), got false")
+	}
+
+	poller.Stop()
+
+	// Wait up to 2s for the goroutine to finish.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !poller.IsRunning() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if poller.IsRunning() {
+		t.Error("expected IsRunning() == false after Stop(), still true after 2s")
+	}
+}
+
+// TestReviewQueuePoller_Start_Idempotent verifies that calling Start() twice does
+// not spawn a second goroutine or panic.
+func TestReviewQueuePoller_Start_Idempotent(t *testing.T) {
+	queue := NewReviewQueue()
+	statusMgr := NewInstanceStatusManager()
+	cfg := DefaultReviewQueuePollerConfig()
+	cfg.PollInterval = 100 * time.Millisecond
+	cfg.ReconcileInterval = 0
+	poller := NewReviewQueuePollerWithConfig(queue, statusMgr, nil, cfg)
+
+	ctx := context.Background()
+	poller.Start(ctx)
+	t.Cleanup(poller.Stop)
+
+	// Second Start() should be a no-op (logged as "already started").
+	poller.Start(ctx)
+
+	if !poller.IsRunning() {
+		t.Error("expected IsRunning() == true after double Start()")
+	}
+}
+
 // TestReviewQueuePoller_AcknowledgedSession_RemovedOnNextPoll verifies that a session
 // acknowledged after its last meaningful output is removed from the queue on the next poll.
 // This is the regression test for the "skip button wipes list but doesn't remove status" bug.
@@ -333,11 +571,11 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 // caused the bug and asserts the corrected condition applies universally.
 func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 	cases := []struct {
-		name              string
-		shouldAdd         bool
-		priority          Priority
+		name               string
+		shouldAdd          bool
+		priority           Priority
 		isControllerActive bool
-		wantOldBypassSkip bool // true = old code SKIPPED the snooze (the bug)
+		wantOldBypassSkip  bool // true = old code SKIPPED the snooze (the bug)
 	}{
 		{
 			name:               "input-required medium-priority active-controller (the bug scenario)",

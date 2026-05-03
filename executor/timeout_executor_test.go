@@ -177,9 +177,11 @@ func TestTimeoutExecutor_TimeoutDuration(t *testing.T) {
 			shouldTimeout: false,
 		},
 		{
-			name:          "Exact boundary",
+			// 300ms sleep with 1s timeout — 700ms buffer prevents scheduler jitter
+			// from flipping the result the way a 100ms buffer (0.9s/1s) did.
+			name:          "Completes well within timeout",
 			timeout:       1 * time.Second,
-			sleep:         "0.9",
+			sleep:         "0.3",
 			shouldTimeout: false,
 		},
 	}

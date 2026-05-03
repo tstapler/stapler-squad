@@ -418,4 +418,3 @@ func runGitCommand(dir string, args ...string) error {
 	}
 	return nil
 }
-

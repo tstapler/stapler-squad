@@ -629,6 +629,24 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		}
 	}()
 
+	// resizeCh coalesces rapid resize events (e.g. window drags) so only the
+	// latest dimensions reach SetWindowSize. The channel holds at most one
+	// pending resize; the goroutine is tied to doneChan so it exits with the stream.
+	type resizeReq struct{ cols, rows int }
+	resizeCh := make(chan resizeReq, 1)
+	go func() {
+		for {
+			select {
+			case <-doneChan:
+				return
+			case r := <-resizeCh:
+				if err := instance.SetWindowSize(r.cols, r.rows); err != nil {
+					log.ErrorLog.Printf("[streamViaControlMode] Failed to resize: %v", err)
+				}
+			}
+		}
+	}()
+
 	// Goroutine 2: Read from WebSocket and handle input/commands
 	go func() {
 		for {
@@ -702,12 +720,19 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					}
 				}
 
-				// Handle resize
+				// Handle resize — send to coalescing worker so rapid window-drag events
+				// never stall input reading and don't pile up unbounded goroutines.
 				if resize := incomingData.GetResize(); resize != nil {
-					cols := int(resize.Cols)
-					rows := int(resize.Rows)
-					if err := instance.SetWindowSize(cols, rows); err != nil {
-						log.ErrorLog.Printf("[streamViaControlMode] Failed to resize: %v", err)
+					req := resizeReq{int(resize.Cols), int(resize.Rows)}
+					select {
+					case resizeCh <- req:
+					default:
+						// Worker is busy; drain stale value and replace with latest.
+						select {
+						case <-resizeCh:
+						default:
+						}
+						resizeCh <- req
 					}
 				}
 

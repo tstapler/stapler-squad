@@ -779,6 +779,57 @@ func (r *EntRepository) UpdateTimestamps(ctx context.Context, title string, last
 	return nil
 }
 
+// UpdateLastAddedToQueue sets only the last_added_to_queue field for a session,
+// issuing a single UPDATE WHERE title=? without a prior SELECT.
+func (r *EntRepository) UpdateLastAddedToQueue(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetLastAddedToQueue(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update last_added_to_queue: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateLastAcknowledged sets only the last_acknowledged field for a session,
+// issuing a single UPDATE WHERE title=? without a prior SELECT.
+func (r *EntRepository) UpdateLastAcknowledged(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetLastAcknowledged(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update last_acknowledged: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateLastViewed sets only the last_viewed field for a session,
+// issuing a single UPDATE WHERE title=? without a prior SELECT.
+func (r *EntRepository) UpdateLastViewed(ctx context.Context, title string, t time.Time) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetLastViewed(t).
+		SetUpdatedAt(time.Now()).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update last_viewed: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
 // Close performs cleanup and releases resources
 func (r *EntRepository) Close() error {
 	if r.client != nil {

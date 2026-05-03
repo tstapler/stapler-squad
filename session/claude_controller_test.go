@@ -589,19 +589,19 @@ func TestHashString_EmptyString(t *testing.T) {
 
 // mockInstance is a minimal InstanceContext that returns a controllable Preview.
 type mockInstance struct {
-	title   string
-	preview string
+	title      string
+	preview    string
 	previewErr error
 }
 
-func (m *mockInstance) GetTitle() string                        { return m.title }
-func (m *mockInstance) GetPTYReader() (*os.File, error)        { return nil, fmt.Errorf("no PTY in mock") }
-func (m *mockInstance) Preview() (string, error)               { return m.preview, m.previewErr }
-func (m *mockInstance) LastMeaningfulOutputTime() time.Time    { return time.Time{} }
-func (m *mockInstance) GetCreatedAt() time.Time                { return time.Time{} }
-func (m *mockInstance) SetLastMeaningfulOutput(_ time.Time)    {}
-func (m *mockInstance) GetStatus() int                         { return 0 }
-func (m *mockInstance) WriteToPTY(_ []byte) (int, error)       { return 0, nil }
+func (m *mockInstance) GetTitle() string                    { return m.title }
+func (m *mockInstance) GetPTYReader() (*os.File, error)     { return nil, fmt.Errorf("no PTY in mock") }
+func (m *mockInstance) Preview() (string, error)            { return m.preview, m.previewErr }
+func (m *mockInstance) LastMeaningfulOutputTime() time.Time { return time.Time{} }
+func (m *mockInstance) GetCreatedAt() time.Time             { return time.Time{} }
+func (m *mockInstance) SetLastMeaningfulOutput(_ time.Time) {}
+func (m *mockInstance) GetStatus() int                      { return 0 }
+func (m *mockInstance) WriteToPTY(_ []byte) (int, error)    { return 0, nil }
 
 func newControllerWithMock(preview string) (*ClaudeController, *mockInstance) {
 	inst := &mockInstance{title: "test", preview: preview}

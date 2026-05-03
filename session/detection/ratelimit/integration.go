@@ -88,6 +88,7 @@ type PTYConsumer struct {
 	mu           sync.Mutex
 	running      bool
 	stopCh       chan struct{}
+	notifyCh     chan struct{}
 }
 
 func NewPTYConsumer(buffer BufferReader, manager *Manager) *PTYConsumer {
@@ -96,6 +97,17 @@ func NewPTYConsumer(buffer BufferReader, manager *Manager) *PTYConsumer {
 		manager:      manager,
 		pollInterval: 500 * time.Millisecond,
 		stopCh:       make(chan struct{}),
+		notifyCh:     make(chan struct{}, 1),
+	}
+}
+
+// NotifyOutput signals the poll loop that new data is available, avoiding the
+// 500ms polling delay. The send is non-blocking: if a notification is already
+// pending, the extra signal is dropped rather than blocking the caller.
+func (pc *PTYConsumer) NotifyOutput() {
+	select {
+	case pc.notifyCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -125,14 +137,19 @@ func (pc *PTYConsumer) Stop() {
 }
 
 func (pc *PTYConsumer) pollLoop() {
-	ticker := time.NewTicker(pc.pollInterval)
-	defer ticker.Stop()
+	heartbeat := time.NewTicker(5 * time.Second)
+	defer heartbeat.Stop()
 
 	for {
 		select {
 		case <-pc.stopCh:
 			return
-		case <-ticker.C:
+		case <-pc.notifyCh:
+			data := pc.buffer.GetRecentOutput(4096)
+			if len(data) > 0 {
+				pc.manager.ProcessOutput(data)
+			}
+		case <-heartbeat.C:
 			data := pc.buffer.GetRecentOutput(4096)
 			if len(data) > 0 {
 				pc.manager.ProcessOutput(data)
@@ -146,6 +163,19 @@ func (pc *PTYConsumer) GetRateLimitState() RateLimitState {
 		return pc.manager.GetState()
 	}
 	return StateNone
+}
+
+// GetResetTime returns the current rate limit reset time from the underlying manager.
+func (pc *PTYConsumer) GetResetTime() time.Time {
+	if pc.manager != nil {
+		return pc.manager.GetResetTime()
+	}
+	return time.Time{}
+}
+
+// GetManager returns the underlying Manager for advanced callback wiring.
+func (pc *PTYConsumer) GetManager() *Manager {
+	return pc.manager
 }
 
 func (pc *PTYConsumer) SetEnabled(enabled bool) {

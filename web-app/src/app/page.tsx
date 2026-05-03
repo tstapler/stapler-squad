@@ -335,6 +335,10 @@ function HomeContent() {
     }
   };
 
+  const handleSetRateLimitEnabled = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
+    await updateSession(sessionId, { rateLimitEnabled: enabled });
+  }, [updateSession]);
+
   const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
     await runOneShot(sessionId, "Create a pull request for the changes in this session.", 0);
   }, [runOneShot]);
@@ -474,6 +478,7 @@ function HomeContent() {
               onListCheckpoints={listCheckpoints}
               onForkFromCheckpoint={forkSession}
               onRunOneShot={handleRunOneShot}
+              onSetRateLimitEnabled={handleSetRateLimitEnabled}
             />
           )}
         </div>

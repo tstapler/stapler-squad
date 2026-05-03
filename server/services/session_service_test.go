@@ -552,3 +552,344 @@ func TestUpdateSession_MissingID(t *testing.T) {
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
 }
+
+// --------------------------------------------------------------------------
+// GetSession
+// --------------------------------------------------------------------------
+
+// TestGetSession_EmptyID verifies that GetSession returns CodeInvalidArgument
+// when no session ID is provided.
+func TestGetSession_EmptyID(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{
+		Id: "",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+// TestGetSession_FoundByTitle verifies that GetSession can find a session by Title
+// when the poller is wired.
+func TestGetSession_FoundByTitle(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	inst := &session.Instance{
+		Title:   "title-session",
+		UUID:    "aaaaaaaa-0000-0000-0000-000000000001",
+		Status:  session.Running,
+		Program: "claude",
+		Path:    "/tmp/test",
+	}
+	fix.poller.AddInstance(inst)
+
+	resp, err := fix.svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{
+		Id: "title-session",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, "title-session", resp.Msg.Session.Title)
+}
+
+// TestGetSession_FoundByUUID verifies that GetSession can find a session by UUID
+// when the poller is wired.
+func TestGetSession_FoundByUUID(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	const testUUID = "bbbbbbbb-0000-0000-0000-000000000002"
+	inst := &session.Instance{
+		Title:   "uuid-session",
+		UUID:    testUUID,
+		Status:  session.Running,
+		Program: "claude",
+		Path:    "/tmp/test",
+	}
+	fix.poller.AddInstance(inst)
+
+	resp, err := fix.svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{
+		Id: testUUID,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, "uuid-session", resp.Msg.Session.Title)
+}
+
+// TestGetSession_NotFound verifies that GetSession returns CodeNotFound when the
+// poller is wired but no session matches the requested ID.
+func TestGetSession_NotFound(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	// Poller is wired but empty — no sessions registered.
+	_, err := fix.svc.GetSession(context.Background(), connect.NewRequest(&sessionv1.GetSessionRequest{
+		Id: "does-not-exist",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// --------------------------------------------------------------------------
+// ListSessions
+// --------------------------------------------------------------------------
+
+// TestListSessions_ReturnsAllSessions verifies that ListSessions returns all sessions
+// registered in the poller when no filter is applied.
+func TestListSessions_ReturnsAllSessions(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	fix.poller.AddInstance(&session.Instance{
+		Title:   "session-one",
+		UUID:    "cccccccc-0000-0000-0000-000000000001",
+		Status:  session.Running,
+		Program: "claude",
+		Path:    "/tmp/test",
+	})
+	fix.poller.AddInstance(&session.Instance{
+		Title:   "session-two",
+		UUID:    "cccccccc-0000-0000-0000-000000000002",
+		Status:  session.Paused,
+		Program: "claude",
+		Path:    "/tmp/test",
+	})
+
+	resp, err := fix.svc.ListSessions(context.Background(), connect.NewRequest(&sessionv1.ListSessionsRequest{}))
+	require.NoError(t, err)
+	assert.Len(t, resp.Msg.Sessions, 2)
+}
+
+// TestListSessions_WithStatusFilter verifies that ListSessions filters sessions by
+// the requested status, returning only those that match.
+func TestListSessions_WithStatusFilter(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	fix.poller.AddInstance(&session.Instance{
+		Title:   "running-session",
+		UUID:    "dddddddd-0000-0000-0000-000000000001",
+		Status:  session.Running,
+		Program: "claude",
+		Path:    "/tmp/test",
+	})
+	fix.poller.AddInstance(&session.Instance{
+		Title:   "paused-session",
+		UUID:    "dddddddd-0000-0000-0000-000000000002",
+		Status:  session.Paused,
+		Program: "claude",
+		Path:    "/tmp/test",
+	})
+
+	filterStatus := sessionv1.SessionStatus_SESSION_STATUS_PAUSED
+	resp, err := fix.svc.ListSessions(context.Background(), connect.NewRequest(&sessionv1.ListSessionsRequest{
+		Status: &filterStatus,
+	}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, "paused-session", resp.Msg.Sessions[0].Title)
+}
+
+// TestListSessions_WithCategoryFilter verifies that ListSessions filters sessions by
+// the requested category, returning only those that match.
+func TestListSessions_WithCategoryFilter(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	fix.poller.AddInstance(&session.Instance{
+		Title:    "backend-session",
+		UUID:     "eeeeeeee-0000-0000-0000-000000000001",
+		Status:   session.Running,
+		Program:  "claude",
+		Path:     "/tmp/test",
+		Category: "backend",
+	})
+	fix.poller.AddInstance(&session.Instance{
+		Title:    "frontend-session",
+		UUID:     "eeeeeeee-0000-0000-0000-000000000002",
+		Status:   session.Running,
+		Program:  "claude",
+		Path:     "/tmp/test",
+		Category: "frontend",
+	})
+
+	category := "backend"
+	resp, err := fix.svc.ListSessions(context.Background(), connect.NewRequest(&sessionv1.ListSessionsRequest{
+		Category: &category,
+	}))
+	require.NoError(t, err)
+	require.Len(t, resp.Msg.Sessions, 1)
+	assert.Equal(t, "backend-session", resp.Msg.Sessions[0].Title)
+}
+
+// --------------------------------------------------------------------------
+// RenameSession
+// --------------------------------------------------------------------------
+
+// TestRenameSession_EmptyID verifies that RenameSession returns CodeInvalidArgument
+// when no session ID is provided.
+func TestRenameSession_EmptyID(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{
+		Id:       "",
+		NewTitle: "new-name",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+// TestRenameSession_EmptyNewTitle verifies that RenameSession returns CodeInvalidArgument
+// when no new title is provided.
+func TestRenameSession_EmptyNewTitle(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{
+		Id:       "some-session",
+		NewTitle: "",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+// TestRenameSession_NotFound verifies that RenameSession returns CodeNotFound when
+// the target session does not exist in storage.
+func TestRenameSession_NotFound(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{
+		Id:       "no-such-session",
+		NewTitle: "new-name",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
+}
+
+// TestRenameSession_ConflictsWithExisting verifies that RenameSession returns
+// CodeAlreadyExists when the desired new title is already taken by another session.
+func TestRenameSession_ConflictsWithExisting(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "session-alpha")
+	addPausedSession(t, fix, "session-beta")
+
+	_, err := fix.svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{
+		Id:       "session-alpha",
+		NewTitle: "session-beta",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
+}
+
+// TestRenameSession_Success verifies that RenameSession renames a session and returns
+// the updated session in the response with the new title. It also confirms the new
+// title record is persisted to storage.
+func TestRenameSession_Success(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	addPausedSession(t, fix, "old-name")
+
+	resp, err := fix.svc.RenameSession(context.Background(), connect.NewRequest(&sessionv1.RenameSessionRequest{
+		Id:       "old-name",
+		NewTitle: "new-name",
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg.Session)
+	assert.Equal(t, "new-name", resp.Msg.Session.Title)
+
+	// Confirm the new title record is present in storage using raw InstanceData
+	// to avoid FromInstanceData's Start() side effect.
+	data, err := fix.storage.ListInstanceData()
+	require.NoError(t, err)
+
+	var foundNew bool
+	for _, d := range data {
+		if d.Title == "new-name" {
+			foundNew = true
+			break
+		}
+	}
+	assert.True(t, foundNew, "new title should exist in storage after rename")
+}
+
+// --------------------------------------------------------------------------
+// CreateSession – validation only (no tmux)
+// --------------------------------------------------------------------------
+
+// TestCreateSession_EmptyTitle verifies that CreateSession returns CodeInvalidArgument
+// when no title is provided.
+func TestCreateSession_EmptyTitle(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "",
+		Path:  "/tmp/test",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+// TestCreateSession_EmptyPath verifies that CreateSession returns CodeInvalidArgument
+// when no path is provided.
+func TestCreateSession_EmptyPath(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "some-session",
+		Path:  "",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
+}
+
+// TestCreateSession_TitleAlreadyExists verifies that CreateSession returns
+// CodeAlreadyExists when a session with the same title already exists in storage.
+func TestCreateSession_TitleAlreadyExists(t *testing.T) {
+	fix := setupForkTestFixture(t)
+	t.Cleanup(fix.cleanup)
+
+	// Seed storage with an existing session.
+	addPausedSession(t, fix, "existing-session")
+
+	_, err := fix.svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "existing-session",
+		Path:  "/tmp/test",
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
+}

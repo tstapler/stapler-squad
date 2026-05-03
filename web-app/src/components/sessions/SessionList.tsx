@@ -65,6 +65,7 @@ interface SessionListProps {
   onListCheckpoints?: (sessionId: string) => Promise<CheckpointProto[]>;
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
+  onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
 }
 
 type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt';
@@ -125,6 +126,7 @@ export function SessionList({
   onListCheckpoints,
   onForkFromCheckpoint,
   onRunOneShot,
+  onSetRateLimitEnabled,
 }: SessionListProps) {
   // Review queue items indexed by session ID for badge display on session cards
   const { items: reviewItems } = useReviewQueueContext();
@@ -826,6 +828,7 @@ export function SessionList({
                       onListCheckpoints={onListCheckpoints}
                       onForkFromCheckpoint={onForkFromCheckpoint}
                       onRunOneShot={onRunOneShot}
+                      onSetRateLimitEnabled={onSetRateLimitEnabled}
                       selectMode={selectMode}
                       isSelected={selectedSessions.has(session.id)}
                       onToggleSelect={() => handleToggleSession(session.id)}

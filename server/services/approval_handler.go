@@ -415,7 +415,6 @@ func (h *ApprovalHandler) resolveSessionID(headerVal, cwd string) string {
 	return bestID
 }
 
-
 // writeDeferDecision returns an empty HTTP 200 with no body.
 // Claude Code interprets the absence of hookSpecificOutput as "no decision made by the hook"
 // and falls back to its native terminal permission dialog.

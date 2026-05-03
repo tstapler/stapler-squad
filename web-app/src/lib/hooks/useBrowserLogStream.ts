@@ -212,7 +212,11 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
-      buffer.splice(0); // discard buffered entries on disable
+      // Flush any buffered entries before tearing down so logs within the
+      // batching window are not silently lost when the toggle is turned off.
+      if (buffer.length > 0) {
+        flush();
+      }
     };
   }, [options.enabled]); // re-run only when enabled changes
 }

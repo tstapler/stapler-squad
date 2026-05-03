@@ -222,8 +222,11 @@ func testSessionRecoveryWithRealTmux(t *testing.T) {
 	killCmd := exec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-session", "-t", tmuxSessionName)
 	_ = killCmd.Run()
 
-	// Create session using our RestoreWithWorkDir logic on the isolated server
-	session := NewTmuxSessionWithServerSocket(sessionName, "pwd; sleep 1", TmuxPrefix, socketName)
+	// Create session using our RestoreWithWorkDir logic on the isolated server.
+	// Use WithRegistry(nil) so DoesSessionExist() uses subprocess checks rather than
+	// the control-mode registry, which cannot connect to an isolated server that has
+	// no keepalive session. Use a long-running program so the session outlives the test.
+	session := NewTmuxSessionWithServerSocket(sessionName, "pwd; sleep 30", TmuxPrefix, socketName, WithRegistry(nil))
 
 	// This should create the session in the worktree directory
 	err = session.RestoreWithWorkDir(worktreeDir)
