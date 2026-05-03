@@ -745,19 +745,30 @@ func (sd *StatusDetector) DetectForProgram(output []byte, program string) Detect
 // DetectFromLines analyzes multiple lines of output and returns the most relevant status.
 // Lines are processed in reverse order (most recent first) so the current terminal
 // state takes precedence over stale scrollback content.
-// Blank/whitespace-only lines are skipped to prevent the `.*` Ready catch-all from
-// shadowing real status patterns on adjacent non-empty lines.
+//
+// Blank/whitespace-only lines are skipped. StatusReady results are noted but the scan
+// continues looking for a more specific status — this prevents the `.*` Ready catch-all
+// from stopping the scan on an unrelated line (e.g. "PR #66") before reaching a real
+// status pattern on an earlier line. StatusReady is returned as a fallback if no more
+// specific status is found.
 func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
+	bestSoFar := StatusUnknown
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
 		}
 		status := sd.DetectFromString(lines[i])
-		if status != StatusUnknown {
-			return status
+		if status == StatusUnknown {
+			continue
+		}
+		if status != StatusReady {
+			return status // specific match wins immediately
+		}
+		if bestSoFar == StatusUnknown {
+			bestSoFar = StatusReady // note we saw Ready but keep looking
 		}
 	}
-	return StatusUnknown
+	return bestSoFar
 }
 
 // DetectWithContextFromLines analyzes lines in reverse order (most recent first) and returns
@@ -765,19 +776,29 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 // on the last line) takes precedence over stale scrollback content (e.g. an old "esc to interrupt"
 // from a previous turn that is still within the scanned window).
 //
-// Blank/whitespace-only lines are skipped so the `.*` Ready catch-all does not
-// shadow real status patterns on adjacent non-empty lines.
+// Blank/whitespace-only lines are skipped. StatusReady is treated as a low-confidence
+// fallback — the scan continues past Ready results looking for a more specific status,
+// preventing the `.*` catch-all from masking real patterns on earlier lines.
 func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedStatus, string) {
+	bestStatus := StatusUnknown
+	bestDesc := ""
 	for i := len(lines) - 1; i >= 0; i-- {
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
 		}
 		status, desc := sd.DetectWithContext([]byte(lines[i]))
-		if status != StatusUnknown {
-			return status, desc
+		if status == StatusUnknown {
+			continue
+		}
+		if status != StatusReady {
+			return status, desc // specific match wins immediately
+		}
+		if bestStatus == StatusUnknown {
+			bestStatus = StatusReady
+			bestDesc = desc
 		}
 	}
-	return StatusUnknown, ""
+	return bestStatus, bestDesc
 }
 
 // DetectRecent analyzes the most recent n bytes of output for status detection.

@@ -389,7 +389,7 @@ export function ReviewQueuePanel({
             </span>
             {(workingCount > 0 || stuckCount > 0) && (
               <span className={stat} data-testid="working-state-counts">
-                {items.length} waiting
+                {items.filter(i => i.workingState !== WorkingState.WAITING).length} waiting
                 {workingCount > 0 && ` · ${workingCount} working`}
                 {stuckCount > 0 && ` · ${stuckCount} stuck`}
               </span>

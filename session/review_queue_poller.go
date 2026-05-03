@@ -473,7 +473,8 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 
 // detectProcessing checks if session is actively processing after user interaction.
 // Uses multiple signals to determine if the session is responding to user input.
-func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusInfo) bool {
+// detector must be the caller's already-compiled StatusDetector (e.g. rqp.statusDetector).
+func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusInfo, detector *detection.StatusDetector) bool {
 	// Signal 1: Status change from prompt state to active/processing
 	if statusInfo.ClaudeStatus == detection.StatusActive ||
 		statusInfo.ClaudeStatus == detection.StatusProcessing {
@@ -494,7 +495,6 @@ func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusI
 	// This replaces the previous hardcoded string-match list and ensures the same
 	// detection pipeline (CR collapsing + ANSI stripping + regex) is used everywhere.
 	if content != "" {
-		detector := detection.NewStatusDetector()
 		status := detector.DetectRecent([]byte(content), detection.StatusDetectionTailBytes)
 		if status == detection.StatusActive || status == detection.StatusProcessing {
 			return true
@@ -610,7 +610,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// STEP 4: Check if session is actively processing after user response
 	isProcessing := false
 	if userRespondedToPrompt && content != "" {
-		isProcessing = detectProcessing(inst, content, statusInfo)
+		isProcessing = detectProcessing(inst, content, statusInfo, rqp.statusDetector)
 	}
 
 	// STEP 5: Check grace period for temporary removal
@@ -675,6 +675,10 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	var priority Priority
 	var shouldAdd bool
 	var context string
+	// claudeStatus captures the raw DetectedStatus from whichever detection path ran.
+	// For controller sessions this is statusInfo.ClaudeStatus; for no-controller sessions
+	// it is set inside the else block when content is available.
+	claudeStatus := statusInfo.ClaudeStatus
 
 	// Check for controller-based states if controller is active
 	if statusInfo.IsControllerActive {
@@ -849,6 +853,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		if content != "" {
 			// Detect status from terminal content using the shared status detector
 			detectedStatus, statusContext := rqp.statusDetector.DetectWithContext([]byte(content))
+			claudeStatus = detectedStatus
 			if debugLog != nil {
 				debugLog.Printf("[ReviewQueue] Session '%s': Detected status=%s from terminal content",
 					inst.Title, detectedStatus.String())
@@ -1130,8 +1135,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			Category:     inst.Category,
 			DiffStats:    inst.GetDiffStats(),
 			LastActivity: lastActivity,
-			// Populate idle state for WorkingState mapping in the proto response.
-			IdleState: statusInfo.IdleState.State,
+			// Populate idle state and raw detected status for WorkingState mapping.
+			IdleState:    statusInfo.IdleState.State,
+			ClaudeStatus: claudeStatus,
 		}
 
 		// Enrich approval items with hook metadata from ApprovalStore (Story 3, Task 3.2).

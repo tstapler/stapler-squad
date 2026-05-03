@@ -171,8 +171,13 @@ type ReviewItem struct {
 	LastActivity time.Time      `json:"last_activity"` // Last meaningful output time (used for sorting and display)
 
 	// IdleState is the active-work state at the time this item was last evaluated.
-	// Used to populate WorkingState in the proto response for frontend filtering.
+	// Used as a fallback for WorkingState when ClaudeStatus is Unknown.
 	IdleState detection.IdleState `json:"idle_state,omitempty"`
+
+	// ClaudeStatus is the raw DetectedStatus from the detection pipeline at the time
+	// this item was last evaluated. It distinguishes Active from Processing, enabling
+	// the WORKING_STATE_PROCESSING proto value that IdleState alone cannot produce.
+	ClaudeStatus detection.DetectedStatus `json:"claude_status,omitempty"`
 
 	// Score is set by the Fixer after a successful Sweep quality gate.
 	// Nil if the Sweep has not yet completed or was not triggered.

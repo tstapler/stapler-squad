@@ -204,6 +204,8 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 }
 
 // MapIdleStateToWorkingState converts a detection.IdleState to the proto WorkingState enum.
+// Prefer MapDetectedStatusToWorkingState when a ClaudeStatus is available, as it can
+// produce WORKING_STATE_PROCESSING which IdleState alone cannot distinguish from ACTIVE.
 func MapIdleStateToWorkingState(s detection.IdleState) sessionv1.WorkingState {
 	switch s {
 	case detection.IdleStateActive:
@@ -211,6 +213,24 @@ func MapIdleStateToWorkingState(s detection.IdleState) sessionv1.WorkingState {
 	case detection.IdleStateWaiting:
 		return sessionv1.WorkingState_WORKING_STATE_IDLE
 	case detection.IdleStateTimeout:
+		return sessionv1.WorkingState_WORKING_STATE_WAITING
+	default:
+		return sessionv1.WorkingState_WORKING_STATE_UNSPECIFIED
+	}
+}
+
+// MapDetectedStatusToWorkingState converts a detection.DetectedStatus to the proto
+// WorkingState enum. It is more precise than MapIdleStateToWorkingState because
+// DetectedStatus distinguishes StatusActive from StatusProcessing.
+func MapDetectedStatusToWorkingState(s detection.DetectedStatus) sessionv1.WorkingState {
+	switch s {
+	case detection.StatusActive:
+		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
+	case detection.StatusProcessing:
+		return sessionv1.WorkingState_WORKING_STATE_PROCESSING
+	case detection.StatusIdle, detection.StatusReady:
+		return sessionv1.WorkingState_WORKING_STATE_IDLE
+	case detection.StatusNeedsApproval, detection.StatusInputRequired:
 		return sessionv1.WorkingState_WORKING_STATE_WAITING
 	default:
 		return sessionv1.WorkingState_WORKING_STATE_UNSPECIFIED
