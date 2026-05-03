@@ -159,7 +159,7 @@ export const viewMoreButton = style({
   selectors: {
     "&:hover": {
       background: vars.color.primary,
-      color: "white",
+      color: vars.color.primaryText,
       borderColor: vars.color.primary,
     },
   },
