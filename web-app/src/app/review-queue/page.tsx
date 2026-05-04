@@ -177,9 +177,9 @@ function ReviewQueueContent() {
   // Auto-advance to the next queue item after resolving the current one.
   // resolvedSessionId: the session that was just resolved (exclude from next-item search
   //   to handle the race where WebSocket hasn't removed it yet).
-  const handleAutoAdvance = useCallback((resolvedSessionId?: string) => {
+  const handleAutoAdvance = useCallback((resolvedSessionId?: string, force = false) => {
     setTimeout(() => {
-      if (!autoAdvanceRef.current) return; // Auto-advance disabled by user preference
+      if (!force && !autoAdvanceRef.current) return; // Auto-advance disabled by user preference
 
       const currentItems = reviewQueueItemsRef.current;
       const currentSelected = selectedSessionRef.current;
@@ -233,7 +233,7 @@ function ReviewQueueContent() {
     const current = selectedSessionRef.current;
     if (!current) return;
     await acknowledgeSession(current.id);
-    handleAutoAdvance(current.id);
+    handleAutoAdvance(current.id, true); // explicit dismiss always advances regardless of auto-advance setting
   }, [acknowledgeSession, handleAutoAdvance]);
 
   // Queue position for the header badge ("2 of 5")
