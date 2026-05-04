@@ -3,8 +3,20 @@ package adapters
 import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// workingStateFromItem derives the proto WorkingState for a ReviewItem.
+// Uses ClaudeStatus (DetectedStatus) when available because it can distinguish
+// ACTIVE from PROCESSING; falls back to IdleState for legacy items where
+// ClaudeStatus was not recorded.
+func workingStateFromItem(item *session.ReviewItem) sessionv1.WorkingState {
+	if item.ClaudeStatus != detection.StatusUnknown {
+		return MapDetectedStatusToWorkingState(item.ClaudeStatus)
+	}
+	return MapIdleStateToWorkingState(item.IdleState)
+}
 
 // ReviewItemToProto converts session.ReviewItem to proto ReviewItem.
 // extraMetadata entries are merged into the item's Metadata map; callers use
@@ -43,6 +55,7 @@ func ReviewItemToProto(item *session.ReviewItem, extraMetadata map[string]string
 		Tags:         item.Tags,
 		Category:     item.Category,
 		LastActivity: timestamppb.New(item.LastActivity),
+		WorkingState: workingStateFromItem(item),
 	}
 
 	// Add diff stats if available

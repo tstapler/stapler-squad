@@ -483,8 +483,10 @@ type SessionStatusChangedEvent struct {
 	// (e.g. "Waiting for tool approval", "Tests failing: 3 of 12").
 	// Empty when detected_status is empty.
 	DetectedContext *string `protobuf:"bytes,5,opt,name=detected_context,json=detectedContext,proto3,oneof" json:"detected_context,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Active-work state at the time of the status change.
+	WorkingState  WorkingState `protobuf:"varint,6,opt,name=working_state,json=workingState,proto3,enum=session.v1.WorkingState" json:"working_state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SessionStatusChangedEvent) Reset() {
@@ -550,6 +552,13 @@ func (x *SessionStatusChangedEvent) GetDetectedContext() string {
 		return *x.DetectedContext
 	}
 	return ""
+}
+
+func (x *SessionStatusChangedEvent) GetWorkingState() WorkingState {
+	if x != nil {
+		return x.WorkingState
+	}
+	return WorkingState_WORKING_STATE_UNSPECIFIED
 }
 
 // TerminalData represents terminal I/O for bidirectional streaming.
@@ -3540,7 +3549,7 @@ const file_session_v1_events_proto_rawDesc = "" +
 	"\x13SessionDeletedEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xb5\x02\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason\"\xf4\x02\n" +
 	"\x19SessionStatusChangedEvent\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x128\n" +
@@ -3549,7 +3558,8 @@ const file_session_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"new_status\x18\x03 \x01(\x0e2\x19.session.v1.SessionStatusR\tnewStatus\x12,\n" +
 	"\x0fdetected_status\x18\x04 \x01(\tH\x00R\x0edetectedStatus\x88\x01\x01\x12.\n" +
-	"\x10detected_context\x18\x05 \x01(\tH\x01R\x0fdetectedContext\x88\x01\x01B\x12\n" +
+	"\x10detected_context\x18\x05 \x01(\tH\x01R\x0fdetectedContext\x88\x01\x01\x12=\n" +
+	"\rworking_state\x18\x06 \x01(\x0e2\x18.session.v1.WorkingStateR\fworkingStateB\x12\n" +
 	"\x10_detected_statusB\x13\n" +
 	"\x11_detected_context\"\xac\a\n" +
 	"\fTerminalData\x12\x1d\n" +
@@ -3901,9 +3911,10 @@ var file_session_v1_events_proto_goTypes = []any{
 	(*timestamppb.Timestamp)(nil),             // 46: google.protobuf.Timestamp
 	(*Session)(nil),                           // 47: session.v1.Session
 	(SessionStatus)(0),                        // 48: session.v1.SessionStatus
-	(*ReviewItem)(nil),                        // 49: session.v1.ReviewItem
-	(NotificationType)(0),                     // 50: session.v1.NotificationType
-	(NotificationPriority)(0),                 // 51: session.v1.NotificationPriority
+	(WorkingState)(0),                         // 49: session.v1.WorkingState
+	(*ReviewItem)(nil),                        // 50: session.v1.ReviewItem
+	(NotificationType)(0),                     // 51: session.v1.NotificationType
+	(NotificationPriority)(0),                 // 52: session.v1.NotificationPriority
 }
 var file_session_v1_events_proto_depIdxs = []int32{
 	46, // 0: session.v1.SessionEvent.timestamp:type_name -> google.protobuf.Timestamp
@@ -3919,58 +3930,59 @@ var file_session_v1_events_proto_depIdxs = []int32{
 	47, // 10: session.v1.SessionUpdatedEvent.session:type_name -> session.v1.Session
 	48, // 11: session.v1.SessionStatusChangedEvent.old_status:type_name -> session.v1.SessionStatus
 	48, // 12: session.v1.SessionStatusChangedEvent.new_status:type_name -> session.v1.SessionStatus
-	7,  // 13: session.v1.TerminalData.output:type_name -> session.v1.TerminalOutput
-	8,  // 14: session.v1.TerminalData.input:type_name -> session.v1.TerminalInput
-	9,  // 15: session.v1.TerminalData.resize:type_name -> session.v1.TerminalResize
-	10, // 16: session.v1.TerminalData.error:type_name -> session.v1.TerminalError
-	12, // 17: session.v1.TerminalData.scrollback_request:type_name -> session.v1.ScrollbackRequest
-	13, // 18: session.v1.TerminalData.scrollback_response:type_name -> session.v1.ScrollbackResponse
-	17, // 19: session.v1.TerminalData.delta:type_name -> session.v1.TerminalDelta
-	15, // 20: session.v1.TerminalData.current_pane_request:type_name -> session.v1.CurrentPaneRequest
-	16, // 21: session.v1.TerminalData.current_pane_response:type_name -> session.v1.CurrentPaneResponse
-	11, // 22: session.v1.TerminalData.flow_control:type_name -> session.v1.FlowControl
-	28, // 23: session.v1.TerminalData.state:type_name -> session.v1.TerminalState
-	23, // 24: session.v1.TerminalData.diff:type_name -> session.v1.TerminalDiff
-	25, // 25: session.v1.TerminalData.input_echo:type_name -> session.v1.InputWithEcho
-	27, // 26: session.v1.TerminalData.ssp_negotiation:type_name -> session.v1.SSPNegotiation
-	14, // 27: session.v1.ScrollbackResponse.chunks:type_name -> session.v1.ScrollbackChunk
-	18, // 28: session.v1.TerminalDelta.lines:type_name -> session.v1.LineDelta
-	21, // 29: session.v1.TerminalDelta.cursor:type_name -> session.v1.CursorPosition
-	22, // 30: session.v1.TerminalDelta.dimensions:type_name -> session.v1.TerminalDimensions
-	19, // 31: session.v1.LineDelta.edit:type_name -> session.v1.LineEdit
-	20, // 32: session.v1.LineDelta.insert:type_name -> session.v1.InsertLine
-	24, // 33: session.v1.TerminalDiff.echo_ack:type_name -> session.v1.EchoAck
-	32, // 34: session.v1.TerminalDiff.compression:type_name -> session.v1.CompressionMetadata
-	26, // 35: session.v1.SSPNegotiation.capabilities:type_name -> session.v1.SSPCapabilities
-	26, // 36: session.v1.SSPNegotiation.negotiated:type_name -> session.v1.SSPCapabilities
-	22, // 37: session.v1.TerminalState.dimensions:type_name -> session.v1.TerminalDimensions
-	29, // 38: session.v1.TerminalState.lines:type_name -> session.v1.TerminalLine
-	21, // 39: session.v1.TerminalState.cursor:type_name -> session.v1.CursorPosition
-	31, // 40: session.v1.TerminalState.scrollback:type_name -> session.v1.ScrollbackInfo
-	32, // 41: session.v1.TerminalState.compression:type_name -> session.v1.CompressionMetadata
-	30, // 42: session.v1.TerminalLine.attributes:type_name -> session.v1.LineAttributes
-	33, // 43: session.v1.CompressionMetadata.dictionary:type_name -> session.v1.DictionaryMetadata
-	0,  // 44: session.v1.UserInteractionEvent.type:type_name -> session.v1.UserInteractionEvent.InteractionType
-	46, // 45: session.v1.SessionAcknowledgedEvent.acknowledged_at:type_name -> google.protobuf.Timestamp
-	46, // 46: session.v1.ApprovalResponseEvent.responded_at:type_name -> google.protobuf.Timestamp
-	46, // 47: session.v1.ReviewQueueEvent.timestamp:type_name -> google.protobuf.Timestamp
-	38, // 48: session.v1.ReviewQueueEvent.item_added:type_name -> session.v1.ReviewQueueItemAddedEvent
-	39, // 49: session.v1.ReviewQueueEvent.item_removed:type_name -> session.v1.ReviewQueueItemRemovedEvent
-	40, // 50: session.v1.ReviewQueueEvent.item_updated:type_name -> session.v1.ReviewQueueItemUpdatedEvent
-	41, // 51: session.v1.ReviewQueueEvent.statistics:type_name -> session.v1.ReviewQueueStatisticsEvent
-	49, // 52: session.v1.ReviewQueueItemAddedEvent.item:type_name -> session.v1.ReviewItem
-	49, // 53: session.v1.ReviewQueueItemUpdatedEvent.item:type_name -> session.v1.ReviewItem
-	43, // 54: session.v1.ReviewQueueStatisticsEvent.by_priority:type_name -> session.v1.ReviewQueueStatisticsEvent.ByPriorityEntry
-	44, // 55: session.v1.ReviewQueueStatisticsEvent.by_reason:type_name -> session.v1.ReviewQueueStatisticsEvent.ByReasonEntry
-	50, // 56: session.v1.NotificationEvent.notification_type:type_name -> session.v1.NotificationType
-	51, // 57: session.v1.NotificationEvent.priority:type_name -> session.v1.NotificationPriority
-	45, // 58: session.v1.NotificationEvent.metadata:type_name -> session.v1.NotificationEvent.MetadataEntry
-	46, // 59: session.v1.NotificationEvent.timestamp:type_name -> google.protobuf.Timestamp
-	60, // [60:60] is the sub-list for method output_type
-	60, // [60:60] is the sub-list for method input_type
-	60, // [60:60] is the sub-list for extension type_name
-	60, // [60:60] is the sub-list for extension extendee
-	0,  // [0:60] is the sub-list for field type_name
+	49, // 13: session.v1.SessionStatusChangedEvent.working_state:type_name -> session.v1.WorkingState
+	7,  // 14: session.v1.TerminalData.output:type_name -> session.v1.TerminalOutput
+	8,  // 15: session.v1.TerminalData.input:type_name -> session.v1.TerminalInput
+	9,  // 16: session.v1.TerminalData.resize:type_name -> session.v1.TerminalResize
+	10, // 17: session.v1.TerminalData.error:type_name -> session.v1.TerminalError
+	12, // 18: session.v1.TerminalData.scrollback_request:type_name -> session.v1.ScrollbackRequest
+	13, // 19: session.v1.TerminalData.scrollback_response:type_name -> session.v1.ScrollbackResponse
+	17, // 20: session.v1.TerminalData.delta:type_name -> session.v1.TerminalDelta
+	15, // 21: session.v1.TerminalData.current_pane_request:type_name -> session.v1.CurrentPaneRequest
+	16, // 22: session.v1.TerminalData.current_pane_response:type_name -> session.v1.CurrentPaneResponse
+	11, // 23: session.v1.TerminalData.flow_control:type_name -> session.v1.FlowControl
+	28, // 24: session.v1.TerminalData.state:type_name -> session.v1.TerminalState
+	23, // 25: session.v1.TerminalData.diff:type_name -> session.v1.TerminalDiff
+	25, // 26: session.v1.TerminalData.input_echo:type_name -> session.v1.InputWithEcho
+	27, // 27: session.v1.TerminalData.ssp_negotiation:type_name -> session.v1.SSPNegotiation
+	14, // 28: session.v1.ScrollbackResponse.chunks:type_name -> session.v1.ScrollbackChunk
+	18, // 29: session.v1.TerminalDelta.lines:type_name -> session.v1.LineDelta
+	21, // 30: session.v1.TerminalDelta.cursor:type_name -> session.v1.CursorPosition
+	22, // 31: session.v1.TerminalDelta.dimensions:type_name -> session.v1.TerminalDimensions
+	19, // 32: session.v1.LineDelta.edit:type_name -> session.v1.LineEdit
+	20, // 33: session.v1.LineDelta.insert:type_name -> session.v1.InsertLine
+	24, // 34: session.v1.TerminalDiff.echo_ack:type_name -> session.v1.EchoAck
+	32, // 35: session.v1.TerminalDiff.compression:type_name -> session.v1.CompressionMetadata
+	26, // 36: session.v1.SSPNegotiation.capabilities:type_name -> session.v1.SSPCapabilities
+	26, // 37: session.v1.SSPNegotiation.negotiated:type_name -> session.v1.SSPCapabilities
+	22, // 38: session.v1.TerminalState.dimensions:type_name -> session.v1.TerminalDimensions
+	29, // 39: session.v1.TerminalState.lines:type_name -> session.v1.TerminalLine
+	21, // 40: session.v1.TerminalState.cursor:type_name -> session.v1.CursorPosition
+	31, // 41: session.v1.TerminalState.scrollback:type_name -> session.v1.ScrollbackInfo
+	32, // 42: session.v1.TerminalState.compression:type_name -> session.v1.CompressionMetadata
+	30, // 43: session.v1.TerminalLine.attributes:type_name -> session.v1.LineAttributes
+	33, // 44: session.v1.CompressionMetadata.dictionary:type_name -> session.v1.DictionaryMetadata
+	0,  // 45: session.v1.UserInteractionEvent.type:type_name -> session.v1.UserInteractionEvent.InteractionType
+	46, // 46: session.v1.SessionAcknowledgedEvent.acknowledged_at:type_name -> google.protobuf.Timestamp
+	46, // 47: session.v1.ApprovalResponseEvent.responded_at:type_name -> google.protobuf.Timestamp
+	46, // 48: session.v1.ReviewQueueEvent.timestamp:type_name -> google.protobuf.Timestamp
+	38, // 49: session.v1.ReviewQueueEvent.item_added:type_name -> session.v1.ReviewQueueItemAddedEvent
+	39, // 50: session.v1.ReviewQueueEvent.item_removed:type_name -> session.v1.ReviewQueueItemRemovedEvent
+	40, // 51: session.v1.ReviewQueueEvent.item_updated:type_name -> session.v1.ReviewQueueItemUpdatedEvent
+	41, // 52: session.v1.ReviewQueueEvent.statistics:type_name -> session.v1.ReviewQueueStatisticsEvent
+	50, // 53: session.v1.ReviewQueueItemAddedEvent.item:type_name -> session.v1.ReviewItem
+	50, // 54: session.v1.ReviewQueueItemUpdatedEvent.item:type_name -> session.v1.ReviewItem
+	43, // 55: session.v1.ReviewQueueStatisticsEvent.by_priority:type_name -> session.v1.ReviewQueueStatisticsEvent.ByPriorityEntry
+	44, // 56: session.v1.ReviewQueueStatisticsEvent.by_reason:type_name -> session.v1.ReviewQueueStatisticsEvent.ByReasonEntry
+	51, // 57: session.v1.NotificationEvent.notification_type:type_name -> session.v1.NotificationType
+	52, // 58: session.v1.NotificationEvent.priority:type_name -> session.v1.NotificationPriority
+	45, // 59: session.v1.NotificationEvent.metadata:type_name -> session.v1.NotificationEvent.MetadataEntry
+	46, // 60: session.v1.NotificationEvent.timestamp:type_name -> google.protobuf.Timestamp
+	61, // [61:61] is the sub-list for method output_type
+	61, // [61:61] is the sub-list for method input_type
+	61, // [61:61] is the sub-list for extension type_name
+	61, // [61:61] is the sub-list for extension extendee
+	0,  // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_events_proto_init() }

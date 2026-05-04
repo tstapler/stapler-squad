@@ -185,6 +185,12 @@ service SessionService {
   // based on the checkpoint's recorded state.
   rpc ForkSession(ForkSessionRequest) returns (ForkSessionResponse) {}
 
+  // ClearConversationState removes the stored Claude conversation UUID from a session
+  // so that the next Resume starts a fresh conversation instead of attempting --resume
+  // with a stale or path-mismatched UUID. Useful when a session is stuck in a crash
+  // loop with "No conversation found" errors.
+  rpc ClearConversationState(ClearConversationStateRequest) returns (ClearConversationStateResponse) {}
+
   // File Viewer RPCs
 
   // ListFiles returns the immediate children of a directory in a session's worktree.
@@ -1734,3 +1740,15 @@ message LogClientEventsRequest {
 }
 
 message LogClientEventsResponse {}
+
+// ClearConversationStateRequest identifies the session whose conversation UUID should be cleared.
+message ClearConversationStateRequest {
+  // Session identifier (title or stable UUID).
+  string id = 1;
+}
+
+// ClearConversationStateResponse reports whether the state was cleared.
+message ClearConversationStateResponse {
+  bool success = 1;
+  string message = 2;
+}

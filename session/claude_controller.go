@@ -42,11 +42,18 @@ type idleCacheEntry struct {
 	state    detection.IdleState
 }
 
-// statusDetectionTailBytes is the number of bytes from the end of the terminal
-// content passed to the status/idle detectors. Status indicators (◇ Ready,
-// esc to interrupt, Thinking…) always appear near the current cursor position,
-// so scanning the full scrollback buffer is wasteful.
+// statusDetectionTailBytes is the number of bytes taken from the tail of the
+// terminal content before line-based detection. This bounds the scope passed to
+// filterTmuxMetadata and the line splitter.
 const statusDetectionTailBytes = 4096
+
+// statusDetectionLinesWindow is the number of trailing lines examined by
+// DetectWithContextFromLines. Status indicators (◇ Ready, esc to interrupt,
+// Thinking…, ? for shortcuts) always appear within the last few lines of the
+// terminal, so restricting the window prevents stale scrollback content — e.g.
+// an "esc to interrupt" from a previous turn — from overriding a fresh idle
+// prompt on the last line.
+const statusDetectionLinesWindow = 15
 
 // ClaudeController provides a high-level API for controlling Claude instances.
 // It orchestrates all the underlying components (queue, executor, history, streams).
@@ -495,7 +502,13 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 	}
 
 	filtered, _ := filterTmuxMetadata(tail)
-	status, desc := cc.statusDetector.DetectWithContext([]byte(filtered))
+
+	// Line-based reverse scan: process from the most recent line backwards.
+	// This ensures a fresh idle prompt on the last line ("? for shortcuts",
+	// "> ") beats a stale "esc to interrupt" that is still within the window
+	// from an earlier turn.
+	lines := lastNLines(filtered, statusDetectionLinesWindow)
+	status, desc := cc.statusDetector.DetectWithContextFromLines(lines)
 
 	cc.statusCache = statusCacheEntry{tailHash: h, status: status, desc: desc}
 	return status, desc
@@ -539,6 +552,16 @@ func filterTmuxMetadata(content string) (string, int) {
 	}
 
 	return sb.String(), removedCount
+}
+
+// lastNLines returns the last n lines of s as a slice.
+// If s has fewer than n lines, all lines are returned.
+func lastNLines(s string, n int) []string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return lines
+	}
+	return lines[len(lines)-n:]
 }
 
 // tailContent returns the last n bytes of s, snapped forward to the next

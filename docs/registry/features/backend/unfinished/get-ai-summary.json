@@ -5,7 +5,9 @@
   "method": "GetWorktreeAISummary",
   "protoFile": "proto/session/v1/unfinished.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-02T11:16:38.480872709-07:00"
+  "tested": true,
+  "testIds": [
+    "TestGetWorktreeAISummary_UnknownWorktree"
+  ],
+  "lastModified": "2026-05-02T19:34:43.996497514-07:00"
 }

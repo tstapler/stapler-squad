@@ -180,6 +180,9 @@ const (
 	// SessionServiceForkSessionProcedure is the fully-qualified name of the SessionService's
 	// ForkSession RPC.
 	SessionServiceForkSessionProcedure = "/session.v1.SessionService/ForkSession"
+	// SessionServiceClearConversationStateProcedure is the fully-qualified name of the SessionService's
+	// ClearConversationState RPC.
+	SessionServiceClearConversationStateProcedure = "/session.v1.SessionService/ClearConversationState"
 	// SessionServiceListFilesProcedure is the fully-qualified name of the SessionService's ListFiles
 	// RPC.
 	SessionServiceListFilesProcedure = "/session.v1.SessionService/ListFiles"
@@ -384,6 +387,11 @@ type SessionServiceClient interface {
 	// The fork receives truncated scrollback, conversation history, and a git worktree
 	// based on the checkpoint's recorded state.
 	ForkSession(context.Context, *connect.Request[v1.ForkSessionRequest]) (*connect.Response[v1.ForkSessionResponse], error)
+	// ClearConversationState removes the stored Claude conversation UUID from a session
+	// so that the next Resume starts a fresh conversation instead of attempting --resume
+	// with a stale or path-mismatched UUID. Useful when a session is stuck in a crash
+	// loop with "No conversation found" errors.
+	ClearConversationState(context.Context, *connect.Request[v1.ClearConversationStateRequest]) (*connect.Response[v1.ClearConversationStateResponse], error)
 	// ListFiles returns the immediate children of a directory in a session's worktree.
 	// Directories are returned first, then files, both alphabetically sorted.
 	// Gitignored entries are excluded unless include_ignored is true.
@@ -753,6 +761,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("ForkSession")),
 			connect.WithClientOptions(opts...),
 		),
+		clearConversationState: connect.NewClient[v1.ClearConversationStateRequest, v1.ClearConversationStateResponse](
+			httpClient,
+			baseURL+SessionServiceClearConversationStateProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ClearConversationState")),
+			connect.WithClientOptions(opts...),
+		),
 		listFiles: connect.NewClient[v1.ListFilesRequest, v1.ListFilesResponse](
 			httpClient,
 			baseURL+SessionServiceListFilesProcedure,
@@ -952,6 +966,7 @@ type sessionServiceClient struct {
 	createCheckpoint         *connect.Client[v1.CreateCheckpointRequest, v1.CreateCheckpointResponse]
 	listCheckpoints          *connect.Client[v1.ListCheckpointsRequest, v1.ListCheckpointsResponse]
 	forkSession              *connect.Client[v1.ForkSessionRequest, v1.ForkSessionResponse]
+	clearConversationState   *connect.Client[v1.ClearConversationStateRequest, v1.ClearConversationStateResponse]
 	listFiles                *connect.Client[v1.ListFilesRequest, v1.ListFilesResponse]
 	getFileContent           *connect.Client[v1.GetFileContentRequest, v1.GetFileContentResponse]
 	searchFiles              *connect.Client[v1.SearchFilesRequest, v1.SearchFilesResponse]
@@ -1228,6 +1243,11 @@ func (c *sessionServiceClient) ForkSession(ctx context.Context, req *connect.Req
 	return c.forkSession.CallUnary(ctx, req)
 }
 
+// ClearConversationState calls session.v1.SessionService.ClearConversationState.
+func (c *sessionServiceClient) ClearConversationState(ctx context.Context, req *connect.Request[v1.ClearConversationStateRequest]) (*connect.Response[v1.ClearConversationStateResponse], error) {
+	return c.clearConversationState.CallUnary(ctx, req)
+}
+
 // ListFiles calls session.v1.SessionService.ListFiles.
 func (c *sessionServiceClient) ListFiles(ctx context.Context, req *connect.Request[v1.ListFilesRequest]) (*connect.Response[v1.ListFilesResponse], error) {
 	return c.listFiles.CallUnary(ctx, req)
@@ -1478,6 +1498,11 @@ type SessionServiceHandler interface {
 	// The fork receives truncated scrollback, conversation history, and a git worktree
 	// based on the checkpoint's recorded state.
 	ForkSession(context.Context, *connect.Request[v1.ForkSessionRequest]) (*connect.Response[v1.ForkSessionResponse], error)
+	// ClearConversationState removes the stored Claude conversation UUID from a session
+	// so that the next Resume starts a fresh conversation instead of attempting --resume
+	// with a stale or path-mismatched UUID. Useful when a session is stuck in a crash
+	// loop with "No conversation found" errors.
+	ClearConversationState(context.Context, *connect.Request[v1.ClearConversationStateRequest]) (*connect.Response[v1.ClearConversationStateResponse], error)
 	// ListFiles returns the immediate children of a directory in a session's worktree.
 	// Directories are returned first, then files, both alphabetically sorted.
 	// Gitignored entries are excluded unless include_ignored is true.
@@ -1843,6 +1868,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("ForkSession")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceClearConversationStateHandler := connect.NewUnaryHandler(
+		SessionServiceClearConversationStateProcedure,
+		svc.ClearConversationState,
+		connect.WithSchema(sessionServiceMethods.ByName("ClearConversationState")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceListFilesHandler := connect.NewUnaryHandler(
 		SessionServiceListFilesProcedure,
 		svc.ListFiles,
@@ -2089,6 +2120,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListCheckpointsHandler.ServeHTTP(w, r)
 		case SessionServiceForkSessionProcedure:
 			sessionServiceForkSessionHandler.ServeHTTP(w, r)
+		case SessionServiceClearConversationStateProcedure:
+			sessionServiceClearConversationStateHandler.ServeHTTP(w, r)
 		case SessionServiceListFilesProcedure:
 			sessionServiceListFilesHandler.ServeHTTP(w, r)
 		case SessionServiceGetFileContentProcedure:
@@ -2344,6 +2377,10 @@ func (UnimplementedSessionServiceHandler) ListCheckpoints(context.Context, *conn
 
 func (UnimplementedSessionServiceHandler) ForkSession(context.Context, *connect.Request[v1.ForkSessionRequest]) (*connect.Response[v1.ForkSessionResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ForkSession is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ClearConversationState(context.Context, *connect.Request[v1.ClearConversationStateRequest]) (*connect.Response[v1.ClearConversationStateResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ClearConversationState is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) ListFiles(context.Context, *connect.Request[v1.ListFilesRequest]) (*connect.Response[v1.ListFilesResponse], error) {

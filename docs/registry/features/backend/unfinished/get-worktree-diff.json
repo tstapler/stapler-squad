@@ -1,0 +1,11 @@
+{
+  "id": "unfinished:get-worktree-diff",
+  "type": "backend",
+  "service": "UnfinishedWorkService",
+  "method": "GetWorktreeDiff",
+  "protoFile": "proto/session/v1/unfinished.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-03T00:32:00Z"
+}

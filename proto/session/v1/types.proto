@@ -158,6 +158,9 @@ message Session {
   // Full launch command as passed to tmux on session start, including injected flags
   // (e.g. --resume <id>, --mcp-server ..., -y, initial prompt). Empty for external sessions.
   string launch_command = 45;
+
+  // Active-work state for review queue filtering. Populated from IdleDetector state.
+  WorkingState working_state = 50;
 }
 
 // SessionStatus represents the current state of a session.
@@ -200,6 +203,21 @@ enum InstanceType {
   INSTANCE_TYPE_MANAGED = 1;
   // Session discovered externally (e.g., via claude-mux) with limited interaction.
   INSTANCE_TYPE_EXTERNAL = 2;
+}
+
+// WorkingState represents the active-work status of a session for review queue filtering.
+// Populated from IdleDetector state; allows frontend to distinguish sessions that are
+// actively working from those waiting for user attention.
+enum WorkingState {
+  WORKING_STATE_UNSPECIFIED = 0;
+  // Session is actively generating output (Claude producing tokens, interrupt available).
+  WORKING_STATE_ACTIVE = 1;
+  // Session is running a tool (Bash, Edit, etc.) with no interrupt visible.
+  WORKING_STATE_PROCESSING = 2;
+  // Session is at the idle prompt, ready for user input.
+  WORKING_STATE_IDLE = 3;
+  // Session has been silent beyond the idle threshold (may be stuck or waiting).
+  WORKING_STATE_WAITING = 4;
 }
 
 // RateLimitState indicates whether the session is experiencing rate limiting.
@@ -379,6 +397,9 @@ message ReviewItem {
   // True if the session's branch has diverged from the base branch (main/master).
   // Populated by RunOneShot pre-check; shows warning badge in review queue UI.
   bool branch_diverged_from_base = 19;
+
+  // Active-work state for review queue filtering. Populated from IdleDetector state.
+  WorkingState working_state = 20;
 }
 
 // Priority levels for review queue items (highest to lowest urgency).

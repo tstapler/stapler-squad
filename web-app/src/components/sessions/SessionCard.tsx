@@ -99,6 +99,7 @@ interface SessionCardProps {
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
+  onClearConversationState?: (sessionId: string) => Promise<boolean>;
   selectMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: () => void;
@@ -123,6 +124,7 @@ export function SessionCard({
   onForkFromCheckpoint,
   onRunOneShot,
   onSetRateLimitEnabled,
+  onClearConversationState,
   selectMode = false,
   isSelected = false,
   onToggleSelect,
@@ -1040,6 +1042,16 @@ export function SessionCard({
                 >
                   <span aria-hidden="true">➕</span> New Workspace
                 </button>
+                {onClearConversationState && (
+                  <button
+                    role="menuitem"
+                    className={overflowMenuItem}
+                    onClick={(e) => { e.stopPropagation(); setShowOverflow(false); onClearConversationState(session.id); }}
+                    aria-label={`Clear conversation state for session ${session.title}`}
+                  >
+                    <span aria-hidden="true">🗑️</span> Clear Conversation
+                  </button>
+                )}
                 <button
                   role="menuitem"
                   className={`${overflowMenuItem} ${overflowMenuItemDanger}`}

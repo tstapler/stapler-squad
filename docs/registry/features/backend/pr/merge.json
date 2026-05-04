@@ -5,7 +5,10 @@
   "method": "MergePR",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-02T18:54:29.248784855-07:00"
+  "tested": true,
+  "testIds": [
+    "TestMergePR_EmptySessionID",
+    "TestMergePR_UnknownSessionID"
+  ],
+  "lastModified": "2026-05-03T00:47:14.017894405-07:00"
 }

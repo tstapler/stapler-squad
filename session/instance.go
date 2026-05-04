@@ -888,10 +888,17 @@ func (i *Instance) GetStableID() string {
 }
 
 // MatchesID reports whether id refers to this instance.
-// Accepts both the stable UUID and the legacy Title identifier so that all
-// service lookups work correctly regardless of which form the caller has.
+// Accepts the stable UUID, the legacy Title, or the full tmux session name
+// (e.g. "staplersquad_my-session") so that hook notifications sent from inside
+// managed tmux sessions are correctly attributed to their human-readable session.
 func (i *Instance) MatchesID(id string) bool {
-	return i.Title == id || i.GetStableID() == id
+	if i.Title == id || i.GetStableID() == id {
+		return true
+	}
+	if tmuxName := i.GetTmuxSessionName(); tmuxName != "" && tmuxName == id {
+		return true
+	}
+	return false
 }
 
 // GetTmuxSessionName returns the sanitized tmux session name for reconciliation.
@@ -2318,6 +2325,18 @@ func (i *Instance) SetClaudeSession(sessionData *ClaudeSessionData) {
 // HasClaudeSession returns true if this instance has Claude session data
 func (i *Instance) HasClaudeSession() bool {
 	return i.claudeSession != nil && i.claudeSession.ConversationUUID != ""
+}
+
+// ClearConversationState removes the stored Claude conversation UUID and history
+// file path so that the next Resume starts a fresh conversation rather than
+// attempting --resume with a potentially stale or path-mismatched UUID.
+func (i *Instance) ClearConversationState() {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+	if i.claudeSession != nil {
+		i.claudeSession.ConversationUUID = ""
+	}
+	i.HistoryFilePath = ""
 }
 
 // tryExtractConversationUUID attempts to detect the Claude conversation UUID

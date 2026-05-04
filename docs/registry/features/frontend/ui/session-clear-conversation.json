@@ -1,0 +1,9 @@
+{
+  "id": "session-clear-conversation",
+  "type": "frontend",
+  "component": "SessionCard",
+  "path": "web-app/src/components/sessions/SessionCard.tsx",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-03T00:32:00Z"
+}

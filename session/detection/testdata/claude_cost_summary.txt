@@ -1,0 +1,12 @@
+● I've completed the implementation. Here's a summary of what was done:
+
+  1. Added the new `WorkingState` enum to the proto schema
+  2. Updated the session adapter to map `IdleState` to `WorkingState`
+  3. Propagated the field through the review queue service
+
+  The changes are backward compatible — proto default 0 = UNSPECIFIED, which the
+  frontend treats the same as the old "no info" state.
+
+> Are there any other changes you'd like me to make?
+
+⎿  $0.42 • 3 tool uses • 1.2k tokens

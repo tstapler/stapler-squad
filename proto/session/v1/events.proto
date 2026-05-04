@@ -55,6 +55,9 @@ message SessionStatusChangedEvent {
   // (e.g. "Waiting for tool approval", "Tests failing: 3 of 12").
   // Empty when detected_status is empty.
   optional string detected_context = 5;
+
+  // Active-work state at the time of the status change.
+  WorkingState working_state = 6;
 }
 
 // TerminalData represents terminal I/O for bidirectional streaming.

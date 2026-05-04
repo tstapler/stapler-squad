@@ -205,13 +205,40 @@ func stripANSI(text string) string {
 	return ansiStripRegex.ReplaceAllString(text, "")
 }
 
+// collapseCarriageReturns collapses CR-overwritten segments within each line,
+// keeping only the final write. "foo\rbar" → "bar"; "\r\n" (Windows newline)
+// is treated as a newline boundary and preserved.
+func collapseCarriageReturns(s string) string {
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		// A trailing \r on a line segment is from a \r\n Windows newline; preserve it
+		// by re-appending it after collapsing inner CR overwrites.
+		trailingCR := strings.HasSuffix(line, "\r")
+		if trailingCR {
+			line = line[:len(line)-1]
+		}
+		if strings.ContainsRune(line, '\r') {
+			segments := strings.Split(line, "\r")
+			line = segments[len(segments)-1]
+		}
+		if trailingCR {
+			line = line + "\r"
+		}
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
+// StatusDetectionTailBytes is the number of bytes scanned from the tail of terminal
+// output when determining session status. Matches DefaultIdleDetectorConfig().BufferSize.
+const StatusDetectionTailBytes = 4096
+
 // Detect analyzes the provided PTY output and returns the detected status.
 // Patterns are checked in priority order: Error > TestsFailing > Success > NeedsApproval > InputRequired > Active > Processing > Idle > Ready.
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
-	// Strip ANSI escape codes for cleaner pattern matching
-	// Terminal output often contains color codes like [38;5;153m that interrupt patterns
-	text := stripANSI(string(output))
+	// Collapse CR-overwritten lines then strip ANSI escape codes for cleaner pattern matching.
+	text := stripANSI(collapseCarriageReturns(string(output)))
 
 	// Check error patterns first (highest priority)
 	for _, regex := range sd.errorRegexes {
@@ -282,9 +309,7 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 // DetectWithContext returns the detected status along with a user-friendly context message.
 // Uses the pattern's Description field for human-readable messages instead of raw matched text.
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
-	// Strip ANSI escape codes for cleaner pattern matching
-	// Terminal output often contains color codes like [38;5;153m that interrupt patterns
-	text := stripANSI(string(output))
+	text := stripANSI(collapseCarriageReturns(string(output)))
 
 	// Check error patterns first (highest priority)
 	for i, regex := range sd.errorRegexes {
@@ -478,6 +503,15 @@ func getDefaultPatterns() StatusPatterns {
 				Priority:    15,
 			},
 			{
+				Name: "claude_readline_prompt",
+				// Matches the Claude Code readline prompt ">" optionally followed by
+				// the terminal cursor block character ▌ (U+258C) which tmux capture-pane
+				// includes when the cursor sits on the prompt line.
+				Pattern:     `(?m)^>\s*▌?\s*$`,
+				Description: "Claude Code readline input prompt",
+				Priority:    16,
+			},
+			{
 				Name:        "command_prompt",
 				Pattern:     `\$\s*$`,
 				Description: "Shell command prompt at end of output",
@@ -516,6 +550,12 @@ func getDefaultPatterns() StatusPatterns {
 				Priority:    25,
 			},
 			{
+				Name:        "claude_thinking_verb",
+				Pattern:     `(?m)^\*\s+\w+[…\.]{1,3}`,
+				Description: "Claude thinking state with random verb (Moonwalking…, Ebbing..., etc.)",
+				Priority:    26,
+			},
+			{
 				Name:        "running_status",
 				Pattern:     `Running\.{3,}`,
 				Description: "Command actively running",
@@ -536,9 +576,18 @@ func getDefaultPatterns() StatusPatterns {
 		},
 		Success: []StatusPattern{
 			{
-				Name:        "verb_duration_completion",
-				Pattern:     `✻\s+\w+\s+for\s+\d+[hms]`,
-				Description: "Claude completed task (verb + duration format)",
+				Name:        "cost_summary_line",
+				Pattern:     `\$\d+\.\d+\s+•`,
+				Description: "Claude cost summary line — turn complete",
+				Priority:    22,
+			},
+			{
+				Name: "verb_duration_completion",
+				// ✻ (asterism U+273B) and ◉ (fisheye U+25C9) are both used as the
+				// turn-completion bullet. The verb is a random past-tense word that
+				// rotates each turn (Baked, Cooked, Pondered, Synthesized, etc.).
+				Pattern:     `[✻◉]\s+\w+\s+for\s+\d+[hms]`,
+				Description: "Claude turn complete — '<PastTenseVerb> for <duration>' format",
 				Priority:    21,
 			},
 			{
@@ -694,17 +743,62 @@ func (sd *StatusDetector) DetectForProgram(output []byte, program string) Detect
 }
 
 // DetectFromLines analyzes multiple lines of output and returns the most relevant status.
-// This is useful for analyzing scrollback history where multiple status indicators may be present.
-// The most recent (last) matching pattern takes precedence.
+// Lines are processed in reverse order (most recent first) so the current terminal
+// state takes precedence over stale scrollback content.
+//
+// Blank/whitespace-only lines are skipped. StatusReady results are noted but the scan
+// continues looking for a more specific status — this prevents the `.*` Ready catch-all
+// from stopping the scan on an unrelated line (e.g. "PR #66") before reaching a real
+// status pattern on an earlier line. StatusReady is returned as a fallback if no more
+// specific status is found.
 func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
-	// Process lines in reverse order (most recent first)
+	bestSoFar := StatusUnknown
 	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
 		status := sd.DetectFromString(lines[i])
-		if status != StatusUnknown {
-			return status
+		if status == StatusUnknown {
+			continue
+		}
+		if status != StatusReady {
+			return status // specific match wins immediately
+		}
+		if bestSoFar == StatusUnknown {
+			bestSoFar = StatusReady // note we saw Ready but keep looking
 		}
 	}
-	return StatusUnknown
+	return bestSoFar
+}
+
+// DetectWithContextFromLines analyzes lines in reverse order (most recent first) and returns
+// the detected status with context. This ensures current terminal state (e.g. "? for shortcuts"
+// on the last line) takes precedence over stale scrollback content (e.g. an old "esc to interrupt"
+// from a previous turn that is still within the scanned window).
+//
+// Blank/whitespace-only lines are skipped. StatusReady is treated as a low-confidence
+// fallback — the scan continues past Ready results looking for a more specific status,
+// preventing the `.*` catch-all from masking real patterns on earlier lines.
+func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedStatus, string) {
+	bestStatus := StatusUnknown
+	bestDesc := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.TrimSpace(lines[i]) == "" {
+			continue
+		}
+		status, desc := sd.DetectWithContext([]byte(lines[i]))
+		if status == StatusUnknown {
+			continue
+		}
+		if status != StatusReady {
+			return status, desc // specific match wins immediately
+		}
+		if bestStatus == StatusUnknown {
+			bestStatus = StatusReady
+			bestDesc = desc
+		}
+	}
+	return bestStatus, bestDesc
 }
 
 // DetectRecent analyzes the most recent n bytes of output for status detection.

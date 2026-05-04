@@ -1994,6 +1994,49 @@ func (s *SessionService) ForkSession(
 	}), nil
 }
 
+// ClearConversationState removes the stored Claude conversation UUID from a session
+// so that the next Resume starts a fresh conversation instead of attempting --resume
+// with a stale or path-mismatched UUID.
+func (s *SessionService) ClearConversationState(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ClearConversationStateRequest],
+) (*connect.Response[sessionv1.ClearConversationStateResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
+	}
+
+	instance := s.FindLiveInstance(req.Msg.Id)
+	if instance == nil {
+		instances, err := s.loadInstancesWithWiring()
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+		}
+		for _, inst := range instances {
+			if inst.MatchesID(req.Msg.Id) {
+				instance = inst
+				break
+			}
+		}
+	}
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	instance.ClearConversationState()
+
+	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist cleared state: %w", err))
+	}
+
+	log.InfoLog.Printf("Cleared conversation state for session '%s'", instance.Title)
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"claude_session"}))
+
+	return connect.NewResponse(&sessionv1.ClearConversationStateResponse{
+		Success: true,
+		Message: fmt.Sprintf("Conversation state cleared for session '%s'", instance.Title),
+	}), nil
+}
+
 // ListPathCompletions returns filesystem entries matching the given path prefix.
 func (s *SessionService) ListPathCompletions(
 	ctx context.Context,

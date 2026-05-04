@@ -1,5 +1,6 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
 import type { ReviewQueue } from "@/gen/session/v1/types_pb";
+import { WorkingState } from "@/gen/session/v1/types_pb";
 import type { RootState } from "./store";
 
 interface ReviewQueueStats {
@@ -78,5 +79,37 @@ export const selectReviewQueueItems = (state: RootState) =>
 export const selectReviewQueueStats = (state: RootState) => state.reviewQueue.stats;
 export const selectReviewQueueLoading = (state: RootState) => state.reviewQueue.loading;
 export const selectReviewQueueError = (state: RootState) => state.reviewQueue.error;
+
+// selectWaitingItems returns only items that are NOT actively working,
+// so the queue shows sessions that genuinely need user attention.
+export const selectWaitingItems = (state: RootState) => {
+  const items = state.reviewQueue.reviewQueue?.items ?? [];
+  return items.filter(
+    (item) =>
+      item.workingState !== WorkingState.ACTIVE &&
+      item.workingState !== WorkingState.PROCESSING
+  );
+};
+
+// selectQueueCountsByWorkingState returns per-category counts for the header badge.
+export const selectQueueCountsByWorkingState = (state: RootState) => {
+  const items = state.reviewQueue.reviewQueue?.items ?? [];
+  let waiting = 0;
+  let working = 0;
+  let stuck = 0;
+  for (const item of items) {
+    if (
+      item.workingState === WorkingState.ACTIVE ||
+      item.workingState === WorkingState.PROCESSING
+    ) {
+      working++;
+    } else if (item.workingState === WorkingState.WAITING) {
+      stuck++;
+    } else {
+      waiting++;
+    }
+  }
+  return { waiting, working, stuck };
+};
 
 export default reviewQueueSlice.reducer;

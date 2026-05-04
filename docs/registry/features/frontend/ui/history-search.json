@@ -4,7 +4,12 @@
   "component": "HistoryBrowserPage",
   "path": "web-app/src/app/history/page.tsx",
   "markerLine": 2,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-04-18T17:28:17.610Z"
+  "tested": true,
+  "testIds": [
+    "History Search > e2e:history-search - History search UI is accessible",
+    "useSessionSearch > returns [] for empty query",
+    "useSessionSearch > title match ranks above path-only match for the same query",
+    "useSessionSearch > caps results at 8 even when more sessions match"
+  ],
+  "lastModified": "2026-05-03T00:32:00Z"
 }

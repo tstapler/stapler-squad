@@ -2,9 +2,11 @@ package detection
 
 import (
 	"fmt"
-	"github.com/tstapler/stapler-squad/log"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // IdleState represents the idle state of a Claude Code session.
@@ -130,11 +132,12 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 		return id.currentState
 	}
 
-	// Strip ANSI codes for cleaner pattern matching (same as status_detector.go)
-	cleanContent := stripANSI(content)
-
-	// Detect status from patterns
-	status := id.statusDetector.Detect([]byte(cleanContent))
+	// Detect via line-based reverse scan: process from the most recent line
+	// backwards so a fresh idle prompt on the last line (e.g. "? for shortcuts")
+	// takes priority over a stale "esc to interrupt" from an earlier turn.
+	// collapseCarriageReturns + ANSI stripping are applied per-line inside DetectFromLines.
+	lines := strings.Split(content, "\n")
+	status := id.statusDetector.DetectFromLines(lines)
 
 	// Map detected status to idle state
 	newState := id.mapStatusToIdleState(status)

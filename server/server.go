@@ -184,22 +184,23 @@ func NewServer(addr string) *Server {
 				stats.SpawnsInWindow, int(stats.WindowDuration.Seconds()),
 				stats.ZombiesInWindow, level,
 			)
-			notifType := int32(sessionv1.NotificationType_NOTIFICATION_TYPE_WARNING)
-			if level == tmux.ForkPressureCritical {
-				notifType = int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR)
-			}
-			event := events.NewNotificationEvent(
-				"fork-pressure",
-				"System",
-				uuid.New().String(),
-				notifType,
-				int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
-				fmt.Sprintf("Fork Pressure: %s", level),
-				body,
-				nil,
-			)
-			deps.EventBus.Publish(event)
 			log.WarningLog.Printf("[ForkPressure] alert dispatched: level=%s %s", level, body)
+
+			// Only surface a UI notification for critical pressure (failures or zombies).
+			// Warning-level (elevated spawn rate alone) is logged but not shown to the user.
+			if level == tmux.ForkPressureCritical {
+				event := events.NewNotificationEvent(
+					"fork-pressure",
+					"System",
+					uuid.New().String(),
+					int32(sessionv1.NotificationType_NOTIFICATION_TYPE_ERROR),
+					int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),
+					fmt.Sprintf("Fork Pressure: %s", level),
+					body,
+					nil,
+				)
+				deps.EventBus.Publish(event)
+			}
 
 			// Immediately reconcile to mark dead sessions Stopped, cutting spawn rate.
 			if deps.ReviewQueuePoller != nil {

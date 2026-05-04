@@ -107,6 +107,27 @@ var snapshotTests = []snapshotTest{
 		description: "Aider actively editing or applying changes",
 	},
 
+	// ── New patterns (Epic 1.3) ───────────────────────────────────────────────
+	{
+		fixture:     "claude_thinking_verb.txt",
+		expected:    StatusActive,
+		program:     "claude",
+		description: "Claude in thinking state — '* Moonwalking…' bullet with ellipsis visible",
+	},
+	{
+		fixture:     "claude_cost_summary.txt",
+		expected:    StatusSuccess,
+		program:     "claude",
+		description: "Claude turn complete — cost summary line '$0.42 •' visible",
+	},
+
+	{
+		fixture:     "claude_baked_idle.txt",
+		expected:    StatusSuccess,
+		program:     "claude",
+		description: "Claude completed a /loop turn — '◉ <PastTenseVerb> for <duration>' visible (verb rotates), '> ▌' prompt, no 'esc to interrupt'",
+	},
+
 	// ── False-positive guards ─────────────────────────────────────────────────
 	// These fixtures contain numbered lists that SHOULD NOT trigger InputRequired.
 	// They guard against regressions in the numbered_option_selector pattern.

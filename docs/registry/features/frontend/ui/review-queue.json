@@ -3,8 +3,16 @@
   "type": "frontend",
   "component": "ReviewQueuePage",
   "path": "web-app/src/app/review-queue/page.tsx",
-  "markerLine": 2,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-04-18T17:28:17.609Z"
+  "tested": true,
+  "testIds": [
+    "Review Queue Smoke Tests > review queue page loads successfully",
+    "Review Queue Smoke Tests > review queue badge is visible",
+    "Review Queue Smoke Tests > review queue panel renders without errors",
+    "Review Queue Acknowledge Flow — UI Contract > review-queue-loaded sentinel is present after page renders",
+    "ReviewQueuePanel — empty state > renders without crashing when queue is empty",
+    "ReviewQueuePanel — Create PR button > shows Create PR button for TASK_COMPLETE item with no existing PR URL",
+    "reviewQueueSlice > setReviewQueue > stores the queue and syncs totalItems into stats",
+    "useReviewQueue — acknowledgeSession > removes item from Redux store synchronously before API call resolves"
+  ],
+  "lastModified": "2026-05-03T00:32:00Z"
 }

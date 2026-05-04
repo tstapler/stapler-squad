@@ -3,8 +3,15 @@
   "type": "frontend",
   "component": "Home",
   "path": "web-app/src/app/page.tsx",
-  "markerLine": 2,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-04-18T17:28:17.608Z"
+  "tested": true,
+  "testIds": [
+    "Session Lifecycle > e2e:session-create - Session create UI is accessible",
+    "Session Lifecycle > e2e:session-pause - Pre-seeded paused sessions are visible",
+    "Session Lifecycle > e2e:session-resume - Session status filter works",
+    "Session Lifecycle > e2e:session-delete - Session management page loads",
+    "sessionsSlice > setSessions > replaces all sessions (setAll semantics)",
+    "sessionsSlice > upsertSession > inserts a new session when id is not present",
+    "sessionsSlice > removeSession > removes the session with the matching id"
+  ],
+  "lastModified": "2026-05-03T00:32:00Z"
 }

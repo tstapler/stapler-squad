@@ -3,6 +3,7 @@ package detection
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -602,6 +603,224 @@ func TestStatusDetector_VerbDurationPriorityOverActive(t *testing.T) {
 	status := sd.Detect([]byte(output))
 	if status != StatusSuccess {
 		t.Errorf("Detect() = %v, want StatusSuccess (success should beat active in priority order)", status)
+	}
+}
+
+// TestCollapseCarriageReturns_SpinnerSequence verifies that CR-overwritten lines are
+// collapsed so old spinner frames don't confuse pattern matching.
+// The stale frame "⠋ Thinking" must not appear in the result.
+func TestCollapseCarriageReturns_SpinnerSequence(t *testing.T) {
+	input := "⠋ Thinking\r⠙ Thinking"
+	got := collapseCarriageReturns(input)
+	if strings.Contains(got, "⠋ Thinking") {
+		t.Errorf("collapseCarriageReturns(%q) = %q — stale frame should not appear", input, got)
+	}
+	if !strings.Contains(got, "⠙ Thinking") {
+		t.Errorf("collapseCarriageReturns(%q) = %q — final frame should be present", input, got)
+	}
+}
+
+func TestCollapseCarriageReturns_CRLFPreserved(t *testing.T) {
+	input := "line1\r\nline2"
+	got := collapseCarriageReturns(input)
+	if got != input {
+		t.Errorf("collapseCarriageReturns(%q) = %q, want unchanged %q", input, got, input)
+	}
+}
+
+func TestCollapseCarriageReturns_EmptyInput(t *testing.T) {
+	got := collapseCarriageReturns("")
+	if got != "" {
+		t.Errorf("collapseCarriageReturns(\"\") = %q, want empty", got)
+	}
+}
+
+func TestCollapseCarriageReturns_NoCR(t *testing.T) {
+	input := "no carriage returns here\nnext line"
+	got := collapseCarriageReturns(input)
+	if got != input {
+		t.Errorf("collapseCarriageReturns(%q) = %q, want unchanged", input, got)
+	}
+}
+
+func TestStripANSI_WithCarriageReturn_FullPipeline(t *testing.T) {
+	// Spinner with ANSI color codes and CR overwriting; final state is "⠙ Thinking"
+	input := "\x1b[32m⠋ Thinking\x1b[0m\r\x1b[32m⠙ Thinking\x1b[0m"
+	text := stripANSI(collapseCarriageReturns(input))
+	want := "⠙ Thinking"
+	if text != want {
+		t.Errorf("pipeline result = %q, want %q", text, want)
+	}
+}
+
+// TestDetectRecentDoesNotMatchStaleContent is a regression guard: stale "esc to interrupt"
+// in the first 5000 bytes must not cause StatusActive when the tail window is idle.
+func TestDetectRecentDoesNotMatchStaleContent(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// Build a buffer: 5000 bytes of old active output, then an idle tail.
+	old := make([]byte, 5000)
+	for i := range old {
+		old[i] = 'x'
+	}
+	// Embed stale active pattern in the old section.
+	copy(old[100:], []byte("esc to interrupt"))
+
+	idleTail := []byte("\n? for shortcuts\n")
+	buf := append(old, idleTail...)
+
+	status := sd.DetectRecent(buf, StatusDetectionTailBytes)
+	if status == StatusActive {
+		t.Errorf("DetectRecent with stale active content returned StatusActive; want StatusIdle")
+	}
+	if status != StatusIdle {
+		t.Errorf("DetectRecent returned %v, want StatusIdle", status)
+	}
+}
+
+// TestDetectRecentTailWindowBoundary verifies a buffer exactly StatusDetectionTailBytes long
+// is fully scanned.
+func TestDetectRecentTailWindowBoundary(t *testing.T) {
+	sd := NewStatusDetector()
+	buf := make([]byte, StatusDetectionTailBytes)
+	for i := range buf {
+		buf[i] = 'x'
+	}
+	copy(buf[len(buf)-20:], []byte("esc to interrupt    "))
+	status := sd.DetectRecent(buf, StatusDetectionTailBytes)
+	if status != StatusActive {
+		t.Errorf("DetectRecent with active pattern at tail end returned %v, want StatusActive", status)
+	}
+}
+
+// TestDetectRecentShorterThanWindow verifies no panic and correct detection when buffer
+// is shorter than the tail window.
+func TestDetectRecentShorterThanWindow(t *testing.T) {
+	sd := NewStatusDetector()
+	buf := []byte("esc to interrupt")
+	status := sd.DetectRecent(buf, StatusDetectionTailBytes)
+	if status != StatusActive {
+		t.Errorf("DetectRecent (short buffer) returned %v, want StatusActive", status)
+	}
+}
+
+// TestStatusDetector_DetectSuccess_CostSummaryLine verifies the cost summary pattern.
+func TestStatusDetector_DetectSuccess_CostSummaryLine(t *testing.T) {
+	sd := NewStatusDetector()
+	cases := []string{
+		"$0.42 • 3 tool uses",
+		"$1.23 •",
+		"$10.05 • some detail",
+	}
+	for _, c := range cases {
+		status := sd.Detect([]byte(c))
+		if status != StatusSuccess {
+			t.Errorf("Detect(%q) = %v, want StatusSuccess", c, status)
+		}
+	}
+}
+
+// TestStatusDetector_DetectIdle_ReadlinePrompt verifies the readline prompt pattern.
+func TestStatusDetector_DetectIdle_ReadlinePrompt(t *testing.T) {
+	sd := NewStatusDetector()
+	cases := []string{
+		">\n",
+		">\n? for shortcuts",
+		"some output\n>\n",
+	}
+	for _, c := range cases {
+		status := sd.Detect([]byte(c))
+		if status != StatusIdle {
+			t.Errorf("Detect(%q) = %v, want StatusIdle", c, status)
+		}
+	}
+}
+
+// TestStatusDetector_ReadlinePrompt_NotMatchedMidLine ensures "> some text" does not trigger idle.
+func TestStatusDetector_ReadlinePrompt_NotMatchedMidLine(t *testing.T) {
+	sd := NewStatusDetector()
+	output := "> some text here"
+	status := sd.Detect([]byte(output))
+	if status == StatusIdle {
+		t.Errorf("Detect(%q) returned StatusIdle but '> text' should not match readline prompt", output)
+	}
+}
+
+// TestStatusDetector_DetectActive_ThinkingVerb verifies the claude_thinking_verb pattern.
+func TestStatusDetector_DetectActive_ThinkingVerb(t *testing.T) {
+	sd := NewStatusDetector()
+	cases := []string{
+		"* Moonwalking…",
+		"* Ebbing...",
+		"* Pondering.",
+		"* Thinking…",
+	}
+	for _, c := range cases {
+		status := sd.Detect([]byte(c))
+		if status != StatusActive {
+			t.Errorf("Detect(%q) = %v, want StatusActive", c, status)
+		}
+	}
+}
+
+// TestStatusDetector_DetectSuccess_VerbDurationCompletion verifies the turn-completion
+// bullet pattern handles both ✻ and ◉ bullets with any past-tense verb.
+func TestStatusDetector_DetectSuccess_VerbDurationCompletion(t *testing.T) {
+	sd := NewStatusDetector()
+	cases := []string{
+		"✻ Cooked for 2m",
+		"◉ Baked for 10s",
+		"◉ Pondered for 45s",
+		"◉ Synthesized for 1m",
+		"✻ Analyzed for 3h",
+	}
+	for _, c := range cases {
+		status := sd.Detect([]byte(c))
+		if status != StatusSuccess {
+			t.Errorf("Detect(%q) = %v, want StatusSuccess", c, status)
+		}
+	}
+}
+
+// TestDetectWithContextFromLines_StaleScrollback is the core regression guard for
+// the scrollback poisoning problem: a session that completed its turn (showing
+// "? for shortcuts" on the last line) must NOT be misclassified as Active because
+// an old "esc to interrupt" line exists earlier in the same window.
+func TestDetectWithContextFromLines_StaleScrollback(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// Simulate 20 lines of terminal content: "esc to interrupt" on line 15 (stale),
+	// "? for shortcuts" on the last line (current state).
+	lines := make([]string, 20)
+	for i := range lines {
+		lines[i] = "some output line"
+	}
+	lines[14] = "esc to interrupt                                   10% until auto-compact"
+	lines[19] = "? for shortcuts"
+
+	status, _ := sd.DetectWithContextFromLines(lines)
+	if status != StatusIdle {
+		t.Errorf("DetectWithContextFromLines with stale 'esc to interrupt' returned %v, want StatusIdle — last-line idle prompt must win", status)
+	}
+}
+
+// TestDetectWithContextFromLines_ActiveWhenNoIdlePrompt verifies that Active is
+// correctly returned when the last line shows an active indicator.
+func TestDetectWithContextFromLines_ActiveWhenNoIdlePrompt(t *testing.T) {
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"some output",
+		"* Moonwalking… (4m 18s · ↓ 2.0k tokens · thinking)",
+		"  └ Tip: Use /btw to ask a quick side question",
+		"",
+		"> ▌",
+		"esc to interrupt                                   10% until auto-compact",
+	}
+
+	status, _ := sd.DetectWithContextFromLines(lines)
+	if status != StatusActive {
+		t.Errorf("DetectWithContextFromLines with active terminal returned %v, want StatusActive", status)
 	}
 }
 
