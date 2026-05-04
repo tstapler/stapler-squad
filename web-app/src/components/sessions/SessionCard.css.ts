@@ -164,47 +164,23 @@ export const status = style({
 });
 
 export const statusRunning = style({
-  background: "#dcfce7",
-  color: "#14532d", // bumped from #166534 (~4.6:1) for better contrast safety margin
-  "@media": {
-    "(prefers-color-scheme: dark)": {
-      background: "#166534",
-      color: "#dcfce7",
-    },
-  },
+  background: vars.statusBadge.completeBg,
+  color: vars.statusBadge.completeFg,
 });
 
 export const statusReady = style({
-  background: "#dbeafe",
-  color: "#1e40af",
-  "@media": {
-    "(prefers-color-scheme: dark)": {
-      background: "#1e40af",
-      color: "#dbeafe",
-    },
-  },
+  background: vars.statusBadge.inputBg,
+  color: vars.statusBadge.inputFg,
 });
 
 export const statusPaused = style({
-  background: "#fef3c7",
-  color: "#78350f", // bumped from #92400e (~4.5:1) for better contrast safety margin
-  "@media": {
-    "(prefers-color-scheme: dark)": {
-      background: "#92400e",
-      color: "#fef3c7",
-    },
-  },
+  background: vars.statusBadge.uncommittedBg,
+  color: vars.statusBadge.uncommittedFg,
 });
 
 export const statusLoading = style({
-  background: "#e0e7ff",
-  color: "#4338ca",
-  "@media": {
-    "(prefers-color-scheme: dark)": {
-      background: "#3730a3",
-      color: "#e0e7ff",
-    },
-  },
+  background: vars.statusBadge.processingBg,
+  color: vars.statusBadge.processingFg,
 });
 
 export const statusNeedsApproval = style({
@@ -222,8 +198,8 @@ export const statusNeedsApproval = style({
 });
 
 export const statusUnknown = style({
-  background: "#f3f4f6",
-  color: "#374151",
+  background: vars.statusBadge.idleBg,
+  color: vars.statusBadge.idleFg,
 });
 
 export const category = style({
@@ -255,17 +231,12 @@ export const tag = style({
   padding: `${vars.space["1"]} 10px`,
   fontSize: "0.6875rem",
   fontWeight: 500,
-  background: "#1e40af",
-  color: "#dbeafe",
+  background: vars.statusBadge.inputBg,
+  color: vars.statusBadge.inputFg,
   borderRadius: vars.radii.full,
   transition: "background 0.2s ease",
   selectors: {
-    "&:hover": { background: "#1e3a8a" },
-  },
-  "@media": {
-    "(prefers-color-scheme: dark)": {
-      color: "#dbeafe",
-    },
+    "&:hover": { background: vars.color.accentHover },
   },
 });
 
