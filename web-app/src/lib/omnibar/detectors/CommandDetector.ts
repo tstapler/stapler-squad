@@ -38,7 +38,7 @@ export class CommandDetector implements Detector {
     for (const cmd of CommandDetector.COMMANDS) {
       if (cmd.pattern.test(trimmed)) {
         return {
-          type: InputType.Unknown, // reuse Unknown as "Command" until InputType is extended
+          type: InputType.Command,
           confidence: 1.0,
           parsedValue: trimmed,
           suggestedName: cmd.suggestedName,

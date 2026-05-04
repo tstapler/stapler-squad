@@ -40,7 +40,10 @@ export default function RootLayout({
     dark: darkTheme,
   });
 
-  const foucScript = `(function(){try{var m=${themeMapJson};var t=localStorage.getItem('stapler-theme');var cls=t&&m[t]?m[t]:m['matrix'];document.documentElement.className=document.documentElement.className.replace(/\\S+/g,'').trim();document.documentElement.classList.add(cls);}catch(e){}})();`;
+  // Remove only theme classes (those that match one of our known theme hashes) so
+  // font variable classes added by next/font are preserved during theme switching.
+  const allThemeClasses = Object.values(JSON.parse(themeMapJson) as Record<string, string>).join(' ');
+  const foucScript = `(function(){try{var m=${themeMapJson};var t=localStorage.getItem('stapler-theme');var cls=t&&m[t]?m[t]:m['matrix'];var themeClasses=${JSON.stringify(allThemeClasses)}.split(' ');themeClasses.forEach(function(c){if(c)document.documentElement.classList.remove(c);});document.documentElement.classList.add(cls);}catch(e){}})();`;
 
   return (
     <html
@@ -59,7 +62,7 @@ export default function RootLayout({
             <AuthProvider>
               <Providers>
                 <CockpitShell>
-                  <a href="#main-content" className="skip-link" style={{ position: "absolute", left: "-9999px" }}>Skip to main content</a>
+                  <a href="#main-content" className="skip-link">Skip to main content</a>
                   <main id="main-content" style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
                     {children}
                   </main>

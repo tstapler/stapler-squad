@@ -387,7 +387,7 @@ function HomeContent() {
   // When no session is open, j/k move the focus index; Enter opens the focused session.
   // When a session is open, p/r/d act on the currently-open session.
   useKeyboard({
-    "?": () => { helpTriggerRef.current = document.activeElement as HTMLElement; setShowHelp(true); },
+    // '?' is handled exclusively by CockpitShell's useShortcut to avoid dual-listener collision
     Escape: () => {
       if (resumeTarget) {
         setResumeTarget(null);

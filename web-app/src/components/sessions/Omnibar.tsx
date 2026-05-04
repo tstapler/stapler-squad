@@ -1,11 +1,14 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import Fuse from "fuse.js";
 import { detect, InputType, INPUT_TYPE_INFO, DetectionResult } from "@/lib/omnibar";
 import { useModeReducer, OmnibarModeState } from "@/lib/omnibar/modes/useModeReducer";
 import { PROGRAMS } from "@/lib/constants/programs";
 import { getApiBaseUrl } from "@/lib/config";
+import { useTheme } from "@/lib/contexts/ThemeContext";
+import type { ThemeName } from "@/lib/contexts/ThemeContext";
 import { usePathCompletions } from "@/lib/hooks/usePathCompletions";
 import { usePathHistory } from "@/lib/hooks/usePathHistory";
 import { useWorktreeSuggestions } from "@/lib/hooks/useWorktreeSuggestions";
@@ -105,6 +108,9 @@ function isValidProjectName(name: string): boolean {
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
 
 export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, initialMode }: OmnibarProps) {
+  const router = useRouter();
+  const { setTheme } = useTheme();
+
   // Input state
   const [input, setInput] = useState("");
   const [detection, setDetection] = useState<DetectionResult | null>(null);
@@ -606,9 +612,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       return true;
     }
 
+    // Recognized commands (>theme ..., >go ...) are always submittable
+    if (detection?.type === InputType.Command && detection.confidence === 1.0) return true;
+
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
-    if (!detection || detection.type === InputType.Unknown || detection.type === InputType.SessionSearch) return false;
+    if (!detection || detection.type === InputType.Unknown || detection.type === InputType.Command || detection.type === InputType.SessionSearch) return false;
 
     // Validate session type specific requirements
     if (sessionType === "new_worktree") {
@@ -625,6 +634,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Handle form submission
   const handleSubmit = useCallback(async () => {
     if (!canSubmit || isSubmitting) return;
+
+    // Execute omnibar commands (>theme ..., >go ...) immediately without entering
+    // session-creation flow. These are fire-and-forget; no loading state needed.
+    if (detection?.type === InputType.Command && detection.confidence === 1.0 && detection.metadata) {
+      const { commandType, commandArg } = detection.metadata as { commandType: string; commandArg: string };
+      if (commandType === "theme") {
+        setTheme(commandArg as ThemeName);
+      } else if (commandType === "navigate") {
+        router.push(commandArg);
+      }
+      onClose();
+      return;
+    }
 
     setIsSubmitting(true);
     setError(null);

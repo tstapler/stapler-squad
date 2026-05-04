@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("session list empty state", async ({ page }) => {
-  await page.goto("http://localhost:8544/");
+  await page.goto("/");
   await page.waitForLoadState("networkidle");
   await expect(page).toHaveScreenshot("session-list-empty.png", {
     maxDiffPixelRatio: 0.01,
@@ -28,7 +28,7 @@ test("session list empty state", async ({ page }) => {
 });
 
 test("omnibar open", async ({ page }) => {
-  await page.goto("http://localhost:8544/");
+  await page.goto("/");
   await page.waitForLoadState("networkidle");
   await page.keyboard.press("Meta+k");
   await page.waitForSelector('[data-testid="omnibar-input"]', { timeout: 2000 }).catch(() => {});

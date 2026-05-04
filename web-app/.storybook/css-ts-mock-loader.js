@@ -11,9 +11,19 @@
  * trees compile and render correctly for Storybook snapshot/a11y testing.
  */
 module.exports = function cssTsMockLoader() {
+  // recipe() exports are functions that return class strings; styleVariants
+  // exports are objects indexed by variant key.  A plain string proxy would
+  // crash both at runtime (recipe is called as a function, styleVariants is
+  // indexed).  Return a recursive Proxy that is both callable (returns '') and
+  // indexable (returns another callable proxy), covering all vanilla-extract
+  // export shapes without needing to know the exact export type.
   return `
-    const handler = { get: (_, key) => typeof key === 'string' ? '' : undefined };
-    const proxy = new Proxy({}, handler);
-    module.exports = proxy;
+    function makeProxy() {
+      return new Proxy(function() { return ''; }, {
+        get: (_, key) => typeof key === 'string' ? makeProxy() : undefined,
+        apply: () => '',
+      });
+    }
+    module.exports = makeProxy();
   `;
 };
