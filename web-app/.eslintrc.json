@@ -63,11 +63,7 @@
           },
           { "from": "ui",     "allow": ["lib", "gen"] },
           { "from": "shared", "allow": ["lib", "gen"] },
-          {
-            "from": "lib",
-            "allow": ["ui", "sessions", "gen"],
-            "_comment": "lib/contexts/ renders UI (NotificationContext→NotificationToast) and owns the omnibar (OmnibarContext→Omnibar). Both are intentional provider patterns."
-          },
+          { "from": "lib",    "allow": ["ui", "sessions", "gen"] },
           { "from": "gen",    "allow": [] }
         ]
       }
