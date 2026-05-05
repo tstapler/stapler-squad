@@ -654,6 +654,7 @@ func (m *Multiplexer) monitorTmuxSessionPolling() {
 			// when tmux is slow or the process table is under pressure).
 			pollCtx, pollCancel := context.WithTimeout(m.ctx, 2*time.Second)
 			checkCmd := exec.CommandContext(pollCtx, "tmux", "has-session", "-t", m.tmuxSession)
+			checkCmd.WaitDelay = 2 * time.Second
 			checkErr := checkCmd.Run()
 			pollCancel()
 			if checkErr != nil {
@@ -667,6 +668,7 @@ func (m *Multiplexer) monitorTmuxSessionPolling() {
 			// This catches cases where the session exists but the command has exited
 			listCtx, listCancel := context.WithTimeout(m.ctx, 2*time.Second)
 			listCmd := exec.CommandContext(listCtx, "tmux", "list-panes", "-t", m.tmuxSession, "-F", "#{pane_dead}")
+			listCmd.WaitDelay = 2 * time.Second
 			output, err := listCmd.Output()
 			listCancel()
 			if err == nil && len(output) > 0 {

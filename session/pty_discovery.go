@@ -33,6 +33,7 @@ func batchPTYInfo(socket string) map[string]paneEntry {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.Output()
 	if err != nil {
 		return nil
@@ -69,6 +70,7 @@ func batchProcessStates(pids []int) map[int]PTYStatus {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "ps", "-p", strings.Join(pidStrs, ","), "-o", "pid=,state=")
+	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.Output()
 	result := make(map[int]PTYStatus, len(pids))
 	if err == nil {
@@ -127,6 +129,7 @@ func batchPaneActivity(socket string) map[string]time.Time {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "tmux", args...)
+	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.Output()
 	if err != nil {
 		return nil
