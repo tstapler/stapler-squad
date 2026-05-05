@@ -188,9 +188,7 @@ func TestRedactArgs_emptyIndices(t *testing.T) {
 
 	argv := []string{"echo", "hello"}
 	result := redactArgs(argv, nil)
-	if &result[0] == &argv[0] {
-		// It's OK if the same slice is returned for efficiency (no copy needed).
-	}
+	// It's OK if the same slice is returned for efficiency (no copy needed).
 	if result[1] != "hello" {
 		t.Errorf("expected 'hello', got %q", result[1])
 	}

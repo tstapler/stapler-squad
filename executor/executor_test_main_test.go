@@ -1,11 +1,14 @@
 package executor
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // helperBin is the path to the compiled testdata/helper binary.
@@ -31,7 +34,9 @@ func buildHelper() (string, error) {
 	}
 	exe := filepath.Join(tmpDir, "helper")
 	// Use the current module path to find testdata/helper.
-	cmd := exec.Command("go", "build", "-o", exe, "./testdata/helper")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	cmd := safeexec.CommandContext(ctx, "go", "build", "-o", exe, "./testdata/helper")
 	cmd.Dir = filepath.Join(findModuleRoot(), "executor")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("go build helper: %w\n%s", err, out)

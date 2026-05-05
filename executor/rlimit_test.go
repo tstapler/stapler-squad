@@ -1,8 +1,10 @@
 package executor
 
 import (
-	"os/exec"
+	"context"
 	"testing"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // T-UNIT-019: RlimitConfig_zerovalueIsValid
@@ -10,7 +12,7 @@ func TestRlimitConfig_zerovalueIsValid(t *testing.T) {
 	t.Parallel()
 
 	cfg := RlimitConfig{} // zero value
-	cmd := exec.Command("echo", "hi")
+	cmd := safeexec.CommandContext(context.Background(), "echo", "hi")
 	err := applyRlimits(cmd, cfg)
 	if err != nil {
 		t.Errorf("applyRlimits with zero RlimitConfig returned error: %v", err)
@@ -24,7 +26,7 @@ func TestRlimitConfig_applyRlimits_returnsNil(t *testing.T) {
 	t.Parallel()
 
 	cfg := RlimitConfig{MaxOpenFiles: 128}
-	cmd := exec.Command("echo", "hi")
+	cmd := safeexec.CommandContext(context.Background(), "echo", "hi")
 	err := applyRlimits(cmd, cfg)
 	if err != nil {
 		t.Errorf("applyRlimits returned error: %v", err)
@@ -40,7 +42,7 @@ func TestRlimitConfig_allFields(t *testing.T) {
 		MaxVirtBytes: 1024 * 1024 * 1024, // 1 GB
 		MaxOpenFiles: 256,
 	}
-	cmd := exec.Command("echo", "hi")
+	cmd := safeexec.CommandContext(context.Background(), "echo", "hi")
 	err := applyRlimits(cmd, cfg)
 	if err != nil {
 		t.Errorf("applyRlimits with all fields set returned error: %v", err)
