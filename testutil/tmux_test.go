@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestTmuxTestServer_Creation validates isolated server creation
@@ -203,7 +204,7 @@ func TestTmuxTestServer_AutomaticCleanup(t *testing.T) {
 	// Try to list sessions on the now-dead server (should fail)
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
-	cmd := exec.CommandContext(listCtx, "tmux", "-L", socketName, "list-sessions")
+	cmd := safeexec.CommandContext(listCtx, "tmux", "-L", socketName, "list-sessions")
 	output, err := cmd.CombinedOutput()
 
 	// Should get an error indicating the server is gone.

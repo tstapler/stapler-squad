@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // GitProvider implements VCSProvider for Git repositories
@@ -43,8 +45,7 @@ func (g *GitProvider) WorkDir() string {
 func (g *GitProvider) runGit(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", g.repoRoot}, args...)...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(ctx, "git", append([]string{"-C", g.repoRoot}, args...)...)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

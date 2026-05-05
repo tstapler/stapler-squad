@@ -8,11 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -305,7 +305,7 @@ func (s *StateStore) CacheSummary(repoPath, branch, diffHash, summary string) er
 // ComputeDiffHash runs `git -C path diff HEAD` and SHA256-hashes the output.
 func ComputeDiffHash(worktreePath string) (string, error) {
 	exec3s := executor.MakeTimeoutExecutor(5 * time.Second)
-	cmd := exec.CommandContext(context.Background(), "git", "-C", worktreePath, "diff", "HEAD")
+	cmd := safeexec.CommandContext(context.Background(), "git", "-C", worktreePath, "diff", "HEAD")
 	out, err := exec3s.CombinedOutput(cmd)
 	if err != nil {
 		return "", fmt.Errorf("git diff HEAD: %w", err)

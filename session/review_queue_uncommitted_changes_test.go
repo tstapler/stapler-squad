@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/git"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -411,7 +411,7 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 
 // Helper function to run git commands
 func runGitCommand(dir string, args ...string) error {
-	cmd := exec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
+	cmd := safeexec.CommandContext(context.Background(), "git", append([]string{"-C", dir}, args...)...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git command failed: %s (%w)", output, err)

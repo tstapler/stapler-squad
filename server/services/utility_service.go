@@ -7,13 +7,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"regexp"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
@@ -150,7 +150,7 @@ func (us *UtilityService) FocusWindow(
 	}
 
 	// Execute AppleScript
-	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	cmd := safeexec.CommandContext(ctx, "osascript", "-e", script)
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 

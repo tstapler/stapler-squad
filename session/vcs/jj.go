@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -38,9 +38,8 @@ func (j *JJClient) RepoPath() string {
 func (j *JJClient) run(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "jj", args...)
+	cmd := safeexec.CommandContext(ctx, "jj", args...)
 	cmd.Dir = j.repoPath
-	cmd.WaitDelay = 2 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -429,8 +428,7 @@ func truncateID(id string, length int) string {
 func GetJJVersion() (string, error) {
 	vCtx, vCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer vCancel()
-	cmd := exec.CommandContext(vCtx, "jj", "--version")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(vCtx, "jj", "--version")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

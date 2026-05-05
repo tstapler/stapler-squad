@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // ETagCache stores ETags and cached PRInfo responses per (owner, repo, prNumber).
@@ -53,7 +55,7 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 		args = append(args, "--header", fmt.Sprintf("If-None-Match: %s", entry.etag))
 	}
 
-	cmd := exec.CommandContext(ctx, "gh", args...)
+	cmd := safeexec.CommandContext(ctx, "gh", args...)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
@@ -53,7 +54,7 @@ func reapLeakedTestServers() {
 			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = exec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
 		cancel()
 	}
 }
@@ -104,7 +105,7 @@ rm -f "$0"
 	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
 		return
 	}
-	cmd := exec.CommandContext(context.Background(), "sh", scriptPath)
+	cmd := exec.CommandContext(context.Background(), "sh", scriptPath) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	_ = cmd.Start()
 }
@@ -525,17 +526,17 @@ func setupTestRepository(t *testing.T) string {
 	tempDir := t.TempDir()
 
 	// Initialize git repo
-	cmd := exec.CommandContext(context.Background(), "git", "init")
+	cmd := safeexec.CommandContext(context.Background(), "git", "init")
 	cmd.Dir = tempDir
 	err := cmd.Run()
 	require.NoError(t, err)
 
 	// Configure git
-	configCmd := exec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
+	configCmd := safeexec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
 	configCmd.Dir = tempDir
 	_ = configCmd.Run()
 
-	configCmd2 := exec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
+	configCmd2 := safeexec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
 	configCmd2.Dir = tempDir
 	_ = configCmd2.Run()
 
@@ -544,12 +545,12 @@ func setupTestRepository(t *testing.T) string {
 	err = os.WriteFile(readmeFile, []byte("# Test Repository"), 0644)
 	require.NoError(t, err)
 
-	addCmd := exec.CommandContext(context.Background(), "git", "add", ".")
+	addCmd := safeexec.CommandContext(context.Background(), "git", "add", ".")
 	addCmd.Dir = tempDir
 	err = addCmd.Run()
 	require.NoError(t, err)
 
-	commitCmd := exec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
+	commitCmd := safeexec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
 	commitCmd.Dir = tempDir
 	err = commitCmd.Run()
 	require.NoError(t, err)
@@ -875,26 +876,26 @@ func BenchmarkSessionRestorePerformance(b *testing.B) {
 func setupTestRepositoryBench(b *testing.B) string {
 	tempDir := b.TempDir()
 
-	cmd := exec.CommandContext(context.Background(), "git", "init")
+	cmd := safeexec.CommandContext(context.Background(), "git", "init")
 	cmd.Dir = tempDir
 	_ = cmd.Run()
 
-	configCmd := exec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
+	configCmd := safeexec.CommandContext(context.Background(), "git", "config", "user.email", "test@example.com")
 	configCmd.Dir = tempDir
 	_ = configCmd.Run()
 
-	configCmd2 := exec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
+	configCmd2 := safeexec.CommandContext(context.Background(), "git", "config", "user.name", "Test User")
 	configCmd2.Dir = tempDir
 	_ = configCmd2.Run()
 
 	readmeFile := filepath.Join(tempDir, "README.md")
 	_ = os.WriteFile(readmeFile, []byte("# Benchmark Repository"), 0644)
 
-	addCmd := exec.CommandContext(context.Background(), "git", "add", ".")
+	addCmd := safeexec.CommandContext(context.Background(), "git", "add", ".")
 	addCmd.Dir = tempDir
 	_ = addCmd.Run()
 
-	commitCmd := exec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
+	commitCmd := safeexec.CommandContext(context.Background(), "git", "commit", "-m", "Initial commit")
 	commitCmd.Dir = tempDir
 	_ = commitCmd.Run()
 

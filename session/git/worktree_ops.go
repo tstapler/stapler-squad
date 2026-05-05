@@ -3,9 +3,9 @@ package git
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -480,8 +480,7 @@ func CleanupWorktrees() error {
 	// Get a list of all branches associated with worktrees
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
-	cmd := exec.CommandContext(listCtx, "git", "worktree", "list", "--porcelain")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(listCtx, "git", "worktree", "list", "--porcelain")
 	output, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to list worktrees: %w", err)
@@ -513,8 +512,7 @@ func CleanupWorktrees() error {
 				if strings.Contains(path, entry.Name()) {
 					// Delete the branch
 					delCtx, delCancel := context.WithTimeout(context.Background(), 10*time.Second)
-					deleteCmd := exec.CommandContext(delCtx, "git", "branch", "-D", branch)
-					deleteCmd.WaitDelay = 2 * time.Second
+					deleteCmd := safeexec.CommandContext(delCtx, "git", "branch", "-D", branch)
 					delErr := deleteCmd.Run()
 					delCancel()
 					if delErr != nil {
@@ -533,8 +531,7 @@ func CleanupWorktrees() error {
 	// You have to prune the cleaned up worktrees.
 	pruneCtx, pruneCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer pruneCancel()
-	cmd = exec.CommandContext(pruneCtx, "git", "worktree", "prune")
-	cmd.WaitDelay = 2 * time.Second
+	cmd = safeexec.CommandContext(pruneCtx, "git", "worktree", "prune")
 	_, err = cmd.Output()
 	if err != nil {
 		return fmt.Errorf("failed to prune worktrees: %w", err)

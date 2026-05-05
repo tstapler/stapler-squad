@@ -3,10 +3,11 @@ package mux
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // tmux user option keys for claude-mux session metadata.
@@ -37,8 +38,7 @@ func WriteSessionUserOptions(sessionName, socketPath, cwd, command string, pid i
 	}
 	for _, opt := range opts {
 		setCtx, setCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		cmd := exec.CommandContext(setCtx, "tmux", "set-option", "-t", sessionName, opt.key, opt.value)
-		cmd.WaitDelay = 2 * time.Second
+		cmd := safeexec.CommandContext(setCtx, "tmux", "set-option", "-t", sessionName, opt.key, opt.value)
 		out, runErr := cmd.CombinedOutput()
 		setCancel()
 		if runErr != nil {
@@ -71,8 +71,7 @@ func ScanByUserOptions() ([]*DiscoveredSession, error) {
 
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer scanCancel()
-	cmd := exec.CommandContext(scanCtx, "tmux", "list-sessions", "-F", format)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(scanCtx, "tmux", "list-sessions", "-F", format)
 	out, err := cmd.Output()
 	if err != nil {
 		// tmux exits non-zero when the server is not running or there are no

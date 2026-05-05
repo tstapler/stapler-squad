@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
@@ -50,8 +51,7 @@ func checkGHCLI() error {
 	// Check if gh is authenticated
 	authCtx, authCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer authCancel()
-	cmd := exec.CommandContext(authCtx, "gh", "auth", "status")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(authCtx, "gh", "auth", "status")
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("GitHub CLI is not configured. Please run 'gh auth login' first")
 	}
@@ -133,8 +133,7 @@ func findGitRepoRoot(path string) (string, error) {
 func getCurrentBranchName(path string) (string, error) {
 	branchCtx, branchCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer branchCancel()
-	cmd := exec.CommandContext(branchCtx, "git", "-C", path, "branch", "--show-current")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(branchCtx, "git", "-C", path, "branch", "--show-current")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to get current branch name: %w", err)
@@ -152,8 +151,7 @@ func getCurrentBranchName(path string) (string, error) {
 func getHeadCommitSHA(path string) (string, error) {
 	shaCtx, shaCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shaCancel()
-	cmd := exec.CommandContext(shaCtx, "git", "-C", path, "rev-parse", "HEAD")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(shaCtx, "git", "-C", path, "rev-parse", "HEAD")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to get HEAD commit SHA: %w", err)

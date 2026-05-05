@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
@@ -227,7 +228,7 @@ func (s *UnfinishedWorkService) SnoozeWorktree(
 		// Run git rev-parse HEAD in the worktree to get current SHA.
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "-C", r.WorktreePath, "rev-parse", "HEAD")
+		cmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath, "rev-parse", "HEAD")
 		out, err := cmd.Output()
 		if err == nil {
 			headSHA = strings.TrimSpace(string(out))
@@ -300,8 +301,8 @@ func (s *UnfinishedWorkService) GetWorktreeAISummary(
 	subCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	gitCmd := exec.CommandContext(subCtx, "git", "-C", r.WorktreePath, "diff", "HEAD")
-	claudeCmd := exec.CommandContext(subCtx, claudePath, "-p",
+	gitCmd := safeexec.CommandContext(subCtx, "git", "-C", r.WorktreePath, "diff", "HEAD")
+	claudeCmd := safeexec.CommandContext(subCtx, claudePath, "-p",
 		"Summarize these git changes in 2-4 sentences for a developer picking up where they left off.")
 
 	gitOut, gitErr := gitCmd.Output()
@@ -349,7 +350,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 	// git add .
 	addCtx, addCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer addCancel()
-	addCmd := exec.CommandContext(addCtx, "git", "-C", worktreePath, "add", ".")
+	addCmd := safeexec.CommandContext(addCtx, "git", "-C", worktreePath, "add", ".")
 	addCmd.WaitDelay = 2 * time.Second
 	if out, err := addCmd.CombinedOutput(); err != nil {
 		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
@@ -361,7 +362,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 	// git commit -m <message>
 	commitCtx, commitCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer commitCancel()
-	commitCmd := exec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
+	commitCmd := safeexec.CommandContext(commitCtx, "git", "-C", worktreePath, "commit", "-m", req.Msg.CommitMessage)
 	commitCmd.WaitDelay = 2 * time.Second
 	if out, err := commitCmd.CombinedOutput(); err != nil {
 		return connect.NewResponse(&sessionv1.QuickCommitPushResponse{
@@ -373,7 +374,7 @@ func (s *UnfinishedWorkService) QuickCommitPush(
 	// git push -u origin <branch> (60s timeout)
 	pushCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	pushCmd := exec.CommandContext(pushCtx, "git", "-C", worktreePath, "push", "-u", "origin", req.Msg.Branch)
+	pushCmd := safeexec.CommandContext(pushCtx, "git", "-C", worktreePath, "push", "-u", "origin", req.Msg.Branch)
 	if out, err := pushCmd.CombinedOutput(); err != nil {
 		errMsg := fmt.Sprintf("git push failed: %v\n%s", err, out)
 		if pushCtx.Err() != nil {
@@ -420,7 +421,7 @@ func (s *UnfinishedWorkService) GetWorktreeDiff(
 
 	if defaultBranch != "" {
 		// Committed changes ahead of the remote default branch.
-		committedCmd := exec.CommandContext(ctx, "git", "-C", r.WorktreePath,
+		committedCmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath,
 			"diff", defaultBranch+"...HEAD")
 		committedOut, err := committedCmd.Output()
 		if err == nil {
@@ -429,7 +430,7 @@ func (s *UnfinishedWorkService) GetWorktreeDiff(
 	}
 
 	// Uncommitted (staged + unstaged) changes on top of HEAD.
-	uncommittedCmd := exec.CommandContext(ctx, "git", "-C", r.WorktreePath,
+	uncommittedCmd := safeexec.CommandContext(ctx, "git", "-C", r.WorktreePath,
 		"diff", "HEAD")
 	uncommittedOut, err := uncommittedCmd.Output()
 	if err == nil && len(uncommittedOut) > 0 {

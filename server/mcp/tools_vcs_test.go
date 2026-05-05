@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -28,7 +28,7 @@ func initGitRepo(t *testing.T) string {
 
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.CommandContext(context.Background(), "git", args...)
+	cmd := safeexec.CommandContext(context.Background(), "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -66,7 +66,7 @@ func TestGetSessionDiff(t *testing.T) {
 		fmt.Fprintf(&added, "line %d\n", i)
 	}
 	writeFile(t, repoDir, "newfile.go", added.String())
-	_ = exec.CommandContext(context.Background(), "git", "-C", repoDir, "add", "-N", ".").Run()
+	_ = safeexec.CommandContext(context.Background(), "git", "-C", repoDir, "add", "-N", ".").Run()
 
 	inst := newVCSInstance("test-session", repoDir)
 	store := &stubStore{instances: []*session.Instance{inst}}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -250,7 +251,7 @@ func (s *TmuxTestServer) CreateSessionWithoutStarting(sessionName string, comman
 func (s *TmuxTestServer) ListSessions() ([]string, error) {
 	s.t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "list-sessions", "-F", "#{session_name}")
+	cmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "list-sessions", "-F", "#{session_name}")
 	// Use CombinedOutput so the tmux stderr message is available for error classification.
 	// executor.Output only captures stdout; "no server running" appears on stderr.
 	output, err := s.executor.CombinedOutput(cmd)
@@ -286,7 +287,7 @@ func (s *TmuxTestServer) ListSessions() ([]string, error) {
 func (s *TmuxTestServer) SessionExists(sessionName string) bool {
 	s.t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "has-session", "-t", sessionName)
+	cmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "has-session", "-t", sessionName)
 	err := s.executor.Run(cmd)
 	return err == nil
 }
@@ -295,7 +296,7 @@ func (s *TmuxTestServer) SessionExists(sessionName string) bool {
 func (s *TmuxTestServer) KillSession(sessionName string) error {
 	s.t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "kill-session", "-t", sessionName)
+	cmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "kill-session", "-t", sessionName)
 	// Use CombinedOutput to get both stdout and stderr
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -339,7 +340,7 @@ func (s *TmuxTestServer) KillAllSessions() error {
 func (s *TmuxTestServer) KillServer() error {
 	s.t.Helper()
 
-	cmd := exec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "kill-server")
+	cmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "-L", s.socketName, "kill-server")
 	// Use CombinedOutput so we can inspect the actual tmux error message on stderr.
 	// executor.Run only returns the exit code; "no server running" lives on stderr.
 	output, err := s.executor.CombinedOutput(cmd)
@@ -431,7 +432,7 @@ func CleanupTmuxSessionsWithPrefix(t *testing.T, prefix string) {
 	execImpl := executor.MakeExecutor()
 
 	// List all sessions
-	cmd := exec.CommandContext(context.Background(), tmux.Binary(), "list-sessions", "-F", "#{session_name}")
+	cmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "list-sessions", "-F", "#{session_name}")
 	output, err := execImpl.Output(cmd)
 	if err != nil {
 		// No sessions running is fine
@@ -446,7 +447,7 @@ func CleanupTmuxSessionsWithPrefix(t *testing.T, prefix string) {
 	sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
 	for _, sessionName := range sessions {
 		if strings.HasPrefix(sessionName, prefix) {
-			killCmd := exec.CommandContext(context.Background(), tmux.Binary(), "kill-session", "-t", sessionName)
+			killCmd := safeexec.CommandContext(context.Background(), tmux.Binary(), "kill-session", "-t", sessionName)
 			if err := execImpl.Run(killCmd); err != nil {
 				t.Logf("Warning: failed to kill session %s: %v", sessionName, err)
 			}

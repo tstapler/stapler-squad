@@ -5,11 +5,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 
 	"connectrpc.com/connect"
@@ -194,7 +194,7 @@ func (p *PathCompletionService) ListWorktrees(
 	}
 	expanded = strings.TrimRight(expanded, "/")
 
-	cmd := exec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
+	cmd := safeexec.CommandContext(ctx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = expanded
 	output, err := cmd.Output()
 	if err != nil {

@@ -68,6 +68,7 @@ func StartExpectSession(t *testing.T, config ExpectSessionConfig) (*TUISession, 
 	}
 
 	// Create command (context.Background(): interactive test session with no fixed deadline)
+	//nolint:norawexec long-running interactive TUI session managed via PTY; no WaitDelay needed
 	cmd := exec.CommandContext(context.Background(), config.Command, config.Args...)
 	cmd.Env = config.Env
 	cmd.Dir = config.WorkDir

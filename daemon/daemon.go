@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"github.com/fsnotify/fsnotify"
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -344,8 +344,8 @@ func LaunchDaemon() error {
 	}
 
 	// Use context.Background(): this is a daemon launch; we only need a context for the
-	// exec.CommandContext API. The daemon process runs indefinitely after Start() returns.
-	cmd := exec.CommandContext(context.Background(), execPath, "--daemon")
+	// safeexec.CommandContext API. The daemon process runs indefinitely after Start() returns.
+	cmd := safeexec.CommandContext(context.Background(), execPath, "--daemon")
 
 	// Detach the process from the parent
 	cmd.Stdin = nil

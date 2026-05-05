@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // checkTmuxAvailable skips the test if tmux is not installed.
@@ -30,7 +31,7 @@ func coldRestoreSocket(t *testing.T) string {
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = exec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
 	})
 	return name
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
 
@@ -213,13 +214,13 @@ func testSessionRecoveryWithRealTmux(t *testing.T) {
 	t.Cleanup(func() {
 		killServerCtx, killServerCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killServerCancel()
-		_ = exec.CommandContext(killServerCtx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killServerCtx, "tmux", "-L", socketName, "kill-server").Run()
 	})
 
 	// Clean up any existing session on the isolated server
 	killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer killCancel()
-	killCmd := exec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-session", "-t", tmuxSessionName)
+	killCmd := safeexec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-session", "-t", tmuxSessionName)
 	_ = killCmd.Run()
 
 	// Create session using our RestoreWithWorkDir logic on the isolated server.
@@ -411,7 +412,7 @@ func TestRecoverFromServerFailure_EnsureRunningFails(t *testing.T) {
 	executor.GetGlobalRegistry().Register(key, cbExec)
 	t.Cleanup(func() { executor.GetGlobalRegistry().Unregister(key) })
 
-	_ = cbExec.Run(exec.CommandContext(context.Background(), "tmux", "list-sessions"))
+	_ = cbExec.Run(exec.CommandContext(context.Background(), "tmux", "list-sessions")) //nolint:norawexec executor-mediated; TimeoutExecutor wraps sets WaitDelay internally
 	snaps := executor.GetGlobalRegistry().AllBreakers()
 	tripKey := key + "/tmux-list-sessions"
 	snap, ok := snaps[tripKey]

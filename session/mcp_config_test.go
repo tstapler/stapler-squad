@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // buildMCPConfigFlag mirrors the production logic in instance.go Restart().
@@ -103,7 +105,7 @@ func TestClaudeBinaryAcceptsMCPConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, claudePath, "--mcp-config", cfg, "--print", "test")
+	cmd := safeexec.CommandContext(ctx, claudePath, "--mcp-config", cfg, "--print", "test")
 	// Route through the local Claude API proxy when available so the test can get
 	// a real response without hardcoding credentials.
 	if serverReachable("http://localhost:47000") {
@@ -122,7 +124,7 @@ func TestClaudeBinaryAcceptsMCPConfig(t *testing.T) {
 func serverReachable(url string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "1", url)
+	cmd := safeexec.CommandContext(ctx, "curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "1", url)
 	out, err := cmd.Output()
 	return err == nil && string(out) != "000"
 }

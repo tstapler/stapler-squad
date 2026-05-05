@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // TestMain runs before all tests to set up the test environment
@@ -36,7 +37,7 @@ func (m *mockCommandExecutor) Command(name string, args ...string) *exec.Cmd {
 	if m.CommandFunc != nil {
 		return m.CommandFunc(name, args...)
 	}
-	return exec.CommandContext(context.Background(), "echo", "mock")
+	return safeexec.CommandContext(context.Background(), "echo", "mock")
 }
 
 func (m *mockCommandExecutor) Output(cmd *exec.Cmd) ([]byte, error) {
@@ -73,7 +74,7 @@ func newMockCommandExecutorWithClaudeNotFound() *mockCommandExecutor {
 	return &mockCommandExecutor{
 		CommandFunc: func(name string, args ...string) *exec.Cmd {
 			// Return a mock command that won't actually execute
-			return exec.CommandContext(context.Background(), "true")
+			return safeexec.CommandContext(context.Background(), "true")
 		},
 		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 			// Simulate command not found for both proxy-claude and claude
@@ -464,7 +465,7 @@ func TestTimeoutCommandExecutor_RealBehavior(t *testing.T) {
 	t.Run("Fast command completes successfully", func(t *testing.T) {
 		executor := newTimeoutCommandExecutor(2 * time.Second)
 
-		cmd := exec.CommandContext(context.Background(), "echo", "hello")
+		cmd := safeexec.CommandContext(context.Background(), "echo", "hello")
 		output, err := executor.Output(cmd)
 
 		assert.NoError(t, err)
@@ -475,7 +476,7 @@ func TestTimeoutCommandExecutor_RealBehavior(t *testing.T) {
 		executor := newTimeoutCommandExecutor(500 * time.Millisecond)
 
 		// Command that takes longer than timeout
-		cmd := exec.CommandContext(context.Background(), "sleep", "2")
+		cmd := safeexec.CommandContext(context.Background(), "sleep", "2")
 		_, err := executor.Output(cmd)
 
 		require.Error(t, err)
@@ -486,7 +487,7 @@ func TestTimeoutCommandExecutor_RealBehavior(t *testing.T) {
 		executor := newTimeoutCommandExecutor(2 * time.Second)
 
 		// Command that fails
-		cmd := exec.CommandContext(context.Background(), "sh", "-c", "exit 1")
+		cmd := safeexec.CommandContext(context.Background(), "sh", "-c", "exit 1")
 		_, err := executor.Output(cmd)
 
 		require.Error(t, err)

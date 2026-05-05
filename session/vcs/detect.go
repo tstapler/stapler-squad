@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -126,8 +127,7 @@ func gitAvailable(repoPath string) bool {
 	// Check if the path is inside a git repository
 	detectCtx, detectCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer detectCancel()
-	cmd := exec.CommandContext(detectCtx, "git", "-C", repoPath, "rev-parse", "--git-dir")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(detectCtx, "git", "-C", repoPath, "rev-parse", "--git-dir")
 	if err := cmd.Run(); err == nil {
 		return true
 	}

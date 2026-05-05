@@ -5,10 +5,11 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // ZombieInfo describes a detected zombie process.
@@ -26,8 +27,7 @@ func ScanZombies() ([]ZombieInfo, error) {
 	// -axo: all processes, custom columns; state Z = zombie
 	psCtx, psCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer psCancel()
-	psCmd := exec.CommandContext(psCtx, "ps", "-axo", "pid,ppid,stat,comm")
-	psCmd.WaitDelay = 2 * time.Second
+	psCmd := safeexec.CommandContext(psCtx, "ps", "-axo", "pid,ppid,stat,comm")
 	out, err := psCmd.Output()
 	if err != nil {
 		return nil, err

@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 type MockPtyFactory struct {
@@ -212,7 +213,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	t.Cleanup(func() {
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel()
-		_ = exec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killCtx, "tmux", "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the isolated server and keep it alive with a detached session.
@@ -220,7 +221,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	// the follow-up check in EnsureServerRunning to falsely report the server as dead.
 	newSessionCtx, newSessionCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer newSessionCancel()
-	require.NoError(t, exec.CommandContext(newSessionCtx, "tmux", "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
+	require.NoError(t, safeexec.CommandContext(newSessionCtx, "tmux", "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
 
 	// With the server running and a live session, EnsureServerRunning should be a no-op.
 	err := EnsureServerRunning(socketName)
@@ -240,7 +241,7 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	t.Cleanup(func() {
 		killCtx2, killCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel2()
-		_ = exec.CommandContext(killCtx2, "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(killCtx2, "tmux", "-L", socketName, "kill-server").Run()
 	})
 
 	// Confirm no server is running on this socket yet.
@@ -254,7 +255,7 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 	// On macOS, tmux's default exit-empty=on causes the server to exit immediately
 	// when there are no sessions. Create a session to keep the server alive and
 	// verify the server is functional by confirming the session can be created.
-	createCmd := exec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "verify-alive")
+	createCmd := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "verify-alive")
 	require.NoError(t, createCmd.Run(),
 		"should be able to create a session on the newly started server — server must be running")
 }
@@ -270,12 +271,12 @@ func TestCreateKeepaliveSession(t *testing.T) {
 	}
 	socketName := fmt.Sprintf("test_keepalive_%d_%d", os.Getpid(), rand.Int63())
 	t.Cleanup(func() {
-		_ = exec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the server with an anchor session to keep it alive while we test.
 	// (new-session -d is equivalent to start-server + create session atomically)
-	require.NoError(t, exec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
+	require.NoError(t, safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
 
 	// Create keepalive session.
 	err := CreateKeepaliveSession(socketName)
@@ -283,7 +284,7 @@ func TestCreateKeepaliveSession(t *testing.T) {
 
 	// Verify the keepalive session exists.
 	keepaliveName := TmuxPrefix + "keepalive"
-	out, err := exec.CommandContext(context.Background(), "tmux", "-L", socketName, "has-session", "-t", keepaliveName).CombinedOutput()
+	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "has-session", "-t", keepaliveName).CombinedOutput()
 	require.NoError(t, err, "keepalive session should exist after CreateKeepaliveSession; output: %s", out)
 
 	// Calling it again should be idempotent (no error).
@@ -301,20 +302,20 @@ func TestSetExitEmpty(t *testing.T) {
 	}
 	socketName := fmt.Sprintf("test_exit_empty_%d_%d", os.Getpid(), rand.Int63())
 	t.Cleanup(func() {
-		_ = exec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
+		_ = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "kill-server").Run()
 	})
 
 	// Start the server WITH a detached session to prevent the server from exiting
 	// immediately due to exit-empty=on (the default). Using new-session -d starts
 	// both the server and an anchor session in one step.
-	require.NoError(t, exec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
+	require.NoError(t, safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "new-session", "-d", "-s", "anchor").Run())
 
 	// Set exit-empty off.
 	err := SetExitEmpty(socketName, false)
 	require.NoError(t, err, "SetExitEmpty(false) should succeed")
 
 	// Verify the option was set.
-	out, err := exec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
+	out, err := safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
 	require.NoError(t, err)
 	require.Contains(t, strings.ToLower(string(out)), "off",
 		"exit-empty should be off after SetExitEmpty(false)")
@@ -323,7 +324,7 @@ func TestSetExitEmpty(t *testing.T) {
 	err = SetExitEmpty(socketName, true)
 	require.NoError(t, err, "SetExitEmpty(true) should succeed")
 
-	out, err = exec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
+	out, err = safeexec.CommandContext(context.Background(), "tmux", "-L", socketName, "show-options", "-g", "exit-empty").CombinedOutput()
 	require.NoError(t, err)
 	require.Contains(t, strings.ToLower(string(out)), "on",
 		"exit-empty should be on after SetExitEmpty(true)")
@@ -538,6 +539,7 @@ func TestRegistryKeyUnregisteredOnClose(t *testing.T) {
 	})
 
 	// Trip the breaker so AllBreakers returns a non-empty snapshot for this executor.
+	//nolint:norawexec executor-mediated; TimeoutExecutor wraps and sets WaitDelay internally
 	_ = cbExec.Run(exec.CommandContext(context.Background(), "tmux", "list-sessions"))
 	breakersBefore := executor.GetGlobalRegistry().AllBreakers()
 	found := false

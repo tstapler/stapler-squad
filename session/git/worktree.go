@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -262,9 +262,8 @@ func findExistingWorktreeForBranch(repoPath, branchName string) (string, bool) {
 	// Run git worktree list --porcelain to get detailed worktree information
 	wtCtx, wtCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer wtCancel()
-	cmd := exec.CommandContext(wtCtx, "git", "worktree", "list", "--porcelain")
+	cmd := safeexec.CommandContext(wtCtx, "git", "worktree", "list", "--porcelain")
 	cmd.Dir = repoPath
-	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.Output()
 	if err != nil {
 		// If the command fails, assume no existing worktrees

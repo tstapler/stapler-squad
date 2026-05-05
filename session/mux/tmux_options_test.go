@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // hasTmux reports whether tmux is available in PATH.
@@ -106,14 +108,14 @@ func TestWriteReadUserOptions(t *testing.T) {
 	sessionName := "cs-test-useropts"
 
 	// Create a throw-away tmux session.
-	create := exec.CommandContext(context.Background(), "tmux", "new-session", "-d", "-s", sessionName, "sleep", "60")
+	create := safeexec.CommandContext(context.Background(), "tmux", "new-session", "-d", "-s", sessionName, "sleep", "60")
 	if err := create.Run(); err != nil {
 		t.Fatalf("create tmux session: %v", err)
 	}
 	t.Cleanup(func() {
 		killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel()
-		_ = exec.CommandContext(killCtx, "tmux", "kill-session", "-t", sessionName).Run()
+		_ = safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", sessionName).Run()
 	})
 
 	socketPath := "/tmp/claude-mux-test-99999.sock"
@@ -140,7 +142,7 @@ func TestWriteReadUserOptions(t *testing.T) {
 	for _, tc := range cases {
 		showCtx, showCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer showCancel()
-		out, err := exec.CommandContext(showCtx, "tmux", "show-options", "-t", sessionName, tc.key).Output()
+		out, err := safeexec.CommandContext(showCtx, "tmux", "show-options", "-t", sessionName, tc.key).Output()
 		if err != nil {
 			t.Errorf("show-options %s: %v", tc.key, err)
 			continue
@@ -163,14 +165,14 @@ func TestScanFromUserOptions_RegistersSession(t *testing.T) {
 	}
 
 	sessionName := "cs-test-scanfromopts"
-	create := exec.CommandContext(context.Background(), "tmux", "new-session", "-d", "-s", sessionName, "sleep", "60")
+	create := safeexec.CommandContext(context.Background(), "tmux", "new-session", "-d", "-s", sessionName, "sleep", "60")
 	if err := create.Run(); err != nil {
 		t.Fatalf("create tmux session: %v", err)
 	}
 	t.Cleanup(func() {
 		killCtx2, killCancel2 := context.WithTimeout(context.Background(), 10*time.Second)
 		defer killCancel2()
-		_ = exec.CommandContext(killCtx2, "tmux", "kill-session", "-t", sessionName).Run()
+		_ = safeexec.CommandContext(killCtx2, "tmux", "kill-session", "-t", sessionName).Run()
 	})
 
 	socketPath := "/tmp/claude-mux-test-88888.sock"

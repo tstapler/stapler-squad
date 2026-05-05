@@ -3,6 +3,8 @@ package testutil
 import (
 	"context"
 	"os/exec"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // CommandExecutor defines the interface for executing external commands
@@ -22,7 +24,7 @@ type CommandExecutor interface {
 type RealCommandExecutor struct{}
 
 func (r *RealCommandExecutor) Command(name string, args ...string) *exec.Cmd {
-	return exec.CommandContext(context.Background(), name, args...)
+	return safeexec.CommandContext(context.Background(), name, args...)
 }
 
 func (r *RealCommandExecutor) Output(cmd *exec.Cmd) ([]byte, error) {
@@ -50,7 +52,7 @@ func (m *MockCommandExecutor) Command(name string, args ...string) *exec.Cmd {
 		return m.CommandFunc(name, args...)
 	}
 	// Return a dummy command that won't actually execute
-	return exec.CommandContext(context.Background(), "echo", "mock")
+	return safeexec.CommandContext(context.Background(), "echo", "mock")
 }
 
 func (m *MockCommandExecutor) Output(cmd *exec.Cmd) ([]byte, error) {

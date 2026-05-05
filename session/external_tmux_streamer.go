@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -185,6 +186,7 @@ func (s *ExternalTmuxStreamer) ConsumerCount() int {
 // should fall back to polling).
 func (s *ExternalTmuxStreamer) startControlMode() bool {
 	// Use s.ctx so the process is killed when the streamer is stopped.
+	//nolint:norawexec long-running control-mode process; pipes set up before cmd.Start(), WaitDelay not applicable
 	cmd := exec.CommandContext(s.ctx, "tmux", "-C", "attach-session", "-t", s.tmuxSessionName, "-r")
 
 	stdout, err := cmd.StdoutPipe()
@@ -429,8 +431,7 @@ func (s *ExternalTmuxStreamer) capturePane() (string, error) {
 	// Use -J to join wrapped lines
 	captureCtx, captureCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer captureCancel()
-	cmd := exec.CommandContext(captureCtx, "tmux", "capture-pane", "-p", "-e", "-J", "-t", s.tmuxSessionName)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(captureCtx, "tmux", "capture-pane", "-p", "-e", "-J", "-t", s.tmuxSessionName)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

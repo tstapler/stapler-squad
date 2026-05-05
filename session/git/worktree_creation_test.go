@@ -3,13 +3,13 @@ package git
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // setupTestRepo creates a temporary git repository with an initial commit and configured
@@ -20,7 +20,7 @@ func setupTestRepo(t *testing.T) string {
 
 	run := func(args ...string) {
 		t.Helper()
-		cmd := exec.CommandContext(context.Background(), "git", args...)
+		cmd := safeexec.CommandContext(context.Background(), "git", args...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git %s failed: %s", strings.Join(args, " "), out)
@@ -90,7 +90,7 @@ func TestExistingBranchWorktree_SetsBaseCommitSHA(t *testing.T) {
 	repoDir := setupTestRepo(t)
 
 	// Create a branch manually so it already exists when we call Setup().
-	cmd := exec.CommandContext(context.Background(), "git", "branch", "existing-feature")
+	cmd := safeexec.CommandContext(context.Background(), "git", "branch", "existing-feature")
 	cmd.Dir = repoDir
 	require.NoError(t, cmd.Run())
 

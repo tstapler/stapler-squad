@@ -6,6 +6,7 @@ import (
 	"fmt"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
@@ -13,7 +14,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"strings"
 	"sync"
@@ -1044,9 +1044,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						// External sessions: Use tmux commands (best effort)
 						// External sessions may be attached to other terminals which control the actual size
 						rwCtx, rwCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						resizeCmd := exec.CommandContext(rwCtx, "tmux", "resize-window", "-t", tmuxSessionName,
+						resizeCmd := safeexec.CommandContext(rwCtx, "tmux", "resize-window", "-t", tmuxSessionName,
 							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
-						resizeCmd.WaitDelay = 2 * time.Second
 						if err := resizeCmd.Run(); err != nil {
 							log.WarningLog.Printf("[streamViaTmuxCapture] Failed to resize tmux window for external '%s': %v",
 								tmuxSessionName, err)
@@ -1055,9 +1054,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 						// Also try to resize the pane
 						rpCtx, rpCancel := context.WithTimeout(context.Background(), 5*time.Second)
-						paneCmd := exec.CommandContext(rpCtx, "tmux", "resize-pane", "-t", tmuxSessionName,
+						paneCmd := safeexec.CommandContext(rpCtx, "tmux", "resize-pane", "-t", tmuxSessionName,
 							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
-						paneCmd.WaitDelay = 2 * time.Second
 						if err := paneCmd.Run(); err != nil {
 							log.WarningLog.Printf("[streamViaTmuxCapture] Failed to resize tmux pane for external '%s': %v",
 								tmuxSessionName, err)
@@ -1256,8 +1254,7 @@ func sendInputToTmux(tmuxSessionName string, data []byte) error {
 
 	skCtx, skCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer skCancel()
-	cmd := exec.CommandContext(skCtx, "tmux", args...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(skCtx, "tmux", args...)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("tmux send-keys failed: %w", err)
 	}

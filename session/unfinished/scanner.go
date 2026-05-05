@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -296,7 +296,7 @@ func (s *Scanner) scanRepo(repoPath string) []ScanResult {
 	// Run git worktree list --porcelain.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "list", "--porcelain")
+	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "list", "--porcelain")
 	out, err := cmd.Output()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -372,7 +372,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 	}
 
 	// git status --porcelain
-	statusCmd := exec.CommandContext(context.Background(), "git", "-C", wt.Path, "status", "--porcelain")
+	statusCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "status", "--porcelain")
 	statusOut, err := exec5s.CombinedOutput(statusCmd)
 	if err != nil {
 		if strings.Contains(err.Error(), "timed out") {
@@ -392,7 +392,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 
 	// git rev-list --left-right --count HEAD...<defaultBranch>
 	if defaultBranch != "" {
-		revCmd := exec.CommandContext(context.Background(), "git", "-C", wt.Path, "rev-list", "--left-right", "--count",
+		revCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "rev-list", "--left-right", "--count",
 			"HEAD..."+defaultBranch)
 		revOut, revErr := exec3s.CombinedOutput(revCmd)
 		if revErr == nil {
@@ -405,7 +405,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 
 		// git log defaultBranch..HEAD --oneline --max-count=5
 		if result.AheadCount > 0 {
-			logCmd := exec.CommandContext(context.Background(), "git", "-C", wt.Path, "log", defaultBranch+"..HEAD",
+			logCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "log", defaultBranch+"..HEAD",
 				"--oneline", "--max-count=5")
 			logOut, logErr := exec3s.CombinedOutput(logCmd)
 			if logErr == nil {
@@ -419,7 +419,7 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 	}
 
 	// git diff --shortstat HEAD
-	diffCmd := exec.CommandContext(context.Background(), "git", "-C", wt.Path, "diff", "--shortstat", "HEAD")
+	diffCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "diff", "--shortstat", "HEAD")
 	diffOut, diffErr := exec3s.CombinedOutput(diffCmd)
 	if diffErr == nil {
 		parseDiffShortstat(strings.TrimSpace(string(diffOut)), &result)
@@ -440,7 +440,7 @@ func (s *Scanner) ResolveDefaultBranch(repoPath string) string {
 
 	// Try symbolic-ref origin/HEAD — returns "origin/main". Keep the
 	// "origin/" prefix so git compares against the remote tracking ref.
-	cmd := exec.CommandContext(ctx, "git", "-C", repoPath, "symbolic-ref",
+	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "symbolic-ref",
 		"refs/remotes/origin/HEAD", "--short")
 	out, err := cmd.Output()
 	if err == nil {
@@ -456,7 +456,7 @@ func (s *Scanner) ResolveDefaultBranch(repoPath string) string {
 		"main", "master", "develop", "trunk",
 	} {
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-		checkCmd := exec.CommandContext(ctx2, "git", "-C", repoPath, "rev-parse",
+		checkCmd := safeexec.CommandContext(ctx2, "git", "-C", repoPath, "rev-parse",
 			"--verify", candidate)
 		checkErr := checkCmd.Run()
 		cancel2()

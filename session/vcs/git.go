@@ -5,11 +5,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -41,9 +41,8 @@ func (g *GitClient) RepoPath() string {
 func (g *GitClient) run(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := safeexec.CommandContext(ctx, "git", args...)
 	cmd.Dir = g.repoPath
-	cmd.WaitDelay = 2 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -472,8 +471,7 @@ func (g *GitClient) ListWorktrees() ([]Worktree, error) {
 func GetGitVersion() (string, error) {
 	vCtx, vCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer vCancel()
-	cmd := exec.CommandContext(vCtx, "git", "--version")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(vCtx, "git", "--version")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err

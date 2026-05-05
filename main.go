@@ -24,7 +24,6 @@ import (
 	"github.com/tstapler/stapler-squad/telemetry"
 	"net"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -32,6 +31,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 var (
@@ -672,8 +672,7 @@ func resolveLANHostnames(lanIPStr string) []string {
 	// 2. Linux-specific: mDNS reverse lookup via avahi-resolve
 	avahiCtx, avahiCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer avahiCancel()
-	avahiCmd := exec.CommandContext(avahiCtx, "avahi-resolve", "-a", lanIPStr)
-	avahiCmd.WaitDelay = 2 * time.Second
+	avahiCmd := safeexec.CommandContext(avahiCtx, "avahi-resolve", "-a", lanIPStr)
 	if out, err := avahiCmd.Output(); err == nil {
 		fields := strings.Fields(string(out))
 		if len(fields) >= 2 {
@@ -684,8 +683,7 @@ func resolveLANHostnames(lanIPStr string) []string {
 	// 3. Try hostname -f for FQDN
 	hostnameCtx, hostnameCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer hostnameCancel()
-	hostnameCmd := exec.CommandContext(hostnameCtx, "hostname", "-f")
-	hostnameCmd.WaitDelay = 2 * time.Second
+	hostnameCmd := safeexec.CommandContext(hostnameCtx, "hostname", "-f")
 	if out, err := hostnameCmd.Output(); err == nil {
 		add(string(out))
 	}
@@ -736,8 +734,7 @@ func getDNSSearchDomains() []string {
 	// scutil --dns — macOS authoritative source for search domains.
 	scutilCtx, scutilCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer scutilCancel()
-	scutilCmd := exec.CommandContext(scutilCtx, "scutil", "--dns")
-	scutilCmd.WaitDelay = 2 * time.Second
+	scutilCmd := safeexec.CommandContext(scutilCtx, "scutil", "--dns")
 	if out, err := scutilCmd.Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			line = strings.TrimSpace(line)

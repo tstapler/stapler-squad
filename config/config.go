@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"os/exec"
@@ -39,7 +40,7 @@ func newTimeoutCommandExecutor(timeout time.Duration) *timeoutCommandExecutor {
 }
 
 func (t *timeoutCommandExecutor) Command(name string, args ...string) *exec.Cmd {
-	return exec.CommandContext(context.Background(), name, args...)
+	return safeexec.CommandContext(context.Background(), name, args...)
 }
 
 func (t *timeoutCommandExecutor) Output(cmd *exec.Cmd) ([]byte, error) {

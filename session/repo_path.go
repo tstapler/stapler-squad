@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -153,8 +153,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
 		log.InfoLog.Printf("[RepoPath] Repository exists at %s, fetching latest...", repoPath)
 		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer fetchCancel()
-		cmd := exec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
-		cmd.WaitDelay = 2 * time.Second
+		cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
 		if output, err := cmd.CombinedOutput(); err != nil {
 			log.WarningLog.Printf("[RepoPath] Failed to fetch: %v\nOutput: %s", err, string(output))
 			// Don't fail - the existing repo is still usable
@@ -172,8 +171,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
 	log.InfoLog.Printf("[RepoPath] Cloning %s to %s...", cloneURL, repoPath)
 	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cloneCancel()
-	cmd := exec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("failed to clone repository: %w\nOutput: %s", err, string(output))
 	}
@@ -263,8 +261,7 @@ func DetectWorktree(path string) (*WorktreeInfo, error) {
 	// Get the remote URL using git command (works for both worktrees and main repos)
 	remoteCtx, remoteCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer remoteCancel()
-	cmd := exec.CommandContext(remoteCtx, "git", "-C", path, "config", "--get", "remote.origin.url")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(remoteCtx, "git", "-C", path, "config", "--get", "remote.origin.url")
 	output, err := cmd.Output()
 	if err == nil {
 		info.RemoteURL = strings.TrimSpace(string(output))
@@ -304,8 +301,7 @@ func parseGitHubRemoteURL(url string) (owner, repo string) {
 func GetMainRepoPath(path string) (string, error) {
 	mainCtx, mainCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer mainCancel()
-	cmd := exec.CommandContext(mainCtx, "git", "-C", path, "rev-parse", "--git-common-dir")
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(mainCtx, "git", "-C", path, "rev-parse", "--git-common-dir")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("failed to get git common dir: %w", err)

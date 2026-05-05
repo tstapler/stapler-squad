@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
@@ -228,8 +229,7 @@ func ListAllSessions(serverSocket string) (map[string]bool, error) {
 	args := prependSocket(serverSocket, []string{"list-sessions", "-F", "#{session_name}"})
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
-	cmd := exec.CommandContext(listCtx, Binary(), args...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(listCtx, Binary(), args...)
 	out, err := cmd.Output()
 	if err != nil {
 		// Collect stderr for server-down detection
@@ -258,8 +258,7 @@ func checkServerNotRunning(serverSocket string) bool {
 	args := prependSocket(serverSocket, []string{"list-sessions"})
 	checkCtx, checkCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer checkCancel()
-	cmd := exec.CommandContext(checkCtx, Binary(), args...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(checkCtx, Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	return err != nil && serverNotRunning(out)
 }
@@ -283,8 +282,7 @@ func EnsureServerRunning(serverSocket string) error {
 	args := prependSocket(serverSocket, []string{"start-server"})
 	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer startCancel()
-	cmd := exec.CommandContext(startCtx, Binary(), args...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(startCtx, Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
@@ -319,8 +317,7 @@ func SetExitEmpty(serverSocket string, enabled bool) error {
 	args := prependSocket(serverSocket, []string{"set-option", "-g", "exit-empty", value})
 	optCtx, optCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer optCancel()
-	cmd := exec.CommandContext(optCtx, Binary(), args...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(optCtx, Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("tmux set-option exit-empty %s failed: %w (output: %s)", value, err, out)
@@ -338,8 +335,7 @@ func CreateKeepaliveSession(serverSocket string) error {
 	hasArgs := prependSocket(serverSocket, []string{"has-session", "-t", keepaliveName})
 	hasCtx, hasCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer hasCancel()
-	hasCmd := exec.CommandContext(hasCtx, Binary(), hasArgs...)
-	hasCmd.WaitDelay = 2 * time.Second
+	hasCmd := safeexec.CommandContext(hasCtx, Binary(), hasArgs...)
 	if hasCmd.Run() == nil {
 		return nil // already exists
 	}
@@ -348,8 +344,7 @@ func CreateKeepaliveSession(serverSocket string) error {
 	newArgs := prependSocket(serverSocket, []string{"new-session", "-d", "-s", keepaliveName})
 	newCtx, newCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer newCancel()
-	cmd := exec.CommandContext(newCtx, Binary(), newArgs...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(newCtx, Binary(), newArgs...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to create keepalive session: %w (output: %s)", err, out)
@@ -585,7 +580,7 @@ func (t *TmuxSession) buildTmuxCommand(args ...string) *exec.Cmd {
 	cmdArgs = append(cmdArgs, args...)
 
 	// Use background context; callers supply their own timeout via the executor layer.
-	return exec.CommandContext(context.Background(), Binary(), cmdArgs...)
+	return safeexec.CommandContext(context.Background(), Binary(), cmdArgs...)
 }
 
 // buildAttachCommand creates a tmux attach-session command for PTY operations.
@@ -1437,14 +1432,13 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 	} else {
 		cmdArgs = []string{"list-sessions", "-F", "#{session_name}"}
 	}
-	cmd := exec.CommandContext(ctx, Binary(), cmdArgs...)
+	cmd := safeexec.CommandContext(ctx, Binary(), cmdArgs...)
 	output, err := t.cmdExec.CombinedOutput(cmd)
 	// If the circuit breaker is open, fall back to direct exec.
 	// "No sessions" (exit 1 when server running but empty) can cause false circuit
 	// breaker trips; the fallback ensures checks always work regardless of breaker state.
 	if errors.Is(err, executor.ErrCircuitOpen) {
-		cmd = exec.CommandContext(ctx, Binary(), cmdArgs...)
-		cmd.WaitDelay = 2 * time.Second
+		cmd = safeexec.CommandContext(ctx, Binary(), cmdArgs...)
 		output, err = cmd.CombinedOutput()
 	}
 	return output, err
@@ -1604,8 +1598,7 @@ func (t *TmuxSession) RefreshClient() error {
 		panePID := strings.TrimSpace(string(output))
 		winchCtx, winchCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer winchCancel()
-		killCmd := exec.CommandContext(winchCtx, "kill", "-WINCH", panePID)
-		killCmd.WaitDelay = 2 * time.Second
+		killCmd := safeexec.CommandContext(winchCtx, "kill", "-WINCH", panePID)
 		if err := killCmd.Run(); err != nil {
 			return fmt.Errorf("failed to send SIGWINCH: %w", err)
 		}
@@ -1829,11 +1822,10 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 	defer lsCancel()
 	var cmd *exec.Cmd
 	if serverSocket != "" {
-		cmd = exec.CommandContext(lsCtx, Binary(), "-L", serverSocket, "ls")
+		cmd = safeexec.CommandContext(lsCtx, Binary(), "-L", serverSocket, "ls")
 	} else {
-		cmd = exec.CommandContext(lsCtx, Binary(), "ls")
+		cmd = safeexec.CommandContext(lsCtx, Binary(), "ls")
 	}
-	cmd.WaitDelay = 2 * time.Second
 	output, err := cmdExec.Output(cmd)
 
 	// If there's an error and it's because no server is running, that's fine
@@ -1856,11 +1848,10 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 		killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		var killCmd *exec.Cmd
 		if serverSocket != "" {
-			killCmd = exec.CommandContext(killCtx, Binary(), "-L", serverSocket, "kill-session", "-t", match)
+			killCmd = safeexec.CommandContext(killCtx, Binary(), "-L", serverSocket, "kill-session", "-t", match)
 		} else {
-			killCmd = exec.CommandContext(killCtx, Binary(), "kill-session", "-t", match)
+			killCmd = safeexec.CommandContext(killCtx, Binary(), "kill-session", "-t", match)
 		}
-		killCmd.WaitDelay = 2 * time.Second
 		runErr := cmdExec.Run(killCmd)
 		killCancel()
 		if runErr != nil {

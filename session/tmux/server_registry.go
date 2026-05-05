@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -200,8 +201,7 @@ func (r *TmuxServerRegistry) syncSessions() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	args := prependSocket(r.serverSocket, []string{"list-sessions", "-F", "#{session_name}"})
-	cmd := exec.CommandContext(ctx, "tmux", args...)
-	cmd.WaitDelay = 2 * time.Second
+	cmd := safeexec.CommandContext(ctx, "tmux", args...)
 	out, err := cmd.Output()
 	if err != nil {
 		return fmt.Errorf("list-sessions: %w", err)
@@ -255,8 +255,7 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 		createArgs := []string{"new-session", "-d", "-s", keepaliveName}
 		keepaliveCtx, keepaliveCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer keepaliveCancel()
-		keepaliveCmd := exec.CommandContext(keepaliveCtx, "tmux", createArgs...)
-		keepaliveCmd.WaitDelay = 2 * time.Second
+		keepaliveCmd := safeexec.CommandContext(keepaliveCtx, "tmux", createArgs...)
 		_ = keepaliveCmd.Run()
 	}
 
@@ -264,7 +263,7 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 	// immediate %exit on some tmux versions.
 	baseArgs := []string{"-C", "attach-session", "-t", keepaliveName}
 	args := prependSocket(r.serverSocket, baseArgs)
-	cmd := exec.CommandContext(r.ctx, "tmux", args...)
+	cmd := exec.CommandContext(r.ctx, "tmux", args...) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

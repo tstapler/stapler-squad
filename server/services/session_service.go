@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
@@ -2140,7 +2141,7 @@ func (s *SessionService) ListBranches(
 	if req.Msg.GetIncludeRemote() {
 		refSpec = "refs/"
 	}
-	cmd := exec.CommandContext(cmdCtx, "git", "-C", absPath, "for-each-ref", refSpec, "--format=%(refname:short)")
+	cmd := safeexec.CommandContext(cmdCtx, "git", "-C", absPath, "for-each-ref", refSpec, "--format=%(refname:short)")
 
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -2507,7 +2508,7 @@ func (s *SessionService) RunOneShot(
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSecs)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, claudeBin, "-p", req.Msg.Prompt)
+	cmd := safeexec.CommandContext(runCtx, claudeBin, "-p", req.Msg.Prompt)
 	cmd.Dir = workDir
 
 	output, runErr := cmd.CombinedOutput()
@@ -2570,7 +2571,7 @@ func extractPRURL(output string) string {
 func checkBranchDivergence(workDir string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", "rev-list", "--count", "origin/HEAD..HEAD")
+	cmd := safeexec.CommandContext(ctx, "git", "rev-list", "--count", "origin/HEAD..HEAD")
 	cmd.Dir = workDir
 	out, err := cmd.Output()
 	if err != nil {

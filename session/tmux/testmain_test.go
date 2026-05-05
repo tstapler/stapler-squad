@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // testSocketPrefixes lists every socket-name prefix created by tests in this
@@ -58,7 +60,7 @@ func reapLeakedTestServers() {
 			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = exec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
+		_ = safeexec.CommandContext(ctx, "tmux", "-L", name, "kill-server").Run()
 		cancel()
 	}
 }
@@ -123,7 +125,7 @@ rm -f "$0"
 	if err := os.WriteFile(scriptPath, []byte(script), 0700); err != nil {
 		return // best-effort; normal t.Cleanup handles the happy path
 	}
-	cmd := exec.CommandContext(context.Background(), "sh", scriptPath)
+	cmd := exec.CommandContext(context.Background(), "sh", scriptPath) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own process group → survives SIGKILL to test binary
 	_ = cmd.Start()
 }

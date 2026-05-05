@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // RiskLevel indicates the severity of a tool use request.
@@ -643,8 +643,7 @@ func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 	}
 	gitCtx, gitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer gitCancel()
-	toplevelCmd := exec.CommandContext(gitCtx, "git", "-C", cwd, "rev-parse", "--show-toplevel")
-	toplevelCmd.WaitDelay = 2 * time.Second
+	toplevelCmd := safeexec.CommandContext(gitCtx, "git", "-C", cwd, "rev-parse", "--show-toplevel")
 	if out, err := toplevelCmd.Output(); err == nil {
 		ctx.RepoRoot = strings.TrimSpace(string(out))
 		ctx.IsGitRepo = true
@@ -652,8 +651,7 @@ func (c *RuleBasedClassifier) BuildContext(cwd string) ClassificationContext {
 	if ctx.IsGitRepo {
 		gitDirCtx, gitDirCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer gitDirCancel()
-		gitDirCmd := exec.CommandContext(gitDirCtx, "git", "-C", cwd, "rev-parse", "--git-dir")
-		gitDirCmd.WaitDelay = 2 * time.Second
+		gitDirCmd := safeexec.CommandContext(gitDirCtx, "git", "-C", cwd, "rev-parse", "--git-dir")
 		if out, err := gitDirCmd.Output(); err == nil {
 			ctx.IsWorktree = strings.Contains(string(out), "worktrees")
 		}

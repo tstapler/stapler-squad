@@ -4,10 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // TestRecordDemo starts an isolated server, seeds it with mock sessions, and
@@ -40,7 +41,7 @@ func TestRecordDemo(t *testing.T) {
 	playwrightBin := filepath.Join(e2eDir, "node_modules", ".bin", "playwright")
 	playwrightCtx, playwrightCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer playwrightCancel()
-	cmd := exec.CommandContext(playwrightCtx, playwrightBin, "test",
+	cmd := safeexec.CommandContext(playwrightCtx, playwrightBin, "test",
 		"--config", "playwright.demo.config.ts",
 		"--project=chromium",
 	)

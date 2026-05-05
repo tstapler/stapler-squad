@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session"
 )
 
@@ -55,6 +56,7 @@ func StartDemoServer(t *testing.T) *DemoServer {
 		t.Fatalf("failed to ensure binary: %v", err)
 	}
 
+	//nolint:norawexec long-running demo server process managed via cmd.Start/Stop lifecycle
 	cmd := exec.CommandContext(context.Background(), binaryPath,
 		"--test-mode",
 		"--test-dir", testDir,
@@ -280,7 +282,7 @@ func ensureBinary(binaryPath string) error {
 	root := filepath.Dir(binaryPath)
 	buildCtx, buildCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer buildCancel()
-	cmd := exec.CommandContext(buildCtx, "go", "build", "-o", binaryPath, ".")
+	cmd := safeexec.CommandContext(buildCtx, "go", "build", "-o", binaryPath, ".")
 	cmd.Dir = root
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
