@@ -519,6 +519,7 @@ func (pd *PTYDiscovery) getPTYInfoFromTmux(sessionName string) (string, int, err
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", sessionName,
 		"#{pane_tty}:#{pane_pid}")
+	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.Output()
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to get tmux pane info: %w", err)
@@ -556,6 +557,7 @@ func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]pan
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
+		cmd.WaitDelay = 2 * time.Second
 		output, err := cmd.Output()
 		if err != nil {
 			return connections
@@ -658,6 +660,7 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 		} else {
 			cmd = exec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}")
 		}
+		cmd.WaitDelay = 2 * time.Second
 		output, err := cmd.Output()
 		if err != nil {
 			return connections
@@ -749,6 +752,7 @@ func (pd *PTYDiscovery) getPTYInfoFromTmuxWithSocket(sessionName string, socket 
 		cmd = exec.CommandContext(ctx, "tmux", "display-message", "-p", "-t", sessionName,
 			"#{pane_tty}:#{pane_pid}")
 	}
+	cmd.WaitDelay = 2 * time.Second
 
 	output, err := cmd.Output()
 	if err != nil {

@@ -2,6 +2,7 @@ package mux
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,8 +27,11 @@ type SessionInfo struct {
 // ListStaplerSquadSessionsWithInfo returns sessions with full metadata
 func ListStaplerSquadSessionsWithInfo() ([]SessionInfo, error) {
 	// Format: name|created|activity|path|windows|attached
-	cmd := exec.Command("tmux", "list-sessions", "-F",
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "tmux", "list-sessions", "-F",
 		"#{session_name}|#{session_created}|#{session_activity}|#{session_path}|#{session_windows}|#{session_attached}")
+	cmd.WaitDelay = 2 * time.Second
 	output, err := cmd.Output()
 	if err != nil {
 		// tmux returns error if no sessions exist

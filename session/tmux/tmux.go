@@ -1444,6 +1444,7 @@ func (t *TmuxSession) listSessionsRaw(ctx context.Context) ([]byte, error) {
 	// breaker trips; the fallback ensures checks always work regardless of breaker state.
 	if errors.Is(err, executor.ErrCircuitOpen) {
 		cmd = exec.CommandContext(ctx, Binary(), cmdArgs...)
+		cmd.WaitDelay = 2 * time.Second
 		output, err = cmd.CombinedOutput()
 	}
 	return output, err

@@ -546,6 +546,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
+      // If connection drops while still loading, content won't arrive — clear the overlay
+      // so the user sees the terminal pane and "Disconnected" status instead of a stuck spinner.
+      setIsLoadingInitialContent(false);
       reconnectTimeoutRef.current = setTimeout(() => {
         if (!isConnected) {
           setShowReconnectButton(true);
