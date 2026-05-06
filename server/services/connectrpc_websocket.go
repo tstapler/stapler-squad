@@ -24,6 +24,12 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// terminalDataPool reuses TerminalData proto objects in the stream hot path to avoid
+// per-frame heap allocations. Reset via proto.Reset before putting back.
+var terminalDataPool = sync.Pool{
+	New: func() any { return &sessionv1.TerminalData{} },
+}
+
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
@@ -567,11 +573,29 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	errChan := make(chan error, 2)
 	doneChan := make(chan struct{})
 
-	// Goroutine 1: Forward control mode updates to WebSocket
+	// Goroutine 1: Forward control mode updates to WebSocket.
+	// Coalesces back-to-back frames so rapid terminal bursts are batched into a
+	// single proto message per write, reducing syscall count and allocations.
 	go func() {
 		defer close(doneChan)
 
 		log.InfoLog.Printf("[streamViaControlMode] Output goroutine started for session '%s'", sessionID)
+
+		// sendData marshals and writes a terminal output message, using a pooled proto.
+		sendData := func(data []byte) error {
+			msg := terminalDataPool.Get().(*sessionv1.TerminalData)
+			msg.SessionId = sessionID
+			msg.Data = &sessionv1.TerminalData_Output{
+				Output: &sessionv1.TerminalOutput{Data: data},
+			}
+			dataBytes, err := proto.Marshal(msg)
+			proto.Reset(msg)
+			terminalDataPool.Put(msg)
+			if err != nil {
+				return fmt.Errorf("failed to marshal output: %w", err)
+			}
+			return stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes))
+		}
 
 		for {
 			select {
@@ -585,9 +609,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						exitData := &sessionv1.TerminalData{
 							SessionId: sessionID,
 							Data: &sessionv1.TerminalData_Output{
-								Output: &sessionv1.TerminalOutput{
-									Data: exitContent,
-								},
+								Output: &sessionv1.TerminalOutput{Data: exitContent},
 							},
 						}
 						if exitBytes, merr := proto.Marshal(exitData); merr == nil {
@@ -599,28 +621,25 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					return
 				}
 
-				// Mark snapshot dirty so the next client connect captures fresh content
+				// Mark snapshot dirty so the next client connect captures fresh content.
 				h.markSnapshotDirty(sessionID)
 
-				// Send incremental output (control mode provides raw terminal output)
-				terminalData := &sessionv1.TerminalData{
-					SessionId: sessionID,
-					Data: &sessionv1.TerminalData_Output{
-						Output: &sessionv1.TerminalOutput{
-							Data: data,
-						},
-					},
+				// Coalesce: drain any immediately available frames into a single write.
+				buf := data
+			coalesce:
+				for {
+					select {
+					case more, ok := <-updateChan:
+						if !ok {
+							break coalesce
+						}
+						buf = append(buf, more...)
+					default:
+						break coalesce
+					}
 				}
 
-				dataBytes, err := proto.Marshal(terminalData)
-				if err != nil {
-					log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal output: %v", err)
-					errChan <- fmt.Errorf("failed to marshal output: %w", err)
-					return
-				}
-
-				envelope := protocol.CreateEnvelope(0, dataBytes)
-				if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
+				if err := sendData(buf); err != nil {
 					log.ErrorLog.Printf("[streamViaControlMode] Failed to send output: %v", err)
 					errChan <- fmt.Errorf("failed to send output: %w", err)
 					return

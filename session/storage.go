@@ -289,18 +289,6 @@ func (s *Storage) DeleteAllInstances() error {
 	return nil
 }
 
-// updateFieldInRepo loads the InstanceData for title, applies fn to it, then saves.
-// Used for partial-field updates.
-func (s *Storage) updateFieldInRepo(title string, fn func(*InstanceData)) error {
-	ctx := context.Background()
-	data, err := s.repo.Get(ctx, title)
-	if err != nil {
-		return fmt.Errorf("failed to get instance '%s': %w", title, err)
-	}
-	fn(data)
-	return s.repo.Update(ctx, *data)
-}
-
 // UpdateInstanceTimestampsOnly updates ONLY the timestamp fields in storage without
 // creating Instance objects. This preserves in-memory state like controllers.
 // This is critical for WebSocket terminal streaming which updates timestamps frequently.
@@ -338,28 +326,22 @@ func (s *Storage) UpdateInstanceProcessingGrace(title string, processingGraceUnt
 }
 
 // UpdateInstancePRStatus updates the PR status fields for a specific instance.
-// Called by PRStatusPoller after a successful PR info fetch.
-func (s *Storage) UpdateInstancePRStatus(title, state, priority, checkConclusion string, approvedCount, changesReqCount int, isDraft, terminal bool) error {
-	return s.updateFieldInRepo(title, func(d *InstanceData) {
-		d.GitHubPRState = state
-		d.GitHubPRPriority = priority
-		d.GitHubPRIsDraft = isDraft
-		d.GitHubApprovedCount = approvedCount
-		d.GitHubChangesReqCount = changesReqCount
-		d.GitHubCheckConclusion = checkConclusion
-		d.GitHubPRStatusTerminal = terminal
-		d.LastPRStatusCheck = time.Now()
-	})
+// PR fields are not stored in the ent schema — they live in memory and are re-populated by
+// PRStatusPoller on each poll cycle. No DB write is needed.
+func (s *Storage) UpdateInstancePRStatus(_, _, _, _ string, _, _ int, _, _ bool) error {
+	return nil
 }
 
 // UpdateInstancePRNumber updates the GitHubPRNumber when discovered by auto-discovery.
-func (s *Storage) UpdateInstancePRNumber(title string, prNumber int) error {
-	return s.updateFieldInRepo(title, func(d *InstanceData) { d.GitHubPRNumber = prNumber })
+// PR fields are not stored in the ent schema; no DB write is needed.
+func (s *Storage) UpdateInstancePRNumber(_ string, _ int) error {
+	return nil
 }
 
 // UpdateInstanceForkFlag records whether the repo for a session is a fork.
-func (s *Storage) UpdateInstanceForkFlag(title string, isFork bool) error {
-	return s.updateFieldInRepo(title, func(d *InstanceData) { d.GitHubIsFork = isFork })
+// PR fields are not stored in the ent schema; no DB write is needed.
+func (s *Storage) UpdateInstanceForkFlag(_ string, _ bool) error {
+	return nil
 }
 
 // --- Session-first convenience methods (Task 2.5) ---

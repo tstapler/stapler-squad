@@ -607,8 +607,11 @@ func (t *TmuxSession) StartWithCleanup(workDir string) (CleanupFunc, error) {
 
 // start is the internal implementation for Start and StartWithCleanup
 func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupFunc) error {
-	// Check if the session already exists
-	if t.DoesSessionExist() {
+	// Use a no-cache check here to detect stale sessions from previous server runs.
+	// The registry only tracks sessions from the current run, so a session left over
+	// from a crashed/restarted server would not be in the registry and DoesSessionExist()
+	// would return false, causing new-session to fail with "duplicate session".
+	if t.DoesSessionExistNoCache() {
 		// Session already exists - we can reuse it
 		log.InfoLog.Printf("Tmux session '%s' already exists, reusing existing session", t.sanitizedName)
 
@@ -654,25 +657,37 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// timeout window to be wasted on stale data.
 	t.invalidateExistsCache()
 
-	// Poll for session existence with exponential backoff.
-	// sessionCreateTimeout gives enough headroom when the tmux server is under load
-	// from multiple active sessions (ReviewQueuePoller, control-mode streaming, etc.).
-	timeout := time.After(sessionCreateTimeout)
-	sleepDuration := sessionPollInitialDelay
-	for !t.DoesSessionExist() {
-		select {
-		case <-timeout:
-			if cleanupErr := t.Close(); cleanupErr != nil {
-				err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-			}
-			return fmt.Errorf("timed out waiting for tmux session %s: %v", t.sanitizedName, err)
-		default:
-			time.Sleep(sleepDuration)
-			// Exponential backoff up to 50ms max
-			if sleepDuration < 50*time.Millisecond {
-				sleepDuration *= 2
+	// Fast path: confirm session existence directly via list-sessions before entering
+	// the poll loop. The push-based registry can lag behind tmux reality (the
+	// %session-created event arrives asynchronously), so using the registry alone
+	// causes poll-loop timeouts when the event is delayed. A single no-cache check
+	// right after successful new-session avoids the 10s wait in the common case.
+	if t.DoesSessionExistNoCache() {
+		t.invalidateExistsCache()
+	} else {
+		// Fall back to the poll loop for the rare case where the session isn't
+		// immediately visible (e.g. tmux server under heavy load).
+		// sessionCreateTimeout gives enough headroom when the tmux server is under load
+		// from multiple active sessions (ReviewQueuePoller, control-mode streaming, etc.).
+		timeout := time.After(sessionCreateTimeout)
+		sleepDuration := sessionPollInitialDelay
+		for !t.DoesSessionExist() {
+			select {
+			case <-timeout:
+				if cleanupErr := t.Close(); cleanupErr != nil {
+					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+				}
+				return fmt.Errorf("timed out waiting for tmux session %s: %v", t.sanitizedName, err)
+			default:
+				time.Sleep(sleepDuration)
+				// Exponential backoff up to 50ms max
+				if sleepDuration < 50*time.Millisecond {
+					sleepDuration *= 2
+				}
 			}
 		}
+		// Session confirmed by poll loop, invalidate cache for fresh state
+		t.invalidateExistsCache()
 	}
 
 	// Session exists now, invalidate cache to ensure fresh state
