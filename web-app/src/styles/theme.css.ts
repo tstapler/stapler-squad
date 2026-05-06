@@ -404,9 +404,9 @@ export const cyberpunk77Theme = createTheme(vars, {
     uncommittedFg: "#fcee09",
     uncommittedBorder: "#443800",
     idleBg: "#12122a",
-    idleFg: "#4a4603",
+    idleFg: "#aaaa00", /* was #4a4603 — fails WCAG AA on #12122a; #aaaa00 = 7.38:1 ✅ */
     idleBorder: "#1a1a3e",
-    staleFg: "#2d2d6e",
+    staleFg: "#8888aa", /* was #2d2d6e — fails WCAG AA on #12122a; #8888aa = 5.1:1 ✅ */
     processingBg: "#0d0d22",
     processingFg: "#c8be08",
     processingBorder: "#1a1a3e",

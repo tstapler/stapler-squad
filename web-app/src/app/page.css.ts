@@ -149,38 +149,33 @@ export const placeholder = style({
   fontStyle: "italic",
 });
 
-export const helpButton = style({
-  position: "fixed",
-  bottom: "2rem",
-  right: "2rem",
-  width: "3rem",
-  height: "3rem",
-  borderRadius: "50%",
-  background: vars.color.primary,
-  color: vars.color.primaryText,
-  border: "none",
-  fontSize: "1.5rem",
+export const cancelButton = style({
+  padding: `${vars.space["2"]} 20px`,
+  borderRadius: vars.radii.lg,
+  fontSize: "0.875rem",
   fontWeight: 600,
   cursor: "pointer",
-  boxShadow: `0 4px 6px -1px ${vars.color.glowSecondary}`,
-  transition: "transform 0.2s, box-shadow 0.2s",
-  zIndex: 100,
+  background: vars.color.cardBackground,
+  color: vars.color.textPrimary,
+  border: `1px solid ${vars.color.borderColor}`,
+  transition: "all 0.2s ease",
   selectors: {
-    "&:hover": {
-      transform: "scale(1.1)",
-      boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)",
-    },
-    "&:active": {
-      transform: "scale(1.05)",
-    },
+    "&:hover": { background: vars.color.hoverBackground, borderColor: vars.color.borderHover },
   },
-  "@media": {
-    "screen and (max-width: 768px)": {
-      bottom: "1rem",
-      right: "1rem",
-      width: "2.5rem",
-      height: "2.5rem",
-      fontSize: "1.25rem",
-    },
+});
+
+export const dangerButton = style({
+  padding: `${vars.space["2"]} 20px`,
+  borderRadius: vars.radii.lg,
+  fontSize: "0.875rem",
+  fontWeight: 600,
+  cursor: "pointer",
+  background: vars.color.error,
+  color: vars.color.primaryText,
+  border: `1px solid ${vars.color.error}`,
+  transition: "all 0.2s ease",
+  selectors: {
+    "&:hover": { background: vars.color.errorDark },
+    "&:disabled": { opacity: 0.5, cursor: "not-allowed" },
   },
 });

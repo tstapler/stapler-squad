@@ -638,7 +638,8 @@ export function SessionCard({
       data-testid="session-card"
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
-      role="article"
+      role="group"
+      aria-roledescription="session"
       tabIndex={0}
       aria-label={`Session ${session.title}, status: ${getStatusText(session.status)}, program: ${session.program}`}
     >

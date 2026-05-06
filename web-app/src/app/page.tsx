@@ -11,7 +11,6 @@ import { SessionDetailBar } from "@/components/sessions/SessionDetailBar";
 import { SessionWizard } from "@/components/sessions/SessionWizard";
 import { ResumeSessionModal } from "@/components/sessions/ResumeSessionModal";
 import { ErrorState } from "@/components/ui/ErrorState";
-import { KeyboardHints } from "@/components/ui/KeyboardHint";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
@@ -29,7 +28,7 @@ function HomeContent() {
   const { openInCreationMode } = useOmnibar();
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [activeTab, setActiveTab] = useState<SessionDetailTab>("info");
-  const [isHelpOpen, setShowHelp] = useState(false);
+  const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<Session | null>(null);
   const [isSessionFullscreen, setIsSessionFullscreen] = useState(false);
   const [pendingSessionId, setPendingSessionId] = useState<string | null>(null);
   // j/k keyboard navigation index within the session list
@@ -54,10 +53,8 @@ function HomeContent() {
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
   const sessionDetailRef = useRef<HTMLDivElement>(null);
   const wizardModalContentRef = useRef<HTMLDivElement>(null);
-  const helpModalContentRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
   const wizardTriggerRef = useRef<HTMLElement | null>(null);
-  const helpTriggerRef = useRef<HTMLElement | null>(null);
 
   // Focus detail panel when session opens; return focus on close
   useEffect(() => {
@@ -78,16 +75,6 @@ function HomeContent() {
       wizardTriggerRef.current = null;
     }
   }, [showWizard]);
-
-  // Focus help modal when it opens; return focus on close
-  useEffect(() => {
-    if (isHelpOpen) {
-      helpModalContentRef.current?.focus();
-    } else if (helpTriggerRef.current) {
-      helpTriggerRef.current.focus();
-      helpTriggerRef.current = null;
-    }
-  }, [isHelpOpen]);
 
   // Valid tab values for URL parsing
   const validTabs: SessionDetailTab[] = ["terminal", "diff", "vcs", "logs", "info"];
@@ -389,12 +376,12 @@ function HomeContent() {
   useKeyboard({
     // '?' is handled exclusively by CockpitShell's useShortcut to avoid dual-listener collision
     Escape: () => {
-      if (resumeTarget) {
+      if (deleteConfirmTarget) {
+        setDeleteConfirmTarget(null);
+      } else if (resumeTarget) {
         setResumeTarget(null);
       } else if (showWizard) {
         handleWizardCancel();
-      } else if (isHelpOpen) {
-        setShowHelp(false);
       } else if (selectedSession) {
         closeSession();
       }
@@ -402,42 +389,42 @@ function HomeContent() {
     "R": () => !loading && listSessions(),
     // j/k navigation (only when no modal is open)
     "j": () => {
-      if (showWizard || isHelpOpen || resumeTarget) return;
+      if (showWizard || deleteConfirmTarget || resumeTarget) return;
       setFocusedSessionIndex(prev =>
         sessions.length === 0 ? -1 : Math.min(prev + 1, sessions.length - 1)
       );
     },
     "k": () => {
-      if (showWizard || isHelpOpen || resumeTarget) return;
+      if (showWizard || deleteConfirmTarget || resumeTarget) return;
       setFocusedSessionIndex(prev =>
         sessions.length === 0 ? -1 : Math.max(prev - 1, 0)
       );
     },
     Enter: () => {
-      if (showWizard || isHelpOpen || resumeTarget) return;
+      if (showWizard || deleteConfirmTarget || resumeTarget) return;
       if (!selectedSession && focusedSessionIndex >= 0 && sessions[focusedSessionIndex]) {
         handleSessionClick(sessions[focusedSessionIndex]);
       }
     },
     // p/r/d act on the open session
     "p": () => {
-      if (selectedSession && !showWizard && !isHelpOpen) {
+      if (selectedSession && !showWizard && !deleteConfirmTarget) {
         pauseSession(selectedSession.id);
       }
     },
     "r": () => {
-      if (selectedSession && !showWizard && !isHelpOpen) {
+      if (selectedSession && !showWizard && !deleteConfirmTarget) {
         handleResumeRequest(selectedSession);
       }
     },
     "d": () => {
-      if (selectedSession && !showWizard && !isHelpOpen) {
-        handleDeleteSession(selectedSession.id);
+      if (selectedSession && !showWizard && !deleteConfirmTarget) {
+        setDeleteConfirmTarget(selectedSession);
       }
     },
     // t — jump to terminal tab
     "t": () => {
-      if (selectedSession && !showWizard && !isHelpOpen) {
+      if (selectedSession && !showWizard && !deleteConfirmTarget) {
         handleTabChange("terminal");
       }
     },
@@ -556,34 +543,38 @@ function HomeContent() {
         />
       )}
 
-      {/* Keyboard shortcuts help modal */}
-      {isHelpOpen && (
-        <div className={styles.modal} onClick={() => setShowHelp(false)}>
-          <div ref={helpModalContentRef} tabIndex={-1} className={styles.modalContent} onClick={(e) => e.stopPropagation()}>
+      {/* Delete confirmation modal (triggered by 'd' keyboard shortcut) */}
+      {deleteConfirmTarget && (
+        <div className={styles.modal} onClick={() => setDeleteConfirmTarget(null)}>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="deleteConfirmTitle"
+            tabIndex={-1}
+            className={styles.modalContent}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => { if (e.key === "Escape") setDeleteConfirmTarget(null); }}
+          >
             <div className={styles.modalHeader}>
-              <h2>Keyboard Shortcuts</h2>
-              <button
-                className={styles.closeButton}
-                onClick={() => setShowHelp(false)}
-                aria-label="Close"
-              >
-                ✕
-              </button>
+              <h2 id="deleteConfirmTitle">Delete Session</h2>
+              <button className={styles.closeButton} onClick={() => setDeleteConfirmTarget(null)} aria-label="Close">✕</button>
             </div>
             <div className={styles.modalBody}>
-              <KeyboardHints
-                hints={[
-                  { keys: "?", description: "Show keyboard shortcuts" },
-                  { keys: "Escape", description: "Close detail panel / dialog" },
-                  { keys: "R", description: "Refresh session list" },
-                  { keys: "j / k", description: "Navigate session list up / down" },
-                  { keys: "Enter", description: "Open focused session" },
-                  { keys: "t", description: "Jump to terminal tab" },
-                  { keys: "p", description: "Pause open session" },
-                  { keys: "r", description: "Resume open session" },
-                  { keys: "d", description: "Delete open session" },
-                ]}
-              />
+              <p>Delete &quot;{deleteConfirmTarget.title}&quot;?</p>
+              <p style={{ color: "var(--error, #ef4444)", fontSize: "0.875rem", marginTop: "0.5rem" }}>This action cannot be undone.</p>
+              <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
+                <button className={styles.cancelButton} onClick={() => setDeleteConfirmTarget(null)}>Cancel</button>
+                <button
+                  className={styles.dangerButton}
+                  onClick={async () => {
+                    const target = deleteConfirmTarget;
+                    setDeleteConfirmTarget(null);
+                    await handleDeleteSession(target.id);
+                  }}
+                >
+                  Delete
+                </button>
+              </div>
             </div>
           </div>
         </div>
