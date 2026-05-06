@@ -60,7 +60,7 @@ tools/scanner/cmd
 tools/scanner/backend/cmd/scanner
 
 # Custom lint tool binaries
-bin/hotpolllog-lint
+bin/
 tools/lint/hotpolllog/hotpolllog
 coverage.html
 
