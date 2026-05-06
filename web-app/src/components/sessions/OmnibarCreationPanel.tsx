@@ -20,7 +20,7 @@ import * as styles from "./OmnibarCreationPanel.css";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
-const SESSION_TYPES = [
+export const SESSION_TYPES = [
   { value: "new_worktree", label: "New Worktree" },
   { value: "directory", label: "Directory" },
   { value: "existing_worktree", label: "Use Worktree" },
@@ -147,7 +147,7 @@ export function OmnibarCreationPanel({
   const {
     sessionName, branch, program, category, autoYes,
     useTitleAsBranch, sessionType, existingWorktree, workingDir,
-    parentDir, projectName, newProjectSessionType, createIfMissing,
+    parentDir, projectName, newProjectSessionType, createIfMissing, firstPrompt,
   } = formState;
 
   // "Create new repository" affordance is only meaningful for session types
@@ -333,6 +333,16 @@ export function OmnibarCreationPanel({
             value={sessionName}
             onChange={(e) => setFormField("sessionName", e.target.value)}
           />
+          {!sessionName && (
+            <span className={hint} style={{ color: "var(--error)" }}>
+              Session name is empty — type a name above or use &ldquo;name &gt; prompt&rdquo; syntax
+            </span>
+          )}
+          {firstPrompt && sessionName && (
+            <span className={hint}>
+              Session name: <strong>{sessionName}</strong> · First prompt will be injected automatically
+            </span>
+          )}
         </div>
 
         {/* Session Type — ARIA radio group (ADR-003: arrow keys cycle) */}
@@ -616,6 +626,28 @@ export function OmnibarCreationPanel({
             ))}
           </div>
         )}
+
+        {/* First Prompt (optional) */}
+        <div className={field}>
+          <label className={labelClass} htmlFor="omnibar-first-prompt">
+            First Prompt <span style={{ fontWeight: "normal", opacity: 0.6 }}>(optional)</span>
+          </label>
+          <textarea
+            id="omnibar-first-prompt"
+            className={fieldInput}
+            placeholder="What should Claude do first? (injected as CLAUDE.md on session start)"
+            rows={3}
+            maxLength={2000}
+            value={formState.firstPrompt}
+            onChange={(e) => setFormField("firstPrompt", e.target.value)}
+            style={{ resize: "vertical", fontFamily: "inherit", fontSize: "inherit" }}
+          />
+          {formState.firstPrompt.length > 1800 && (
+            <span className={hint} style={{ color: "var(--warning)" }}>
+              {2000 - formState.firstPrompt.length} characters remaining
+            </span>
+          )}
+        </div>
 
         {/* Advanced Options */}
         <div className={collapsible}>

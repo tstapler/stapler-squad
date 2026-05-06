@@ -172,6 +172,7 @@ export function useSessionService(
           sessionType: request.sessionType,
           oneOff: request.oneOff ?? false,
           createIfMissing: request.createIfMissing ?? false,
+          initialPrompt: request.initialPrompt,
         });
 
         // Add to store (with duplicate check handled by entity adapter upsertOne)

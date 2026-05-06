@@ -144,6 +144,16 @@ func (r *TmuxServerRegistry) IsHealthy() bool {
 	return r.healthy
 }
 
+// NotifySessionCreated proactively marks a session as existing in the registry.
+// Called by TmuxSession.start() after a new session is confirmed via list-sessions,
+// so that DoesSessionExist() returns true before the async %session-created
+// control-mode event is processed.
+func (r *TmuxServerRegistry) NotifySessionCreated(name string) {
+	r.mu.Lock()
+	r.sessions[name] = true
+	r.mu.Unlock()
+}
+
 // SubscribePaneExit implements PaneExitSubscriber. The returned channel is
 // closed when the named session/pane exits or when ctx is cancelled.
 func (r *TmuxServerRegistry) SubscribePaneExit(ctx context.Context, sessionName string) <-chan struct{} {

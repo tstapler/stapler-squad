@@ -122,6 +122,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         sessionType: effectiveSessionType,
         oneOff: data.oneOff ?? false,
         createIfMissing: data.createIfMissing ?? false,
+        initialPrompt: data.initialPrompt,
       });
 
       if (session) {

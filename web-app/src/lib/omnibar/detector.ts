@@ -5,6 +5,7 @@
 
 import { InputType, DetectionResult, GitHubRef } from "./types";
 import { CommandDetector } from "./detectors/CommandDetector";
+import { toSessionSlug } from "./slugify";
 
 export interface Detector {
   name: string;
@@ -298,7 +299,7 @@ class SessionSearchDetector implements Detector {
       type: InputType.SessionSearch,
       confidence: 0.5,
       parsedValue: trimmed,
-      suggestedName: "",
+      suggestedName: toSessionSlug(trimmed),
     };
   }
 }
