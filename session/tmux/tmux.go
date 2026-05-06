@@ -668,6 +668,21 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// right after successful new-session avoids the 10s wait in the common case.
 	if t.DoesSessionExistNoCache() {
 		t.invalidateExistsCache()
+		// The registry is push-based: %session-created arrives asynchronously and may
+		// not be reflected yet. Wait briefly so that DoesSessionExist() (which takes
+		// the registry fast path when healthy) is consistent the moment Start() returns.
+		// Without this, callers see false immediately after a successful Start().
+		if t.registry != nil && t.registry.IsHealthy() {
+			registryDeadline := time.Now().Add(2 * time.Second)
+			for !t.registry.SessionExists(t.sanitizedName) {
+				if time.Now().After(registryDeadline) {
+					log.WarningLog.Printf("Registry lagged for session %s after creation; continuing", t.sanitizedName)
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			t.invalidateExistsCache()
+		}
 	} else {
 		// Fall back to the poll loop for the rare case where the session isn't
 		// immediately visible (e.g. tmux server under heavy load).

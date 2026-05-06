@@ -534,6 +534,86 @@ func TestClassify_PythonInline_SafeStdlib_Allow(t *testing.T) {
 	}
 }
 
+func TestClassify_PythonInlineMultiline_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	// Multiline python -c scripts that use banned patterns (e.g. open()) should escalate
+	// via seed-escalate-python-inline-multiline, which provides a temp-script recommendation.
+	// The banned pattern must be in the actual code, not in a # comment.
+	multilineWithOpen := "python3 -c \"\nimport json\nwith open('/tmp/foo') as f: pass\n\""
+	payload := PermissionRequestPayload{
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": multilineWithOpen},
+	}
+	result := c.Classify(payload, ctx)
+	if result.Decision == AutoAllow {
+		t.Errorf("multiline python -c with open(): expected Escalate, got AutoAllow (rule=%s)", result.RuleID)
+	}
+	if result.RuleID != "seed-escalate-python-inline-multiline" {
+		t.Errorf("multiline python -c with open(): expected rule seed-escalate-python-inline-multiline, got %s", result.RuleID)
+	}
+}
+
+func TestClassify_PythonInlineMultilineSafeStdlib_Allow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	// Multiline python -c that uses only safe stdlib and has no banned patterns in the
+	// actual code should be auto-allowed even when # comment lines are present.
+	multilineSafe := "python3 -c \"\nimport json\n# print last reply too if multiple\nfor t in []: print(t)\n\""
+	payload := PermissionRequestPayload{
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": multilineSafe},
+	}
+	result := c.Classify(payload, ctx)
+	if result.Decision != AutoAllow {
+		t.Errorf("multiline stdlib-only python -c: expected AutoAllow, got %v (rule=%s reason=%s)",
+			result.Decision, result.RuleID, result.Reason)
+	}
+}
+
+func TestClassify_PythonInlineCommentStripping_Allow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	// Multiline python -c where a whole-line # comment mentions a banned pattern
+	// (open, eval, exec) should still be auto-allowed when the actual code is safe stdlib.
+	// The comment line "# use open() to read" must not trigger the banned-pattern check.
+	safeWithCommentLine := "python3 -c \"\nimport json\n# use open() to read\nprint(json.dumps({}))\n\""
+	payload := PermissionRequestPayload{
+		ToolName:  "Bash",
+		ToolInput: map[string]interface{}{"command": safeWithCommentLine},
+	}
+	result := c.Classify(payload, ctx)
+	if result.Decision != AutoAllow {
+		t.Errorf("python -c with banned pattern only in # comment line: expected AutoAllow, got %v (rule=%s reason=%s)",
+			result.Decision, result.RuleID, result.Reason)
+	}
+}
+
+func TestClassify_PythonInlineActualBannedPattern_Escalate(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	// python -c that actually uses open() in code (not just in a comment) must still escalate.
+	cmds := []string{
+		`python3 -c "import json; f = open('/tmp/x'); print(f.read())"`,
+		`python3 -c "import json; eval('1+1')"`,
+		`python3 -c "import json; exec('print(1)')"`,
+	}
+	for _, cmd := range cmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision == AutoAllow {
+			t.Errorf("cmd %q: expected Escalate for actual banned pattern, got AutoAllow (rule=%s)", cmd, result.RuleID)
+		}
+	}
+}
+
 func TestClassify_PipUnknownSubcmd_Escalate(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	ctx := ClassificationContext{}

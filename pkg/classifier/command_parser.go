@@ -227,6 +227,12 @@ type PythonInfo struct {
 	Imports []string
 	// IsInline is true when code was passed via the -c flag.
 	IsInline bool
+	// Code is the extracted Python source passed via -c, with surrounding quotes stripped.
+	Code string
+	// CodeWithoutComments is Code with whole-line Python comments (lines whose first
+	// non-whitespace character is '#') removed. Use this for banned-pattern detection
+	// so that a comment like "# open() is dangerous" does not trigger a false positive.
+	CodeWithoutComments string
 }
 
 // shellKeywords is the set of Bash/POSIX shell flow-control keywords. When the
@@ -631,9 +637,15 @@ func detectPythonMode(prog string, args []string) string {
 	if !isPythonProgram(prog) {
 		return ""
 	}
-	for _, arg := range args {
+	for i, arg := range args {
 		switch arg {
 		case "-c":
+			// Return "inline-multiline" when the code block contains newlines so
+			// that rules can distinguish interactive one-liners from embedded scripts
+			// and recommend more reviewable alternatives (e.g. a temp .py file).
+			if i+1 < len(args) && strings.ContainsRune(args[i+1], '\n') {
+				return "inline-multiline"
+			}
 			return "inline"
 		case "-m":
 			return "module"
@@ -718,7 +730,11 @@ func ParsePythonCommand(command string) PythonInfo {
 		}
 	}
 
-	info.Imports = extractPythonImports(code)
+	info.Code = code
+	info.CodeWithoutComments = stripPythonCommentLines(code)
+	// Extract imports from comment-stripped code so that commented-out import
+	// statements (e.g. "# import os") are not treated as real imports.
+	info.Imports = extractPythonImports(info.CodeWithoutComments)
 	return info
 }
 
@@ -868,6 +884,23 @@ func categorizeProgram(prog string) string {
 	default:
 		return "other"
 	}
+}
+
+// stripPythonCommentLines removes whole-line Python comments from code. A line is
+// treated as a comment when its first non-whitespace character is '#'. Inline
+// comments (# after code on the same line) and '#' inside string literals are
+// intentionally kept to avoid incorrectly altering string content.
+func stripPythonCommentLines(code string) string {
+	lines := strings.Split(code, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			out = append(out, "") // preserve line count for readability
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 // extractPythonImports parses Python import statements from source code using regex.
