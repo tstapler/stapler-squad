@@ -13,7 +13,7 @@ export interface NotificationData {
   message: string;
   timestamp: number;
   priority?: "urgent" | "high" | "medium" | "low";
-  notificationType?: "info" | "approval_needed" | "error" | "warning" | "task_complete" | "task_failed" | "progress" | "question" | "reminder" | "system" | "custom";
+  notificationType?: "info" | "approval_needed" | "auto_approved" | "error" | "warning" | "task_complete" | "task_failed" | "progress" | "question" | "reminder" | "system" | "custom";
   /** Source app name (e.g., "IntelliJ IDEA", "Visual Studio Code") */
   sourceApp?: string;
   /** macOS bundle ID for window activation */

@@ -345,6 +345,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Wire the notification stamper so approval outcomes persist across page refreshes
 	if notifStore != nil {
 		approvalHandler.SetNotificationStamper(notifStore)
+		approvalHandler.SetAutoApprovalLogger(notifStore)
 	}
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.InfoLog.Printf("Registered Claude Code hook approval handler at /api/hooks/permission-request")

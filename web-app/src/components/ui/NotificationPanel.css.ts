@@ -584,3 +584,127 @@ export const filterPillActive = style({
   borderColor: vars.color.primary,
   color: "white",
 });
+
+// Auto-handled (auto_approved) collapsible section
+
+export const autoHandledSection = style({
+  borderTop: `1px solid ${vars.color.borderColor}`,
+  backgroundColor: vars.color.cardBackground,
+  flexShrink: 0,
+});
+
+export const autoHandledHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  width: "100%",
+  padding: "0.625rem 1.25rem",
+  backgroundColor: "transparent",
+  border: "none",
+  cursor: "pointer",
+  fontSize: "0.8125rem",
+  fontWeight: 500,
+  color: vars.color.textSecondary,
+  textAlign: "left",
+  transition: "background-color 0.15s ease",
+  selectors: {
+    "&:hover": {
+      backgroundColor: vars.color.hoverBackground,
+    },
+  },
+});
+
+export const autoHandledHeaderLeft = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "0.375rem",
+});
+
+export const autoHandledBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  minWidth: "1.25rem",
+  height: "1.25rem",
+  padding: "0 0.375rem",
+  backgroundColor: vars.color.textSecondary,
+  color: vars.color.background,
+  borderRadius: "10px",
+  fontSize: "0.6875rem",
+  fontWeight: 600,
+});
+
+export const autoHandledChevron = style({
+  fontSize: "0.625rem",
+  color: vars.color.textMuted,
+  transition: "transform 0.2s ease",
+  flexShrink: 0,
+});
+
+export const autoHandledChevronOpen = style({
+  transform: "rotate(180deg)",
+});
+
+export const autoHandledList = style({
+  display: "flex",
+  flexDirection: "column",
+  overflow: "hidden",
+  maxHeight: "40vh",
+  overflowY: "auto",
+});
+
+export const autoHandledItem = style({
+  display: "flex",
+  alignItems: "flex-start",
+  gap: "0.5rem",
+  padding: "0.5rem 1.25rem",
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  fontSize: "0.8125rem",
+  color: vars.color.textSecondary,
+  opacity: 0.75,
+  selectors: {
+    "&:last-child": {
+      borderBottom: "none",
+    },
+    "&:hover": {
+      backgroundColor: vars.color.hoverBackground,
+      opacity: 1,
+    },
+  },
+});
+
+export const autoHandledDecision = style({
+  fontSize: "0.75rem",
+  fontWeight: 600,
+  flexShrink: 0,
+  marginTop: "0.0625rem",
+});
+
+export const autoHandledContent = style({
+  flex: 1,
+  minWidth: 0,
+});
+
+export const autoHandledTitle = style({
+  fontWeight: 500,
+  color: vars.color.textPrimary,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+});
+
+export const autoHandledMeta = style({
+  fontSize: "0.75rem",
+  color: vars.color.textMuted,
+  display: "flex",
+  gap: "0.5rem",
+  flexWrap: "wrap",
+  marginTop: "0.125rem",
+});
+
+export const autoHandledTimestamp = style({
+  fontSize: "0.75rem",
+  color: vars.color.textMuted,
+  flexShrink: 0,
+  marginTop: "0.0625rem",
+});

@@ -3,11 +3,13 @@ package notifications
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/tstapler/stapler-squad/log"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 const (
@@ -24,6 +26,8 @@ const (
 	// (outcome-stamping uses the notification record ID to find the record) while
 	// preventing multiple "x3" cards for a session that issues several approval requests.
 	notifTypeApprovalNeeded = int32(1)
+	// notifTypeAutoApproved matches NOTIFICATION_TYPE_AUTO_APPROVED = 13 in types.proto.
+	notifTypeAutoApproved = int32(13)
 )
 
 // NotificationRecord is the persisted representation of a notification event.
@@ -149,6 +153,37 @@ func (s *NotificationHistoryStore) Append(record *NotificationRecord) error {
 	s.enforceRetention()
 
 	return s.saveToDisk()
+}
+
+// AppendAutoApproved writes a silent NOTIFICATION_TYPE_AUTO_APPROVED record directly to
+// history without publishing to the event bus. The record is immediately marked as read so
+// it never appears in the active notification feed — only in the auto-handled history view.
+func (s *NotificationHistoryStore) AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error {
+	title := "Auto-" + decision + "d: " + toolName
+	msg := filePath
+	if msg == "" {
+		msg = toolName
+	}
+	now := time.Now()
+	record := &NotificationRecord{
+		ID:               uuid.New().String(),
+		SessionID:        sessionID,
+		SessionName:      sessionName,
+		NotificationType: notifTypeAutoApproved,
+		Priority:         int32(1), // low — no interrupt
+		Title:            title,
+		Message:          msg,
+		IsRead:           true, // pre-read: never surfaces as unread alert
+		CreatedAt:        now,
+		Metadata: map[string]string{
+			"approval_decision":      decision,
+			"tool_name":              toolName,
+			"classifier_rule_id":     ruleID,
+			"classifier_rule_name":   ruleName,
+			"classifier_rule_source": ruleSource,
+		},
+	}
+	return s.Append(record)
 }
 
 // findUnreadDuplicate scans s.records for an unread record matching the given

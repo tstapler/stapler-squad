@@ -499,6 +499,7 @@ const (
 	NotificationType_NOTIFICATION_TYPE_INFO          NotificationType = 10 // General information
 	NotificationType_NOTIFICATION_TYPE_DEBUG         NotificationType = 11 // Debug information
 	NotificationType_NOTIFICATION_TYPE_STATUS_CHANGE NotificationType = 12 // Session status changed
+	NotificationType_NOTIFICATION_TYPE_AUTO_APPROVED NotificationType = 13 // Classifier auto-approved or auto-denied; no human action needed
 	// Custom (Medium Priority by default)
 	NotificationType_NOTIFICATION_TYPE_CUSTOM NotificationType = 100 // Custom notification type
 )
@@ -519,6 +520,7 @@ var (
 		10:  "NOTIFICATION_TYPE_INFO",
 		11:  "NOTIFICATION_TYPE_DEBUG",
 		12:  "NOTIFICATION_TYPE_STATUS_CHANGE",
+		13:  "NOTIFICATION_TYPE_AUTO_APPROVED",
 		100: "NOTIFICATION_TYPE_CUSTOM",
 	}
 	NotificationType_value = map[string]int32{
@@ -535,6 +537,7 @@ var (
 		"NOTIFICATION_TYPE_INFO":                10,
 		"NOTIFICATION_TYPE_DEBUG":               11,
 		"NOTIFICATION_TYPE_STATUS_CHANGE":       12,
+		"NOTIFICATION_TYPE_AUTO_APPROVED":       13,
 		"NOTIFICATION_TYPE_CUSTOM":              100,
 	}
 )
@@ -5257,7 +5260,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x16ATTENTION_REASON_STALE\x10\b\x12%\n" +
 	"!ATTENTION_REASON_WAITING_FOR_USER\x10\t\x12\"\n" +
 	"\x1eATTENTION_REASON_TESTS_FAILING\x10\n" +
-	"*\xf8\x03\n" +
+	"*\x9d\x04\n" +
 	"\x10NotificationType\x12!\n" +
 	"\x1dNOTIFICATION_TYPE_UNSPECIFIED\x10\x00\x12%\n" +
 	"!NOTIFICATION_TYPE_APPROVAL_NEEDED\x10\x01\x12$\n" +
@@ -5272,7 +5275,8 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x16NOTIFICATION_TYPE_INFO\x10\n" +
 	"\x12\x1b\n" +
 	"\x17NOTIFICATION_TYPE_DEBUG\x10\v\x12#\n" +
-	"\x1fNOTIFICATION_TYPE_STATUS_CHANGE\x10\f\x12\x1c\n" +
+	"\x1fNOTIFICATION_TYPE_STATUS_CHANGE\x10\f\x12#\n" +
+	"\x1fNOTIFICATION_TYPE_AUTO_APPROVED\x10\r\x12\x1c\n" +
 	"\x18NOTIFICATION_TYPE_CUSTOM\x10d*\xc0\x01\n" +
 	"\x14NotificationPriority\x12%\n" +
 	"!NOTIFICATION_PRIORITY_UNSPECIFIED\x10\x00\x12\x1d\n" +

@@ -31,6 +31,8 @@ export function mapNotificationType(protoType: number): NotificationData["notifi
       return "task_complete";
     case NotificationType.PROCESS_STARTED:
       return "progress";
+    case NotificationType.AUTO_APPROVED:
+      return "auto_approved";
     case NotificationType.INFO:
     case NotificationType.DEBUG:
     case NotificationType.STATUS_CHANGE:
@@ -59,6 +61,7 @@ export function mapPriority(protoPriority: number): "urgent" | "high" | "medium"
 export function notificationTypeIcon(type: UIType): string {
   switch (type) {
     case "approval_needed": return "⚠️";
+    case "auto_approved":   return "✅";
     case "error":           return "❌";
     case "warning":         return "⚠️";
     case "task_complete":   return "✅";
@@ -74,6 +77,7 @@ export function notificationTypeIcon(type: UIType): string {
 export function notificationTypeLabel(type: UIType): string {
   switch (type) {
     case "approval_needed": return "Approval Needed";
+    case "auto_approved":   return "Auto-handled";
     case "error":           return "Error";
     case "warning":         return "Warning";
     case "task_complete":   return "Task Complete";
@@ -116,6 +120,7 @@ export function notificationTypeFilter(
       return types.filter(
         (t) =>
           t !== "approval_needed" &&
+          t !== "auto_approved" &&
           t !== "error" &&
           t !== "task_failed" &&
           t !== "warning" &&

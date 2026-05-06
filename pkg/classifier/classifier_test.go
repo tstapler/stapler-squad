@@ -2949,3 +2949,88 @@ func TestClassify_EnvExpansion(t *testing.T) {
 		})
 	}
 }
+
+// T-UNIT-GO-01: Update tool must be auto-allowed for regular file edits (seed-allow-file-tools).
+func TestClassify_UpdateTool_RegularFile_AutoAllow(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	files := []string{
+		"/project/main.go",
+		"/project/web-app/src/App.tsx",
+		"README.md",
+		"/tmp/some_file.txt",
+	}
+	for _, file := range files {
+		payload := PermissionRequestPayload{
+			ToolName:  "Update",
+			ToolInput: map[string]interface{}{"file_path": file},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("Update on %q: expected AutoAllow, got %v (rule=%s)", file, result.Decision, result.RuleID)
+		}
+	}
+}
+
+// T-UNIT-GO-02: Update tool must be auto-denied for .env files (seed-deny-env-write).
+func TestClassify_UpdateTool_EnvFile_AutoDeny(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	files := []string{".env", ".env.local", ".env.production", "/project/.env.test"}
+	for _, file := range files {
+		payload := PermissionRequestPayload{
+			ToolName:  "Update",
+			ToolInput: map[string]interface{}{"file_path": file},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoDeny {
+			t.Errorf("Update on %q: expected AutoDeny, got %v (rule=%s)", file, result.Decision, result.RuleID)
+		}
+	}
+}
+
+// T-UNIT-GO-03: Update tool must be auto-denied for .git internal files (seed-deny-git-internals-write).
+func TestClassify_UpdateTool_GitInternals_AutoDeny(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	files := []string{
+		".git/hooks/pre-commit",
+		".git/config",
+		".git/HEAD",
+	}
+	for _, file := range files {
+		payload := PermissionRequestPayload{
+			ToolName:  "Update",
+			ToolInput: map[string]interface{}{"file_path": file},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoDeny {
+			t.Errorf("Update on %q: expected AutoDeny, got %v (rule=%s)", file, result.Decision, result.RuleID)
+		}
+	}
+}
+
+// T-UNIT-GO-04: ClassificationResult.Source is populated from the matching rule's Source field.
+func TestClassify_ResultSource_PopulatedFromRule(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	payload := PermissionRequestPayload{
+		ToolName:  "Update",
+		ToolInput: map[string]interface{}{"file_path": "/project/main.go"},
+	}
+	result := c.Classify(payload, ctx)
+	if result.Decision != AutoAllow {
+		t.Fatalf("expected AutoAllow, got %v", result.Decision)
+	}
+	if result.Source == "" {
+		t.Error("expected Source to be populated, got empty string")
+	}
+	// Seed rules have Source == "seed"
+	if result.Source != "seed" {
+		t.Errorf("expected Source=%q for seed rule, got %q", "seed", result.Source)
+	}
+}

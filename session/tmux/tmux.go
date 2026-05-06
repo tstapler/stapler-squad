@@ -1469,10 +1469,15 @@ func (t *TmuxSession) DoesSessionExist() bool {
 		return false
 	}
 
-	// Fast path: use the push-based registry when it is healthy.
-	// This avoids an exec.Command fork entirely.
+	// Fast path: use the push-based registry when it is healthy and it confirms
+	// the session exists. If the registry returns false, it may be lagging behind
+	// tmux reality (e.g. the %session-created event has not been delivered yet),
+	// so fall through to the cache/subprocess path for an authoritative answer.
 	if t.registry != nil && t.registry.IsHealthy() {
-		return t.registry.SessionExists(t.sanitizedName)
+		if t.registry.SessionExists(t.sanitizedName) {
+			return true
+		}
+		// Registry returned false — do not trust it blindly; fall through.
 	}
 
 	// Check cache first (read lock)

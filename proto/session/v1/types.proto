@@ -568,6 +568,7 @@ enum NotificationType {
   NOTIFICATION_TYPE_INFO = 10;              // General information
   NOTIFICATION_TYPE_DEBUG = 11;             // Debug information
   NOTIFICATION_TYPE_STATUS_CHANGE = 12;     // Session status changed
+  NOTIFICATION_TYPE_AUTO_APPROVED = 13;     // Classifier auto-approved or auto-denied; no human action needed
 
   // Custom (Medium Priority by default)
   NOTIFICATION_TYPE_CUSTOM = 100;           // Custom notification type

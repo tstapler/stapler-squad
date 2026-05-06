@@ -48,6 +48,12 @@ type approvalNotificationStamper interface {
 	SetMetadata(id, key, value string) error
 }
 
+// autoApprovalLogger is a narrow interface for writing silent auto-approval records
+// directly to notification history without triggering toasts or push notifications.
+type autoApprovalLogger interface {
+	AppendAutoApproved(sessionID, sessionName, toolName, filePath, ruleID, ruleName, ruleSource, decision string) error
+}
+
 // ApprovalHandler handles Claude Code HTTP hooks for PermissionRequest events.
 // It blocks the HTTP connection open while waiting for the user's decision,
 // then returns the decision in the hookSpecificOutput JSON format.
@@ -60,6 +66,7 @@ type ApprovalHandler struct {
 	analyticsStore      *AnalyticsStore             // optional: record classification decisions
 	domainChecker       *DomainAgeChecker           // optional: escalate requests to newly-registered domains
 	notificationStamper approvalNotificationStamper // optional: stamps approval outcomes on notification records
+	autoApprovalLog     autoApprovalLogger          // optional: writes silent records for auto-approved/denied ops
 	timeout             time.Duration               // default 4m; overridable in tests
 }
 
@@ -104,6 +111,13 @@ func (h *ApprovalHandler) SetDomainChecker(d *DomainAgeChecker) {
 // so the notification panel can show a persistent badge after page refresh.
 func (h *ApprovalHandler) SetNotificationStamper(s approvalNotificationStamper) {
 	h.notificationStamper = s
+}
+
+// SetAutoApprovalLogger injects a logger for writing silent auto-approval records to notification
+// history. When set, AutoAllow and AutoDeny decisions are recorded without triggering toasts or
+// push notifications, giving users a reviewable log of what the classifier handled automatically.
+func (h *ApprovalHandler) SetAutoApprovalLogger(l autoApprovalLogger) {
+	h.autoApprovalLog = l
 }
 
 // HandlePermissionRequest handles POST /api/hooks/permission-request.
@@ -211,6 +225,10 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 		switch result.Decision {
 		case classifier.AutoAllow:
 			log.InfoLog.Printf("[ApprovalHandler] Auto-allowed %s/%s (rule=%s)", sessionID, payload.ToolName, result.RuleID)
+			if h.autoApprovalLog != nil {
+				filePath, _ := payload.ToolInput["file_path"].(string)
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "allow")
+			}
 			h.writeDecision(w, "allow", "")
 			return
 		case classifier.AutoDeny:
@@ -219,6 +237,10 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
 			log.InfoLog.Printf("[ApprovalHandler] Auto-denied %s/%s (rule=%s): %s", sessionID, payload.ToolName, result.RuleID, msg)
+			if h.autoApprovalLog != nil {
+				filePath, _ := payload.ToolInput["file_path"].(string)
+				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "deny")
+			}
 			h.writeDecision(w, "deny", msg)
 			return
 			// Escalate: fall through to manual review queue

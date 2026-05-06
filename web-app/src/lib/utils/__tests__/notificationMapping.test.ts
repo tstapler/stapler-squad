@@ -59,6 +59,10 @@ describe("notificationMapping", () => {
       expect(mapNotificationType(NotificationType.STATUS_CHANGE)).toBe("info");
     });
 
+    it("maps AUTO_APPROVED to auto_approved", () => {
+      expect(mapNotificationType(NotificationType.AUTO_APPROVED)).toBe("auto_approved");
+    });
+
     it("maps CUSTOM to custom", () => {
       expect(mapNotificationType(NotificationType.CUSTOM)).toBe("custom");
     });
@@ -187,6 +191,7 @@ describe("notificationMapping", () => {
   describe("notificationTypeFilter", () => {
     const allTypes = [
       "approval_needed",
+      "auto_approved",
       "question",
       "error",
       "task_failed",
@@ -248,14 +253,25 @@ describe("notificationMapping", () => {
       expect(result).toContain("custom");
     });
 
-    it("filter categories are mutually exclusive and collectively exhaustive", () => {
+    it("filter categories are mutually exclusive and collectively exhaustive (excluding auto_approved)", () => {
       const approval = notificationTypeFilter("approval_needed", [...allTypes]);
       const error = notificationTypeFilter("error", [...allTypes]);
       const task = notificationTypeFilter("task_complete", [...allTypes]);
       const info = notificationTypeFilter("info", [...allTypes]);
 
       const covered = new Set([...approval, ...error, ...task, ...info]);
-      allTypes.forEach((t) => expect(covered.has(t)).toBe(true));
+      // auto_approved is intentionally excluded from all filter pills — it appears only in the
+      // collapsible "Auto-handled" section in NotificationPanel, so it must NOT appear in any filter.
+      const filterable = allTypes.filter((t) => t !== "auto_approved");
+      filterable.forEach((t) => expect(covered.has(t)).toBe(true));
+    });
+
+    it("auto_approved is excluded from all filter categories", () => {
+      const approval = notificationTypeFilter("approval_needed", ["auto_approved"]);
+      const error = notificationTypeFilter("error", ["auto_approved"]);
+      const task = notificationTypeFilter("task_complete", ["auto_approved"]);
+      const info = notificationTypeFilter("info", ["auto_approved"]);
+      expect([...approval, ...error, ...task, ...info]).toHaveLength(0);
     });
 
     it("returns empty array when input is empty", () => {

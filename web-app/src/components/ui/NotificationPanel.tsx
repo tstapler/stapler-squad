@@ -69,6 +69,19 @@ import {
   viewButton,
   loadMore,
   loadMoreButton,
+  autoHandledSection,
+  autoHandledHeader,
+  autoHandledHeaderLeft,
+  autoHandledBadge,
+  autoHandledChevron,
+  autoHandledChevronOpen,
+  autoHandledList,
+  autoHandledItem,
+  autoHandledDecision,
+  autoHandledContent,
+  autoHandledTitle,
+  autoHandledMeta,
+  autoHandledTimestamp,
 } from "./NotificationPanel.css";
 
 type TypeFilter = "all" | "approval_needed" | "error" | "task_complete" | "info";
@@ -116,6 +129,7 @@ export function NotificationPanel() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [autoHandledOpen, setAutoHandledOpen] = useState(false);
 
   // Track per-approval resolution state so buttons update after the user decides.
   // "allow" / "deny" = user resolved it; "expired" = already resolved or timed out.
@@ -160,9 +174,10 @@ export function NotificationPanel() {
       setPendingApprovals(prev => { const next = { ...prev }; delete next[approvalId]; return next; });
     }
   }, [getClient, acknowledgeNotification]);
-  // Filter notifications by search query and type
+  // Filter notifications by search query and type; auto_approved records are always excluded
+  // from the main list and shown in a separate collapsible section.
   const filteredNotifications = useMemo(() => {
-    let list = notificationHistory;
+    let list = notificationHistory.filter((n) => n.notificationType !== "auto_approved");
 
     if (typeFilter !== "all") {
       const allowed = new Set(
@@ -183,6 +198,10 @@ export function NotificationPanel() {
 
     return list;
   }, [notificationHistory, typeFilter, searchQuery]);
+
+  const autoHandledNotifications = useMemo(() => {
+    return notificationHistory.filter((n) => n.notificationType === "auto_approved");
+  }, [notificationHistory]);
 
   const unreadCount = getUnreadCount();
 
@@ -506,6 +525,54 @@ export function NotificationPanel() {
             </div>
           )}
         </div>
+
+        {/* Auto-handled section — collapsible, always below main list */}
+        {autoHandledNotifications.length > 0 && (
+          <div className={autoHandledSection}>
+            <button
+              className={autoHandledHeader}
+              onClick={() => setAutoHandledOpen((v) => !v)}
+              aria-expanded={autoHandledOpen}
+              aria-controls="auto-handled-list"
+            >
+              <span className={autoHandledHeaderLeft}>
+                Auto-handled
+                <span className={autoHandledBadge}>{autoHandledNotifications.length}</span>
+              </span>
+              <span className={`${autoHandledChevron} ${autoHandledOpen ? autoHandledChevronOpen : ""}`}>
+                ▼
+              </span>
+            </button>
+            {autoHandledOpen && (
+              <div id="auto-handled-list" className={autoHandledList}>
+                {autoHandledNotifications.map((n) => {
+                  const decision = n.metadata?.["approval_decision"] ?? "allow";
+                  const ruleName = n.metadata?.["classifier_rule_name"];
+                  const toolName = n.metadata?.["tool_name"] ?? n.title;
+                  return (
+                    <div key={n.id} className={autoHandledItem}>
+                      <span className={autoHandledDecision}>
+                        {decision === "deny" ? "✗" : "✓"}
+                      </span>
+                      <div className={autoHandledContent}>
+                        <div className={autoHandledTitle}>{toolName}</div>
+                        {(n.message || ruleName) && (
+                          <div className={autoHandledMeta}>
+                            {n.message && <span>{n.message}</span>}
+                            {ruleName && <span>· {ruleName}</span>}
+                          </div>
+                        )}
+                      </div>
+                      <span className={autoHandledTimestamp}>
+                        {formatRelativeTime(n.timestamp)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </>
   );
