@@ -460,7 +460,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// asynchronously via the output reader goroutine. We must check existence first so
 	// the restore path actually runs.
 	tmuxSession := instance.GetTmuxSession()
-	if tmuxSession != nil && !tmuxSession.DoesSessionExist() {
+	// Use no-cache check: a stale positive (cache still true after session died) causes
+	// control mode to attach to a dead session and immediately receive %exit.
+	if tmuxSession != nil && !tmuxSession.DoesSessionExistNoCache() {
 		log.InfoLog.Printf("[streamViaControlMode] Session '%s' not in tmux, restoring before control mode", sessionID)
 		workDir := instance.GetWorkingDirectory()
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
@@ -523,8 +525,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		return instance.CapturePaneContentRaw()
 	})
 	if err != nil {
-		log.InfoLog.Printf("[streamViaControlMode] capture-pane failed for '%s', proceeding with empty content: %v", sessionID, err)
-		initialContent = ""
+		log.InfoLog.Printf("[streamViaControlMode] capture-pane failed for '%s', sending stopped notice: %v", sessionID, err)
+		// Send a visible notice instead of leaving the terminal blank so the user
+		// knows why there is no output (session stopped, not a connection failure).
+		initialContent = "\r\n\x1b[33m[session stopped — no terminal content available]\x1b[0m\r\n"
 	}
 
 	if initialContent != "" {

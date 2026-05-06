@@ -462,3 +462,106 @@ type fakeWriteCloser struct{}
 
 func (fakeWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
 func (fakeWriteCloser) Close() error                { return nil }
+
+// TestCMDispatch_ExitDrainsPendingCmdsImmediately verifies that %exit drains
+// in-flight pendingCmds with ErrControlModeStopped without waiting for scanner EOF.
+// This is the fix for the race where capture-pane/resize commands block for 3s.
+func TestCMDispatch_ExitDrainsPendingCmdsImmediately(t *testing.T) {
+	sess, _ := newDispatchTestSession(t)
+
+	channels := enqueueChannels(sess, 3)
+
+	// Fire %exit — all pending commands must be drained immediately.
+	sess.processControlModeLine("%exit")
+
+	deadline := time.After(100 * time.Millisecond)
+	for i, ch := range channels {
+		select {
+		case r := <-ch:
+			if r.err != ErrControlModeStopped {
+				t.Errorf("channel %d: expected ErrControlModeStopped, got %v", i, r.err)
+			}
+		case <-deadline:
+			t.Fatalf("channel %d was not drained within 100ms of %%exit (would be 3s timeout without fix)", i)
+		}
+	}
+}
+
+// TestCMDispatch_ExitSetsControlModeExitedFlag verifies that controlModeExited is
+// set synchronously when %exit is processed, so SubscribeToControlModeUpdates
+// immediately returns a pre-closed channel for late subscribers.
+func TestCMDispatch_ExitSetsControlModeExitedFlag(t *testing.T) {
+	sess, _ := newDispatchTestSession(t)
+
+	sess.processControlModeLine("%exit")
+
+	sess.controlModeSubMu.Lock()
+	exited := sess.controlModeExited
+	sess.controlModeSubMu.Unlock()
+
+	if !exited {
+		t.Fatal("controlModeExited should be true immediately after exit is processed")
+	}
+
+	// SubscribeToControlModeUpdates must return a pre-closed channel.
+	_, ch := sess.SubscribeToControlModeUpdates()
+	select {
+	case _, ok := <-ch:
+		if ok {
+			t.Fatal("expected pre-closed channel (ok=false), got open channel")
+		}
+	default:
+		t.Fatal("channel was not closed — late subscriber would block forever")
+	}
+}
+
+// TestCMDispatch_ProcessAfterExitReturnsStopped verifies that commands enqueued via
+// runCMSender AFTER %exit is processed get ErrControlModeStopped immediately, not after
+// a 3-second context timeout. This is the race: runCMSender can still be alive when
+// %exit fires, and previously it would append to pendingCmds after the drain had run.
+func TestCMDispatch_ProcessAfterExitReturnsStopped(t *testing.T) {
+	sess, _ := newDispatchTestSession(t)
+
+	// Simulate %exit having already been processed.
+	sess.processControlModeLine("%exit")
+
+	// Now enqueue a command AFTER exit — simulates the race where runCMSender
+	// picks up a resize/capture-pane request after the CM process has died.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	_, err := sess.sendCMCommand(ctx, "capture-pane", "-p", "-e", "-t", "test")
+	if err == nil {
+		t.Fatal("expected error after exit, got nil")
+	}
+	// Must return quickly — not after the 3-second cmCtx timeout.
+	if ctx.Err() == context.DeadlineExceeded {
+		t.Fatal("sendCMCommand timed out; command should have returned ErrControlModeStopped immediately (3s race)")
+	}
+	if err != ErrControlModeStopped && !strings.Contains(err.Error(), "stopped") {
+		t.Fatalf("expected ErrControlModeStopped, got %v", err)
+	}
+}
+
+// TestCMDispatch_ExitDrainsInFlightCmdResp verifies that an in-flight command
+// (between %begin and %exit) receives ErrControlModeStopped, not a silent hang.
+func TestCMDispatch_ExitDrainsInFlightCmdResp(t *testing.T) {
+	sess, _ := newDispatchTestSession(t)
+
+	channels := enqueueChannels(sess, 1)
+	ch := channels[0]
+
+	// %begin claims the channel; %exit arrives before %end.
+	sess.processControlModeLine("%begin 1 1 0")
+	sess.processControlModeLine("partial body")
+	sess.processControlModeLine("%exit")
+
+	select {
+	case r := <-ch:
+		if r.err != ErrControlModeStopped {
+			t.Fatalf("expected ErrControlModeStopped for in-flight cmd, got err=%v body=%q", r.err, r.body)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("in-flight channel was not drained after exit")
+	}
+}

@@ -390,6 +390,39 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 
 	case "%exit":
+		// Drain the in-flight command (reader-goroutine-only fields, no lock needed).
+		if t.inCmdResp && t.curCmdCh != nil {
+			select {
+			case t.curCmdCh <- cmdResult{err: ErrControlModeStopped}:
+			default:
+			}
+			t.curCmdCh = nil
+			t.inCmdResp = false
+			t.cmdBodyBuf.Reset()
+		}
+
+		// Immediately mark exited and drain so waiting goroutines unblock in <1ms
+		// rather than waiting for their 3-second context timeout.  The scanner-EOF
+		// path in readControlModeOutput() does the same drain, but there is a race
+		// window between %exit and EOF where runCMSender can append a new resultCh
+		// to pendingCmds after the EOF drain has already run, leaving it orphaned.
+		t.controlModeSubMu.Lock()
+		if !t.controlModeExited {
+			t.controlModeExited = true
+			for _, ch := range t.pendingCmds {
+				select {
+				case ch <- cmdResult{err: ErrControlModeStopped}:
+				default:
+				}
+			}
+			t.pendingCmds = nil
+			for id, ch := range t.controlModeSubscribers {
+				close(ch)
+				delete(t.controlModeSubscribers, id)
+			}
+		}
+		t.controlModeSubMu.Unlock()
+
 		log.InfoLog.Printf("Control mode received %%exit for session '%s'", t.sanitizedName)
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
@@ -436,14 +469,22 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 	process := func(req cmSendReq) {
 		// Enqueue the response channel BEFORE writing so the reader goroutine
 		// never encounters a %begin with no matching pending channel.
+		// Guard against controlModeExited: if %exit was already processed, the drain
+		// has run and no one will ever drain a newly appended resultCh, causing a
+		// 3-second context timeout for the caller.
 		t.controlModeSubMu.Lock()
+		if t.controlModeExited {
+			t.controlModeSubMu.Unlock()
+			select {
+			case req.resultCh <- cmdResult{err: ErrControlModeStopped}:
+			default:
+			}
+			return
+		}
 		t.pendingCmds = append(t.pendingCmds, req.resultCh)
 		t.controlModeSubMu.Unlock()
 
 		if _, err := fmt.Fprintf(stdin, "%s\n", req.line); err != nil {
-			// Write failed — the resultCh is orphaned in pendingCmds and will absorb
-			// the next tmux response out-of-order. This is extremely rare (stdin close
-			// during shutdown). No-op: StopControlMode is about to drain pendingCmds.
 			if log.DebugLog != nil {
 				log.DebugLog.Printf("CM sender write error for session '%s': %v", t.sanitizedName, err)
 			}
