@@ -657,7 +657,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 
 	// Invalidate cache so the poll loop gets a fresh check immediately.
 	// The pre-creation DoesSessionExist() call above caches a "false" result,
-	// and the 500ms cache TTL would otherwise cause the first 500ms of the
+	// and the 5s cache TTL would otherwise cause the first 5s of the
 	// timeout window to be wasted on stale data.
 	t.invalidateExistsCache()
 
@@ -695,7 +695,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		// from multiple active sessions (ReviewQueuePoller, control-mode streaming, etc.).
 		timeout := time.After(sessionCreateTimeout)
 		sleepDuration := sessionPollInitialDelay
-		for !t.DoesSessionExist() {
+		for !t.DoesSessionExistNoCache() {
 			select {
 			case <-timeout:
 				if cleanupErr := t.Close(); cleanupErr != nil {
