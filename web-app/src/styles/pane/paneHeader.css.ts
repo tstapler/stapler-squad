@@ -16,12 +16,10 @@ export const paneHeader = style({
   userSelect: "none",
   cursor: "default",
   "@media": {
-    // Hide pane header below 768px — SessionDetail's own tab bar (and MobilePaneTabStrip when
-    // multiple panes exist) covers navigation. The 769–900px range has no pane header either,
-    // but the BottomNav only appears below 900px (layout.css.ts cockpitRoot), so a device in
-    // that range gets a full-height cockpit minus any bottom-nav padding. This is intentional:
-    // tablets in portrait orientation have enough vertical room and the pane header would waste
-    // space that the terminal benefits from.
+    // Hide pane header at ≤768px — SessionDetail's own tab bar (and MobilePaneTabStrip when
+    // multiple panes exist) covers pane navigation at that width. At 769–900px the pane header
+    // IS visible; cockpitRoot still subtracts the BottomNav height at that range (≤900px) so
+    // both can coexist. Above 900px the BottomNav disappears and the full 100dvh is available.
     "(max-width: 768px)": {
       display: "none",
     },

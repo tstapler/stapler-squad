@@ -178,12 +178,13 @@ function PaneLeafComponent({ pane, state, dispatch, sessions }: PaneLeafProps) {
  * Renders the full recursive pane layout.
  */
 export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRendererProps) {
-  const { isInnerScreen } = useViewport();
-  // isNarrow = any viewport where paneHeader is hidden (≤768px CSS breakpoint maps to !isInnerScreen)
-  const isMobile = !isInnerScreen;
+  const { isMobile, isFoldable } = useViewport();
+  // Collapse split panes for any viewport below 900px (mobile + foldable) — BottomNav is
+  // visible there and single-pane + MobilePaneTabStrip gives a better UX than cramped splits.
+  const isNarrow = isMobile || isFoldable;
   const allLeaves = getAllLeaves(state.root);
   const hasMultiplePanes = allLeaves.length > 1;
-  const showMobileTabStrip = isMobile && hasMultiplePanes;
+  const showMobileTabStrip = isNarrow && hasMultiplePanes;
 
   return (
     <div
@@ -218,7 +219,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
           state={state}
           dispatch={dispatch}
           sessions={sessions}
-          isMobile={isMobile}
+          isMobile={isNarrow}
         />
       </div>
 
