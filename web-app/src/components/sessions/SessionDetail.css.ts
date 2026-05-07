@@ -37,9 +37,10 @@ export const header = style({
   },
   "@media": {
     "screen and (max-width: 768px)": {
-      padding: "0.75rem 1rem",
-      flexWrap: "wrap",
-      rowGap: "0.5rem",
+      padding: "0.4rem 0.75rem",
+      flexWrap: "nowrap",
+      gap: "0.25rem",
+      minHeight: 0,
     },
   },
 });
@@ -59,9 +60,9 @@ export const title = style({
   },
   "@media": {
     "screen and (max-width: 768px)": {
-      fontSize: "1.125rem",
-      flex: "1 1 100%",
-      maxWidth: "calc(100vw - 120px)",
+      fontSize: "0.9rem",
+      flex: "1 1 auto",
+      minWidth: 0,
     },
   },
 });
@@ -86,7 +87,7 @@ export const headerActions = style({
   gap: "0.5rem",
   "@media": {
     "screen and (max-width: 768px)": {
-      width: "100%",
+      flexShrink: 0,
     },
   },
 });
@@ -207,8 +208,12 @@ export const tabs = style({
   "@media": {
     "screen and (max-width: 768px)": {
       overflowX: "auto",
-      padding: "0 0.5rem",
-      gap: "0.25rem",
+      padding: "0 0.25rem",
+      gap: "0",
+      scrollbarWidth: "none",
+      selectors: {
+        "&::-webkit-scrollbar": { display: "none" },
+      },
     },
   },
 });
@@ -234,9 +239,12 @@ export const tab = style({
   },
   "@media": {
     "screen and (max-width: 768px)": {
-      padding: "0.75rem 1rem",
-      fontSize: "0.875rem",
+      padding: "0.5rem 0.6rem",
+      fontSize: "0.75rem",
       whiteSpace: "nowrap",
+      minHeight: "44px", // WCAG 2.5.5 AA minimum touch target
+      display: "flex",
+      alignItems: "center",
     },
   },
 });
@@ -589,7 +597,6 @@ export const fullscreenMobileTitle = style({
 export const fullscreenMobileHeaderActions = style({
   "@media": {
     "screen and (max-width: 768px)": {
-      width: "auto",
       flexShrink: 0,
     },
   },

@@ -13,6 +13,17 @@ export const cockpitRoot = style({
   gridTemplateColumns: "auto 1fr",
   height: "100dvh",
   overflow: "hidden",
+  "@media": {
+    // BottomNav is position:fixed below 900px. Shrink cockpit so content never renders
+    // underneath it. Note: paneHeader.css.ts hides the pane header at 768px, creating an
+    // intentional gap (769–900px) where: no pane header, but cockpit is still shortened for
+    // the bottom nav. This range targets tablets in portrait orientation — they have more
+    // vertical room than phones, so losing the pane header trades a 32px chrome strip for
+    // terminal rows, and the BottomNav still needs clearance regardless.
+    "(max-width: 900px)": {
+      height: "calc(100dvh - 64px - max(env(safe-area-inset-bottom, 0px), 8px))",
+    },
+  },
 });
 
 export const drawerColumn = style({

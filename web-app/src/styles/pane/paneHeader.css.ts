@@ -15,6 +15,17 @@ export const paneHeader = style({
   fontSize: vars.fontSize.xs,
   userSelect: "none",
   cursor: "default",
+  "@media": {
+    // Hide pane header below 768px — SessionDetail's own tab bar (and MobilePaneTabStrip when
+    // multiple panes exist) covers navigation. The 769–900px range has no pane header either,
+    // but the BottomNav only appears below 900px (layout.css.ts cockpitRoot), so a device in
+    // that range gets a full-height cockpit minus any bottom-nav padding. This is intentional:
+    // tablets in portrait orientation have enough vertical room and the pane header would waste
+    // space that the terminal benefits from.
+    "(max-width: 768px)": {
+      display: "none",
+    },
+  },
 });
 
 export const paneTitle = style({

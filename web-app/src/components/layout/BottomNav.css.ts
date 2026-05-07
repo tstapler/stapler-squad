@@ -152,7 +152,7 @@ export const moreSheet = style({
   position: "fixed",
   left: 0,
   right: 0,
-  bottom: "64px", // sits directly above the nav bar
+  bottom: "var(--bottom-nav-height, 64px)" as string,
   zIndex: 1045,
   background: vars.color.background,
   borderTop: `1px solid ${vars.color.borderColor}`,

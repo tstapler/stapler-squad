@@ -1,4 +1,5 @@
 import { style, keyframes, globalStyle } from "@vanilla-extract/css";
+import { vars } from "@/styles/theme.css";
 
 const pulse = keyframes({
   "0%, 100%": { opacity: 1 },
@@ -16,8 +17,8 @@ export const container = style({
   height: "100%",
   minHeight: 0,
   flex: 1,
-  background: "#1e1e1e",
-  color: "#d4d4d4",
+  background: vars.color.terminalBackground,
+  color: vars.color.terminalForeground,
   fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace",
 });
 
@@ -26,8 +27,8 @@ export const toolbar = style({
   alignItems: "center",
   justifyContent: "space-between",
   padding: "0.75rem 1rem",
-  background: "#2d2d30",
-  borderBottom: "1px solid #3e3e42",
+  background: vars.color.terminalHeaderBg,
+  borderBottom: `1px solid ${vars.color.terminalBorder}`,
   flexShrink: 0,
   "@media": {
     "screen and (max-width: 768px)": {
@@ -68,10 +69,11 @@ export const stabilizing = style({
 
 export const statusText = style({
   fontSize: "0.875rem",
-  color: "#cccccc",
+  color: vars.color.terminalForeground,
   "@media": {
+    // Keep a compact label visible so connectivity state isn't color-only (WCAG 1.4.1)
     "screen and (max-width: 768px)": {
-      display: "none",
+      fontSize: "0.7rem",
     },
   },
 });
@@ -109,10 +111,10 @@ export const actions = style({
 
 export const toolbarButton = style({
   padding: "0.5rem 0.75rem",
-  background: "#3e3e42",
-  border: "1px solid #555555",
+  background: vars.color.terminalHoverBg,
+  border: `1px solid ${vars.color.terminalBorder}`,
   borderRadius: "4px",
-  color: "#cccccc",
+  color: vars.color.terminalForeground,
   fontSize: "0.875rem",
   cursor: "pointer",
   transition: "background 0.2s, border-color 0.2s",
@@ -122,7 +124,7 @@ export const toolbarButton = style({
       borderColor: "#6e6e6e",
     },
     "&:active": {
-      background: "#2d2d30",
+      background: vars.color.terminalHeaderBg,
     },
   },
   "@media": {
@@ -140,10 +142,10 @@ export const debugActive = style({});
 // Toolbar toggle button — always visible on mobile, hidden on desktop
 export const toolbarToggle = style({
   padding: "0.5rem",
-  background: "#3e3e42",
-  border: "1px solid #555555",
+  background: vars.color.terminalHoverBg,
+  border: `1px solid ${vars.color.terminalBorder}`,
   borderRadius: "4px",
-  color: "#cccccc",
+  color: vars.color.terminalForeground,
   fontSize: "0.75rem",
   cursor: "pointer",
   minWidth: "var(--min-touch-target, 44px)",
@@ -177,6 +179,9 @@ export const toolbarActions = style({
       whiteSpace: "nowrap",
       scrollbarWidth: "none",
       msOverflowStyle: "none",
+      // Fade the right edge to signal swipeable overflow content
+      maskImage: "linear-gradient(to right, black calc(100% - 32px), transparent 100%)" as string,
+      WebkitMaskImage: "linear-gradient(to right, black calc(100% - 32px), transparent 100%)" as string,
     },
     // On desktop toolbarActions always visible regardless of toolbarExpanded
     "screen and (min-width: 1024px)": {
@@ -233,8 +238,8 @@ export const mobileOverflowRow = style({
       display: "flex",
       gap: "0.25rem",
       padding: "0.3rem 0.75rem 0.4rem",
-      background: "#252526",
-      borderBottom: "1px solid #3e3e42",
+      background: vars.color.terminalTabsBg,
+      borderBottom: `1px solid ${vars.color.terminalBorder}`,
       overflowX: "auto",
       WebkitOverflowScrolling: "touch" as "auto",
       scrollbarWidth: "none",
@@ -283,19 +288,20 @@ export const terminal = style({
   minHeight: 0,
   margin: 0,
   padding: 0,
-  background: "#1e1e1e",
-  color: "#d4d4d4",
+  background: vars.color.terminalBackground,
+  color: vars.color.terminalForeground,
   overflow: "hidden",
   position: "relative",
   // Safe-area padding for landscape notch (horizontal insets only)
   paddingLeft: "var(--safe-area-left, 0px)",
   paddingRight: "var(--safe-area-right, 0px)",
   "@media": {
+    // Keep zero top/bottom padding — FitAddon measures the container; padding
+    // causes it to undercount rows. Only respect horizontal safe-area insets.
     "screen and (max-width: 768px)": {
-      padding: "0.75rem",
-      paddingLeft: "max(0.75rem, var(--safe-area-left, 0px))",
-      paddingRight: "max(0.75rem, var(--safe-area-right, 0px))",
-      fontSize: "13px",
+      padding: 0,
+      paddingLeft: "var(--safe-area-left, 0px)",
+      paddingRight: "var(--safe-area-right, 0px)",
     },
   },
 });
@@ -367,8 +373,8 @@ export const mobileKeyboard = style({
   flexDirection: "column",
   gap: "0.25rem",
   padding: "0.4rem 0.5rem",
-  background: "#252526",
-  borderTop: "1px solid #3e3e42",
+  background: vars.color.terminalTabsBg,
+  borderTop: `1px solid ${vars.color.terminalBorder}`,
   flexShrink: 0,
   "@media": {
     "screen and (max-width: 768px)": {
@@ -393,13 +399,13 @@ export const mobileKey = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  background: "#3c3c3c",
-  border: "1px solid #555",
+  background: vars.color.terminalHoverBg,
+  border: `1px solid ${vars.color.terminalBorder}`,
   borderBottom: "3px solid #333",
   borderRadius: "5px",
-  color: "#d4d4d4",
+  color: vars.color.terminalForeground,
   fontFamily: "inherit",
-  fontSize: "0.78rem",
+  fontSize: "0.8rem",
   fontWeight: 500,
   cursor: "pointer",
   userSelect: "none",
@@ -417,6 +423,15 @@ export const mobileKey = style({
   },
 });
 
+// Highlight ^C so users can find the interrupt key instantly
+export const mobileKeyCtrlC = style({
+  background: "#4e1e1e !important",
+  borderColor: "#a03030 !important",
+  color: "#ff6060 !important",
+  fontWeight: "700",
+  boxShadow: "0 0 0 1px #a03030",
+});
+
 // Global styles for xterm.js selectors within the terminal class
 globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar`, {
   width: "12px",
@@ -424,13 +439,13 @@ globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar`, {
 });
 
 globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar-track`, {
-  background: "#1e1e1e",
+  background: vars.color.terminalBackground,
 });
 
 globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar-thumb`, {
   background: "#424242",
   borderRadius: "6px",
-  border: "2px solid #1e1e1e",
+  border: `2px solid ${vars.color.terminalBackground}`,
 });
 
 globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar-thumb:hover`, {
@@ -438,7 +453,7 @@ globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar-thumb:hover`, {
 });
 
 globalStyle(`${terminal} .xterm-viewport::-webkit-scrollbar-corner`, {
-  background: "#1e1e1e",
+  background: vars.color.terminalBackground,
 });
 
 globalStyle(`${terminal} .xterm-selection`, {

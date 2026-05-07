@@ -66,10 +66,8 @@ interface PaneSplitProps {
 function PaneSplitComponent({ pane, state, dispatch, sessions, isMobile }: PaneSplitProps) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // On mobile + vertical split: show only the pane containing the focused id
-  const isMobileVertical = isMobile && pane.direction === "vertical";
-
-  if (isMobileVertical) {
+  // On mobile: show only the pane containing the focused id (any split direction)
+  if (isMobile) {
     const focusedInFirst = containsPaneId(pane.first, state.focusedPaneId);
     const visibleNode = focusedInFirst ? pane.first : pane.second;
     return (
@@ -180,11 +178,12 @@ function PaneLeafComponent({ pane, state, dispatch, sessions }: PaneLeafProps) {
  * Renders the full recursive pane layout.
  */
 export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRendererProps) {
-  const { isMobile } = useViewport();
+  const { isInnerScreen } = useViewport();
+  // isNarrow = any viewport where paneHeader is hidden (≤768px CSS breakpoint maps to !isInnerScreen)
+  const isMobile = !isInnerScreen;
   const allLeaves = getAllLeaves(state.root);
   const hasMultiplePanes = allLeaves.length > 1;
-  const hasVerticalSplit = state.root.type === "split" && state.root.direction === "vertical";
-  const showMobileTabStrip = isMobile && hasVerticalSplit && hasMultiplePanes;
+  const showMobileTabStrip = isMobile && hasMultiplePanes;
 
   return (
     <div
