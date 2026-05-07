@@ -1,5 +1,7 @@
 package prompts
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"crypto/sha256"
 	"encoding/json"
@@ -7,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"sync"
 	"time"
 )
 
@@ -25,7 +26,7 @@ type PromptEntry struct {
 
 // PromptStore manages a persistent JSON-backed collection of prompt entries.
 type PromptStore struct {
-	mu       sync.Mutex
+	mu       deadlock.Mutex
 	filePath string
 }
 

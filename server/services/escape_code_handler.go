@@ -3,7 +3,7 @@ package services
 import (
 	"encoding/json"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"net/http"
 	"strings"
 )

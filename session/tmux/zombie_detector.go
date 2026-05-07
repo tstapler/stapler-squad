@@ -92,12 +92,20 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 
 				// Build current set so we can evict stale entries
 				current := make(map[int]bool, len(zombies))
-				newZombies := 0
+
+				if len(zombies) > 0 {
+					// Immediately reap rather than waiting for the 60s background tick.
+					// Doing this before recording ensure we've at least tried to clean
+					// up before the fork pressure monitor evaluates the alert state.
+					if n := reapZombieChildren(); n > 0 {
+						warnFn("[zombie-reaper] reaped %d zombie child(ren) on detection", n)
+					}
+				}
+
 				for _, z := range zombies {
 					current[z.PID] = true
 					if !reported[z.PID] {
 						reported[z.PID] = true
-						newZombies++
 						RecordZombieProcess(z.PID, z.Command, warnFn)
 					}
 				}
@@ -106,18 +114,6 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 				for pid := range reported {
 					if !current[pid] {
 						delete(reported, pid)
-					}
-				}
-
-				// Only call checkPressure when new zombies were recorded — the ring
-				// buffer tracks them; firing on stable (already-reported) zombies
-				// produces repeated alerts for a constant non-growing zombie set.
-				if newZombies > 0 {
-					checkPressure(time.Now())
-
-					// Immediately reap rather than waiting for the 60s background tick.
-					if n := reapZombieChildren(); n > 0 {
-						warnFn("[zombie-reaper] reaped %d zombie child(ren) on detection", n)
 					}
 				}
 			}

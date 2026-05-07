@@ -72,6 +72,9 @@ jobs:
           skip-cache: false
           only-new-issues: false
 
+      - name: Import cycle check
+        run: go build ./...
+
       - name: ESLint (no-100vh, mobile regression rules)
         working-directory: web-app
         run: |

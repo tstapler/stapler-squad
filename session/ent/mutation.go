@@ -16,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/errorevent"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -37,6 +38,7 @@ const (
 	TypeClaudeMetadata          = "ClaudeMetadata"
 	TypeClaudeSession           = "ClaudeSession"
 	TypeDiffStats               = "DiffStats"
+	TypeErrorEvent              = "ErrorEvent"
 	TypeProject                 = "Project"
 	TypeSession                 = "Session"
 	TypeTag                     = "Tag"
@@ -5007,6 +5009,895 @@ func (m *DiffStatsMutation) ResetEdge(name string) error {
 		return nil
 	}
 	return fmt.Errorf("unknown DiffStats edge %s", name)
+}
+
+// ErrorEventMutation represents an operation that mutates the ErrorEvent nodes in the graph.
+type ErrorEventMutation struct {
+	config
+	op                  Op
+	typ                 string
+	id                  *int
+	fingerprint         *string
+	error_type          *string
+	message             *string
+	stack_trace         *string
+	rpc_procedure       *string
+	occurrence_count    *int
+	addoccurrence_count *int
+	first_seen          *time.Time
+	last_seen           *time.Time
+	acknowledged        *bool
+	acknowledged_at     *time.Time
+	clearedFields       map[string]struct{}
+	done                bool
+	oldValue            func(context.Context) (*ErrorEvent, error)
+	predicates          []predicate.ErrorEvent
+}
+
+var _ ent.Mutation = (*ErrorEventMutation)(nil)
+
+// erroreventOption allows management of the mutation configuration using functional options.
+type erroreventOption func(*ErrorEventMutation)
+
+// newErrorEventMutation creates new mutation for the ErrorEvent entity.
+func newErrorEventMutation(c config, op Op, opts ...erroreventOption) *ErrorEventMutation {
+	m := &ErrorEventMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeErrorEvent,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withErrorEventID sets the ID field of the mutation.
+func withErrorEventID(id int) erroreventOption {
+	return func(m *ErrorEventMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *ErrorEvent
+		)
+		m.oldValue = func(ctx context.Context) (*ErrorEvent, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().ErrorEvent.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withErrorEvent sets the old ErrorEvent of the mutation.
+func withErrorEvent(node *ErrorEvent) erroreventOption {
+	return func(m *ErrorEventMutation) {
+		m.oldValue = func(context.Context) (*ErrorEvent, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m ErrorEventMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m ErrorEventMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *ErrorEventMutation) ID() (id int, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *ErrorEventMutation) IDs(ctx context.Context) ([]int, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().ErrorEvent.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetFingerprint sets the "fingerprint" field.
+func (m *ErrorEventMutation) SetFingerprint(s string) {
+	m.fingerprint = &s
+}
+
+// Fingerprint returns the value of the "fingerprint" field in the mutation.
+func (m *ErrorEventMutation) Fingerprint() (r string, exists bool) {
+	v := m.fingerprint
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFingerprint returns the old "fingerprint" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldFingerprint(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFingerprint is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFingerprint requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFingerprint: %w", err)
+	}
+	return oldValue.Fingerprint, nil
+}
+
+// ResetFingerprint resets all changes to the "fingerprint" field.
+func (m *ErrorEventMutation) ResetFingerprint() {
+	m.fingerprint = nil
+}
+
+// SetErrorType sets the "error_type" field.
+func (m *ErrorEventMutation) SetErrorType(s string) {
+	m.error_type = &s
+}
+
+// ErrorType returns the value of the "error_type" field in the mutation.
+func (m *ErrorEventMutation) ErrorType() (r string, exists bool) {
+	v := m.error_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorType returns the old "error_type" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldErrorType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorType: %w", err)
+	}
+	return oldValue.ErrorType, nil
+}
+
+// ResetErrorType resets all changes to the "error_type" field.
+func (m *ErrorEventMutation) ResetErrorType() {
+	m.error_type = nil
+}
+
+// SetMessage sets the "message" field.
+func (m *ErrorEventMutation) SetMessage(s string) {
+	m.message = &s
+}
+
+// Message returns the value of the "message" field in the mutation.
+func (m *ErrorEventMutation) Message() (r string, exists bool) {
+	v := m.message
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMessage returns the old "message" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldMessage(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMessage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMessage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMessage: %w", err)
+	}
+	return oldValue.Message, nil
+}
+
+// ResetMessage resets all changes to the "message" field.
+func (m *ErrorEventMutation) ResetMessage() {
+	m.message = nil
+}
+
+// SetStackTrace sets the "stack_trace" field.
+func (m *ErrorEventMutation) SetStackTrace(s string) {
+	m.stack_trace = &s
+}
+
+// StackTrace returns the value of the "stack_trace" field in the mutation.
+func (m *ErrorEventMutation) StackTrace() (r string, exists bool) {
+	v := m.stack_trace
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStackTrace returns the old "stack_trace" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldStackTrace(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStackTrace is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStackTrace requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStackTrace: %w", err)
+	}
+	return oldValue.StackTrace, nil
+}
+
+// ResetStackTrace resets all changes to the "stack_trace" field.
+func (m *ErrorEventMutation) ResetStackTrace() {
+	m.stack_trace = nil
+}
+
+// SetRPCProcedure sets the "rpc_procedure" field.
+func (m *ErrorEventMutation) SetRPCProcedure(s string) {
+	m.rpc_procedure = &s
+}
+
+// RPCProcedure returns the value of the "rpc_procedure" field in the mutation.
+func (m *ErrorEventMutation) RPCProcedure() (r string, exists bool) {
+	v := m.rpc_procedure
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRPCProcedure returns the old "rpc_procedure" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldRPCProcedure(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRPCProcedure is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRPCProcedure requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRPCProcedure: %w", err)
+	}
+	return oldValue.RPCProcedure, nil
+}
+
+// ClearRPCProcedure clears the value of the "rpc_procedure" field.
+func (m *ErrorEventMutation) ClearRPCProcedure() {
+	m.rpc_procedure = nil
+	m.clearedFields[errorevent.FieldRPCProcedure] = struct{}{}
+}
+
+// RPCProcedureCleared returns if the "rpc_procedure" field was cleared in this mutation.
+func (m *ErrorEventMutation) RPCProcedureCleared() bool {
+	_, ok := m.clearedFields[errorevent.FieldRPCProcedure]
+	return ok
+}
+
+// ResetRPCProcedure resets all changes to the "rpc_procedure" field.
+func (m *ErrorEventMutation) ResetRPCProcedure() {
+	m.rpc_procedure = nil
+	delete(m.clearedFields, errorevent.FieldRPCProcedure)
+}
+
+// SetOccurrenceCount sets the "occurrence_count" field.
+func (m *ErrorEventMutation) SetOccurrenceCount(i int) {
+	m.occurrence_count = &i
+	m.addoccurrence_count = nil
+}
+
+// OccurrenceCount returns the value of the "occurrence_count" field in the mutation.
+func (m *ErrorEventMutation) OccurrenceCount() (r int, exists bool) {
+	v := m.occurrence_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOccurrenceCount returns the old "occurrence_count" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldOccurrenceCount(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOccurrenceCount is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOccurrenceCount requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOccurrenceCount: %w", err)
+	}
+	return oldValue.OccurrenceCount, nil
+}
+
+// AddOccurrenceCount adds i to the "occurrence_count" field.
+func (m *ErrorEventMutation) AddOccurrenceCount(i int) {
+	if m.addoccurrence_count != nil {
+		*m.addoccurrence_count += i
+	} else {
+		m.addoccurrence_count = &i
+	}
+}
+
+// AddedOccurrenceCount returns the value that was added to the "occurrence_count" field in this mutation.
+func (m *ErrorEventMutation) AddedOccurrenceCount() (r int, exists bool) {
+	v := m.addoccurrence_count
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetOccurrenceCount resets all changes to the "occurrence_count" field.
+func (m *ErrorEventMutation) ResetOccurrenceCount() {
+	m.occurrence_count = nil
+	m.addoccurrence_count = nil
+}
+
+// SetFirstSeen sets the "first_seen" field.
+func (m *ErrorEventMutation) SetFirstSeen(t time.Time) {
+	m.first_seen = &t
+}
+
+// FirstSeen returns the value of the "first_seen" field in the mutation.
+func (m *ErrorEventMutation) FirstSeen() (r time.Time, exists bool) {
+	v := m.first_seen
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFirstSeen returns the old "first_seen" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldFirstSeen(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFirstSeen is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFirstSeen requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFirstSeen: %w", err)
+	}
+	return oldValue.FirstSeen, nil
+}
+
+// ResetFirstSeen resets all changes to the "first_seen" field.
+func (m *ErrorEventMutation) ResetFirstSeen() {
+	m.first_seen = nil
+}
+
+// SetLastSeen sets the "last_seen" field.
+func (m *ErrorEventMutation) SetLastSeen(t time.Time) {
+	m.last_seen = &t
+}
+
+// LastSeen returns the value of the "last_seen" field in the mutation.
+func (m *ErrorEventMutation) LastSeen() (r time.Time, exists bool) {
+	v := m.last_seen
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldLastSeen returns the old "last_seen" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldLastSeen(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldLastSeen is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldLastSeen requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldLastSeen: %w", err)
+	}
+	return oldValue.LastSeen, nil
+}
+
+// ResetLastSeen resets all changes to the "last_seen" field.
+func (m *ErrorEventMutation) ResetLastSeen() {
+	m.last_seen = nil
+}
+
+// SetAcknowledged sets the "acknowledged" field.
+func (m *ErrorEventMutation) SetAcknowledged(b bool) {
+	m.acknowledged = &b
+}
+
+// Acknowledged returns the value of the "acknowledged" field in the mutation.
+func (m *ErrorEventMutation) Acknowledged() (r bool, exists bool) {
+	v := m.acknowledged
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAcknowledged returns the old "acknowledged" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldAcknowledged(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAcknowledged is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAcknowledged requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAcknowledged: %w", err)
+	}
+	return oldValue.Acknowledged, nil
+}
+
+// ResetAcknowledged resets all changes to the "acknowledged" field.
+func (m *ErrorEventMutation) ResetAcknowledged() {
+	m.acknowledged = nil
+}
+
+// SetAcknowledgedAt sets the "acknowledged_at" field.
+func (m *ErrorEventMutation) SetAcknowledgedAt(t time.Time) {
+	m.acknowledged_at = &t
+}
+
+// AcknowledgedAt returns the value of the "acknowledged_at" field in the mutation.
+func (m *ErrorEventMutation) AcknowledgedAt() (r time.Time, exists bool) {
+	v := m.acknowledged_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAcknowledgedAt returns the old "acknowledged_at" field's value of the ErrorEvent entity.
+// If the ErrorEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ErrorEventMutation) OldAcknowledgedAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAcknowledgedAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAcknowledgedAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAcknowledgedAt: %w", err)
+	}
+	return oldValue.AcknowledgedAt, nil
+}
+
+// ClearAcknowledgedAt clears the value of the "acknowledged_at" field.
+func (m *ErrorEventMutation) ClearAcknowledgedAt() {
+	m.acknowledged_at = nil
+	m.clearedFields[errorevent.FieldAcknowledgedAt] = struct{}{}
+}
+
+// AcknowledgedAtCleared returns if the "acknowledged_at" field was cleared in this mutation.
+func (m *ErrorEventMutation) AcknowledgedAtCleared() bool {
+	_, ok := m.clearedFields[errorevent.FieldAcknowledgedAt]
+	return ok
+}
+
+// ResetAcknowledgedAt resets all changes to the "acknowledged_at" field.
+func (m *ErrorEventMutation) ResetAcknowledgedAt() {
+	m.acknowledged_at = nil
+	delete(m.clearedFields, errorevent.FieldAcknowledgedAt)
+}
+
+// Where appends a list predicates to the ErrorEventMutation builder.
+func (m *ErrorEventMutation) Where(ps ...predicate.ErrorEvent) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the ErrorEventMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *ErrorEventMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.ErrorEvent, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *ErrorEventMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *ErrorEventMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (ErrorEvent).
+func (m *ErrorEventMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *ErrorEventMutation) Fields() []string {
+	fields := make([]string, 0, 10)
+	if m.fingerprint != nil {
+		fields = append(fields, errorevent.FieldFingerprint)
+	}
+	if m.error_type != nil {
+		fields = append(fields, errorevent.FieldErrorType)
+	}
+	if m.message != nil {
+		fields = append(fields, errorevent.FieldMessage)
+	}
+	if m.stack_trace != nil {
+		fields = append(fields, errorevent.FieldStackTrace)
+	}
+	if m.rpc_procedure != nil {
+		fields = append(fields, errorevent.FieldRPCProcedure)
+	}
+	if m.occurrence_count != nil {
+		fields = append(fields, errorevent.FieldOccurrenceCount)
+	}
+	if m.first_seen != nil {
+		fields = append(fields, errorevent.FieldFirstSeen)
+	}
+	if m.last_seen != nil {
+		fields = append(fields, errorevent.FieldLastSeen)
+	}
+	if m.acknowledged != nil {
+		fields = append(fields, errorevent.FieldAcknowledged)
+	}
+	if m.acknowledged_at != nil {
+		fields = append(fields, errorevent.FieldAcknowledgedAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *ErrorEventMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case errorevent.FieldFingerprint:
+		return m.Fingerprint()
+	case errorevent.FieldErrorType:
+		return m.ErrorType()
+	case errorevent.FieldMessage:
+		return m.Message()
+	case errorevent.FieldStackTrace:
+		return m.StackTrace()
+	case errorevent.FieldRPCProcedure:
+		return m.RPCProcedure()
+	case errorevent.FieldOccurrenceCount:
+		return m.OccurrenceCount()
+	case errorevent.FieldFirstSeen:
+		return m.FirstSeen()
+	case errorevent.FieldLastSeen:
+		return m.LastSeen()
+	case errorevent.FieldAcknowledged:
+		return m.Acknowledged()
+	case errorevent.FieldAcknowledgedAt:
+		return m.AcknowledgedAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *ErrorEventMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case errorevent.FieldFingerprint:
+		return m.OldFingerprint(ctx)
+	case errorevent.FieldErrorType:
+		return m.OldErrorType(ctx)
+	case errorevent.FieldMessage:
+		return m.OldMessage(ctx)
+	case errorevent.FieldStackTrace:
+		return m.OldStackTrace(ctx)
+	case errorevent.FieldRPCProcedure:
+		return m.OldRPCProcedure(ctx)
+	case errorevent.FieldOccurrenceCount:
+		return m.OldOccurrenceCount(ctx)
+	case errorevent.FieldFirstSeen:
+		return m.OldFirstSeen(ctx)
+	case errorevent.FieldLastSeen:
+		return m.OldLastSeen(ctx)
+	case errorevent.FieldAcknowledged:
+		return m.OldAcknowledged(ctx)
+	case errorevent.FieldAcknowledgedAt:
+		return m.OldAcknowledgedAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown ErrorEvent field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ErrorEventMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case errorevent.FieldFingerprint:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFingerprint(v)
+		return nil
+	case errorevent.FieldErrorType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorType(v)
+		return nil
+	case errorevent.FieldMessage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMessage(v)
+		return nil
+	case errorevent.FieldStackTrace:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStackTrace(v)
+		return nil
+	case errorevent.FieldRPCProcedure:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRPCProcedure(v)
+		return nil
+	case errorevent.FieldOccurrenceCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOccurrenceCount(v)
+		return nil
+	case errorevent.FieldFirstSeen:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFirstSeen(v)
+		return nil
+	case errorevent.FieldLastSeen:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetLastSeen(v)
+		return nil
+	case errorevent.FieldAcknowledged:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAcknowledged(v)
+		return nil
+	case errorevent.FieldAcknowledgedAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAcknowledgedAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ErrorEvent field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *ErrorEventMutation) AddedFields() []string {
+	var fields []string
+	if m.addoccurrence_count != nil {
+		fields = append(fields, errorevent.FieldOccurrenceCount)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *ErrorEventMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case errorevent.FieldOccurrenceCount:
+		return m.AddedOccurrenceCount()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *ErrorEventMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case errorevent.FieldOccurrenceCount:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddOccurrenceCount(v)
+		return nil
+	}
+	return fmt.Errorf("unknown ErrorEvent numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *ErrorEventMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(errorevent.FieldRPCProcedure) {
+		fields = append(fields, errorevent.FieldRPCProcedure)
+	}
+	if m.FieldCleared(errorevent.FieldAcknowledgedAt) {
+		fields = append(fields, errorevent.FieldAcknowledgedAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *ErrorEventMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *ErrorEventMutation) ClearField(name string) error {
+	switch name {
+	case errorevent.FieldRPCProcedure:
+		m.ClearRPCProcedure()
+		return nil
+	case errorevent.FieldAcknowledgedAt:
+		m.ClearAcknowledgedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown ErrorEvent nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *ErrorEventMutation) ResetField(name string) error {
+	switch name {
+	case errorevent.FieldFingerprint:
+		m.ResetFingerprint()
+		return nil
+	case errorevent.FieldErrorType:
+		m.ResetErrorType()
+		return nil
+	case errorevent.FieldMessage:
+		m.ResetMessage()
+		return nil
+	case errorevent.FieldStackTrace:
+		m.ResetStackTrace()
+		return nil
+	case errorevent.FieldRPCProcedure:
+		m.ResetRPCProcedure()
+		return nil
+	case errorevent.FieldOccurrenceCount:
+		m.ResetOccurrenceCount()
+		return nil
+	case errorevent.FieldFirstSeen:
+		m.ResetFirstSeen()
+		return nil
+	case errorevent.FieldLastSeen:
+		m.ResetLastSeen()
+		return nil
+	case errorevent.FieldAcknowledged:
+		m.ResetAcknowledged()
+		return nil
+	case errorevent.FieldAcknowledgedAt:
+		m.ResetAcknowledgedAt()
+		return nil
+	}
+	return fmt.Errorf("unknown ErrorEvent field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *ErrorEventMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *ErrorEventMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *ErrorEventMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *ErrorEventMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *ErrorEventMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *ErrorEventMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *ErrorEventMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown ErrorEvent unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *ErrorEventMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown ErrorEvent edge %s", name)
 }
 
 // ProjectMutation represents an operation that mutates the Project nodes in the graph.

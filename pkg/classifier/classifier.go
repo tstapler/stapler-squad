@@ -8,8 +8,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/linkdata/deadlock"
 )
 
 // RiskLevel indicates the severity of a tool use request.
@@ -355,7 +356,7 @@ type Rule struct {
 
 // RuleBasedClassifier evaluates a priority-ordered list of Rules.
 type RuleBasedClassifier struct {
-	mu    sync.RWMutex
+	mu    deadlock.RWMutex
 	rules []Rule // sorted by Priority descending
 }
 
@@ -439,6 +440,21 @@ func (c *RuleBasedClassifier) classifyInternal(payload PermissionRequestPayload,
 			}
 
 			cmds := ExtractAllCommands(cmd)
+
+			// A command that produces zero ParsedCommands is a no-op from a security
+			// perspective — it consists entirely of shell comments (#...) or bare
+			// environment-variable assignments (KEY=val) with no executable. Auto-allow
+			// so that compound chains like `OWNER=org; gh api ...` don't escalate on
+			// the env-setup part.
+			if len(cmds) == 0 {
+				return ClassificationResult{
+					Decision:  AutoAllow,
+					RiskLevel: RiskLow,
+					Reason:    "Command contains only comments or environment-variable assignments; no executable to review.",
+					RuleID:    "no-op-command",
+				}
+			}
+
 			if len(cmds) > 1 {
 				return c.classifyCompound(payload, cmds, ctx, depth)
 			}
@@ -530,8 +546,17 @@ func (c *RuleBasedClassifier) classifyOneSubCmd(sub ParsedCommand, payload Permi
 //   - Pass 2 (require AutoAllow): CmdSubst inner commands are exempt; only top-level
 //     commands must have an explicit AutoAllow rule.
 func (c *RuleBasedClassifier) classifyCompound(payload PermissionRequestPayload, cmds []ParsedCommand, ctx ClassificationContext, depth int) ClassificationResult {
+	// isNoOp returns true for sub-commands that have no executable (env-var assignments
+	// like OWNER=org or bare comment fragments) and therefore require no security review.
+	isNoOp := func(sub ParsedCommand) bool {
+		return sub.Program == "" && !sub.HasShellExpansionProgram
+	}
+
 	// Pass 1: deny/escalate takes priority.
 	for _, sub := range cmds {
+		if isNoOp(sub) {
+			continue // env-var assignments and comment fragments are harmless
+		}
 		result := c.classifyOneSubCmd(sub, payload, ctx, depth)
 		if result.Decision == AutoDeny || result.Decision == Escalate {
 			// CmdSubst inner commands: only block on explicit rules, not catch-all escalations.
@@ -553,10 +578,10 @@ func (c *RuleBasedClassifier) classifyCompound(payload PermissionRequestPayload,
 	}
 
 	// Pass 2: every top-level sub-command must produce AutoAllow.
-	// CmdSubst inner commands are exempt — they are argument producers, not independent commands.
+	// CmdSubst inner commands and no-op sub-commands (env-var assignments) are exempt.
 	var firstResult *ClassificationResult
 	for _, sub := range cmds {
-		if sub.FromCmdSubst {
+		if sub.FromCmdSubst || isNoOp(sub) {
 			continue // exempt from AutoAllow requirement
 		}
 		result := c.classifyOneSubCmd(sub, payload, ctx, depth)
@@ -730,9 +755,10 @@ func SeedRules() []Rule {
 			Source:      "seed",
 		},
 		{
-			ID:             "seed-deny-rm-rf-root",
-			Name:           "Block rm -rf on root or home paths",
-			ToolName:       "Bash",
+			ID:       "seed-deny-rm-rf-root",
+			Name:     "Block rm -rf on root or home paths",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match combined -rf flag variants; regex inspects argument path prefix
 			CommandPattern: regexp.MustCompile(`rm\s+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)\s+(/|~|\$HOME)/?(\s|$)`),
 			Decision:       AutoDeny,
 			RiskLevel:      RiskCritical,
@@ -743,9 +769,10 @@ func SeedRules() []Rule {
 			Source:         "seed",
 		},
 		{
-			ID:             "seed-deny-find-exec",
-			Name:           "Block find with -exec/-delete/-ok",
-			ToolName:       "Bash",
+			ID:       "seed-deny-find-exec",
+			Name:     "Block find with -exec/-delete/-ok",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match multi-flag combinations in find arguments; regex required for -exec/-delete alternation
 			CommandPattern: regexp.MustCompile(`find\s+.*(-(exec|delete|ok)\b|--delete\b)`),
 			Decision:       AutoDeny,
 			RiskLevel:      RiskHigh,
@@ -761,9 +788,10 @@ func SeedRules() []Rule {
 			//   cat config > .env.local
 			//   printf "KEY=val" > /path/.env
 			// The Write/Edit deny rule covers tool-based writes; this covers Bash redirects.
-			ID:             "seed-deny-bash-redirect-env",
-			Name:           "Block shell redirects to .env files",
-			ToolName:       "Bash",
+			ID:       "seed-deny-bash-redirect-env",
+			Name:     "Block shell redirects to .env files",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot detect shell redirection operators (>> >) or match filename suffixes; regex required
 			CommandPattern: regexp.MustCompile(`>>?\s*\S*\.env(\s|$|[.'":])`),
 			Decision:       AutoDeny,
 			RiskLevel:      RiskCritical,
@@ -847,9 +875,10 @@ func SeedRules() []Rule {
 			// The 520 allow rule below permits -f body= replies (POST), but DELETE/PUT/
 			// PATCH on /replies would remove or alter existing comments. This rule fires
 			// first (525 > 520) to block those cases.
-			ID:             "seed-escalate-gh-api-pr-review-replies-write",
-			Name:           "Escalate gh api replies endpoint with destructive HTTP method",
-			ToolName:       "Bash",
+			ID:       "seed-escalate-gh-api-pr-review-replies-write",
+			Name:     "Escalate gh api replies endpoint with destructive HTTP method",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match URL path patterns or flag value content (DELETE/PUT/PATCH); regex required for REST path + method combination
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\brepos/[^/\s]+/[^/\s]+/pulls/[^/\s]+/comments/[^/\s]+/replies\b.*(\s-X\s+(DELETE|PUT|PATCH)\b|\s--method\s+(DELETE|PUT|PATCH)\b|\s--input\b)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskMedium,
@@ -865,9 +894,10 @@ func SeedRules() []Rule {
 			// Must be at 520 (above the 515 guard) because it uses -f body=.
 			// Matches both literal paths (repos/owner/repo/pulls/123/comments/456/replies)
 			// and shell-variable forms (repos/$OWNER/$REPO/pulls/$PR_NUMBER/...).
-			ID:             "seed-allow-gh-api-pr-review-replies",
-			Name:           "Allow gh api to post PR review comment replies",
-			ToolName:       "Bash",
+			ID:       "seed-allow-gh-api-pr-review-replies",
+			Name:     "Allow gh api to post PR review comment replies",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match URL path segments; regex required to identify the /pulls/.../comments/.../replies endpoint
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\brepos/[^/\s]+/[^/\s]+/pulls/[^/\s]+/comments/[^/\s]+/replies\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
@@ -880,9 +910,10 @@ func SeedRules() []Rule {
 			// Resolving a PR review thread marks it as done so it no longer blocks the
 			// merge. The resolveReviewThread GraphQL mutation uses -f query=... which
 			// would be caught by the 515 guard, so this must be at 520.
-			ID:             "seed-allow-gh-api-graphql-resolve-thread",
-			Name:           "Allow gh api graphql resolveReviewThread mutation",
-			ToolName:       "Bash",
+			ID:       "seed-allow-gh-api-graphql-resolve-thread",
+			Name:     "Allow gh api graphql resolveReviewThread mutation",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match GraphQL mutation names inside argument values; regex required to identify resolveReviewThread
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\s+graphql\b.*\bresolveReviewThread\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
@@ -899,9 +930,10 @@ func SeedRules() []Rule {
 			// where --jq is a response filter but -f is still a write indicator.
 			// The 510 --jq / --paginate rules are safe to assume GET semantics because
 			// any -f/-F/--field flag is caught here first.
-			ID:             "seed-escalate-gh-api-explicit-write",
-			Name:           "Escalate gh api calls with field flags, write method, or --input",
-			ToolName:       "Bash",
+			ID:       "seed-escalate-gh-api-explicit-write",
+			Name:     "Escalate gh api calls with field flags, write method, or --input",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match flag value content (POST/PUT/DELETE/PATCH) or alternation across -f/-F/--field; regex required
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*(\s-X\s+(POST|PUT|DELETE|PATCH)\b|\s--method\s+(POST|PUT|DELETE|PATCH)\b|\s(-f|-F)\s|\s--field\s|\s--input\b)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskMedium,
@@ -916,9 +948,10 @@ func SeedRules() []Rule {
 			// auto-allow here because the 515 guard above has already blocked any command
 			// that also contains -f/-F/--field flags (which would indicate a write).
 			// Covers the most common analytics pattern: gh api repos/.../X --jq '...'
-			ID:             "seed-allow-gh-api-rest-jq",
-			Name:           "Allow read-only gh api calls with --jq",
-			ToolName:       "Bash",
+			ID:       "seed-allow-gh-api-rest-jq",
+			Name:     "Allow read-only gh api calls with --jq",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match presence of a specific long flag (--jq) anywhere in the command; regex required for flag detection in gh api
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\s--jq\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
@@ -931,9 +964,10 @@ func SeedRules() []Rule {
 			// gh api REST calls with --paginate read all pages of a resource; --paginate
 			// has no HTTP method implication and is used exclusively for large reads.
 			// Safe here because the 515 guard has blocked any -f/-F/--field combos.
-			ID:             "seed-allow-gh-api-rest-paginate",
-			Name:           "Allow read-only gh api calls with --paginate",
-			ToolName:       "Bash",
+			ID:       "seed-allow-gh-api-rest-paginate",
+			Name:     "Allow read-only gh api calls with --paginate",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match presence of a specific long flag (--paginate) anywhere in the command; regex required for flag detection in gh api
 			CommandPattern: regexp.MustCompile(`\bgh\s+api\b.*\s--paginate\b`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
@@ -1114,9 +1148,10 @@ func SeedRules() []Rule {
 		{
 			// curl with file output flags (-o/-O/--output) writes response bodies to disk.
 			// Must fire at 500 to override seed-allow-curl-read at 100.
-			ID:             "seed-escalate-curl-output",
-			Name:           "Escalate curl with file output flags",
-			ToolName:       "Bash",
+			ID:       "seed-escalate-curl-output",
+			Name:     "Escalate curl with file output flags",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match combined short flags (-oLs, etc.) or flag value content; regex required for -o/-O/--output detection
 			CommandPattern: regexp.MustCompile(`\bcurl\b.*\s(-[a-zA-Z]*[oO]|--(output|remote-name))\b`),
 			Decision:       Escalate,
 			RiskLevel:      RiskMedium,
@@ -1130,9 +1165,10 @@ func SeedRules() []Rule {
 			// curl with write HTTP methods can modify remote state.
 			// Must fire at 500 to override seed-allow-curl-read at 100.
 			// Note: -X alone (e.g. -X GET) is harmless but rare; we conservatively escalate any -X.
-			ID:             "seed-escalate-curl-write-method",
-			Name:           "Escalate curl write HTTP methods (POST/PUT/DELETE/PATCH)",
-			ToolName:       "Bash",
+			ID:       "seed-escalate-curl-write-method",
+			Name:     "Escalate curl write HTTP methods (POST/PUT/DELETE/PATCH)",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match alternation across -X/-d/--data/--upload-file/-T/-F flags; regex required for write-method detection
 			CommandPattern: regexp.MustCompile(`\bcurl\b.*(\s-X\s|\s--request\s|\s--data\b|\s-d\s|\s--data-raw\b|\s--data-binary\b|\s--upload-file\b|\s-T\s|\s-F\s|\s--form\s)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskHigh,
@@ -1152,9 +1188,10 @@ func SeedRules() []Rule {
 			// base64 -o / --output writes decoded/encoded data directly to a file (BSD/macOS
 			// semantics). All other base64 invocations write to stdout and are harmless
 			// pipeline steps. This rule fires at 101, before text-proc allows base64 at 100.
-			ID:             "seed-escalate-base64-file-output",
-			Name:           "Escalate base64 with file output flag",
-			ToolName:       "Bash",
+			ID:       "seed-escalate-base64-file-output",
+			Name:     "Escalate base64 with file output flag",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match -o/--output flag presence in combined flag strings; regex required
 			CommandPattern: regexp.MustCompile(`\bbase64\b.*\s(-o|--output)\s`),
 			Decision:       Escalate,
 			RiskLevel:      RiskMedium,
@@ -1226,9 +1263,10 @@ func SeedRules() []Rule {
 			// cat > /tmp/... << 'EOF' is a common Claude Code pattern for writing temp scripts,
 			// queries, or helper files to /tmp before execution. Writing to /tmp is low-risk
 			// (ephemeral, world-readable) and should not require manual review.
-			ID:             "seed-allow-bash-cat-tmp-write",
-			Name:           "Allow cat heredoc writes to /tmp",
-			ToolName:       "Bash",
+			ID:       "seed-allow-bash-cat-tmp-write",
+			Name:     "Allow cat heredoc writes to /tmp",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot detect shell redirection operators (>) or match path prefixes (/tmp/); regex required
 			CommandPattern: regexp.MustCompile(`\bcat\s*>+\s*/tmp/`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
@@ -1978,9 +2016,10 @@ func SeedRules() []Rule {
 			//
 			// Matches any -Q variant (-Qs, -Qi, -Ql, etc.), -F variants, and the two
 			// safe -S sub-modes: -Ss (search) and -Si (show package info).
-			ID:             "seed-allow-bash-pacman-query",
-			Name:           "Allow pacman read-only query operations",
-			ToolName:       "Bash",
+			ID:       "seed-allow-bash-pacman-query",
+			Name:     "Allow pacman read-only query operations",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match combined pacman flag variants (-Q, -Qi, -Ql, -Ss, -Si); regex required for flag-class detection
 			CommandPattern: regexp.MustCompile(`^pacman\s+(-Q[a-zA-Z]*\b|--query\b|-F[a-zA-Z]*\b|--files\b|-[Vh]\b|--version\b|--help\b|-Ss\b|-Si\b)`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
@@ -1996,9 +2035,10 @@ func SeedRules() []Rule {
 			//
 			// Matched: .tables, .schema [table], .indexes [table], .databases, .pragma <name>
 			// NOT matched: "SELECT ...", "INSERT INTO ...", bare invocations without dot cmds.
-			ID:             "seed-allow-bash-sqlite3-read",
-			Name:           "Allow sqlite3 read-only schema inspection",
-			ToolName:       "Bash",
+			ID:       "seed-allow-bash-sqlite3-read",
+			Name:     "Allow sqlite3 read-only schema inspection",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match sqlite3 dot commands (.tables, .schema) inside quoted argument values; regex required
 			CommandPattern: regexp.MustCompile(`\bsqlite3\b\s+\S+\s+["']?\.(tables|databases?|schema(\s+\w+)?|indexes?(\s+\w+)?|pragma\s+\w+)["']?\s*$`),
 			Decision:       AutoAllow,
 			RiskLevel:      RiskLow,
@@ -2006,6 +2046,168 @@ func SeedRules() []Rule {
 			Priority:       100,
 			Enabled:        true,
 			Source:         "seed",
+		},
+
+		{
+			// pgrep and ps are read-only process inspection tools. pgrep lists PIDs by name
+			// or pattern; ps shows a snapshot of running processes. Neither modifies state.
+			// pkill/killall (which send signals) are escalated at priority 50.
+			ID:       "seed-allow-bash-process-inspect",
+			Name:     "Allow pgrep and ps (read-only process inspection)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"pgrep", "ps"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "pgrep and ps are read-only process inspection tools; they do not modify state.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// kill with a PID argument is common and targeted — it only affects the specific
+			// process whose PID was explicitly supplied. Escalated patterns (pkill, killall)
+			// match by name and can hit unrelated processes.
+			ID:       "seed-allow-bash-kill-pid",
+			Name:     "Allow kill with explicit PID",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"kill"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "kill with an explicit PID is targeted and commonly used to stop a known process.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// java -version, java --version are read-only informational queries.
+			// java -jar runs an executable JAR in development contexts (common for Spring Boot,
+			// Gradle-built services, etc.). Escalate if more specific review is warranted.
+			ID:       "seed-allow-bash-java-dev",
+			Name:     "Allow java version check and -jar execution",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:      []string{"java"},
+				RequiredFlags: []string{"-version", "--version", "-jar"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "java -version and java -jar are standard development operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// asdf read-only top-level subcommands: list, current, which, where are all
+			// information-only. Two-word subcommands like "list all" or "plugin list" are
+			// handled by seed-allow-bash-asdf-plugin-read and seed-allow-bash-asdf-list-all.
+			// Mutations (install, uninstall, global, local, plugin add/remove/update) fall
+			// through to seed-escalate-asdf at priority 50.
+			// asdf is in deepSubcommandPrograms so two-word subcommands are captured.
+			ID:       "seed-allow-bash-asdf-read",
+			Name:     "Allow asdf read-only query operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"asdf"},
+				Subcommands: []string{"list", "current", "which", "where", "version", "help", "info", "shim-versions", "reshim", "list all", "plugin list", "plugin list all"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "asdf list/current/which/where/plugin list are read-only operations that do not modify tool state.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// docker compose logs/ps/stats/top are read-only container observation operations.
+			// They are distinct from docker compose up/down/rm which modify container state.
+			// docker is in deepSubcommandPrograms so "compose logs" is captured as a 2-word sub.
+			ID:       "seed-allow-bash-docker-compose-read",
+			Name:     "Allow docker compose read-only operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"docker"},
+				Subcommands: []string{"compose logs", "compose ps", "compose top", "compose stats", "compose config", "compose images", "compose ls", "compose port"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "docker compose logs/ps/stats/top/config are read-only container observation operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// gh auth list and gh auth token inspect authentication state without modifying it.
+			// gh auth status is already covered by seed-allow-bash-gh-read.
+			// gh auth login/logout are write operations escalated by seed-escalate-gh-write.
+			ID:       "seed-allow-bash-gh-auth-read",
+			Name:     "Allow gh auth list and token (read-only)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"gh"},
+				Subcommands: []string{"auth list", "auth token"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "gh auth list/token inspect authentication state without modifying it.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// source/. for Python virtualenv activation is a common development pattern.
+			// Sourcing activate scripts only modifies PATH and VIRTUAL_ENV in the current shell.
+			// Generic source (arbitrary scripts) is escalated at priority 50 by seed-escalate-source.
+			ID:       "seed-allow-bash-source-venv",
+			Name:     "Allow source/. for virtualenv activation",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match argument path content (activate filename); regex required to distinguish virtualenv activation from arbitrary script sourcing
+			CommandPattern: regexp.MustCompile(`(?:source|\.)\s+[^\s]+/(?:activate|activate\.fish|activate\.csh|activate\.ps1)\s*$`),
+			Decision:       AutoAllow,
+			RiskLevel:      RiskLow,
+			Reason:         "Sourcing a virtualenv activate script only modifies PATH in the current shell.",
+			Priority:       100,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// Common Node.js project linters and formatters installed locally under
+			// node_modules/.bin/. The path is stripped to the bare name by ExtractAllCommands,
+			// so "./node_modules/.bin/stylelint" → prog="stylelint".
+			// These are read-only code-quality tools that do not modify package state.
+			ID:       "seed-allow-bash-node-bin-linters",
+			Name:     "Allow node_modules/.bin/ linters and formatters",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"stylelint", "eslint", "prettier", "tslint", "lint-staged", "biome", "oxlint", "knip"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "Local node_modules/.bin/ linters and formatters are read-only code-quality tools.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// localdev is the FBG internal developer CLI. The ai-setup sub-tool has read-only
+			// inspection operations (status, config get, --help) and write operations (config set,
+			// install). localdev is in deepSubcommandPrograms so "ai-setup status" is captured.
+			ID:       "seed-allow-bash-localdev-read",
+			Name:     "Allow localdev ai-setup read-only operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"localdev"},
+				Subcommands: []string{"ai-setup status", "ai-setup help", "ai-setup version"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "localdev ai-setup status/help/version are read-only developer configuration inspection.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
 		},
 
 		// ══════════════════════════════════════════════════════════════════════════
@@ -2102,9 +2304,10 @@ func SeedRules() []Rule {
 			Source:    "seed",
 		},
 		{
-			ID:             "seed-escalate-network-write",
-			Name:           "Escalate curl/wget with output flags",
-			ToolName:       "Bash",
+			ID:       "seed-escalate-network-write",
+			Name:     "Escalate curl/wget with output flags",
+			ToolName: "Bash",
+			//nolint:commandpattern Criteria cannot match -o/-O/--output flag presence; regex required for output-flag detection across curl/wget variants
 			CommandPattern: regexp.MustCompile(`^\s*(curl|wget)\s+.*(-o\s|-O\s|--output)`),
 			Decision:       Escalate,
 			RiskLevel:      RiskHigh,

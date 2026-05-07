@@ -1,5 +1,7 @@
 package tmux
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"bytes"
 	"context"
@@ -76,7 +78,7 @@ type TmuxSession struct {
 	externalResizeCh chan windowSize
 
 	// Detach synchronization to prevent race conditions
-	detachMutex sync.Mutex
+	detachMutex deadlock.Mutex
 	detaching   bool
 
 	// registry is an optional SessionExistenceChecker backed by the server-level
@@ -100,7 +102,7 @@ type TmuxSession struct {
 	lastKnownRows atomic.Int32
 
 	// Session existence caching to avoid repeated list-sessions calls
-	existsCacheMutex sync.RWMutex
+	existsCacheMutex deadlock.RWMutex
 	existsCache      bool
 	existsCacheTime  time.Time
 	existsCacheTTL   time.Duration
@@ -111,7 +113,7 @@ type TmuxSession struct {
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
 	controlModeDone        chan struct{}          // Signal channel for control mode termination
 	controlModeSubscribers map[string]chan []byte // WebSocket clients subscribed to control mode updates
-	controlModeSubMu       sync.RWMutex           // Protects controlModeSubscribers, controlModeExited, and pendingCmds
+	controlModeSubMu       deadlock.RWMutex       // Protects controlModeSubscribers, controlModeExited, and pendingCmds
 	controlModeExited      bool                   // True after readControlModeOutput exits; new subscribers get pre-closed channel
 
 	// Control mode command dispatch — priority queue
@@ -122,7 +124,7 @@ type TmuxSession struct {
 	highPriSendCh  chan cmSendReq   // user send-keys — processed before normPriSendCh
 	normPriSendCh  chan cmSendReq   // background commands (polling, resize, capture-pane)
 	cmSenderExited chan struct{}    // closed when runCMSender exits; lets StopControlMode know stdin is safe to close
-	cmdSendMu      sync.Mutex       // guards stdin-close in StopControlMode vs sender goroutine writes
+	cmdSendMu      deadlock.Mutex   // guards stdin-close in StopControlMode vs sender goroutine writes
 	pendingCmds    []chan cmdResult // FIFO of pending response channels; protected by controlModeSubMu
 	cmdBodyBuf     strings.Builder  // body accumulator between %begin and %end; reader goroutine only
 	curCmdCh       chan cmdResult   // current in-flight response channel; reader goroutine only
@@ -161,7 +163,7 @@ var whiteSpaceRegex = regexp.MustCompile(`\s+`)
 // When the server dies all sessions detect the failure simultaneously; only one should
 // run EnsureServerRunning + ResetAll + CreateKeepaliveSession.
 var (
-	recoveryMu       sync.Mutex
+	recoveryMu       deadlock.Mutex
 	recoveryInFlight bool
 )
 

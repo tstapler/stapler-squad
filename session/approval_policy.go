@@ -2,10 +2,10 @@ package session
 
 import (
 	"fmt"
+	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -62,7 +62,7 @@ type UsageLimit struct {
 // PolicyEngine manages approval policies and evaluates approval requests.
 type PolicyEngine struct {
 	policies    []*ApprovalPolicy
-	mu          sync.RWMutex
+	mu          deadlock.RWMutex
 	auditLog    []PolicyAuditEntry
 	maxAuditLog int
 }

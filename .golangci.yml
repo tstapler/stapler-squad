@@ -2,7 +2,9 @@ version: "2"
 
 linters:
   enable:
+    - depguard
     - forbidigo
+    - gochecknoglobals
     - ineffassign
     - nilnil
     - staticcheck
@@ -11,6 +13,25 @@ linters:
   disable:
     - errcheck
   settings:
+    depguard:
+      rules:
+        no_server_in_core:
+          files:
+            - "**/session/**/*.go"
+            - "**/config/**/*.go"
+            - "**/log/**/*.go"
+            - "!**/*_test.go"
+          deny:
+            - pkg: "github.com/tstapler/stapler-squad/server"
+              desc: "core packages (session/config/log) must not import the server layer"
+            - pkg: "github.com/tstapler/stapler-squad/server/**"
+              desc: "core packages must not import server subpackages"
+        no_ioutil:
+          files:
+            - "$all"
+          deny:
+            - pkg: "io/ioutil"
+              desc: "replaced by io and os packages since Go 1.16"
     forbidigo:
       analyze-types: false
       forbid:
@@ -18,6 +39,8 @@ linters:
           msg: "use the log package instead of fmt.Print* in production code"
         - pattern: '(?m)exec\.Command$'
           msg: "use exec.CommandContext with context.WithTimeout; raw exec.Command can hang indefinitely"
+        - pattern: 'log\.(InfoLog|WarningLog|ErrorLog|DebugLog)\.Printf'
+          msg: "use slog.InfoContext(ctx, ...) in new code; legacy log.XxxLog.Printf is being migrated"
       exclude-godoc-examples: true
   exclusions:
     paths:
@@ -45,3 +68,67 @@ linters:
       # Allow fmt.Print* in session/mux/picker.go (terminal UI rendering with escape codes)
       - path: "^session/mux/picker\\.go"
         linters: [forbidigo]
+      # ──────────────────────────────────────────────────────────────────────────
+      # forbidigo: legacy log.XxxLog.Printf — migrated incrementally.
+      # New packages (pkg/warren, pkg/events, pkg/analytics) are NOT excluded;
+      # they must use slog from the start.
+      # ──────────────────────────────────────────────────────────────────────────
+      - path: "^log/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^session/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^server/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^cmd/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^daemon/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^config/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^profiling/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^telemetry/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^testutil/"
+        linters: [forbidigo]
+        text: "log\\."
+      - path: "^main\\.go"
+        linters: [forbidigo]
+        text: "log\\."
+      # ──────────────────────────────────────────────────────────────────────────
+      # gochecknoglobals: existing packages have globals from before this rule was
+      # introduced. Suppress blanket per-package; new packages (pkg/warren,
+      # pkg/events) are NOT excluded and must not introduce globals.
+      # ──────────────────────────────────────────────────────────────────────────
+      - path: "^session/"
+        linters: [gochecknoglobals]
+      - path: "^server/"
+        linters: [gochecknoglobals]
+      - path: "^cmd/"
+        linters: [gochecknoglobals]
+      - path: "^main\\.go"
+        linters: [gochecknoglobals]
+      - path: "^executor/"
+        linters: [gochecknoglobals]
+      - path: "^github/"
+        linters: [gochecknoglobals]
+      - path: "^daemon/"
+        linters: [gochecknoglobals]
+      - path: "^telemetry/"
+        linters: [gochecknoglobals]
+      - path: "^testutil/"
+        linters: [gochecknoglobals]
+      - path: "^profiling/"
+        linters: [gochecknoglobals]
+      - path: "^pkg/analytics/"
+        linters: [gochecknoglobals]
+      - path: "^pkg/classifier/"
+        linters: [gochecknoglobals]

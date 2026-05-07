@@ -51,19 +51,18 @@ func (t *timeoutCommandExecutor) LookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
 
-// Global command executor instance - uses timeout protection by default
-// 5-second timeout prevents indefinite hangs on external commands
-var globalCommandExecutor CommandExecutor = newTimeoutCommandExecutor(5 * time.Second)
-
-// SetCommandExecutor sets the global command executor (primarily for testing)
-func SetCommandExecutor(executor CommandExecutor) {
-	globalCommandExecutor = executor
+// NewConfigWithExecutor creates a Config with an explicit command executor.
+// Pass nil to use the default timeout executor.
+func NewConfigWithExecutor(exec CommandExecutor) *Config {
+	if exec == nil {
+		exec = newTimeoutCommandExecutor(5 * time.Second)
+	}
+	return &Config{executor: exec}
 }
 
-// ResetCommandExecutor resets the global command executor to the default implementation
-// Uses timeout protection by default (5 seconds)
-func ResetCommandExecutor() {
-	globalCommandExecutor = newTimeoutCommandExecutor(5 * time.Second)
+// NewConfig creates a Config with the default timeout executor.
+func NewConfig() *Config {
+	return NewConfigWithExecutor(nil)
 }
 
 const (
@@ -180,6 +179,9 @@ type NotificationPrefs struct {
 
 // Config represents the application configuration
 type Config struct {
+	// executor is the command executor used for shell command discovery.
+	// Set via NewConfigWithExecutor; defaults to a 5-second timeout executor.
+	executor CommandExecutor
 	// ListenAddress is the address the HTTP server listens on.
 	// Default: "localhost:8543". Set to "0.0.0.0:8543" for remote access.
 	ListenAddress string `json:"listen_address"`
@@ -241,6 +243,10 @@ type Config struct {
 	// OneOffBaseDir is the base directory where one-off session directories are created.
 	// Default: "~/oneoff". Tilde is expanded at runtime. Created automatically on first use.
 	OneOffBaseDir string `json:"one_off_base_dir,omitempty"`
+	// PyroscopeServerAddress is the Pyroscope server URL for continuous profiling.
+	// Empty string (the default) disables continuous profiling.
+	// Example: "http://localhost:4040"
+	PyroscopeServerAddress string `json:"pyroscope_server_address,omitempty"`
 	// NewProjectBaseDir is the base directory where new project directories are created.
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
 	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
@@ -290,44 +296,51 @@ type DirectoryRule struct {
 
 // DefaultConfig returns the default configuration
 func DefaultConfig() *Config {
-	program, err := GetClaudeCommand()
+	return defaultConfigWithExecutor(nil)
+}
+
+// defaultConfigWithExecutor creates the default Config using the provided executor.
+// Pass nil to use the default timeout executor.
+func defaultConfigWithExecutor(exec CommandExecutor) *Config {
+	cfg := NewConfigWithExecutor(exec)
+
+	program, err := cfg.GetClaudeCommand()
 	if err != nil {
 		log.ErrorLog.Printf("failed to get claude command: %v", err)
 		program = defaultProgram
 	}
 
-	availablePrograms := GetAvailablePrograms()
+	availablePrograms := cfg.GetAvailablePrograms()
 
-	return &Config{
-		ListenAddress:      "localhost:8543",
-		DefaultProgram:     program,
-		AutoYes:            false,
-		DaemonPollInterval: 1000,
-		BranchPrefix: func() string {
-			user, err := user.Current()
-			if err != nil || user == nil || user.Username == "" {
-				log.ErrorLog.Printf("failed to get current user: %v", err)
-				return "session/"
-			}
-			return fmt.Sprintf("%s/", strings.ToLower(user.Username))
-		}(),
-		DetectNewSessions:             true,
-		SessionDetectionInterval:      5000,
-		StateRefreshInterval:          3000,
-		LogsEnabled:                   true,
-		LogsDir:                       "", // Empty string means use default location
-		LogMaxSize:                    10, // 10MB
-		LogMaxFiles:                   5,  // Keep 5 rotated files
-		LogMaxAge:                     30, // 30 days
-		LogCompress:                   true,
-		UseSessionLogs:                true,
-		TmuxSessionPrefix:             "staplersquad_", // Default prefix for backward compatibility
-		PerformBackgroundHealthChecks: true,            // Enabled by default for automated session maintenance
-		KeyCategories:                 getDefaultKeyCategories(),
-		TerminalStreamingMode:         "raw",  // Default to raw streaming (simpler, more reliable)
-		VCSPreference:                 "auto", // Default to auto-detection (prefer JJ if available)
-		AvailablePrograms:             availablePrograms,
-	}
+	cfg.ListenAddress = "localhost:8543"
+	cfg.DefaultProgram = program
+	cfg.AutoYes = false
+	cfg.DaemonPollInterval = 1000
+	cfg.BranchPrefix = func() string {
+		user, err := user.Current()
+		if err != nil || user == nil || user.Username == "" {
+			log.ErrorLog.Printf("failed to get current user: %v", err)
+			return "session/"
+		}
+		return fmt.Sprintf("%s/", strings.ToLower(user.Username))
+	}()
+	cfg.DetectNewSessions = true
+	cfg.SessionDetectionInterval = 5000
+	cfg.StateRefreshInterval = 3000
+	cfg.LogsEnabled = true
+	cfg.LogsDir = "" // Empty string means use default location
+	cfg.LogMaxSize = 10 // 10MB
+	cfg.LogMaxFiles = 5  // Keep 5 rotated files
+	cfg.LogMaxAge = 30 // 30 days
+	cfg.LogCompress = true
+	cfg.UseSessionLogs = true
+	cfg.TmuxSessionPrefix = "staplersquad_" // Default prefix for backward compatibility
+	cfg.PerformBackgroundHealthChecks = true // Enabled by default for automated session maintenance
+	cfg.KeyCategories = getDefaultKeyCategories()
+	cfg.TerminalStreamingMode = "raw"  // Default to raw streaming (simpler, more reliable)
+	cfg.VCSPreference = "auto" // Default to auto-detection (prefer JJ if available)
+	cfg.AvailablePrograms = availablePrograms
+	return cfg
 }
 
 // OneOffBaseDirOrDefault returns the resolved one-off base directory.
@@ -384,7 +397,7 @@ func (c *Config) NewProjectBaseDirOrDefault() (string, error) {
 // 2. PATH lookup
 //
 // If both fail, it returns an error.
-func GetClaudeCommand() (string, error) {
+func (c *Config) GetClaudeCommand() (string, error) {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "/bin/bash" // Default to bash if SHELL is not set
@@ -406,8 +419,8 @@ func GetClaudeCommand() (string, error) {
 			shellCmd = fmt.Sprintf("which %s", candidate)
 		}
 
-		cmd := globalCommandExecutor.Command(shell, "-c", shellCmd)
-		output, err := globalCommandExecutor.Output(cmd)
+		cmd := c.executor.Command(shell, "-c", shellCmd)
+		output, err := c.executor.Output(cmd)
 		if err == nil && len(output) > 0 {
 			result := strings.TrimSpace(string(output))
 			if result != "" {
@@ -450,7 +463,7 @@ func GetClaudeCommand() (string, error) {
 
 	// Fallback: try to find in PATH directly
 	for _, candidate := range candidates {
-		path, err := globalCommandExecutor.LookPath(candidate)
+		path, err := c.executor.LookPath(candidate)
 		if err == nil {
 			return path, nil
 		}
@@ -460,7 +473,7 @@ func GetClaudeCommand() (string, error) {
 }
 
 // GetAvailablePrograms returns a list of all detected CLI programs.
-func GetAvailablePrograms() []string {
+func (c *Config) GetAvailablePrograms() []string {
 	programs := []string{}
 	seen := make(map[string]bool)
 
@@ -481,8 +494,8 @@ func GetAvailablePrograms() []string {
 			shellCmd = fmt.Sprintf("which %s", candidate)
 		}
 
-		cmd := globalCommandExecutor.Command(shell, "-c", shellCmd)
-		if output, err := globalCommandExecutor.Output(cmd); err == nil {
+		cmd := c.executor.Command(shell, "-c", shellCmd)
+		if output, err := c.executor.Output(cmd); err == nil {
 			path := strings.TrimSpace(string(output))
 			if path != "" && !seen[path] {
 				programs = append(programs, path)
@@ -491,6 +504,18 @@ func GetAvailablePrograms() []string {
 		}
 	}
 	return programs
+}
+
+// GetClaudeCommand is a package-level convenience wrapper using the default executor.
+// Callers that need a custom executor should use NewConfigWithExecutor(exec).GetClaudeCommand().
+func GetClaudeCommand() (string, error) {
+	return NewConfig().GetClaudeCommand()
+}
+
+// GetAvailablePrograms is a package-level convenience wrapper using the default executor.
+// Callers that need a custom executor should use NewConfigWithExecutor(exec).GetAvailablePrograms().
+func GetAvailablePrograms() []string {
+	return NewConfig().GetAvailablePrograms()
 }
 
 func LoadConfig() *Config {
@@ -588,6 +613,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
 	}
+	// Unmarshaling produces a zero Config with no executor; initialize it now
+	// so GetClaudeCommand / GetAvailablePrograms don't panic on nil executor.
+	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
 
 	return &cfg, nil
 }

@@ -95,8 +95,19 @@ jobs:
         if: steps.tmux-cache.outputs.cache-hit != 'true'
         run: ./scripts/build-tmux.sh
 
-      - name: Run tests (pinned tmux 3.4)
-        run: TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...
+      - name: Run tests with coverage (pinned tmux 3.4)
+        run: |
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -coverprofile=coverage.out \
+            -covermode=atomic ./server/... ./session/... ./config/... \
+            || (TMUX_BIN="$(pwd)/bin/tmux" go test -race -v ./...; exit 1)
+
+      - name: Coverage gate
+        uses: vladopajic/go-test-coverage@v2
+        with:
+          profile: coverage.out
+          global-threshold: 60
+          local-threshold: 0
+          badge-file-name: coverage.svg
 
       - name: Set up Node.js (for coverage report)
         uses: actions/setup-node@v4
@@ -145,6 +156,55 @@ jobs:
               });
             }
         continue-on-error: true
+
+      - name: Check new RPCs have tests
+        run: |
+          make registry-generate
+          git diff --exit-code docs/registry/features/ || {
+            echo "Registry out of date — run: make registry-generate"
+            exit 1
+          }
+          NEW_FILES=$(git diff --name-only origin/main -- 'docs/registry/features/backend/**' 2>/dev/null || true)
+          for f in $NEW_FILES; do
+            if [ -f "$f" ] && jq -e '.tested == false' "$f" > /dev/null 2>&1; then
+              echo "ERROR: New RPC $f has no test (tested: false). Add a test and set tested: true."
+              exit 1
+            fi
+          done
+        continue-on-error: true
+
+      - name: Benchmark comparison (advisory, PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          go install golang.org/x/perf/cmd/benchstat@latest
+          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=BenchmarkNavigation -benchmem -count=5 ./app/... \
+            -timeout=15m > bench-current.txt || true
+          if [ -f bench-baseline.txt ]; then
+            benchstat bench-baseline.txt bench-current.txt || true
+          fi
+        continue-on-error: true
+
+      - name: Integration coverage (advisory)
+        run: |
+          mkdir -p /tmp/covdata
+          go build -cover -o stapler-squad-cov .
+          GOCOVERDIR=/tmp/covdata STAPLER_SQUAD_INSTANCE=cov-$$ \
+            TMUX_BIN="$(pwd)/bin/tmux" ./stapler-squad-cov &
+          sleep 2
+          TMUX_BIN="$(pwd)/bin/tmux" go test -race -tags integration ./... || true
+          pkill -f stapler-squad-cov || true
+          sleep 1
+          go tool covdata textfmt -i=/tmp/covdata -o integration.out || true
+        continue-on-error: true
+
+      - name: Upload integration coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-coverage
+          path: integration.out
+          if-no-files-found: ignore
+          retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────────────
   # build: cross-compiles for all supported platforms in parallel.
@@ -224,3 +284,75 @@ jobs:
 
       - name: Verify binary runs
         run: ./stapler-squad version
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # benchmark-gate: runs on main-merge only. Fails if any benchmark regresses
+  # more than 20%. PRs get advisory comments only (never blocked).
+  # 20% threshold is deliberate — tmux-touching benchmarks have 15-25% natural
+  # variance on shared runners. Use count=10 + utest for statistical significance.
+  # ─────────────────────────────────────────────────────────────────────────────
+  benchmark-gate:
+    name: Benchmark Gate (main only)
+    runs-on: ubuntu-latest
+    needs: [prepare, test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+          cache: true
+
+      - name: Download generated files
+        uses: actions/download-artifact@v4
+        with:
+          name: generated-files
+
+      - name: Install tmux build dependencies
+        run: sudo apt-get install -y automake libevent-dev libncurses-dev pkg-config
+
+      - name: Cache pinned tmux binary
+        uses: actions/cache@v4
+        id: tmux-cache
+        with:
+          path: bin/tmux
+          key: tmux-3.4-${{ runner.os }}-v1
+
+      - name: Build pinned tmux 3.4
+        if: steps.tmux-cache.outputs.cache-hit != 'true'
+        run: ./scripts/build-tmux.sh
+
+      - name: Run benchmarks (count=10 for significance)
+        run: |
+          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=10 \
+            ./app/... -timeout=30m > bench-current.txt
+
+      - name: Install benchstat
+        run: go install golang.org/x/perf/cmd/benchstat@latest
+
+      - name: Compare against baseline (20% threshold)
+        run: |
+          if [ ! -f bench-baseline.txt ]; then
+            echo "No baseline found — treating this run as the new baseline (no regression check)"
+            cp bench-current.txt bench-baseline.txt
+            exit 0
+          fi
+          benchstat -delta-test=utest bench-baseline.txt bench-current.txt \
+            | tee bench-diff.txt
+          if grep -E '\+[2-9][0-9]\.' bench-diff.txt | grep -v '±'; then
+            echo "Benchmark regression > 20% detected — see bench-diff.txt above"
+            exit 1
+          fi
+
+      - name: Update baseline on success
+        run: |
+          cp bench-current.txt bench-baseline.txt
+          git config user.email "ci@stapler-squad"
+          git config user.name "CI"
+          git add bench-baseline.txt
+          git commit -m "chore(bench): update baseline [skip ci]" || true
+          git push origin HEAD:main

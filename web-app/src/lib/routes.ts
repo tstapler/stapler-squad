@@ -10,6 +10,7 @@ export const routes = {
   rules: "/rules",
   history: "/history",
   logs: "/logs",
+  errors: "/errors",
   config: "/config",
   settings: "/settings",
   settingsDefaults: "/settings/defaults",

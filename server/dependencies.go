@@ -8,6 +8,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
+	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"os"
@@ -33,11 +34,37 @@ type ServerDependencies struct {
 	ExternalDiscovery       *session.ExternalSessionDiscovery
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
 	HistoryLinker           *session.HistoryLinker
+	ErrorRegistry           *services.ErrorRegistry
 
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
+}
+
+// ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
+// by NewServerWithDeps. This mirrors the projection done inside BuildDependencies.
+func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
+	return &ServerDependencies{
+		SessionService:          rt.SessionService,
+		Storage:                 rt.Storage,
+		Instances:               rt.Instances,
+		EventBus:                rt.EventBus,
+		StatusManager:           rt.StatusManager,
+		ReviewQueue:             rt.ReviewQueue,
+		ReviewQueuePoller:       rt.ReviewQueuePoller,
+		PRStatusPoller:          rt.PRStatusPoller,
+		ReactiveQueueMgr:        rt.ReactiveQueueMgr,
+		ScrollbackManager:       rt.ScrollbackManager,
+		TmuxStreamerManager:     rt.TmuxStreamerManager,
+		ExternalDiscovery:       rt.ExternalDiscovery,
+		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
+		HistoryLinker:           rt.HistoryLinker,
+		ErrorRegistry:           rt.ErrorRegistry,
+		UnfinishedScanner:       rt.UnfinishedScanner,
+		UnfinishedStateStore:    rt.UnfinishedStateStore,
+		UnfinishedWorkService:   rt.UnfinishedWorkService,
+	}
 }
 
 // BuildDependencies constructs and wires all server dependencies in the correct order.
@@ -69,25 +96,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 		return nil, fmt.Errorf("phase 3 (runtime): %w", err)
 	}
 
-	return &ServerDependencies{
-		SessionService:          rt.SessionService,
-		Storage:                 rt.Storage,
-		Instances:               rt.Instances,
-		EventBus:                rt.EventBus,
-		StatusManager:           rt.StatusManager,
-		ReviewQueue:             rt.ReviewQueue,
-		ReviewQueuePoller:       rt.ReviewQueuePoller,
-		PRStatusPoller:          rt.PRStatusPoller,
-		ReactiveQueueMgr:        rt.ReactiveQueueMgr,
-		ScrollbackManager:       rt.ScrollbackManager,
-		TmuxStreamerManager:     rt.TmuxStreamerManager,
-		ExternalDiscovery:       rt.ExternalDiscovery,
-		ExternalApprovalMonitor: rt.ExternalApprovalMonitor,
-		HistoryLinker:           rt.HistoryLinker,
-		UnfinishedScanner:       rt.UnfinishedScanner,
-		UnfinishedStateStore:    rt.UnfinishedStateStore,
-		UnfinishedWorkService:   rt.UnfinishedWorkService,
-	}, nil
+	return rt.ToServerDeps(), nil
 }
 
 // scanSessionsOnStartup scans all running sessions for pre-existing approval prompts,
@@ -292,22 +301,53 @@ type CoreDeps struct {
 	EventBus       *events.EventBus
 	ReviewQueue    *session.ReviewQueue
 	ApprovalStore  *services.ApprovalStore
+	ErrorRegistry  *services.ErrorRegistry
 }
 
-// BuildCoreDeps constructs Phase 1 dependencies: SessionService and its internal
-// components (Storage, EventBus, ReviewQueue, ApprovalStore).
-func BuildCoreDeps() (*CoreDeps, error) {
-	sessionService, err := services.NewSessionServiceFromConfig()
+// BuildOptions carries optional overrides for BuildCoreDepsWithOptions.
+// The zero value uses all defaults (equivalent to calling BuildCoreDeps).
+type BuildOptions struct {
+	// EntClient supplies a pre-opened *ent.Client, bypassing config-based DB path
+	// discovery and schema migration. nil = open from config as usual.
+	EntClient *ent.Client
+}
+
+// BuildCoreDepsWithOptions constructs Phase 1 dependencies with optional overrides.
+// Use BuildOptions to inject a pre-built EntClient (for tests).
+func BuildCoreDepsWithOptions(opts BuildOptions) (*CoreDeps, error) {
+	var sessionService *services.SessionService
+	var err error
+	if opts.EntClient != nil {
+		sessionService, err = services.NewSessionServiceWithEntClient(opts.EntClient)
+	} else {
+		sessionService, err = services.NewSessionServiceFromConfig()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("initialize SessionService: %w", err)
 	}
+
+	storage := sessionService.GetStorage()
+
+	// Wire the ErrorRegistry using the existing ent client from Storage.
+	// GetEntClient returns nil when storage is not ent-backed (e.g. in tests),
+	// in which case ErrorRegistry gracefully disables itself.
+	errorRegistry := services.NewErrorRegistry(storage.GetEntClient(), true)
+	sessionService.SetErrorRegistry(errorRegistry)
+
 	return &CoreDeps{
 		SessionService: sessionService,
-		Storage:        sessionService.GetStorage(),
+		Storage:        storage,
 		EventBus:       sessionService.GetEventBus(),
 		ReviewQueue:    sessionService.GetReviewQueueInstance(),
 		ApprovalStore:  sessionService.GetApprovalStore(),
+		ErrorRegistry:  errorRegistry,
 	}, nil
+}
+
+// BuildCoreDeps constructs Phase 1 dependencies using config defaults.
+// It is a thin wrapper around BuildCoreDepsWithOptions(BuildOptions{}).
+func BuildCoreDeps() (*CoreDeps, error) {
+	return BuildCoreDepsWithOptions(BuildOptions{})
 }
 
 // ServiceDeps holds Phase 2 dependencies: management components that depend on CoreDeps.
@@ -358,6 +398,7 @@ type RuntimeDeps struct {
 	ExternalApprovalMonitor *session.ExternalApprovalMonitor
 	PRStatusPoller          *session.PRStatusPoller
 	HistoryLinker           *session.HistoryLinker
+	ErrorRegistry           *services.ErrorRegistry
 
 	// Unfinished work scanning.
 	UnfinishedScanner     *unfinished.Scanner
@@ -608,6 +649,7 @@ func BuildRuntimeDeps(svc *ServiceDeps) (*RuntimeDeps, error) {
 		ExternalApprovalMonitor: externalApprovalMonitor,
 		PRStatusPoller:          svc.PRStatusPoller,
 		HistoryLinker:           historyLinker,
+		ErrorRegistry:           svc.ErrorRegistry,
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,

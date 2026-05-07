@@ -89,17 +89,6 @@ func newMockCommandExecutorWithClaudeNotFound() *mockCommandExecutor {
 	}
 }
 
-// setupTest sets up a test environment with a mock command executor
-func setupTest(t *testing.T) func() {
-	// Store original executor
-	originalExecutor := globalCommandExecutor
-
-	// Return cleanup function
-	return func() {
-		SetCommandExecutor(originalExecutor)
-	}
-}
-
 func TestGetClaudeCommand(t *testing.T) {
 	originalShell := os.Getenv("SHELL")
 	defer func() {
@@ -107,25 +96,18 @@ func TestGetClaudeCommand(t *testing.T) {
 	}()
 
 	t.Run("finds claude via shell command", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		claudePath := "/usr/local/bin/claude"
 		mockExecutor := newMockCommandExecutorWithClaudeFound(claudePath)
-		SetCommandExecutor(mockExecutor)
 
 		os.Setenv("SHELL", "/bin/bash")
 
-		result, err := GetClaudeCommand()
+		result, err := NewConfigWithExecutor(mockExecutor).GetClaudeCommand()
 
 		assert.NoError(t, err)
 		assert.Equal(t, claudePath, result)
 	})
 
 	t.Run("finds claude via LookPath when shell command fails", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		claudePath := "/usr/local/bin/claude"
 		mockExecutor := &mockCommandExecutor{
 			OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
@@ -139,26 +121,21 @@ func TestGetClaudeCommand(t *testing.T) {
 				return "", exec.ErrNotFound
 			},
 		}
-		SetCommandExecutor(mockExecutor)
 
 		os.Setenv("SHELL", "/bin/bash")
 
-		result, err := GetClaudeCommand()
+		result, err := NewConfigWithExecutor(mockExecutor).GetClaudeCommand()
 
 		assert.NoError(t, err)
 		assert.Equal(t, claudePath, result)
 	})
 
 	t.Run("handles missing claude command", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		mockExecutor := newMockCommandExecutorWithClaudeNotFound()
-		SetCommandExecutor(mockExecutor)
 
 		os.Setenv("SHELL", "/bin/bash")
 
-		result, err := GetClaudeCommand()
+		result, err := NewConfigWithExecutor(mockExecutor).GetClaudeCommand()
 
 		assert.Error(t, err)
 		assert.Equal(t, "", result)
@@ -166,25 +143,18 @@ func TestGetClaudeCommand(t *testing.T) {
 	})
 
 	t.Run("handles empty SHELL environment", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		claudePath := "/usr/local/bin/claude"
 		mockExecutor := newMockCommandExecutorWithClaudeFound(claudePath)
-		SetCommandExecutor(mockExecutor)
 
 		os.Unsetenv("SHELL")
 
-		result, err := GetClaudeCommand()
+		result, err := NewConfigWithExecutor(mockExecutor).GetClaudeCommand()
 
 		assert.NoError(t, err)
 		assert.Equal(t, claudePath, result)
 	})
 
 	t.Run("handles alias parsing", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		// Test alias output parsing
 		aliasOutput := "claude: aliased to /usr/local/bin/claude"
 		mockExecutor := &mockCommandExecutor{
@@ -192,31 +162,26 @@ func TestGetClaudeCommand(t *testing.T) {
 				return []byte(aliasOutput), nil
 			},
 		}
-		SetCommandExecutor(mockExecutor)
 
 		os.Setenv("SHELL", "/bin/bash")
 
-		result, err := GetClaudeCommand()
+		result, err := NewConfigWithExecutor(mockExecutor).GetClaudeCommand()
 
 		assert.NoError(t, err)
 		assert.Equal(t, "/usr/local/bin/claude", result)
 	})
 
 	t.Run("handles direct path output", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		claudePath := "/usr/local/bin/claude"
 		mockExecutor := &mockCommandExecutor{
 			OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
 				return []byte(claudePath), nil
 			},
 		}
-		SetCommandExecutor(mockExecutor)
 
 		os.Setenv("SHELL", "/bin/bash")
 
-		result, err := GetClaudeCommand()
+		result, err := NewConfigWithExecutor(mockExecutor).GetClaudeCommand()
 
 		assert.NoError(t, err)
 		assert.Equal(t, claudePath, result)
@@ -241,14 +206,10 @@ func TestGetClaudeCommand(t *testing.T) {
 
 func TestDefaultConfig(t *testing.T) {
 	t.Run("creates config with default values when claude found", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		claudePath := "/usr/local/bin/claude"
 		mockExecutor := newMockCommandExecutorWithClaudeFound(claudePath)
-		SetCommandExecutor(mockExecutor)
 
-		config := DefaultConfig()
+		config := defaultConfigWithExecutor(mockExecutor)
 
 		assert.NotNil(t, config)
 		assert.Equal(t, claudePath, config.DefaultProgram)
@@ -259,13 +220,9 @@ func TestDefaultConfig(t *testing.T) {
 	})
 
 	t.Run("creates config with fallback program when claude not found", func(t *testing.T) {
-		cleanup := setupTest(t)
-		defer cleanup()
-
 		mockExecutor := newMockCommandExecutorWithClaudeNotFound()
-		SetCommandExecutor(mockExecutor)
 
-		config := DefaultConfig()
+		config := defaultConfigWithExecutor(mockExecutor)
 
 		assert.NotNil(t, config)
 		assert.Equal(t, "proxy-claude", config.DefaultProgram) // Falls back to default
@@ -469,8 +426,6 @@ func TestSaveConfig(t *testing.T) {
 
 // TestGetClaudeCommand_Timeout verifies that GetClaudeCommand respects timeout
 func TestGetClaudeCommand_Timeout(t *testing.T) {
-	defer setupTest(t)()
-
 	t.Run("Timeout on hanging command", func(t *testing.T) {
 		// Create a mock executor that hangs indefinitely
 		hangingExecutor := &mockCommandExecutor{
@@ -484,11 +439,9 @@ func TestGetClaudeCommand_Timeout(t *testing.T) {
 			},
 		}
 
-		SetCommandExecutor(hangingExecutor)
-
 		// This should complete quickly even though the command "hangs"
 		// because our timeout executor wrapper kills hanging commands
-		result, err := GetClaudeCommand()
+		result, err := NewConfigWithExecutor(hangingExecutor).GetClaudeCommand()
 
 		// Should return error (command not found)
 		assert.Error(t, err)
@@ -496,16 +449,12 @@ func TestGetClaudeCommand_Timeout(t *testing.T) {
 	})
 
 	t.Run("Default executor uses timeout protection", func(t *testing.T) {
-		// Reset to default executor
-		ResetCommandExecutor()
-
-		// Verify that the global executor is using timeout protection
-		// We can't easily test the actual timeout without real hanging commands,
-		// but we can verify the type
-		assert.NotNil(t, globalCommandExecutor)
+		// Verify that NewConfig() creates a config with timeout protection.
+		cfg := NewConfig()
+		assert.NotNil(t, cfg.executor)
 
 		// The default should be timeoutCommandExecutor
-		_, ok := globalCommandExecutor.(*timeoutCommandExecutor)
+		_, ok := cfg.executor.(*timeoutCommandExecutor)
 		assert.True(t, ok, "Default executor should be timeoutCommandExecutor")
 	})
 }

@@ -1,5 +1,7 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"bufio"
 	"context"
@@ -8,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -260,7 +261,7 @@ func WithSessionLister(l tmux.SessionLister) PTYDiscoveryOption {
 
 // PTYDiscovery manages PTY discovery and monitoring
 type PTYDiscovery struct {
-	mu            sync.RWMutex
+	mu            deadlock.RWMutex
 	connections   []*PTYConnection
 	sessionMap    map[string]*Instance // Session name -> Instance
 	stopCh        chan struct{}

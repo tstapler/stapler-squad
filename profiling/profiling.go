@@ -11,6 +11,7 @@ import (
 	"runtime/trace"
 	"time"
 
+	pyroscope "github.com/grafana/pyroscope-go"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -135,6 +136,29 @@ func StartProfiling(cfg Config) (func(), error) {
 			cleanup()
 		}
 	}, nil
+}
+
+// StartContinuousProfiling starts Pyroscope continuous profiling if serverAddr is non-empty.
+// Returns a stop function (call on shutdown) and any initialization error.
+// When serverAddr is empty, returns a no-op stop function and nil error.
+func StartContinuousProfiling(appName, serverAddr string) (func(), error) {
+	if serverAddr == "" {
+		return func() {}, nil
+	}
+	profiler, err := pyroscope.Start(pyroscope.Config{
+		ApplicationName: appName,
+		ServerAddress:   serverAddr,
+		Logger:          nil,
+		ProfileTypes: []pyroscope.ProfileType{
+			pyroscope.ProfileCPU,
+			pyroscope.ProfileAllocObjects,
+			pyroscope.ProfileGoroutines,
+		},
+	})
+	if err != nil {
+		return func() {}, fmt.Errorf("pyroscope: %w", err)
+	}
+	return func() { _ = profiler.Stop() }, nil
 }
 
 // PrintGoroutineStacks prints all goroutine stacks to logs

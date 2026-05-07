@@ -1,10 +1,12 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/analytics"
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"io"
 	"strings"
 	"sync"
@@ -34,7 +36,7 @@ type ResponseStream struct {
 	sessionName  string
 	ptyAccess    *PTYAccess
 	subscribers  map[string]*Subscriber
-	mu           sync.RWMutex
+	mu           deadlock.RWMutex
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup

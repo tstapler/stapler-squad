@@ -3,8 +3,10 @@ package session
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/log"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // InstanceData represents the serializable data of an Instance
@@ -181,6 +183,15 @@ func NewStorageWithRepository(repo Repository) (*Storage, error) {
 
 // Close performs graceful shutdown of storage.
 func (s *Storage) Close() error {
+	return nil
+}
+
+// GetEntClient returns the *ent.Client from the underlying EntRepository, or nil
+// when the repository is not ent-backed (e.g. in-memory test doubles).
+func (s *Storage) GetEntClient() *ent.Client {
+	if er, ok := s.repo.(*EntRepository); ok {
+		return er.GetEntClient()
+	}
 	return nil
 }
 

@@ -1,13 +1,14 @@
 package unfinished
 
+import "github.com/linkdata/deadlock"
+
 import (
-	"sync"
 	"time"
 )
 
 // worktreeCache is a single-entry TTL cache for a ScanResult.
 type worktreeCache struct {
-	mu       sync.RWMutex
+	mu       deadlock.RWMutex
 	result   ScanResult
 	scanTime time.Time
 	ttl      time.Duration

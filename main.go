@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/daemon"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/warren"
 	"github.com/tstapler/stapler-squad/profiling"
 	"github.com/tstapler/stapler-squad/server"
 	serverauth "github.com/tstapler/stapler-squad/server/auth"
@@ -53,21 +54,11 @@ var (
 		Use:   "stapler-squad",
 		Short: "Stapler Squad - Manage multiple AI agents like Claude Code, Aider, Codex, and Amp (Web Mode)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-
-			// Graceful shutdown on SIGTERM (pkill from Makefile) and SIGINT (Ctrl+C).
-			// cancel() triggers srv.Shutdown() which runs the shutdown hooks that persist
-			// session state (including Claude session IDs for --resume on next start).
-			sigChan := make(chan os.Signal, 1)
-			signal.Notify(sigChan, syscall.SIGTERM, os.Interrupt)
-			defer signal.Stop(sigChan)
-			go func() {
-				sig := <-sigChan
-				log.InfoLog.Printf("Received signal %v, initiating graceful shutdown", sig)
-				log.LogSessionPathsToStderr()
-				cancel()
-			}()
+			// signal.NotifyContext cancels ctx on SIGTERM/SIGINT, triggering graceful
+			// shutdown via app.Run → app.Stop → srv.Shutdown (shutdown hooks persist
+			// session state including Claude session IDs for --resume on next start).
+			ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer stop()
 
 			// MCP mode: initialize logging to stderr, load storage, run MCP server.
 			// Mutually exclusive with HTTP server mode — returns when stdin closes.
@@ -120,20 +111,7 @@ var (
 				log.InfoLog.Printf("External discovery enabled (from --discover-external flag)")
 			}
 
-			// Convert config to log config
-			logCfg := &log.LogConfig{
-				LogsEnabled:    true,
-				LogsDir:        "", // Use default location
-				LogMaxSize:     cfg.LogMaxSize,
-				LogMaxFiles:    cfg.LogMaxFiles,
-				LogMaxAge:      cfg.LogMaxAge,
-				LogCompress:    cfg.LogCompress,
-				UseSessionLogs: cfg.UseSessionLogs,
-				ConsoleEnabled: false,
-				FileEnabled:    true,
-				FileLevel:      log.DEBUG,
-			}
-			log.InitializeWithConfig(daemonFlag, logCfg)
+			log.InitializeWithConfig(daemonFlag, buildLogConfig(daemonFlag, cfg, false))
 			defer func() {
 				log.LogSessionPathsToStderr()
 				log.Close()
@@ -184,6 +162,16 @@ var (
 				}()
 			}
 
+			// Start continuous profiling if configured.
+			stopProfiling, err := profiling.StartContinuousProfiling(
+				"stapler-squad",
+				cfg.PyroscopeServerAddress,
+			)
+			if err != nil {
+				log.WarningLog.Printf("Continuous profiling unavailable: %v", err)
+			}
+			defer stopProfiling()
+
 			// Determine listen address: flag > config > PORT env > default
 			address := cfg.ListenAddress
 			if address == "" {
@@ -218,47 +206,84 @@ var (
 			}
 			hostnames := resolveLANHostnames(lanIPStr)
 
-			srv := server.NewServer(address)
-			srv.SetHostnames(hostnames)
+			app := warren.New()
+			var (
+				coreDeps *server.CoreDeps
+				svcDeps  *server.ServiceDeps
+				srv      *server.Server
+			)
 
-			localOrigin := fmt.Sprintf("http://%s", address)
-			srv.SetOrigins([]string{localOrigin})
+			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
+				log.InfoLog.Printf("Building core dependencies (phase 1/3)...")
+				var err error
+				coreDeps, err = server.BuildCoreDepsWithOptions(server.BuildOptions{})
+				return err
+			})
 
-			// Start a second HTTPS server with passkey auth for remote access.
-			if remoteAccessFlag || cfg.PasskeyEnabled {
-				if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
-					return fmt.Errorf("start remote access: %w", err)
+			app.Phase("service-deps", func(ctx context.Context, a *warren.App) error {
+				log.InfoLog.Printf("Building service dependencies (phase 2/3)...")
+				var err error
+				svcDeps, err = server.BuildServiceDeps(coreDeps)
+				return err
+			})
+
+			app.Phase("runtime", func(ctx context.Context, a *warren.App) error {
+				log.InfoLog.Printf("Building runtime dependencies (phase 3/3)...")
+				rt, err := server.BuildRuntimeDeps(svcDeps)
+				if err != nil {
+					return err
 				}
-			}
 
-			strictStartup := os.Getenv("STAPLER_SQUAD_STRICT_STARTUP") == "true"
+				srv = server.NewServerWithDeps(address, rt.ToServerDeps())
+				srv.SetHostnames(hostnames)
 
-			// Ensure tmux server is running before sessions are restored.
-			if err := tmux.EnsureServerRunning(""); err != nil {
-				if strictStartup {
-					return fmt.Errorf("tmux server startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
-				}
-				log.WarningLog.Printf("Failed to ensure tmux server running: %v", err)
-			}
-			// Create a keepalive session so the tmux server does not exit when all user sessions close.
-			if err := tmux.CreateKeepaliveSession(""); err != nil {
-				if strictStartup {
-					return fmt.Errorf("failed to create tmux keepalive session (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
-				}
-				log.WarningLog.Printf("Failed to create keepalive session: %v", err)
-			}
-			// --tmux-keep-server: also set exit-empty off so the server survives even if the keepalive dies.
-			if tmuxKeepServerFlag {
-				if err := tmux.SetExitEmpty("", false); err != nil {
-					if strictStartup {
-						return fmt.Errorf("failed to set tmux exit-empty off (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+				localOrigin := fmt.Sprintf("http://%s", address)
+				srv.SetOrigins([]string{localOrigin})
+
+				// Start a second HTTPS server with passkey auth for remote access.
+				if remoteAccessFlag || cfg.PasskeyEnabled {
+					if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
+						return fmt.Errorf("start remote access: %w", err)
 					}
-					log.WarningLog.Printf("Failed to set tmux exit-empty off: %v", err)
 				}
-			}
 
-			log.InfoLog.Printf("Starting web server on %s", address)
-			return srv.Start(ctx)
+				strictStartup := os.Getenv("STAPLER_SQUAD_STRICT_STARTUP") == "true"
+
+				// Ensure tmux server is running before sessions are restored.
+				if err := tmux.EnsureServerRunning(""); err != nil {
+					if strictStartup {
+						return fmt.Errorf("tmux server startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+					}
+					log.WarningLog.Printf("Failed to ensure tmux server running: %v", err)
+				}
+				// Create a keepalive session so the tmux server does not exit when all user sessions close.
+				if err := tmux.CreateKeepaliveSession(""); err != nil {
+					if strictStartup {
+						return fmt.Errorf("failed to create tmux keepalive session (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+					}
+					log.WarningLog.Printf("Failed to create keepalive session: %v", err)
+				}
+				// --tmux-keep-server: also set exit-empty off so the server survives even if the keepalive dies.
+				if tmuxKeepServerFlag {
+					if err := tmux.SetExitEmpty("", false); err != nil {
+						if strictStartup {
+							return fmt.Errorf("failed to set tmux exit-empty off (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+						}
+						log.WarningLog.Printf("Failed to set tmux exit-empty off: %v", err)
+					}
+				}
+
+				a.Go("http-server", func(ctx context.Context) {
+					log.InfoLog.Printf("Starting web server on %s", address)
+					if err := srv.Start(ctx); err != nil {
+						log.ErrorLog.Printf("HTTP server stopped: %v", err)
+					}
+				})
+
+				return nil
+			})
+
+			return app.Run(ctx)
 		},
 	}
 
@@ -268,21 +293,7 @@ var (
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
-			// Convert config to log config
-			logCfg := &log.LogConfig{
-				LogsEnabled:    true,
-				LogsDir:        "", // Use default location
-				LogMaxSize:     cfg.LogMaxSize,
-				LogMaxFiles:    cfg.LogMaxFiles,
-				LogMaxAge:      cfg.LogMaxAge,
-				LogCompress:    cfg.LogCompress,
-				UseSessionLogs: cfg.UseSessionLogs,
-				// Disable console output for CLI commands to keep output clean
-				ConsoleEnabled: false,
-				FileEnabled:    true,
-				FileLevel:      log.DEBUG,
-			}
-			log.InitializeWithConfig(false, logCfg)
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, false))
 			defer func() {
 				log.LogSessionPathsToStderr()
 				log.Close()
@@ -328,21 +339,7 @@ var (
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Load config first so we can configure logging properly
 			cfg := config.LoadConfig()
-			// Convert config to log config
-			logCfg := &log.LogConfig{
-				LogsEnabled:    true,
-				LogsDir:        "", // Use default location
-				LogMaxSize:     cfg.LogMaxSize,
-				LogMaxFiles:    cfg.LogMaxFiles,
-				LogMaxAge:      cfg.LogMaxAge,
-				LogCompress:    cfg.LogCompress,
-				UseSessionLogs: cfg.UseSessionLogs,
-				// Disable console output for CLI commands to keep output clean
-				ConsoleEnabled: false,
-				FileEnabled:    true,
-				FileLevel:      log.DEBUG,
-			}
-			log.InitializeWithConfig(false, logCfg)
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, false))
 			defer func() {
 				log.LogSessionPathsToStderr()
 				log.Close()
@@ -389,19 +386,7 @@ var (
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize logging
 			cfg := config.LoadConfig()
-			logCfg := &log.LogConfig{
-				LogsEnabled:    true,
-				LogsDir:        "",
-				LogMaxSize:     cfg.LogMaxSize,
-				LogMaxFiles:    cfg.LogMaxFiles,
-				LogMaxAge:      cfg.LogMaxAge,
-				LogCompress:    cfg.LogCompress,
-				UseSessionLogs: cfg.UseSessionLogs,
-				ConsoleEnabled: true,
-				FileEnabled:    true,
-				FileLevel:      log.DEBUG,
-			}
-			log.InitializeWithConfig(false, logCfg)
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, true))
 			defer log.Close()
 
 			fmt.Println("=== PTY Initialization Test ===")
@@ -492,19 +477,7 @@ var (
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Initialize logging
 			cfg := config.LoadConfig()
-			logCfg := &log.LogConfig{
-				LogsEnabled:    true,
-				LogsDir:        "",
-				LogMaxSize:     cfg.LogMaxSize,
-				LogMaxFiles:    cfg.LogMaxFiles,
-				LogMaxAge:      cfg.LogMaxAge,
-				LogCompress:    cfg.LogCompress,
-				UseSessionLogs: cfg.UseSessionLogs,
-				ConsoleEnabled: false,
-				FileEnabled:    true,
-				FileLevel:      log.DEBUG,
-			}
-			log.InitializeWithConfig(false, logCfg)
+			log.InitializeWithConfig(false, buildLogConfig(false, cfg, false))
 			defer log.Close()
 
 			repo, err := session.NewEntRepository()
@@ -927,6 +900,24 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)
+	}
+}
+
+// buildLogConfig converts application config to a log.LogConfig. consoleEnabled
+// controls whether output is also written to stdout (false for server/CLI modes,
+// true for interactive diagnostic commands).
+func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.LogConfig {
+	return &log.LogConfig{
+		LogsEnabled:    true,
+		LogsDir:        "",
+		LogMaxSize:     cfg.LogMaxSize,
+		LogMaxFiles:    cfg.LogMaxFiles,
+		LogMaxAge:      cfg.LogMaxAge,
+		LogCompress:    cfg.LogCompress,
+		UseSessionLogs: cfg.UseSessionLogs,
+		ConsoleEnabled: consoleEnabled,
+		FileEnabled:    true,
+		FileLevel:      log.DEBUG,
 	}
 }
 

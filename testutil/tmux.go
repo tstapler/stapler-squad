@@ -1,5 +1,7 @@
 package testutil
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
 	"fmt"
@@ -7,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -166,7 +167,7 @@ type TmuxTestServer struct {
 	socketName string
 	executor   executor.Executor
 	t          *testing.T
-	mu         sync.Mutex // serializes tmux new-session calls; the socket doesn't tolerate concurrent creates
+	mu         deadlock.Mutex // serializes tmux new-session calls; the socket doesn't tolerate concurrent creates
 }
 
 // CreateIsolatedTmuxServer creates a new isolated tmux server for testing.

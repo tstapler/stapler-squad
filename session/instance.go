@@ -4,21 +4,21 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
-	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/scrollback"
-	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
+	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 type Status int
@@ -254,22 +254,22 @@ type Instance struct {
 	tagManager TagManager
 
 	// Mutex to protect concurrent access to instance state
-	stateMutex sync.RWMutex
+	stateMutex deadlock.RWMutex
 	// startMu prevents concurrent calls to start() from racing during session setup.
 	// Held for the full duration of start(); callers that lose the race return early.
-	startMu sync.Mutex
+	startMu deadlock.Mutex
 
 	// restartCount and recentRestartTimes track rapid restarts for storm detection.
 	restartCount       int64
 	recentRestartTimes []time.Time
-	restartMu          sync.Mutex
+	restartMu          deadlock.Mutex
 
 	// lifecycleListeners receives EventStarted / EventExited notifications.
 	lifecycleListeners   []LifecycleListener
-	lifecycleListenersMu sync.Mutex
+	lifecycleListenersMu deadlock.Mutex
 
 	// rateLimitCallbacksMu protects the rate limit event callback fields below.
-	rateLimitCallbacksMu sync.Mutex
+	rateLimitCallbacksMu deadlock.Mutex
 	// onRateLimitDetected is called (in a goroutine) when rate limit is detected.
 	// Wired by the server layer to publish events to the server event bus.
 	onRateLimitDetected func(sessionID string, resetTime time.Time)
@@ -2726,7 +2726,7 @@ func (i *Instance) StartController() error {
 	i.controllerManager.RegisterController(i.Title, controller)
 
 	// Wire rate limit callbacks from the server layer (if already set).
-	i.wireRateLimitCallbacks()
+	i.wireRateLimitCallbacks(controller)
 
 	log.InfoLog.Printf("Started ClaudeController for instance %s", i.Title)
 	return nil
@@ -2830,13 +2830,12 @@ func (i *Instance) SetRateLimitCallbacks(
 	i.rateLimitCallbacksMu.Unlock()
 
 	// If a controller is already running, wire immediately.
-	i.wireRateLimitCallbacks()
+	i.wireRateLimitCallbacks(i.GetController())
 }
 
 // wireRateLimitCallbacks wires the instance-level callbacks to the rate limit manager
 // inside the controller. Called both from SetRateLimitCallbacks and from controller startup.
-func (i *Instance) wireRateLimitCallbacks() {
-	ctrl := i.GetController()
+func (i *Instance) wireRateLimitCallbacks(ctrl *ClaudeController) {
 	if ctrl == nil {
 		return
 	}

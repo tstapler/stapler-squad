@@ -2,10 +2,10 @@ package session
 
 import (
 	"fmt"
+	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -17,7 +17,7 @@ type SessionHealthChecker struct {
 	// Recovery is only attempted after failureThreshold consecutive failures,
 	// preventing false-positive recoveries from transient check glitches.
 	failureCounts   map[string]int
-	failureCountsMu sync.Mutex
+	failureCountsMu deadlock.Mutex
 }
 
 // failureThreshold is the number of consecutive failed health checks before

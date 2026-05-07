@@ -57,10 +57,14 @@ func ExtractAllCommands(cmd string) []ParsedCommand {
 	f, err := syntax.NewParser().Parse(r, "")
 	if err != nil {
 		// Fallback: split on shell operators and treat each part as a raw command.
+		// Skip parts with no executable (env-var-only assignments like OWNER=val).
 		parts := splitCommandParts(cmd)
 		result := make([]ParsedCommand, 0, len(parts))
 		for _, p := range parts {
 			prog, _ := extractProgramAndSubcommand(p)
+			if prog == "" {
+				continue // bare env-var assignment or empty fragment — no-op
+			}
 			result = append(result, ParsedCommand{Program: prog, Raw: p})
 		}
 		return result
@@ -515,17 +519,19 @@ func ExtractInnerCommand(prog string, args []string) string {
 // (e.g., "gh pr create", "aws s3 cp", "kubectl get pods"). For these programs,
 // extractProgramAndSubcommand captures up to 2 positional subcommand tokens.
 var deepSubcommandPrograms = map[string]bool{
-	"gh":      true, // gh pr create, gh repo clone, gh workflow run
-	"aws":     true, // aws s3 cp, aws ec2 describe-instances
-	"gcloud":  true, // gcloud compute instances list
-	"az":      true, // az vm list, az group create
-	"doctl":   true, // doctl compute droplet list
-	"fly":     true, // fly apps list
-	"flyctl":  true, // flyctl apps list
-	"kubectl": true, // kubectl get pods, kubectl apply
-	"docker":  true, // docker container run, docker image pull
-	"heroku":  true, // heroku apps:info, heroku config:set
-	"ip":      true, // ip route show, ip addr add, ip link set
+	"gh":       true, // gh pr create, gh repo clone, gh workflow run
+	"aws":      true, // aws s3 cp, aws ec2 describe-instances
+	"gcloud":   true, // gcloud compute instances list
+	"az":       true, // az vm list, az group create
+	"doctl":    true, // doctl compute droplet list
+	"fly":      true, // fly apps list
+	"flyctl":   true, // flyctl apps list
+	"kubectl":  true, // kubectl get pods, kubectl apply
+	"docker":   true, // docker container run, docker image pull
+	"heroku":   true, // heroku apps:info, heroku config:set
+	"ip":       true, // ip route show, ip addr add, ip link set
+	"asdf":     true, // asdf plugin list, asdf plugin add, asdf list all
+	"localdev": true, // localdev ai-setup status, localdev ai-setup config get
 }
 
 // prefixFlagArgs maps programs to the set of flags that each consume one additional

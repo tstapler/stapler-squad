@@ -271,6 +271,17 @@ service SessionService {
   // Used for remote debugging of mobile browser sessions where DevTools are unavailable.
   // Always returns an empty response; malformed entries are silently discarded.
   rpc LogClientEvents(LogClientEventsRequest) returns (LogClientEventsResponse) {}
+
+  // Error Registry RPCs (E2-S5)
+
+  // ListErrors returns persisted RPC error events ordered by last_seen descending.
+  // Unacknowledged errors are returned by default; set include_acknowledged=true
+  // to include all events.
+  rpc ListErrors(ListErrorsRequest) returns (ListErrorsResponse) {}
+
+  // AcknowledgeError marks an error event as acknowledged so it no longer appears
+  // in the default (unacknowledged) listing.
+  rpc AcknowledgeError(AcknowledgeErrorRequest) returns (AcknowledgeErrorResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -1740,6 +1751,38 @@ message LogClientEventsRequest {
 }
 
 message LogClientEventsResponse {}
+
+// ============================================================================
+// E2-S5: Error Registry Messages
+// ============================================================================
+
+message ListErrorsRequest {
+  // When true, acknowledged error events are included in the response.
+  bool include_acknowledged = 1;
+}
+
+// ErrorEventRecord is the wire representation of a persisted RPC error.
+message ErrorEventRecord {
+  string fingerprint = 1;
+  string error_type = 2;
+  string message = 3;
+  string stack_trace = 4;
+  string rpc_procedure = 5;
+  int32 occurrence_count = 6;
+  google.protobuf.Timestamp first_seen = 7;
+  google.protobuf.Timestamp last_seen = 8;
+  bool acknowledged = 9;
+}
+
+message ListErrorsResponse {
+  repeated ErrorEventRecord errors = 1;
+}
+
+message AcknowledgeErrorRequest {
+  string fingerprint = 1;
+}
+
+message AcknowledgeErrorResponse {}
 
 // ClearConversationStateRequest identifies the session whose conversation UUID should be cleared.
 message ClearConversationStateRequest {

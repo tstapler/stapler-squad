@@ -1,5 +1,7 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
 	"fmt"
@@ -72,7 +74,7 @@ type ReviewQueuePoller struct {
 	// `tmux list-panes -a` call (fetched once per checkSessions tick) is the change
 	// signal. A capture-pane subprocess is spawned only when that timestamp advances.
 	// A 30s TTL acts as a safety fallback when list-panes is unavailable.
-	cacheMu              sync.Mutex
+	cacheMu              deadlock.Mutex
 	lastSeenActivity     map[string]time.Time // per-session: last IdleDetector.lastActivity seen
 	lastSeenPaneActivity map[string]time.Time // per-session: last #{pane_last_activity} seen
 	cachedContent        map[string]string    // per-session: content from last Preview() call
@@ -81,7 +83,7 @@ type ReviewQueuePoller struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	mu     sync.RWMutex
+	mu     deadlock.RWMutex
 
 	// activityCh is an optional channel that signals the poll loop to snap back to
 	// the fast interval. Wired by ReactiveQueueManager on EventApprovalResponse and

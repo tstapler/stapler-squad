@@ -10,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/errorevent"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/schema"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -121,6 +122,16 @@ func init() {
 	diffstatsDescRemoved := diffstatsFields[1].Descriptor()
 	// diffstats.DefaultRemoved holds the default value on creation for the removed field.
 	diffstats.DefaultRemoved = diffstatsDescRemoved.Default.(int)
+	erroreventFields := schema.ErrorEvent{}.Fields()
+	_ = erroreventFields
+	// erroreventDescOccurrenceCount is the schema descriptor for occurrence_count field.
+	erroreventDescOccurrenceCount := erroreventFields[5].Descriptor()
+	// errorevent.DefaultOccurrenceCount holds the default value on creation for the occurrence_count field.
+	errorevent.DefaultOccurrenceCount = erroreventDescOccurrenceCount.Default.(int)
+	// erroreventDescAcknowledged is the schema descriptor for acknowledged field.
+	erroreventDescAcknowledged := erroreventFields[8].Descriptor()
+	// errorevent.DefaultAcknowledged holds the default value on creation for the acknowledged field.
+	errorevent.DefaultAcknowledged = erroreventDescAcknowledged.Default.(bool)
 	projectFields := schema.Project{}.Fields()
 	_ = projectFields
 	// projectDescName is the schema descriptor for name field.

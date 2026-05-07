@@ -177,6 +177,38 @@ var (
 			},
 		},
 	}
+	// ErrorEventsColumns holds the columns for the "error_events" table.
+	ErrorEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "fingerprint", Type: field.TypeString, Unique: true},
+		{Name: "error_type", Type: field.TypeString},
+		{Name: "message", Type: field.TypeString},
+		{Name: "stack_trace", Type: field.TypeString, Size: 2147483647},
+		{Name: "rpc_procedure", Type: field.TypeString, Nullable: true},
+		{Name: "occurrence_count", Type: field.TypeInt, Default: 1},
+		{Name: "first_seen", Type: field.TypeTime},
+		{Name: "last_seen", Type: field.TypeTime},
+		{Name: "acknowledged", Type: field.TypeBool, Default: false},
+		{Name: "acknowledged_at", Type: field.TypeTime, Nullable: true},
+	}
+	// ErrorEventsTable holds the schema information for the "error_events" table.
+	ErrorEventsTable = &schema.Table{
+		Name:       "error_events",
+		Columns:    ErrorEventsColumns,
+		PrimaryKey: []*schema.Column{ErrorEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "errorevent_last_seen",
+				Unique:  false,
+				Columns: []*schema.Column{ErrorEventsColumns[8]},
+			},
+			{
+				Name:    "errorevent_acknowledged",
+				Unique:  false,
+				Columns: []*schema.Column{ErrorEventsColumns[9]},
+			},
+		},
+	}
 	// ProjectsColumns holds the columns for the "projects" table.
 	ProjectsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -354,6 +386,7 @@ var (
 		ClaudeMetadataTable,
 		ClaudeSessionsTable,
 		DiffStatsTable,
+		ErrorEventsTable,
 		ProjectsTable,
 		SessionsTable,
 		TagsTable,

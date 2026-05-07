@@ -21,6 +21,9 @@ type ClaudeSession func(*sql.Selector)
 // DiffStats is the predicate function for diffstats builders.
 type DiffStats func(*sql.Selector)
 
+// ErrorEvent is the predicate function for errorevent builders.
+type ErrorEvent func(*sql.Selector)
+
 // Project is the predicate function for project builders.
 type Project func(*sql.Selector)
 

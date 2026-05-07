@@ -1,8 +1,9 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 
@@ -181,7 +182,7 @@ func TestCommandExecutor_ExecuteSimpleCommand(t *testing.T) {
 	defer executor.Stop()
 
 	// Track execution results
-	var resultMu sync.Mutex
+	var resultMu deadlock.Mutex
 	var executionResult *ExecutionResult
 	executor.SetResultCallback(func(result *ExecutionResult) {
 		resultMu.Lock()
@@ -404,7 +405,7 @@ func TestCommandExecutor_Timeout(t *testing.T) {
 	executor.Start(ctx)
 	defer executor.Stop()
 
-	var resultMu sync.Mutex
+	var resultMu deadlock.Mutex
 	var executionResult *ExecutionResult
 	executor.SetResultCallback(func(result *ExecutionResult) {
 		resultMu.Lock()
@@ -531,7 +532,7 @@ func TestCommandExecutor_StatusDetection(t *testing.T) {
 	executor.Start(ctx)
 	defer executor.Stop()
 
-	var resultMu sync.Mutex
+	var resultMu deadlock.Mutex
 	var executionResult *ExecutionResult
 	executor.SetResultCallback(func(result *ExecutionResult) {
 		resultMu.Lock()

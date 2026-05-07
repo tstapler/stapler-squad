@@ -3,28 +3,28 @@ package unfinished
 import (
 	"time"
 
-	"github.com/tstapler/stapler-squad/server/events"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
 
 const (
 	// EventUnfinishedWorkUpdated is published when a worktree scan result changes.
-	EventUnfinishedWorkUpdated events.EventType = "unfinished.work_updated"
+	EventUnfinishedWorkUpdated pkgevents.EventType = "unfinished.work_updated"
 	// EventUnfinishedWorkRemoved is published when a worktree is dismissed/snoozed/gone.
-	EventUnfinishedWorkRemoved events.EventType = "unfinished.work_removed"
+	EventUnfinishedWorkRemoved pkgevents.EventType = "unfinished.work_removed"
 	// EventUnfinishedScanCompleted is published after each full scan pass.
-	EventUnfinishedScanCompleted events.EventType = "unfinished.scan_completed"
+	EventUnfinishedScanCompleted pkgevents.EventType = "unfinished.scan_completed"
 )
 
-// UnfinishedEvent extends events.Event with extra fields for unfinished-work events.
-// It reuses the existing events.Event type by embedding the ScanResult in Context.
+// UnfinishedEvent extends pkgevents.Event with extra fields for unfinished-work events.
+// It reuses the existing pkgevents.Event type by embedding the ScanResult in Context.
 type UnfinishedEvent struct {
-	events.Event
+	pkgevents.Event
 	ScanResult  ScanResult
 	CompletedAt time.Time
 }
 
-func newUnfinishedWorkUpdatedEvent(r ScanResult) *events.Event {
-	return &events.Event{
+func newUnfinishedWorkUpdatedEvent(r ScanResult) *pkgevents.Event {
+	return &pkgevents.Event{
 		Type:      EventUnfinishedWorkUpdated,
 		Timestamp: time.Now(),
 		Context:   r.RepoPath + "|" + r.Branch,
@@ -32,8 +32,8 @@ func newUnfinishedWorkUpdatedEvent(r ScanResult) *events.Event {
 	}
 }
 
-func newScanCompletedEvent() *events.Event {
-	return &events.Event{
+func newScanCompletedEvent() *pkgevents.Event {
+	return &pkgevents.Event{
 		Type:      EventUnfinishedScanCompleted,
 		Timestamp: time.Now(),
 	}

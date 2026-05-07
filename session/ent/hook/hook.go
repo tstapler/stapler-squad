@@ -69,6 +69,18 @@ func (f DiffStatsFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, e
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.DiffStatsMutation", m)
 }
 
+// The ErrorEventFunc type is an adapter to allow the use of ordinary
+// function as ErrorEvent mutator.
+type ErrorEventFunc func(context.Context, *ent.ErrorEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ErrorEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ErrorEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ErrorEventMutation", m)
+}
+
 // The ProjectFunc type is an adapter to allow the use of ordinary
 // function as Project mutator.
 type ProjectFunc func(context.Context, *ent.ProjectMutation) (ent.Value, error)

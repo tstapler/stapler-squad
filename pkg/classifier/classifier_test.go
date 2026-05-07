@@ -2179,13 +2179,13 @@ func TestClassify_Source_Escalate(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	ctx := ClassificationContext{}
 
-	cmds := []string{
+	// Generic shell scripts are escalated.
+	escalateCmds := []string{
 		"source ~/.bashrc",
-		"source .venv/bin/activate",
 		". ~/.profile",
 		". /etc/environment",
 	}
-	for _, cmd := range cmds {
+	for _, cmd := range escalateCmds {
 		payload := PermissionRequestPayload{
 			ToolName:  "Bash",
 			ToolInput: map[string]interface{}{"command": cmd},
@@ -2198,19 +2198,36 @@ func TestClassify_Source_Escalate(t *testing.T) {
 			t.Errorf("cmd %q: expected non-empty Alternative for source escalation", cmd)
 		}
 	}
+
+	// Virtualenv activation scripts are auto-allowed (they only modify PATH).
+	allowCmds := []string{
+		"source .venv/bin/activate",
+		". .venv/bin/activate",
+		"source /tmp/myenv/bin/activate",
+	}
+	for _, cmd := range allowCmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("cmd %q: expected AutoAllow for venv activation, got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
+	}
 }
 
 func TestClassify_Asdf_Escalate(t *testing.T) {
 	c := NewRuleBasedClassifier()
 	ctx := ClassificationContext{}
 
-	cmds := []string{
+	// Write/install operations must escalate.
+	escalateCmds := []string{
 		"asdf install python 3.11.0",
 		"asdf global python 3.11.0",
-		"asdf list",
 		"asdf plugin add nodejs",
 	}
-	for _, cmd := range cmds {
+	for _, cmd := range escalateCmds {
 		payload := PermissionRequestPayload{
 			ToolName:  "Bash",
 			ToolInput: map[string]interface{}{"command": cmd},
@@ -2218,6 +2235,25 @@ func TestClassify_Asdf_Escalate(t *testing.T) {
 		result := c.Classify(payload, ctx)
 		if result.Decision != Escalate {
 			t.Errorf("cmd %q: expected Escalate, got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
+	}
+
+	// Read-only inspection commands are auto-allowed.
+	allowCmds := []string{
+		"asdf list",
+		"asdf current",
+		"asdf which python",
+		"asdf plugin list",
+		"asdf version",
+	}
+	for _, cmd := range allowCmds {
+		payload := PermissionRequestPayload{
+			ToolName:  "Bash",
+			ToolInput: map[string]interface{}{"command": cmd},
+		}
+		result := c.Classify(payload, ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("cmd %q: expected AutoAllow, got %v (rule=%s)", cmd, result.Decision, result.RuleID)
 		}
 	}
 }

@@ -1,8 +1,9 @@
 package tmux
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -30,9 +31,9 @@ func (l ForkPressureLevel) String() string {
 const (
 	forkPressureWindow         = 30 * time.Second
 	forkAlertCooldown          = 2 * time.Minute
-	spawnFailureAlertThreshold = 5  // failures/window → critical
-	spawnRateWarnThreshold     = 60 // spawns/window → warning (2/s avg)
-	zombieAlertThreshold       = 3  // zombie children/window → alert
+	spawnFailureAlertThreshold = 10 // failures/window → critical
+	spawnRateWarnThreshold     = 120 // spawns/window → warning (4/s avg)
+	zombieAlertThreshold       = 10 // zombie children/window → alert
 )
 
 // ForkPressureStats is a point-in-time snapshot of fork pressure metrics.
@@ -53,7 +54,7 @@ type AlertFunc func(level ForkPressureLevel, stats ForkPressureStats)
 
 // timestampRing is a fixed-size ring buffer for counting events in a sliding window.
 type timestampRing struct {
-	mu   sync.Mutex
+	mu   deadlock.Mutex
 	buf  []time.Time
 	head int
 }
@@ -91,7 +92,7 @@ type spawnEntry struct {
 // is responsible. Keyed by PID; entries added via TrackChildPID after cmd.Start()
 // and removed via UntrackChildPID after cmd.Wait().
 var spawnRegistry struct {
-	mu      sync.Mutex
+	mu      deadlock.Mutex
 	entries map[int]spawnEntry
 }
 
@@ -138,7 +139,7 @@ var forkMonitor = struct {
 	spawnRing     *timestampRing
 	failureRing   *timestampRing
 	zombieRing    *timestampRing
-	alertMu       sync.Mutex
+	alertMu       deadlock.Mutex
 	lastAlertAt   time.Time
 	alertFns      []AlertFunc
 }{

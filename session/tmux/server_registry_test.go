@@ -1,5 +1,7 @@
 package tmux
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"bufio"
 	"context"
@@ -42,7 +44,7 @@ func newTestRegistry(t *testing.T) (*TmuxServerRegistry, func(line string)) {
 // newPipe returns a synchronised reader/writer pair backed by a strings.Builder
 // that blocks reads until data is available.
 type syncPipe struct {
-	mu   sync.Mutex
+	mu   deadlock.Mutex
 	cond *sync.Cond
 	buf  []byte
 	done bool

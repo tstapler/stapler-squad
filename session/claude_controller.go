@@ -1,12 +1,13 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
 	"fmt"
 	"hash/fnv"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -71,7 +72,7 @@ type ClaudeController struct {
 	onEOFCallback    func() // Fired when the ResponseStream PTY exits unexpectedly
 	statusCache      statusCacheEntry
 	idleCache        idleCacheEntry
-	mu               sync.RWMutex
+	mu               deadlock.RWMutex
 	ctx              context.Context
 	cancel           context.CancelFunc
 }

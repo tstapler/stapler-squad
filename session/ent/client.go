@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/errorevent"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
@@ -41,6 +42,8 @@ type Client struct {
 	ClaudeSession *ClaudeSessionClient
 	// DiffStats is the client for interacting with the DiffStats builders.
 	DiffStats *DiffStatsClient
+	// ErrorEvent is the client for interacting with the ErrorEvent builders.
+	ErrorEvent *ErrorEventClient
 	// Project is the client for interacting with the Project builders.
 	Project *ProjectClient
 	// Session is the client for interacting with the Session builders.
@@ -65,6 +68,7 @@ func (c *Client) init() {
 	c.ClaudeMetadata = NewClaudeMetadataClient(c.config)
 	c.ClaudeSession = NewClaudeSessionClient(c.config)
 	c.DiffStats = NewDiffStatsClient(c.config)
+	c.ErrorEvent = NewErrorEventClient(c.config)
 	c.Project = NewProjectClient(c.config)
 	c.Session = NewSessionClient(c.config)
 	c.Tag = NewTagClient(c.config)
@@ -166,6 +170,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
 		ClaudeSession:           NewClaudeSessionClient(cfg),
 		DiffStats:               NewDiffStatsClient(cfg),
+		ErrorEvent:              NewErrorEventClient(cfg),
 		Project:                 NewProjectClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		Tag:                     NewTagClient(cfg),
@@ -194,6 +199,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
 		ClaudeSession:           NewClaudeSessionClient(cfg),
 		DiffStats:               NewDiffStatsClient(cfg),
+		ErrorEvent:              NewErrorEventClient(cfg),
 		Project:                 NewProjectClient(cfg),
 		Session:                 NewSessionClient(cfg),
 		Tag:                     NewTagClient(cfg),
@@ -228,7 +234,7 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession,
-		c.DiffStats, c.Project, c.Session, c.Tag, c.Worktree,
+		c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -239,7 +245,7 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession,
-		c.DiffStats, c.Project, c.Session, c.Tag, c.Worktree,
+		c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -258,6 +264,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.ClaudeSession.mutate(ctx, m)
 	case *DiffStatsMutation:
 		return c.DiffStats.mutate(ctx, m)
+	case *ErrorEventMutation:
+		return c.ErrorEvent.mutate(ctx, m)
 	case *ProjectMutation:
 		return c.Project.mutate(ctx, m)
 	case *SessionMutation:
@@ -1000,6 +1008,139 @@ func (c *DiffStatsClient) mutate(ctx context.Context, m *DiffStatsMutation) (Val
 	}
 }
 
+// ErrorEventClient is a client for the ErrorEvent schema.
+type ErrorEventClient struct {
+	config
+}
+
+// NewErrorEventClient returns a client for the ErrorEvent from the given config.
+func NewErrorEventClient(c config) *ErrorEventClient {
+	return &ErrorEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `errorevent.Hooks(f(g(h())))`.
+func (c *ErrorEventClient) Use(hooks ...Hook) {
+	c.hooks.ErrorEvent = append(c.hooks.ErrorEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `errorevent.Intercept(f(g(h())))`.
+func (c *ErrorEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ErrorEvent = append(c.inters.ErrorEvent, interceptors...)
+}
+
+// Create returns a builder for creating a ErrorEvent entity.
+func (c *ErrorEventClient) Create() *ErrorEventCreate {
+	mutation := newErrorEventMutation(c.config, OpCreate)
+	return &ErrorEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ErrorEvent entities.
+func (c *ErrorEventClient) CreateBulk(builders ...*ErrorEventCreate) *ErrorEventCreateBulk {
+	return &ErrorEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ErrorEventClient) MapCreateBulk(slice any, setFunc func(*ErrorEventCreate, int)) *ErrorEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ErrorEventCreateBulk{err: fmt.Errorf("calling to ErrorEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ErrorEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ErrorEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ErrorEvent.
+func (c *ErrorEventClient) Update() *ErrorEventUpdate {
+	mutation := newErrorEventMutation(c.config, OpUpdate)
+	return &ErrorEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ErrorEventClient) UpdateOne(_m *ErrorEvent) *ErrorEventUpdateOne {
+	mutation := newErrorEventMutation(c.config, OpUpdateOne, withErrorEvent(_m))
+	return &ErrorEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ErrorEventClient) UpdateOneID(id int) *ErrorEventUpdateOne {
+	mutation := newErrorEventMutation(c.config, OpUpdateOne, withErrorEventID(id))
+	return &ErrorEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ErrorEvent.
+func (c *ErrorEventClient) Delete() *ErrorEventDelete {
+	mutation := newErrorEventMutation(c.config, OpDelete)
+	return &ErrorEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ErrorEventClient) DeleteOne(_m *ErrorEvent) *ErrorEventDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ErrorEventClient) DeleteOneID(id int) *ErrorEventDeleteOne {
+	builder := c.Delete().Where(errorevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ErrorEventDeleteOne{builder}
+}
+
+// Query returns a query builder for ErrorEvent.
+func (c *ErrorEventClient) Query() *ErrorEventQuery {
+	return &ErrorEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeErrorEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ErrorEvent entity by its id.
+func (c *ErrorEventClient) Get(ctx context.Context, id int) (*ErrorEvent, error) {
+	return c.Query().Where(errorevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ErrorEventClient) GetX(ctx context.Context, id int) *ErrorEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *ErrorEventClient) Hooks() []Hook {
+	return c.hooks.ErrorEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *ErrorEventClient) Interceptors() []Interceptor {
+	return c.inters.ErrorEvent
+}
+
+func (c *ErrorEventClient) mutate(ctx context.Context, m *ErrorEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ErrorEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ErrorEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ErrorEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ErrorEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ErrorEvent mutation op: %q", m.Op())
+	}
+}
+
 // ProjectClient is a client for the Project schema.
 type ProjectClient struct {
 	config
@@ -1664,10 +1805,10 @@ func (c *WorktreeClient) mutate(ctx context.Context, m *WorktreeMutation) (Value
 type (
 	hooks struct {
 		ApprovalRule, ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats,
-		Project, Session, Tag, Worktree []ent.Hook
+		ErrorEvent, Project, Session, Tag, Worktree []ent.Hook
 	}
 	inters struct {
 		ApprovalRule, ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats,
-		Project, Session, Tag, Worktree []ent.Interceptor
+		ErrorEvent, Project, Session, Tag, Worktree []ent.Interceptor
 	}
 )

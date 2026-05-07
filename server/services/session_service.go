@@ -22,6 +22,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
@@ -97,6 +98,10 @@ type SessionService struct {
 
 	// branchCache caches git branch lists per repo path. ADR-002.
 	branchCache sync.Map // map[string]branchCacheEntry
+
+	// errorRegistry persists deduplicated RPC errors to SQLite.
+	// May be nil when wired without an ent-backed storage (e.g. in tests).
+	errorRegistry *ErrorRegistry
 }
 
 // scrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -252,6 +257,20 @@ func NewSessionServiceFromConfig() (*SessionService, error) {
 	return NewSessionService(storage, eventBus), nil
 }
 
+// NewSessionServiceWithEntClient creates a SessionService from a pre-existing *ent.Client.
+// Use this when the caller already opened a database (e.g. in tests or when sharing a
+// connection) and wants to bypass the config-based path discovery in NewSessionServiceFromConfig.
+func NewSessionServiceWithEntClient(entClient *ent.Client) (*SessionService, error) {
+	config.EnsureWorkspaceMeta()
+	repo := session.NewEntRepositoryFromClient(entClient)
+	storage, err := session.NewStorageWithRepository(repo)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize storage with provided ent client: %w", err)
+	}
+	eventBus := events.NewEventBus(100)
+	return NewSessionService(storage, eventBus), nil
+}
+
 // GetStorage returns the concrete *session.Storage for components that haven't migrated to InstanceStore yet.
 // Returns nil when SessionService was constructed with a fake InstanceStore (e.g., in unit tests).
 // Prefer using the session.InstanceStore interface via GetInstanceStore() for new code.
@@ -297,6 +316,12 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 		return nil
 	}
 	return s.rulesSvc.analyticsStore
+}
+
+// SetErrorRegistry wires the ErrorRegistry so the service can expose ListErrors and
+// AcknowledgeError RPCs.  Must be called before the first RPC request.
+func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
+	s.errorRegistry = r
 }
 
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the
@@ -2698,8 +2723,8 @@ func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
 			notifID := fmt.Sprintf("rl-detect-%s", sessionID)
 			s.eventBus.Publish(events.NewNotificationEvent(
 				sessionID, inst.Title, notifID,
-				int32(8),  // NotificationType_WARNING
-				int32(3),  // NotificationPriority_HIGH
+				int32(8), // NotificationType_WARNING
+				int32(3), // NotificationPriority_HIGH
 				title,
 				fmt.Sprintf("Session hit the usage limit%s.", resetMsg),
 				nil,
@@ -2732,6 +2757,7 @@ func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
 	)
 }
 
+
 // logClientEntry writes a single browser log entry to the server log.
 func logClientEntry(e *sessionv1.ClientLogEntry) {
 	msg := sanitizeClientLogField(e.GetMessage(), 200)
@@ -2757,4 +2783,54 @@ func sanitizeClientLogField(s string, maxLen int) string {
 		return string(runes[:maxLen]) + "…"
 	}
 	return s
+}
+
+// +api: errors:list
+// ListErrors returns persisted RPC error events from SQLite, ordered by last_seen desc.
+func (s *SessionService) ListErrors(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListErrorsRequest],
+) (*connect.Response[sessionv1.ListErrorsResponse], error) {
+	if s.errorRegistry == nil {
+		return connect.NewResponse(&sessionv1.ListErrorsResponse{}), nil
+	}
+	events, err := s.errorRegistry.List(ctx, req.Msg.GetIncludeAcknowledged())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	records := make([]*sessionv1.ErrorEventRecord, 0, len(events))
+	for _, e := range events {
+		rec := &sessionv1.ErrorEventRecord{
+			Fingerprint:     e.Fingerprint,
+			ErrorType:       e.ErrorType,
+			Message:         e.Message,
+			StackTrace:      e.StackTrace,
+			RpcProcedure:    e.RPCProcedure,
+			OccurrenceCount: int32(e.OccurrenceCount),
+			Acknowledged:    e.Acknowledged,
+		}
+		if !e.FirstSeen.IsZero() {
+			rec.FirstSeen = timestamppb.New(e.FirstSeen)
+		}
+		if !e.LastSeen.IsZero() {
+			rec.LastSeen = timestamppb.New(e.LastSeen)
+		}
+		records = append(records, rec)
+	}
+	return connect.NewResponse(&sessionv1.ListErrorsResponse{Errors: records}), nil
+}
+
+// +api: errors:acknowledge
+// AcknowledgeError marks a persisted error event as acknowledged.
+func (s *SessionService) AcknowledgeError(
+	ctx context.Context,
+	req *connect.Request[sessionv1.AcknowledgeErrorRequest],
+) (*connect.Response[sessionv1.AcknowledgeErrorResponse], error) {
+	if s.errorRegistry == nil {
+		return connect.NewResponse(&sessionv1.AcknowledgeErrorResponse{}), nil
+	}
+	if err := s.errorRegistry.Acknowledge(ctx, req.Msg.GetFingerprint()); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&sessionv1.AcknowledgeErrorResponse{}), nil
 }

@@ -18,6 +18,7 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.reviewQueue, label: "Review Queue", shortLabel: "Review", icon: "📋" },
   { href: routes.rules,       label: "Rules",        icon: "📜" },
   { href: routes.logs,        label: "Logs",         icon: "📋", mobileNav: false },
+  { href: routes.errors,      label: "Errors",       icon: "⚠", mobileNav: false },
   { href: routes.history,     label: "History",      icon: "🕐" },
   { href: routes.config,      label: "Config",       icon: "⚙" },
   { href: routes.settings,    label: "Settings",     icon: "⚙", mobileNav: false },

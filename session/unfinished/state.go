@@ -1,5 +1,7 @@
 package unfinished
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
 	"crypto/sha256"
@@ -8,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor"
@@ -52,7 +53,7 @@ type unfinishedState struct {
 // StateStore manages persistent state for the unfinished-work feature.
 // All public methods are thread-safe.
 type StateStore struct {
-	mu    sync.RWMutex
+	mu    deadlock.RWMutex
 	path  string
 	state unfinishedState
 }

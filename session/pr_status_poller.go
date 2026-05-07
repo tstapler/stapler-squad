@@ -1,5 +1,7 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
 	"errors"
@@ -56,7 +58,7 @@ type PRStatusPoller struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	mu     sync.RWMutex
+	mu     deadlock.RWMutex
 }
 
 // NewPRStatusPoller creates a new poller with default configuration.

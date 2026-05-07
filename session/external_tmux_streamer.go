@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -32,18 +33,18 @@ type ExternalTmuxStreamer struct {
 
 	// Content tracking for change detection
 	lastContent   string
-	lastContentMu sync.RWMutex
+	lastContentMu deadlock.RWMutex
 
 	// Consumers receive content updates (keyed by token for reliable removal)
 	consumers   map[string]func(content string)
-	consumersMu sync.RWMutex
+	consumersMu deadlock.RWMutex
 
 	// Lifecycle
 	ctx       context.Context
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	running   bool
-	runningMu sync.Mutex
+	runningMu deadlock.Mutex
 
 	// Control mode infrastructure
 	controlModeCmd    *exec.Cmd

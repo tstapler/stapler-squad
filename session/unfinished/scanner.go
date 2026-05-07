@@ -2,6 +2,8 @@
 // uncommitted changes, commits ahead of the default branch, or commits behind.
 package unfinished
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"context"
 	"fmt"
@@ -17,7 +19,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/server/events"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
 
 // ScanResultStatus describes the quality of a scan result.
@@ -148,7 +150,7 @@ type Scanner struct {
 	cacheStore   sync.Map // map[string]*worktreeCache (key = worktreePath)
 	breakerStore sync.Map // map[string]*circuitBreaker (key = repoPath)
 
-	eventBus   *events.EventBus
+	eventBus   *pkgevents.EventBus
 	stateStore *StateStore
 
 	triggerCh  chan struct{}  // signals coordinator to run a full scan now
@@ -162,11 +164,11 @@ type Scanner struct {
 	// autoSpiderEnabled controls whether SessionCreated/Updated events trigger scans.
 	autoSpiderEnabled atomic.Bool
 
-	mu sync.RWMutex
+	mu deadlock.RWMutex
 }
 
 // NewScanner constructs a Scanner. Call Start(ctx) to begin background processing.
-func NewScanner(eventBus *events.EventBus, stateStore *StateStore) *Scanner {
+func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore) *Scanner {
 	s := &Scanner{
 		scanQueue:    make(chan scanTask, 50),
 		eventBus:     eventBus,
@@ -636,7 +638,7 @@ func (s *Scanner) subscribeToSessionEvents(ctx context.Context) {
 			if !s.autoSpiderEnabled.Load() {
 				continue
 			}
-			if evt.Type != events.EventSessionCreated && evt.Type != events.EventSessionUpdated {
+			if evt.Type != pkgevents.EventSessionCreated && evt.Type != pkgevents.EventSessionUpdated {
 				continue
 			}
 			if evt.Session == nil || evt.Session.Path == "" {
@@ -688,7 +690,7 @@ func (s *Scanner) InvalidateCache(worktreePath string) {
 // --- Circuit breaker ---
 
 type circuitBreaker struct {
-	mu                  sync.Mutex
+	mu                  deadlock.Mutex
 	consecutiveTimeouts int
 	backoffUntil        time.Time
 }

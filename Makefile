@@ -45,7 +45,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service uninstall-service coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux
+.PHONY: help build test benchmark install-tools lint lint-custom analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service uninstall-service coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux vet-architecture vet-rpc-markers coverage-integration
 
 # Default target
 help: ## Show this help message
@@ -333,6 +333,22 @@ test-race: ensure-tools proto-gen ## Run tests with race detector enabled (skips
 test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
 	go test -race -tags integration ./...
 
+coverage-integration: ensure-tools proto-gen ## Build instrumented binary, run integration tests, emit integration.out
+	@mkdir -p /tmp/covdata
+	go build -cover -o stapler-squad-cov .
+	@echo "Starting instrumented binary..."
+	GOCOVERDIR=/tmp/covdata STAPLER_SQUAD_INSTANCE=cov-$$PPID ./stapler-squad-cov &
+	@sleep 2
+	@echo "Running integration tests against instrumented binary..."
+	go test -race -tags integration ./... || true
+	@echo "Stopping instrumented binary..."
+	@pkill -f stapler-squad-cov || true
+	@sleep 1
+	go tool covdata textfmt -i=/tmp/covdata -o integration.out
+	@echo "✅ Integration coverage written to integration.out"
+	@rm -f stapler-squad-cov
+	@rm -rf /tmp/covdata
+
 test-ux-polish: ## Run tests registered in docs/registry/features/ (no server/tmux required)
 	@RUN=$$(python3 -c "import json,glob; ids=[t for p in glob.glob('docs/registry/features/backend/**/*.json',recursive=True) for t in json.load(open(p)).get('testIds',[])]; print('|'.join(sorted(set(ids))))"); \
 	echo "Running: $$RUN"; \
@@ -361,6 +377,30 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
+.PHONY: vet-architecture
+vet-architecture: ## Run all architectural lint checks (depguard + import cycle check)
+	golangci-lint run --enable depguard ./...
+	go build ./...
+
+.PHONY: vet-rpc-markers
+vet-rpc-markers: registry-generate-backend ## Check that all RPC handlers have a // +api: marker (advisory)
+	@missing=0; \
+	for f in $$(find $(BACKEND_FEATURES_DIR) -name "*.json"); do \
+		if jq -e '.markerFound == false' "$$f" > /dev/null 2>&1; then \
+			id=$$(jq -r '.id' "$$f"); method=$$(jq -r '.method' "$$f"); \
+			echo "MISSING MARKER  $$id  ($$method)"; \
+			echo "  Add:  // +api: $$id  to the handler in server/services/"; \
+			missing=$$((missing + 1)); \
+		fi; \
+	done; \
+	if [ "$$missing" -gt 0 ]; then \
+		echo ""; \
+		echo "$$missing RPC handler(s) missing // +api: marker."; \
+		exit 1; \
+	else \
+		echo "✅ All RPC handlers have +api: markers."; \
+	fi
+
 lint: ensure-tools proto-gen server/web/dist lint-custom ## Run golangci-lint with comprehensive checks
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
@@ -370,16 +410,24 @@ lint: ensure-tools proto-gen server/web/dist lint-custom ## Run golangci-lint wi
 	fi; \
 	golangci-lint run --enable=nilnil,staticcheck,ineffassign,govet
 
-HOTPOLLLOG_BIN := $(CURDIR)/bin/hotpolllog-lint
+HOTPOLLLOG_BIN       := $(CURDIR)/bin/hotpolllog-lint
+NOCOMMANDPATTERN_BIN := $(CURDIR)/bin/nocommandpattern-lint
 
-lint-custom: $(HOTPOLLLOG_BIN) ## Run project-specific custom linters (hotpolllog: detect DebugLog in select-case hot loops)
+lint-custom: $(HOTPOLLLOG_BIN) $(NOCOMMANDPATTERN_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern)
 	@echo "Running custom lint: hotpolllog..."
 	@$(HOTPOLLLOG_BIN) ./...
 	@echo "hotpolllog: ok"
+	@echo "Running custom lint: nocommandpattern..."
+	@$(NOCOMMANDPATTERN_BIN) ./pkg/classifier/...
+	@echo "nocommandpattern: ok"
 
 $(HOTPOLLLOG_BIN):
 	@mkdir -p $(CURDIR)/bin
 	@cd tools/lint/hotpolllog && go build -o $(HOTPOLLLOG_BIN) ./cmd/hotpolllog
+
+$(NOCOMMANDPATTERN_BIN):
+	@mkdir -p $(CURDIR)/bin
+	@cd tools/lint/nocommandpattern && go build -o $(NOCOMMANDPATTERN_BIN) ./cmd/nocommandpattern
 
 lint-no-sleep-tests: ## ADR-003 audit: count time.Sleep calls in test files outside testutil/ (target: 0)
 	@violations=$$(grep -rn 'time\.Sleep(' --include='*_test.go' . \
@@ -477,7 +525,7 @@ ci: build test test-race vet lint test-integration fmt-check registry-generate #
 quick-check: build test-coverage test-race lint ## Quick development validation
 	@echo "✅ Quick validation complete"
 
-pre-commit: format vet test test-race lint ## Pre-commit validation
+pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation
 	@echo "✅ Pre-commit checks passed"
 
 # Debugging and profiling

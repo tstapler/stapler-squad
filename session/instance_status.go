@@ -1,10 +1,11 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"fmt"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
-	"sync"
 )
 
 // InstanceStatusInfo provides extended status information for an instance.
@@ -22,7 +23,7 @@ type InstanceStatusInfo struct {
 // InstanceStatusManager manages status information for instances.
 type InstanceStatusManager struct {
 	controllers map[string]*ClaudeController // Map of instance title to controller
-	mu          sync.RWMutex
+	mu          deadlock.RWMutex
 }
 
 // NewInstanceStatusManager creates a new status manager.

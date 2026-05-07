@@ -4,9 +4,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
+	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -25,7 +25,7 @@ type HistoryLinker struct {
 	detector *HistoryFileDetector
 	watcher  *HistoryFileWatcher
 
-	mu        sync.RWMutex
+	mu        deadlock.RWMutex
 	instances []*Instance
 }
 

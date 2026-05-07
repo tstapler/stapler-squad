@@ -6,12 +6,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/linkdata/deadlock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/testutil/wait"
@@ -31,7 +31,7 @@ type StaplerSquadTester struct {
 	cmd         *exec.Cmd
 	pty         *os.File
 	output      strings.Builder
-	outputMux   sync.Mutex
+	outputMux   deadlock.Mutex
 	timeout     time.Duration
 	snapshotDir string
 	snapshotNum int

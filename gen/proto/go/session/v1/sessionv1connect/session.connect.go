@@ -255,6 +255,12 @@ const (
 	// SessionServiceLogClientEventsProcedure is the fully-qualified name of the SessionService's
 	// LogClientEvents RPC.
 	SessionServiceLogClientEventsProcedure = "/session.v1.SessionService/LogClientEvents"
+	// SessionServiceListErrorsProcedure is the fully-qualified name of the SessionService's ListErrors
+	// RPC.
+	SessionServiceListErrorsProcedure = "/session.v1.SessionService/ListErrors"
+	// SessionServiceAcknowledgeErrorProcedure is the fully-qualified name of the SessionService's
+	// AcknowledgeError RPC.
+	SessionServiceAcknowledgeErrorProcedure = "/session.v1.SessionService/AcknowledgeError"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -448,6 +454,13 @@ type SessionServiceClient interface {
 	// Used for remote debugging of mobile browser sessions where DevTools are unavailable.
 	// Always returns an empty response; malformed entries are silently discarded.
 	LogClientEvents(context.Context, *connect.Request[v1.LogClientEventsRequest]) (*connect.Response[v1.LogClientEventsResponse], error)
+	// ListErrors returns persisted RPC error events ordered by last_seen descending.
+	// Unacknowledged errors are returned by default; set include_acknowledged=true
+	// to include all events.
+	ListErrors(context.Context, *connect.Request[v1.ListErrorsRequest]) (*connect.Response[v1.ListErrorsResponse], error)
+	// AcknowledgeError marks an error event as acknowledged so it no longer appears
+	// in the default (unacknowledged) listing.
+	AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -911,6 +924,18 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("LogClientEvents")),
 			connect.WithClientOptions(opts...),
 		),
+		listErrors: connect.NewClient[v1.ListErrorsRequest, v1.ListErrorsResponse](
+			httpClient,
+			baseURL+SessionServiceListErrorsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ListErrors")),
+			connect.WithClientOptions(opts...),
+		),
+		acknowledgeError: connect.NewClient[v1.AcknowledgeErrorRequest, v1.AcknowledgeErrorResponse](
+			httpClient,
+			baseURL+SessionServiceAcknowledgeErrorProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("AcknowledgeError")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -991,6 +1016,8 @@ type sessionServiceClient struct {
 	listBranches             *connect.Client[v1.ListBranchesRequest, v1.ListBranchesResponse]
 	getTerminalSnapshot      *connect.Client[v1.GetTerminalSnapshotRequest, v1.GetTerminalSnapshotResponse]
 	logClientEvents          *connect.Client[v1.LogClientEventsRequest, v1.LogClientEventsResponse]
+	listErrors               *connect.Client[v1.ListErrorsRequest, v1.ListErrorsResponse]
+	acknowledgeError         *connect.Client[v1.AcknowledgeErrorRequest, v1.AcknowledgeErrorResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1368,6 +1395,16 @@ func (c *sessionServiceClient) LogClientEvents(ctx context.Context, req *connect
 	return c.logClientEvents.CallUnary(ctx, req)
 }
 
+// ListErrors calls session.v1.SessionService.ListErrors.
+func (c *sessionServiceClient) ListErrors(ctx context.Context, req *connect.Request[v1.ListErrorsRequest]) (*connect.Response[v1.ListErrorsResponse], error) {
+	return c.listErrors.CallUnary(ctx, req)
+}
+
+// AcknowledgeError calls session.v1.SessionService.AcknowledgeError.
+func (c *sessionServiceClient) AcknowledgeError(ctx context.Context, req *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error) {
+	return c.acknowledgeError.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -1559,6 +1596,13 @@ type SessionServiceHandler interface {
 	// Used for remote debugging of mobile browser sessions where DevTools are unavailable.
 	// Always returns an empty response; malformed entries are silently discarded.
 	LogClientEvents(context.Context, *connect.Request[v1.LogClientEventsRequest]) (*connect.Response[v1.LogClientEventsResponse], error)
+	// ListErrors returns persisted RPC error events ordered by last_seen descending.
+	// Unacknowledged errors are returned by default; set include_acknowledged=true
+	// to include all events.
+	ListErrors(context.Context, *connect.Request[v1.ListErrorsRequest]) (*connect.Response[v1.ListErrorsResponse], error)
+	// AcknowledgeError marks an error event as acknowledged so it no longer appears
+	// in the default (unacknowledged) listing.
+	AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2018,6 +2062,18 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("LogClientEvents")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceListErrorsHandler := connect.NewUnaryHandler(
+		SessionServiceListErrorsProcedure,
+		svc.ListErrors,
+		connect.WithSchema(sessionServiceMethods.ByName("ListErrors")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceAcknowledgeErrorHandler := connect.NewUnaryHandler(
+		SessionServiceAcknowledgeErrorProcedure,
+		svc.AcknowledgeError,
+		connect.WithSchema(sessionServiceMethods.ByName("AcknowledgeError")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -2170,6 +2226,10 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceGetTerminalSnapshotHandler.ServeHTTP(w, r)
 		case SessionServiceLogClientEventsProcedure:
 			sessionServiceLogClientEventsHandler.ServeHTTP(w, r)
+		case SessionServiceListErrorsProcedure:
+			sessionServiceListErrorsHandler.ServeHTTP(w, r)
+		case SessionServiceAcknowledgeErrorProcedure:
+			sessionServiceAcknowledgeErrorHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -2477,4 +2537,12 @@ func (UnimplementedSessionServiceHandler) GetTerminalSnapshot(context.Context, *
 
 func (UnimplementedSessionServiceHandler) LogClientEvents(context.Context, *connect.Request[v1.LogClientEventsRequest]) (*connect.Response[v1.LogClientEventsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.LogClientEvents is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ListErrors(context.Context, *connect.Request[v1.ListErrorsRequest]) (*connect.Response[v1.ListErrorsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ListErrors is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.AcknowledgeError is not implemented"))
 }

@@ -91,6 +91,20 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 	return repo, nil
 }
 
+// NewEntRepositoryFromClient wraps a pre-existing *ent.Client in an EntRepository.
+// The caller is responsible for running schema migration on the client beforehand.
+// Use this when you need to share an already-opened client across subsystems
+// (e.g. injecting a test client or reusing an existing connection).
+func NewEntRepositoryFromClient(client *ent.Client) *EntRepository {
+	return &EntRepository{client: client}
+}
+
+// GetEntClient returns the underlying *ent.Client so callers (e.g. ErrorRegistry)
+// can operate on entities not managed by the Repository interface.
+func (r *EntRepository) GetEntClient() *ent.Client {
+	return r.client
+}
+
 // Create inserts a new session into the database
 func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	// Start transaction
