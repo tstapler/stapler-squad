@@ -4,6 +4,7 @@
  * Covers:
  *  - TC-2.1: Scroll container div exists when session-list pane is rendered
  *  - TC-2.2: SessionList is rendered inside the scroll wrapper (descendant, not sibling)
+ *  - TC-2.3: Scroll wrapper does not set inline overflowX (REQ-2c)
  *  - TC-2.4: Non-session-list pane (session-detail) does not have the scroll wrapper
  */
 
@@ -106,6 +107,20 @@ describe("SessionListPaneBody — scroll wrapper", () => {
     const scrollWrapper = getByTestId("session-list-scroll");
     const sessionList = getByTestId("session-list");
     expect(scrollWrapper).toContainElement(sessionList);
+  });
+
+  it("SessionListPaneBody_should_notSetOverflowX_on_scrollWrapper", () => {
+    // TC-2.3: REQ-2c — scroll wrapper must not set inline overflowX;
+    // vanilla-extract controls Y-axis scroll only at build time.
+    const { getByTestId } = render(
+      <PaneSplitRenderer
+        state={sessionListPaneState}
+        dispatch={jest.fn()}
+        sessions={[makeSession("s1", "S1") as Session]}
+      />
+    );
+    const scrollWrapper = getByTestId("session-list-scroll");
+    expect(scrollWrapper.style.overflowX).toBe("");
   });
 
   it("SessionListPaneBody_should_notWrapNonSessionListPane", () => {
