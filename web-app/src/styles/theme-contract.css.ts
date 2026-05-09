@@ -57,6 +57,10 @@ export const vars = createThemeContract({
     inputText: null,
     placeholderColor: null,
 
+    // Glow / cyberpunk effects
+    glowPrimary: null,
+    glowSecondary: null,
+
     // Terminal (always dark — same value in both themes)
     terminalBackground: null,
     terminalForeground: null,
