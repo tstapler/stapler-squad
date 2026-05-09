@@ -102,14 +102,14 @@ export const sessionListScroll = style({
 export const resetLayoutBar = style({
   display: "flex",
   justifyContent: "flex-end",
-  padding: "2px 4px",
+  padding: `2px ${vars.space["1"]}`,
   flexShrink: 0,
   background: "transparent",
 });
 
 export const resetLayoutButton = style({
   fontSize: vars.fontSize.xs,
-  padding: "2px 6px",
+  padding: `2px ${vars.space["1"]}`,
   background: "transparent",
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.sm,
