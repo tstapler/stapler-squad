@@ -2,10 +2,9 @@
  * Tests for scroll wrapper in SessionListPaneBody (Bug 2 fix).
  *
  * Covers:
- *  - TC-2.1: Scroll container div (overflowY: "auto") exists when session-list pane is rendered
+ *  - TC-2.1: Scroll container div exists when session-list pane is rendered
  *  - TC-2.2: SessionList is rendered inside the scroll wrapper (descendant, not sibling)
- *  - TC-2.3: Scroll wrapper does not set overflowX
- *  - TC-2.4: Non-session-list pane (session-detail) does not have overflowY: auto wrapper
+ *  - TC-2.4: Non-session-list pane (session-detail) does not have the scroll wrapper
  */
 
 import React from "react";
@@ -86,17 +85,14 @@ const makeSession = (id: string, title: string): Partial<Session> => ({
 
 describe("SessionListPaneBody — scroll wrapper", () => {
   it("SessionListPaneBody_should_renderScrollContainer_When_sessionsExist", () => {
-    render(
+    const { getByTestId } = render(
       <PaneSplitRenderer
         state={sessionListPaneState}
         dispatch={jest.fn()}
         sessions={[makeSession("s1", "S1") as Session]}
       />
     );
-    // React renders overflowY as CSS property "overflow-y"
-    const scrollDiv = document.querySelector('[style*="overflow-y"]') as HTMLElement | null;
-    expect(scrollDiv).not.toBeNull();
-    expect(scrollDiv!.style.overflowY).toBe("auto");
+    expect(getByTestId("session-list-scroll")).toBeInTheDocument();
   });
 
   it("SessionListPaneBody_should_renderSessionListInsideScrollWrapper", () => {
@@ -107,39 +103,19 @@ describe("SessionListPaneBody — scroll wrapper", () => {
         sessions={[makeSession("s1", "S1") as Session]}
       />
     );
+    const scrollWrapper = getByTestId("session-list-scroll");
     const sessionList = getByTestId("session-list");
-    // The parent of the SessionList mock should be the scroll wrapper div
-    const parent = sessionList.parentElement as HTMLElement;
-    expect(parent).not.toBeNull();
-    expect(parent.style.overflowY).toBe("auto");
-  });
-
-  it("SessionListPaneBody_should_notSetOverflowX_on_scrollWrapper", () => {
-    render(
-      <PaneSplitRenderer
-        state={sessionListPaneState}
-        dispatch={jest.fn()}
-        sessions={[makeSession("s1", "S1") as Session]}
-      />
-    );
-    // React renders overflowY as CSS property "overflow-y"
-    const scrollDiv = document.querySelector('[style*="overflow-y"]') as HTMLElement | null;
-    expect(scrollDiv).not.toBeNull();
-    // overflowX should not be "auto" or "scroll" — it is not set in the inline style
-    expect(scrollDiv!.style.overflowX).not.toBe("auto");
-    expect(scrollDiv!.style.overflowX).not.toBe("scroll");
+    expect(scrollWrapper).toContainElement(sessionList);
   });
 
   it("SessionListPaneBody_should_notWrapNonSessionListPane", () => {
-    render(
+    const { queryByTestId } = render(
       <PaneSplitRenderer
         state={sessionDetailPaneState}
         dispatch={jest.fn()}
         sessions={[]}
       />
     );
-    // The scroll wrapper (overflowY: auto) is exclusive to session-list pane body
-    const scrollDiv = document.querySelector('[style*="overflow-y"]') as HTMLElement | null;
-    expect(scrollDiv).toBeNull();
+    expect(queryByTestId("session-list-scroll")).toBeNull();
   });
 });

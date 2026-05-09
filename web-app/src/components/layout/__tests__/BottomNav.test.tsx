@@ -145,6 +145,15 @@ describe("BottomNav — ResizeObserver", () => {
   let resizeCallback: ResizeObserverCallback;
   const mockDisconnect = jest.fn();
   const mockObserve = jest.fn();
+  let originalResizeObserver: typeof ResizeObserver;
+
+  beforeAll(() => {
+    originalResizeObserver = global.ResizeObserver;
+  });
+
+  afterAll(() => {
+    global.ResizeObserver = originalResizeObserver;
+  });
 
   beforeEach(() => {
     mockDisconnect.mockClear();

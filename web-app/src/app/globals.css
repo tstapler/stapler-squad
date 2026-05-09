@@ -82,8 +82,8 @@
   --breakpoint-fold: 600px;    /* between outer and inner */
   --breakpoint-inner: 900px;   /* inner screen */
 
-  /* Bottom navigation bar height — matches navItem minHeight in BottomNav.css.ts */
-  --bottom-nav-height: 64px;
+  /* Bottom navigation bar height — overwritten at runtime by BottomNav ResizeObserver */
+  --bottom-nav-height: 72px;
 
   /* Touch target sizes (WCAG 2.1 AA) */
   --min-touch-target: 44px;

@@ -21,6 +21,9 @@ import {
   leafZoomed,
   emptyPaneSlot,
   paneBody,
+  sessionListScroll,
+  resetLayoutBar,
+  resetLayoutButton,
 } from "@/styles/pane/paneSplit.css";
 import { pickerOverlay, pickerLabel } from "@/styles/pane/panePickerOverlay.css";
 
@@ -156,7 +159,7 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     );
   }
   return (
-    <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+    <div className={sessionListScroll} data-testid="session-list-scroll">
       <SessionList
         sessions={actions.sessions}
         onSessionClick={triggerPicker}
@@ -309,18 +312,10 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
     >
       {/* Reset layout button — only shown when there is a split layout */}
       {hasMultiplePanes && (
-        <div style={{ display: "flex", justifyContent: "flex-end", padding: "2px 4px", flexShrink: 0, background: "transparent" }}>
+        <div className={resetLayoutBar}>
           <button
             data-testid="reset-layout-btn"
-            style={{
-              fontSize: "11px",
-              padding: "2px 6px",
-              background: "transparent",
-              border: "1px solid var(--border-color)",
-              borderRadius: "4px",
-              cursor: "pointer",
-              color: "var(--text-muted)",
-            }}
+            className={resetLayoutButton}
             onClick={() => dispatch({ type: "RESET_LAYOUT" })}
             title="Reset to single pane"
           >

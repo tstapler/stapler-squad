@@ -92,3 +92,27 @@ export const paneBody = style({
   display: "flex",
   flexDirection: "column",
 });
+
+export const sessionListScroll = style({
+  flex: 1,
+  overflowY: "auto",
+  minHeight: 0,
+});
+
+export const resetLayoutBar = style({
+  display: "flex",
+  justifyContent: "flex-end",
+  padding: "2px 4px",
+  flexShrink: 0,
+  background: "transparent",
+});
+
+export const resetLayoutButton = style({
+  fontSize: vars.fontSize.xs,
+  padding: "2px 6px",
+  background: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.sm,
+  cursor: "pointer",
+  color: vars.color.textMuted,
+});
