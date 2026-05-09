@@ -101,6 +101,9 @@ export const lightTheme = createTheme(vars, {
     inputText: "#0a0a0a",
     placeholderColor: "#9ca3af",
 
+    glowPrimary: "rgba(0,112,243,0.4)",
+    glowSecondary: "rgba(0,112,243,0.2)",
+
     ...terminalTokens,
   },
   shadow: {
@@ -182,6 +185,9 @@ export const darkTheme = createTheme(vars, {
     inputBackground: "#2a2a2a",
     inputText: "#ededed",
     placeholderColor: "#6b7280",
+
+    glowPrimary: "rgba(45,156,219,0.4)",
+    glowSecondary: "rgba(45,156,219,0.2)",
 
     ...terminalTokens,
   },
