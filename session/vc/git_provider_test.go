@@ -874,6 +874,13 @@ func configureGitUser(t *testing.T, dir string) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("Failed to configure git name: %v", err)
 	}
+
+	// Disable commit signing so tests work in environments with global signing hooks.
+	cmd = safeexec.CommandContext(context.Background(), "git", "config", "commit.gpgsign", "false")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("Failed to disable commit signing: %v", err)
+	}
 }
 
 func initGitRepoWithCommit(t *testing.T, dir string) {
