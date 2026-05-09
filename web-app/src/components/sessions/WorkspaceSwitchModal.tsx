@@ -97,7 +97,7 @@ export function WorkspaceSwitchModal({
     [baseUrl]
   );
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -124,11 +124,11 @@ export function WorkspaceSwitchModal({
     } finally {
       setLoading(false);
     }
-  };
+  }, [client, sessionId]);
 
   useEffect(() => {
     fetchData();
-  }, [sessionId, baseUrl]);
+  }, [fetchData]);
 
   // Filter targets based on search input
   const filteredBookmarks = useMemo(() => {

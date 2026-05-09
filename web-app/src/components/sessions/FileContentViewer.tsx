@@ -395,6 +395,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
       <div className={container}>
         <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
         <div className={imageViewer}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={rawUrl}
             alt={filePath}

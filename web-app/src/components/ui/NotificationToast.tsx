@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ReviewItem } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { NotificationData } from "@/lib/types/notification";
@@ -93,6 +93,18 @@ export function NotificationToast({
     return () => clearTimeout(timer);
   }, []);
 
+  const handleClose = useCallback((shouldAcknowledge: boolean = false) => {
+    setIsExiting(true);
+    auditLog.logNotificationDismissed(notification.id, notification.sessionId);
+    setTimeout(() => {
+      notification.onDismiss?.();
+      if (shouldAcknowledge) {
+        notification.onAcknowledge?.();
+      }
+      onClose();
+    }, 300);
+  }, [auditLog, notification, onClose]);
+
   // Auto-close timer (does NOT acknowledge - user didn't explicitly dismiss)
   useEffect(() => {
     if (effectiveAutoClose > 0) {
@@ -101,7 +113,7 @@ export function NotificationToast({
       }, effectiveAutoClose);
       return () => clearTimeout(timer);
     }
-  }, [effectiveAutoClose]);
+  }, [effectiveAutoClose, handleClose]);
 
   // Auto-minimize timer: shrink to compact pill so it doesn't obscure content
   useEffect(() => {
@@ -112,18 +124,6 @@ export function NotificationToast({
       return () => clearTimeout(timer);
     }
   }, [effectiveAutoMinimize, isMinimized]);
-
-  const handleClose = (shouldAcknowledge: boolean = false) => {
-    setIsExiting(true);
-    auditLog.logNotificationDismissed(notification.id, notification.sessionId);
-    setTimeout(() => {
-      notification.onDismiss?.();
-      if (shouldAcknowledge) {
-        notification.onAcknowledge?.();
-      }
-      onClose();
-    }, 300);
-  };
 
   const handleView = () => {
     auditLog.logNotificationSessionViewed(notification.id, notification.sessionId);

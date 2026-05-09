@@ -86,6 +86,7 @@ export function SessionLogsTab({ sessionId, baseUrl }: SessionLogsTabProps) {
 
   useEffect(() => {
     fetchLogs(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, debouncedSearch, levelFilters]);
 
   const [liveTailState, liveTailControls] = useLiveTail(

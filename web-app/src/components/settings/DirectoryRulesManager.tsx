@@ -75,12 +75,6 @@ export function DirectoryRulesManager() {
     typeof createClient<typeof SessionService>
   > | null>(null);
 
-  useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createClient(SessionService, transport);
-    loadRules();
-  }, []);
-
   const loadRules = useCallback(async () => {
     if (!clientRef.current) return;
     try {
@@ -98,6 +92,12 @@ export function DirectoryRulesManager() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    clientRef.current = createClient(SessionService, transport);
+    loadRules();
+  }, [loadRules]);
 
   const handleEdit = (rule: DirectoryRuleProto) => {
     setEditingPath(rule.path);

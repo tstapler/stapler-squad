@@ -168,6 +168,7 @@ export default function LogsPage() {
   // Fetch logs on mount and when filters change
   useEffect(() => {
     fetchLogs(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearchQuery, levelFilters, limit, timeRange]);
 
   // Infinite scroll

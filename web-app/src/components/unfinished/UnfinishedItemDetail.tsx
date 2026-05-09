@@ -139,6 +139,7 @@ export function UnfinishedItemDetail({ worktree }: UnfinishedItemDetailProps) {
                   key={id}
                   className={styles.sessionPickerItem}
                   role="option"
+                  aria-selected={false}
                   onClick={() => {
                     setShowSessionPicker(false);
                     router.push(routes.sessionDetail(id));

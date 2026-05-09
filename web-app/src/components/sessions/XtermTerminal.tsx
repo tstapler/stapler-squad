@@ -353,7 +353,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     };
     // Only recreate terminal if scrollback changes (requires full recreation)
     // Other options can be updated dynamically below
-  }, [scrollback]); // Reduced dependencies - only recreate when necessary
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollback]);
 
   // Update theme dynamically (no terminal recreation needed)
   useEffect(() => {

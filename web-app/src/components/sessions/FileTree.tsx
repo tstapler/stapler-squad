@@ -417,7 +417,7 @@ export function FileTree({
         });
       }
     },
-    [sessionId, baseUrl, includeIgnored]
+    [sessionId, baseUrl, includeIgnored, loadingPaths]
   );
 
   // Load root on mount / when session changes.

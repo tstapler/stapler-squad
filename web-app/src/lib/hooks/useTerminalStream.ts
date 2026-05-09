@@ -284,8 +284,8 @@ export function useTerminalStream({
       handleError(err);
       setIsConnected(false);
     }
-  }, [sessionId, getTerminal, scrollbackLines, onError, onScrollbackReceived, onOutput,
-      streamingMode, flowControl, metrics, handleError]);
+  }, [sessionId, getTerminal, onError, onScrollbackReceived, onOutput,
+      streamingMode, flowControl, metrics, handleError, initialCols, initialRows]);
 
   // ---- Disconnect ----
   // Use stable method reference to avoid disconnect being recreated on every render.

@@ -172,6 +172,7 @@ export function SearchWithHistory({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           className={input}
+          role="combobox"
           aria-label="Search logs"
           aria-expanded={showHistory}
           aria-controls="search-history"

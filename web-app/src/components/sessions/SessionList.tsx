@@ -145,9 +145,8 @@ export function SessionList({
   storageKeyPrefix,
   extraHeaderActions,
 }: SessionListProps) {
-  // Stable storage key set — storageKeyPrefix is fixed for the lifetime of this instance
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const STORAGE_KEYS = useRef(makeStorageKeys(storageKeyPrefix)).current;
+  // Stable storage key set — only recomputed when storageKeyPrefix changes
+  const STORAGE_KEYS = useMemo(() => makeStorageKeys(storageKeyPrefix), [storageKeyPrefix]);
   // Review queue items indexed by session ID for badge display on session cards
   const { items: reviewItems } = useReviewQueueContext();
   const reviewItemBySessionId = useMemo(() => {
@@ -256,35 +255,35 @@ export function SessionList({
   // Persist filter preferences to local storage whenever they change
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SEARCH_QUERY, searchQuery);
-  }, [searchQuery]);
+  }, [STORAGE_KEYS, searchQuery]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SELECTED_STATUS, selectedStatus);
-  }, [selectedStatus]);
+  }, [STORAGE_KEYS, selectedStatus]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SELECTED_CATEGORY, selectedCategory);
-  }, [selectedCategory]);
+  }, [STORAGE_KEYS, selectedCategory]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SELECTED_TAG, selectedTag);
-  }, [selectedTag]);
+  }, [STORAGE_KEYS, selectedTag]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.HIDE_PAUSED, hidePaused);
-  }, [hidePaused]);
+  }, [STORAGE_KEYS, hidePaused]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.GROUPING_STRATEGY, groupingStrategy);
-  }, [groupingStrategy]);
+  }, [STORAGE_KEYS, groupingStrategy]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SORT_FIELD, sortField);
-  }, [sortField]);
+  }, [STORAGE_KEYS, sortField]);
 
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SORT_DIR, sortDir);
-  }, [sortDir]);
+  }, [STORAGE_KEYS, sortDir]);
 
   // Extract unique categories from sessions
   const categories = useMemo(() => {

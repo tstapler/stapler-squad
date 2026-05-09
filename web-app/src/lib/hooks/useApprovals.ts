@@ -56,14 +56,10 @@ export function useApprovals(
   const [resolveApproval] = useResolveApprovalMutation();
 
   // Filter by sessionId if provided
-  const allApprovals = data?.approvals ?? [];
-  const approvals = useMemo(
-    () =>
-      sessionId
-        ? allApprovals.filter((a) => a.sessionId === sessionId)
-        : allApprovals,
-    [allApprovals, sessionId]
-  );
+  const approvals = useMemo(() => {
+    const all = data?.approvals ?? [];
+    return sessionId ? all.filter((a) => a.sessionId === sessionId) : all;
+  }, [data?.approvals, sessionId]);
 
   const approve = useCallback(
     async (approvalId: string) => {

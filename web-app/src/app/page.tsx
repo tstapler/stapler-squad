@@ -2,6 +2,11 @@
 // +feature: session-list session-search session-filter session-groupby
 
 import React, { useState, useEffect, useRef, Suspense, useCallback } from "react";
+
+const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
+function isValidTab(tab: string | null): boolean {
+  return tab !== null && (VALID_TABS as readonly string[]).includes(tab);
+}
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
@@ -73,10 +78,6 @@ function HomeContent() {
     }
   }, [showWizard]);
 
-  // Valid tab values for URL parsing
-  const validTabs: SessionDetailTab[] = ["terminal", "diff", "vcs", "logs", "info"];
-  const isValidTab = (tab: string | null): tab is SessionDetailTab =>
-    tab !== null && validTabs.includes(tab as SessionDetailTab);
 
   const {
     sessions,
@@ -135,6 +136,19 @@ function HomeContent() {
     return session;
   }, [sessions]);
 
+  // Update URL with session and tab parameters
+  const updateUrl = useCallback((sessionId: string | null, tab: SessionDetailTab | null) => {
+    const params = new URLSearchParams();
+    if (sessionId) {
+      params.set("session", sessionId);
+      if (tab && tab !== "info") {
+        params.set("tab", tab);
+      }
+    }
+    const query = params.toString();
+    router.replace(query ? `/?${query}` : "/", { scroll: false });
+  }, [router]);
+
   // Handle pending session navigation from notification click
   useEffect(() => {
     if (pendingSessionId && sessions.length > 0) {
@@ -148,7 +162,7 @@ function HomeContent() {
       }
       setPendingSessionId(null);
     }
-  }, [pendingSessionId, sessions]);
+  }, [pendingSessionId, sessions, findSessionById, updateUrl]);
 
   // Handle direct session selection from URL
   useEffect(() => {
@@ -184,7 +198,7 @@ function HomeContent() {
         console.warn(`[URL] Session not found: ${sessionId}`);
       }
     }
-  }, [searchParams, sessions]);
+  }, [searchParams, sessions, findSessionById, router]);
 
   // Detect ?new=true, ?duplicate=<id>, or ?worktree=<path>&branch=<branch> query params
   useEffect(() => {
@@ -234,20 +248,7 @@ function HomeContent() {
       });
       setShowWizard(true);
     }
-  }, [searchParams, getSession]);
-
-  // Update URL with session and tab parameters
-  const updateUrl = (sessionId: string | null, tab: SessionDetailTab | null) => {
-    const params = new URLSearchParams();
-    if (sessionId) {
-      params.set("session", sessionId);
-      if (tab && tab !== "info") {
-        params.set("tab", tab);
-      }
-    }
-    const query = params.toString();
-    router.replace(query ? `/?${query}` : "/", { scroll: false });
-  };
+  }, [searchParams, getSession, router]);
 
   // Close session and clear URL query parameter
   const closeSession = () => {

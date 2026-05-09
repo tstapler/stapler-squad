@@ -609,6 +609,7 @@ export function OmnibarCreationPanel({
           <div className={styles.thumbnailRow}>
             {attachedImages.map((img, i) => (
               <div key={img.path} className={styles.thumbnail}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={img.previewUrl}
                   alt={img.file.name}

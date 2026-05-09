@@ -70,12 +70,6 @@ export function ProfilesManager() {
     typeof createClient<typeof SessionService>
   > | null>(null);
 
-  useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createClient(SessionService, transport);
-    loadProfiles();
-  }, []);
-
   const loadProfiles = useCallback(async () => {
     if (!clientRef.current) return;
     try {
@@ -98,6 +92,12 @@ export function ProfilesManager() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    clientRef.current = createClient(SessionService, transport);
+    loadProfiles();
+  }, [loadProfiles]);
 
   const handleEdit = (key: string, profile: ProfileDefaultsProto) => {
     setEditingKey(key);

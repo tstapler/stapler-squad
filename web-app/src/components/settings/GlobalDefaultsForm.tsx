@@ -40,12 +40,6 @@ export function GlobalDefaultsForm() {
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
-  useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createClient(SessionService, transport);
-    loadDefaults();
-  }, []);
-
   const loadDefaults = useCallback(async () => {
     if (!clientRef.current) return;
     try {
@@ -71,6 +65,12 @@ export function GlobalDefaultsForm() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
+    clientRef.current = createClient(SessionService, transport);
+    loadDefaults();
+  }, [loadDefaults]);
 
   const handleSave = async () => {
     if (!clientRef.current) return;

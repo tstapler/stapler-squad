@@ -22,7 +22,7 @@ export function HistoryEntryCard({ entry, isSelected, enrichedEntry, onSelect }:
     <div
       onClick={onSelect}
       className={`${styles.entryCard} ${isSelected ? styles.selected : ""}`}
-      role="button"
+      role="option"
       tabIndex={0}
       aria-selected={isSelected}
       onKeyDown={(e) => {

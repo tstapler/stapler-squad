@@ -54,10 +54,11 @@ export function useFocusTrap(
 
     document.addEventListener("keydown", handleKeyDown);
 
+    const triggerEl = triggerRef?.current;
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       // Return focus to the trigger element when the trap is deactivated
-      triggerRef?.current?.focus();
+      triggerEl?.focus();
     };
   }, [isActive, ref, triggerRef]);
 }

@@ -171,6 +171,7 @@ export function HistorySearchInput({
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           className={styles.input}
+          role="combobox"
           aria-label="Search conversation history"
           aria-expanded={showHistory}
           aria-controls="search-history-dropdown"

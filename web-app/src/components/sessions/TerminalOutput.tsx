@@ -192,7 +192,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }
       return next;
     });
-  }, []);
+  }, [keyboardStorageKey]);
 
   // Mobile detection — use shared ViewportProvider hook for consistency
   const { isMobile } = useViewport();
@@ -284,7 +284,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics]);
+  }, [logTerminalMetrics, sessionId]);
 
   // Callback to write initial pane content to terminal
   const handleScrollbackReceived = useCallback(async (scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => {
@@ -851,7 +851,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       setPasteError('Clipboard access denied');
       pasteErrorTimerRef.current = setTimeout(() => setPasteError(null), 2500);
     }
-  }, [handleTerminalData]);
+  }, [handleTerminalData, baseUrl]);
 
   const handleScrollToBottom = () => {
     if (xtermRef.current?.terminal) {

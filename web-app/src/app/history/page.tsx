@@ -58,7 +58,6 @@ export default function HistoryBrowserPage() {
     const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
     clientRef.current = createClient(SessionService, transport);
   }, []);
-  useEffect(() => { loadHistory(); }, []);
 
   // Data loading callbacks
   const loadHistory = useCallback(async (query?: string) => {
@@ -71,6 +70,8 @@ export default function HistoryBrowserPage() {
     } catch (err) { setError(`Failed to load history: ${err}`); }
     finally { setLoading(false); }
   }, []);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
 
   const loadMoreHistory = useCallback(async () => {
     if (!clientRef.current || !nextPageToken || loadingMore) return;
