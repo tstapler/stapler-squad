@@ -116,3 +116,18 @@ export const resetLayoutButton = style({
   cursor: "pointer",
   color: vars.color.textMuted,
 });
+
+export const rendererRoot = style({
+  display: "flex",
+  flexDirection: "column",
+  flex: 1,
+  overflow: "hidden",
+  minHeight: 0,
+});
+
+export const rendererContent = style({
+  flex: 1,
+  overflow: "hidden",
+  minHeight: 0,
+  position: "relative",
+});

@@ -24,6 +24,8 @@ import {
   sessionListScroll,
   resetLayoutBar,
   resetLayoutButton,
+  rendererRoot,
+  rendererContent,
 } from "@/styles/pane/paneSplit.css";
 import { pickerOverlay, pickerLabel } from "@/styles/pane/panePickerOverlay.css";
 
@@ -307,7 +309,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
 
   return (
     <div
-      style={{ display: "flex", flexDirection: "column", flex: 1, overflow: "hidden", minHeight: 0 }}
+      className={rendererRoot}
       data-context="cockpit"
     >
       {/* Reset layout button — only shown when there is a split layout */}
@@ -324,7 +326,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
         </div>
       )}
 
-      <div style={{ flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }}>
+      <div className={rendererContent}>
         <PaneNodeComponent
           node={state.root}
           state={state}
