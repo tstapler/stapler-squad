@@ -156,28 +156,30 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
     );
   }
   return (
-    <SessionList
-      sessions={actions.sessions}
-      onSessionClick={triggerPicker}
-      onSessionOpenInNewPane={triggerPickerForceNew}
-      onDeleteSession={actions.onDeleteSession}
-      onPauseSession={actions.onPauseSession}
-      onResumeSession={actions.onResumeSession}
-      onDirectResumeSession={actions.onDirectResumeSession}
-      onCloneSession={actions.onCloneSession}
-      onNewWorkspaceSession={actions.onNewWorkspaceSession}
-      onRenameSession={actions.onRenameSession}
-      onRestartSession={actions.onRestartSession}
-      onUpdateTags={actions.onUpdateTags}
-      onNewSession={actions.onNewSession}
-      onCreateCheckpoint={actions.onCreateCheckpoint}
-      onListCheckpoints={actions.onListCheckpoints}
-      onForkFromCheckpoint={actions.onForkFromCheckpoint}
-      onRunOneShot={actions.onRunOneShot}
-      onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
-      onClearConversationState={actions.onClearConversationState}
-      storageKeyPrefix={`pane-${pane.id}.`}
-    />
+    <div style={{ flex: 1, overflowY: "auto", minHeight: 0 }}>
+      <SessionList
+        sessions={actions.sessions}
+        onSessionClick={triggerPicker}
+        onSessionOpenInNewPane={triggerPickerForceNew}
+        onDeleteSession={actions.onDeleteSession}
+        onPauseSession={actions.onPauseSession}
+        onResumeSession={actions.onResumeSession}
+        onDirectResumeSession={actions.onDirectResumeSession}
+        onCloneSession={actions.onCloneSession}
+        onNewWorkspaceSession={actions.onNewWorkspaceSession}
+        onRenameSession={actions.onRenameSession}
+        onRestartSession={actions.onRestartSession}
+        onUpdateTags={actions.onUpdateTags}
+        onNewSession={actions.onNewSession}
+        onCreateCheckpoint={actions.onCreateCheckpoint}
+        onListCheckpoints={actions.onListCheckpoints}
+        onForkFromCheckpoint={actions.onForkFromCheckpoint}
+        onRunOneShot={actions.onRunOneShot}
+        onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
+        onClearConversationState={actions.onClearConversationState}
+        storageKeyPrefix={`pane-${pane.id}.`}
+      />
+    </div>
   );
 }
 

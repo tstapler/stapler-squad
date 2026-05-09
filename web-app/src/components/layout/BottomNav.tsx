@@ -1,7 +1,7 @@
 "use client";
 // +feature: ui:bottom-nav
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
@@ -50,6 +50,23 @@ export function BottomNav() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [moreOpen]);
+
+  // Measure actual nav height (includes safe-area padding) and publish to CSS
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    const update = () => {
+      document.documentElement.style.setProperty(
+        "--bottom-nav-height",
+        `${nav.offsetHeight}px`
+      );
+    };
+    const ro = new ResizeObserver(update);
+    ro.observe(nav);
+    update(); // set immediately on mount
+    return () => ro.disconnect();
+  }, []);
 
   const isMoreActive = moreItems.some((item) => pathname?.startsWith(item.href));
 
@@ -125,7 +142,7 @@ export function BottomNav() {
       </div>
 
       {/* Bottom nav bar */}
-      <nav className={styles.nav} aria-label="Bottom navigation">
+      <nav ref={navRef} className={styles.nav} aria-label="Bottom navigation">
         {primaryItems.map(renderPrimaryItem)}
         <AppLink
           href={routes.notifications}

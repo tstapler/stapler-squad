@@ -23,7 +23,7 @@ export const cockpitRoot = style({
     //   769–900px — pane header visible, BottomNav visible, cockpit shrunk
     //   >900px   — pane header visible, BottomNav hidden, full 100dvh available
     "(max-width: 900px)": {
-      height: "calc(100dvh - var(--bottom-nav-height, 64px) - max(env(safe-area-inset-bottom, 0px), 8px))",
+      height: "calc(100dvh - var(--bottom-nav-height, 72px))",
     },
   },
 });

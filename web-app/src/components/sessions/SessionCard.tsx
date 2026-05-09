@@ -313,8 +313,10 @@ export function SessionCard({
       e.stopPropagation();
       onToggleSelect();
     } else if (e.altKey && onOpenInNewPane) {
+      e.stopPropagation();
       onOpenInNewPane();
     } else if (onClick) {
+      e.stopPropagation();
       onClick();
     }
   };
