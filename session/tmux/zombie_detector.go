@@ -92,8 +92,7 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 
 				// Build current set so we can evict stale entries
 				current := make(map[int]bool, len(zombies))
-				newZombies := 0
-				
+
 				if len(zombies) > 0 {
 					// Immediately reap rather than waiting for the 60s background tick.
 					// Doing this before recording ensure we've at least tried to clean
@@ -107,7 +106,6 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 					current[z.PID] = true
 					if !reported[z.PID] {
 						reported[z.PID] = true
-						newZombies++
 						RecordZombieProcess(z.PID, z.Command, warnFn)
 					}
 				}
