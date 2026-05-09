@@ -173,8 +173,11 @@ describe("BottomNav — ResizeObserver", () => {
 
   it("BottomNav_should_set_bottomNavHeight_When_mounted", () => {
     render(<BottomNav />);
-    // ResizeObserver.observe must be called (nav is observed)
+    // observe must be called with the nav element (not null/undefined)
     expect(mockObserve).toHaveBeenCalledTimes(1);
+    expect(mockObserve).toHaveBeenCalledWith(expect.any(HTMLElement));
+    const observedElement = mockObserve.mock.calls[0][0] as HTMLElement;
+    expect(observedElement.getAttribute("aria-label")).toBe("Bottom navigation");
     // --bottom-nav-height must be set to a px value (jsdom returns "0px" since no layout engine)
     const value = document.documentElement.style.getPropertyValue("--bottom-nav-height");
     expect(value).toMatch(/^\d+px$/);
