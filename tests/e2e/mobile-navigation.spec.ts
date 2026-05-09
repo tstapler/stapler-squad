@@ -29,14 +29,6 @@ test.describe("mobile-navigation", () => {
     await expect(
       page.locator('[data-testid="session-detail"]').first()
     ).toBeVisible({ timeout: 5000 });
-
-    // Session-list scroll wrapper should not be visible (mobile hides non-focused pane)
-    const scrollWrapper = page.locator(
-      '[data-testid="session-list-scroll"]'
-    );
-    await expect(scrollWrapper).not.toBeVisible({ timeout: 2000 }).catch(() => {
-      // Acceptable if the element is hidden by CSS rather than removed from DOM
-    });
   });
 
   test("mobile_should_scrollSessionList_When_sessionsExist", async ({
@@ -61,8 +53,16 @@ test.describe("mobile-navigation", () => {
     await page.setViewportSize(MOBILE_VIEWPORT);
     await page.goto(BASE_URL, { waitUntil: "domcontentloaded", timeout: 15000 });
 
-    // Wait for BottomNav to mount and ResizeObserver to fire
-    await page.waitForTimeout(500);
+    // Wait for BottomNav ResizeObserver to set the variable to a non-zero value
+    await page.waitForFunction(
+      () => {
+        const v = getComputedStyle(document.documentElement).getPropertyValue(
+          "--bottom-nav-height"
+        );
+        return v.trim().length > 0 && v.trim() !== "0px";
+      },
+      { timeout: 5000 }
+    );
 
     const value = await page.evaluate(() =>
       getComputedStyle(document.documentElement).getPropertyValue(
