@@ -28,7 +28,6 @@ function getCached(sessionId: string): SnapshotCacheEntry | null {
 function renderAnsi(raw: string): string {
   try {
     // Dynamically require to avoid server-side import issues (ansi-to-html is browser-only).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const Convert = require("ansi-to-html");
     const convert = new Convert({ escapeXML: true });
     return convert.toHtml(raw);

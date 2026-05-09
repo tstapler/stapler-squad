@@ -19,14 +19,16 @@ export const Open: Story = {
   },
 };
 
+function ControlledStory() {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <>
+      <button onClick={() => setOpen(true)}>Open Shortcuts (?)</button>
+      <KeyboardShortcutOverlay isOpen={open} onClose={() => setOpen(false)} />
+    </>
+  );
+}
+
 export const Controlled: Story = {
-  render: () => {
-    const [open, setOpen] = React.useState(false);
-    return (
-      <>
-        <button onClick={() => setOpen(true)}>Open Shortcuts (?)</button>
-        <KeyboardShortcutOverlay isOpen={open} onClose={() => setOpen(false)} />
-      </>
-    );
-  },
+  render: () => <ControlledStory />,
 };

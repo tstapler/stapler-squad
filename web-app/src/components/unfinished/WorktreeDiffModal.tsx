@@ -75,7 +75,7 @@ export function WorktreeDiffModal({ repoPath, branch, repoName, onClose }: Workt
 
         <div className={styles.body}>
           {fetchError ? (
-            <div style={{ padding: "2rem", color: "#f48771", textAlign: "center" }}>{fetchError}</div>
+            <div style={{ padding: "2rem", color: "var(--error)", textAlign: "center" }}>{fetchError}</div>
           ) : (
             <DiffRenderer
               content={content}

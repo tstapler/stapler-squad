@@ -1,3 +1,5 @@
+import * as React from "react";
+
 /**
  * Terminal configuration system with localStorage persistence
  *
@@ -242,13 +244,10 @@ export function useTerminalConfig(): [
   TerminalConfig,
   (config: Partial<TerminalConfig>) => void
 ] {
-  if (typeof window === "undefined") {
-    return [DEFAULT_TERMINAL_CONFIG, () => {}];
-  }
-
   const [config, setConfig] = React.useState<TerminalConfig>(loadTerminalConfig);
 
   React.useEffect(() => {
+    if (typeof window === "undefined") return;
     const handleConfigChange = (event: Event) => {
       const customEvent = event as CustomEvent<TerminalConfig>;
       setConfig(customEvent.detail);
@@ -262,12 +261,10 @@ export function useTerminalConfig(): [
   }, []);
 
   const updateConfig = React.useCallback((partial: Partial<TerminalConfig>) => {
+    if (typeof window === "undefined") return;
     saveTerminalConfig(partial);
     setConfig(loadTerminalConfig());
   }, []);
 
   return [config, updateConfig];
 }
-
-// Re-export React for the hook
-import * as React from "react";

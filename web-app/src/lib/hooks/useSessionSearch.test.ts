@@ -51,9 +51,10 @@ function makeSession(overrides: Partial<Parameters<typeof create>[1]> = {}): Ses
 
 function renderWithStore(query: string, sessions: Session[]) {
   const store = makeStore(sessions);
-  const wrapper = ({ children }: { children: React.ReactNode }) =>
-    React.createElement(Provider, { store, children });
-  return renderHook(() => useSessionSearch(query), { wrapper });
+  function Wrapper({ children }: { children: React.ReactNode }) {
+    return React.createElement(Provider, { store } as any, children);
+  }
+  return renderHook(() => useSessionSearch(query), { wrapper: Wrapper });
 }
 
 // ---------------------------------------------------------------------------

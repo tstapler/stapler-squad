@@ -1,7 +1,7 @@
 "use client";
 
 import { useNotifications } from "@/lib/contexts/NotificationContext";
-import { badge, inline as inlineClass } from "@/components/sessions/ReviewQueueNavBadge.css";
+import { badge, inline as inlineClass } from "./NavBadge.css";
 
 interface NotificationsNavBadgeProps {
   inline?: boolean;

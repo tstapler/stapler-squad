@@ -1,5 +1,5 @@
 // +feature: drawer-nav
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react";
 import { DrawerNav } from "./DrawerNav";
 
@@ -14,9 +14,6 @@ interface NavigationContextValue {
 }
 
 const NavigationContext = createContext<NavigationContextValue | null>(null);
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-(useContext as any)._mock = undefined; // keep TS happy
 
 function MockNavigationProvider({
   children,
@@ -46,7 +43,7 @@ const meta: Meta<typeof DrawerNav> = {
   decorators: [
     (Story) => (
       <MockNavigationProvider>
-        <div style={{ height: "100vh", display: "flex" }}>
+        <div style={{ height: "var(--viewport-height, 100dvh)", display: "flex" }}>
           <Story />
         </div>
       </MockNavigationProvider>
@@ -72,7 +69,7 @@ export const CollapsedByDefault: Story = {
   decorators: [
     (Story) => (
       <MockNavigationProvider defaultOpen={false}>
-        <div style={{ height: "100vh", display: "flex" }}>
+        <div style={{ height: "var(--viewport-height, 100dvh)", display: "flex" }}>
           <Story />
         </div>
       </MockNavigationProvider>

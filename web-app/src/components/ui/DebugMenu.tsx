@@ -352,7 +352,7 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
             <h3 className={sectionTitle}>Console Commands</h3>
             <div className={commandList}>
               <code className={command}>
-                localStorage.setItem("notifications-enabled", "false")
+                {`localStorage.setItem("notifications-enabled", "false")`}
               </code>
               <span className={commandDescription}>
                 Disable notifications
@@ -360,7 +360,7 @@ export function DebugMenu({ isOpen, onClose }: DebugMenuProps) {
             </div>
             <div className={commandList}>
               <code className={command}>
-                localStorage.setItem("debug-terminal", "true")
+                {`localStorage.setItem("debug-terminal", "true")`}
               </code>
               <span className={commandDescription}>Enable terminal logging</span>
             </div>

@@ -11,19 +11,19 @@ export function SessionListSkeleton({ count = 6 }: SessionListSkeletonProps) {
       <div className={styles.header}>
         <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
           <div
-            style={{ width: "120px", height: "32px", background: "#e5e7eb", borderRadius: "4px" }}
+            style={{ width: "120px", height: "32px", background: "var(--hover-background)", borderRadius: "4px" }}
           />
         </div>
 
         <div className={styles.filters}>
           <div
-            style={{ width: "200px", height: "38px", background: "#e5e7eb", borderRadius: "4px" }}
+            style={{ width: "200px", height: "38px", background: "var(--hover-background)", borderRadius: "4px" }}
           />
           <div
-            style={{ width: "150px", height: "38px", background: "#e5e7eb", borderRadius: "4px" }}
+            style={{ width: "150px", height: "38px", background: "var(--hover-background)", borderRadius: "4px" }}
           />
           <div
-            style={{ width: "150px", height: "38px", background: "#e5e7eb", borderRadius: "4px" }}
+            style={{ width: "150px", height: "38px", background: "var(--hover-background)", borderRadius: "4px" }}
           />
         </div>
       </div>
@@ -34,7 +34,7 @@ export function SessionListSkeleton({ count = 6 }: SessionListSkeletonProps) {
             style={{
               width: "200px",
               height: "24px",
-              background: "#e5e7eb",
+              background: "var(--hover-background)",
               borderRadius: "4px",
               marginBottom: "1rem",
             }}

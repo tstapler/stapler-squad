@@ -74,7 +74,6 @@ import { useReviewQueueNotifications } from "../useReviewQueueNotifications";
 
 const DWELL_TIME_MS = 3_000;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeItem(sessionId: string, reason = 1 /* APPROVAL_PENDING */): any {
   return {
     sessionId,

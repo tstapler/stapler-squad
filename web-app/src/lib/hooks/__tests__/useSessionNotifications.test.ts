@@ -87,7 +87,6 @@ import { useSessionNotifications } from "../useSessionNotifications";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeEvent(notificationType: number, sessionId = "test-session"): any {
   return {
     sessionId,

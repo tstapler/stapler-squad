@@ -8,7 +8,6 @@ interface DiffViewerProps {
 }
 
 /** Session-aware diff viewer — reads from SessionVcsContext. */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function DiffViewer(_props: DiffViewerProps) {
   const { diff: rawDiff, diffLoading: loading, refreshDiff } = useSessionVcsContext();
 
