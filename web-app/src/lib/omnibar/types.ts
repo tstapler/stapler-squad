@@ -13,6 +13,7 @@ export enum InputType {
   GitHubShorthand = "github_shorthand",
   SessionSearch = "session_search",
   NewSession = "new_session",
+  Command = "command",
 }
 
 export interface InputTypeInfo {
@@ -66,6 +67,11 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "New Session",
     icon: "✨",
     description: "Create a new session",
+  },
+  [InputType.Command]: {
+    label: "Command",
+    icon: "⌘",
+    description: "Run an omnibar command (>theme, >go ...)",
   },
 };
 
