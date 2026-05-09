@@ -2,15 +2,15 @@
 // +feature: session-list session-search session-filter session-groupby
 
 import React, { useState, useEffect, useRef, Suspense, useCallback } from "react";
-
-const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
-function isValidTab(tab: string | null): boolean {
-  return tab !== null && (VALID_TABS as readonly string[]).includes(tab);
-}
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
 import { SessionDetailTab } from "@/components/sessions/SessionDetail";
+
+const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
+function isValidTab(tab: string | null): tab is SessionDetailTab {
+  return tab !== null && (VALID_TABS as readonly string[]).includes(tab);
+}
 import { SessionWizard } from "@/components/sessions/SessionWizard";
 import { ResumeSessionModal } from "@/components/sessions/ResumeSessionModal";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
