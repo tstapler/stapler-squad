@@ -5,7 +5,6 @@
 
 export enum InputType {
   Unknown = "unknown",
-  Command = "command",
   LocalPath = "local_path",
   PathWithBranch = "path_with_branch",
   GitHubPR = "github_pr",
@@ -27,11 +26,6 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "Unknown",
     icon: "❓",
     description: "Enter a local path or GitHub URL",
-  },
-  [InputType.Command]: {
-    label: "Command",
-    icon: "⌨️",
-    description: "Run an omnibar command",
   },
   [InputType.LocalPath]: {
     label: "Local Path",

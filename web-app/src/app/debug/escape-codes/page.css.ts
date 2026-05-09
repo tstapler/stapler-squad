@@ -58,33 +58,33 @@ export const button = style({
 });
 
 export const buttonActive = style({
-  background: vars.color.success,
-  borderColor: vars.color.success,
-  color: vars.color.primaryText,
+  background: "#22c55e",
+  borderColor: "#22c55e",
+  color: "white",
   selectors: {
     "&:hover": {
-      background: vars.color.successBg,
+      background: "#16a34a",
     },
   },
 });
 
 export const buttonDanger = style({
-  borderColor: vars.color.error,
-  color: vars.color.error,
+  borderColor: "#dc2626",
+  color: "#dc2626",
   selectors: {
     "&:hover": {
-      background: vars.color.error,
-      color: vars.color.primaryText,
+      background: "#dc2626",
+      color: "white",
     },
   },
 });
 
 export const error = style({
   padding: "1rem",
-  background: vars.color.errorBg,
-  border: `1px solid ${vars.color.error}`,
+  background: "#7f1d1d",
+  border: "1px solid #dc2626",
   borderRadius: "6px",
-  color: vars.color.errorText,
+  color: "#fecaca",
   marginBottom: "1.5rem",
 });
 
@@ -111,7 +111,7 @@ export const statCard = style({
 export const statValue = style({
   fontSize: "1.5rem",
   fontWeight: 700,
-  color: vars.color.primary,
+  color: "#60a5fa",
 });
 
 export const statLabel = style({

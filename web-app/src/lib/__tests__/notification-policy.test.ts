@@ -120,16 +120,16 @@ describe("notification-policy", () => {
       expect(toastAutoMinimizeMs("warning")).toBe(5_000);
     });
 
-    it("returns 3 seconds for info (auto-minimize)", () => {
-      expect(toastAutoMinimizeMs("info")).toBe(3_000);
+    it("returns 0 for info (no minimize)", () => {
+      expect(toastAutoMinimizeMs("info")).toBe(0);
     });
 
-    it("returns 3 seconds for task_complete (auto-minimize)", () => {
-      expect(toastAutoMinimizeMs("task_complete")).toBe(3_000);
+    it("returns 0 for task_complete (no minimize)", () => {
+      expect(toastAutoMinimizeMs("task_complete")).toBe(0);
     });
 
-    it("returns 3 seconds for undefined (auto-minimize)", () => {
-      expect(toastAutoMinimizeMs(undefined)).toBe(3_000);
+    it("returns 0 for undefined (no minimize)", () => {
+      expect(toastAutoMinimizeMs(undefined)).toBe(0);
     });
   });
 });

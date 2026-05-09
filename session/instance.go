@@ -1,9 +1,17 @@
 package session
 
+import "github.com/linkdata/deadlock"
+
 import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
+	"github.com/tstapler/stapler-squad/session/git"
+	"github.com/tstapler/stapler-squad/session/scrollback"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -12,13 +20,6 @@ import (
 
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
-	"github.com/linkdata/deadlock"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
-	"github.com/tstapler/stapler-squad/session/git"
-	"github.com/tstapler/stapler-squad/session/scrollback"
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 type Status int

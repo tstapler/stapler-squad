@@ -87,13 +87,13 @@ export const analyticsRate = style({
 });
 
 export const rateAllow = style({
-  background: vars.color.successBg,
-  color: vars.color.success,
+  background: "rgba(34, 197, 94, 0.15)",
+  color: "#22c55e",
 });
 
 export const rateManual = style({
-  background: vars.color.warningBg,
-  color: vars.color.warning,
+  background: "rgba(234, 179, 8, 0.15)",
+  color: "#eab308",
 });
 
 export const analyticsTopTool = style({
@@ -127,15 +127,15 @@ export const tab = style({
 export const tabActive = style({
   background: vars.color.primary,
   borderColor: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "#fff",
 });
 
 export const error = style({
   padding: 12,
-  background: vars.color.errorBg,
-  border: `1px solid ${vars.color.error}`,
+  background: "rgba(239, 68, 68, 0.1)",
+  border: "1px solid rgba(239, 68, 68, 0.3)",
   borderRadius: 8,
-  color: vars.color.errorText,
+  color: "#ef4444",
   fontSize: 13,
   display: "flex",
   alignItems: "center",
@@ -143,12 +143,12 @@ export const error = style({
 });
 
 export const retryButton = style({
-  background: vars.color.errorBg,
+  background: "rgba(239, 68, 68, 0.2)",
   border: "none",
   borderRadius: 4,
   padding: "3px 8px",
   cursor: "pointer",
-  color: vars.color.error,
+  color: "#ef4444",
   fontSize: 12,
 });
 
@@ -237,7 +237,7 @@ export const ruleReason = style({
 export const ruleAlt = style({
   display: "block",
   fontSize: 11,
-  color: vars.color.success,
+  color: "#22c55e",
   marginTop: 2,
 });
 
@@ -271,18 +271,18 @@ export const decisionBadge = style({
 });
 
 export const decisionAllow = style({
-  background: vars.color.successBg,
-  color: vars.color.success,
+  background: "rgba(34, 197, 94, 0.15)",
+  color: "#22c55e",
 });
 
 export const decisionDeny = style({
-  background: vars.color.errorBg,
-  color: vars.color.error,
+  background: "rgba(239, 68, 68, 0.15)",
+  color: "#ef4444",
 });
 
 export const decisionEscalate = style({
-  background: vars.color.warningBg,
-  color: vars.color.warning,
+  background: "rgba(234, 179, 8, 0.15)",
+  color: "#eab308",
 });
 
 export const sourceBadge = style({
@@ -313,12 +313,12 @@ export const toggle = style({
 });
 
 export const toggleOn = style({
-  background: vars.color.successBg,
-  color: vars.color.success,
+  background: "rgba(34, 197, 94, 0.2)",
+  color: "#22c55e",
 });
 
 export const toggleOff = style({
-  background: vars.color.hoverBackground,
+  background: "rgba(255,255,255,0.06)",
   color: vars.color.textSecondary,
 });
 
@@ -333,8 +333,8 @@ export const deleteButton = style({
   transition: "all 0.15s ease",
   selectors: {
     "&:hover": {
-      background: vars.color.errorBg,
-      color: vars.color.error,
+      background: "rgba(239, 68, 68, 0.15)",
+      color: "#ef4444",
     },
   },
 });
@@ -351,7 +351,7 @@ export const addButton = style({
   padding: "8px 16px",
   fontSize: 14,
   fontWeight: 600,
-  color: vars.color.primaryText,
+  color: "#fff",
   cursor: "pointer",
   transition: "opacity 0.15s ease",
   selectors: {
@@ -380,10 +380,10 @@ export const formTitle = style({
 
 export const formError = style({
   padding: "8px 12px",
-  background: vars.color.errorBg,
-  border: `1px solid ${vars.color.error}`,
+  background: "rgba(239, 68, 68, 0.1)",
+  border: "1px solid rgba(239, 68, 68, 0.3)",
   borderRadius: 6,
-  color: vars.color.errorText,
+  color: "#ef4444",
   fontSize: 13,
 });
 
@@ -455,7 +455,7 @@ export const saveButton = style({
   padding: "8px 18px",
   fontSize: 14,
   fontWeight: 600,
-  color: vars.color.primaryText,
+  color: "#fff",
   cursor: "pointer",
   transition: "opacity 0.15s ease",
   selectors: {

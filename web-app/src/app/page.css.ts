@@ -2,15 +2,11 @@ import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const page = style({
-  // Story 2.2.2: fill remaining height inside CockpitShell so the cockpit grid
-  // can use height: 100% to fill the viewport without scrolling.
-  flex: 1,
+  minHeight: "var(--viewport-height, 100dvh)",
   display: "flex",
   flexDirection: "column",
-  minHeight: 0,
   backgroundColor: vars.color.background,
   color: vars.color.textPrimary,
-  overflow: "hidden",
 });
 
 export const main = style({
@@ -22,6 +18,7 @@ export const main = style({
   "@media": {
     "screen and (max-width: 900px)": {
       padding: "1rem",
+      // Ensure content clears the bottom nav on mobile
       paddingBottom: "calc(var(--bottom-nav-height, 56px) + max(env(safe-area-inset-bottom, 0px), 0px) + 1rem)",
     },
   },
@@ -34,9 +31,9 @@ export const loading = style({
 });
 
 export const error = style({
-  color: vars.color.error,
+  color: "#ff4444",
   padding: "1rem",
-  backgroundColor: vars.color.errorBg,
+  backgroundColor: "rgba(255, 68, 68, 0.1)",
   borderRadius: "8px",
   margin: "1rem 0",
 });
@@ -47,7 +44,7 @@ export const modal = style({
   left: 0,
   right: 0,
   bottom: 0,
-  background: vars.color.overlayBackground,
+  background: "rgba(0, 0, 0, 0.7)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -149,33 +146,38 @@ export const placeholder = style({
   fontStyle: "italic",
 });
 
-export const cancelButton = style({
-  padding: `${vars.space["2"]} 20px`,
-  borderRadius: vars.radii.lg,
-  fontSize: "0.875rem",
+export const helpButton = style({
+  position: "fixed",
+  bottom: "2rem",
+  right: "2rem",
+  width: "3rem",
+  height: "3rem",
+  borderRadius: "50%",
+  background: vars.color.primary,
+  color: "white",
+  border: "none",
+  fontSize: "1.5rem",
   fontWeight: 600,
   cursor: "pointer",
-  background: vars.color.cardBackground,
-  color: vars.color.textPrimary,
-  border: `1px solid ${vars.color.borderColor}`,
-  transition: "all 0.2s ease",
+  boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)",
+  transition: "transform 0.2s, box-shadow 0.2s",
+  zIndex: 100,
   selectors: {
-    "&:hover": { background: vars.color.hoverBackground, borderColor: vars.color.borderHover },
+    "&:hover": {
+      transform: "scale(1.1)",
+      boxShadow: "0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)",
+    },
+    "&:active": {
+      transform: "scale(1.05)",
+    },
   },
-});
-
-export const dangerButton = style({
-  padding: `${vars.space["2"]} 20px`,
-  borderRadius: vars.radii.lg,
-  fontSize: "0.875rem",
-  fontWeight: 600,
-  cursor: "pointer",
-  background: vars.color.error,
-  color: vars.color.primaryText,
-  border: `1px solid ${vars.color.error}`,
-  transition: "all 0.2s ease",
-  selectors: {
-    "&:hover": { background: vars.color.errorDark },
-    "&:disabled": { opacity: 0.5, cursor: "not-allowed" },
+  "@media": {
+    "screen and (max-width: 768px)": {
+      bottom: "1rem",
+      right: "1rem",
+      width: "2.5rem",
+      height: "2.5rem",
+      fontSize: "1.25rem",
+    },
   },
 });

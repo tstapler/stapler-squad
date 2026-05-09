@@ -86,7 +86,6 @@ import {
 interface SessionCardProps {
   session: Session;
   onClick?: () => void;
-  onOpenInNewPane?: () => void;
   onDelete?: () => Promise<void> | void;
   onPause?: () => void;
   onResume?: () => void;
@@ -112,7 +111,6 @@ interface SessionCardProps {
 export function SessionCard({
   session,
   onClick,
-  onOpenInNewPane,
   onDelete,
   onPause,
   onResume,
@@ -312,8 +310,6 @@ export function SessionCard({
     if (selectMode && onToggleSelect) {
       e.stopPropagation();
       onToggleSelect();
-    } else if (e.altKey && onOpenInNewPane) {
-      onOpenInNewPane();
     } else if (onClick) {
       onClick();
     }
@@ -639,24 +635,21 @@ export function SessionCard({
         isExternal ? cardExternal : "",
         isDeleting ? cardDeleting : "",
       ].filter(Boolean).join(" ")}
-      data-testid="session-card"
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
-      role="group"
-      aria-roledescription="session"
+      role="button"
       tabIndex={0}
       aria-label={`Session ${session.title}, status: ${getStatusText(session.status)}, program: ${session.program}`}
+      aria-pressed={selectMode ? isSelected : undefined}
     >
-      {selectMode && (
-        <div className={checkbox} onClick={handleCheckboxClick}>
-          <input
-            type="checkbox"
-            checked={isSelected}
-            onChange={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
-            aria-label={`Select ${session.title}`}
-          />
-        </div>
-      )}
+      <div className={checkbox} onClick={handleCheckboxClick}>
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => { e.stopPropagation(); onToggleSelect?.(); }}
+          aria-label={`Select ${session.title}`}
+        />
+      </div>
       <div className={header}>
         <div className={titleRow}>
           {isInlineEditing ? (
@@ -802,12 +795,10 @@ export function SessionCard({
             <span className={label}>Program:</span>
             <span className={value}>{session.program}</span>
           </div>
-          {session.branch && (
-            <div className={infoRow}>
-              <span className={label}>Branch:</span>
-              <span className={value}>{session.branch}</span>
-            </div>
-          )}
+          <div className={infoRow}>
+            <span className={label}>Branch:</span>
+            <span className={value}>{session.branch}</span>
+          </div>
           <div className={infoRow}>
             <span className={label}>Path:</span>
             <span className={value} title={session.path}>
@@ -908,14 +899,27 @@ export function SessionCard({
 
       <div className={footer}>
         <div className={timestamps}>
-          {session.updatedAt && (
-            <span
-              className={timestamp}
-              title={`Created: ${formatDate(session.createdAt)}\nUpdated: ${formatDate(session.updatedAt)}`}
-            >
-              Updated <time dateTime={new Date(Number(session.updatedAt.seconds) * 1000).toISOString()}>{formatTimeAgo(session.updatedAt)}</time>
-            </span>
-          )}
+          <span className={timestamp}>
+            Created: <time dateTime={session.createdAt ? new Date(Number(session.createdAt.seconds) * 1000).toISOString() : ""}>{formatDate(session.createdAt)}</time>
+          </span>
+          <span className={timestamp}>
+            Updated: <time dateTime={session.updatedAt ? new Date(Number(session.updatedAt.seconds) * 1000).toISOString() : ""}>{formatDate(session.updatedAt)}</time>
+          </span>
+          {(() => {
+            // Use the most recent of lastMeaningfulOutput and lastTerminalUpdate.
+            // lastMeaningfulOutput is gated by a content-signature check, so it can lag
+            // behind lastTerminalUpdate when content repeats (e.g. idle prompt).
+            const moSecs = session.lastMeaningfulOutput?.seconds ?? BigInt(0);
+            const tuSecs = session.lastTerminalUpdate?.seconds ?? BigInt(0);
+            const lastActivity = moSecs === BigInt(0) && tuSecs === BigInt(0)
+              ? undefined
+              : moSecs >= tuSecs ? session.lastMeaningfulOutput : session.lastTerminalUpdate;
+            return lastActivity ? (
+              <span className={timestamp} title="Last terminal activity">
+                Last Activity: <time dateTime={new Date(Number(lastActivity.seconds) * 1000).toISOString()}>{formatTimeAgo(lastActivity)}</time>
+              </span>
+            ) : null;
+          })()}
         </div>
 
         {/* Desktop: primary action + overflow menu */}
@@ -1010,16 +1014,6 @@ export function SessionCard({
                     aria-label={`Clone session ${session.title}`}
                   >
                     <span aria-hidden="true">⊕</span> Clone
-                  </button>
-                )}
-                {onOpenInNewPane && (
-                  <button
-                    role="menuitem"
-                    className={overflowMenuItem}
-                    onClick={(e) => { e.stopPropagation(); setShowOverflow(false); onOpenInNewPane(); }}
-                    aria-label={`Open ${session.title} in new pane`}
-                  >
-                    <span aria-hidden="true">⊞</span> Open in new pane
                   </button>
                 )}
                 <button

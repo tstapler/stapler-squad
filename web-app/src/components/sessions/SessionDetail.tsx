@@ -42,15 +42,13 @@ interface SessionDetailProps {
   onFullscreenChange?: (isFullscreen: boolean) => void;
   onTabChange?: (tab: SessionDetailTab) => void;
   initialTab?: SessionDetailTab;
-  /** When true, hides the title header and tab strip — caller (e.g. PaneHeader) owns those. */
-  embedded?: boolean;
-  onNext?: () => void;
-  onPrevious?: () => void;
-  showNavigation?: boolean;
-  onApprovalResolved?: () => void;
-  onDismissFromQueue?: () => void;
-  queuePosition?: number;
-  queueTotal?: number;
+  onNext?: () => void; // Navigate to next item in review queue
+  onPrevious?: () => void; // Navigate to previous item in review queue
+  showNavigation?: boolean; // Show navigation arrows (for review queue)
+  onApprovalResolved?: () => void; // Auto-advance callback when all approvals are resolved
+  onDismissFromQueue?: () => void; // Acknowledge current session and advance to next
+  queuePosition?: number; // 1-indexed position in the review queue (0 = not in queue)
+  queueTotal?: number; // Total items in the review queue
 }
 
 function getStatusLabel(status: SessionStatus): string {
@@ -81,7 +79,6 @@ export function SessionDetail({
   onFullscreenChange,
   onTabChange,
   initialTab = "info",
-  embedded = false,
   onNext,
   onPrevious,
   showNavigation = false,
@@ -91,12 +88,6 @@ export function SessionDetail({
   queueTotal,
 }: SessionDetailProps) {
   const [activeTab, setActiveTab] = useState<SessionDetailTab>(initialTab);
-
-  // Sync active tab when the pane's controlled tab changes (e.g. PaneHeader tab click)
-  useEffect(() => {
-    setActiveTab(initialTab);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialTab]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [filesSelectedPath, setFilesSelectedPath] = useState<string | null>(null);
@@ -311,7 +302,7 @@ export function SessionDetail({
 
   return (
     <div className={`${styles.container} ${isFullscreen ? styles.fullscreen : ""}`}>
-      {!embedded && <div className={`${styles.header} ${isFullscreen ? styles.fullscreenMobileHeader : ""}`} data-testid="session-header">
+      <div className={`${styles.header} ${isFullscreen ? styles.fullscreenMobileHeader : ""}`} data-testid="session-header">
         <h2
           className={`${styles.title} ${isFullscreen ? styles.fullscreenMobileTitle : ""}`}
           title={session.title}
@@ -400,9 +391,9 @@ export function SessionDetail({
             ✕
           </button>
         </ActionBar>
-      </div>}
+      </div>
 
-      {!embedded && <div
+      <div
         className={`${styles.tabs} ${isFullscreen ? styles.fullscreenMobileTabs : ""}`}
         role="tablist"
         onKeyDown={(e) => {
@@ -433,7 +424,7 @@ export function SessionDetail({
             <span className={styles.tabLabel}>{tab.label}</span>
           </button>
         ))}
-      </div>}
+      </div>
 
       <SessionVcsProvider sessionId={session.id} baseUrl={getApiBaseUrl()}>
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>

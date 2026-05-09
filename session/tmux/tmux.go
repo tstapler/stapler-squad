@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
@@ -273,18 +272,11 @@ func prependSocket(socket string, args []string) []string {
 	return append([]string{"-L", socket}, args...)
 }
 
-// TmuxServerReady is a zero-size proof token returned by EnsureServerRunning.
-// BuildRuntimeDeps requires it as its first parameter to enforce that the tmux
-// server is running before any sessions are loaded — preventing cold-restore of
-// processes that are still alive inside tmux.
-type TmuxServerReady struct{}
-
 // EnsureServerRunning starts the tmux server if it is not already running.
 // Uses exec.Command directly so it always runs regardless of circuit breaker state.
-// Returns a TmuxServerReady token that callers must pass to BuildRuntimeDeps.
-func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
+func EnsureServerRunning(serverSocket string) error {
 	if !checkServerNotRunning(serverSocket) {
-		return TmuxServerReady{}, nil // server is already running
+		return nil // server is already running
 	}
 	args := prependSocket(serverSocket, []string{"start-server"})
 	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -292,10 +284,10 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 	cmd := safeexec.CommandContext(startCtx, Binary(), args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return TmuxServerReady{}, fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
+		return fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
 	}
 	log.InfoLog.Printf("[tmux] server started successfully")
-	return TmuxServerReady{}, nil
+	return nil
 }
 
 // ensureServerRunning is a package-level variable holding the function called by
@@ -442,14 +434,7 @@ func NewTmuxSessionWithPrefixAndCleanup(name string, program string, prefix stri
 func NewTmuxSessionWithServerSocket(name string, program string, prefix string, serverSocket string, opts ...TmuxSessionOption) *TmuxSession {
 	baseExec := executor.MakeExecutor()
 	cbExec := executor.NewCircuitBreakerExecutor(baseExec, tmuxCircuitBreakerConfig())
-
-	// For isolated server sockets (used in tests), append the socket name to the registry key
-	// to prevent registration conflicts when multiple tests create sessions with the same name.
 	key := "tmux-" + name
-	if serverSocket != "" {
-		key += "-" + serverSocket
-	}
-
 	executor.GetGlobalRegistry().Register(key, cbExec)
 	s := newTmuxSessionWithSocket(name, program, MakePtyFactory(), cbExec, prefix, serverSocket, opts...)
 	s.registryKey = key
@@ -512,8 +497,7 @@ func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory
 	// Inject the server-level registry only when no explicit registry was provided.
 	// This prevents an unwanted reconnect loop when WithRegistry(nil) is passed for
 	// isolated sockets that have no keepalive session.
-	// In test mode, skip this entirely to avoid flaky control-mode connections.
-	if !s.registryExplicit && !config.IsTestMode() {
+	if !s.registryExplicit {
 		s.registry = GetServerRegistry(serverSocket)
 	}
 	return s
@@ -664,7 +648,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 
 	// Invalidate cache so the poll loop gets a fresh check immediately.
 	// The pre-creation DoesSessionExist() call above caches a "false" result,
-	// and the 5s cache TTL would otherwise cause the first 5s of the
+	// and the 500ms cache TTL would otherwise cause the first 500ms of the
 	// timeout window to be wasted on stale data.
 	t.invalidateExistsCache()
 
@@ -702,7 +686,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 		// from multiple active sessions (ReviewQueuePoller, control-mode streaming, etc.).
 		timeout := time.After(sessionCreateTimeout)
 		sleepDuration := sessionPollInitialDelay
-		for !t.DoesSessionExistNoCache() {
+		for !t.DoesSessionExist() {
 			select {
 			case <-timeout:
 				if cleanupErr := t.Close(); cleanupErr != nil {
@@ -870,7 +854,8 @@ func newStatusMonitor() *statusMonitor {
 // hash hashes the string.
 func (m *statusMonitor) hash(s string) []byte {
 	h := sha256.New()
-	_, _ = io.WriteString(h, s)
+	// TODO: this allocation sucks since the string is probably large. Ideally, we hash the string directly.
+	h.Write([]byte(s))
 	return h.Sum(nil)
 }
 
@@ -1428,7 +1413,7 @@ func recoverFromServerFailure(serverSocket, caller string) {
 		recoveryMu.Unlock()
 	}()
 
-	if _, restartErr := ensureServerRunning(serverSocket); restartErr == nil {
+	if restartErr := ensureServerRunning(serverSocket); restartErr == nil {
 		log.InfoLog.Printf("[tmux] server restarted from %s, resetting circuit breakers", caller)
 		executor.GetGlobalRegistry().ResetAll()
 		if onServerRecovered != nil {

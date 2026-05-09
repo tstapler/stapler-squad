@@ -22,7 +22,7 @@ export const badge = style({
       transform: "translateY(0)",
     },
     "&:focus": {
-      outline: `2px solid ${vars.color.primary}`,
+      outline: "2px solid #0969da",
       outlineOffset: 2,
     },
   },
@@ -40,33 +40,47 @@ export const compact = style({
 });
 
 export const prBadge = style({
-  background: vars.color.primary,
-  color: vars.color.primaryText,
-  borderColor: vars.color.primaryDark,
+  background: "#8250df",
+  color: "#ffffff",
+  borderColor: "#6e40c9",
   selectors: {
     "&:hover": {
-      background: vars.color.primaryDark,
+      background: "#6e40c9",
       boxShadow: "0 2px 6px rgba(130, 80, 223, 0.3)",
+    },
+  },
+  "@media": {
+    "(prefers-color-scheme: dark)": {
+      background: "#8957e5",
+      color: "#ffffff",
+      borderColor: "#7741d9",
     },
   },
 });
 
 export const repoBadge = style({
-  background: vars.color.surfaceSubtle,
-  color: vars.color.textPrimary,
-  borderColor: vars.color.borderColor,
+  background: "#f6f8fa",
+  color: "#24292f",
+  borderColor: "#d0d7de",
   selectors: {
     "&:hover": {
-      background: vars.color.hoverBackground,
-      borderColor: vars.color.borderHover,
+      background: "#eaeef2",
+      borderColor: "#afb8c1",
       boxShadow: "0 2px 6px rgba(0, 0, 0, 0.1)",
+    },
+  },
+  "@media": {
+    "(prefers-color-scheme: dark)": {
+      background: "#21262d",
+      color: "#c9d1d9",
+      borderColor: "#30363d",
     },
   },
 });
 
 export const prBadgeBlocking = style({
   background: vars.color.error,
-  color: vars.color.primaryText,
+  color: "#ffffff",
   borderColor: vars.color.error,
   selectors: {
     "&:hover": {
@@ -78,7 +92,7 @@ export const prBadgeBlocking = style({
 
 export const prBadgeReady = style({
   background: vars.color.success,
-  color: vars.color.primaryText,
+  color: "#ffffff",
   borderColor: vars.color.success,
   selectors: {
     "&:hover": {
@@ -90,7 +104,7 @@ export const prBadgeReady = style({
 
 export const prBadgePending = style({
   background: vars.color.warning,
-  color: vars.color.textPrimary,
+  color: "#1a1a1a",
   borderColor: vars.color.warning,
   selectors: {
     "&:hover": {
@@ -102,7 +116,7 @@ export const prBadgePending = style({
 
 export const prBadgeDraft = style({
   background: vars.color.textMuted,
-  color: vars.color.primaryText,
+  color: "#ffffff",
   borderColor: vars.color.textMuted,
   selectors: {
     "&:hover": {
@@ -114,7 +128,7 @@ export const prBadgeDraft = style({
 
 export const prBadgeComplete = style({
   background: vars.color.textSecondary,
-  color: vars.color.primaryText,
+  color: "#ffffff",
   borderColor: vars.color.textSecondary,
   opacity: 0.8,
   selectors: {
@@ -126,7 +140,7 @@ export const prBadgeComplete = style({
 
 export const prBadgeError = style({
   background: vars.color.error,
-  color: vars.color.primaryText,
+  color: "#ffffff",
   borderColor: vars.color.error,
   selectors: {
     "&:hover": {

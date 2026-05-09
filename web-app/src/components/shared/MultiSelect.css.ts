@@ -1,5 +1,4 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
 
 export const container = style({
   position: "relative",
@@ -11,7 +10,7 @@ export const container = style({
 export const label = style({
   fontSize: "0.85rem",
   fontWeight: 500,
-  color: vars.color.terminalTextMuted,
+  color: "#999",
 });
 
 export const trigger = style({
@@ -19,9 +18,9 @@ export const trigger = style({
   alignItems: "center",
   gap: "0.5rem",
   padding: "0.5rem",
-  backgroundColor: vars.color.terminalBackground,
-  border: `1px solid ${vars.color.terminalBorder}`,
-  color: vars.color.terminalForeground,
+  backgroundColor: "#0a0a0a",
+  border: "1px solid #444",
+  color: "#e5e5e5",
   borderRadius: "4px",
   cursor: "pointer",
   fontSize: "0.9rem",
@@ -30,11 +29,11 @@ export const trigger = style({
   minWidth: "120px",
   selectors: {
     "&:hover": {
-      borderColor: vars.color.terminalBorder,
+      borderColor: "#666",
     },
     "&:focus": {
       outline: "none",
-      borderColor: vars.color.primary,
+      borderColor: "#17a2b8",
     },
   },
 });
@@ -46,7 +45,7 @@ export const text = style({
 
 export const chevron = style({
   fontSize: "0.7rem",
-  color: vars.color.terminalTextMuted,
+  color: "#666",
 });
 
 export const dropdown = style({
@@ -54,8 +53,8 @@ export const dropdown = style({
   top: "100%",
   left: "0",
   marginTop: "4px",
-  backgroundColor: vars.color.terminalBackground,
-  border: `1px solid ${vars.color.terminalBorder}`,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #333",
   borderRadius: "6px",
   boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
   zIndex: 100,
@@ -73,8 +72,8 @@ export const actionButton = style({
   flex: 1,
   padding: "0.25rem 0.5rem",
   background: "none",
-  border: `1px solid ${vars.color.terminalBorder}`,
-  color: vars.color.primary,
+  border: "1px solid #444",
+  color: "#17a2b8",
   borderRadius: "4px",
   cursor: "pointer",
   fontSize: "0.75rem",
@@ -82,14 +81,14 @@ export const actionButton = style({
   transition: "background-color 0.15s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.terminalHoverBg,
+      backgroundColor: "#2a2a2a",
     },
   },
 });
 
 export const divider = style({
   height: "1px",
-  backgroundColor: vars.color.terminalBorder,
+  backgroundColor: "#333",
 });
 
 export const options = style({
@@ -110,7 +109,7 @@ export const option = style({
   transition: "background-color 0.15s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.terminalHoverBg,
+      backgroundColor: "#2a2a2a",
     },
   },
 });
@@ -118,7 +117,7 @@ export const option = style({
 export const checkbox = style({
   width: "16px",
   height: "16px",
-  accentColor: vars.color.primary,
+  accentColor: "#17a2b8",
   cursor: "pointer",
 });
 

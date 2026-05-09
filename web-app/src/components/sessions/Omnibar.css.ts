@@ -6,11 +6,9 @@ const fadeIn = keyframes({
   to: { opacity: 1 },
 });
 
-// Story 6.1: Theme-specific opening animation — scale + fade for cyberpunk feel
-const scanlineReveal = keyframes({
-  from: { opacity: 0, transform: "translateY(-16px) scaleY(0.95)", filter: "brightness(2)" },
-  "60%": { filter: "brightness(1.2)" },
-  to: { opacity: 1, transform: "translateY(0) scaleY(1)", filter: "brightness(1)" },
+const slideDown = keyframes({
+  from: { transform: "translateY(-20px)", opacity: 0 },
+  to: { transform: "translateY(0)", opacity: 1 },
 });
 
 const spin = keyframes({
@@ -24,17 +22,16 @@ export const overlay = style({
   left: 0,
   right: 0,
   bottom: 0,
-  background: vars.color.overlayBackground,
+  background: "rgba(0, 0, 0, 0.6)",
   display: "flex",
   alignItems: "flex-start",
   justifyContent: "center",
   paddingTop: "10vh",
   zIndex: 1000,
+  animation: `${fadeIn} 0.15s ease-out`,
   "@media": {
-    "(prefers-reduced-motion: no-preference)": {
-      animationName: fadeIn,
-      animationDuration: "0.15s",
-      animationTimingFunction: "ease-out",
+    "(prefers-color-scheme: light)": {
+      background: "rgba(0, 0, 0, 0.4)",
     },
   },
 });
@@ -44,15 +41,14 @@ export const modal = style({
   borderRadius: 12,
   width: "100%",
   maxWidth: 600,
-  // Story 6.1: Theme-aware glow border on omnibar
-  boxShadow: `0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 1px ${vars.color.glowSecondary}`,
+  boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.5)",
   overflow: "hidden",
   position: "relative",
+  animation: `${slideDown} 0.2s ease-out`,
   "@media": {
-    "(prefers-reduced-motion: no-preference)": {
-      animationName: scanlineReveal,
-      animationDuration: "0.22s",
-      animationTimingFunction: "ease-out",
+    "(prefers-color-scheme: light)": {
+      background: "#fff",
+      boxShadow: "0 25px 50px -12px rgba(0, 0, 0, 0.25)",
     },
   },
 });
@@ -63,6 +59,11 @@ export const inputContainer = style({
   padding: 16,
   borderBottom: `1px solid ${vars.color.borderColor}`,
   gap: 12,
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      borderBottomColor: "#e5e5e5",
+    },
+  },
 });
 
 export const typeIndicator = style({
@@ -88,12 +89,23 @@ export const input = style({
       color: vars.color.textMuted,
     },
   },
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      color: "#111",
+    },
+  },
 });
 
 export const detectionInfo = style({
   padding: "12px 16px",
   background: vars.color.hoverBackground,
   borderBottom: `1px solid ${vars.color.borderColor}`,
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "#f5f5f5",
+      borderBottomColor: "#e5e5e5",
+    },
+  },
 });
 
 export const detectionBadge = style({
@@ -149,6 +161,13 @@ export const fieldInput = style({
       color: vars.color.textMuted,
     },
   },
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "#f5f5f5",
+      borderColor: "#e5e5e5",
+      color: "#111",
+    },
+  },
 });
 
 export const hint = style({
@@ -168,6 +187,13 @@ export const select = style({
   selectors: {
     "&:focus": {
       borderColor: vars.color.primary,
+    },
+  },
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "#f5f5f5",
+      borderColor: "#e5e5e5",
+      color: "#111",
     },
   },
 });
@@ -230,6 +256,12 @@ export const footer = style({
   padding: 16,
   borderTop: `1px solid ${vars.color.borderColor}`,
   background: vars.color.hoverBackground,
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "#f5f5f5",
+      borderTopColor: "#e5e5e5",
+    },
+  },
 });
 
 export const button = style({
@@ -256,7 +288,7 @@ export const buttonSecondary = style({
 
 export const buttonPrimary = style({
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "white",
   selectors: {
     "&:hover": {
       background: vars.color.accentHover,
@@ -284,6 +316,11 @@ export const shortcuts = style({
   background: vars.color.hoverBackground,
   fontSize: 12,
   color: vars.color.textMuted,
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "#f5f5f5",
+    },
+  },
 });
 
 export const shortcut = style({
@@ -297,6 +334,11 @@ export const shortcutKey = style({
   padding: "2px 6px",
   borderRadius: 4,
   fontFamily: "monospace",
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "#e5e5e5",
+    },
+  },
 });
 
 export const completionError = style({
@@ -316,11 +358,11 @@ export const pathIndicator = style({
 });
 
 export const pathIndicatorValid = style({
-  color: vars.color.success,
+  color: "#22c55e",
 });
 
 export const pathIndicatorInvalid = style({
-  color: vars.color.error,
+  color: "#ef4444",
 });
 
 export const pathIndicatorLoading = style({

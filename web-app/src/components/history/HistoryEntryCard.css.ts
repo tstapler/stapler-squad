@@ -12,12 +12,12 @@ export const entryCard = style({
   selectors: {
     "&:hover": {
       borderColor: vars.color.primary,
-      background: vars.color.accentBg,
+      background: "rgba(59, 130, 246, 0.05)",
     },
     "&:focus": {
       outline: "none",
       borderColor: vars.color.primary,
-      boxShadow: `0 0 0 2px ${vars.color.glowPrimary}`,
+      boxShadow: "0 0 0 2px rgba(59, 130, 246, 0.2)",
     },
   },
 });
@@ -46,7 +46,7 @@ export const entryName = style({
 
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.textInverse,
+      color: "rgba(255, 255, 255, 0.9)",
     },
   },
 });
@@ -59,7 +59,7 @@ export const entryTime = style({
 
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.textInverse,
+      color: "rgba(255, 255, 255, 0.9)",
     },
   },
 });
@@ -74,7 +74,7 @@ export const entryMeta = style({
 
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.textInverse,
+      color: "rgba(255, 255, 255, 0.9)",
     },
   },
 });
@@ -89,7 +89,7 @@ export const entryDivider = style({
 
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.textInverse,
+      color: "rgba(255, 255, 255, 0.9)",
     },
   },
 });
@@ -97,7 +97,7 @@ export const entryDivider = style({
 export const entryMessages = style({
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.textInverse,
+      color: "rgba(255, 255, 255, 0.9)",
     },
   },
 });
@@ -111,7 +111,7 @@ export const entryProject = style({
 
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.textInverse,
+      color: "rgba(255, 255, 255, 0.9)",
     },
   },
 });
@@ -124,7 +124,7 @@ export const entryBranch = style({
 
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.textInverse,
+      color: "rgba(255, 255, 255, 0.9)",
     },
   },
 });
@@ -136,7 +136,7 @@ export const entryDirty = style({
 
   selectors: {
     [`${selected} &`]: {
-      color: vars.color.warningText,
+      color: "#fde68a",
     },
   },
 });

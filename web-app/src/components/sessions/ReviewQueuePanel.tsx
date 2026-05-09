@@ -366,9 +366,11 @@ export function ReviewQueuePanel({
         <div className={titleRow}>
           <h2 className={title}>
             Review Queue{" "}
-            <span className={count} data-testid="review-queue-badge">
-              {totalItems}
-            </span>
+            {totalItems > 0 && (
+              <span className={count} data-testid="review-queue-badge">
+                ({totalItems})
+              </span>
+            )}
           </h2>
           <button
             onClick={refreshSnapshot}
@@ -526,7 +528,6 @@ export function ReviewQueuePanel({
           )
         ) : (
           <>
-            {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
             {items.map((queueItem, index) => (
               <div
                 key={queueItem.sessionId}
@@ -724,6 +725,7 @@ export function ReviewQueuePanel({
                 </div>
               </div>
             ))}
+            {!loading && <div data-testid="review-queue-loaded" aria-hidden="true" />}
           </>
         )}
       </div>

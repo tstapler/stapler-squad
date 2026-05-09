@@ -260,6 +260,12 @@ func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig
 	} else {
 		proto.NewProjectBaseDir = cfg.NewProjectBaseDir
 	}
+	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
+	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {
+		proto.NewProjectBaseDir = resolvedNewProjectDir
+	} else {
+		proto.NewProjectBaseDir = cfg.NewProjectBaseDir
+	}
 	if proto.EnvVars == nil {
 		proto.EnvVars = make(map[string]string)
 	}

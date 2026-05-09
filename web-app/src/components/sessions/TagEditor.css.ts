@@ -17,7 +17,7 @@ export const overlay = style({
   left: 0,
   right: 0,
   bottom: 0,
-  background: vars.color.overlayBackground,
+  background: "rgba(0, 0, 0, 0.5)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -115,7 +115,7 @@ export const addButton = style({
 
 export const error = style({
   margin: "8px 0 0 0",
-  color: vars.color.error,
+  color: "#dc2626",
   fontSize: "13px",
   fontWeight: 500,
 });

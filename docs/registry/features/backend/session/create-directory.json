@@ -1,0 +1,16 @@
+{
+  "id": "session:create-directory",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CreateSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestResolveSessionType_ExplicitDirectory",
+    "TestResolveSessionType_UnspecifiedDefaultsToDirectory",
+    "TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory"
+  ],
+  "lastModified": "2026-05-01T00:00:00Z"
+}

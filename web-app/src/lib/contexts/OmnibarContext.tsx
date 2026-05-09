@@ -92,14 +92,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     [router, close]
   );
 
-  const handleNavigateToSessionInNewPane = useCallback(
-    (sessionId: string) => {
-      router.push(`/?session=${sessionId}&newPane=true`);
-      close();
-    },
-    [router, close]
-  );
-
   // Handle session creation
   const handleCreateSession = useCallback(
     async (data: OmnibarSessionData) => {
@@ -158,7 +150,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onClose={close}
         onCreateSession={handleCreateSession}
         onNavigateToSession={handleNavigateToSession}
-        onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         initialMode={initialMode}
       />
     </OmnibarContext.Provider>

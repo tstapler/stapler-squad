@@ -629,9 +629,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				h.markSnapshotDirty(sessionID)
 
 				// Coalesce: drain any immediately available frames into a single write.
-				// Copy data into a fresh buffer — data is broadcast to all subscribers
-				// and shares a backing array; appending into it would corrupt other readers.
-				buf := append([]byte(nil), data...)
+				buf := data
 			coalesce:
 				for {
 					select {

@@ -17,7 +17,7 @@ export const overlay = style({
   left: 0,
   right: 0,
   bottom: 0,
-  background: vars.color.overlayBackground,
+  background: "rgba(0, 0, 0, 0.5)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -102,7 +102,7 @@ export const conflictHint = style({
   display: "block",
   margin: "6px 0 0 0",
   fontSize: "12px",
-  color: vars.color.warning,
+  color: "#d97706",
   fontWeight: 500,
 });
 
@@ -140,7 +140,7 @@ export const tagInput = style({
 export const addTagButton = style({
   padding: "8px 16px",
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "white",
   border: "none",
   borderRadius: "6px",
   fontSize: "13px",
@@ -216,7 +216,7 @@ export const emptyTags = style({
 
 export const tagError = style({
   margin: "4px 0 0 0",
-  color: vars.color.error,
+  color: "#dc2626",
   fontSize: "12px",
   fontWeight: 500,
 });
@@ -284,7 +284,7 @@ export const cancelButton = style({
 export const resumeButton = style({
   padding: "10px 24px",
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "white",
   border: "none",
   borderRadius: "6px",
   fontSize: "14px",

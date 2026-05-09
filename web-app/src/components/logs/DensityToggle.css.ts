@@ -1,10 +1,9 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
 
 export const container = style({
   display: "flex",
-  backgroundColor: vars.color.cardBackground,
-  border: `1px solid ${vars.color.borderColor}`,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #333",
   borderRadius: "4px",
   overflow: "hidden",
 });
@@ -18,8 +17,8 @@ export const option = style({
   padding: "0",
   background: "none",
   border: "none",
-  borderRight: `1px solid ${vars.color.borderColor}`,
-  color: vars.color.textMuted,
+  borderRight: "1px solid #333",
+  color: "#666",
   cursor: "pointer",
   fontSize: "0.9rem",
   transition: "all 0.15s",
@@ -28,18 +27,18 @@ export const option = style({
       borderRight: "none",
     },
     "&:hover": {
-      backgroundColor: vars.color.hoverBackground,
-      color: vars.color.textMuted,
+      backgroundColor: "#2a2a2a",
+      color: "#999",
     },
   },
 });
 
 export const active = style({
-  backgroundColor: vars.color.primary,
-  color: vars.color.primaryText,
+  backgroundColor: "#17a2b8",
+  color: "#fff",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.primaryHover,
+      backgroundColor: "#138496",
     },
   },
 });

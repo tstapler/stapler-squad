@@ -1,18 +1,5 @@
 require('@testing-library/jest-dom');
 
-// Global mock for Next.js navigation hooks (not available in jsdom)
-jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: jest.fn(), replace: jest.fn(), prefetch: jest.fn(), back: jest.fn() }),
-  usePathname: () => '/',
-  useSearchParams: () => new URLSearchParams(),
-}));
-
-// Global mock for ThemeContext — components using useTheme don't need a provider in tests
-jest.mock('@/lib/contexts/ThemeContext', () => ({
-  useTheme: () => ({ theme: 'matrix', setTheme: jest.fn() }),
-  ThemeProvider: ({ children }) => children,
-}));
-
 // Polyfill TextEncoder/TextDecoder for jsdom
 const { TextEncoder, TextDecoder } = require('util');
 global.TextEncoder = TextEncoder;

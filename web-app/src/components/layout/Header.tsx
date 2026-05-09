@@ -8,7 +8,6 @@ import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
 import { ApprovalNavBadge } from "@/components/sessions/ApprovalNavBadge";
 import { UnfinishedNavBadge } from "@/components/unfinished/UnfinishedNavBadge";
 import { DebugMenu } from "@/components/ui/DebugMenu";
-import { NotificationsNavBadge } from "@/components/ui/NotificationsNavBadge";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { routes } from "@/lib/routes";
@@ -76,20 +75,17 @@ export function Header() {
               const isActive = page.href === routes.home
                 ? pathname === routes.home
                 : pathname?.startsWith(page.href);
-              const isSecondary = page.headerNav === false;
               return (
                 <AppLink
                   key={page.href}
                   href={page.href}
-                  className={`${styles.navLink} ${isActive ? styles.active : ""} ${isSecondary ? styles.hamburgerOnlyNavLink : ""}`}
+                  className={`${styles.navLink} ${isActive ? styles.active : ""}`}
                   aria-current={isActive ? "page" : undefined}
                 >
                   {page.href === routes.unfinished ? (
                     <><span>{page.label}</span><UnfinishedNavBadge inline={true} /></>
                   ) : page.href === routes.reviewQueue ? (
                     <><span>{page.label}</span><ReviewQueueNavBadge inline={true} /></>
-                  ) : page.href === routes.notifications ? (
-                    <><span>{page.label}</span><NotificationsNavBadge inline={true} /></>
                   ) : (
                     page.label
                   )}

@@ -46,7 +46,6 @@ export function toastAutoCloseMs(type: NotificationData["notificationType"]): nu
  */
 export function toastAutoMinimizeMs(type: NotificationData["notificationType"]): number {
   if (isActionable(type)) return 0;
-  if (type === "error" || type === "task_failed") return 5_000;
-  if (type === "warning") return 5_000;
-  return 3_000;
+  if (type === "error" || type === "task_failed" || type === "warning") return 5_000;
+  return 0;
 }

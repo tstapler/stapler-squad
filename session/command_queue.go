@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/tstapler/stapler-squad/log"
 )
 
 // CommandStatus represents the current status of a command in the queue.
@@ -175,7 +173,7 @@ func (cq *CommandQueue) Dequeue() *Command {
 	if cq.persistPath != "" {
 		if err := cq.saveUnsafe(); err != nil {
 			// Log error but don't fail the dequeue operation
-			log.ErrorLog.Printf("failed to persist command queue state for session %s: %v", cq.sessionName, err)
+			_ = err // TODO: log this error
 		}
 	}
 

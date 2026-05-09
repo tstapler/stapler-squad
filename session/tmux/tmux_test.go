@@ -224,7 +224,7 @@ func TestEnsureServerRunning_NoOp(t *testing.T) {
 	require.NoError(t, safeexec.CommandContext(newSessionCtx, "tmux", "-L", socketName, "new-session", "-d", "-s", "keepalive").Run())
 
 	// With the server running and a live session, EnsureServerRunning should be a no-op.
-	_, err := EnsureServerRunning(socketName)
+	err := EnsureServerRunning(socketName)
 	require.NoError(t, err, "EnsureServerRunning should be a no-op when server is already running")
 }
 
@@ -249,7 +249,7 @@ func TestEnsureServerRunning_StartsServer(t *testing.T) {
 		"server should not be running before the test starts")
 
 	// EnsureServerRunning should start the server.
-	_, err := EnsureServerRunning(socketName)
+	err := EnsureServerRunning(socketName)
 	require.NoError(t, err)
 
 	// On macOS, tmux's default exit-empty=on causes the server to exit immediately
@@ -478,7 +478,7 @@ func TestSetServerRecoveryCallback(t *testing.T) {
 	// Inject a succeeding ensureServerRunning so recoverFromServerFailure
 	// takes the success branch and fires the callback.
 	origEnsure := ensureServerRunning
-	ensureServerRunning = func(_ string) (TmuxServerReady, error) { return TmuxServerReady{}, nil }
+	ensureServerRunning = func(_ string) error { return nil }
 	t.Cleanup(func() { ensureServerRunning = origEnsure })
 
 	// Ensure recoveryInFlight is clean before and after.

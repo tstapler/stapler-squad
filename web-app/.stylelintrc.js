@@ -95,14 +95,8 @@ module.exports = {
     // :root instead. Exception: globals.css itself defines the tokens
     // (see overrides section at the bottom of this file).
     'declaration-property-value-disallowed-list': {
-      // Ban height units that ignore the Android Chrome URL bar or iOS keyboard.
-      // - 100vh / 100lvh  = large-viewport height (URL bar hidden) — same bug
-      // - 100dvh (bare)   = dynamic height that bypasses ViewportProvider for iOS keyboard
-      // Use var(--viewport-height, 100dvh) — the single source of truth managed by ViewportProvider.
       '/^(?:height|min-height|max-height|block-size|min-block-size)$/': [
         '/100vh/',
-        '/100dvh/',
-        '/100lvh/',
       ],
       '/.+/': [
         '/env\\(safe-area-inset-/',

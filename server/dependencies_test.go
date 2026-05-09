@@ -2,8 +2,6 @@ package server
 
 import (
 	"testing"
-
-	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 func TestBuildServiceDeps_RejectsNilCore(t *testing.T) {
@@ -23,9 +21,7 @@ func TestBuildServiceDeps_RejectsNilCoreFields(t *testing.T) {
 }
 
 func TestBuildRuntimeDeps_RejectsNilService(t *testing.T) {
-	// The zero-value token is acceptable here — this test is only checking the
-	// nil-ServiceDeps guard, not that tmux is actually running.
-	_, err := BuildRuntimeDeps(tmux.TmuxServerReady{}, nil)
+	_, err := BuildRuntimeDeps(nil)
 	if err == nil {
 		t.Fatal("expected error for nil ServiceDeps")
 	}

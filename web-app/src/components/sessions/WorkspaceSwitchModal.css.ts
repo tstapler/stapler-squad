@@ -14,7 +14,7 @@ const slideIn = keyframes({
 export const modalOverlay = style({
   position: "fixed",
   inset: 0,
-  background: vars.color.overlayBackground,
+  background: "rgba(0, 0, 0, 0.6)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -356,7 +356,7 @@ export const successBanner = style({
   alignItems: "center",
   gap: "0.5rem",
   fontSize: "0.8125rem",
-  color: vars.color.success,
+  color: "#065f46",
 });
 
 export const warningBanner = style({

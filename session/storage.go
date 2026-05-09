@@ -332,16 +332,14 @@ func (s *Storage) UpdateInstancePRStatus(_, _, _, _ string, _, _ int, _, _ bool)
 	return nil
 }
 
-// UpdateInstancePRNumber is intentionally a no-op: PR number is not persisted in
-// the ent schema. Callers (e.g. PRStatusPoller) call this as a persistence hook,
-// but no DB write occurs.
+// UpdateInstancePRNumber updates the GitHubPRNumber when discovered by auto-discovery.
+// PR fields are not stored in the ent schema; no DB write is needed.
 func (s *Storage) UpdateInstancePRNumber(_ string, _ int) error {
 	return nil
 }
 
-// UpdateInstanceForkFlag is intentionally a no-op: fork status is not persisted in
-// the ent schema. Callers (e.g. PRStatusPoller) call this as a persistence hook,
-// but no DB write occurs.
+// UpdateInstanceForkFlag records whether the repo for a session is a fork.
+// PR fields are not stored in the ent schema; no DB write is needed.
 func (s *Storage) UpdateInstanceForkFlag(_ string, _ bool) error {
 	return nil
 }

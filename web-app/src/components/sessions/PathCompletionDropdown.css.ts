@@ -9,6 +9,12 @@ export const dropdown = style({
   overflowY: "auto",
   borderBottom: `1px solid ${vars.color.borderColor}`,
   background: vars.color.cardBackground,
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "#fff",
+      borderBottomColor: "#e5e5e5",
+    },
+  },
 });
 
 export const item = style({
@@ -26,10 +32,20 @@ export const item = style({
       background: vars.color.accentBg,
     },
   },
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      color: "#111",
+    },
+  },
 });
 
 export const itemSelected = style({
   background: vars.color.accentBg,
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      background: "rgba(59, 130, 246, 0.15)",
+    },
+  },
 });
 
 export const icon = style({
@@ -68,4 +84,9 @@ export const loading = style({
   fontSize: 13,
   color: vars.color.textMuted,
   borderBottom: `1px solid ${vars.color.borderColor}`,
+  "@media": {
+    "(prefers-color-scheme: light)": {
+      borderBottomColor: "#e5e5e5",
+    },
+  },
 });

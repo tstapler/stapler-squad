@@ -184,12 +184,11 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 			log.ErrorLog.Printf("Failed to create notification history store: %v", storeErr)
 			notifStore = nil
 		} else {
-			// Wire into SessionService BEFORE subscribing to EventBus so any
-			// in-flight event handler that calls GetNotificationStore() sees a
-			// non-nil value even if the subscriber goroutine races ahead.
-			deps.SessionService.SetNotificationStore(notifStore)
 			notifications.StartSubscriber(serverCtx, deps.EventBus, notifStore)
 			log.InfoLog.Printf("NotificationHistoryStore initialized at %s", notifStorePath)
+
+			// Wire the notification store into the session service for RPC access
+			deps.SessionService.SetNotificationStore(notifStore)
 		}
 	}
 

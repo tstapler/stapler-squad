@@ -80,9 +80,9 @@ export const breadcrumbSep = style({
 
 export const truncationWarning = style({
   padding: "6px 12px",
-  background: vars.color.warningBg,
-  borderBottom: `1px solid ${vars.color.warning}`,
-  color: vars.color.warning,
+  background: "rgba(204, 167, 0, 0.1)",
+  borderBottom: "1px solid rgba(204, 167, 0, 0.3)",
+  color: "#cca700",
   fontSize: 12,
 });
 

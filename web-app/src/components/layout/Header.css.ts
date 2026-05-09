@@ -150,15 +150,6 @@ export const navLink = style({
   },
 });
 
-/** Shown only in the hamburger dropdown, hidden in the inline desktop nav row. */
-export const hamburgerOnlyNavLink = style({
-  "@media": {
-    "(min-width: 1100px)": {
-      display: "none",
-    },
-  },
-});
-
 export const active = style({
   // Use textPrimary (overridden to #ededed inside the dark header) instead of
   // vars.color.primary (#0070f3) which fails WCAG AA on the dark header backdrop.
@@ -194,7 +185,7 @@ export const newSessionButton = style({
   borderRadius: vars.radii.md,
   fontSize: vars.fontSize.sm,
   fontWeight: "600",
-  color: vars.color.primaryText,
+  color: "white",
   background: vars.color.primary,
   textDecoration: "none",
   transition: "all 0.2s ease",
@@ -304,7 +295,7 @@ export const notificationBadge = style({
   height: "1.25rem",
   padding: `0 ${vars.space["1"]}`,
   background: vars.color.error,
-  color: vars.color.primaryText,
+  color: "white",
   fontSize: vars.fontSize.xs,
   fontWeight: "600",
   borderRadius: "10px",

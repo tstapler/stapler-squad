@@ -212,9 +212,11 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
         clearTimeout(flushTimer);
         flushTimer = null;
       }
-      // Discard pending buffer on cleanup — the beforeunload beacon handles
-      // data preservation on actual page unload.
-      buffer.length = 0;
+      // Flush any buffered entries before tearing down so logs within the
+      // batching window are not silently lost when the toggle is turned off.
+      if (buffer.length > 0) {
+        flush();
+      }
     };
   }, [options.enabled]); // re-run only when enabled changes
 }

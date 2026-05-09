@@ -14,8 +14,8 @@
 
 import { test, expect } from '@playwright/test';
 
-// Base URL falls back to the test server port; playwright.config.ts sets baseURL
-const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
+// Base URL falls back to the production server port; playwright.config.ts sets baseURL
+const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8543';
 
 test.describe('Review Queue Smoke Tests', () => {
   test('review queue page loads successfully', async ({ page }) => {
@@ -24,18 +24,18 @@ test.describe('Review Queue Smoke Tests', () => {
 
     // Verify page elements are present
     await expect(page.locator('[data-testid="review-queue"]')).toBeVisible();
-    await expect(page.locator('[data-testid="review-queue"] [data-testid="review-queue-badge"]')).toBeVisible();
+    await expect(page.locator('[data-testid="review-queue-badge"]')).toBeVisible();
   });
 
   test('review queue badge is visible', async ({ page }) => {
     await page.goto(`${BASE_URL}/review-queue`);
 
-    const badge = page.locator('[data-testid="review-queue"] [data-testid="review-queue-badge"]');
+    const badge = page.locator('[data-testid="review-queue-badge"]');
     await expect(badge).toBeVisible();
 
     // Badge should show a number (even if 0)
     const text = await badge.textContent();
-    expect(text?.trim()).toMatch(/^\d+$/);
+    expect(text).toMatch(/^\d+$/);
   });
 
   test('review queue panel renders without errors', async ({ page }) => {
@@ -56,11 +56,11 @@ test.describe('Session Creation Flow (UI Only)', () => {
   test('session creation wizard has all steps', async ({ page }) => {
     await page.goto(`${BASE_URL}/sessions/new`);
 
-    // Verify wizard steps are present
-    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Basic Info' })).toBeVisible();
-    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Repository' })).toBeVisible();
-    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Configuration' })).toBeVisible();
-    await expect(page.locator('[data-testid="wizard-step-label"]', { hasText: 'Review' })).toBeVisible();
+    // Verify wizard steps are present (using more specific selectors to avoid multiple matches)
+    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Basic Info' })).toBeVisible();
+    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Repository' })).toBeVisible();
+    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Configuration' })).toBeVisible();
+    await expect(page.locator('.Wizard_stepLabel__dIAKY', { hasText: 'Review' })).toBeVisible();
   });
 
   test('session creation form has required test IDs', async ({ page }) => {
@@ -116,7 +116,7 @@ test.describe('Review Queue Acknowledge Flow — UI Contract', () => {
   test('when queue has items, each carries acknowledge data-testid', async ({ page }) => {
     // +feature: ui:review-queue
     await page.goto(`${BASE_URL}/review-queue`);
-    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000, state: 'attached' });
+    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000 });
 
     const items = await page.locator('[data-testid^="review-item-"]').all();
 
@@ -140,7 +140,7 @@ test.describe('Review Queue Acknowledge Flow — UI Contract', () => {
   test('acknowledge button removes item from DOM (optimistic UI)', async ({ page }) => {
     // +feature: ui:review-queue
     await page.goto(`${BASE_URL}/review-queue`);
-    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000, state: 'attached' });
+    await page.waitForSelector('[data-testid="review-queue-loaded"]', { timeout: 10000 });
 
     const items = await page.locator('[data-testid^="review-item-"]').all();
 

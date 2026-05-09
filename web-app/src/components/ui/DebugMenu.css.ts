@@ -21,7 +21,7 @@ export const overlay = style({
   left: 0,
   right: 0,
   bottom: 0,
-  background: vars.color.overlayBackground,
+  background: "rgba(0, 0, 0, 0.7)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -40,6 +40,12 @@ export const menu = style({
   flexDirection: "column",
   boxShadow: "0 10px 40px rgba(0, 0, 0, 0.3)",
   animation: `${slideUp} 0.2s ease-out`,
+  "@media": {
+    "(prefers-color-scheme: dark)": {
+      background: "#1a1a1a",
+      borderColor: "#333",
+    },
+  },
 });
 
 export const header = style({
@@ -118,6 +124,16 @@ export const toggleRow = style({
       background: vars.color.hoverBackground,
     },
   },
+  "@media": {
+    "(prefers-color-scheme: dark)": {
+      background: "#222",
+      selectors: {
+        "&:hover": {
+          background: "#2a2a2a",
+        },
+      },
+    },
+  },
 });
 
 export const toggleLabel = style({
@@ -171,7 +187,7 @@ export const toggleSlider = style({
   left: "2px",
   width: "24px",
   height: "24px",
-  background: vars.color.primaryText,
+  background: "white",
   borderRadius: "50%",
   transition: "transform 0.2s ease",
   boxShadow: "0 2px 4px rgba(0, 0, 0, 0.2)",
@@ -186,6 +202,11 @@ export const commandList = style({
   background: vars.color.cardBackground,
   padding: "16px",
   borderRadius: "8px",
+  "@media": {
+    "(prefers-color-scheme: dark)": {
+      background: "#222",
+    },
+  },
 });
 
 export const command = style({
@@ -195,7 +216,7 @@ export const command = style({
   color: vars.color.success,
   marginBottom: "8px",
   padding: "8px 12px",
-  background: vars.color.accentBg,
+  background: "rgba(0, 0, 0, 0.2)",
   borderRadius: "4px",
   wordBreak: "break-all",
 });
@@ -256,7 +277,7 @@ export const footer = style({
 export const doneButton = style({
   padding: "10px 24px",
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "white",
   border: "none",
   borderRadius: "6px",
   fontSize: "14px",
@@ -356,7 +377,7 @@ export const snapshotFilePath = style({
   color: vars.color.textMuted,
   wordBreak: "break-all",
   padding: "6px 8px",
-  background: vars.color.accentBg,
+  background: "rgba(0, 0, 0, 0.15)",
   borderRadius: "4px",
   userSelect: "all",
   cursor: "text",

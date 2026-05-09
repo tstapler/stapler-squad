@@ -13,7 +13,6 @@ interface OmnibarResultListProps {
   repoEntries: PathHistoryEntry[];
   sessionCounts?: Record<string, number>; // path → session count (optional)
   onSessionSelect: (session: Session) => void;
-  onSessionOpenInNewPane?: (session: Session) => void;
   onRepoSelect: (path: string) => void;
   onCreateNew: () => void;
   onCloneSession?: (session: Session) => void;
@@ -61,7 +60,6 @@ export function OmnibarResultList({
   repoEntries,
   sessionCounts,
   onSessionSelect,
-  onSessionOpenInNewPane,
   onRepoSelect,
   onCreateNew,
   onCloneSession,
@@ -94,7 +92,6 @@ export function OmnibarResultList({
               isHighlighted={highlightedIndex === i}
               id={`${id}-session-${result.session.id}`}
               onClick={onSessionSelect}
-              onOpenInNewPane={onSessionOpenInNewPane}
               onClone={onCloneSession}
             />
           ))}

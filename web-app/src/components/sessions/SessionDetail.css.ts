@@ -23,47 +23,45 @@ export const header = style({
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "0.375rem 0.75rem",
-  borderBottom: `1px solid ${vars.color.borderColor}`,
-  background: vars.color.cardBackground,
+  padding: "1.5rem",
+  borderBottom: `1px solid ${vars.color.terminalBorder}`,
+  background: vars.color.terminalHeaderBg,
   position: "sticky",
   top: 0,
   zIndex: 10,
   flexShrink: 0,
-  minHeight: "40px",
   selectors: {
     [`.${fullscreen} &`]: {
-      padding: "0.25rem 0.75rem",
+      padding: "0.5rem 1rem",
     },
   },
   "@media": {
     "screen and (max-width: 768px)": {
-      padding: "0.4rem 0.75rem",
-      flexWrap: "nowrap",
-      gap: "0.25rem",
-      minHeight: 0,
+      padding: "0.75rem 1rem",
+      flexWrap: "wrap",
+      rowGap: "0.5rem",
     },
   },
 });
 
 export const title = style({
   margin: 0,
-  fontSize: "0.9375rem",
+  fontSize: "1.5rem",
   fontWeight: 600,
-  color: vars.color.textPrimary,
+  color: vars.color.terminalHeaderFg,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   selectors: {
     [`.${fullscreen} &`]: {
-      fontSize: "0.875rem",
+      fontSize: "1rem",
     },
   },
   "@media": {
     "screen and (max-width: 768px)": {
-      fontSize: "0.9rem",
-      flex: "1 1 auto",
-      minWidth: 0,
+      fontSize: "1.125rem",
+      flex: "1 1 100%",
+      maxWidth: "calc(100vw - 120px)",
     },
   },
 });
@@ -71,24 +69,24 @@ export const title = style({
 export const statusBadge = style({
   display: "inline-flex",
   alignItems: "center",
-  padding: "0.0625rem 0.375rem",
+  padding: "0.125rem 0.5rem",
   borderRadius: "9999px",
-  fontSize: vars.fontSize.xs,
+  fontSize: "0.75rem",
   fontWeight: 600,
   flexShrink: 0,
-  marginLeft: "0.375rem",
-  background: vars.color.surfaceSubtle,
-  color: vars.color.textMuted,
-  border: `1px solid ${vars.color.borderColor}`,
+  marginLeft: "0.5rem",
+  background: vars.color.terminalHoverBg,
+  color: vars.color.terminalTextMuted,
+  border: `1px solid ${vars.color.terminalBorder}`,
 });
 
 export const headerActions = style({
   display: "flex",
   alignItems: "center",
-  gap: "0.25rem",
+  gap: "0.5rem",
   "@media": {
     "screen and (max-width: 768px)": {
-      flexShrink: 0,
+      width: "100%",
     },
   },
 });
@@ -96,22 +94,22 @@ export const headerActions = style({
 export const fullscreenButton = style({
   background: "transparent",
   border: "none",
-  fontSize: "1.1rem",
+  fontSize: "1.25rem",
   cursor: "pointer",
-  color: vars.color.textMuted,
-  padding: "0.25rem 0.375rem",
+  color: vars.color.terminalTextMuted,
+  padding: "0.5rem",
   lineHeight: 1,
   transition: "color 0.2s, background 0.2s",
-  borderRadius: vars.radii.sm,
-  minWidth: "32px",
-  minHeight: "32px",
+  borderRadius: "4px",
+  minWidth: "var(--min-touch-target, 44px)",
+  minHeight: "var(--min-touch-target, 44px)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   selectors: {
     "&:hover": {
-      color: vars.color.textPrimary,
-      background: vars.color.hoverBackground,
+      color: vars.color.terminalHeaderFg,
+      background: vars.color.terminalHoverBg,
     },
   },
 });
@@ -122,14 +120,14 @@ export const switchWorkspaceButton = style({
   gap: "0.25rem",
   background: vars.color.primary,
   border: "none",
-  fontSize: vars.fontSize.xs,
+  fontSize: "0.875rem",
   fontWeight: 500,
   cursor: "pointer",
-  color: vars.color.primaryText,
-  padding: "0.25rem 0.5rem",
+  color: "white",
+  padding: "0.375rem 0.75rem",
   lineHeight: 1,
   transition: "background 0.2s, transform 0.1s",
-  borderRadius: vars.radii.sm,
+  borderRadius: "6px",
   selectors: {
     "&:hover": {
       background: vars.color.primaryDark,
@@ -142,11 +140,11 @@ export const switchWorkspaceButton = style({
 });
 
 export const queuePosition = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-  padding: "0.125rem 0.375rem",
-  background: vars.color.hoverBackground,
-  borderRadius: vars.radii.sm,
+  fontSize: "0.8rem",
+  color: vars.color.terminalTextMuted,
+  padding: "0.25rem 0.5rem",
+  background: vars.color.terminalHoverBg,
+  borderRadius: "4px",
   whiteSpace: "nowrap",
   userSelect: "none",
 });
@@ -154,23 +152,23 @@ export const queuePosition = style({
 export const navButton = style({
   background: "transparent",
   border: "none",
-  fontSize: "1.1rem",
+  fontSize: "1.25rem",
   cursor: "pointer",
-  color: vars.color.textMuted,
-  padding: "0.25rem 0.375rem",
+  color: vars.color.terminalTextMuted,
+  padding: "0.5rem",
   lineHeight: 1,
   transition: "color 0.2s, background 0.2s",
-  borderRadius: vars.radii.sm,
+  borderRadius: "4px",
   fontWeight: "bold",
-  minWidth: "32px",
-  minHeight: "32px",
+  minWidth: "var(--min-touch-target, 44px)",
+  minHeight: "var(--min-touch-target, 44px)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   selectors: {
     "&:hover": {
-      color: vars.color.textPrimary,
-      background: vars.color.hoverBackground,
+      color: vars.color.terminalHeaderFg,
+      background: vars.color.terminalHoverBg,
     },
     "&:disabled": {
       opacity: 0.3,
@@ -182,42 +180,35 @@ export const navButton = style({
 export const closeButton = style({
   background: "transparent",
   border: "none",
-  fontSize: "1.1rem",
+  fontSize: "1.5rem",
   cursor: "pointer",
-  color: vars.color.textMuted,
-  padding: "0.25rem 0.375rem",
+  color: vars.color.terminalTextMuted,
+  padding: "0.5rem",
   lineHeight: 1,
-  transition: "color 0.2s, background 0.2s",
-  borderRadius: vars.radii.sm,
-  minWidth: "32px",
-  minHeight: "32px",
+  transition: "color 0.2s",
+  minWidth: "var(--min-touch-target, 44px)",
+  minHeight: "var(--min-touch-target, 44px)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   selectors: {
     "&:hover": {
-      color: vars.color.error,
-      background: vars.color.errorBg,
+      color: vars.color.terminalHeaderFg,
     },
   },
 });
 
 export const tabs = style({
   display: "flex",
-  borderBottom: `1px solid ${vars.color.borderColor}`,
-  background: vars.color.background,
-  padding: "0 0.5rem",
-  gap: "0.125rem",
-  flexShrink: 0,
+  borderBottom: `1px solid ${vars.color.terminalBorder}`,
+  background: vars.color.terminalTabsBg,
+  padding: "0 1rem",
+  gap: "0.5rem",
   "@media": {
     "screen and (max-width: 768px)": {
       overflowX: "auto",
-      padding: "0 0.25rem",
-      gap: "0",
-      scrollbarWidth: "none",
-      selectors: {
-        "&::-webkit-scrollbar": { display: "none" },
-      },
+      padding: "0 0.5rem",
+      gap: "0.25rem",
     },
   },
 });
@@ -225,31 +216,27 @@ export const tabs = style({
 export const tab = style({
   display: "flex",
   alignItems: "center",
-  gap: "0.375rem",
-  padding: "0.5rem 0.75rem",
+  gap: "0.5rem",
+  padding: "1rem 1.5rem",
   border: "none",
   background: "transparent",
-  color: vars.color.textMuted,
-  fontSize: vars.fontSize.sm,
+  color: vars.color.terminalTextMuted,
+  fontSize: "0.95rem",
   fontWeight: 500,
   cursor: "pointer",
   transition: "color 0.2s, border-color 0.2s",
   borderBottom: "2px solid transparent",
   position: "relative",
-  whiteSpace: "nowrap",
   selectors: {
     "&:hover": {
-      color: vars.color.textPrimary,
+      color: vars.color.terminalHeaderFg,
     },
   },
   "@media": {
     "screen and (max-width: 768px)": {
-      padding: "0.5rem 0.6rem",
-      fontSize: "0.75rem",
+      padding: "0.75rem 1rem",
+      fontSize: "0.875rem",
       whiteSpace: "nowrap",
-      minHeight: "44px", // WCAG 2.5.5 AA minimum touch target
-      display: "flex",
-      alignItems: "center",
     },
   },
 });
@@ -260,11 +247,11 @@ export const active = style({
 });
 
 export const tabIcon = style({
-  fontSize: "1rem",
+  fontSize: "1.1rem",
   lineHeight: 1,
   "@media": {
     "screen and (max-width: 768px)": {
-      fontSize: "0.875rem",
+      fontSize: "1rem",
     },
   },
 });
@@ -277,12 +264,12 @@ export const content = style({
   flex: 1,
   minHeight: 0,
   overflowY: "auto",
-  padding: "1rem",
+  padding: "1.5rem",
   display: "flex",
   flexDirection: "column",
   "@media": {
     "screen and (max-width: 768px)": {
-      padding: "0.75rem",
+      padding: "1rem",
     },
   },
 });
@@ -304,18 +291,18 @@ export const tabContent = style({
 export const placeholder = style({
   padding: "2rem",
   textAlign: "center",
-  color: vars.color.textMuted,
+  color: vars.color.terminalTextMuted,
   fontStyle: "italic",
 });
 
 export const infoGrid = style({
   display: "grid",
   gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))",
-  gap: "1rem",
+  gap: "1.5rem",
   "@media": {
     "screen and (max-width: 768px)": {
       gridTemplateColumns: "1fr",
-      gap: "0.75rem",
+      gap: "1rem",
     },
   },
 });
@@ -324,28 +311,28 @@ export const infoItem = style({
   display: "flex",
   flexDirection: "column",
   gap: "0.5rem",
-  padding: "0.75rem",
-  background: vars.color.cardBackground,
-  borderRadius: vars.radii.md,
-  border: `1px solid ${vars.color.borderColor}`,
+  padding: "1rem",
+  background: vars.color.terminalTabsBg,
+  borderRadius: "8px",
+  border: `1px solid ${vars.color.terminalBorder}`,
   "@media": {
     "screen and (max-width: 768px)": {
-      padding: "0.625rem",
+      padding: "0.75rem",
     },
   },
 });
 
 export const infoLabel = style({
-  fontSize: vars.fontSize.xs,
+  fontSize: "0.875rem",
   fontWeight: 600,
-  color: vars.color.textMuted,
+  color: vars.color.terminalTextMuted,
   textTransform: "uppercase",
   letterSpacing: "0.05em",
 });
 
 export const infoValue = style({
-  fontSize: vars.fontSize.sm,
-  color: vars.color.textPrimary,
+  fontSize: "1rem",
+  color: vars.color.terminalForeground,
   wordBreak: "break-all",
   fontWeight: 500,
   display: "flex",
@@ -377,31 +364,31 @@ export const editContainer = style({
 
 export const editInput = style({
   flex: 1,
-  padding: "0.375rem 0.5rem",
-  fontSize: vars.fontSize.sm,
-  border: `1px solid ${vars.color.inputBorder}`,
-  borderRadius: vars.radii.sm,
-  background: vars.color.inputBackground,
-  color: vars.color.inputText,
+  padding: "0.5rem",
+  fontSize: "1rem",
+  border: `1px solid ${vars.color.terminalBorder}`,
+  borderRadius: "4px",
+  background: vars.color.terminalBackground,
+  color: vars.color.terminalForeground,
   fontFamily: "inherit",
   selectors: {
     "&:focus": {
       outline: "none",
-      borderColor: vars.color.inputFocusBorder,
+      borderColor: vars.color.primary,
     },
   },
 });
 
 export const saveButton = style({
-  padding: "0.375rem 0.625rem",
+  padding: "0.5rem 0.75rem",
   border: "none",
-  borderRadius: vars.radii.sm,
+  borderRadius: "4px",
   cursor: "pointer",
-  fontSize: vars.fontSize.sm,
+  fontSize: "1rem",
   fontWeight: 600,
   transition: "background 0.2s, transform 0.1s",
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "white",
   selectors: {
     "&:hover": {
       background: vars.color.primaryDark,
@@ -414,19 +401,22 @@ export const saveButton = style({
 });
 
 export const cancelButton = style({
-  padding: "0.375rem 0.625rem",
+  padding: "0.5rem 0.75rem",
   border: "none",
-  borderRadius: vars.radii.sm,
+  borderRadius: "4px",
   cursor: "pointer",
-  fontSize: vars.fontSize.sm,
+  fontSize: "1rem",
   fontWeight: 600,
-  transition: "background 0.2s",
-  background: vars.color.cardBackground,
-  color: vars.color.textMuted,
+  transition: "background 0.2s, transform 0.1s",
+  background: vars.color.terminalTabsBg,
+  color: vars.color.terminalTextMuted,
   selectors: {
     "&:hover": {
-      background: vars.color.hoverBackground,
-      color: vars.color.textPrimary,
+      background: vars.color.terminalHoverBg,
+      color: vars.color.terminalForeground,
+    },
+    "&:active": {
+      transform: "translateY(0)",
     },
   },
 });
@@ -441,7 +431,7 @@ export const noTerminalPlaceholder = style({
   gap: "0.75rem",
   padding: "2rem",
   textAlign: "center",
-  color: vars.color.textMuted,
+  color: vars.color.terminalTextMuted,
 });
 
 export const noTerminalIcon = style({
@@ -453,41 +443,43 @@ export const noTerminalText = style({
   margin: 0,
   fontSize: "1.125rem",
   fontWeight: 600,
-  color: vars.color.textPrimary,
+  color: vars.color.terminalForeground,
   opacity: 0.7,
 });
 
 export const noTerminalSubtext = style({
   margin: 0,
-  fontSize: vars.fontSize.sm,
-  color: vars.color.textMuted,
+  fontSize: "0.875rem",
+  color: vars.color.terminalTextMuted,
   maxWidth: "400px",
   lineHeight: 1.5,
 });
 
+// ⋯ More actions button in header
 export const moreActionsButton = style({
   background: "transparent",
   border: "none",
-  fontSize: "1.25rem",
+  fontSize: "1.5rem",
   cursor: "pointer",
-  color: vars.color.textMuted,
-  padding: "0.25rem 0.375rem",
+  color: vars.color.terminalTextMuted,
+  padding: "0.5rem",
   lineHeight: 1,
   transition: "color 0.2s, background 0.2s",
-  borderRadius: vars.radii.sm,
-  minWidth: "32px",
-  minHeight: "32px",
+  borderRadius: "4px",
+  minWidth: "var(--min-touch-target, 44px)",
+  minHeight: "var(--min-touch-target, 44px)",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
   selectors: {
     "&:hover": {
-      color: vars.color.textPrimary,
-      background: vars.color.hoverBackground,
+      color: vars.color.terminalHeaderFg,
+      background: vars.color.terminalHoverBg,
     },
   },
 });
 
+// Action sheet list
 export const actionSheet = style({
   display: "flex",
   flexDirection: "column",
@@ -500,7 +492,7 @@ export const actionSheetItem = style({
   padding: "0 16px",
   textAlign: "left",
   fontSize: "16px",
-  borderRadius: vars.radii.md,
+  borderRadius: "8px",
   background: "transparent",
   border: "none",
   cursor: "pointer",
@@ -528,14 +520,15 @@ export const actionDivider = style({
   margin: "8px 0",
 });
 
+// Generic action buttons for confirm dialogs
 export const actionButton = style({
-  padding: "0.375rem 0.75rem",
+  padding: "0.5rem 1rem",
   border: `1px solid ${vars.color.borderColor}`,
-  borderRadius: vars.radii.sm,
+  borderRadius: "6px",
   background: vars.color.cardBackground,
   color: vars.color.textPrimary,
   cursor: "pointer",
-  fontSize: vars.fontSize.sm,
+  fontSize: "0.875rem",
   transition: "background 0.15s",
   selectors: {
     "&:hover": {
@@ -546,7 +539,7 @@ export const actionButton = style({
 
 export const actionButtonDanger = style({
   background: vars.color.error,
-  color: vars.color.primaryText,
+  color: "white",
   border: "none",
   selectors: {
     "&:hover": {
@@ -557,7 +550,7 @@ export const actionButtonDanger = style({
 
 export const actionButtonSave = style({
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "white",
   border: "none",
   selectors: {
     "&:hover": {
@@ -565,6 +558,10 @@ export const actionButtonSave = style({
     },
   },
 });
+
+// Mobile-fullscreen overrides — applied when isFullscreen is true.
+// Vanilla-extract can't express @media inside compound selectors, so we use
+// separate exported classes that SessionDetail.tsx applies conditionally.
 
 export const fullscreenMobileHeader = style({
   "@media": {
@@ -592,16 +589,18 @@ export const fullscreenMobileTitle = style({
 export const fullscreenMobileHeaderActions = style({
   "@media": {
     "screen and (max-width: 768px)": {
+      width: "auto",
       flexShrink: 0,
     },
   },
 });
 
+// Shrinks tabs in fullscreen mode on mobile to reclaim vertical space without hiding them entirely.
 export const fullscreenMobileTabs = style({
   "@media": {
     "screen and (max-width: 768px)": {
       padding: "0 0.25rem",
-      borderBottom: `1px solid ${vars.color.borderColor}`,
+      borderBottom: `1px solid ${vars.color.terminalBorder}`,
     },
   },
 });

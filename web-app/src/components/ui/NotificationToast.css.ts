@@ -16,20 +16,21 @@ export const toast = style({
   background: vars.color.modalBackground,
   border: `2px solid var(--priority-color, ${vars.color.primary})`,
   borderRadius: "12px",
-  // Story 5.3: Theme-aware glow on toast border
-  boxShadow: `0 8px 32px rgba(0, 0, 0, 0.4), 0 0 0 1px ${vars.color.glowSecondary}`,
+  boxShadow: "0 8px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1)",
   zIndex: 10000,
   overflow: "hidden",
   transform: "translateX(450px)",
   opacity: 0,
   transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   "@media": {
-    // On mobile the bottom nav is 64px tall; clear it + 12px breathing room
-    "screen and (max-width: 899px)": {
+    "(prefers-color-scheme: dark)": {
+      boxShadow: "0 8px 32px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05)",
+    },
+    "screen and (max-width: 768px)": {
       left: "16px",
       right: "16px",
       width: "auto",
-      bottom: "calc(64px + 12px + max(env(safe-area-inset-bottom, 0px), 0px))",
+      bottom: "16px",
     },
   },
   selectors: {
@@ -154,7 +155,7 @@ export const typeLabel = style({
   padding: "2px 6px",
   borderRadius: "4px",
   background: `var(--priority-color, ${vars.color.primary})`,
-  color: vars.color.primaryText,
+  color: "white",
   whiteSpace: "nowrap",
   flexShrink: 0,
   selectors: {
@@ -273,7 +274,7 @@ const baseActionButton = style({
 
 export const viewButton = style([baseActionButton, {
   background: `var(--priority-color, ${vars.color.primary})`,
-  color: vars.color.primaryText,
+  color: "white",
   selectors: {
     "&:hover": {
       filter: "brightness(1.1)",
@@ -303,17 +304,17 @@ export const focusButton = style([baseActionButton, {
   selectors: {
     "&:hover": {
       background: vars.color.primary,
-      color: vars.color.primaryText,
+      color: "white",
     },
   },
 }]);
 
 export const approveButton = style([baseActionButton, {
-  background: vars.color.success,
-  color: vars.color.primaryText,
+  background: "#22c55e",
+  color: "white",
   selectors: {
     "&:hover": {
-      background: vars.color.successBg,
+      background: "#16a34a",
       transform: "translateY(-1px)",
       boxShadow: "0 4px 8px rgba(0, 0, 0, 0.2)",
     },
@@ -321,11 +322,11 @@ export const approveButton = style([baseActionButton, {
 }]);
 
 export const denyButton = style([baseActionButton, {
-  background: vars.color.error,
-  color: vars.color.primaryText,
+  background: "#ef4444",
+  color: "white",
   selectors: {
     "&:hover": {
-      background: vars.color.errorDark,
+      background: "#dc2626",
       transform: "translateY(-1px)",
       boxShadow: "0 4px 8px rgba(0, 0, 0, 0.2)",
     },

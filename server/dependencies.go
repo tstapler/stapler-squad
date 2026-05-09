@@ -10,7 +10,6 @@ import (
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/scrollback"
-	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"os"
 	"path/filepath"
@@ -88,13 +87,11 @@ func BuildDependencies() (*ServerDependencies, error) {
 		return nil, fmt.Errorf("phase 2 (services): %w", err)
 	}
 
-	// Phase 3 (runtime): ensure tmux server running, then load instances.
-	// EnsureServerRunning must precede BuildRuntimeDeps — the token enforces it.
-	tmuxReady, err := tmux.EnsureServerRunning("")
-	if err != nil {
-		log.WarningLog.Printf("BuildDependencies: failed to ensure tmux server running: %v", err)
-	}
-	rt, err := BuildRuntimeDeps(tmuxReady, svc)
+	// Phase 3 (runtime): load instances, start tmux/controllers, create managers, external discovery
+	// was: steps 5-12 - LoadInstances, wire/start instances, controllers, startup scan,
+	//       ReactiveQueueManager, ScrollbackManager, TmuxStreamerManager, ExternalDiscovery,
+	//       ExternalApprovalMonitor, SetExternalDiscovery
+	rt, err := BuildRuntimeDeps(svc)
 	if err != nil {
 		return nil, fmt.Errorf("phase 3 (runtime): %w", err)
 	}
@@ -422,11 +419,7 @@ type RuntimeDeps struct {
 //   - Step 11: ExternalDiscovery with session-added/removed callbacks
 //   - Step 12: ExternalApprovalMonitor with approval-to-review-queue bridge
 //   - SetExternalDiscovery on SessionService (moved from server.go)
-// BuildRuntimeDeps requires a TmuxServerReady token to enforce that
-// tmux.EnsureServerRunning was called before sessions are loaded. Without this
-// ordering, DoesSessionExist() may trigger recoverFromServerFailure, which starts
-// a fresh server that considers all sessions non-existent and cold-restores them.
-func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, error) {
+func BuildRuntimeDeps(svc *ServiceDeps) (*RuntimeDeps, error) {
 	if svc == nil {
 		return nil, fmt.Errorf("BuildRuntimeDeps: ServiceDeps is nil (Phase 2 not completed)")
 	}

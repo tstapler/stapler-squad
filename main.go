@@ -229,40 +229,7 @@ var (
 
 			app.Phase("runtime", func(ctx context.Context, a *warren.App) error {
 				log.InfoLog.Printf("Building runtime dependencies (phase 3/3)...")
-
-				strictStartup := os.Getenv("STAPLER_SQUAD_STRICT_STARTUP") == "true"
-
-				// Ensure tmux server is running BEFORE restoring sessions.
-				// BuildRuntimeDeps calls Start(false) via FromInstanceData; if the server
-				// is not yet up, DoesSessionExist() triggers recoverFromServerFailure which
-				// starts a fresh server — then all sessions look non-existent and get cold-
-				// restored into brand-new tmux sessions, losing the running processes.
-				// The TmuxServerReady token enforces this ordering at compile time.
-				tmuxReady, tmuxReadyErr := tmux.EnsureServerRunning("")
-				if tmuxReadyErr != nil {
-					if strictStartup {
-						return fmt.Errorf("tmux server startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tmuxReadyErr)
-					}
-					log.WarningLog.Printf("Failed to ensure tmux server running: %v", tmuxReadyErr)
-				}
-				// Create a keepalive session so the tmux server does not exit when all user sessions close.
-				if err := tmux.CreateKeepaliveSession(""); err != nil {
-					if strictStartup {
-						return fmt.Errorf("failed to create tmux keepalive session (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
-					}
-					log.WarningLog.Printf("Failed to create keepalive session: %v", err)
-				}
-				// Set exit-empty off so the server survives even if the keepalive dies.
-				if tmuxKeepServerFlag {
-					if err := tmux.SetExitEmpty("", false); err != nil {
-						if strictStartup {
-							return fmt.Errorf("failed to set tmux exit-empty off (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
-						}
-						log.WarningLog.Printf("Failed to set tmux exit-empty off: %v", err)
-					}
-				}
-
-				rt, err := server.BuildRuntimeDeps(tmuxReady, svcDeps)
+				rt, err := server.BuildRuntimeDeps(svcDeps)
 				if err != nil {
 					return err
 				}
@@ -277,6 +244,32 @@ var (
 				if remoteAccessFlag || cfg.PasskeyEnabled {
 					if err := startRemoteAccess(ctx, srv, address, cfg, remotePortFlag); err != nil {
 						return fmt.Errorf("start remote access: %w", err)
+					}
+				}
+
+				strictStartup := os.Getenv("STAPLER_SQUAD_STRICT_STARTUP") == "true"
+
+				// Ensure tmux server is running before sessions are restored.
+				if err := tmux.EnsureServerRunning(""); err != nil {
+					if strictStartup {
+						return fmt.Errorf("tmux server startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+					}
+					log.WarningLog.Printf("Failed to ensure tmux server running: %v", err)
+				}
+				// Create a keepalive session so the tmux server does not exit when all user sessions close.
+				if err := tmux.CreateKeepaliveSession(""); err != nil {
+					if strictStartup {
+						return fmt.Errorf("failed to create tmux keepalive session (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+					}
+					log.WarningLog.Printf("Failed to create keepalive session: %v", err)
+				}
+				// --tmux-keep-server: also set exit-empty off so the server survives even if the keepalive dies.
+				if tmuxKeepServerFlag {
+					if err := tmux.SetExitEmpty("", false); err != nil {
+						if strictStartup {
+							return fmt.Errorf("failed to set tmux exit-empty off (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
+						}
+						log.WarningLog.Printf("Failed to set tmux exit-empty off: %v", err)
 					}
 				}
 

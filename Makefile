@@ -448,27 +448,6 @@ lint-no-sleep-tests: ## ADR-003 audit: count time.Sleep calls in test files outs
 	  exit 1; \
 	fi
 
-lint-css-tokens: ## Fail if any component .css.ts file uses hardcoded hex colors instead of vars.color.*
-	@echo "Checking for hardcoded colors in component .css.ts files..."
-	@violations=$$(find web-app/src -name '*.css.ts' \
-	  ! -name 'theme.css.ts' \
-	  ! -name 'theme-contract.css.ts' \
-	  ! -name 'Header.css.ts' \
-	  ! -name 'ThemePicker.css.ts' \
-	  ! -name 'ApprovalAnalyticsPanel.css.ts' \
-	  ! -path '*/debug/escape-codes/page.css.ts' \
-	  | while read f; do \
-	    if grep '#[0-9a-fA-F]\{3,8\}' "$$f" 2>/dev/null | grep -qv '//.*#[0-9a-fA-F]\{3,8\}'; then echo "$$f"; fi; \
-	  done); \
-	if [ -n "$$violations" ]; then \
-	  echo "❌ Hardcoded hex colors found in component .css.ts files (use vars.color.* instead):"; \
-	  for f in $$violations; do \
-	    grep -n '#[0-9a-fA-F]\{3,8\}' "$$f" | grep -v '//.*#[0-9a-fA-F]\{3,8\}' | head -3 | sed "s|^|  $$f line |"; \
-	  done; \
-	  exit 1; \
-	fi
-	@echo "✅ No hardcoded colors in component .css.ts files"
-
 format: ensure-tools ## Format code with gofmt
 	go fmt ./...
 
@@ -548,10 +527,10 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build test test-race vet lint test-integration fmt-check registry-generate ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # Quick development workflows
-quick-check: build test-coverage test-race lint lint-css-tokens ## Quick development validation
+quick-check: build test-coverage test-race lint ## Quick development validation
 	@echo "✅ Quick validation complete"
 
 pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation

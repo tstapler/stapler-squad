@@ -155,7 +155,7 @@ export const helpButton = style({
   height: "2.25rem",
   borderRadius: "50%",
   background: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "white",
   border: "none",
   fontSize: "1rem",
   fontWeight: 600,

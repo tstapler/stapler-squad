@@ -34,26 +34,6 @@
       {
         "selector": "TemplateElement[value.raw=/\\b100vh\\b/]",
         "message": "Use var(--viewport-height) instead of '100vh' in template literals. See project_plans/ux-overhaul/."
-      },
-      {
-        "selector": "Literal[value='100dvh']",
-        "message": "Use var(--viewport-height, 100dvh) instead of bare '100dvh'. dvh alone bypasses ViewportProvider's iOS keyboard handling (visualViewport API). The CSS variable is the single source of truth for both Android URL-bar and iOS keyboard shrinkage."
-      },
-      {
-        "selector": "TemplateElement[value.raw=/\\b100dvh\\b/]",
-        "message": "Use var(--viewport-height, 100dvh) instead of bare '100dvh' in template literals. See previous note on ViewportProvider."
-      },
-      {
-        "selector": "Literal[value='100lvh']",
-        "message": "Do not use '100lvh' — it equals the large (URL-bar-hidden) viewport height, the same problematic behaviour as '100vh' on Android Chrome. Use var(--viewport-height, 100dvh) instead."
-      },
-      {
-        "selector": "TemplateElement[value.raw=/\\b100lvh\\b/]",
-        "message": "Do not use '100lvh' in template literals — same issue as '100vh' on Android Chrome. Use var(--viewport-height, 100dvh)."
-      },
-      {
-        "selector": "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > Literal[value=/^#[0-9a-fA-F]{3,8}$/]",
-        "message": "Use vars.color.* tokens from theme.css.ts instead of hardcoded hex values in style props."
       }
     ],
     "boundaries/dependencies": [

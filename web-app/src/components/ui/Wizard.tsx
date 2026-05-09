@@ -50,16 +50,13 @@ export function Wizard({ currentStep, steps, children }: WizardProps) {
             }>
               {index < currentStep ? "✓" : index + 1}
             </div>
-            <div
-              className={
-                index < currentStep
-                  ? completedStepLabel
-                  : index === currentStep
-                  ? activeStepLabel
-                  : stepLabel
-              }
-              data-testid="wizard-step-label"
-            >{stepName}</div>
+            <div className={
+              index < currentStep
+                ? completedStepLabel
+                : index === currentStep
+                ? activeStepLabel
+                : stepLabel
+            }>{stepName}</div>
             {index < steps.length - 1 && (
               <div className={index < currentStep ? completedStepConnector : stepConnector} />
             )}

@@ -1,0 +1,15 @@
+{
+  "id": "session:create-existing-worktree",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CreateSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestResolveSessionType_ExplicitExistingWorktree",
+    "TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree"
+  ],
+  "lastModified": "2026-05-01T00:00:00Z"
+}

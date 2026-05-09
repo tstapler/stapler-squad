@@ -82,15 +82,15 @@ export const windowBtn = style({
 export const windowBtnActive = style({
   background: vars.color.primary,
   borderColor: vars.color.primary,
-  color: vars.color.primaryText,
+  color: "#fff",
 });
 
 export const error = style({
   padding: 12,
-  background: vars.color.errorBg,
-  border: `1px solid ${vars.color.error}`,
+  background: "rgba(239, 68, 68, 0.1)",
+  border: "1px solid rgba(239, 68, 68, 0.3)",
   borderRadius: 8,
-  color: vars.color.errorText,
+  color: "#ef4444",
   fontSize: 13,
   display: "flex",
   alignItems: "center",
@@ -98,12 +98,12 @@ export const error = style({
 });
 
 export const retryButton = style({
-  background: vars.color.errorBg,
+  background: "rgba(239, 68, 68, 0.2)",
   border: "none",
   borderRadius: 4,
   padding: "3px 8px",
   cursor: "pointer",
-  color: vars.color.error,
+  color: "#ef4444",
   fontSize: 12,
 });
 
@@ -124,18 +124,18 @@ export const card = style({
 });
 
 export const cardAllow = style({
-  borderColor: vars.color.success,
-  background: vars.color.successBg,
+  borderColor: "rgba(34, 197, 94, 0.3)",
+  background: "rgba(34, 197, 94, 0.06)",
 });
 
 export const cardDeny = style({
-  borderColor: vars.color.error,
-  background: vars.color.errorBg,
+  borderColor: "rgba(239, 68, 68, 0.3)",
+  background: "rgba(239, 68, 68, 0.06)",
 });
 
 export const cardManual = style({
-  borderColor: vars.color.warning,
-  background: vars.color.warningBg,
+  borderColor: "rgba(234, 179, 8, 0.3)",
+  background: "rgba(234, 179, 8, 0.06)",
 });
 
 export const cardValue = style({
@@ -144,9 +144,9 @@ export const cardValue = style({
   color: vars.color.textPrimary,
   lineHeight: 1,
   selectors: {
-    [`${cardAllow} &`]: { color: vars.color.success },
-    [`${cardDeny} &`]: { color: vars.color.error },
-    [`${cardManual} &`]: { color: vars.color.warning },
+    [`${cardAllow} &`]: { color: "#22c55e" },
+    [`${cardDeny} &`]: { color: "#ef4444" },
+    [`${cardManual} &`]: { color: "#eab308" },
   },
 });
 
@@ -244,17 +244,17 @@ export const row = style({});
 globalStyle(`${row}:last-child td`, { borderBottom: "none" });
 
 export const allowCount = style({
-  color: vars.color.success,
+  color: "#22c55e",
   fontWeight: 600,
 });
 
 export const denyCount = style({
-  color: vars.color.error,
+  color: "#ef4444",
   fontWeight: 600,
 });
 
 export const manualCount = style({
-  color: vars.color.warning,
+  color: "#eab308",
   fontWeight: 600,
 });
 
@@ -302,12 +302,12 @@ export const barTool = style({
 });
 
 export const barRule = style({
-  background: vars.color.success,
+  background: "#22c55e",
   opacity: 0.7,
 });
 
 export const barCmd = style({
-  background: vars.color.warning,
+  background: "#f59e0b",
   opacity: 0.7,
 });
 
@@ -386,18 +386,18 @@ export const coverageGapHeader = style({
 });
 
 export const coverageGapHigh = style({
-  background: vars.color.warningBg,
-  borderColor: vars.color.warning,
+  background: "rgba(249, 115, 22, 0.08)",
+  borderColor: "rgba(249, 115, 22, 0.35)",
 });
 
 export const coverageGapMed = style({
-  background: vars.color.warningBg,
-  borderColor: vars.color.warning,
+  background: "rgba(234, 179, 8, 0.08)",
+  borderColor: "rgba(234, 179, 8, 0.35)",
 });
 
 export const coverageGapLow = style({
-  background: vars.color.successBg,
-  borderColor: vars.color.success,
+  background: "rgba(34, 197, 94, 0.06)",
+  borderColor: "rgba(34, 197, 94, 0.25)",
 });
 
 export const coverageGapTitleRow = style({

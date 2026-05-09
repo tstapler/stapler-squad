@@ -1,0 +1,16 @@
+{
+  "id": "session:log-client-events",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "LogClientEvents",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
+  "tested": true,
+  "testIds": [
+    "TestLogClientEvents_ValidEntries",
+    "TestLogClientEvents_EmptyRequest",
+    "TestLogClientEvents_OversizedEntries"
+  ],
+  "lastModified": "2026-05-03T00:00:00.000000000-07:00"
+}

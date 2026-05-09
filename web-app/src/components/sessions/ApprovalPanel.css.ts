@@ -35,8 +35,8 @@ export const countBadge = style({
   height: 22,
   padding: "0 6px",
   borderRadius: 11,
-  background: vars.color.warning,
-  color: vars.color.primaryText,
+  background: "#f59e0b",
+  color: "white",
   fontSize: 12,
   fontWeight: 700,
 });

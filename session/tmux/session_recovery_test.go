@@ -383,8 +383,8 @@ func TestRecoverFromServerFailure_EnsureRunningFails(t *testing.T) {
 	// Inject a failing ensureServerRunning function so we can test the failure branch
 	// without relying on tmux socket behavior (tmux start-server always exits 0).
 	origEnsureServerRunning := ensureServerRunning
-	ensureServerRunning = func(socket string) (TmuxServerReady, error) {
-		return TmuxServerReady{}, fmt.Errorf("injected failure for test")
+	ensureServerRunning = func(socket string) error {
+		return fmt.Errorf("injected failure for test")
 	}
 	t.Cleanup(func() { ensureServerRunning = origEnsureServerRunning })
 

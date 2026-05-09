@@ -1,5 +1,4 @@
 import { style, keyframes } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
 
 const pulseKeyframes = keyframes({
   "0%, 100%": {
@@ -24,9 +23,9 @@ export const toggleButton = style({
   alignItems: "center",
   gap: "0.5rem",
   padding: "0.5rem 0.75rem",
-  backgroundColor: vars.color.terminalBackground,
-  border: `1px solid ${vars.color.terminalBorder}`,
-  color: vars.color.terminalTextMuted,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #444",
+  color: "#999",
   borderRadius: "4px",
   cursor: "pointer",
   fontSize: "0.85rem",
@@ -34,20 +33,20 @@ export const toggleButton = style({
   transition: "all 0.2s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.terminalHoverBg,
-      borderColor: vars.color.terminalBorder,
-      color: vars.color.terminalForeground,
+      backgroundColor: "#2a2a2a",
+      borderColor: "#666",
+      color: "#e5e5e5",
     },
   },
 });
 
 export const toggleButtonActive = style({
-  backgroundColor: vars.color.accentBg,
-  borderColor: vars.color.primary,
-  color: vars.color.primary,
+  backgroundColor: "rgba(23, 162, 184, 0.15)",
+  borderColor: "#17a2b8",
+  color: "#17a2b8",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.accentHover,
+      backgroundColor: "rgba(23, 162, 184, 0.25)",
     },
   },
 });
@@ -56,12 +55,12 @@ export const indicator = style({
   width: "8px",
   height: "8px",
   borderRadius: "50%",
-  backgroundColor: vars.color.terminalTextMuted,
+  backgroundColor: "#666",
   transition: "background-color 0.2s",
 });
 
 export const indicatorActive = style({
-  backgroundColor: vars.color.primary,
+  backgroundColor: "#17a2b8",
 });
 
 export const indicatorPulse = style({
@@ -79,22 +78,22 @@ export const pauseButton = style({
   width: "32px",
   height: "32px",
   padding: "0",
-  backgroundColor: vars.color.terminalBackground,
-  border: `1px solid ${vars.color.terminalBorder}`,
-  color: vars.color.terminalTextMuted,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #444",
+  color: "#999",
   borderRadius: "4px",
   cursor: "pointer",
   fontSize: "0.85rem",
   transition: "all 0.2s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.terminalHoverBg,
-      borderColor: vars.color.terminalBorder,
-      color: vars.color.terminalForeground,
+      backgroundColor: "#2a2a2a",
+      borderColor: "#666",
+      color: "#e5e5e5",
     },
     "&:focus": {
       outline: "none",
-      borderColor: vars.color.primary,
+      borderColor: "#17a2b8",
     },
   },
 });
@@ -106,22 +105,22 @@ export const settingsButton = style({
   width: "32px",
   height: "32px",
   padding: "0",
-  backgroundColor: vars.color.terminalBackground,
-  border: `1px solid ${vars.color.terminalBorder}`,
-  color: vars.color.terminalTextMuted,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #444",
+  color: "#999",
   borderRadius: "4px",
   cursor: "pointer",
   fontSize: "0.85rem",
   transition: "all 0.2s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.terminalHoverBg,
-      borderColor: vars.color.terminalBorder,
-      color: vars.color.terminalForeground,
+      backgroundColor: "#2a2a2a",
+      borderColor: "#666",
+      color: "#e5e5e5",
     },
     "&:focus": {
       outline: "none",
-      borderColor: vars.color.primary,
+      borderColor: "#17a2b8",
     },
   },
 });
@@ -131,8 +130,8 @@ export const dropdown = style({
   top: "100%",
   right: "0",
   marginTop: "4px",
-  backgroundColor: vars.color.terminalBackground,
-  border: `1px solid ${vars.color.terminalBorder}`,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #333",
   borderRadius: "6px",
   boxShadow: "0 4px 12px rgba(0, 0, 0, 0.4)",
   zIndex: 100,
@@ -144,9 +143,9 @@ export const dropdownHeader = style({
   padding: "0.5rem 0.75rem",
   fontSize: "0.75rem",
   fontWeight: 600,
-  color: vars.color.terminalTextMuted,
+  color: "#666",
   textTransform: "uppercase",
-  borderBottom: `1px solid ${vars.color.terminalBorder}`,
+  borderBottom: "1px solid #333",
 });
 
 export const options = style({
@@ -162,7 +161,7 @@ export const option = style({
   padding: "0.5rem 0.75rem",
   background: "none",
   border: "none",
-  color: vars.color.terminalForeground,
+  color: "#e5e5e5",
   cursor: "pointer",
   fontSize: "0.85rem",
   fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
@@ -172,13 +171,13 @@ export const option = style({
   width: "100%",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.terminalHoverBg,
+      backgroundColor: "#2a2a2a",
     },
   },
 });
 
 export const optionSelected = style({
-  color: vars.color.primary,
+  color: "#17a2b8",
 });
 
 export const check = style({
@@ -187,6 +186,6 @@ export const check = style({
 
 export const lastUpdate = style({
   fontSize: "0.75rem",
-  color: vars.color.terminalTextMuted,
+  color: "#666",
   whiteSpace: "nowrap",
 });

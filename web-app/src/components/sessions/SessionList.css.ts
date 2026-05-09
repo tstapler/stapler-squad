@@ -3,12 +3,12 @@ import { vars } from "@/styles/theme.css";
 
 export const container = style({
   width: "100%",
-  // Story 2.2.2: max-width removed — the session list now lives in a fixed 280px
-  // column; constraining width further would waste space.
-  padding: vars.space["4"],
+  maxWidth: "1200px",
+  margin: "0 auto",
+  padding: vars.space["6"],
   "@media": {
     "(max-width: 768px)": {
-      padding: vars.space["3"],
+      padding: vars.space["4"],
     },
   },
 });
@@ -65,34 +65,52 @@ export const selectModeButtonActive = style({
 
 export const filters = style({
   display: "flex",
-  flexDirection: "column",
-  gap: vars.space["2"],
+  gap: vars.space["3"],
+  flexWrap: "wrap",
+  alignItems: "center",
+  "@media": {
+    "(max-width: 768px)": {
+      flexDirection: "column",
+      alignItems: "stretch",
+      gap: vars.space["2"],
+    },
+  },
 });
 
 export const filterTopRow = style({
-  display: "flex",
-  gap: vars.space["2"],
-  alignItems: "center",
-  width: "100%",
+  // On desktop, children participate in the parent flex
+  display: "contents",
+  "@media": {
+    "(max-width: 768px)": {
+      display: "flex",
+      gap: vars.space["2"],
+      width: "100%",
+    },
+  },
 });
 
 export const filterToggle = style({
-  display: "flex",
+  display: "none",
   alignItems: "center",
   gap: "6px",
-  padding: `6px 12px`,
+  padding: `10px ${vars.space["4"]}`,
   border: `1px solid ${vars.color.inputBorder}`,
   borderRadius: vars.radii.lg,
   background: vars.color.inputBackground,
   color: vars.color.textPrimary,
-  fontSize: "0.8125rem",
+  fontSize: "0.875rem",
   fontWeight: 500,
   cursor: "pointer",
+  minHeight: "44px",
   whiteSpace: "nowrap",
   transition: "border-color 0.2s ease",
-  flexShrink: 0,
   selectors: {
     "&:hover": { borderColor: vars.color.inputFocusBorder },
+  },
+  "@media": {
+    "(max-width: 768px)": {
+      display: "flex",
+    },
   },
 });
 
@@ -111,20 +129,28 @@ export const filterActiveDot = style({
 });
 
 export const filterControls = style({
-  display: "none",
-  flexDirection: "row",
-  flexWrap: "wrap",
-  gap: vars.space["2"],
-  width: "100%",
+  display: "contents",
+  "@media": {
+    "(max-width: 768px)": {
+      display: "none",
+      flexDirection: "column",
+      gap: vars.space["2"],
+      width: "100%",
+    },
+  },
 });
 
 export const filterControlsOpen = style({
-  display: "flex",
+  "@media": {
+    "(max-width: 768px)": {
+      display: "flex",
+    },
+  },
 });
 
 export const searchInput = style({
   flex: 1,
-  minWidth: 0,
+  minWidth: "250px",
   padding: `10px ${vars.space["4"]}`,
   border: `1px solid ${vars.color.inputBorder}`,
   borderRadius: vars.radii.lg,
@@ -235,23 +261,9 @@ export const categoryTitle = style({
   fontSize: "1rem",
   fontWeight: 600,
   color: vars.color.textPrimary,
-  // Story 4.3: sticky group headers — stick to top of scrolling column
-  position: "sticky",
-  top: 0,
-  zIndex: 10,
   background: vars.color.surfaceSubtle,
   borderLeft: `4px solid ${vars.color.primary}`,
   borderRadius: vars.radii.sm,
-  // Subtle glow on group header accent border
-  boxShadow: `inset 4px 0 0 ${vars.color.glowSecondary}`,
-  cursor: "pointer",
-  userSelect: "none",
-  selectors: {
-    "&:hover": {
-      background: vars.color.hoverBackground,
-    },
-  },
-  transition: "background 0.15s ease",
 });
 
 export const categoryContent = style({
@@ -304,28 +316,6 @@ export const emptyHint = style({
   color: vars.color.textSecondary,
 });
 
-export const newSessionHeaderButton = style({
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: "32px",
-  height: "32px",
-  borderRadius: vars.radii.md,
-  fontSize: "1.25rem",
-  fontWeight: 400,
-  lineHeight: 1,
-  background: vars.color.primary,
-  color: vars.color.textInverse,
-  border: "none",
-  cursor: "pointer",
-  flexShrink: 0,
-  transition: "background 0.15s, opacity 0.15s",
-  selectors: {
-    "&:hover": { background: vars.color.primaryHover, opacity: 0.9 },
-    "&:active": { background: vars.color.primaryActive },
-  },
-});
-
 export const newSessionButtonLarge = style({
   display: "flex",
   alignItems: "center",
@@ -334,18 +324,18 @@ export const newSessionButtonLarge = style({
   borderRadius: vars.radii.lg,
   fontSize: "1rem",
   fontWeight: 600,
-  color: vars.color.primaryText,
+  color: "white",
   background: vars.color.primary,
   textDecoration: "none",
   transition: "all 0.2s ease",
-  boxShadow: `0 2px 4px ${vars.color.glowSecondary}`,
+  boxShadow: "0 2px 4px rgba(0, 102, 204, 0.2)",
   border: "none",
   cursor: "pointer",
   selectors: {
     "&:hover": {
       background: vars.color.primaryHover,
       transform: "translateY(-2px)",
-      boxShadow: `0 6px 12px ${vars.color.glowPrimary}`,
+      boxShadow: "0 6px 12px rgba(0, 102, 204, 0.3)",
     },
     "&:active": { transform: "translateY(0)" },
   },

@@ -22,7 +22,7 @@ export const toolbar = style({
 export const searchInput = style({
   padding: "0.4rem 0.6rem",
   backgroundColor: vars.color.terminalBackground,
-  border: `1px solid ${vars.color.inputBorder}`,
+  border: "1px solid #444",
   color: vars.color.terminalForeground,
   borderRadius: "4px",
   fontSize: "0.85rem",
@@ -31,23 +31,23 @@ export const searchInput = style({
   selectors: {
     "&:focus": {
       outline: "none",
-      borderColor: vars.color.inputFocusBorder,
+      borderColor: "#666",
     },
   },
 });
 
 export const refreshButton = style({
   padding: "0.4rem 0.75rem",
-  backgroundColor: vars.color.cardBackground,
-  border: `1px solid ${vars.color.borderColor}`,
-  color: vars.color.textPrimary,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #333",
+  color: "#e5e5e5",
   cursor: "pointer",
   borderRadius: "4px",
   fontSize: "0.85rem",
   transition: "background-color 0.15s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.hoverBackground,
+      backgroundColor: "#2a2a2a",
     },
   },
 });
@@ -55,14 +55,14 @@ export const refreshButton = style({
 export const status = style({
   padding: "1.5rem",
   textAlign: "center",
-  color: vars.color.textMuted,
+  color: "#999",
 });
 
 export const statusError = style({
   padding: "1rem",
-  color: vars.color.error,
-  backgroundColor: vars.color.errorBg,
-  border: `1px solid ${vars.color.error}`,
+  color: "#ff6b6b",
+  backgroundColor: "rgba(255, 107, 107, 0.1)",
+  border: "1px solid #ff6b6b",
   borderRadius: "4px",
   margin: "0.75rem",
 });
@@ -70,7 +70,7 @@ export const statusError = style({
 export const empty = style({
   padding: "2rem",
   textAlign: "center",
-  color: vars.color.textMuted,
+  color: "#666",
 });
 
 export const tableWrapper = style({
@@ -87,16 +87,16 @@ export const table = style({
 globalStyle(`${table} thead`, {
   position: "sticky",
   top: 0,
-  backgroundColor: vars.color.cardBackground,
+  backgroundColor: "#1a1a1a",
   zIndex: 1,
 });
 
 globalStyle(`${table} th`, {
   padding: "0.5rem 0.75rem",
   textAlign: "left",
-  borderBottom: `1px solid ${vars.color.borderColor}`,
+  borderBottom: "1px solid #333",
   fontWeight: 600,
-  color: vars.color.textMuted,
+  color: "#999",
   textTransform: "uppercase",
   fontSize: "0.75rem",
 });
@@ -107,18 +107,18 @@ export const colSource = style({ width: "160px" });
 export const colMessage = style({ flex: 1 });
 
 export const row = style({
-  borderBottom: `1px solid ${vars.color.borderSubtle}`,
+  borderBottom: "1px solid #111",
   transition: "background-color 0.1s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.hoverBackground,
+      backgroundColor: "#1a1a1a",
     },
   },
 });
 
 export const timestamp = style({
   padding: "0.4rem 0.75rem",
-  color: vars.color.textMuted,
+  color: "#999",
   whiteSpace: "nowrap",
 });
 
@@ -130,7 +130,7 @@ export const level = style({
 
 export const source = style({
   padding: "0.4rem 0.75rem",
-  color: vars.color.textMuted,
+  color: "#888",
   fontSize: "0.8rem",
 });
 
@@ -139,27 +139,27 @@ export const message = style({
   wordBreak: "break-word",
 });
 
-export const levelDebug = style({ color: vars.color.textMuted });
-export const levelInfo = style({ color: vars.color.primary });
-export const levelWarning = style({ color: vars.color.warning });
-export const levelError = style({ color: vars.color.error });
-export const levelFatal = style({ color: vars.color.error });
+export const levelDebug = style({ color: "#6c757d" });
+export const levelInfo = style({ color: "#17a2b8" });
+export const levelWarning = style({ color: "#ffc107" });
+export const levelError = style({ color: "#dc3545" });
+export const levelFatal = style({ color: "#ff0000" });
 
 export const loadMoreButton = style({
   display: "block",
   width: "100%",
   padding: "0.75rem",
-  backgroundColor: vars.color.cardBackground,
+  backgroundColor: "#1a1a1a",
   border: "none",
-  borderTop: `1px solid ${vars.color.borderColor}`,
-  color: vars.color.textMuted,
+  borderTop: "1px solid #333",
+  color: "#999",
   cursor: "pointer",
   fontSize: "0.85rem",
   transition: "background-color 0.15s",
   selectors: {
     "&:hover:not(:disabled)": {
-      backgroundColor: vars.color.hoverBackground,
-      color: vars.color.textPrimary,
+      backgroundColor: "#2a2a2a",
+      color: "#e5e5e5",
     },
     "&:disabled": {
       opacity: 0.5,

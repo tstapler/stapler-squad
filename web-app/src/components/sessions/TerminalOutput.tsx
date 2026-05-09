@@ -170,12 +170,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const [uploadError, setUploadError] = useState<string | null>(null);
   const uploadErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Mobile keyboard visibility — persisted in localStorage, scoped per session
-  const keyboardStorageKey = `stapler-squad-mobile-keyboard-visible-${sessionId}`;
+  // Mobile keyboard visibility — persisted in localStorage
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(() => {
     if (typeof window === 'undefined') return true;
     try {
-      const stored = localStorage.getItem(keyboardStorageKey);
+      const stored = localStorage.getItem('stapler-squad-mobile-keyboard-visible');
       return stored === null ? true : stored === 'true';
     } catch {
       return true;
@@ -186,7 +185,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setIsKeyboardVisible(prev => {
       const next = !prev;
       try {
-        localStorage.setItem(keyboardStorageKey, String(next));
+        localStorage.setItem('stapler-squad-mobile-keyboard-visible', String(next));
       } catch {
         // localStorage full or disabled — continue without persistence
       }
@@ -197,14 +196,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // Mobile detection — use shared ViewportProvider hook for consistency
   const { isMobile } = useViewport();
 
-  // Toolbar collapsed/expanded state — persisted in localStorage; collapsed by default
+  // Toolbar collapsed/expanded state — persisted in localStorage
   const [toolbarExpanded, setToolbarExpanded] = useState(() => {
-    if (typeof window === 'undefined') return false;
+    if (typeof window === 'undefined') return true;
     try {
       const s = localStorage.getItem('stapler-squad-toolbar-expanded');
-      return s === null ? false : s === 'true';
+      return s === null ? true : s === 'true';
     } catch {
-      return false;
+      return true;
     }
   });
   const [mobileOverflowOpen, setMobileOverflowOpen] = useState(false);
@@ -966,54 +965,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   };
 
-  const secondaryActions = [
-    {
-      key: 'mouse',
-      icon: '🖱️',
-      label: mouseMode === 'none' ? 'Mouse' : 'Mouse ON',
-      ariaLabel: mouseMode === 'none' ? 'Enable mouse mode for terminal apps (vim, tmux)' : 'Disable mouse mode — enables text selection',
-      title: mouseMode === 'none' ? 'Mouse OFF — tap to enable for vim/tmux' : 'Mouse ON — tap to disable, enables selection',
-      extraClass: mouseMode === 'any' ? styles.mouseModeActive : '',
-      handler: toggleMouseMode,
-    },
-    {
-      key: 'copy',
-      icon: '📋',
-      label: 'Copy',
-      ariaLabel: 'Copy terminal output to clipboard',
-      title: 'Copy selected terminal text to clipboard',
-      extraClass: '',
-      handler: handleCopyOutput,
-    },
-    {
-      key: 'bottom',
-      icon: '↓',
-      label: 'Bottom',
-      ariaLabel: 'Scroll to bottom',
-      title: 'Scroll to bottom',
-      extraClass: '',
-      handler: handleScrollToBottom,
-    },
-    {
-      key: 'resize',
-      icon: '↔️',
-      label: 'Resize',
-      ariaLabel: 'Resize terminal',
-      title: 'Resize terminal to fit container',
-      extraClass: '',
-      handler: handleManualResize,
-    },
-    {
-      key: 'clear',
-      icon: '🗑️',
-      label: 'Clear',
-      ariaLabel: 'Clear terminal',
-      title: 'Clear terminal',
-      extraClass: '',
-      handler: handleClear,
-    },
-  ];
-
   return (
     <div className={styles.container}>
       <div className={styles.toolbar}>
@@ -1045,21 +996,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           <button
             className={styles.toolbarToggle}
             onClick={() => setToolbarExpanded(v => !v)}
-            aria-label="Toggle toolbar"
+            aria-label={toolbarExpanded ? 'Collapse toolbar' : 'Expand toolbar'}
             aria-expanded={toolbarExpanded}
             data-testid="toolbar-toggle"
           >
-            {toolbarExpanded ? '✕' : '⋯'}
-          </button>
-          {/* Keyboard toggle — always visible so users can find it without expanding toolbar */}
-          <button
-            className={`${styles.toolbarButton} ${styles.mobileKeyboardToggle}`}
-            onClick={toggleMobileKeyboard}
-            aria-label={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
-            aria-expanded={isKeyboardVisible}
-            title={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
-          >
-            ⌨️
+            {toolbarExpanded ? '▲' : '▼'}
           </button>
           {/* Reconnect always visible when needed, regardless of toolbar state */}
           {showReconnectButton && (
@@ -1084,7 +1025,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 🛠️ {debugMode ? 'Debug ON' : 'Debug'}
               </button>
               <button
-                className={`${styles.toolbarButton} ${styles.devOnly} ${logStreamEnabled ? styles.debugActive : ''}`}
+                className={`${styles.toolbarButton} ${logStreamEnabled ? styles.debugActive : ''}`}
                 onClick={handleToggleLogStream}
                 title={logStreamEnabled ? "Stop forwarding console logs to server" : "Forward console logs to server (Remote Debug)"}
                 aria-label={logStreamEnabled ? "Disable remote log streaming" : "Enable remote log streaming"}
@@ -1122,6 +1063,16 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 <option value="state">🔄 State Sync</option>
                 <option value="hybrid">🔬 Hybrid</option>
               </select>
+              {/* Primary mobile buttons — always visible in the toolbar row */}
+              <button
+                className={`${styles.toolbarButton} ${styles.mobileKeyboardToggle}`}
+                onClick={toggleMobileKeyboard}
+                aria-label={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
+                aria-expanded={isKeyboardVisible}
+                title={isKeyboardVisible ? "Hide mobile keyboard" : "Show mobile keyboard"}
+              >
+                ⌨️ {isKeyboardVisible ? 'Hide Keys' : 'Show Keys'}
+              </button>
               <button
                 className={styles.toolbarButton}
                 onClick={handlePaste}
@@ -1150,17 +1101,46 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               </button>
               {/* Secondary actions — inline on desktop, hidden on mobile (shown in overflow row) */}
               <div className={styles.secondaryGroup} data-testid="toolbar-secondary">
-                {secondaryActions.map((action) => (
-                  <button
-                    key={action.key}
-                    className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
-                    onClick={action.handler}
-                    aria-label={action.ariaLabel}
-                    title={action.title}
-                  >
-                    {action.icon} {action.label}
-                  </button>
-                ))}
+                <button
+                  className={`${styles.toolbarButton} ${mouseMode === 'any' ? styles.mouseModeActive : ''}`}
+                  onClick={toggleMouseMode}
+                  aria-label={mouseMode === 'none' ? 'Enable mouse mode for terminal apps (vim, tmux)' : 'Disable mouse mode — enables text selection'}
+                  title={mouseMode === 'none' ? 'Mouse OFF — tap to enable for vim/tmux' : 'Mouse ON — tap to disable, enables selection'}
+                >
+                  🖱️ {mouseMode === 'none' ? 'Mouse' : 'Mouse ON'}
+                </button>
+                <button
+                  className={styles.toolbarButton}
+                  onClick={handleCopyOutput}
+                  title="Copy selected terminal text to clipboard"
+                  aria-label="Copy terminal output to clipboard"
+                >
+                  📋 Copy
+                </button>
+                <button
+                  className={styles.toolbarButton}
+                  onClick={handleScrollToBottom}
+                  title="Scroll to bottom"
+                  aria-label="Scroll to bottom"
+                >
+                  ↓ Bottom
+                </button>
+                <button
+                  className={styles.toolbarButton}
+                  onClick={handleManualResize}
+                  title="Resize terminal to fit container"
+                  aria-label="Resize terminal"
+                >
+                  ↔️ Resize
+                </button>
+                <button
+                  className={styles.toolbarButton}
+                  onClick={handleClear}
+                  title="Clear terminal"
+                  aria-label="Clear terminal"
+                >
+                  🗑️ Clear
+                </button>
               </div>
               {/* More ▾ trigger — only visible on mobile, opens overflow row below toolbar */}
               <button
@@ -1179,17 +1159,46 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       {/* Mobile overflow row — appears below toolbar when More is open; hidden on desktop */}
       {mobileOverflowOpen && toolbarExpanded && (
         <div className={styles.mobileOverflowRow} data-testid="toolbar-overflow-row">
-          {secondaryActions.map((action) => (
-            <button
-              key={action.key}
-              className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
-              onClick={() => { action.handler(); setMobileOverflowOpen(false); }}
-              aria-label={action.ariaLabel}
-              title={action.title}
-            >
-              {action.icon} {action.label}
-            </button>
-          ))}
+          <button
+            className={`${styles.toolbarButton} ${mouseMode === 'any' ? styles.mouseModeActive : ''}`}
+            onClick={() => { toggleMouseMode(); setMobileOverflowOpen(false); }}
+            aria-label={mouseMode === 'none' ? 'Enable mouse mode' : 'Disable mouse mode'}
+            title={mouseMode === 'none' ? 'Mouse OFF — tap to enable for vim/tmux' : 'Mouse ON — tap to disable, enables selection'}
+          >
+            🖱️ {mouseMode === 'none' ? 'Mouse' : 'Mouse ON'}
+          </button>
+          <button
+            className={styles.toolbarButton}
+            onClick={() => { handleCopyOutput(); setMobileOverflowOpen(false); }}
+            title="Copy selected terminal text to clipboard"
+            aria-label="Copy terminal output to clipboard"
+          >
+            📋 Copy
+          </button>
+          <button
+            className={styles.toolbarButton}
+            onClick={() => { handleScrollToBottom(); setMobileOverflowOpen(false); }}
+            title="Scroll to bottom"
+            aria-label="Scroll to bottom"
+          >
+            ↓ Bottom
+          </button>
+          <button
+            className={styles.toolbarButton}
+            onClick={() => { handleManualResize(); setMobileOverflowOpen(false); }}
+            title="Resize terminal to fit container"
+            aria-label="Resize terminal"
+          >
+            ↔️ Resize
+          </button>
+          <button
+            className={styles.toolbarButton}
+            onClick={() => { handleClear(); setMobileOverflowOpen(false); }}
+            title="Clear terminal"
+            aria-label="Clear terminal"
+          >
+            🗑️ Clear
+          </button>
         </div>
       )}
       <div className={styles.terminal} ref={terminalContainerRef}>
@@ -1221,7 +1230,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       {/* Mobile keyboard toolbar — Termux-compatible extra-keys layout.
           Row 1: ESC / - HOME ↑ END PGUP
           Row 2: TAB CTRL ALT ← ↓ → PGDN
-          Row 3: ^C  ^D  ^Z  ^L  ^R  ^W  ^U  (direct Ctrl sequences, no sticky needed)
           CTRL and ALT are sticky: tap to arm, next key fires the modified sequence. */}
       {isKeyboardVisible && (
         <div className={styles.mobileKeyboard}>
@@ -1258,15 +1266,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[B'); }} aria-label="Down arrow" data-testid="mobile-key">↓</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[C'); }} aria-label="Right arrow" data-testid="mobile-key">→</button>
             <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); sendKey('\x1b[6~'); }} aria-label="Page down" data-testid="mobile-key">PgDn</button>
-          </div>
-          <div className={styles.mobileKeyRow}>
-            <button className={`${styles.mobileKey} ${styles.mobileKeyCtrlC}`} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x03'); }} aria-label="Ctrl+C (interrupt)" title="Interrupt (Ctrl+C)" data-testid="mobile-key">^C</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x1a'); }} aria-label="Ctrl+Z (suspend)" title="Suspend (Ctrl+Z)" data-testid="mobile-key">^Z</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x0c'); }} aria-label="Ctrl+L (clear screen)" title="Clear screen (Ctrl+L)" data-testid="mobile-key">^L</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x12'); }} aria-label="Ctrl+R (reverse search)" title="Reverse search (Ctrl+R)" data-testid="mobile-key">^R</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x17'); }} aria-label="Ctrl+W (delete word)" title="Delete word (Ctrl+W)" data-testid="mobile-key">^W</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x15'); }} aria-label="Ctrl+U (delete line)" title="Delete line (Ctrl+U)" data-testid="mobile-key">^U</button>
-            <button className={styles.mobileKey} onPointerDown={(e) => { e.preventDefault(); setCtrlActive(false); setAltActive(false); handleTerminalData('\x04'); }} aria-label="Ctrl+D (EOF)" title="EOF / logout (Ctrl+D)" data-testid="mobile-key">^D</button>
           </div>
         </div>
       )}

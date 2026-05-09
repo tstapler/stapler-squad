@@ -20,7 +20,6 @@ web/src/gen/
 /web-app/.next
 /web-app/node_modules/
 /web-app/out/
-/web-app/storybook-static/
 /server/web/dist/
 /.playwright-mcp
 
@@ -42,10 +41,6 @@ tests/test-results.json
 # Playwright test artifacts
 assets/demo-recording/.last-run.json
 assets/demo-recording/demo-Demo-Flow-chromium/
-tests/e2e/allure-results/
-tests/e2e/allure-report/
-tests/e2e/playwright-report/
-tests/e2e/test-results/
 
 bench-*.txt
 benchmark_results.txt

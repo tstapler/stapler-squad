@@ -1,5 +1,4 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
 
 export const container = style({
   display: "flex",
@@ -7,9 +6,9 @@ export const container = style({
   height: "var(--viewport-height, 100dvh)",
   overflow: "hidden",
   padding: "1.5rem",
-  backgroundColor: vars.color.background,
-  color: vars.color.textPrimary,
-  fontFamily: vars.font.mono,
+  backgroundColor: "#0a0a0a",
+  color: "#e5e5e5",
+  fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
 });
 
 export const header = style({
@@ -27,26 +26,26 @@ export const headerActions = style({
 
 export const timezone = style({
   padding: "0.5rem 1rem",
-  backgroundColor: vars.color.cardBackground,
-  border: `1px solid ${vars.color.borderColor}`,
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.sm,
-  color: vars.color.textMuted,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #333",
+  borderRadius: "4px",
+  fontSize: "0.85rem",
+  color: "#999",
   cursor: "help",
 });
 
 export const refreshButton = style({
   padding: "0.5rem 1rem",
-  backgroundColor: vars.color.cardBackground,
-  border: `1px solid ${vars.color.borderColor}`,
-  color: vars.color.textPrimary,
+  backgroundColor: "#1a1a1a",
+  border: "1px solid #333",
+  color: "#e5e5e5",
   cursor: "pointer",
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.base,
+  borderRadius: "4px",
+  fontSize: "0.9rem",
   transition: "background-color 0.2s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.hoverBackground,
+      backgroundColor: "#2a2a2a",
     },
   },
 });
@@ -56,9 +55,9 @@ export const filters = style({
   gap: "1rem",
   marginBottom: "1.5rem",
   padding: "1rem",
-  backgroundColor: vars.color.cardBackground,
-  borderRadius: vars.radii.md,
-  border: `1px solid ${vars.color.borderColor}`,
+  backgroundColor: "#1a1a1a",
+  borderRadius: "6px",
+  border: "1px solid #333",
   flexWrap: "wrap",
 });
 
@@ -70,50 +69,50 @@ export const filterGroup = style({
 
 export const searchInput = style({
   padding: "0.5rem",
-  backgroundColor: vars.color.inputBackground,
-  border: `1px solid ${vars.color.inputBorder}`,
-  color: vars.color.inputText,
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.base,
+  backgroundColor: "#0a0a0a",
+  border: "1px solid #444",
+  color: "#e5e5e5",
+  borderRadius: "4px",
+  fontSize: "0.9rem",
   minWidth: "300px",
-  fontFamily: vars.font.mono,
+  fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
   selectors: {
     "&:focus": {
       outline: "none",
-      borderColor: vars.color.inputFocusBorder,
+      borderColor: "#666",
     },
   },
 });
 
 export const searchButton = style({
   padding: "0.5rem 1rem",
-  backgroundColor: vars.color.hoverBackground,
-  border: `1px solid ${vars.color.inputBorder}`,
-  color: vars.color.textPrimary,
+  backgroundColor: "#2a2a2a",
+  border: "1px solid #444",
+  color: "#e5e5e5",
   cursor: "pointer",
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.base,
+  borderRadius: "4px",
+  fontSize: "0.9rem",
   transition: "background-color 0.2s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.panelBgSecondary,
+      backgroundColor: "#3a3a3a",
     },
   },
 });
 
 export const select = style({
   padding: "0.5rem",
-  backgroundColor: vars.color.inputBackground,
-  border: `1px solid ${vars.color.inputBorder}`,
-  color: vars.color.inputText,
-  borderRadius: vars.radii.sm,
-  fontSize: vars.fontSize.base,
+  backgroundColor: "#0a0a0a",
+  border: "1px solid #444",
+  color: "#e5e5e5",
+  borderRadius: "4px",
+  fontSize: "0.9rem",
   cursor: "pointer",
-  fontFamily: vars.font.mono,
+  fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
   selectors: {
     "&:focus": {
       outline: "none",
-      borderColor: vars.color.inputFocusBorder,
+      borderColor: "#666",
     },
   },
 });
@@ -121,40 +120,40 @@ export const select = style({
 export const loading = style({
   padding: "2rem",
   textAlign: "center",
-  backgroundColor: vars.color.cardBackground,
-  borderRadius: vars.radii.md,
-  border: `1px solid ${vars.color.borderColor}`,
+  backgroundColor: "#1a1a1a",
+  borderRadius: "6px",
+  border: "1px solid #333",
 });
 
 export const error = style({
   padding: "2rem",
   textAlign: "center",
-  backgroundColor: vars.color.cardBackground,
-  borderRadius: vars.radii.md,
-  border: `1px solid ${vars.color.error}`,
-  color: vars.color.error,
+  backgroundColor: "#1a1a1a",
+  borderRadius: "6px",
+  border: "1px solid #ff6b6b",
+  color: "#ff6b6b",
 });
 
 export const noLogs = style({
   padding: "3rem 2rem",
   textAlign: "center",
-  backgroundColor: vars.color.cardBackground,
-  borderRadius: vars.radii.md,
-  border: `1px solid ${vars.color.borderColor}`,
+  backgroundColor: "#1a1a1a",
+  borderRadius: "6px",
+  border: "1px solid #333",
 });
 
 export const logsContainer = style({
   flex: 1,
   overflow: "auto",
-  backgroundColor: vars.color.background,
-  borderRadius: vars.radii.md,
-  border: `1px solid ${vars.color.borderColor}`,
+  backgroundColor: "#0a0a0a",
+  borderRadius: "6px",
+  border: "1px solid #333",
 });
 
 export const logsTable = style({
   width: "100%",
   borderCollapse: "collapse",
-  fontSize: vars.fontSize.xs,
+  fontSize: "0.85rem",
 });
 
 export const timestampColumn = style({
@@ -174,22 +173,22 @@ export const messageColumn = style({
 });
 
 export const logRow = style({
-  borderBottom: `1px solid ${vars.color.cardBackground}`,
+  borderBottom: "1px solid #1a1a1a",
   transition: "background-color 0.1s",
   selectors: {
     "&:hover": {
-      backgroundColor: vars.color.cardBackground,
+      backgroundColor: "#1a1a1a",
     },
   },
 });
 
 export const logRowExpanded = style({
-  backgroundColor: vars.color.cardBackground,
+  backgroundColor: "#1a1a1a",
 });
 
 export const timestamp = style({
   padding: "0.75rem",
-  color: vars.color.textMuted,
+  color: "#999",
   whiteSpace: "nowrap",
 });
 
@@ -200,22 +199,22 @@ export const level = style({
   whiteSpace: "nowrap",
 });
 
-export const levelDebug = style({ color: vars.color.textMuted });
-export const levelInfo = style({ color: vars.color.primary });
-export const levelWarning = style({ color: vars.color.warning });
-export const levelError = style({ color: vars.color.error });
-export const levelFatal = style({ color: vars.color.errorDark, fontWeight: 700 });
+export const levelDebug = style({ color: "#6c757d" });
+export const levelInfo = style({ color: "#17a2b8" });
+export const levelWarning = style({ color: "#ffc107" });
+export const levelError = style({ color: "#dc3545" });
+export const levelFatal = style({ color: "#ff0000", fontWeight: 700 });
 
 export const source = style({
   padding: "0.75rem",
-  color: vars.color.textSecondary,
-  fontFamily: vars.font.mono,
-  fontSize: vars.fontSize.xs,
+  color: "#666",
+  fontFamily: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
+  fontSize: "0.8rem",
 });
 
 export const message = style({
   padding: "0.75rem",
-  color: vars.color.textPrimary,
+  color: "#e5e5e5",
   wordBreak: "break-word",
   lineHeight: "1.4",
 });
@@ -223,19 +222,19 @@ export const message = style({
 export const loadingMore = style({
   padding: "1.5rem",
   textAlign: "center",
-  color: vars.color.textMuted,
-  fontSize: vars.fontSize.base,
-  backgroundColor: vars.color.cardBackground,
-  borderTop: `1px solid ${vars.color.borderColor}`,
+  color: "#999",
+  fontSize: "0.9rem",
+  backgroundColor: "#1a1a1a",
+  borderTop: "1px solid #333",
 });
 
 export const endOfLogs = style({
   padding: "1.5rem",
   textAlign: "center",
-  color: vars.color.textSecondary,
-  fontSize: vars.fontSize.xs,
-  backgroundColor: vars.color.background,
-  borderTop: `1px solid ${vars.color.borderColor}`,
+  color: "#666",
+  fontSize: "0.85rem",
+  backgroundColor: "#0a0a0a",
+  borderTop: "1px solid #333",
   fontStyle: "italic",
 });
 
@@ -250,7 +249,7 @@ export const clearSearch = style({
   right: "8px",
   background: "none",
   border: "none",
-  color: vars.color.textSecondary,
+  color: "#666",
   cursor: "pointer",
   fontSize: "1.2rem",
   lineHeight: "1",
@@ -258,7 +257,7 @@ export const clearSearch = style({
   transition: "color 0.15s",
   selectors: {
     "&:hover": {
-      color: vars.color.error,
+      color: "#ff6b6b",
     },
   },
 });
@@ -276,14 +275,14 @@ export const expandCell = style({
 export const expandButton = style({
   background: "none",
   border: "none",
-  color: vars.color.textSecondary,
+  color: "#666",
   cursor: "pointer",
-  fontSize: vars.fontSize.xs,
+  fontSize: "0.75rem",
   padding: "0.25rem",
   transition: "color 0.15s",
   selectors: {
     "&:hover": {
-      color: vars.color.primary,
+      color: "#17a2b8",
     },
   },
 });
@@ -302,7 +301,7 @@ export const actionButton = style({
   background: "none",
   border: "none",
   cursor: "pointer",
-  fontSize: vars.fontSize.base,
+  fontSize: "0.9rem",
   padding: "0.25rem",
   opacity: 0.5,
   transition: "opacity 0.15s",
@@ -345,11 +344,11 @@ export const logDetailSection = style({
 export const logDetailMessage = style({
   margin: 0,
   padding: "0.75rem",
-  backgroundColor: vars.color.background,
-  borderRadius: vars.radii.sm,
+  backgroundColor: "#0a0a0a",
+  borderRadius: "4px",
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
-  fontSize: vars.fontSize.xs,
+  fontSize: "0.85rem",
   lineHeight: "1.5",
   overflowX: "auto",
   maxHeight: "300px",
@@ -362,23 +361,23 @@ export const footer = style({
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  backgroundColor: vars.color.cardBackground,
-  borderRadius: vars.radii.md,
-  border: `1px solid ${vars.color.borderColor}`,
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
+  backgroundColor: "#1a1a1a",
+  borderRadius: "6px",
+  border: "1px solid #333",
+  fontSize: "0.85rem",
+  color: "#999",
 });
 
 export const shortcuts = style({
   display: "flex",
   gap: "0.75rem",
   alignItems: "center",
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textSecondary,
+  fontSize: "0.75rem",
+  color: "#666",
 });
 
 export const liveTailStatus = style({
-  color: vars.color.primary,
+  color: "#17a2b8",
   fontWeight: 500,
 });
 
