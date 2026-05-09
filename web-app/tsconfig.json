@@ -36,6 +36,8 @@
   ],
   "exclude": [
     "node_modules",
-    "src/gen/session/v1/session_connect.ts"
+    "src/gen/session/v1/session_connect.ts",
+    "**/*.stories.tsx",
+    "**/*.stories.ts"
   ]
 }
