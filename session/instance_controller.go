@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
@@ -62,6 +63,9 @@ func (i *Instance) StartController() error {
 		i.stateMutex.Unlock()
 		i.fireLifecycleEvent(EventExited, "pty-eof")
 	})
+
+	// Wire status-change listener before Start() so no events are lost.
+	i.wireStatusChangeCallback(controller)
 
 	// Start the controller - this initializes all components and begins background operations
 	// Single call replaces the old Initialize() + Start() pattern
@@ -170,6 +174,34 @@ func (i *Instance) SetRateLimitEnabled(enabled bool) {
 	if ctrl != nil {
 		ctrl.SetRateLimitEnabled(enabled)
 	}
+}
+
+// SetStatusChangeCallback registers fn to be called on every terminal status change
+// detected by the ClaudeController. Safe to call before or after the controller is
+// started; the callback is wired at controller start time via wireStatusChangeCallback.
+func (i *Instance) SetStatusChangeCallback(fn func(detection.DetectedStatus, string)) {
+	i.onStatusChangeMu.Lock()
+	i.onStatusChange = fn
+	i.onStatusChangeMu.Unlock()
+
+	// If a controller is already running, wire immediately.
+	i.wireStatusChangeCallback(i.GetController())
+}
+
+// wireStatusChangeCallback wires the instance-level status-change callback to the
+// ClaudeController's listener. Called both from SetStatusChangeCallback and from
+// StartController before controller.Start().
+func (i *Instance) wireStatusChangeCallback(ctrl *ClaudeController) {
+	if ctrl == nil {
+		return
+	}
+	i.onStatusChangeMu.RLock()
+	fn := i.onStatusChange
+	i.onStatusChangeMu.RUnlock()
+	if fn == nil {
+		return
+	}
+	ctrl.SetStatusChangeListener(fn)
 }
 
 // SetRateLimitCallbacks registers server-layer callbacks for rate limit events.
