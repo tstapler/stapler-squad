@@ -577,31 +577,41 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// can populate its scrollback buffer immediately on connect (R2.2).
 	if h.scrollbackManager != nil {
 		const initialScrollbackLines = 500
-		sbEntries, sbErr := h.scrollbackManager.GetScrollback(sessionID, 0, initialScrollbackLines)
+		sbData, sbErr := h.scrollbackManager.GetRecentLines(sessionID, initialScrollbackLines)
 		if sbErr != nil {
 			log.WarningLog.Printf("[streamViaControlMode] Failed to fetch initial scrollback for '%s': %v", sessionID, sbErr)
-		} else if len(sbEntries) > 0 {
-			chunks := make([]*sessionv1.ScrollbackChunk, 0, len(sbEntries))
-			for _, e := range sbEntries {
-				chunks = append(chunks, &sessionv1.ScrollbackChunk{
-					Data:     e.Data,
-					Sequence: e.Sequence,
-				})
+		} else if len(sbData) > 0 {
+			// GetRecentLines returns raw bytes; wrap as a single chunk.
+			sbStats, statsErr := h.scrollbackManager.GetStats(sessionID)
+			var oldestSeq, newestSeq uint64
+			if statsErr == nil {
+				oldestSeq = sbStats.OldestSequence
+				newestSeq = sbStats.NewestSequence
 			}
-			hasMore := len(sbEntries) == initialScrollbackLines
+			chunks := []*sessionv1.ScrollbackChunk{
+				{
+					Data:     sbData,
+					Sequence: newestSeq,
+				},
+			}
+			// has_more is true when the session has more history than the initial window.
+			hasMore := sbStats.MemoryLines > initialScrollbackLines || sbStats.StorageBytes > 0
 			sbResp := &sessionv1.TerminalData{
 				SessionId: sessionID,
 				Data: &sessionv1.TerminalData_ScrollbackResponse{
 					ScrollbackResponse: &sessionv1.ScrollbackResponse{
-						Chunks:  chunks,
-						HasMore: hasMore,
+						Chunks:          chunks,
+						HasMore:         hasMore,
+						TotalLines:      uint64(sbStats.MemoryLines),
+						OldestSequence:  oldestSeq,
+						NewestSequence:  newestSeq,
 					},
 				},
 			}
 			if sbBytes, merr := proto.Marshal(sbResp); merr == nil {
 				if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, sbBytes)); wsErr == nil {
-					log.InfoLog.Printf("[streamViaControlMode] Sent initial scrollback (%d chunks) for session '%s'",
-						len(chunks), sessionID)
+					log.InfoLog.Printf("[streamViaControlMode] Sent initial scrollback (1 chunk, %d bytes) for session '%s'",
+						len(sbData), sessionID)
 				}
 			}
 		}
@@ -861,12 +871,34 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				}
 
 				// Handle ScrollbackRequest — client requesting historical scrollback data (R2.4).
+				// FromSequence is the oldest sequence the client already has; we return
+				// the `limit` entries immediately BEFORE that sequence (older content).
+				// When FromSequence == 0, return the most recent lines instead.
 				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
 					if h.scrollbackManager != nil {
-						entries, sbErr := h.scrollbackManager.GetScrollback(sessionID, scrollbackReq.FromSequence, int(scrollbackReq.Limit))
+						limit := int(scrollbackReq.Limit)
+						if limit <= 0 {
+							limit = 500
+						}
+
+						var entries []scrollback.ScrollbackEntry
+						var sbErr error
+						if scrollbackReq.FromSequence == 0 {
+							// Client wants the most recent history.
+							var sbData []byte
+							sbData, sbErr = h.scrollbackManager.GetRecentLines(sessionID, limit)
+							if sbErr == nil && len(sbData) > 0 {
+								entries = []scrollback.ScrollbackEntry{{Data: sbData}}
+							}
+						} else {
+							// Client wants content older than FromSequence.
+							entries, sbErr = h.scrollbackManager.GetScrollbackBefore(sessionID, scrollbackReq.FromSequence, limit)
+						}
+
 						if sbErr != nil {
 							log.WarningLog.Printf("[streamViaControlMode] ScrollbackRequest failed for '%s': %v", sessionID, sbErr)
 						} else {
+							sbStats, _ := h.scrollbackManager.GetStats(sessionID)
 							chunks := make([]*sessionv1.ScrollbackChunk, 0, len(entries))
 							for _, e := range entries {
 								chunks = append(chunks, &sessionv1.ScrollbackChunk{
@@ -874,13 +906,16 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 									Sequence: e.Sequence,
 								})
 							}
-							hasMore := scrollbackReq.Limit > 0 && len(entries) == int(scrollbackReq.Limit)
+							hasMore := scrollbackReq.Limit > 0 && len(entries) == limit
 							sbResp := &sessionv1.TerminalData{
 								SessionId: sessionID,
 								Data: &sessionv1.TerminalData_ScrollbackResponse{
 									ScrollbackResponse: &sessionv1.ScrollbackResponse{
-										Chunks:  chunks,
-										HasMore: hasMore,
+										Chunks:         chunks,
+										HasMore:        hasMore,
+										TotalLines:     uint64(sbStats.MemoryLines),
+										OldestSequence: sbStats.OldestSequence,
+										NewestSequence: sbStats.NewestSequence,
 									},
 								},
 							}
