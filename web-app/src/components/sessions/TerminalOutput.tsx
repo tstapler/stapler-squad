@@ -270,6 +270,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       (paused, watermark) => sendFlowControlRef.current?.(paused, watermark)
     );
 
+    // Inject SerializeAddon so prependScrollbackBatch can serialize the current buffer
+    // before clearing it (enables correct history order without losing live content).
+    const serializeAddon = xtermRef.current?.serializeAddon;
+    if (serializeAddon) {
+      manager.setSerializeAddon(serializeAddon);
+    }
+
     // Track first output for metrics and loading overlay
     manager.setOnFirstOutput(() => {
       if (metricsRef.current.firstOutputTime === null) {

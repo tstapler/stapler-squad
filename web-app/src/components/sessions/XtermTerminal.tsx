@@ -6,6 +6,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
@@ -48,6 +49,8 @@ export interface XtermTerminalProps {
 
 export interface XtermTerminalHandle {
   terminal: Terminal | null;
+  /** SerializeAddon instance for buffer serialization (used by TerminalStreamManager for scrollback prepend). */
+  serializeAddon: SerializeAddon | null;
   write: (data: string) => void;
   writeln: (data: string) => void;
   clear: () => void;
@@ -95,6 +98,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
 
   // Floating Copy button state — shown when xterm has a non-empty selection (R3.1)
@@ -150,10 +154,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
     const searchAddon = new SearchAddon();
+    const serializeAddon = new SerializeAddon();
 
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(webLinksAddon);
     terminal.loadAddon(searchAddon);
+    terminal.loadAddon(serializeAddon);
 
     // xterm.js issue #2033 — guard WebGL before loading on Android/mobile
     (async () => {
@@ -272,6 +278,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
+    serializeAddonRef.current = serializeAddon;
 
     // Setup ResizeObserver for automatic fitting
     // Track container size to avoid unnecessary fit() calls
@@ -340,6 +347,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current = null;
       fitAddonRef.current = null;
       searchAddonRef.current = null;
+      serializeAddonRef.current = null;
     };
     // Only recreate terminal if scrollback changes (requires full recreation)
     // Other options can be updated dynamically below
@@ -403,6 +411,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   useImperativeHandle(ref, () => ({
     get terminal() {
       return terminalRef.current;
+    },
+    get serializeAddon() {
+      return serializeAddonRef.current;
     },
     write: (data: string) => {
       terminalRef.current?.write(data);
