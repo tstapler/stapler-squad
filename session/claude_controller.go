@@ -97,9 +97,11 @@ func (cc *ClaudeController) SetOnEOFCallback(fn func()) {
 }
 
 // SetStatusChangeListener registers fn to be called on every terminal status change.
-// Must be called before Start(). fn is invoked outside cc.mu.
+// Safe to call before or after Start(). fn is invoked outside cc.mu.
 func (cc *ClaudeController) SetStatusChangeListener(fn StatusChangeListener) {
+	cc.mu.Lock()
 	cc.statusChangeListener = fn
+	cc.mu.Unlock()
 }
 
 // NewClaudeController creates a new controller for the given instance.
@@ -243,11 +245,9 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 			cc.rateLimitHandler.NotifyOutput()
 		}
 		// Signal status-check goroutine; non-blocking drop if already pending.
-		if cc.statusChangeListener != nil {
-			select {
-			case cc.statusCheckCh <- struct{}{}:
-			default:
-			}
+		select {
+		case cc.statusCheckCh <- struct{}{}:
+		default:
 		}
 	})
 
@@ -263,9 +263,10 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 	}
 
 	// Start status-change background goroutine (exits via ctx cancellation).
-	if cc.statusChangeListener != nil {
-		go cc.runStatusChangeLoop(cc.ctx)
-	}
+	// Always start unconditionally: for sessions loaded from the database,
+	// wireStatusChangeCallback is called AFTER Start(), so the listener may be
+	// nil here but will be wired later. runStatusChangeLoop handles nil listeners.
+	go cc.runStatusChangeLoop(cc.ctx)
 
 	// Start command executor
 	if err := cc.executor.Start(cc.ctx); err != nil {
@@ -882,17 +883,15 @@ func (cc *ClaudeController) runStatusChangeLoop(ctx context.Context) {
 		case <-cc.statusCheckCh:
 			newStatus, _ := cc.GetCurrentStatus()
 			cc.mu.Lock()
-			if newStatus == cc.lastEmittedStatus {
+			listener := cc.statusChangeListener
+			if listener == nil || newStatus == cc.lastEmittedStatus {
 				cc.mu.Unlock()
 				continue
 			}
 			cc.lastEmittedStatus = newStatus
-			listener := cc.statusChangeListener
 			cc.mu.Unlock()
 			// Call listener outside cc.mu (avoids re-entrancy deadlock)
-			if listener != nil {
-				listener(newStatus, cc.sessionName)
-			}
+			listener(newStatus, cc.sessionName)
 		}
 	}
 }

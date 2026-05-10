@@ -863,10 +863,23 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 	// Now send a second signal; status hasn't changed so listener must NOT fire again.
 	cc.statusCheckCh <- struct{}{}
 
-	// Give the goroutine time to process the second signal.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the goroutine to consume the second signal from the channel (without sleeping a
+	// fixed duration). Once the channel is empty the goroutine has processed the signal and
+	// decided — correctly — not to call the listener again.
+	deadline := time.After(2 * time.Second)
+	for len(cc.statusCheckCh) > 0 {
+		select {
+		case <-deadline:
+			// Timed out waiting for channel to drain — fall through to the assertion below.
+			goto checkResult
+		default:
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+	// Give the goroutine a brief window (10ms) to potentially call the listener after draining.
+	time.Sleep(10 * time.Millisecond)
 
-	// Drain any unexpected extra calls.
+checkResult:
 	select {
 	case <-callCount:
 		t.Error("StatusChangeListener fired a second time for the same status")

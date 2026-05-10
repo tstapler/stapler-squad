@@ -567,6 +567,46 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 	}
 }
 
+// TestReviewQueuePoller_ControllerSessions_SkipFastPath verifies that sessions with an
+// active ClaudeController are skipped by the fast-path poller. When a controller is
+// wired into an instance, checkSession must return before calling statusManager.GetStatus
+// so that controller-managed sessions are not double-polled.
+//
+// Observable proxy: a started, Running instance without a controller would be added to the
+// review queue (basic idle threshold elapsed since UpdatedAt zero value). With a controller
+// wired in, checkSession returns immediately and the queue stays empty.
+func TestReviewQueuePoller_ControllerSessions_SkipFastPath(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	// Build a started, Running instance — would normally reach statusManager.GetStatus.
+	inst := &Instance{
+		Title:  "controller-session",
+		UUID:   "uuid-ctrl",
+		Status: Running,
+	}
+	inst.started = true
+	// UpdatedAt zero value means idleDuration > basicIdleThreshold (5s), so without a
+	// controller the poller would add this instance to the review queue.
+
+	// Wire a minimal ClaudeController so GetController() returns non-nil.
+	// We only need the controller pointer to be non-nil; we do not start it.
+	bareController := &ClaudeController{
+		sessionName: inst.Title,
+		instance:    inst,
+	}
+	inst.controllerManager.SetController(bareController)
+
+	poller.AddInstance(inst)
+
+	// checkSession should return at the "active controller → skip" guard.
+	poller.checkSession(inst, nil)
+
+	// The queue must remain empty — no item was added because the fast path was skipped.
+	if _, exists := poller.queue.Get(inst.Title); exists {
+		t.Error("checkSession should not add a controller-managed session to the review queue (fast-path skip)")
+	}
+}
+
 // TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic documents the bypass that
 // caused the bug and asserts the corrected condition applies universally.
 func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
