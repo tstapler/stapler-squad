@@ -876,9 +876,10 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				// When FromSequence == 0, return the most recent lines instead.
 				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
 					if h.scrollbackManager != nil {
+						const maxScrollbackLimit = 1000
 						limit := int(scrollbackReq.Limit)
-						if limit <= 0 {
-							limit = 500
+						if limit <= 0 || limit > maxScrollbackLimit {
+							limit = maxScrollbackLimit
 						}
 
 						var entries []scrollback.ScrollbackEntry

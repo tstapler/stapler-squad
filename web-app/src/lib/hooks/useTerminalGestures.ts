@@ -247,8 +247,11 @@ export function useTerminalGestures({
             const col = Math.floor((tapX - canvasRect.left) / cellW) + 1; // 1-based
             const row = Math.floor((tapY - canvasRect.top) / cellH) + 1;   // 1-based
             // X10 mouse encoding: \x1b[M + button(32=left-press) + col+32 + row+32
-            const press   = `\x1b[M${String.fromCharCode(32, col + 32, row + 32)}`;
-            const release = `\x1b[M${String.fromCharCode(35, col + 32, row + 32)}`; // 35 = release
+            // Clamp col/row to 1-223 so charCode stays in 33-255 (valid X10 range)
+            const clampedCol = Math.max(1, Math.min(col, 223));
+            const clampedRow = Math.max(1, Math.min(row, 223));
+            const press   = `\x1b[M${String.fromCharCode(32, clampedCol + 32, clampedRow + 32)}`;
+            const release = `\x1b[M${String.fromCharCode(35, clampedCol + 32, clampedRow + 32)}`; // 35 = release
             onSendDataRef.current(press + release);
             t.focus();
           }

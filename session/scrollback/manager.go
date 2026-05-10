@@ -307,6 +307,10 @@ func (m *ScrollbackManager) GetStats(sessionID string) (ScrollbackStats, error) 
 // with Sequence strictly less than beforeSeq.
 // Returns entries in chronological order (oldest first).
 func (m *ScrollbackManager) GetScrollbackBefore(sessionID string, beforeSeq uint64, limit int) ([]ScrollbackEntry, error) {
+	if beforeSeq == 0 {
+		return nil, nil
+	}
+
 	// Get all entries from the beginning up to (but not including) beforeSeq.
 	all, err := m.GetScrollback(sessionID, 0, int(beforeSeq))
 	if err != nil {
