@@ -105,11 +105,21 @@ export function validateCellDimensions(
   currentFontFamily: string,
 ): CachedDimensions {
   if (cached.cellWidth == null || cached.cellHeight == null) {
-    return cached; // No cell dims to validate
+    return cached; // No cell dims to validate — safe
   }
 
-  const fontSizeChanged = cached.fontSize != null && cached.fontSize !== currentFontSize;
-  const fontFamilyChanged = cached.fontFamily != null && cached.fontFamily !== currentFontFamily;
+  // If we have cell dims but no font metadata, the entry predates R1.6 and is stale.
+  // Using pre-R1.6 cell dims with a different (or unknown) font config causes wrong initial fit (Bug 3 fix).
+  if (cached.fontSize == null || cached.fontFamily == null) {
+    console.log(
+      `[TerminalDimensionCache] Discarding stale cell dimensions (pre-R1.6 entry: no font metadata)`
+    );
+    const { cellWidth: _cw, cellHeight: _ch, ...rest } = cached;
+    return rest;
+  }
+
+  const fontSizeChanged = cached.fontSize !== currentFontSize;
+  const fontFamilyChanged = cached.fontFamily !== currentFontFamily;
 
   if (fontSizeChanged || fontFamilyChanged) {
     // Stale cache from different font config causes wrong initial fit (R1.6)

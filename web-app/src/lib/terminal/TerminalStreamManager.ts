@@ -289,10 +289,18 @@ export class TerminalStreamManager {
   async prependScrollbackBatch(content: string): Promise<void> {
     this.isWritingInitialContent = true;
     try {
+      if (!this.serializeAddon) {
+        // Degraded mode: SerializeAddon not available — cannot serialize current buffer before
+        // clearing, so we skip the clear and simply append the history content. The history
+        // will appear after the current content (wrong order) but current content is preserved.
+        // This is preferable to clearing and losing the existing terminal output (Bug 6 fix).
+        console.warn('[TerminalStreamManager] SerializeAddon not available — appending history without clear (degraded mode)');
+        await this.enqueueWrite(content);
+        return;
+      }
+
       // Serialize current buffer state before clearing
-      // TODO: inject @xterm/addon-serialize once available in the dependency tree
-      // for a lossless serialize. For now, fall back to clearing (loses current view temporarily).
-      const serialized = this.serializeAddon?.serialize() ?? '';
+      const serialized = this.serializeAddon.serialize();
 
       this.terminal.clear();
       await this.enqueueWrite(content);

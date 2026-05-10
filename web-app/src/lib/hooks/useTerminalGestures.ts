@@ -27,7 +27,8 @@ type GestureState = 'IDLE' | 'PENDING' | 'SCROLLING' | 'SELECTING' | 'TAPPING';
 
 interface UseTerminalGesturesOptions {
   containerRef: RefObject<HTMLElement | null>;
-  terminal: Terminal | null;
+  /** Pass the RefObject itself (not .current) so event handlers always see the live terminal instance. */
+  terminalRef: RefObject<Terminal | null>;
   onSendData: (data: string) => void;
   /** Milliseconds of hold before a touch becomes a long-press selection. Default: 400ms. */
   longPressMs?: number;
@@ -40,18 +41,13 @@ interface UseTerminalGesturesOptions {
  */
 export function useTerminalGestures({
   containerRef,
-  terminal,
+  terminalRef,
   onSendData,
   longPressMs = 400,
 }: UseTerminalGesturesOptions): void {
   // Keep stable refs so event handlers don't form stale closures
-  const terminalRef = useRef(terminal);
   const onSendDataRef = useRef(onSendData);
   const longPressMsRef = useRef(longPressMs);
-
-  useEffect(() => {
-    terminalRef.current = terminal;
-  }, [terminal]);
 
   useEffect(() => {
     onSendDataRef.current = onSendData;

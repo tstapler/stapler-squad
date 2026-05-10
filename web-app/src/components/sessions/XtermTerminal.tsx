@@ -111,9 +111,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // Unified mobile gesture state machine (R4.3).
   // Replaces the conflicting useTouchScroll + useMobileTerminalGestures hooks:
   // having both register touchmove caused double-scroll and prevented selection.
+  // Pass terminalRef (the RefObject itself, not .current) so gesture handlers always
+  // read the live terminal instance — at render time terminalRef.current is null since
+  // the terminal is created inside an effect (Bug 1 fix).
   useTerminalGestures({
     containerRef,
-    terminal: terminalRef.current,
+    terminalRef,
     onSendData: useCallback((data: string) => onDataRef.current?.(data), []),
   });
 
@@ -136,7 +139,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       fontSize,
       fontFamily,
       theme: getTheme(theme),
-      scrollback: scrollback ?? 5000, // Default 5000: xterm.js default of 1000 is insufficient for session history (R2.1)
+      scrollback: scrollback && scrollback > 0 ? scrollback : 5000, // Default 5000: xterm.js default of 1000 is insufficient for session history (R2.1); config default of 0 means "use xterm default" so we substitute 5000 (Bug 2 fix)
       allowProposedApi: true, // Required for some addons
       rightClickSelectsWord: true, // Right-click selects the word under cursor
     });

@@ -33,6 +33,7 @@ import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { XtermTerminal, type XtermTerminalHandle } from "./XtermTerminal";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
+import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { track } from "@/lib/telemetry";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import * as styles from "./TerminalOutput.css";
@@ -647,7 +648,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     const terminal = xtermRef.current?.terminal;
     if (!terminal?.element) return;
 
-    const scrollEl = terminal.element;
+    // xterm.js scrolls the .xterm-viewport child element, not the root terminal.element —
+    // attaching the listener to terminal.element would never fire on scroll (Bug 5 fix).
+    const scrollEl = terminal.element?.querySelector('.xterm-viewport') ?? terminal.element;
 
     const onScroll = () => {
       const viewportY = terminal.buffer.active.viewportY;
@@ -663,8 +666,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       }
     };
 
-    scrollEl.addEventListener('scroll', onScroll, { passive: true });
-    return () => scrollEl.removeEventListener('scroll', onScroll);
+    scrollEl?.addEventListener('scroll', onScroll, { passive: true });
+    return () => scrollEl?.removeEventListener('scroll', onScroll);
   }, [isLoadingInitialContent, isConnected, requestScrollback]);
 
   // Auto-reconnect with exponential backoff
@@ -696,8 +699,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     const rawCached = getCachedDimensions(sessionId);
     // Validate cell dims against current font config (R1.6): stale dims from a different
     // font configuration produce an incorrect initial fit() and wrong initial resize.
-    const currentFontSize = 14; // matches the fontSize={14} prop on XtermTerminal
-    const currentFontFamily = 'Menlo, Monaco, "Courier New", monospace';
+    // Use DEFAULT_TERMINAL_CONFIG values so this stays in sync with XtermTerminal's actual
+    // font settings rather than being hardcoded independently (Bug 4 fix).
+    const currentFontSize = DEFAULT_TERMINAL_CONFIG.fontSize;
+    const currentFontFamily = DEFAULT_TERMINAL_CONFIG.fontFamily;
     const cached = rawCached
       ? validateCellDimensions(rawCached, currentFontSize, currentFontFamily)
       : null;
