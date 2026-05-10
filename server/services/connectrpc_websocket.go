@@ -608,11 +608,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					},
 				},
 			}
-			if sbBytes, merr := proto.Marshal(sbResp); merr == nil {
-				if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, sbBytes)); wsErr == nil {
-					log.InfoLog.Printf("[streamViaControlMode] Sent initial scrollback (1 chunk, %d bytes) for session '%s'",
-						len(sbData), sessionID)
-				}
+			if sbBytes, merr := proto.Marshal(sbResp); merr != nil {
+				log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal initial scrollback for '%s': %v", sessionID, merr)
+			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, sbBytes)); wsErr == nil {
+				log.InfoLog.Printf("[streamViaControlMode] Sent initial scrollback (1 chunk, %d bytes) for session '%s'",
+					len(sbData), sessionID)
 			}
 		}
 	}
@@ -745,7 +745,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 							},
 						},
 					}
-					if rqBytes, merr := proto.Marshal(rqMsg); merr == nil {
+					if rqBytes, merr := proto.Marshal(rqMsg); merr != nil {
+						log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal ResizeQuiescence for '%s': %v", sessionID, merr)
+					} else {
 						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, rqBytes))
 					}
 				}
@@ -775,7 +777,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 							},
 						},
 					}
-					if snapBytes, merr := proto.Marshal(snapMsg); merr == nil {
+					if snapBytes, merr := proto.Marshal(snapMsg); merr != nil {
+						log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal post-resize snapshot for '%s': %v", sessionID, merr)
+					} else {
 						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, snapBytes))
 					}
 				}
@@ -925,7 +929,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 									},
 								},
 							}
-							if respBytes, merr := proto.Marshal(sbResp); merr == nil {
+							if respBytes, merr := proto.Marshal(sbResp); merr != nil {
+								log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal scrollback response for '%s': %v", sessionID, merr)
+							} else {
 								_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
 							}
 						}

@@ -329,17 +329,17 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDetectionInterval = 5000
 	cfg.StateRefreshInterval = 3000
 	cfg.LogsEnabled = true
-	cfg.LogsDir = "" // Empty string means use default location
+	cfg.LogsDir = ""    // Empty string means use default location
 	cfg.LogMaxSize = 10 // 10MB
-	cfg.LogMaxFiles = 5  // Keep 5 rotated files
-	cfg.LogMaxAge = 30 // 30 days
+	cfg.LogMaxFiles = 5 // Keep 5 rotated files
+	cfg.LogMaxAge = 30  // 30 days
 	cfg.LogCompress = true
 	cfg.UseSessionLogs = true
-	cfg.TmuxSessionPrefix = "staplersquad_" // Default prefix for backward compatibility
+	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
 	cfg.PerformBackgroundHealthChecks = true // Enabled by default for automated session maintenance
 	cfg.KeyCategories = getDefaultKeyCategories()
-	cfg.TerminalStreamingMode = "raw"  // Default to raw streaming (simpler, more reliable)
-	cfg.VCSPreference = "auto" // Default to auto-detection (prefer JJ if available)
+	cfg.TerminalStreamingMode = "raw" // Default to raw streaming (simpler, more reliable)
+	cfg.VCSPreference = "auto"        // Default to auto-detection (prefer JJ if available)
 	cfg.AvailablePrograms = availablePrograms
 	return cfg
 }

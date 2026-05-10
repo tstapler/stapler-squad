@@ -321,12 +321,17 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     } else {
       // Paged history load
       console.log(`[TerminalOutput] Writing paged scrollback: ${scrollback.length} bytes`);
-      await manager.prependScrollbackBatch(scrollback);
-      if (metadata) {
-        hasMoreScrollbackRef.current = metadata.hasMore;
-        oldestSequenceReceivedRef.current = metadata.oldestSequence;
+      try {
+        await manager.prependScrollbackBatch(scrollback);
+        if (metadata) {
+          hasMoreScrollbackRef.current = metadata.hasMore;
+          oldestSequenceReceivedRef.current = metadata.oldestSequence;
+        }
+      } catch (err) {
+        console.error('[TerminalOutput] prependScrollbackBatch failed:', err);
+      } finally {
+        isFetchingScrollbackRef.current = false;
       }
-      isFetchingScrollbackRef.current = false;
     }
 
     setIsLoadingInitialContent(false);

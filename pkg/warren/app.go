@@ -27,7 +27,7 @@ const DefaultShutdownTimeout = 30 * time.Second
 type App struct {
 	mu      sync.Mutex
 	phases  []phaseEntry
-	stopFns []stopEntry  // in registration order; Stop() calls in reverse
+	stopFns []stopEntry // in registration order; Stop() calls in reverse
 	checks  []healthEntry
 
 	goroutines      *GoroutineGroup // nil until Start() initialises it

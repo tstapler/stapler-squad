@@ -152,4 +152,3 @@ func (i *Instance) RecoverFromStopped() {
 		i.started = false
 	}
 }
-

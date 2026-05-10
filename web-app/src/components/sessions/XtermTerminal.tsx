@@ -442,6 +442,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           writes inside synchronous user gesture handlers (ADR-013). */}
       {copyButtonPos && (
         <button
+          aria-label="Copy selected text"
           className={styles.floatingCopyButton}
           style={{ left: copyButtonPos.x, top: copyButtonPos.y }}
           onPointerDown={(e) => {

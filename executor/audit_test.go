@@ -27,7 +27,7 @@ func (h *testSlogHandler) Handle(_ context.Context, r slog.Record) error {
 	return nil
 }
 func (h *testSlogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
-func (h *testSlogHandler) WithGroup(_ string) slog.Handler       { return h }
+func (h *testSlogHandler) WithGroup(_ string) slog.Handler      { return h }
 
 // T-UNIT-021: WithAuditHook_receivesEntryOnCompletion
 func TestWithAuditHook_receivesEntryOnCompletion(t *testing.T) {
@@ -258,4 +258,3 @@ func TestAuditHookFromCtx(t *testing.T) {
 		t.Errorf("expected nil hook from plain context, got %v", noHook)
 	}
 }
-

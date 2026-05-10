@@ -434,6 +434,7 @@ type RuntimeDeps struct {
 //   - Step 11: ExternalDiscovery with session-added/removed callbacks
 //   - Step 12: ExternalApprovalMonitor with approval-to-review-queue bridge
 //   - SetExternalDiscovery on SessionService (moved from server.go)
+//
 // BuildRuntimeDeps requires a TmuxServerReady token to enforce that
 // tmux.EnsureServerRunning was called before sessions are loaded. Without this
 // ordering, DoesSessionExist() may trigger recoverFromServerFailure, which starts
