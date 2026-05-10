@@ -33,7 +33,7 @@ import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { XtermTerminal, type XtermTerminalHandle } from "./XtermTerminal";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions } from "@/lib/terminal/TerminalDimensionCache";
-import { track } from "@/lib/telemetry";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import * as styles from "./TerminalOutput.css";
 
@@ -59,6 +59,7 @@ const XTERM_DEFAULT_COLS = 80;
 const XTERM_DEFAULT_ROWS = 24;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible }: TerminalOutputProps) {
+  const { track } = useAnalytics();
   const xtermRef = useRef<XtermTerminalHandle | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
@@ -270,11 +271,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         metricsRef.current.firstOutputTime = performance.now();
         logTerminalMetrics();
         const totalLoadTime = metricsRef.current.firstOutputTime - metricsRef.current.mountTime;
-        track('session_attach', totalLoadTime, { phase: 'attach' }, sessionId);
+        track({ name: "session_attach", category: "performance", durationMs: totalLoadTime, labels: { phase: "attach" }, sessionId });
         const connectionDuration = metricsRef.current.connectedTime && metricsRef.current.connectionInitTime
           ? metricsRef.current.connectedTime - metricsRef.current.connectionInitTime
           : totalLoadTime;
-        track('stream_terminal_first_byte', connectionDuration, undefined, sessionId);
+        track({ name: "stream_terminal_first_byte", category: "performance", durationMs: connectionDuration, sessionId });
         setIsLoadingInitialContent(false);
       }
     });
@@ -284,7 +285,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
     streamManagerRef.current = manager;
     return manager;
-  }, [logTerminalMetrics, sessionId]);
+  }, [logTerminalMetrics, sessionId, track]);
 
   // Callback to write initial pane content to terminal
   const handleScrollbackReceived = useCallback(async (scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => {

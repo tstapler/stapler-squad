@@ -252,6 +252,14 @@ type Config struct {
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
 	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
 	NewProjectBaseDir string `json:"new_project_base_dir,omitempty"`
+	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
+	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
+	// Default: 100_000.
+	AnalyticsMaxRows int `json:"analytics_max_rows,omitempty"`
+	// AnalyticsMaxAgeDays is the maximum age in days of analytics events to retain.
+	// Events older than this are deleted. 0 means no age limit.
+	// Default: 90.
+	AnalyticsMaxAgeDays int `json:"analytics_max_age_days,omitempty"`
 }
 
 // SessionDefaults is the top-level container for all session default configuration.
@@ -390,6 +398,24 @@ func (c *Config) NewProjectBaseDirOrDefault() (string, error) {
 		dir = home
 	}
 	return dir, nil
+}
+
+// AnalyticsMaxRowsOrDefault returns the configured max analytics rows, or 100_000
+// if not set (zero value).
+func (c *Config) AnalyticsMaxRowsOrDefault() int {
+	if c.AnalyticsMaxRows <= 0 {
+		return 100_000
+	}
+	return c.AnalyticsMaxRows
+}
+
+// AnalyticsMaxAgeDaysOrDefault returns the configured max analytics age in days,
+// or 90 if not set (zero value).
+func (c *Config) AnalyticsMaxAgeDaysOrDefault() int {
+	if c.AnalyticsMaxAgeDays <= 0 {
+		return 90
+	}
+	return c.AnalyticsMaxAgeDays
 }
 
 // GetClaudeCommand attempts to find the "claude" command in the user's shell

@@ -15,6 +15,7 @@ import (
 	"entgo.io/ent/dialect"
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
@@ -32,6 +33,8 @@ type Client struct {
 	config
 	// Schema is the client for creating, migrating and dropping schema.
 	Schema *migrate.Schema
+	// AnalyticsEvent is the client for interacting with the AnalyticsEvent builders.
+	AnalyticsEvent *AnalyticsEventClient
 	// ApprovalRule is the client for interacting with the ApprovalRule builders.
 	ApprovalRule *ApprovalRuleClient
 	// ClassificationAnalytics is the client for interacting with the ClassificationAnalytics builders.
@@ -63,6 +66,7 @@ func NewClient(opts ...Option) *Client {
 
 func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
+	c.AnalyticsEvent = NewAnalyticsEventClient(c.config)
 	c.ApprovalRule = NewApprovalRuleClient(c.config)
 	c.ClassificationAnalytics = NewClassificationAnalyticsClient(c.config)
 	c.ClaudeMetadata = NewClaudeMetadataClient(c.config)
@@ -165,6 +169,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 	return &Tx{
 		ctx:                     ctx,
 		config:                  cfg,
+		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
 		ClassificationAnalytics: NewClassificationAnalyticsClient(cfg),
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
@@ -194,6 +199,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 	return &Tx{
 		ctx:                     ctx,
 		config:                  cfg,
+		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
 		ClassificationAnalytics: NewClassificationAnalyticsClient(cfg),
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
@@ -210,7 +216,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 // Debug returns a new debug-client. It's used to get verbose logging on specific operations.
 //
 //	client.Debug().
-//		ApprovalRule.
+//		AnalyticsEvent.
 //		Query().
 //		Count(ctx)
 func (c *Client) Debug() *Client {
@@ -233,8 +239,9 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession,
-		c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag, c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata,
+		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag,
+		c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -244,8 +251,9 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata, c.ClaudeSession,
-		c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag, c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata,
+		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag,
+		c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -254,6 +262,8 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 // Mutate implements the ent.Mutator interface.
 func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 	switch m := m.(type) {
+	case *AnalyticsEventMutation:
+		return c.AnalyticsEvent.mutate(ctx, m)
 	case *ApprovalRuleMutation:
 		return c.ApprovalRule.mutate(ctx, m)
 	case *ClassificationAnalyticsMutation:
@@ -276,6 +286,139 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.Worktree.mutate(ctx, m)
 	default:
 		return nil, fmt.Errorf("ent: unknown mutation type %T", m)
+	}
+}
+
+// AnalyticsEventClient is a client for the AnalyticsEvent schema.
+type AnalyticsEventClient struct {
+	config
+}
+
+// NewAnalyticsEventClient returns a client for the AnalyticsEvent from the given config.
+func NewAnalyticsEventClient(c config) *AnalyticsEventClient {
+	return &AnalyticsEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `analyticsevent.Hooks(f(g(h())))`.
+func (c *AnalyticsEventClient) Use(hooks ...Hook) {
+	c.hooks.AnalyticsEvent = append(c.hooks.AnalyticsEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `analyticsevent.Intercept(f(g(h())))`.
+func (c *AnalyticsEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.AnalyticsEvent = append(c.inters.AnalyticsEvent, interceptors...)
+}
+
+// Create returns a builder for creating a AnalyticsEvent entity.
+func (c *AnalyticsEventClient) Create() *AnalyticsEventCreate {
+	mutation := newAnalyticsEventMutation(c.config, OpCreate)
+	return &AnalyticsEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of AnalyticsEvent entities.
+func (c *AnalyticsEventClient) CreateBulk(builders ...*AnalyticsEventCreate) *AnalyticsEventCreateBulk {
+	return &AnalyticsEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *AnalyticsEventClient) MapCreateBulk(slice any, setFunc func(*AnalyticsEventCreate, int)) *AnalyticsEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &AnalyticsEventCreateBulk{err: fmt.Errorf("calling to AnalyticsEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*AnalyticsEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &AnalyticsEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for AnalyticsEvent.
+func (c *AnalyticsEventClient) Update() *AnalyticsEventUpdate {
+	mutation := newAnalyticsEventMutation(c.config, OpUpdate)
+	return &AnalyticsEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *AnalyticsEventClient) UpdateOne(_m *AnalyticsEvent) *AnalyticsEventUpdateOne {
+	mutation := newAnalyticsEventMutation(c.config, OpUpdateOne, withAnalyticsEvent(_m))
+	return &AnalyticsEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *AnalyticsEventClient) UpdateOneID(id string) *AnalyticsEventUpdateOne {
+	mutation := newAnalyticsEventMutation(c.config, OpUpdateOne, withAnalyticsEventID(id))
+	return &AnalyticsEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for AnalyticsEvent.
+func (c *AnalyticsEventClient) Delete() *AnalyticsEventDelete {
+	mutation := newAnalyticsEventMutation(c.config, OpDelete)
+	return &AnalyticsEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *AnalyticsEventClient) DeleteOne(_m *AnalyticsEvent) *AnalyticsEventDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *AnalyticsEventClient) DeleteOneID(id string) *AnalyticsEventDeleteOne {
+	builder := c.Delete().Where(analyticsevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &AnalyticsEventDeleteOne{builder}
+}
+
+// Query returns a query builder for AnalyticsEvent.
+func (c *AnalyticsEventClient) Query() *AnalyticsEventQuery {
+	return &AnalyticsEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeAnalyticsEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a AnalyticsEvent entity by its id.
+func (c *AnalyticsEventClient) Get(ctx context.Context, id string) (*AnalyticsEvent, error) {
+	return c.Query().Where(analyticsevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *AnalyticsEventClient) GetX(ctx context.Context, id string) *AnalyticsEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *AnalyticsEventClient) Hooks() []Hook {
+	return c.hooks.AnalyticsEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *AnalyticsEventClient) Interceptors() []Interceptor {
+	return c.inters.AnalyticsEvent
+}
+
+func (c *AnalyticsEventClient) mutate(ctx context.Context, m *AnalyticsEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&AnalyticsEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&AnalyticsEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&AnalyticsEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&AnalyticsEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown AnalyticsEvent mutation op: %q", m.Op())
 	}
 }
 
@@ -1804,11 +1947,13 @@ func (c *WorktreeClient) mutate(ctx context.Context, m *WorktreeMutation) (Value
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		ApprovalRule, ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats,
-		ErrorEvent, Project, Session, Tag, Worktree []ent.Hook
+		AnalyticsEvent, ApprovalRule, ClassificationAnalytics, ClaudeMetadata,
+		ClaudeSession, DiffStats, ErrorEvent, Project, Session, Tag,
+		Worktree []ent.Hook
 	}
 	inters struct {
-		ApprovalRule, ClassificationAnalytics, ClaudeMetadata, ClaudeSession, DiffStats,
-		ErrorEvent, Project, Session, Tag, Worktree []ent.Interceptor
+		AnalyticsEvent, ApprovalRule, ClassificationAnalytics, ClaudeMetadata,
+		ClaudeSession, DiffStats, ErrorEvent, Project, Session, Tag,
+		Worktree []ent.Interceptor
 	}
 )

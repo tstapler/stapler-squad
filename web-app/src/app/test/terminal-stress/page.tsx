@@ -1,4 +1,5 @@
 'use client';
+// analytics-exempt
 
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import dynamic from 'next/dynamic';

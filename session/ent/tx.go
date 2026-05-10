@@ -12,6 +12,8 @@ import (
 // Tx is a transactional client that is created by calling Client.Tx().
 type Tx struct {
 	config
+	// AnalyticsEvent is the client for interacting with the AnalyticsEvent builders.
+	AnalyticsEvent *AnalyticsEventClient
 	// ApprovalRule is the client for interacting with the ApprovalRule builders.
 	ApprovalRule *ApprovalRuleClient
 	// ClassificationAnalytics is the client for interacting with the ClassificationAnalytics builders.
@@ -163,6 +165,7 @@ func (tx *Tx) Client() *Client {
 }
 
 func (tx *Tx) init() {
+	tx.AnalyticsEvent = NewAnalyticsEventClient(tx.config)
 	tx.ApprovalRule = NewApprovalRuleClient(tx.config)
 	tx.ClassificationAnalytics = NewClassificationAnalyticsClient(tx.config)
 	tx.ClaudeMetadata = NewClaudeMetadataClient(tx.config)
@@ -182,7 +185,7 @@ func (tx *Tx) init() {
 // of them in order to commit or rollback the transaction.
 //
 // If a closed transaction is embedded in one of the generated entities, and the entity
-// applies a query, for example: ApprovalRule.QueryXXX(), the query will be executed
+// applies a query, for example: AnalyticsEvent.QueryXXX(), the query will be executed
 // through the driver which created this transaction.
 //
 // Note that txDriver is not goroutine safe.

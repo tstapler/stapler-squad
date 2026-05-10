@@ -18,9 +18,11 @@ import { SearchWithHistory } from "@/components/logs/SearchWithHistory";
 import { DensityToggle, type LogDensity } from "@/components/logs/DensityToggle";
 import { useLiveTail } from "@/lib/hooks/useLiveTail";
 import { ActionBar } from "@/components/ui/ActionBar";
+import { usePageView } from "@/lib/analytics/usePageView";
 import * as styles from "./page.css";
 
 export default function LogsPage() {
+  usePageView();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);

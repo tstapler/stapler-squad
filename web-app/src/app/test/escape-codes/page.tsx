@@ -1,4 +1,5 @@
 'use client';
+// analytics-exempt
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {

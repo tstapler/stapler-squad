@@ -1,4 +1,5 @@
 "use client";
+// analytics-exempt
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, Suspense } from "react";

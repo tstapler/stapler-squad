@@ -19,9 +19,13 @@ import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { SessionFormData } from "@/lib/validation/sessionSchema";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
+import { usePageView } from "@/lib/analytics/usePageView";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import * as styles from "./page.css";
 
 function HomeContent() {
+  usePageView();
+  const { track } = useAnalytics();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode } = useOmnibar();
@@ -300,6 +304,7 @@ function HomeContent() {
   };
 
   const handleWizardComplete = async (data: SessionFormData) => {
+    track({ name: "session_wizard_complete", category: "user_action" });
     const branchName = data.useTitleAsBranch ? data.title : (data.branch || "");
     await createSession({
       title: data.title,

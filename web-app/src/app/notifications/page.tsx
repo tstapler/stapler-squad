@@ -1,6 +1,8 @@
+// analytics-exempt
 import type { Metadata } from "next";
 // +feature: ui:notifications-page
 import { NotificationsPage } from "./NotificationsPage";
+import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 
 export const metadata: Metadata = {
   title: "Notifications - Stapler Squad",
@@ -8,5 +10,10 @@ export const metadata: Metadata = {
 };
 
 export default function Page() {
-  return <NotificationsPage />;
+  return (
+    <>
+      <PageViewTracker />
+      <NotificationsPage />
+    </>
+  );
 }

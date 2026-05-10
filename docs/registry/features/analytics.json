@@ -1,0 +1,26 @@
+{
+  "id": "analytics",
+  "type": "both",
+  "description": "Analytics event ingestion and summary API",
+  "backend": {
+    "rpcs": [],
+    "handlers": ["POST /api/analytics", "GET /api/analytics/summary"]
+  },
+  "frontend": {
+    "components": ["AnalyticsContextProvider", "WebVitalsReporter", "PageViewTracker"],
+    "hooks": ["useAnalytics", "usePageView"]
+  },
+  "tested": true,
+  "testIds": [
+    "TestSQLiteAnalyticsProvider_Track",
+    "TestSQLiteAnalyticsProvider_Summary",
+    "TestAnalyticsRetention",
+    "TestAnalyticsHandler_Track",
+    "TestAnalyticsHandler_Summary",
+    "should_batch_events_and_flush_after_interval",
+    "should_flush_on_close",
+    "should_track_rpc_event_on_success",
+    "should_track_rpc_event_on_error"
+  ],
+  "lastModified": "2026-05-10T00:00:00Z"
+}

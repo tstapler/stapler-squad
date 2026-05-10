@@ -14,6 +14,7 @@ import {
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
 import {
   setSessions,
@@ -77,6 +78,7 @@ export function useSessionService(
   options: UseSessionServiceOptions = {}
 ): UseSessionServiceReturn {
   const { baseUrl = getApiBaseUrl(), autoWatch = false, enabled = true, onNotification, onReconnect } = options;
+  const analytics = useAnalytics();
   const onReconnectRef = useRef(onReconnect);
   useEffect(() => { onReconnectRef.current = onReconnect; }, [onReconnect]);
   const onNotificationRef = useRef(onNotification);
@@ -105,10 +107,12 @@ export function useSessionService(
   useEffect(() => {
     const transport = createWatchTransport({
       baseUrl,
-      interceptors: [createAuthInterceptor(), createRpcTimingInterceptor()],
+      interceptors: [createAuthInterceptor(), createRpcTimingInterceptor(analytics)],
     });
 
     clientRef.current = createClient(SessionService, transport);
+  // analytics identity is stable (memoized in AnalyticsContextProvider); baseUrl is the only real dep
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseUrl]);
 
   // List sessions with retry logic

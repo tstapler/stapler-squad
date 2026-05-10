@@ -1,4 +1,5 @@
 import type { Interceptor } from "@connectrpc/connect";
+import type { AnalyticsProvider } from "@/lib/analytics/types";
 
 /**
  * ConnectRPC interceptor that records timing for every unary RPC call.
@@ -12,8 +13,11 @@ import type { Interceptor } from "@connectrpc/connect";
  *
  * Attributes recorded in the measure detail:
  *   { method, url, ok, durationMs }
+ *
+ * When an optional analytics provider is supplied, each RPC call also enqueues
+ * an analytics event with category "rpc" for latency tracking.
  */
-export function createRpcTimingInterceptor(): Interceptor {
+export function createRpcTimingInterceptor(analytics?: Pick<AnalyticsProvider, "track">): Interceptor {
   return (next) => async (req) => {
     const method = req.method.name;
     const startMark = `rpc:${method}:start`;
@@ -48,6 +52,13 @@ export function createRpcTimingInterceptor(): Interceptor {
           `[rpc] ${method} ${durationMs}ms ${ok ? "✓" : "✗"}`,
         );
       }
+
+      analytics?.track({
+        name: `rpc.${method}`,
+        category: "rpc",
+        durationMs,
+        labels: { method, ok: String(ok) },
+      });
     }
   };
 }

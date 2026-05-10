@@ -2,6 +2,7 @@
 // +feature: review-queue session-approval session-triage
 
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
+import { usePageView } from "@/lib/analytics/usePageView";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session, SessionSchema, ReviewItem } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
@@ -354,6 +355,7 @@ function ReviewQueueSkeleton() {
 }
 
 export default function ReviewQueuePage() {
+  usePageView();
   return (
     <Suspense fallback={<ReviewQueueSkeleton />}>
       <ReviewQueueContent />

@@ -5,6 +5,7 @@ package ent
 import (
 	"time"
 
+	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
@@ -22,6 +23,24 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
+	analyticseventFields := schema.AnalyticsEvent{}.Fields()
+	_ = analyticseventFields
+	// analyticseventDescEventName is the schema descriptor for event_name field.
+	analyticseventDescEventName := analyticseventFields[1].Descriptor()
+	// analyticsevent.EventNameValidator is a validator for the "event_name" field. It is called by the builders before save.
+	analyticsevent.EventNameValidator = analyticseventDescEventName.Validators[0].(func(string) error)
+	// analyticseventDescEventCategory is the schema descriptor for event_category field.
+	analyticseventDescEventCategory := analyticseventFields[2].Descriptor()
+	// analyticsevent.EventCategoryValidator is a validator for the "event_category" field. It is called by the builders before save.
+	analyticsevent.EventCategoryValidator = analyticseventDescEventCategory.Validators[0].(func(string) error)
+	// analyticseventDescCreatedAt is the schema descriptor for created_at field.
+	analyticseventDescCreatedAt := analyticseventFields[8].Descriptor()
+	// analyticsevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	analyticsevent.DefaultCreatedAt = analyticseventDescCreatedAt.Default.(func() time.Time)
+	// analyticseventDescID is the schema descriptor for id field.
+	analyticseventDescID := analyticseventFields[0].Descriptor()
+	// analyticsevent.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	analyticsevent.IDValidator = analyticseventDescID.Validators[0].(func(string) error)
 	approvalruleFields := schema.ApprovalRule{}.Fields()
 	_ = approvalruleFields
 	// approvalruleDescRuleID is the schema descriptor for rule_id field.

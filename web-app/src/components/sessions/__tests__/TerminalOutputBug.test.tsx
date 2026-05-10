@@ -76,8 +76,9 @@ jest.mock('@/lib/terminal/TerminalStreamManager', () => ({
   })),
 }));
 
-jest.mock('@/lib/telemetry', () => ({
-  track: jest.fn(),
+const mockTrack = jest.fn();
+jest.mock('@/lib/contexts/AnalyticsContext', () => ({
+  useAnalytics: () => ({ track: mockTrack }),
 }));
 
 // ---------------------------------------------------------------------------
