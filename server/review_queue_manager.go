@@ -170,7 +170,7 @@ func (rqm *ReactiveQueueManager) signalActivity() {
 
 // OnControllerStatusChange is called by a ClaudeController's status-change goroutine
 // when it detects a terminal status transition. Safe to call from any goroutine.
-func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance, newStatus detection.DetectedStatus) {
+func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance, _ detection.DetectedStatus) {
 	rqm.signalActivity()
 	go func() {
 		select {

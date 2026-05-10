@@ -2715,10 +2715,13 @@ func (s *SessionService) LogClientEvents(
 // ClaudeController status transitions immediately trigger a CheckSession call, bypassing
 // the poll cycle. Safe to call before or after the controller is started.
 func (s *SessionService) wireStatusChangeCallback(inst *session.Instance) {
-	if inst == nil || s.reviewQueueSvc == nil || s.reviewQueueSvc.reactiveQueueMgr == nil {
+	if inst == nil || s.reviewQueueSvc == nil {
 		return
 	}
-	mgr := s.reviewQueueSvc.reactiveQueueMgr
+	mgr := s.reviewQueueSvc.GetReactiveQueueManager()
+	if mgr == nil {
+		return
+	}
 	inst.SetStatusChangeCallback(func(newStatus detection.DetectedStatus, _ string) {
 		mgr.OnControllerStatusChange(inst, newStatus)
 	})
