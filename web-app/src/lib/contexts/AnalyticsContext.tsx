@@ -29,19 +29,20 @@ export function AnalyticsContextProvider({ provider, children }: AnalyticsContex
   providerRef.current = provider;
 
   useEffect(() => {
-    void provider.initialize?.();
+    const p = provider;
+    providerRef.current = p;
+    void p.initialize?.();
     return () => {
-      void provider.onClose?.();
+      void p.onClose?.();
     };
-    // provider identity is intentionally held via ref; eslint-disable is correct here
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [provider]);
 
   const contextValue = useMemo<AnalyticsContextValue>(
     () => ({
       provider: providerRef.current,
       track: (event) => providerRef.current.track(event),
     }),
+    // track delegates through the ref so consumers don't re-render on provider swap
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );

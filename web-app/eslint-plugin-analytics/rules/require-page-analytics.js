@@ -27,8 +27,8 @@ module.exports = {
   create(context) {
     const filename = context.getFilename();
 
-    // Gate on filename: only applies to app/.../.../page.tsx? files
-    if (!/\/app\/.*\/page\.tsx?$/.test(filename)) {
+    // Gate on filename: applies to app/page.tsx (root) and app/.../page.tsx (nested)
+    if (!/\/app\/(.*\/)?page\.tsx?$/.test(filename)) {
       return {};
     }
 
@@ -84,7 +84,7 @@ module.exports = {
         return true;
       }
 
-      // someObj.track("page_view", ...)
+      // someObj.track("page_view", ...) — legacy string form
       if (
         node.callee.type === "MemberExpression" &&
         node.callee.property.name === "track" &&
@@ -93,6 +93,24 @@ module.exports = {
         node.arguments[0].value === "page_view"
       ) {
         return true;
+      }
+
+      // someObj.track({ name: "page_view", ... }) — object form used by AnalyticsProvider
+      if (
+        node.callee.type === "MemberExpression" &&
+        node.callee.property.name === "track" &&
+        node.arguments.length > 0 &&
+        node.arguments[0].type === "ObjectExpression"
+      ) {
+        const nameProp = node.arguments[0].properties.find(
+          (p) =>
+            p.type === "Property" &&
+            ((p.key.type === "Identifier" && p.key.name === "name") ||
+              (p.key.type === "Literal" && p.key.value === "name")) &&
+            p.value.type === "Literal" &&
+            p.value.value === "page_view"
+        );
+        if (nameProp) return true;
       }
 
       return false;

@@ -100,15 +100,25 @@ module.exports = {
       }
 
       // Check JSX children for {/* analytics-exempt */}
+      // In JSX, comments are JSXEmptyExpression nodes with attached comments.
       const children = jsxElementNode.children || [];
       for (const child of children) {
-        if (
-          child.type === "JSXExpressionContainer" &&
-          child.expression.type === "Literal" &&
-          typeof child.expression.value === "string" &&
-          child.expression.value.trim() === "analytics-exempt"
-        ) {
-          return true;
+        if (child.type === "JSXExpressionContainer") {
+          // String literal form: {"analytics-exempt"} (kept for backward compat)
+          if (
+            child.expression.type === "Literal" &&
+            typeof child.expression.value === "string" &&
+            child.expression.value.trim() === "analytics-exempt"
+          ) {
+            return true;
+          }
+          // Comment form: {/* analytics-exempt */} → JSXEmptyExpression with leading comment
+          if (child.expression.type === "JSXEmptyExpression") {
+            const comments = context.getSourceCode().getCommentsBefore(child.expression);
+            if (comments.some((c) => c.value.trim() === " analytics-exempt" || c.value.trim() === "analytics-exempt")) {
+              return true;
+            }
+          }
         }
       }
       return false;

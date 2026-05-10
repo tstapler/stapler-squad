@@ -402,10 +402,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Start analytics retention enforcer (hourly; exits when serverCtx is cancelled).
 	cfg := config.LoadConfig()
-	analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
-		cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
-	log.InfoLog.Printf("Analytics retention enforcer started (maxRows=%d, maxAgeDays=%d)",
-		cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
+	if deps.AnalyticsEntClient != nil {
+		analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
+		log.InfoLog.Printf("Analytics retention enforcer started (maxRows=%d, maxAgeDays=%d)",
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
+	}
 
 	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).
 	analytics.StartAnalyticsSubscriber(serverCtx, deps.EventBus, analyticsProvider)

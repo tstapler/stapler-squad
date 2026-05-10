@@ -19,6 +19,9 @@ import (
 //
 // The goroutine exits when ctx is cancelled.
 func StartRetentionEnforcer(ctx context.Context, client *ent.Client, maxRows int, maxAgeDays int) {
+	if client == nil {
+		return
+	}
 	go func() {
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()

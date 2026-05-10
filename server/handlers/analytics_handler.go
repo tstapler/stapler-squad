@@ -80,6 +80,9 @@ type AnalyticsHandler struct {
 
 // NewAnalyticsHandler creates a new AnalyticsHandler with a 1000/min rate limiter.
 func NewAnalyticsHandler(provider analytics.AnalyticsProvider) *AnalyticsHandler {
+	if provider == nil {
+		provider = analytics.NewLogAnalyticsProvider()
+	}
 	return &AnalyticsHandler{
 		provider: provider,
 		limiter: &rateLimiter{
