@@ -2,24 +2,31 @@
 
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
+import type { AsyncResult } from "@/lib/types/asyncResult";
 
 interface BranchSuggestionsOptions {
   repositoryPath?: string;
   baseUrl?: string;
 }
 
+interface BranchSuggestionsResult extends AsyncResult {
+  suggestions: string[];
+  /** @deprecated Use `loading` instead (AsyncResult-compatible field). */
+  isLoading: boolean;
+}
+
 /**
  * Hook to provide git branch suggestions from the real git refs of the selected repo.
  * Calls ListBranches RPC when repositoryPath changes. Cancels in-flight requests on path change.
- * Returns { suggestions, isLoading } — same interface as the previous implementation.
+ * Returns { suggestions, loading, error } — implements AsyncResult.
  */
-export function useBranchSuggestions(options: BranchSuggestionsOptions = {}) {
-  const { repositoryPath, baseUrl = getApiBaseUrl() } = options;
+export function useBranchSuggestions(options: BranchSuggestionsOptions = {}): BranchSuggestionsResult {
+  const { repositoryPath } = options;
   const [suggestions, setSuggestions] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -30,19 +37,20 @@ export function useBranchSuggestions(options: BranchSuggestionsOptions = {}) {
 
     if (!repositoryPath) {
       setSuggestions([]);
-      setIsLoading(false);
+      setLoading(false);
+      setError(null);
       return;
     }
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    // Create transport and client once per effect invocation (not per retry).
-    const transport = createConnectTransport({ baseUrl });
-    const client = createClient(SessionService, transport);
+    // Create client once per effect invocation (not per retry).
+    const client = createClient(SessionService, getConnectTransport());
 
     const fetchBranches = async () => {
-      setIsLoading(true);
+      setLoading(true);
+      setError(null);
       setSuggestions([]);
 
       try {
@@ -54,15 +62,16 @@ export function useBranchSuggestions(options: BranchSuggestionsOptions = {}) {
         if (!controller.signal.aborted) {
           setSuggestions(response.branches ?? []);
         }
-      } catch (error: unknown) {
+      } catch (err: unknown) {
         if (controller.signal.aborted) {
           return; // Request was cancelled — ignore
         }
-        console.error("Failed to fetch branch suggestions:", error);
+        console.error("Failed to fetch branch suggestions:", err);
+        setError(err instanceof Error ? err : new Error(String(err)));
         setSuggestions([]);
       } finally {
         if (!controller.signal.aborted) {
-          setIsLoading(false);
+          setLoading(false);
         }
       }
     };
@@ -72,7 +81,7 @@ export function useBranchSuggestions(options: BranchSuggestionsOptions = {}) {
     return () => {
       controller.abort();
     };
-  }, [repositoryPath, baseUrl]);
+  }, [repositoryPath]);
 
-  return { suggestions, isLoading };
+  return { suggestions, loading, error, isLoading: loading };
 }

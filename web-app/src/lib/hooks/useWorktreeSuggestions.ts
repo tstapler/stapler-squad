@@ -2,10 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { WorktreeEntry } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 interface UseWorktreeSuggestionsOptions {
   baseUrl?: string;
@@ -20,7 +19,7 @@ export function useWorktreeSuggestions(
   repoPath: string,
   options: UseWorktreeSuggestionsOptions = {}
 ) {
-  const { baseUrl = getApiBaseUrl(), enabled = true } = options;
+  const { enabled = true } = options;
   const [worktrees, setWorktrees] = useState<WorktreeEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -35,8 +34,7 @@ export function useWorktreeSuggestions(
     setIsLoading(true);
     setError(null);
 
-    const transport = createConnectTransport({ baseUrl });
-    const client = createClient(SessionService, transport);
+    const client = createClient(SessionService, getConnectTransport());
 
     client
       .listWorktrees({ repoPath })
@@ -57,7 +55,7 @@ export function useWorktreeSuggestions(
     return () => {
       cancelled = true;
     };
-  }, [repoPath, baseUrl, enabled]);
+  }, [repoPath, enabled]);
 
   return { worktrees, isLoading, error };
 }

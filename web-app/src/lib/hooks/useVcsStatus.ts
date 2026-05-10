@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
+import { getConnectTransport } from "@/lib/api/transport";
 import type { VCSStatus } from "@/gen/session/v1/types_pb";
 
 interface VcsCacheEntry {
@@ -30,7 +30,7 @@ function getCached(sessionId: string): VcsCacheEntry | null {
 export async function prefetchVcsStatus(sessionId: string, baseUrl: string): Promise<void> {
   if (getCached(sessionId)) return;
   try {
-    const client = createClient(SessionService, createConnectTransport({ baseUrl }));
+    const client = createClient(SessionService, getConnectTransport());
     const response = await client.getVCSStatus({ id: sessionId });
     vcsCache.set(sessionId, {
       data: response.vcsStatus ?? null,
@@ -77,7 +77,7 @@ export function useVcsStatus(
       }
 
       try {
-        const client = createClient(SessionService, createConnectTransport({ baseUrl }));
+        const client = createClient(SessionService, getConnectTransport());
         const response = await client.getVCSStatus({ id: sessionId });
         const entry: VcsCacheEntry = {
           data: response.vcsStatus ?? null,

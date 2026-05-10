@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
+import { getConnectTransport } from "@/lib/api/transport";
 import type { LogEntry } from "@/gen/session/v1/session_pb";
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import { formatTimestamp, formatRelativeTime } from "@/lib/utils/datetime";
@@ -37,11 +37,8 @@ export function SessionLogsTab({ sessionId, baseUrl }: SessionLogsTabProps) {
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    clientRef.current = createClient(
-      SessionService,
-      createConnectTransport({ baseUrl })
-    );
-  }, [baseUrl]);
+    clientRef.current = createClient(SessionService, getConnectTransport());
+  }, []);
 
   const fetchLogs = useCallback(async (reset = true) => {
     if (!clientRef.current) return;

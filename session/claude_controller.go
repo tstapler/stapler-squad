@@ -8,12 +8,18 @@ import (
 	"hash/fnv"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
+
+// StatusChangeListener is called when the controller detects a terminal status transition.
+// Always invoked outside cc.mu and from the controller's own background goroutine.
+// Must not call back into any ClaudeController method that acquires cc.mu.
+type StatusChangeListener func(newStatus detection.DetectedStatus, sessionName string)
 
 // InstanceContext is the narrow interface ClaudeController needs from its owning Instance.
 // Using an interface breaks the bidirectional Instance ↔ ClaudeController dependency.
@@ -72,9 +78,15 @@ type ClaudeController struct {
 	onEOFCallback    func() // Fired when the ResponseStream PTY exits unexpectedly
 	statusCache      statusCacheEntry
 	idleCache        idleCacheEntry
+	cacheMu          sync.Mutex // protects statusCache and idleCache writes
 	mu               deadlock.RWMutex
 	ctx              context.Context
 	cancel           context.CancelFunc
+
+	// Status-change notification fields.
+	statusChangeListener StatusChangeListener
+	lastEmittedStatus    detection.DetectedStatus
+	statusCheckCh        chan struct{} // capacity 1; non-blocking send from onOutput
 }
 
 // SetOnEOFCallback registers a function called when the PTY backing this controller
@@ -82,6 +94,14 @@ type ClaudeController struct {
 // Must be called before Start().
 func (cc *ClaudeController) SetOnEOFCallback(fn func()) {
 	cc.onEOFCallback = fn
+}
+
+// SetStatusChangeListener registers fn to be called on every terminal status change.
+// Safe to call before or after Start(). fn is invoked outside cc.mu.
+func (cc *ClaudeController) SetStatusChangeListener(fn StatusChangeListener) {
+	cc.mu.Lock()
+	cc.statusChangeListener = fn
+	cc.mu.Unlock()
 }
 
 // NewClaudeController creates a new controller for the given instance.
@@ -96,8 +116,9 @@ func NewClaudeController(instance InstanceContext) (*ClaudeController, error) {
 	}
 
 	return &ClaudeController{
-		sessionName: sessionName,
-		instance:    instance,
+		sessionName:   sessionName,
+		instance:      instance,
+		statusCheckCh: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -223,6 +244,11 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		if cc.rateLimitHandler != nil {
 			cc.rateLimitHandler.NotifyOutput()
 		}
+		// Signal status-check goroutine; non-blocking drop if already pending.
+		select {
+		case cc.statusCheckCh <- struct{}{}:
+		default:
+		}
 	})
 
 	// Wire PTY-EOF callback so the owning Instance can transition state when the
@@ -235,6 +261,12 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 	if err := cc.responseStream.Start(cc.ctx); err != nil {
 		return fmt.Errorf("failed to start response stream: %w", err)
 	}
+
+	// Start status-change background goroutine (exits via ctx cancellation).
+	// Always start unconditionally: for sessions loaded from the database,
+	// wireStatusChangeCallback is called AFTER Start(), so the listener may be
+	// nil here but will be wired later. runStatusChangeLoop handles nil listeners.
+	go cc.runStatusChangeLoop(cc.ctx)
 
 	// Start command executor
 	if err := cc.executor.Start(cc.ctx); err != nil {
@@ -498,9 +530,14 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 	tail := tailContent(content, statusDetectionTailBytes)
 	h := hashString(tail)
 
+	cc.cacheMu.Lock()
 	if h == cc.statusCache.tailHash {
-		return cc.statusCache.status, cc.statusCache.desc
+		cachedStatus := cc.statusCache.status
+		cachedDesc := cc.statusCache.desc
+		cc.cacheMu.Unlock()
+		return cachedStatus, cachedDesc
 	}
+	cc.cacheMu.Unlock()
 
 	filtered, _ := filterTmuxMetadata(tail)
 
@@ -511,7 +548,9 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 	lines := lastNLines(filtered, statusDetectionLinesWindow)
 	status, desc := cc.statusDetector.DetectWithContextFromLines(lines)
 
+	cc.cacheMu.Lock()
 	cc.statusCache = statusCacheEntry{tailHash: h, status: status, desc: desc}
+	cc.cacheMu.Unlock()
 	return status, desc
 }
 
@@ -709,12 +748,17 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 			tail := tailContent(content, statusDetectionTailBytes)
 			h := hashString(tail)
 
+			cc.cacheMu.Lock()
 			if h == cc.idleCache.tailHash {
 				state = cc.idleCache.state
+				cc.cacheMu.Unlock()
 			} else {
+				cc.cacheMu.Unlock()
 				filtered, _ := filterTmuxMetadata(tail)
 				state = cc.idleDetector.DetectStateFromContent(filtered)
+				cc.cacheMu.Lock()
 				cc.idleCache = idleCacheEntry{tailHash: h, state: state}
+				cc.cacheMu.Unlock()
 			}
 		} else {
 			state = cc.idleDetector.GetState()
@@ -826,6 +870,30 @@ func (cc *ClaudeController) IsRateLimitEnabled() bool {
 		return cc.rateLimitHandler.IsEnabled()
 	}
 	return false
+}
+
+// runStatusChangeLoop waits for output signals on statusCheckCh, checks the current
+// status, and calls statusChangeListener whenever the status transitions to a new value.
+// Exits when ctx is cancelled (i.e., when Stop() calls cc.cancel()).
+func (cc *ClaudeController) runStatusChangeLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-cc.statusCheckCh:
+			newStatus, _ := cc.GetCurrentStatus()
+			cc.mu.Lock()
+			listener := cc.statusChangeListener
+			if listener == nil || newStatus == cc.lastEmittedStatus {
+				cc.mu.Unlock()
+				continue
+			}
+			cc.lastEmittedStatus = newStatus
+			cc.mu.Unlock()
+			// Call listener outside cc.mu (avoids re-entrancy deadlock)
+			listener(newStatus, cc.sessionName)
+		}
+	}
 }
 
 func generateCommandID() string {

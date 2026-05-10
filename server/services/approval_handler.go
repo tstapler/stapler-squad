@@ -320,6 +320,18 @@ createApproval:
 	h.writeDecision(w, decision.Behavior, decision.Message)
 }
 
+// resolveSessionName returns the human-readable title for sessionID using the
+// in-memory queueChecker (no DB side-effects). Falls back to sessionID itself
+// when the instance cannot be found (e.g. external sessions, race at startup).
+func (h *ApprovalHandler) resolveSessionName(sessionID string) string {
+	if h.queueChecker != nil {
+		if inst := h.queueChecker.FindInstance(sessionID); inst != nil {
+			return inst.Title
+		}
+	}
+	return sessionID
+}
+
 // broadcastApprovalNotification notifies all connected web UI clients about a pending approval.
 // The approval ID is passed in the notification metadata so the UI can resolve it.
 func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approval *PendingApproval) {
@@ -345,7 +357,7 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 
 	event := events.NewNotificationEvent(
 		sessionID,
-		sessionID,
+		h.resolveSessionName(sessionID),
 		approval.ID, // Use approval ID as notification ID for correlation
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_APPROVAL_NEEDED),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_URGENT),
@@ -371,7 +383,7 @@ func (h *ApprovalHandler) broadcastQuestionNotification(sessionID string, payloa
 
 	event := events.NewNotificationEvent(
 		sessionID,
-		sessionID,
+		h.resolveSessionName(sessionID),
 		uuid.New().String(),
 		int32(sessionv1.NotificationType_NOTIFICATION_TYPE_INPUT_REQUIRED),
 		int32(sessionv1.NotificationPriority_NOTIFICATION_PRIORITY_HIGH),

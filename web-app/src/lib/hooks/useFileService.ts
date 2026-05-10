@@ -2,8 +2,8 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
+import { getConnectTransport } from "@/lib/api/transport";
 import type { ListFilesResponse, GetFileContentResponse, SearchFilesResponse } from "@/gen/session/v1/session_pb";
 import type { FileNode } from "@/gen/session/v1/types_pb";
 
@@ -29,8 +29,8 @@ interface UseGetFileContentResult {
  * createFileClient creates a ConnectRPC client for the SessionService.
  * Extracted as a helper so both hooks share the same pattern.
  */
-function createFileClient(baseUrl: string) {
-  return createClient(SessionService, createConnectTransport({ baseUrl }));
+function createFileClient(_baseUrl: string) {
+  return createClient(SessionService, getConnectTransport());
 }
 
 /**

@@ -1,24 +1,25 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
-import { useGetApprovalsQuery, useResolveApprovalMutation } from "@/lib/api/approvalsApi";
+import { useMemo } from "react";
+import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import type { PlainApproval } from "@/lib/api/approvalsApi";
+import type { AsyncResult } from "@/lib/types/asyncResult";
 
 interface UseApprovalsOptions {
   sessionId?: string;
-  pollInterval?: number; // in milliseconds, default 5000
   /**
-   * Increment this counter externally to trigger an immediate refresh.
-   * Use when the parent receives an APPROVAL_NEEDED notification so the
-   * panel updates without waiting for the next poll cycle.
+   * @deprecated Polling is now controlled centrally by ApprovalsProvider.
+   * This option is accepted for backwards-compatibility but has no effect.
+   */
+  pollInterval?: number;
+  /**
+   * @deprecated No longer has any effect; kept for backwards-compatibility.
    */
   notificationTrigger?: number;
 }
 
-interface UseApprovalsReturn {
+export interface UseApprovalsReturn extends AsyncResult {
   approvals: PlainApproval[];
-  loading: boolean;
-  error: Error | null;
   approve: (approvalId: string) => Promise<void>;
   deny: (approvalId: string, message?: string) => Promise<void>;
   refresh: () => Promise<void>;
@@ -27,11 +28,8 @@ interface UseApprovalsReturn {
 /**
  * React hook for managing pending tool-use approval requests.
  *
- * Polls `listPendingApprovals` (via RTK Query) and exposes approve/deny actions
- * that call `resolveApproval` on the ConnectRPC SessionService.
- *
- * Pass `notificationTrigger` (increment it on APPROVAL_NEEDED events) to get
- * near-instant updates without opening an additional streaming connection.
+ * Delegates to ApprovalsContext (the single RTK Query polling singleton).
+ * Optionally filters the approval list by sessionId.
  *
  * @example
  * ```tsx
@@ -47,53 +45,17 @@ interface UseApprovalsReturn {
 export function useApprovals(
   options: UseApprovalsOptions = {}
 ): UseApprovalsReturn {
-  const { sessionId, pollInterval = 5000 } = options;
+  const { sessionId } = options;
+  const { approvals: allApprovals, loading, error, approve, deny, refresh } =
+    useApprovalsContext();
 
-  const { data, isLoading, error: queryError, refetch } = useGetApprovalsQuery(undefined, {
-    pollingInterval: pollInterval,
-  });
-
-  const [resolveApproval] = useResolveApprovalMutation();
-
-  // Filter by sessionId if provided
-  const approvals = useMemo(() => {
-    const all = data?.approvals ?? [];
-    return sessionId ? all.filter((a) => a.sessionId === sessionId) : all;
-  }, [data?.approvals, sessionId]);
-
-  const approve = useCallback(
-    async (approvalId: string) => {
-      await resolveApproval({ approvalId, decision: "allow" });
-    },
-    [resolveApproval]
+  const approvals = useMemo(
+    () =>
+      sessionId
+        ? allApprovals.filter((a) => a.sessionId === sessionId)
+        : allApprovals,
+    [allApprovals, sessionId]
   );
 
-  const deny = useCallback(
-    async (approvalId: string, message?: string) => {
-      await resolveApproval({ approvalId, decision: "deny", message });
-    },
-    [resolveApproval]
-  );
-
-  const refresh = useCallback(async () => {
-    await refetch();
-  }, [refetch]);
-
-  const error = useMemo(() => {
-    if (!queryError) return null;
-    const msg =
-      typeof queryError === "object" && "error" in queryError
-        ? String((queryError as { error: unknown }).error)
-        : "Unknown error";
-    return new Error(msg);
-  }, [queryError]);
-
-  return {
-    approvals,
-    loading: isLoading,
-    error,
-    approve,
-    deny,
-    refresh,
-  };
+  return { approvals, loading, error, approve, deny, refresh };
 }

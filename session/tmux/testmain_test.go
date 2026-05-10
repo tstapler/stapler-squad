@@ -126,6 +126,6 @@ rm -f "$0"
 		return // best-effort; normal t.Cleanup handles the happy path
 	}
 	cmd := exec.CommandContext(context.Background(), "sh", scriptPath) //nolint:norawexec long-running cmd.Start() process; lifecycle managed by caller
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own process group → survives SIGKILL to test binary
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}              // own process group → survives SIGKILL to test binary
 	_ = cmd.Start()
 }

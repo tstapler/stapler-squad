@@ -1,7 +1,7 @@
 "use client";
 // +feature: session-list session-search session-filter session-groupby
 
-import React, { useState, useEffect, useRef, Suspense, useCallback } from "react";
+import React, { useState, useEffect, useRef, Suspense, useCallback, useMemo } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
@@ -11,12 +11,10 @@ const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
 function isValidTab(tab: string | null): tab is SessionDetailTab {
   return tab !== null && (VALID_TABS as readonly string[]).includes(tab);
 }
-import { SessionWizard } from "@/components/sessions/SessionWizard";
 import { ResumeSessionModal } from "@/components/sessions/ResumeSessionModal";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
-import { SessionFormData } from "@/lib/validation/sessionSchema";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -28,7 +26,7 @@ function HomeContent() {
   const { track } = useAnalytics();
   const searchParams = useSearchParams();
   const router = useRouter();
-  const { openInCreationMode } = useOmnibar();
+  const { openInCreationMode, openOmnibar } = useOmnibar();
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
   const [activeTab, setActiveTab] = useState<SessionDetailTab>("info");
   const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<Session | null>(null);
@@ -45,17 +43,9 @@ function HomeContent() {
   // Resume modal state
   const [resumeTarget, setResumeTarget] = useState<Session | null>(null);
 
-  // Wizard modal state
-  const [showWizard, setShowWizard] = useState(false);
-  const [wizardInitialData, setWizardInitialData] = useState<Partial<SessionFormData> | undefined>(undefined);
-  // Track whether wizard was opened via query params so we clean up URL on close
-  const openedViaQueryParam = useRef(false);
-
   // Focus management: modal containers (tabIndex={-1}) and trigger element refs
   const sessionDetailRef = useRef<HTMLDivElement>(null);
-  const wizardModalContentRef = useRef<HTMLDivElement>(null);
   const sessionTriggerRef = useRef<HTMLElement | null>(null);
-  const wizardTriggerRef = useRef<HTMLElement | null>(null);
 
   // Tracks the last URL params that were routed to a pane. Prevents the URL-watching
   // effect from re-triggering pane assignment on every sessions stream update (which
@@ -72,22 +62,11 @@ function HomeContent() {
     }
   }, [selectedSession]);
 
-  // Focus wizard modal when it opens; return focus on close
-  useEffect(() => {
-    if (showWizard) {
-      wizardModalContentRef.current?.focus();
-    } else if (wizardTriggerRef.current) {
-      wizardTriggerRef.current.focus();
-      wizardTriggerRef.current = null;
-    }
-  }, [showWizard]);
-
 
   const {
     sessions,
     loading,
     error,
-    createSession,
     deleteSession,
     pauseSession,
     resumeSession,
@@ -210,49 +189,23 @@ function HomeContent() {
     const duplicateId = searchParams.get("duplicate");
     const worktreePath = searchParams.get("worktree");
     const worktreeBranch = searchParams.get("branch");
-    const worktreeTitle = searchParams.get("title");
 
     if (newParam === "true") {
-      setWizardInitialData(undefined);
-      setShowWizard(true);
-      openedViaQueryParam.current = true;
       router.replace("/", { scroll: false });
+      openOmnibar();
     } else if (duplicateId) {
-      openedViaQueryParam.current = true;
       router.replace("/", { scroll: false });
       getSession(duplicateId).then((session) => {
-        if (session) {
-          setWizardInitialData({
-            title: `${session.title}-copy`,
-            path: session.path,
-            workingDir: session.workingDir || "",
-            branch: session.branch || "",
-            program: session.program || "claude",
-            category: session.category || "",
-            prompt: "",
-            autoYes: false,
-          });
-        }
-        setShowWizard(true);
+        openOmnibar(session?.path);
       }).catch(() => {
-        setShowWizard(true);
+        openOmnibar();
       });
     } else if (worktreePath) {
-      openedViaQueryParam.current = true;
       router.replace("/", { scroll: false });
-      setWizardInitialData({
-        title: worktreeTitle || "",
-        path: worktreePath,
-        branch: worktreeBranch || "",
-        workingDir: "",
-        program: "claude",
-        category: "",
-        prompt: "",
-        autoYes: false,
-      });
-      setShowWizard(true);
+      // Pass path@branch so the PathWithBranch detector pre-fills both fields
+      openOmnibar(worktreeBranch ? `${worktreePath}@${worktreeBranch}` : worktreePath);
     }
-  }, [searchParams, getSession, router]);
+  }, [searchParams, getSession, openOmnibar, router]);
 
   // Close session and clear URL query parameter
   const closeSession = () => {
@@ -273,25 +226,10 @@ function HomeContent() {
 
   // Handle new workspace on same project
   const handleNewWorkspaceSession = (sessionId: string) => {
-    wizardTriggerRef.current = document.activeElement as HTMLElement;
-    openedViaQueryParam.current = false;
     getSession(sessionId).then((session) => {
-      if (session) {
-        setWizardInitialData({
-          path: session.path,
-          workingDir: session.workingDir || "",
-          program: session.program || "claude",
-          category: session.category || "",
-          title: "",
-          branch: "",
-          prompt: "",
-          autoYes: false,
-          useTitleAsBranch: true,
-        });
-      }
-      setShowWizard(true);
+      openOmnibar(session?.path);
     }).catch(() => {
-      setShowWizard(true);
+      openOmnibar();
     });
   };
 
@@ -301,38 +239,6 @@ function HomeContent() {
 
   const handleNewSession = () => {
     openInCreationMode();
-  };
-
-  const handleWizardComplete = async (data: SessionFormData) => {
-    track({ name: "session_wizard_complete", category: "user_action" });
-    const branchName = data.useTitleAsBranch ? data.title : (data.branch || "");
-    await createSession({
-      title: data.title,
-      path: data.path,
-      workingDir: data.workingDir || "",
-      branch: branchName,
-      program: data.program,
-      category: data.category || "",
-      prompt: data.prompt || "",
-      initialPrompt: data.initialPrompt || "",
-      autoYes: data.autoYes,
-      existingWorktree: data.existingWorktree || "",
-    });
-    setShowWizard(false);
-    setWizardInitialData(undefined);
-    if (openedViaQueryParam.current) {
-      router.replace("/", { scroll: false });
-      openedViaQueryParam.current = false;
-    }
-  };
-
-  const handleWizardCancel = () => {
-    setShowWizard(false);
-    setWizardInitialData(undefined);
-    if (openedViaQueryParam.current) {
-      router.replace("/", { scroll: false });
-      openedViaQueryParam.current = false;
-    }
   };
 
   const handleUpdateTags = async (sessionId: string, tags: string[]) => {
@@ -409,8 +315,6 @@ function HomeContent() {
         setDeleteConfirmTarget(null);
       } else if (resumeTarget) {
         setResumeTarget(null);
-      } else if (showWizard) {
-        handleWizardCancel();
       } else if (selectedSession) {
         closeSession();
       }
@@ -418,51 +322,48 @@ function HomeContent() {
     "R": () => !loading && listSessions(),
     // j/k navigation (only when no modal is open)
     "j": () => {
-      if (showWizard || deleteConfirmTarget || resumeTarget) return;
+      if (deleteConfirmTarget || resumeTarget) return;
       setFocusedSessionIndex(prev =>
         sessions.length === 0 ? -1 : Math.min(prev + 1, sessions.length - 1)
       );
     },
     "k": () => {
-      if (showWizard || deleteConfirmTarget || resumeTarget) return;
+      if (deleteConfirmTarget || resumeTarget) return;
       setFocusedSessionIndex(prev =>
         sessions.length === 0 ? -1 : Math.max(prev - 1, 0)
       );
     },
     Enter: () => {
-      if (showWizard || deleteConfirmTarget || resumeTarget) return;
+      if (deleteConfirmTarget || resumeTarget) return;
       if (!selectedSession && focusedSessionIndex >= 0 && sessions[focusedSessionIndex]) {
         handleSessionClick(sessions[focusedSessionIndex]);
       }
     },
     // p/r/d act on the open session
     "p": () => {
-      if (selectedSession && !showWizard && !deleteConfirmTarget) {
+      if (selectedSession && !deleteConfirmTarget) {
         pauseSession(selectedSession.id);
       }
     },
     "r": () => {
-      if (selectedSession && !showWizard && !deleteConfirmTarget) {
+      if (selectedSession && !deleteConfirmTarget) {
         handleResumeRequest(selectedSession);
       }
     },
     "d": () => {
-      if (selectedSession && !showWizard && !deleteConfirmTarget) {
+      if (selectedSession && !deleteConfirmTarget) {
         setDeleteConfirmTarget(selectedSession);
       }
     },
     // t — jump to terminal tab
     "t": () => {
-      if (selectedSession && !showWizard && !deleteConfirmTarget) {
+      if (selectedSession && !deleteConfirmTarget) {
         handleTabChange("terminal");
       }
     },
   });
 
-  const cockpitActions = {
-    sessions,
-    loading,
-    error,
+  const cockpitActions = useMemo(() => ({
     onSessionClick: handleSessionClick,
     onDeleteSession: handleDeleteSession,
     onPauseSession: pauseSession,
@@ -481,7 +382,13 @@ function HomeContent() {
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onClearConversationState: clearConversationState,
     onListSessions: listSessions,
-  };
+  }), [
+    handleSessionClick, handleDeleteSession, pauseSession, handleResumeRequest,
+    handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
+    restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
+    listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
+    clearConversationState, listSessions,
+  ]);
 
   return (
     <div className={styles.page}>
@@ -504,32 +411,6 @@ function HomeContent() {
           />
         </div>
       </CockpitActionsProvider>
-
-      {/* Session creation wizard modal */}
-      {showWizard && (
-        <div className={styles.modal} onClick={handleWizardCancel}>
-          <div ref={wizardModalContentRef} tabIndex={-1} className={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-            <div className={styles.modalHeader}>
-              <h2>{wizardInitialData ? "Duplicate Session" : "Create New Session"}</h2>
-              <button
-                className={styles.closeButton}
-                onClick={handleWizardCancel}
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
-            <div className={styles.modalBody}>
-              <SessionWizard
-                onComplete={handleWizardComplete}
-                onCancel={handleWizardCancel}
-                initialData={wizardInitialData}
-                existingTitles={sessions.map((s) => s.title)}
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Resume session modal */}
       {resumeTarget && (

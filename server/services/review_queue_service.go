@@ -55,6 +55,11 @@ func (rqs *ReviewQueueService) SetReactiveQueueManager(mgr ReactiveQueueManager)
 	rqs.reactiveQueueMgr = mgr
 }
 
+// GetReactiveQueueManager returns the injected ReactiveQueueManager, or nil if not set.
+func (rqs *ReviewQueueService) GetReactiveQueueManager() ReactiveQueueManager {
+	return rqs.reactiveQueueMgr
+}
+
 // SetReviewQueuePoller injects the ReviewQueuePoller used to refresh instance
 // references after acknowledgement.
 func (rqs *ReviewQueueService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {

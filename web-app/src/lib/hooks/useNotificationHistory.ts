@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import {
   NotificationHistoryRecord,
@@ -14,7 +13,7 @@ import {
   ClearNotificationHistoryRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 const DEFAULT_PAGE_SIZE = 50;
 
@@ -49,10 +48,7 @@ export function useNotificationHistory(): UseNotificationHistoryReturn {
 
   // Initialize ConnectRPC client
   useEffect(() => {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-    });
-    clientRef.current = createClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, getConnectTransport());
   }, []);
 
   // Fetch notification history from the server

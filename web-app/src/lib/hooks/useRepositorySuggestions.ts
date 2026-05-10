@@ -2,9 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { rankPathsByFrecency } from "@/lib/utils/frecency";
 
 /** Returns OS-appropriate example paths shown when no sessions exist yet. */
@@ -29,7 +28,7 @@ interface RepositorySuggestionsOptions {
  * you use most often AND most recently appears first.
  */
 export function useRepositorySuggestions(options: RepositorySuggestionsOptions = {}) {
-  const { baseUrl = getApiBaseUrl() } = options;
+  const {} = options;
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -38,8 +37,7 @@ export function useRepositorySuggestions(options: RepositorySuggestionsOptions =
       try {
         setIsLoading(true);
 
-        const transport = createConnectTransport({ baseUrl });
-        const client = createClient(SessionService, transport);
+        const client = createClient(SessionService, getConnectTransport());
 
         const response = await client.listSessions({});
         const sessions = response.sessions || [];
@@ -67,7 +65,8 @@ export function useRepositorySuggestions(options: RepositorySuggestionsOptions =
     };
 
     fetchSuggestions();
-  }, [baseUrl]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return { suggestions, isLoading };
 }

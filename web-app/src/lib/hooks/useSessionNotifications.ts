@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { NotificationEvent } from "@/gen/session/v1/events_pb";
 import { NotificationPriority, NotificationType } from "@/gen/session/v1/types_pb";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -10,7 +9,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { NotificationData } from "@/lib/types/notification";
 import { mapNotificationType, mapPriority } from "@/lib/utils/notificationMapping";
 import { TOAST_DEDUP_WINDOW_MS } from "@/lib/notification-policy";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 /**
  * Notification types that should only appear in history — no toast, no sound.
@@ -30,8 +29,7 @@ const HISTORY_ONLY_TYPES = new Set([
  */
 async function resolveApproval(approvalId: string, decision: "allow" | "deny"): Promise<void> {
   try {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    const client = createClient(SessionService, transport);
+    const client = createClient(SessionService, getConnectTransport());
     await client.resolveApproval({ approvalId, decision });
   } catch (error) {
     console.error(`[resolveApproval] Failed to resolve approval ${approvalId}:`, error);
@@ -45,10 +43,7 @@ async function focusWindow(bundleId?: string, appName?: string): Promise<void> {
   if (!bundleId && !appName) return;
 
   try {
-    const transport = createConnectTransport({
-      baseUrl: getApiBaseUrl(),
-    });
-    const client = createClient(SessionService, transport);
+    const client = createClient(SessionService, getConnectTransport());
     const response = await client.focusWindow({
       bundleId: bundleId,
       appName: appName,

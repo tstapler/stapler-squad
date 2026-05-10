@@ -303,6 +303,35 @@ func (m *ScrollbackManager) GetStats(sessionID string) (ScrollbackStats, error) 
 	return stats, nil
 }
 
+// GetScrollbackBefore retrieves the `limit` most recent scrollback entries
+// with Sequence strictly less than beforeSeq.
+// Returns entries in chronological order (oldest first).
+func (m *ScrollbackManager) GetScrollbackBefore(sessionID string, beforeSeq uint64, limit int) ([]ScrollbackEntry, error) {
+	if beforeSeq == 0 {
+		return nil, nil
+	}
+
+	// Get all entries from the beginning up to (but not including) beforeSeq.
+	all, err := m.GetScrollback(sessionID, 0, int(beforeSeq))
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter to entries strictly before beforeSeq.
+	filtered := make([]ScrollbackEntry, 0, len(all))
+	for _, e := range all {
+		if e.Sequence < beforeSeq {
+			filtered = append(filtered, e)
+		}
+	}
+
+	// Return the last `limit` entries (the ones immediately before beforeSeq).
+	if len(filtered) <= limit {
+		return filtered, nil
+	}
+	return filtered[len(filtered)-limit:], nil
+}
+
 // CurrentSequence returns the highest scrollback sequence number written so far
 // for the given session. Returns 0 if the session has no scrollback yet.
 // Implements the scrollbackSequencer interface used by SessionService.CreateCheckpoint.

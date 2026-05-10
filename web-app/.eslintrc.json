@@ -1,6 +1,6 @@
 {
   "extends": ["next/core-web-vitals"],
-  "plugins": ["boundaries", "analytics"],
+  "plugins": ["boundaries", "analytics", "@typescript-eslint"],
   "settings": {
     "boundaries/elements": [
       { "type": "app",        "pattern": "src/app/**" },
@@ -25,6 +25,7 @@
     ]
   },
   "rules": {
+    "react/jsx-max-props-per-line": "off",
     "no-restricted-syntax": [
       "error",
       {
@@ -95,9 +96,40 @@
   },
   "overrides": [
     {
+      "files": ["**/*.ts", "**/*.tsx"],
+      "rules": {
+        "@typescript-eslint/no-non-null-assertion": "warn",
+        "@typescript-eslint/consistent-type-imports": "warn"
+      }
+    },
+    {
       "files": ["src/app/test/**/*.tsx", "src/app/test/**/*.ts"],
       "rules": {
         "no-restricted-syntax": "off"
+      }
+    },
+    {
+      "files": ["**/*.css.ts"],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "Property > Literal[value=/^#[0-9a-fA-F]{3,8}$/]",
+            "message": "Hardcoded hex colors are not allowed in .css.ts files. Use vars.color.* tokens from theme-contract.css.ts."
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/components/**/*.tsx"],
+      "rules": {
+        "no-restricted-syntax": [
+          "warn",
+          {
+            "selector": "TSInterfaceDeclaration[id.name=/Props$/] > TSInterfaceBody > TSPropertySignature:nth-child(13) ~ TSPropertySignature",
+            "message": "Component props interface has >12 props. Consider splitting the component or grouping props into a sub-interface."
+          }
+        ]
       }
     }
   ]

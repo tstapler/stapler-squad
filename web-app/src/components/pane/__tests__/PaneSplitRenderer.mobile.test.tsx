@@ -25,7 +25,7 @@ jest.mock("@/components/pane/ResizeHandle", () => ({
 }));
 
 jest.mock("@/lib/contexts/CockpitActionsContext", () => ({
-  useCockpitActions: () => ({ sessions: [], loading: false, error: null }),
+  useCockpitActions: () => ({}),
 }));
 
 jest.mock("@/components/pane/PaneContext", () => ({

@@ -4,9 +4,6 @@ import { createContext, useContext } from "react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 
 export interface CockpitActions {
-  sessions: Session[];
-  loading: boolean;
-  error: Error | null;
   onSessionClick: (session: Session) => void;
   onDeleteSession: (sessionId: string) => Promise<void> | void;
   onPauseSession: (sessionId: string) => void;

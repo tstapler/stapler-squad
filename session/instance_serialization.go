@@ -334,4 +334,3 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 
 	return instance, nil
 }
-

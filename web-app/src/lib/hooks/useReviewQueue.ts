@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useCallback, useRef, useMemo } from "react";
+import type { AsyncResult } from "@/lib/types/asyncResult";
 import { createClient } from "@connectrpc/connect";
 import { createWatchTransport } from "@/lib/transport/watch-ws-transport";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -43,12 +44,10 @@ interface UseReviewQueueOptions {
   fallbackPollInterval?: number; // Fallback polling interval (default: 30000ms)
 }
 
-interface UseReviewQueueReturn {
+interface UseReviewQueueReturn extends AsyncResult {
   // State
   reviewQueue: ReviewQueue | null;
   items: ReviewItem[];
-  loading: boolean;
-  error: Error | null;
 
   // Statistics
   totalItems: number;

@@ -6,12 +6,14 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -270,6 +272,12 @@ type Instance struct {
 	// onRateLimitRecovery is called (in a goroutine) when recovery completes.
 	// success=true means recovery input was sent; false means it failed.
 	onRateLimitRecovery func(sessionID string, success bool, errMsg string)
+
+	// onStatusChangeMu protects onStatusChange.
+	onStatusChangeMu sync.RWMutex
+	// onStatusChange is called when the ClaudeController detects a status transition.
+	// Wired by the server layer to trigger reactive queue checks.
+	onStatusChange func(detection.DetectedStatus, string)
 }
 
 // SessionType indicates the type of session workflow to use

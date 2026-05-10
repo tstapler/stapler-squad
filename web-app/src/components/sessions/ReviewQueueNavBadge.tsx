@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useReviewQueueNotifications } from "@/lib/hooks/useReviewQueueNotifications";
 import { NotificationSound } from "@/lib/utils/notifications";
-import * as styles from "./ReviewQueueNavBadge.css";
+import { NavBadge } from "@/components/ui/NavBadge";
 
 interface ReviewQueueNavBadgeProps {
   inline?: boolean;
@@ -34,19 +34,15 @@ export function ReviewQueueNavBadge({ inline = false }: ReviewQueueNavBadgeProps
   const count = items.length;
 
   // Always show badge (even when count is 0) for test visibility
-  // Badge will be styled to show 0 state
-  const className = inline
-    ? `${styles.badge} ${styles.inline} ${count === 0 ? styles.empty : ""}`
-    : `${styles.badge} ${count === 0 ? styles.empty : ""}`;
-
   return (
-    <span
-      className={className}
+    <NavBadge
+      count={count}
+      element="span"
+      inline={inline}
+      showWhenEmpty
       data-testid="review-queue-badge"
       aria-label={`${count} item${count !== 1 ? "s" : ""} in review queue`}
       title={`${count} session${count !== 1 ? "s" : ""} ${count > 0 ? "need attention" : "- queue empty"}`}
-    >
-      {count}
-    </span>
+    />
   );
 }

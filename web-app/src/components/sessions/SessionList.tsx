@@ -2,9 +2,8 @@
 
 import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService, Project } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { AppLink } from "@/components/ui/AppLink";
 import { Session, SessionStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
@@ -194,7 +193,7 @@ export function SessionList({
   // S4: Project data for grouping headers and "Group as..." functionality
   const [projects, setProjects] = useState<Project[]>([]);
   const projectClientRef = useRef(
-    createClient(SessionService, createConnectTransport({ baseUrl: getApiBaseUrl() }))
+    createClient(SessionService, getConnectTransport())
   );
 
   // Fetch projects from API (called on mount and after mutations)

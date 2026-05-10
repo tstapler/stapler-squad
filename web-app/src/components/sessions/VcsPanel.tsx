@@ -159,7 +159,7 @@ export function VcsPanel({ onNavigateToFile, session }: VcsPanelProps) {
       <div className={styles.container}>
         <div className={styles.error}>
           <span className={styles.errorIcon}>⚠️</span>
-          <span>{error}</span>
+          <span>{error.message}</span>
           <button className={styles.retryButton} onClick={refresh}>
             Retry
           </button>

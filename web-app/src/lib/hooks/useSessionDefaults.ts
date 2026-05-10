@@ -2,9 +2,8 @@
 
 import { useState, useEffect } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 export type FieldSource = "global" | "directory" | "profile" | "none";
 
@@ -70,8 +69,7 @@ export function useSessionDefaults(
   useEffect(() => {
     const fetchProfiles = async () => {
       try {
-        const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-        const client = createClient(SessionService, transport);
+        const client = createClient(SessionService, getConnectTransport());
         const response = await client.getSessionDefaults({});
         const config = response.defaults;
         if (config?.profiles) {
@@ -101,8 +99,7 @@ export function useSessionDefaults(
       setError(null);
 
       try {
-        const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-        const client = createClient(SessionService, transport);
+        const client = createClient(SessionService, getConnectTransport());
         const response = await client.resolveDefaults({
           workingDir,
           profileName: profileName || "",

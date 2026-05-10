@@ -1,0 +1,9 @@
+{
+  "threshold": 5,
+  "minLines": 10,
+  "minTokens": 70,
+  "format": ["typescript", "tsx"],
+  "ignore": ["**/gen/**", "**/node_modules/**", "**/*.test.*", "**/*.spec.*", "**/*.stories.*"],
+  "reporters": ["json", "console"],
+  "output": "reports/jscpd"
+}

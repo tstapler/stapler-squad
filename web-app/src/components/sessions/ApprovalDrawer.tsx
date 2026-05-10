@@ -18,7 +18,7 @@ interface ApprovalDrawerProps {
  * Does not block the rest of the UI — no backdrop overlay.
  */
 export function ApprovalDrawer({ isOpen, onClose }: ApprovalDrawerProps) {
-  const { approvals, approve, deny, refresh } = useApprovals({});
+  const { approvals, approve, deny, refresh, error, loading } = useApprovals({});
   const sessions = useAppSelector(selectAllSessions);
   const [announcement, setAnnouncement] = useState("");
   const prevCountRef = useRef(approvals.length);
@@ -96,7 +96,11 @@ export function ApprovalDrawer({ isOpen, onClose }: ApprovalDrawerProps) {
       </div>
 
       <div className={styles.list}>
-        {sorted.length === 0 ? (
+        {error ? (
+          <p className={styles.empty}>Failed to load approvals: {error.message}</p>
+        ) : loading && sorted.length === 0 ? (
+          <p className={styles.empty}>Loading…</p>
+        ) : sorted.length === 0 ? (
           <p className={styles.empty}>No pending approvals</p>
         ) : (
           sorted.map((approval) => (

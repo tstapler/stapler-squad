@@ -34,6 +34,12 @@ export const card = style({
   // Runtime: animation-delay set via --card-index inline style
   // Cap stagger at 5 cards (300ms max) to prevent long lists from having excessive delays
   animationDelay: "calc(min(var(--card-index, 0), 5) * 60ms)",
+  "@media": {
+    "(prefers-reduced-motion: reduce)": {
+      animationDuration: "0.01ms",
+      animationDelay: "0ms",
+    },
+  },
   selectors: {
     "&:hover": {
       borderColor: vars.color.borderHover,

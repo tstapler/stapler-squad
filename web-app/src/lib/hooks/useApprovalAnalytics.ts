@@ -2,12 +2,11 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { AnalyticsSummaryProto, DailyBucketProto } from "@/gen/session/v1/types_pb";
 import { GetApprovalAnalyticsRequest, GetApprovalAnalyticsRequestSchema } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 interface UseApprovalAnalyticsOptions {
   windowDays?: number; // default 7
@@ -40,8 +39,7 @@ export function useApprovalAnalytics(
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, getConnectTransport());
   }, []);
 
   const fetchAnalytics = useCallback(async () => {

@@ -10,6 +10,8 @@ const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 test.describe('Accessibility (WCAG 2.1 AA)', () => {
   test('IT-5.1: Main page has no critical or serious accessibility violations', async ({ page }) => {
+    // Disable animations so Axe sees final rendered state, not mid-animation opacity
+    await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     // Wait for the app to load

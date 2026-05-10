@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { DatabaseInfo } from "@/gen/session/v1/types_pb";
 import {
@@ -17,6 +16,7 @@ import {
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 interface MergeResult {
   sessionsImported: number;
@@ -56,8 +56,7 @@ export function useDatabases(): UseDatabasesReturn {
   > | null>(null);
 
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl: getApiBaseUrl() });
-    clientRef.current = createClient(SessionService, transport);
+    clientRef.current = createClient(SessionService, getConnectTransport());
   }, []);
 
   const fetchDatabases = useCallback(async () => {
@@ -112,8 +111,7 @@ export function useDatabases(): UseDatabasesReturn {
 
       while (attempts < maxAttempts) {
         try {
-          const transport = createConnectTransport({ baseUrl: apiBase });
-          const tempClient = createClient(SessionService, transport);
+          const tempClient = createClient(SessionService, getConnectTransport());
           await tempClient.getCurrentDatabase(create(GetCurrentDatabaseRequestSchema, {}));
           serverBack = true;
           break;

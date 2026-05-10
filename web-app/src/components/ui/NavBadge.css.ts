@@ -31,3 +31,5 @@ export const inline = style({
   marginLeft: "0.375rem",
   verticalAlign: "middle",
 });
+
+export const empty = style({});

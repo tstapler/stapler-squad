@@ -9,6 +9,7 @@ import { ErrorState } from "@/components/ui/ErrorState";
 import type { PaneNode, LeafPane, SplitPane, PaneState, PaneAction, PaneId, SessionDetailTab, PaneViewKind } from "@/lib/pane/paneTypes";
 import { getAllLeaves } from "@/lib/pane/paneReducer";
 import { useCockpitActions } from "@/lib/contexts/CockpitActionsContext";
+import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { usePaneContext } from "./PaneContext";
 import { PaneHeader } from "./PaneHeader";
 import { ResizeHandle } from "./ResizeHandle";
@@ -148,22 +149,23 @@ interface PaneLeafProps {
 
 function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: React.Dispatch<PaneAction> }) {
   const actions = useCockpitActions();
+  const { sessions, loading, error, listSessions } = useSessionServiceContext();
   const { triggerPicker, triggerPickerForceNew } = usePaneContext();
-  if (actions.loading) return <SessionListSkeleton count={4} />;
-  if (actions.error) {
+  if (loading) return <SessionListSkeleton count={4} />;
+  if (error) {
     return (
       <ErrorState
-        error={actions.error}
+        error={error}
         title="Failed to Load Sessions"
         message="Unable to connect to the server."
-        onRetry={actions.onListSessions}
+        onRetry={listSessions}
       />
     );
   }
   return (
     <div className={sessionListScroll} data-testid="session-list-scroll">
       <SessionList
-        sessions={actions.sessions}
+        sessions={sessions}
         onSessionClick={triggerPicker}
         onSessionOpenInNewPane={triggerPickerForceNew}
         onDeleteSession={actions.onDeleteSession}

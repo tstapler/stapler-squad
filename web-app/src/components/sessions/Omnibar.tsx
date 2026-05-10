@@ -36,6 +36,7 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   initialMode?: "discovery" | "creation";
+  initialInput?: string;
 }
 
 // Consolidated form state
@@ -117,7 +118,7 @@ function isValidProjectName(name: string): boolean {
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, initialMode }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, initialMode, initialInput }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -444,6 +445,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       dispatchMode({ kind: "open_creation_direct" });
     }
   }, [isOpen, initialMode, dispatchMode]);
+
+  // On open: pre-populate input if initialInput is provided
+  useEffect(() => {
+    if (isOpen && initialInput) {
+      setInput(initialInput);
+    }
+  }, [isOpen, initialInput]);
 
   // Session result selection handlers
   const handleSessionSelect = useCallback(

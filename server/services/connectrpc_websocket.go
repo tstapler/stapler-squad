@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
@@ -515,7 +515,13 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		log.WarningLog.Printf("[streamViaControlMode] Handshake missing dimensions, layout may be incorrect")
 	}
 
-	streamer.UnsubscribeControlModeUpdates(quiescenceSubID)
+	// Do NOT unsubscribe quiescenceCh here — keep the subscription alive for the
+	// stream's lifetime so the resize goroutine can call waitForQuiescence after
+	// each SetWindowSize (R1.1: tmux reflow takes 100–400 ms; without quiescence
+	// the next capture-pane sees partially-reflowed content).
+	// The subscription is implicitly stopped when the underlying channel is closed
+	// (i.e. when StopControlMode is called via the defer above).
+	_ = quiescenceSubID // prevent unused-variable lint error
 
 	// Now capture content at correct dimensions.
 	// If capture fails (session died), proceed with empty content rather than trying
@@ -565,6 +571,50 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			strings.Count(initialContent, "\n")+1, sessionID)
 
 		instance.UpdateTerminalTimestamps(initialContent, true)
+	}
+
+	// Send initial ScrollbackResponse with the most recent history so the client
+	// can populate its scrollback buffer immediately on connect (R2.2).
+	if h.scrollbackManager != nil {
+		const initialScrollbackLines = 500
+		sbData, sbErr := h.scrollbackManager.GetRecentLines(sessionID, initialScrollbackLines)
+		if sbErr != nil {
+			log.WarningLog.Printf("[streamViaControlMode] Failed to fetch initial scrollback for '%s': %v", sessionID, sbErr)
+		} else if len(sbData) > 0 {
+			// GetRecentLines returns raw bytes; wrap as a single chunk.
+			sbStats, statsErr := h.scrollbackManager.GetStats(sessionID)
+			var oldestSeq, newestSeq uint64
+			if statsErr == nil {
+				oldestSeq = sbStats.OldestSequence
+				newestSeq = sbStats.NewestSequence
+			}
+			chunks := []*sessionv1.ScrollbackChunk{
+				{
+					Data:     sbData,
+					Sequence: newestSeq,
+				},
+			}
+			// has_more is true when the session has more history than the initial window.
+			hasMore := sbStats.MemoryLines > initialScrollbackLines || sbStats.StorageBytes > 0
+			sbResp := &sessionv1.TerminalData{
+				SessionId: sessionID,
+				Data: &sessionv1.TerminalData_ScrollbackResponse{
+					ScrollbackResponse: &sessionv1.ScrollbackResponse{
+						Chunks:          chunks,
+						HasMore:         hasMore,
+						TotalLines:      uint64(sbStats.MemoryLines),
+						OldestSequence:  oldestSeq,
+						NewestSequence:  newestSeq,
+					},
+				},
+			}
+			if sbBytes, merr := proto.Marshal(sbResp); merr != nil {
+				log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal initial scrollback for '%s': %v", sessionID, merr)
+			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, sbBytes)); wsErr == nil {
+				log.InfoLog.Printf("[streamViaControlMode] Sent initial scrollback (1 chunk, %d bytes) for session '%s'",
+					len(sbData), sessionID)
+			}
+		}
 	}
 
 	// Subscribe to control mode updates for streaming
@@ -660,14 +710,82 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	type resizeReq struct{ cols, rows int }
 	resizeCh := make(chan resizeReq, 1)
 	go func() {
+		// lastAppliedResize tracks the most recently applied resize dimensions and time.
+		// Used to suppress duplicate resize calls within 50 ms (R1.5 — avoid redundant
+		// PTY ioctls when rapid window-drag events produce identical dimensions).
+		type lastResize struct {
+			cols, rows int
+			t          time.Time
+		}
+		var last lastResize
 		for {
 			select {
 			case <-doneChan:
 				return
 			case r := <-resizeCh:
+				// Skip duplicate resizes within 50 ms to avoid unnecessary tmux reflows.
+				if r.cols == last.cols && r.rows == last.rows && time.Since(last.t) < 50*time.Millisecond {
+					continue
+				}
 				if err := instance.SetWindowSize(r.cols, r.rows); err != nil {
 					log.ErrorLog.Printf("[streamViaControlMode] Failed to resize: %v", err)
+					continue
 				}
+				last = lastResize{cols: r.cols, rows: r.rows, t: time.Now()}
+
+				// sendResizeQuiescence is a helper to emit ResizeQuiescence signals (R1.4).
+				sendResizeQuiescence := func(resizing bool) {
+					rqMsg := &sessionv1.TerminalData{
+						SessionId: sessionID,
+						Data: &sessionv1.TerminalData_ResizeQuiescence{
+							ResizeQuiescence: &sessionv1.ResizeQuiescence{
+								Resizing: resizing,
+								Cols:     int32(r.cols),
+								Rows:     int32(r.rows),
+							},
+						},
+					}
+					if rqBytes, merr := proto.Marshal(rqMsg); merr != nil {
+						log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal ResizeQuiescence for '%s': %v", sessionID, merr)
+					} else {
+						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, rqBytes))
+					}
+				}
+
+				// Signal client: tmux reflow is starting (R1.4).
+				sendResizeQuiescence(true)
+
+				// Wait for tmux to finish reflowing at the new dimensions before the
+				// next capture-pane, preventing partially-reflowed content (R1.1).
+				quiescenceDeadline := 300 * time.Millisecond
+				quiescenceStart := time.Now()
+				waitForQuiescence(quiescenceCh, quiescenceDeadline, 100*time.Millisecond)
+				if elapsed := time.Since(quiescenceStart); elapsed >= quiescenceDeadline-5*time.Millisecond {
+					log.ErrorLog.Printf("[streamViaControlMode] quiescence timed out after %v for session %s (%dx%d); sending snapshot anyway", elapsed.Round(time.Millisecond), sessionID, r.cols, r.rows)
+				}
+
+				// Capture and send a fresh snapshot at the new dimensions so the client
+				// display is immediately correct without waiting for the next PTY event
+				// (R1.3 — post-resize snapshot).
+				if snapContent, snapErr := instance.CapturePaneContentRaw(); snapErr == nil && snapContent != "" {
+					h.markSnapshotDirty(sessionID)
+					snapMsg := &sessionv1.TerminalData{
+						SessionId: sessionID,
+						Data: &sessionv1.TerminalData_Output{
+							Output: &sessionv1.TerminalOutput{
+								Data: []byte("\x1b[H" + sanitizeInitialContent(snapContent)),
+							},
+						},
+					}
+					if snapBytes, merr := proto.Marshal(snapMsg); merr != nil {
+						log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal post-resize snapshot for '%s': %v", sessionID, merr)
+					} else {
+						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, snapBytes))
+					}
+				}
+
+				// Signal client: reflow complete, stable snapshot sent (R1.4).
+				sendResizeQuiescence(false)
 			}
 		}
 	}()
@@ -758,6 +876,65 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						default:
 						}
 						resizeCh <- req
+					}
+				}
+
+				// Handle ScrollbackRequest — client requesting historical scrollback data (R2.4).
+				// FromSequence is the oldest sequence the client already has; we return
+				// the `limit` entries immediately BEFORE that sequence (older content).
+				// When FromSequence == 0, return the most recent lines instead.
+				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
+					if h.scrollbackManager != nil {
+						const maxScrollbackLimit = 1000
+						limit := int(scrollbackReq.Limit)
+						if limit <= 0 || limit > maxScrollbackLimit {
+							limit = maxScrollbackLimit
+						}
+
+						var entries []scrollback.ScrollbackEntry
+						var sbErr error
+						if scrollbackReq.FromSequence == 0 {
+							// Client wants the most recent history.
+							var sbData []byte
+							sbData, sbErr = h.scrollbackManager.GetRecentLines(sessionID, limit)
+							if sbErr == nil && len(sbData) > 0 {
+								entries = []scrollback.ScrollbackEntry{{Data: sbData}}
+							}
+						} else {
+							// Client wants content older than FromSequence.
+							entries, sbErr = h.scrollbackManager.GetScrollbackBefore(sessionID, scrollbackReq.FromSequence, limit)
+						}
+
+						if sbErr != nil {
+							log.WarningLog.Printf("[streamViaControlMode] ScrollbackRequest failed for '%s': %v", sessionID, sbErr)
+						} else {
+							sbStats, _ := h.scrollbackManager.GetStats(sessionID)
+							chunks := make([]*sessionv1.ScrollbackChunk, 0, len(entries))
+							for _, e := range entries {
+								chunks = append(chunks, &sessionv1.ScrollbackChunk{
+									Data:     e.Data,
+									Sequence: e.Sequence,
+								})
+							}
+							hasMore := scrollbackReq.Limit > 0 && len(entries) == limit
+							sbResp := &sessionv1.TerminalData{
+								SessionId: sessionID,
+								Data: &sessionv1.TerminalData_ScrollbackResponse{
+									ScrollbackResponse: &sessionv1.ScrollbackResponse{
+										Chunks:         chunks,
+										HasMore:        hasMore,
+										TotalLines:     uint64(sbStats.MemoryLines),
+										OldestSequence: sbStats.OldestSequence,
+										NewestSequence: sbStats.NewestSequence,
+									},
+								},
+							}
+							if respBytes, merr := proto.Marshal(sbResp); merr != nil {
+								log.ErrorLog.Printf("[streamViaControlMode] Failed to marshal scrollback response for '%s': %v", sessionID, merr)
+							} else {
+								_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
+							}
+						}
 					}
 				}
 

@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
+import { getConnectTransport } from "@/lib/api/transport";
 import { VCSStatus } from "@/gen/session/v1/types_pb";
 import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
+import type { AsyncResult } from "@/lib/types/asyncResult";
 
 /** Parsed diff stats returned by getSessionDiff. */
 export interface SessionDiff {
@@ -15,15 +16,18 @@ export interface SessionDiff {
   removed: number;
 }
 
-export interface SessionVcsState {
+export interface SessionVcsState extends AsyncResult {
   /** VCS status, null while loading or when the directory is not a VCS repo. */
   status: VCSStatus | null;
   /** Diff content, null while loading or when there are no changes. */
   diff: SessionDiff | null;
+  /** True while the VCS status fetch is in-flight (primary loading signal). */
   statusLoading: boolean;
   diffLoading: boolean;
-  /** Error message from VCS status fetch (diff errors are non-fatal). */
-  error: string | null;
+  /** AsyncResult.loading maps to statusLoading (primary loading signal). */
+  loading: boolean;
+  /** Error from VCS status fetch (diff errors are non-fatal). Implements AsyncResult.error. */
+  error: Error | null;
   /** Trigger a fresh VCS status fetch (shared across all consumers). */
   refreshStatus: () => void;
   /** Trigger a fresh diff fetch (shared across all consumers). */
@@ -46,34 +50,29 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
   const [diff, setDiff] = useState<SessionDiff | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<Error | null>(null);
 
-  // Stable client reference — recreated only when baseUrl changes.
+  // Stable client reference — initialized once from the shared transport singleton.
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
   const getClient = useCallback(() => {
     if (!clientRef.current) {
-      clientRef.current = createClient(SessionService, createConnectTransport({ baseUrl }));
+      clientRef.current = createClient(SessionService, getConnectTransport());
     }
     return clientRef.current;
-  }, [baseUrl]);
-
-  // Invalidate client when baseUrl changes.
-  useEffect(() => {
-    clientRef.current = null;
-  }, [baseUrl]);
+  }, []);
 
   const fetchStatus = useCallback(async () => {
     try {
       const response = await getClient().getVCSStatus({ id: sessionId });
       if (response.error) {
-        setError(response.error);
+        setError(new Error(response.error));
         setStatus(null);
       } else {
         setStatus(response.vcsStatus ?? null);
         setError(null);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load VCS status");
+      setError(err instanceof Error ? err : new Error("Failed to load VCS status"));
     } finally {
       setStatusLoading(false);
     }
@@ -139,6 +138,7 @@ export function useSessionVcs(sessionId: string, baseUrl: string): SessionVcsSta
     diff,
     statusLoading,
     diffLoading,
+    loading: statusLoading,
     error,
     refreshStatus: fetchStatus,
     refreshDiff: fetchDiff,

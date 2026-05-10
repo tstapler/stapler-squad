@@ -1,4 +1,4 @@
-import { style, globalStyle } from "@vanilla-extract/css";
+import { style, globalStyle, keyframes } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const container = style({
@@ -75,4 +75,55 @@ globalStyle(`${terminal} .xterm-selection`, {
 globalStyle(`${terminal} .xterm:focus`, {
   outline: "2px solid rgba(33, 150, 243, 0.5)",
   outlineOffset: "-2px",
+});
+
+// ---- Floating Copy button (Task 3.2.2 / R3.2) ----
+// Appears above the selection end point when the user makes a text selection.
+// position: fixed is set via inline style since the coordinates are dynamic.
+export const floatingCopyButton = style({
+  position: "fixed",
+  zIndex: 9999,
+  padding: `${vars.space[1]} ${vars.space[3]}`,
+  background: vars.color.primary,
+  color: vars.color.primaryText,
+  border: "none",
+  borderRadius: vars.radii.md,
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.semibold,
+  cursor: "pointer",
+  boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+  touchAction: "manipulation",
+  userSelect: "none",
+  WebkitUserSelect: "none",
+  selectors: {
+    "&:active": {
+      opacity: 0.85,
+      transform: "scale(0.97)",
+    },
+  },
+});
+
+const fadeInOut = keyframes({
+  "0%": { opacity: 0, transform: "translateY(4px)" },
+  "15%": { opacity: 1, transform: "translateY(0)" },
+  "85%": { opacity: 1, transform: "translateY(0)" },
+  "100%": { opacity: 0, transform: "translateY(-4px)" },
+});
+
+// Brief "Copied" toast shown after clipboard write succeeds
+export const copiedToast = style({
+  position: "fixed",
+  bottom: "80px",
+  left: "50%",
+  transform: "translateX(-50%)",
+  zIndex: 9999,
+  padding: `${vars.space[1]} ${vars.space[3]}`,
+  background: vars.color.success,
+  color: vars.color.textPrimary,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.medium,
+  boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+  pointerEvents: "none",
+  animation: `${fadeInOut} 1.5s ease-in-out forwards`,
 });

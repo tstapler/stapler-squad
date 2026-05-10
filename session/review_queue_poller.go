@@ -567,6 +567,17 @@ func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStat
 		return cached
 	}
 
+	// Update LastMeaningfulOutput when new terminal content is detected.
+	// This ensures sessions resurface in the review queue after producing new output,
+	// even when the user hasn't visited them via WebSocket streaming.
+	// The content-signature dedup in UpdateTimestamps() (persisted to DB) prevents
+	// false positives: if content is cosmetically changed but semantically the same
+	// as when the user last acknowledged, LastMeaningfulOutput is not updated and
+	// the acknowledgment snooze is preserved.
+	if content != "" {
+		inst.UpdateTerminalTimestamps(content, false)
+	}
+
 	rqp.cacheMu.Lock()
 	rqp.cachedContent[inst.Title] = content
 	if statusInfo.IsControllerActive && !statusInfo.IdleState.LastActivity.IsZero() {
@@ -590,6 +601,11 @@ func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStat
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[string]time.Time) {
 	// Skip paused, stopped, or unstarted sessions
 	if !inst.Started() || inst.Paused() || inst.Status == Stopped {
+		return
+	}
+
+	// Sessions with an active controller get status updates via events; skip fast-path poll.
+	if inst.GetController() != nil {
 		return
 	}
 
@@ -914,20 +930,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		}
 	}
 
-	// NOTE: Preview() is now a read-only operation that does NOT update timestamps.
-	// Timestamps are managed by:
-	// 1. WebSocket streaming when users view the terminal in the web UI
-	// 2. User interactions (typing, viewing) via UpdateTerminalTimestamps(forceUpdate=true)
-	// 3. Automated checks in HasUpdated() which call UpdateTerminalTimestamps(forceUpdate=false)
-	//
-	// We deliberately avoid calling Preview() here because it would be an expensive operation
-	// (blocking tmux capture) that doesn't provide value since it no longer updates timestamps.
-	// Instead, we rely on the timestamps already set by the above mechanisms.
-	//
-	// This approach:
-	// - Prevents breaking acknowledgment snooze (Preview() no longer updates LastMeaningfulOutput)
-	// - Avoids expensive blocking tmux calls during polling
-	// - Relies on WebSocket streaming or HasUpdated() for accurate timestamp management
+	// LastMeaningfulOutput is updated by getContent() above via UpdateTerminalTimestamps()
+	// when new terminal content is detected. The persisted content-signature dedup prevents
+	// false positives: sessions stay snoozed after acknowledgment unless output genuinely changes.
 
 	// Check for terminal staleness (no meaningful output for configured threshold)
 	// This helps identify sessions that might be stuck or waiting without showing obvious idle state

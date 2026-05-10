@@ -41,7 +41,7 @@ function makeSession(overrides: Partial<Record<string, unknown>> = {}): Session 
     title: "Test Session",
     tags: [] as string[],
     status: SessionStatus.RUNNING,
-    instanceType: InstanceType.LOCAL,
+    instanceType: InstanceType.MANAGED,
     rateLimitEnabled: false,
     ...overrides,
   } as unknown as Session;

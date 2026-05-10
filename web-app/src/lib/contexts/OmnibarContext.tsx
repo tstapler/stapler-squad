@@ -19,6 +19,7 @@ interface OmnibarContextValue {
   isOpen: boolean;
   open: () => void;
   openInCreationMode: () => void;
+  openOmnibar: (initialInput?: string) => void;
   close: () => void;
   toggle: () => void;
 }
@@ -40,6 +41,7 @@ interface OmnibarProviderProps {
 export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [initialMode, setInitialMode] = useState<"discovery" | "creation">("discovery");
+  const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
   const router = useRouter();
   const { authEnabled, authenticated, loading: authLoading } = useAuth();
   const { createSession } = useSessionService({
@@ -48,13 +50,23 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
 
   const open = useCallback(() => {
     setInitialMode("discovery");
+    setInitialInput(undefined);
     setIsOpen(true);
   }, []);
   const openInCreationMode = useCallback(() => {
     setInitialMode("creation");
+    setInitialInput(undefined);
     setIsOpen(true);
   }, []);
-  const close = useCallback(() => setIsOpen(false), []);
+  const openOmnibar = useCallback((inputValue?: string) => {
+    setInitialMode(inputValue ? "creation" : "discovery");
+    setInitialInput(inputValue);
+    setIsOpen(true);
+  }, []);
+  const close = useCallback(() => {
+    setIsOpen(false);
+    setInitialInput(undefined);
+  }, []);
   const toggle = useCallback(() => setIsOpen((prev) => !prev), []);
 
   // Global keyboard shortcut: Cmd+K or Ctrl+K (discovery), Cmd+Shift+K (creation)
@@ -146,6 +158,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     isOpen,
     open,
     openInCreationMode,
+    openOmnibar,
     close,
     toggle,
   };
@@ -160,6 +173,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
         initialMode={initialMode}
+        initialInput={initialInput}
       />
     </OmnibarContext.Provider>
   );

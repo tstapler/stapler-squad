@@ -1,7 +1,7 @@
 "use client";
 
 import { useNotifications } from "@/lib/contexts/NotificationContext";
-import { badge, inline as inlineClass } from "./NavBadge.css";
+import { NavBadge } from "./NavBadge";
 
 interface NotificationsNavBadgeProps {
   inline?: boolean;
@@ -11,17 +11,13 @@ export function NotificationsNavBadge({ inline = false }: NotificationsNavBadgeP
   const { getUnreadCount } = useNotifications();
   const count = getUnreadCount();
 
-  if (count === 0) return null;
-
-  const className = inline ? `${badge} ${inlineClass}` : badge;
-
   return (
-    <span
-      className={className}
+    <NavBadge
+      count={count}
+      element="span"
+      inline={inline}
       data-testid="notifications-nav-badge"
       aria-label={`${count} unread notification${count !== 1 ? "s" : ""}`}
-    >
-      {count > 99 ? "99+" : count}
-    </span>
+    />
   );
 }

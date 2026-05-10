@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useImperativeHandle, forwardRef } from "react";
-import { useMobileTerminalGestures } from "@/lib/hooks/useMobileTerminalGestures";
+import { useEffect, useRef, useCallback, useImperativeHandle, forwardRef, useState } from "react";
+import { useTerminalGestures } from "@/lib/hooks/useTerminalGestures";
 import { Terminal } from "@xterm/xterm";
-import { useTouchScroll } from "@/lib/hooks/useTouchScroll";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
+import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
 import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
+import { getCellDimensions } from "@/lib/terminal/cellDimensions";
+
+const DEFAULT_SCROLLBACK_SIZE = 5000;
 
 export interface XtermTerminalProps {
   /**
@@ -38,24 +41,16 @@ export interface XtermTerminalProps {
   scrollback?: number;
 
   /**
-   * Mouse tracking mode for enabling mouse event reporting
-   * 'none': No mouse tracking (default)
-   * 'x10': Send Mouse X & Y on button press
-   * 'vt200': Send Mouse X & Y on button press and release
-   * 'drag': Use Cell Motion Mouse Tracking
-   * 'any': Use All Motion Mouse Tracking
-   */
-  mouseTracking?: 'none' | 'x10' | 'vt200' | 'drag' | 'any';
-
-  /**
    * Use terminal configuration from localStorage
-   * If true, theme/fontSize/scrollback/mouseTracking props are ignored unless explicitly provided
+   * If true, theme/fontSize/scrollback props are ignored unless explicitly provided
    */
   useConfig?: boolean;
 }
 
 export interface XtermTerminalHandle {
   terminal: Terminal | null;
+  /** SerializeAddon instance for buffer serialization (used by TerminalStreamManager for scrollback prepend). */
+  serializeAddon: SerializeAddon | null;
   write: (data: string) => void;
   writeln: (data: string) => void;
   clear: () => void;
@@ -84,7 +79,6 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   theme: themeProp,
   fontSize: fontSizeProp,
   scrollback: scrollbackProp,
-  mouseTracking: mouseTrackingProp,
   useConfig = false,
 }, ref) => {
   // Load configuration
@@ -94,7 +88,8 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const theme = themeProp ?? config?.theme ?? "dark";
   const fontSize = fontSizeProp ?? config?.fontSize ?? 14;
   const scrollback = scrollbackProp ?? config?.scrollbackLines ?? 0;
-  const mouseTracking = mouseTrackingProp ?? config?.mouseTracking ?? 'none';
+  // Mouse tracking mode is set at runtime by PTY escape sequences and read via terminal.modes.mouseTrackingMode.
+  // It is not configurable via prop — the 'mouseTracking' ITerminalOptions field does not exist in xterm.js 6.
   const fontFamily = config?.fontFamily ?? 'Menlo, Monaco, "Courier New", monospace';
   const cursorStyle = config?.cursorStyle ?? "block";
   const cursorBlink = config?.cursorBlink ?? true;
@@ -103,41 +98,32 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   const containerRef = useRef<HTMLDivElement>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
+  const serializeAddonRef = useRef<SerializeAddon | null>(null);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
+
+  // Floating Copy button state — shown when xterm has a non-empty selection (R3.1)
+  const [copyButtonPos, setCopyButtonPos] = useState<{ x: number; y: number } | null>(null);
+  const [showCopiedToast, setShowCopiedToast] = useState<'copied' | 'failed' | null>(null);
 
   // Store callbacks in refs to avoid recreating terminal on callback changes
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
-  // Ref so touch handlers always read the latest mouseTracking value without recreating terminal
-  const mouseTrackingRef = useRef(mouseTracking);
-
-  // Enable touch-based scrolling on mobile devices
-  useTouchScroll(containerRef, () => terminalRef.current);
 
   useEffect(() => {
     onDataRef.current = onData;
     onResizeRef.current = onResize;
   }, [onData, onResize]);
 
-  // Keep mouseTrackingRef in sync and try to update terminal option dynamically
-  useEffect(() => {
-    mouseTrackingRef.current = mouseTracking;
-    if (terminalRef.current) {
-      try {
-        (terminalRef.current as any).options.mouseTracking = mouseTracking;
-      } catch {
-        // Proposed API may not support dynamic updates on all xterm.js builds
-      }
-    }
-  }, [mouseTracking]);
-
-  // Mobile touch gestures — scroll and long-press selection.
-  // Extracted to a hook so gesture logic stays separate from terminal lifecycle.
-  useMobileTerminalGestures({
+  // Unified mobile gesture state machine (R4.3).
+  // Replaces the conflicting useTouchScroll + useMobileTerminalGestures hooks:
+  // having both register touchmove caused double-scroll and prevented selection.
+  // Pass terminalRef (the RefObject itself, not .current) so gesture handlers always
+  // read the live terminal instance — at render time terminalRef.current is null since
+  // the terminal is created inside an effect (Bug 1 fix).
+  useTerminalGestures({
     containerRef,
-    getTerminal: useCallback(() => terminalRef.current, []),
-    getMouseTracking: useCallback(() => mouseTrackingRef.current, []),
-    fontSize,
+    terminalRef,
+    onSendData: useCallback((data: string) => onDataRef.current?.(data), []),
   });
 
   // Initialize terminal on mount
@@ -151,26 +137,29 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     if (!containerRef.current || terminalRef.current) return;
 
     // Create terminal instance with configuration
+    // Note: mouseTracking is NOT set here — it is not a valid ITerminalOptions field in xterm.js 6.
+    // Mouse tracking mode is set at runtime by PTY escape sequences and read via terminal.modes.mouseTrackingMode.
     const terminal = new Terminal({
       cursorBlink,
       cursorStyle,
       fontSize,
       fontFamily,
       theme: getTheme(theme),
-      scrollback,
+      scrollback: scrollback && scrollback > 0 ? scrollback : DEFAULT_SCROLLBACK_SIZE,
       allowProposedApi: true, // Required for some addons
       rightClickSelectsWord: true, // Right-click selects the word under cursor
-      mouseTracking // Enable mouse event reporting (proposed API)
-    } as any);
+    });
 
     // Create and load addons
     const fitAddon = new FitAddon();
     const webLinksAddon = new WebLinksAddon();
     const searchAddon = new SearchAddon();
+    const serializeAddon = new SerializeAddon();
 
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(webLinksAddon);
     terminal.loadAddon(searchAddon);
+    terminal.loadAddon(serializeAddon);
 
     // xterm.js issue #2033 — guard WebGL before loading on Android/mobile
     (async () => {
@@ -234,14 +223,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
               }
             }
           }
-
-          // Force one more fit after a short delay to ensure accurate sizing
-          setTimeout(() => {
-            const secondProposed = fitAddon.proposeDimensions();
-            console.log(`[XtermTerminal] Secondary proposed dimensions:`, secondProposed);
-            fitAddon.fit();
-            console.log(`[XtermTerminal] Secondary fit complete: ${terminal.cols} cols × ${terminal.rows} rows`);
-          }, 100);
+          // Secondary delayed fit() removed (R1.3): the double-rAF above provides sufficient layout
+          // stability; the extra setTimeout caused a second terminal.onResize, triggering a duplicate
+          // server resize RPC and second capture-pane cycle (double-resize corruption on mount).
         });
       });
     } catch (error) {
@@ -260,11 +244,23 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       onDataRef.current?.(data);
     });
 
-    // Auto-copy selected text to clipboard on selection change (copyOnSelect behavior)
+    // Task 3.2.1 — Show floating Copy button on selection change (R3.1).
+    // onSelectionChange is NOT a user gesture in iOS Safari, so we only set state here.
+    // The clipboard write happens in the button's onPointerDown (synchronous user gesture).
     const selectionDisposable = terminal.onSelectionChange(() => {
-      const selection = terminal.getSelection();
-      if (selection) {
-        navigator.clipboard.writeText(selection).catch(() => {});
+      const text = terminal.getSelection();
+      if (text && text.length > 0) {
+        const pos = terminal.getSelectionPosition();
+        if (pos && terminal.element) {
+          const rect = terminal.element.getBoundingClientRect();
+          const { cellH, cellW } = getCellDimensions(terminal);
+          setCopyButtonPos({
+            x: rect.left + pos.end.x * cellW,
+            y: rect.top + pos.end.y * cellH - 40, // 40px above selection end
+          });
+        }
+      } else {
+        setCopyButtonPos(null);
       }
     });
 
@@ -282,11 +278,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
     searchAddonRef.current = searchAddon;
+    serializeAddonRef.current = serializeAddon;
 
     // Setup ResizeObserver for automatic fitting
     // Track container size to avoid unnecessary fit() calls
     let lastContainerSize = { width: 0, height: 0 };
-    let resizeCount = 0;
     let resizeTimeout: NodeJS.Timeout | null = null;
     const resizeObserver = new ResizeObserver((entries: ResizeObserverEntry[]) => {
       if (!fitAddonRef.current || !terminalRef.current) return;
@@ -303,14 +299,15 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       if ((widthChanged || heightChanged) && width > 0 && height > 0) {
         lastContainerSize = { width, height };
-        resizeCount++;
 
         console.log(`[XtermTerminal] Container resized to ${width}px × ${height}px (before fit)`);
         console.log(`[XtermTerminal] Terminal dimensions BEFORE fit: ${terminalRef.current.cols} cols × ${terminalRef.current.rows} rows`);
 
-        // Use minimal debounce for initial resizes (first 3), then increase for stability
-        // This ensures ultra-fast initial sizing (10ms) when modal opens, then reduces resize frequency
-        const debounceDelay = resizeCount <= 3 ? 10 : 250;
+        // Flat 150ms debounce (R1.2): ensures tmux has processed the previous SIGWINCH before
+        // FitAddon measures container and fires terminal.onResize. The previous adaptive debounce
+        // (10ms for first 3 resizes) fired before a single animation frame, causing the
+        // ResizeObserver to trigger fit and server resize before tmux could stabilize.
+        const debounceDelay = 150;
 
         // Clear any pending resize timeout
         if (resizeTimeout) {
@@ -350,6 +347,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       terminalRef.current = null;
       fitAddonRef.current = null;
       searchAddonRef.current = null;
+      serializeAddonRef.current = null;
     };
     // Only recreate terminal if scrollback changes (requires full recreation)
     // Other options can be updated dynamically below
@@ -414,6 +412,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     get terminal() {
       return terminalRef.current;
     },
+    get serializeAddon() {
+      return serializeAddonRef.current;
+    },
     write: (data: string) => {
       terminalRef.current?.write(data);
     },
@@ -446,6 +447,58 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   return (
     <div className={styles.container} data-context="terminal">
       <div ref={containerRef} className={styles.terminal} />
+      {/* Task 3.2.2 — Floating Copy button (R3.2).
+          Rendered in a fixed-position button so it appears above the terminal.
+          onPointerDown is used (not onClick) because iOS Safari only allows clipboard
+          writes inside synchronous user gesture handlers (ADR-013). */}
+      {copyButtonPos && (
+        <button
+          aria-label="Copy selected text"
+          className={styles.floatingCopyButton}
+          style={{ left: copyButtonPos.x, top: copyButtonPos.y }}
+          onPointerDown={(e) => {
+            const terminal = terminalRef.current;
+            if (!terminal) return;
+            const text = terminal.getSelection(); // synchronous within user gesture — iOS safe
+            const tryExecCommandCopy = () => {
+              const el = document.createElement('textarea');
+              el.value = text;
+              document.body.appendChild(el);
+              el.select();
+              const ok = document.execCommand('copy');
+              document.body.removeChild(el);
+              return ok;
+            };
+            if (navigator.clipboard?.writeText) {
+              navigator.clipboard.writeText(text).then(() => {
+                setCopyButtonPos(null);
+                setShowCopiedToast('copied');
+                setTimeout(() => setShowCopiedToast(null), 1500);
+              }).catch(() => {
+                // Clipboard API denied — fall back to execCommand
+                const ok = tryExecCommandCopy();
+                setCopyButtonPos(null);
+                setShowCopiedToast(ok ? 'copied' : 'failed');
+                setTimeout(() => setShowCopiedToast(null), 1500);
+              });
+              e.preventDefault();
+              return;
+            }
+            const ok = tryExecCommandCopy();
+            setCopyButtonPos(null);
+            setShowCopiedToast(ok ? 'copied' : 'failed');
+            setTimeout(() => setShowCopiedToast(null), 1500);
+            e.preventDefault();
+          }}
+        >
+          Copy
+        </button>
+      )}
+      {showCopiedToast && (
+        <div className={styles.copiedToast} aria-live="polite">
+          {showCopiedToast === 'copied' ? 'Copied' : 'Copy failed'}
+        </div>
+      )}
     </div>
   );
 });
@@ -459,24 +512,3 @@ function getTheme(theme: "light" | "dark") {
   return theme === "light" ? lightTerminalTheme : darkTerminalTheme;
 }
 
-/**
- * Debounce helper for resize events
- */
-function debounce<T extends (...args: any[]) => void>(
-  func: T,
-  wait: number
-): (...args: Parameters<T>) => void {
-  let timeout: NodeJS.Timeout | null = null;
-
-  return function executedFunction(...args: Parameters<T>) {
-    const later = () => {
-      timeout = null;
-      func(...args);
-    };
-
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    timeout = setTimeout(later, wait);
-  };
-}

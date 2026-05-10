@@ -2,12 +2,11 @@
 
 import { useCallback, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { LogUserInteractionRequest, LogUserInteractionRequestSchema } from "@/gen/session/v1/session_pb";
 import { UserInteractionEvent_InteractionType } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 interface UseAuditLogOptions {
   baseUrl?: string;
@@ -23,20 +22,17 @@ interface AuditLogEntry {
 }
 
 export function useAuditLog(options: UseAuditLogOptions = {}) {
-  const { baseUrl = getApiBaseUrl(), enabled = true } = options;
+  const { enabled = true } = options;
 
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
   // Initialize gRPC client on first use
   const getClient = useCallback(() => {
     if (!clientRef.current) {
-      const transport = createConnectTransport({
-        baseUrl,
-      });
-      clientRef.current = createClient(SessionService, transport);
+      clientRef.current = createClient(SessionService, getConnectTransport());
     }
     return clientRef.current;
-  }, [baseUrl]);
+  }, []);
 
   // Log user interaction to server
   const logInteraction = useCallback(

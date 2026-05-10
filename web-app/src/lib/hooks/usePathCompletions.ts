@@ -2,10 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import type { PathEntry } from "@/gen/session/v1/session_pb";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 const DEBOUNCE_MS = 150;
 const CACHE_MAX = 100;
@@ -91,7 +90,6 @@ export function usePathCompletions(
   options: UsePathCompletionsOptions = {}
 ): PathCompletionResult {
   const {
-    baseUrl = getApiBaseUrl(),
     enabled = true,
     directoriesOnly = true,
     maxResults = 50,
@@ -144,8 +142,7 @@ export function usePathCompletions(
 
     const debounceTimer = setTimeout(async () => {
       try {
-        const transport = createConnectTransport({ baseUrl });
-        const client = createClient(SessionService, transport);
+        const client = createClient(SessionService, getConnectTransport());
 
         const response = await client.listPathCompletions(
           { pathPrefix, directoriesOnly, maxResults },
@@ -181,7 +178,7 @@ export function usePathCompletions(
       clearTimeout(debounceTimer);
       abortController.abort();
     };
-  }, [pathPrefix, baseUrl, enabled, directoriesOnly, maxResults]);
+  }, [pathPrefix, enabled, directoriesOnly, maxResults]);
 
   return result;
 }

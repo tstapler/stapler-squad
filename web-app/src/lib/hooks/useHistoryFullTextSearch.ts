@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import {
   SearchResult,
@@ -10,7 +9,7 @@ import {
   HighlightRange,
 } from "@/gen/session/v1/session_pb";
 import { timestampFromDate, timestampDate } from "@bufbuild/protobuf/wkt";
-import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 import { useDebounce } from "./useDebounce";
 
 export interface SearchOptions {
@@ -96,7 +95,7 @@ interface UseHistoryFullTextSearchOptions {
 export function useHistoryFullTextSearch(
   options: UseHistoryFullTextSearchOptions = {}
 ) {
-  const { baseUrl = getApiBaseUrl(), debounceMs = 300, autoSearch = true } = options;
+  const { debounceMs = 300, autoSearch = true } = options;
 
   const [state, setState] = useState<SearchState>({
     results: [],
@@ -115,9 +114,8 @@ export function useHistoryFullTextSearch(
 
   // Initialize ConnectRPC client
   useEffect(() => {
-    const transport = createConnectTransport({ baseUrl });
-    clientRef.current = createClient(SessionService, transport);
-  }, [baseUrl]);
+    clientRef.current = createClient(SessionService, getConnectTransport());
+  }, []);
 
   // Convert protobuf SearchResult to our interface
   const convertResult = useCallback((result: SearchResult): SearchResultItem => {

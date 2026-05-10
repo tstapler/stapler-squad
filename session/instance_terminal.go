@@ -123,12 +123,6 @@ func (i *Instance) Preview() (string, error) {
 		return "", err
 	}
 
-	// REMOVED: i.UpdateTerminalTimestamps(content, false)
-	// Timestamps are managed separately by WebSocket streaming and user interactions.
-	// Preview() is now a true read-only operation that doesn't update timestamps,
-	// preventing it from breaking acknowledgment snooze when the poller refreshes stale timestamps.
-	// See session/review_queue_poller.go lines 383-408 for context.
-
 	return content, nil
 }
 
@@ -147,11 +141,6 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 	if err != nil {
 		return "", err
 	}
-
-	// REMOVED: i.UpdateTerminalTimestamps(content, false)
-	// Like Preview(), this is now a true read-only operation that doesn't update timestamps.
-	// Timestamps are managed separately by WebSocket streaming and user interactions.
-	// This prevents app startup from falsely updating all "Last Activity" timestamps.
 
 	return content, nil
 }

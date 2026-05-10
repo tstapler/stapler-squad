@@ -2,9 +2,9 @@
 
 import { useEffect, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl } from "@/lib/config";
+import { getConnectTransport } from "@/lib/api/transport";
 
 export interface BrowserLogEntry {
   level: "log" | "warn" | "error" | "debug";
@@ -57,8 +57,7 @@ export function useBrowserLogStream(options: UseBrowserLogStreamOptions): void {
     if (!options.enabled) return;
 
     const apiBase = baseUrlRef.current ?? getApiBaseUrl();
-    const transport = createConnectTransport({ baseUrl: apiBase });
-    const client = createClient(SessionService, transport);
+    const client = createClient(SessionService, getConnectTransport());
 
     const buffer: BrowserLogEntry[] = [];
     let flushTimer: ReturnType<typeof setTimeout> | null = null;
