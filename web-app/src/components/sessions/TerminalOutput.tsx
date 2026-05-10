@@ -32,7 +32,7 @@ import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
 import { XtermTerminal, type XtermTerminalHandle } from "./XtermTerminal";
 import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
-import { getCachedDimensions, saveDimensions } from "@/lib/terminal/TerminalDimensionCache";
+import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { track } from "@/lib/telemetry";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import * as styles from "./TerminalOutput.css";
@@ -82,6 +82,11 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
   // Ref to hold sendFlowControl function (allows use in callbacks defined before useTerminalStream)
   const sendFlowControlRef = useRef<((paused: boolean, watermark?: number) => void) | null>(null);
+
+  // Task 4.2.2 — Queue output during RESIZING state (Pitfall #2 / Race 3).
+  // A snapshot arriving while the client is mid-resize writes bytes at the old column width.
+  // Queuing output during resize prevents stale bytes from being written before the post-resize snapshot.
+  const pendingOutputDuringResizeRef = useRef<string[]>([]);
 
   // Terminal loading metrics
   const metricsRef = useRef<{
@@ -286,29 +291,60 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     return manager;
   }, [logTerminalMetrics, sessionId]);
 
-  // Callback to write initial pane content to terminal
+  // Ref to track whether the initial scrollback has been written (Task 2.3.2)
+  const isInitialScrollbackDoneRef = useRef(false);
+  // Paging state for on-demand scrollback loading (Task 2.3.1 / 2.3.2)
+  const isFetchingScrollbackRef = useRef(false);
+  const hasMoreScrollbackRef = useRef(false);
+  const oldestSequenceReceivedRef = useRef(0);
+
+  // Callback to write initial pane content to terminal.
+  // Metadata guard removed (R2.7): all scrollback — both initial and historical —
+  // is now allowed to proceed. Initial load calls writeInitialContent(); paged
+  // loads (subsequent calls with metadata) call prependScrollbackBatch().
   const handleScrollbackReceived = useCallback(async (scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => {
     if (!xtermRef.current?.terminal) return;
 
-    // Reject historical scrollback requests (with metadata)
-    if (metadata) {
-      console.log(`[TerminalOutput] Ignoring historical scrollback request (${scrollback.length} bytes) - auto-load disabled`, metadata);
-      return;
-    }
-
-    console.log(`[TerminalOutput] Received initial pane content: ${scrollback.length} bytes`);
-
     const manager = getOrCreateStreamManager();
-    if (manager) {
+    if (!manager) return;
+
+    if (!isInitialScrollbackDoneRef.current) {
+      // Initial load
+      console.log(`[TerminalOutput] Writing initial scrollback: ${scrollback.length} bytes`);
+      isInitialScrollbackDoneRef.current = true;
       await manager.writeInitialContent(scrollback);
+      if (metadata) {
+        hasMoreScrollbackRef.current = metadata.hasMore;
+        oldestSequenceReceivedRef.current = metadata.oldestSequence;
+      }
+    } else {
+      // Paged history load
+      console.log(`[TerminalOutput] Writing paged scrollback: ${scrollback.length} bytes`);
+      await manager.prependScrollbackBatch(scrollback);
+      if (metadata) {
+        hasMoreScrollbackRef.current = metadata.hasMore;
+        oldestSequenceReceivedRef.current = metadata.oldestSequence;
+      }
+      isFetchingScrollbackRef.current = false;
     }
 
     setIsLoadingInitialContent(false);
   }, [getOrCreateStreamManager]);
 
-  // Callback to write output directly to terminal via TerminalStreamManager
+  // Ref to access current terminalState inside the handleOutput callback
+  // (useCallback can't take terminalState as a dep without recreating on every state change)
+  const terminalStateRef = useRef<string>('DISCONNECTED');
+
+  // Callback to write output directly to terminal via TerminalStreamManager.
+  // Task 4.2.2: Output is queued during RESIZING to prevent bytes at the old column width
+  // from being written before the post-resize snapshot.
   const handleOutput = useCallback((output: string) => {
     if (!xtermRef.current) return;
+
+    if (terminalStateRef.current === 'RESIZING') {
+      pendingOutputDuringResizeRef.current.push(output);
+      return;
+    }
 
     const manager = getOrCreateStreamManager();
     if (manager) {
@@ -331,7 +367,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, []);
 
-  const { isConnected, error, sendInput, sendInputWithEcho, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, getIsApplyingState, sspNegotiated, startRecording, stopRecording } = useTerminalStream({
+  const { isConnected, error, sendInput, sendInputWithEcho, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, getIsApplyingState, sspNegotiated, startRecording, stopRecording, terminalState } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     getTerminal,
@@ -347,6 +383,24 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     enablePredictiveEcho: true,
     onEchoAck: handleEchoAck,
   });
+
+  // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
+  // Also flushes queued output when transitioning from RESIZING to STABLE (Task 4.2.2).
+  useEffect(() => {
+    const prevState = terminalStateRef.current;
+    terminalStateRef.current = terminalState;
+
+    if (prevState === 'RESIZING' && terminalState === 'STABLE') {
+      const manager = streamManagerRef.current;
+      if (manager) {
+        const pending = pendingOutputDuringResizeRef.current.splice(0);
+        for (const chunk of pending) {
+          manager.write(chunk);
+        }
+        console.log(`[TerminalOutput] Flushed ${pending.length} pending output chunks after resize quiescence`);
+      }
+    }
+  }, [terminalState]);
 
   // Remote browser log streaming for mobile debugging
   useBrowserLogStream({ enabled: logStreamEnabled, sessionId, baseUrl });
@@ -444,10 +498,12 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         // isFinite() guards against NaN/Infinity that a corrupted private API
         // could theoretically return (e.g. during a render-service error state).
         const cell = (xtermRef.current?.terminal as any)?._core?._renderService?.dimensions?.css?.cell;
+        const currentFontSize = xtermRef.current?.terminal?.options?.fontSize ?? 14;
+        const currentFontFamily = xtermRef.current?.terminal?.options?.fontFamily ?? 'Menlo, Monaco, "Courier New", monospace';
         if (cell?.width && cell?.height && isFinite(cell.width) && isFinite(cell.height)) {
-          saveDimensions(sessionId, cols, rows, cell.width, cell.height);
+          saveDimensions(sessionId, cols, rows, cell.width, cell.height, currentFontSize, currentFontFamily);
         } else {
-          saveDimensions(sessionId, cols, rows);
+          saveDimensions(sessionId, cols, rows, undefined, undefined, currentFontSize, currentFontFamily);
         }
       } else {
         console.log(`[TerminalOutput] Skipping cache write for tiny dimensions ${cols}x${rows} (below ${MIN_COLS}x${MIN_ROWS})`);
@@ -582,6 +638,35 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   }, [isLoadingInitialContent]);
 
+  // Task 2.3.1 — DOM scroll listener to detect near-top-of-buffer and trigger paged history load.
+  // Uses DOM 'scroll' event on terminal.element (NOT terminal.onScroll, which only fires on buffer
+  // writes, not user scroll gestures — see xterm.js issues #3201, #3864).
+  useEffect(() => {
+    if (isLoadingInitialContent) return; // Don't attach until initial content is loaded
+
+    const terminal = xtermRef.current?.terminal;
+    if (!terminal?.element) return;
+
+    const scrollEl = terminal.element;
+
+    const onScroll = () => {
+      const viewportY = terminal.buffer.active.viewportY;
+      if (
+        viewportY < 200 &&
+        !isFetchingScrollbackRef.current &&
+        hasMoreScrollbackRef.current &&
+        isConnected
+      ) {
+        isFetchingScrollbackRef.current = true;
+        console.log(`[TerminalOutput] Near top of buffer (viewportY=${viewportY}), requesting older scrollback from seq ${oldestSequenceReceivedRef.current}`);
+        requestScrollback(oldestSequenceReceivedRef.current, 500);
+      }
+    };
+
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    return () => scrollEl.removeEventListener('scroll', onScroll);
+  }, [isLoadingInitialContent, isConnected, requestScrollback]);
+
   // Auto-reconnect with exponential backoff
   useEffect(() => {
     if (!isConnected && error && connectionAttempts > 0 && connectionAttempts < 5) {
@@ -608,7 +693,14 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   // lastResizeRef before the session-switch effect reads it to trigger connect().
   // Moving this effect below the session-switch effect will silently break pre-sizing.
   useEffect(() => {
-    const cached = getCachedDimensions(sessionId);
+    const rawCached = getCachedDimensions(sessionId);
+    // Validate cell dims against current font config (R1.6): stale dims from a different
+    // font configuration produce an incorrect initial fit() and wrong initial resize.
+    const currentFontSize = 14; // matches the fontSize={14} prop on XtermTerminal
+    const currentFontFamily = 'Menlo, Monaco, "Courier New", monospace';
+    const cached = rawCached
+      ? validateCellDimensions(rawCached, currentFontSize, currentFontFamily)
+      : null;
     if (cached && cached.cols >= MIN_COLS && cached.rows >= MIN_ROWS) {
       hasCachedDimensionsRef.current = true;
       console.log(`[TerminalOutput] Initialized with cached dimensions: ${cached.cols}x${cached.rows}`);
@@ -1208,6 +1300,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
             <div className={styles.unavailableSubtext}>Could not connect to terminal session</div>
           </div>
         )}
+        {/* Task 4.2.1 — Non-blocking resizing overlay (R1.4).
+            Shown while the server waits for tmux quiescence after a window resize.
+            pointer-events: none (set in CSS) allows continued interaction. */}
+        {terminalState === 'RESIZING' && (
+          <div
+            className={styles.resizingOverlay}
+            aria-label="Terminal resizing"
+            aria-live="polite"
+          >
+            <span className={styles.resizingSpinner} />
+          </div>
+        )}
 <XtermTerminal
   ref={xtermRef}
   onData={handleTerminalData}
@@ -1215,7 +1319,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   theme={theme}
   fontSize={14}
   scrollback={5000}
-  mouseTracking={mouseMode}
 />
       </div>
       {/* Mobile keyboard toolbar — Termux-compatible extra-keys layout.

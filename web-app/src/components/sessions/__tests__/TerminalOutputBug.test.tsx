@@ -63,6 +63,7 @@ jest.mock('@/lib/hooks/useTerminalStream', () => ({
 jest.mock('@/lib/terminal/TerminalDimensionCache', () => ({
   getCachedDimensions: jest.fn(),
   saveDimensions: jest.fn(),
+  validateCellDimensions: jest.fn((cached: unknown) => cached),
 }));
 
 jest.mock('@/lib/terminal/TerminalStreamManager', () => ({
@@ -327,7 +328,7 @@ describe('MIN_COLS/MIN_ROWS: tiny dims do not corrupt the cache or trigger fast-
 
     await act(async () => { capturedOnResize?.(30, 10); });
 
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 30, 10);
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 30, 10, undefined, undefined, expect.anything(), expect.anything());
     expect(stream.connect).toHaveBeenCalledWith(30, 10);
   });
 
@@ -520,7 +521,7 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     await act(async () => { capturedOnResize?.(200, 50); });
 
     expect(saveDimensions).toHaveBeenCalledWith(
-      expect.any(String), 200, 50, 8.4, 17.0,
+      expect.any(String), 200, 50, 8.4, 17.0, expect.anything(), expect.anything(),
     );
 
     // Restore
@@ -536,8 +537,8 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     renderTerminalOutput();
     await act(async () => { capturedOnResize?.(200, 50); });
 
-    // Called with exactly 3 args (no cellWidth/cellHeight)
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50);
+    // Called without cellWidth/cellHeight (undefined), but with fontSize/fontFamily
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, undefined, undefined, expect.anything(), expect.anything());
     expect(saveDimensions).not.toHaveBeenCalledWith(
       expect.any(String), 200, 50, expect.any(Number), expect.any(Number),
     );
@@ -561,7 +562,8 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     renderTerminalOutput();
     await act(async () => { capturedOnResize?.(200, 50); });
 
-    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50);
+    // Called without cellWidth/cellHeight (undefined), but with fontSize/fontFamily
+    expect(saveDimensions).toHaveBeenCalledWith(expect.any(String), 200, 50, undefined, undefined, expect.anything(), expect.anything());
     expect(saveDimensions).not.toHaveBeenCalledWith(
       expect.any(String), 200, 50, expect.any(Number), expect.any(Number),
     );

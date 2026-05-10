@@ -20,6 +20,18 @@ interface ScrollbackMetadata {
   totalLines: number;
 }
 
+/**
+ * TerminalState — typed state machine for terminal connection and rendering lifecycle (R1.4).
+ * Driven by server-side proto messages rather than ad-hoc client-side booleans.
+ */
+export type TerminalState =
+  | 'DISCONNECTED'
+  | 'CONNECTING'
+  | 'LOADING'
+  | 'STABLE'
+  | 'RESIZING'
+  | 'FETCHING_SCROLLBACK';
+
 interface UseTerminalStreamOptions {
   baseUrl: string;
   sessionId: string;
@@ -53,6 +65,8 @@ interface TerminalStreamResult {
   sspNegotiated: boolean; // Whether SSP capabilities have been negotiated
   startRecording: () => void; // Start recording WebSocket messages for debugging
   stopRecording: () => void; // Stop recording and download recorded messages
+  /** Terminal state machine (R1.4) — typed lifecycle state driven by server messages. */
+  terminalState: TerminalState;
 }
 
 export function useTerminalStream({
@@ -74,6 +88,8 @@ export function useTerminalStream({
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<Error | null>(null);
   const [scrollbackLoaded, setScrollbackLoaded] = useState(false);
+  // Task 4.1.1 — Terminal state machine (R1.4)
+  const [terminalState, setTerminalState] = useState<TerminalState>('DISCONNECTED');
 
   const messageQueueRef = useRef<MessageQueue | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -146,6 +162,7 @@ export function useTerminalStream({
     }
 
     isDisconnectingRef.current = false;
+    setTerminalState('CONNECTING');
 
     try {
       abortControllerRef.current = new AbortController();
@@ -188,7 +205,20 @@ export function useTerminalStream({
             if (firstMessage) {
               setIsConnected(true);
               setScrollbackLoaded(true);
+              setTerminalState('LOADING');
               firstMessage = false;
+            }
+
+            // Task 4.1.2 — Handle ResizeQuiescence message (R1.4).
+            // Transitions: resizing=true → RESIZING, resizing=false → STABLE.
+            if (msg.data.case === "resizeQuiescence") {
+              const rq = msg.data.value;
+              if (rq.resizing) {
+                setTerminalState('RESIZING');
+              } else {
+                setTerminalState('STABLE');
+              }
+              continue; // No further processing for quiescence messages
             }
 
             // Dispatch to sub-hooks based on message type
@@ -237,6 +267,8 @@ export function useTerminalStream({
               } else {
                 metrics.scheduleOutputUpdate(text);
               }
+              // First raw output → terminal is stable (not resizing)
+              setTerminalState((prev) => prev === 'LOADING' || prev === 'CONNECTING' ? 'STABLE' : prev);
             } else if (msg.data.case === "currentPaneResponse") {
               flowControl.handleCurrentPaneResponse(msg.data.value);
 
@@ -248,6 +280,7 @@ export function useTerminalStream({
               if (onScrollbackReceived) {
                 onScrollbackReceived(content);
               }
+              setTerminalState('STABLE');
             } else if (msg.data.case === "scrollbackResponse") {
               const chunks: string[] = [];
               for (const chunk of msg.data.value.chunks) {
@@ -268,6 +301,8 @@ export function useTerminalStream({
               if (onScrollbackReceived) {
                 onScrollbackReceived(scrollbackText, metadata);
               }
+              // Scrollback response received — return to STABLE
+              setTerminalState((prev) => prev === 'FETCHING_SCROLLBACK' ? 'STABLE' : prev);
             } else if (msg.data.case === "error") {
               const err = new Error(msg.data.value.message);
               setError(err);
@@ -278,6 +313,7 @@ export function useTerminalStream({
           handleError(err);
         } finally {
           setIsConnected(false);
+          setTerminalState('DISCONNECTED');
         }
       })();
     } catch (err) {
@@ -357,5 +393,6 @@ export function useTerminalStream({
     sspNegotiated: flowControl.sspNegotiated,
     startRecording: metrics.startRecording,
     stopRecording: metrics.stopRecording,
+    terminalState,
   };
 }
