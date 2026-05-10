@@ -11,6 +11,8 @@ import * as styles from "./XtermTerminal.css";
 import { loadTerminalConfig, darkTerminalTheme, lightTerminalTheme, type TerminalConfig } from "@/lib/config/terminalConfig";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
 
+const DEFAULT_SCROLLBACK_SIZE = 5000;
+
 export interface XtermTerminalProps {
   /**
    * Callback when user types in terminal
@@ -97,7 +99,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
   // Floating Copy button state — shown when xterm has a non-empty selection (R3.1)
   const [copyButtonPos, setCopyButtonPos] = useState<{ x: number; y: number } | null>(null);
-  const [showCopiedToast, setShowCopiedToast] = useState(false);
+  const [showCopiedToast, setShowCopiedToast] = useState<'copied' | 'failed' | null>(null);
 
   // Store callbacks in refs to avoid recreating terminal on callback changes
   const onDataRef = useRef(onData);
@@ -139,7 +141,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
       fontSize,
       fontFamily,
       theme: getTheme(theme),
-      scrollback: scrollback && scrollback > 0 ? scrollback : 5000, // Default 5000: xterm.js default of 1000 is insufficient for session history (R2.1); config default of 0 means "use xterm default" so we substitute 5000 (Bug 2 fix)
+      scrollback: scrollback && scrollback > 0 ? scrollback : DEFAULT_SCROLLBACK_SIZE,
       allowProposedApi: true, // Required for some addons
       rightClickSelectsWord: true, // Right-click selects the word under cursor
     });
@@ -446,20 +448,34 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             const terminal = terminalRef.current;
             if (!terminal) return;
             const text = terminal.getSelection(); // synchronous within user gesture — iOS safe
-            if (navigator.clipboard?.writeText) {
-              navigator.clipboard.writeText(text).catch(() => {});
-            } else {
-              // Fallback: execCommand (deprecated but works in WKWebView / older browsers)
+            const tryExecCommandCopy = () => {
               const el = document.createElement('textarea');
               el.value = text;
               document.body.appendChild(el);
               el.select();
-              document.execCommand('copy');
+              const ok = document.execCommand('copy');
               document.body.removeChild(el);
+              return ok;
+            };
+            if (navigator.clipboard?.writeText) {
+              navigator.clipboard.writeText(text).then(() => {
+                setCopyButtonPos(null);
+                setShowCopiedToast('copied');
+                setTimeout(() => setShowCopiedToast(null), 1500);
+              }).catch(() => {
+                // Clipboard API denied — fall back to execCommand
+                const ok = tryExecCommandCopy();
+                setCopyButtonPos(null);
+                setShowCopiedToast(ok ? 'copied' : 'failed');
+                setTimeout(() => setShowCopiedToast(null), 1500);
+              });
+              e.preventDefault();
+              return;
             }
+            const ok = tryExecCommandCopy();
             setCopyButtonPos(null);
-            setShowCopiedToast(true);
-            setTimeout(() => setShowCopiedToast(false), 1500);
+            setShowCopiedToast(ok ? 'copied' : 'failed');
+            setTimeout(() => setShowCopiedToast(null), 1500);
             e.preventDefault();
           }}
         >
@@ -467,7 +483,9 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         </button>
       )}
       {showCopiedToast && (
-        <div className={styles.copiedToast} aria-live="polite">Copied</div>
+        <div className={styles.copiedToast} aria-live="polite">
+          {showCopiedToast === 'copied' ? 'Copied' : 'Copy failed'}
+        </div>
       )}
     </div>
   );

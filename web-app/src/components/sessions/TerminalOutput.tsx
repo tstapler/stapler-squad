@@ -1311,8 +1311,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         {terminalState === 'RESIZING' && (
           <div
             className={styles.resizingOverlay}
+            role="status"
             aria-label="Terminal resizing"
-            aria-live="polite"
           >
             <span className={styles.resizingSpinner} />
           </div>

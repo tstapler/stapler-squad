@@ -755,7 +755,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 				// Wait for tmux to finish reflowing at the new dimensions before the
 				// next capture-pane, preventing partially-reflowed content (R1.1).
-				waitForQuiescence(quiescenceCh, 300*time.Millisecond, 100*time.Millisecond)
+				quiescenceDeadline := 300 * time.Millisecond
+				quiescenceStart := time.Now()
+				waitForQuiescence(quiescenceCh, quiescenceDeadline, 100*time.Millisecond)
+				if elapsed := time.Since(quiescenceStart); elapsed >= quiescenceDeadline-5*time.Millisecond {
+					log.ErrorLog.Printf("[streamViaControlMode] quiescence timed out after %v for session %s (%dx%d); sending snapshot anyway", elapsed.Round(time.Millisecond), sessionID, r.cols, r.rows)
+				}
 
 				// Capture and send a fresh snapshot at the new dimensions so the client
 				// display is immediately correct without waiting for the next PTY event
