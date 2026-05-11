@@ -176,12 +176,10 @@ export const navBadgeWrapper = recipe({
       true: {
         position: "absolute",
         top: "2px",
-        left: "28px",
+        right: vars.space[1],
         pointerEvents: "none",
       },
-      false: {
-        marginLeft: "0.375rem",
-      },
+      false: {},
     },
   },
   defaultVariants: { collapsed: false },

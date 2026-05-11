@@ -52,17 +52,17 @@ export function DrawerNav() {
                 </span>
                 {page.href === routes.reviewQueue && (
                   <span className={navBadgeWrapper({ collapsed: !isDrawerOpen })}>
-                    <ReviewQueueNavBadge />
+                    <ReviewQueueNavBadge inline={isDrawerOpen} />
                   </span>
                 )}
                 {page.href === routes.unfinished && (
                   <span className={navBadgeWrapper({ collapsed: !isDrawerOpen })}>
-                    <UnfinishedNavBadge />
+                    <UnfinishedNavBadge inline={isDrawerOpen} />
                   </span>
                 )}
                 {page.href === routes.notifications && (
                   <span className={navBadgeWrapper({ collapsed: !isDrawerOpen })}>
-                    <NotificationsNavBadge />
+                    <NotificationsNavBadge inline={isDrawerOpen} />
                   </span>
                 )}
               </Link>
