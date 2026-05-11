@@ -390,7 +390,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	log.InfoLog.Printf("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
 
 	// Register telemetry handler for frontend performance events
-	telemetryHandler := handlers.NewTelemetryHandler()
+	telemetryHandler := handlers.NewTelemetryHandler(nil)
 	srv.mux.HandleFunc("POST /api/telemetry", telemetryHandler.HandleTelemetry)
 	log.InfoLog.Printf("Registered telemetry handler at POST /api/telemetry")
 
