@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
 	"github.com/tstapler/stapler-squad/server/interceptors"
@@ -389,8 +390,36 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cbHandler.RegisterRoutes(srv.mux)
 	log.InfoLog.Printf("Registered Circuit Breaker debug handler at /api/debug/circuit-breakers")
 
+	// Wire analytics provider: SQLite when DB client is available, log-only fallback otherwise.
+	var analyticsProvider analytics.AnalyticsProvider
+	if deps.AnalyticsEntClient != nil {
+		analyticsProvider = analytics.NewSQLiteAnalyticsProvider(deps.AnalyticsEntClient)
+		log.InfoLog.Printf("Analytics: using SQLiteAnalyticsProvider")
+	} else {
+		analyticsProvider = analytics.NewLogAnalyticsProvider()
+		log.InfoLog.Printf("Analytics: using LogAnalyticsProvider (fallback)")
+	}
+
+	// Start analytics retention enforcer (hourly; exits when serverCtx is cancelled).
+	cfg := config.LoadConfig()
+	if deps.AnalyticsEntClient != nil {
+		analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
+		log.InfoLog.Printf("Analytics retention enforcer started (maxRows=%d, maxAgeDays=%d)",
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
+	}
+
+	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).
+	analytics.StartAnalyticsSubscriber(serverCtx, deps.EventBus, analyticsProvider)
+	log.InfoLog.Printf("Analytics EventBus subscriber started")
+
+	// Register analytics HTTP handler (POST /api/analytics, GET /api/analytics/summary).
+	analyticsHandler := handlers.NewAnalyticsHandlerWithClient(analyticsProvider, deps.AnalyticsEntClient)
+	analyticsHandler.RegisterRoutes(srv.mux)
+	log.InfoLog.Printf("Registered analytics handler at POST /api/analytics and GET /api/analytics/summary")
+
 	// Register telemetry handler for frontend performance events
-	telemetryHandler := handlers.NewTelemetryHandler(nil)
+	telemetryHandler := handlers.NewTelemetryHandler(analyticsProvider)
 	srv.mux.HandleFunc("POST /api/telemetry", telemetryHandler.HandleTelemetry)
 	log.InfoLog.Printf("Registered telemetry handler at POST /api/telemetry")
 

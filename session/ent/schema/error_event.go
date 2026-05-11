@@ -12,7 +12,7 @@ type ErrorEvent struct{ ent.Schema }
 // Fields of the ErrorEvent.
 func (ErrorEvent) Fields() []ent.Field {
 	return []ent.Field{
-		field.String("fingerprint").Unique(),       // SHA256 of type+first3frames
+		field.String("fingerprint").Unique(), // SHA256 of type+first3frames
 		field.String("error_type"),
 		field.String("message"),
 		field.Text("stack_trace"),

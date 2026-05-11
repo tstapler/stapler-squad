@@ -6,15 +6,24 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Session } from "@/gen/session/v1/types_pb";
 import { SessionListSkeleton } from "@/components/sessions/SessionListSkeleton";
 import { SessionDetailTab } from "@/components/sessions/SessionDetail";
+
+const VALID_TABS = ["terminal", "diff", "vcs", "logs", "info"] as const;
+function isValidTab(tab: string | null): tab is SessionDetailTab {
+  return tab !== null && (VALID_TABS as readonly string[]).includes(tab);
+}
 import { ResumeSessionModal } from "@/components/sessions/ResumeSessionModal";
 import { useSessionServiceContext } from "@/lib/contexts/SessionServiceContext";
 import { useKeyboard } from "@/lib/hooks/useKeyboard";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { PaneTilingContainer } from "@/components/pane/PaneTilingContainer";
 import { CockpitActionsProvider } from "@/lib/contexts/CockpitActionsContext";
+import { usePageView } from "@/lib/analytics/usePageView";
+import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
 import * as styles from "./page.css";
 
 function HomeContent() {
+  usePageView();
+  const { track } = useAnalytics();
   const searchParams = useSearchParams();
   const router = useRouter();
   const { openInCreationMode, openOmnibar } = useOmnibar();
@@ -53,10 +62,6 @@ function HomeContent() {
     }
   }, [selectedSession]);
 
-  // Valid tab values for URL parsing
-  const validTabs: SessionDetailTab[] = ["terminal", "diff", "vcs", "logs", "info"];
-  const isValidTab = (tab: string | null): tab is SessionDetailTab =>
-    tab !== null && validTabs.includes(tab as SessionDetailTab);
 
   const {
     sessions,

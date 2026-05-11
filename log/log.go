@@ -126,6 +126,13 @@ var (
 	// It is populated by initializeWithConfig and used by GetSessionLoggers and Close
 	// so callers can inject it for zero-migration compatibility.
 	defaultManager *LogManager
+
+	// asyncFileWriter and asyncConsoleWriter are the async queued writers that back the
+	// stdlib log.Logger shims (InfoLog, WarningLog, etc.). They are populated by
+	// initializeWithConfig and must be drained (via Close) before the underlying file
+	// is closed. Declared here so Close() can reach them even without a LogManager.
+	asyncLogFileWriter    *asyncWriter
+	asyncLogConsoleWriter *asyncWriter
 )
 
 // LogConfig holds logging configuration
@@ -787,41 +794,49 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 		combinedWriter = io.MultiWriter(writers...)
 	}
 
-	// Initialize traditional loggers with level filtering for each stream
-	// For dual-stream, we need separate filtering per stream
+	// Initialize traditional loggers with level filtering for each stream.
+	// Both the file and console destinations are wrapped in asyncWriter so that
+	// log.Logger's internal mutex is held only for message formatting and a
+	// non-blocking channel send — not for the underlying I/O.
 	if cfg.FileEnabled && cfg.ConsoleEnabled {
-		// Dual-stream: create separate filtered writers
-		fileWriter := createRotatingWriter(logFilePath, cfg)
-		fileFiltered := newLevelFilterWriter(fileWriter, cfg.FileLevel, DEBUG)
-		consoleFiltered := newLevelFilterWriter(os.Stderr, cfg.ConsoleLevel, DEBUG)
+		// Dual-stream: reuse globalLogFile (already created above) so we have
+		// exactly one lumberjack instance writing to the log file.
+		asyncFile := newAsyncWriter(globalLogFile, asyncWriterBufSize)
+		asyncCons := newAsyncWriter(os.Stderr, asyncWriterBufSize)
+		asyncLogFileWriter = asyncFile
+		asyncLogConsoleWriter = asyncCons
 
-		// Create multi-writers for each log level
+		fileFiltered := newLevelFilterWriter(asyncFile, cfg.FileLevel, DEBUG)
+		consoleFiltered := newLevelFilterWriter(asyncCons, cfg.ConsoleLevel, DEBUG)
+
 		InfoLog = log.New(io.MultiWriter(
-			newLevelFilterWriter(fileWriter, cfg.FileLevel, INFO),
-			newLevelFilterWriter(os.Stderr, cfg.ConsoleLevel, INFO),
+			newLevelFilterWriter(asyncFile, cfg.FileLevel, INFO),
+			newLevelFilterWriter(asyncCons, cfg.ConsoleLevel, INFO),
 		), prefix+"INFO:", log.Ldate|log.Ltime|log.Lshortfile)
 
 		WarningLog = log.New(io.MultiWriter(
-			newLevelFilterWriter(fileWriter, cfg.FileLevel, WARNING),
-			newLevelFilterWriter(os.Stderr, cfg.ConsoleLevel, WARNING),
+			newLevelFilterWriter(asyncFile, cfg.FileLevel, WARNING),
+			newLevelFilterWriter(asyncCons, cfg.ConsoleLevel, WARNING),
 		), prefix+"WARNING:", log.Ldate|log.Ltime|log.Lshortfile)
 
 		ErrorLog = log.New(io.MultiWriter(
-			newLevelFilterWriter(fileWriter, cfg.FileLevel, ERROR),
-			newLevelFilterWriter(os.Stderr, cfg.ConsoleLevel, ERROR),
+			newLevelFilterWriter(asyncFile, cfg.FileLevel, ERROR),
+			newLevelFilterWriter(asyncCons, cfg.ConsoleLevel, ERROR),
 		), prefix+"ERROR:", log.Ldate|log.Ltime|log.Lshortfile)
 
 		DebugLog = log.New(io.MultiWriter(
-			newLevelFilterWriter(fileWriter, cfg.FileLevel, DEBUG),
-			newLevelFilterWriter(os.Stderr, cfg.ConsoleLevel, DEBUG),
+			newLevelFilterWriter(asyncFile, cfg.FileLevel, DEBUG),
+			newLevelFilterWriter(asyncCons, cfg.ConsoleLevel, DEBUG),
 		), prefix+"DEBUG:", log.Ldate|log.Ltime|log.Lshortfile)
 
-		// Initialize structured logger with multi-writer
 		if cfg.StructuredLogs {
 			structuredLogger = NewStructuredLogger(io.MultiWriter(fileFiltered, consoleFiltered), cfg.FileLevel, cfg.PrettyLogs)
 		}
 	} else {
-		// Single-stream: use existing logic with combined writer
+		// Single-stream: wrap the combined writer so the path is also async.
+		asyncCombined := newAsyncWriter(combinedWriter, asyncWriterBufSize)
+		asyncLogFileWriter = asyncCombined
+
 		minLevel := cfg.LogLevel // Use deprecated field for backward compatibility
 		if cfg.FileEnabled {
 			minLevel = cfg.FileLevel
@@ -829,14 +844,13 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 			minLevel = cfg.ConsoleLevel
 		}
 
-		InfoLog = log.New(newLevelFilterWriter(combinedWriter, minLevel, INFO), prefix+"INFO:", log.Ldate|log.Ltime|log.Lshortfile)
-		WarningLog = log.New(newLevelFilterWriter(combinedWriter, minLevel, WARNING), prefix+"WARNING:", log.Ldate|log.Ltime|log.Lshortfile)
-		ErrorLog = log.New(newLevelFilterWriter(combinedWriter, minLevel, ERROR), prefix+"ERROR:", log.Ldate|log.Ltime|log.Lshortfile)
-		DebugLog = log.New(newLevelFilterWriter(combinedWriter, minLevel, DEBUG), prefix+"DEBUG:", log.Ldate|log.Ltime|log.Lshortfile)
+		InfoLog = log.New(newLevelFilterWriter(asyncCombined, minLevel, INFO), prefix+"INFO:", log.Ldate|log.Ltime|log.Lshortfile)
+		WarningLog = log.New(newLevelFilterWriter(asyncCombined, minLevel, WARNING), prefix+"WARNING:", log.Ldate|log.Ltime|log.Lshortfile)
+		ErrorLog = log.New(newLevelFilterWriter(asyncCombined, minLevel, ERROR), prefix+"ERROR:", log.Ldate|log.Ltime|log.Lshortfile)
+		DebugLog = log.New(newLevelFilterWriter(asyncCombined, minLevel, DEBUG), prefix+"DEBUG:", log.Ldate|log.Ltime|log.Lshortfile)
 
-		// Initialize structured logger if enabled
 		if cfg.StructuredLogs {
-			structuredLogger = NewStructuredLogger(combinedWriter, minLevel, cfg.PrettyLogs)
+			structuredLogger = NewStructuredLogger(asyncCombined, minLevel, cfg.PrettyLogs)
 		}
 	}
 
@@ -853,7 +867,7 @@ func initializeWithConfig(daemon bool, cfg *LogConfig) {
 	slog.SetDefault(slog.New(NewTraceIDHandler(asyncHandler)))
 
 	// Populate the default LogManager so package consumers can use it via dependency injection.
-	defaultManager = newLogManager(cfg, InfoLog, WarningLog, ErrorLog, DebugLog, globalLogFile, structuredLogger, asyncHandler)
+	defaultManager = newLogManager(cfg, InfoLog, WarningLog, ErrorLog, DebugLog, globalLogFile, structuredLogger, asyncHandler, asyncLogFileWriter, asyncLogConsoleWriter)
 }
 
 func Close() {

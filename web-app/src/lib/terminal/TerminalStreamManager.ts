@@ -122,6 +122,14 @@ export class TerminalStreamManager {
   private lastWriteTime: number = 0;
   private writeCount: number = 0;
 
+  // Write-lock: prevents live output from being written while initial/paged history is loading.
+  // Live writes received during the lock are queued and flushed once the history write completes.
+  private isWritingInitialContent: boolean = false;
+  private pendingLiveWrites: string[] = [];
+
+  // SerializeAddon for prependScrollbackBatch (injected externally after addon is loaded)
+  private serializeAddon?: { serialize(): string };
+
   // First output tracking
   private firstOutputReceived: boolean = false;
   private onFirstOutput: (() => void) | null = null;
@@ -139,6 +147,11 @@ export class TerminalStreamManager {
   /** Set a callback invoked once on first output received. */
   setOnFirstOutput(cb: () => void): void {
     this.onFirstOutput = cb;
+  }
+
+  /** Inject a SerializeAddon for prependScrollbackBatch (serialize-clear-rewrite pattern). */
+  setSerializeAddon(addon: { serialize(): string }): void {
+    this.serializeAddon = addon;
   }
 
   /** Update the sendFlowControl callback (e.g., after reconnection). */
@@ -210,6 +223,13 @@ export class TerminalStreamManager {
    * This is the primary entry point for streaming output.
    */
   write(output: string): void {
+    // Write-lock: if writeInitialContent or prependScrollbackBatch is in progress,
+    // queue live output to avoid interleaving history with live data (Pitfall #1 and #8).
+    if (this.isWritingInitialContent) {
+      this.pendingLiveWrites.push(output);
+      return;
+    }
+
     // Track first output
     if (!this.firstOutputReceived) {
       this.firstOutputReceived = true;
@@ -227,19 +247,75 @@ export class TerminalStreamManager {
   /**
    * Write initial content (e.g., from currentPaneResponse).
    * Clears terminal, enqueues content via chunked write, scrolls to bottom.
+   * Holds a write-lock for the duration to prevent live output from interleaving.
    *
    * @returns Promise that resolves when the write completes.
    */
   async writeInitialContent(content: string): Promise<void> {
-    this.terminal.clear();
-    await this.enqueueWrite(content);
-    this.terminal.scrollToBottom();
+    this.isWritingInitialContent = true;
+    try {
+      this.terminal.clear();
+      await this.enqueueWrite(content);
+      this.terminal.scrollToBottom();
 
-    // Delayed scrolls in case content is still rendering.
-    // Large scrollback can take >100ms to fully render on slower machines.
-    setTimeout(() => this.terminal.scrollToBottom(), 10);
-    setTimeout(() => this.terminal.scrollToBottom(), 100);
-    setTimeout(() => this.terminal.scrollToBottom(), 500);
+      // Delayed scrolls in case content is still rendering.
+      // Large scrollback can take >100ms to fully render on slower machines.
+      setTimeout(() => this.terminal.scrollToBottom(), 10);
+      setTimeout(() => this.terminal.scrollToBottom(), 100);
+      setTimeout(() => this.terminal.scrollToBottom(), 500);
+    } finally {
+      this.isWritingInitialContent = false;
+      // Flush any live writes that arrived during history loading (in order)
+      const pending = this.pendingLiveWrites.splice(0);
+      for (const chunk of pending) {
+        this.write(chunk);
+      }
+    }
+  }
+
+  /**
+   * Prepend historical scrollback above the current terminal content.
+   * Uses the serialize-clear-rewrite pattern (ADR-010):
+   *   1. Serialize current buffer (if SerializeAddon available)
+   *   2. Clear terminal
+   *   3. Write older history
+   *   4. Write saved current content
+   *   5. Scroll to bottom
+   *
+   * Holds a write-lock for the duration to prevent live output from interleaving.
+   *
+   * @returns Promise that resolves when the write completes.
+   */
+  async prependScrollbackBatch(content: string): Promise<void> {
+    this.isWritingInitialContent = true;
+    try {
+      if (!this.serializeAddon) {
+        // Degraded mode: SerializeAddon not available — cannot serialize current buffer before
+        // clearing, so we skip the clear and simply append the history content. The history
+        // will appear after the current content (wrong order) but current content is preserved.
+        // This is preferable to clearing and losing the existing terminal output (Bug 6 fix).
+        console.warn('[TerminalStreamManager] SerializeAddon not available — appending history without clear (degraded mode)');
+        await this.enqueueWrite(content);
+        return;
+      }
+
+      // Serialize current buffer state before clearing
+      const serialized = this.serializeAddon.serialize();
+
+      this.terminal.clear();
+      await this.enqueueWrite(content);
+      if (serialized) {
+        await this.enqueueWrite(serialized);
+      }
+      this.terminal.scrollToBottom();
+    } finally {
+      this.isWritingInitialContent = false;
+      // Flush any live writes that arrived during history loading (in order)
+      const pending = this.pendingLiveWrites.splice(0);
+      for (const chunk of pending) {
+        this.write(chunk);
+      }
+    }
   }
 
   /**
@@ -473,6 +549,15 @@ export class TerminalStreamManager {
       this.terminal.refresh = this.originalRefresh;
       this.debugMonitorInstalled = false;
     }
+
+    // Null out refs to terminal internals to prevent GC retention (Pitfall #7):
+    // when the terminal is disposed while the manager is still alive, these refs
+    // hold closed terminal objects preventing garbage collection.
+    this.originalWrite = null;
+    this.originalRefresh = null;
+
+    // Clear any pending live writes
+    this.pendingLiveWrites.length = 0;
   }
 
   // ---- Test/debug accessors ----

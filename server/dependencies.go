@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	warren "github.com/tstapler/stapler-squad/pkg/warren"
+	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
@@ -43,6 +45,10 @@ type ServerDependencies struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
+
+	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
+	// is used as a fallback in that case).
+	AnalyticsEntClient *ent.Client
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -67,6 +73,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedScanner:       rt.UnfinishedScanner,
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
+		AnalyticsEntClient:      rt.AnalyticsEntClient,
 	}
 }
 
@@ -419,6 +426,9 @@ type RuntimeDeps struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
+
+	// Analytics storage.
+	AnalyticsEntClient *ent.Client
 }
 
 // BuildRuntimeDeps constructs Phase 3 dependencies using Phase 2 outputs.
@@ -434,6 +444,7 @@ type RuntimeDeps struct {
 //   - Step 11: ExternalDiscovery with session-added/removed callbacks
 //   - Step 12: ExternalApprovalMonitor with approval-to-review-queue bridge
 //   - SetExternalDiscovery on SessionService (moved from server.go)
+//
 // BuildRuntimeDeps requires a TmuxServerReady token to enforce that
 // tmux.EnsureServerRunning was called before sessions are loaded. Without this
 // ordering, DoesSessionExist() may trigger recoverFromServerFailure, which starts
@@ -672,6 +683,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		log.WarningLog.Printf("Could not initialize UnfinishedWork state store: %v", configErr)
 	}
 
+	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
+	var analyticsClient *ent.Client
+	if configDir, configErr := config.GetConfigDir(); configErr == nil {
+		ctx := context.Background()
+		if ac, acErr := analytics.OpenAnalyticsDB(ctx, configDir); acErr != nil {
+			log.WarningLog.Printf("Could not open analytics DB (will use log-only fallback): %v", acErr)
+		} else {
+			analyticsClient = ac
+			log.InfoLog.Printf("Analytics DB opened: %s/analytics.db", configDir)
+		}
+	} else {
+		log.WarningLog.Printf("Could not determine config dir for analytics DB: %v", configErr)
+	}
+
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
 		Instances:               instances,
@@ -686,5 +711,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,
+		AnalyticsEntClient:      analyticsClient,
 	}, nil
 }

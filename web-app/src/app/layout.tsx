@@ -4,7 +4,6 @@ import { AuthProvider } from "@/lib/contexts/AuthContext";
 import { Providers } from "./Providers";
 import { NotificationPanel } from "@/components/ui/NotificationPanel";
 import { ViewportProvider } from "@/components/providers/ViewportProvider";
-import { WebVitalsReporter } from "@/components/telemetry/WebVitalsReporter";
 import { CockpitShell } from "@/components/layout/CockpitShell";
 import { matrixTheme, cyberpunk77Theme, wh40kTheme, cleanTheme, lightTheme, darkTheme } from "@/styles/theme.css";
 import { jetbrainsMono, rajdhani, cinzel, inter } from "./fonts";
@@ -56,7 +55,6 @@ export default function RootLayout({
         <script dangerouslySetInnerHTML={{ __html: foucScript }} />
       </head>
       <body>
-        <WebVitalsReporter />
         <ViewportProvider>
           <ErrorBoundary>
             <AuthProvider>

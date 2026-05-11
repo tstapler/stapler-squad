@@ -147,12 +147,12 @@ func TestShortLivedCmd_WaitDelayAlwaysNonZero(t *testing.T) {
 
 	ctx := context.Background()
 	configs := [][]Option{
-		{},                                      // no options
-		{WithTimeout(time.Second)},              // with timeout
-		{WithDir(t.TempDir())},                  // with dir
-		{WithReplaceEnv([]string{"FOO=bar"})},  // with env replacement
-		{WithEnv("KEY", "val")},                 // with extra env
-		{WithoutProcessGroup()},                 // no process group
+		{},                                    // no options
+		{WithTimeout(time.Second)},            // with timeout
+		{WithDir(t.TempDir())},                // with dir
+		{WithReplaceEnv([]string{"FOO=bar"})}, // with env replacement
+		{WithEnv("KEY", "val")},               // with extra env
+		{WithoutProcessGroup()},               // no process group
 	}
 
 	for i, opts := range configs {

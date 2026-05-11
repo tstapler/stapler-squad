@@ -126,9 +126,9 @@ func WithProcessRedactArgs(indices ...int) ProcessOption {
 type ManagedProcess struct {
 	cmd         *exec.Cmd
 	cancel      context.CancelFunc // cancels the derived context passed to cmd
-	stopCh      chan struct{}       // closed by Stop(); triggers graceful shutdown
-	done        chan struct{}       // closed by reaper goroutine when cmd.Wait() returns
-	waitErr     chan error          // buffered(1); written once by reaper goroutine
+	stopCh      chan struct{}      // closed by Stop(); triggers graceful shutdown
+	done        chan struct{}      // closed by reaper goroutine when cmd.Wait() returns
+	waitErr     chan error         // buffered(1); written once by reaper goroutine
 	stopped     atomic.Bool        // guards against concurrent Stop() calls
 	gracePeriod time.Duration
 

@@ -567,6 +567,17 @@ func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStat
 		return cached
 	}
 
+	// Update LastMeaningfulOutput when new terminal content is detected.
+	// This ensures sessions resurface in the review queue after producing new output,
+	// even when the user hasn't visited them via WebSocket streaming.
+	// The content-signature dedup in UpdateTimestamps() (persisted to DB) prevents
+	// false positives: if content is cosmetically changed but semantically the same
+	// as when the user last acknowledged, LastMeaningfulOutput is not updated and
+	// the acknowledgment snooze is preserved.
+	if content != "" {
+		inst.UpdateTerminalTimestamps(content, false)
+	}
+
 	rqp.cacheMu.Lock()
 	rqp.cachedContent[inst.Title] = content
 	if statusInfo.IsControllerActive && !statusInfo.IdleState.LastActivity.IsZero() {
@@ -590,6 +601,11 @@ func (rqp *ReviewQueuePoller) getContent(inst *Instance, statusInfo InstanceStat
 func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[string]time.Time) {
 	// Skip paused, stopped, or unstarted sessions
 	if !inst.Started() || inst.Paused() || inst.Status == Stopped {
+		return
+	}
+
+	// Sessions with an active controller get status updates via events; skip fast-path poll.
+	if inst.GetController() != nil {
 		return
 	}
 
@@ -914,27 +930,14 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		}
 	}
 
-	// NOTE: Preview() is now a read-only operation that does NOT update timestamps.
-	// Timestamps are managed by:
-	// 1. WebSocket streaming when users view the terminal in the web UI
-	// 2. User interactions (typing, viewing) via UpdateTerminalTimestamps(forceUpdate=true)
-	// 3. Automated checks in HasUpdated() which call UpdateTerminalTimestamps(forceUpdate=false)
-	//
-	// We deliberately avoid calling Preview() here because it would be an expensive operation
-	// (blocking tmux capture) that doesn't provide value since it no longer updates timestamps.
-	// Instead, we rely on the timestamps already set by the above mechanisms.
-	//
-	// This approach:
-	// - Prevents breaking acknowledgment snooze (Preview() no longer updates LastMeaningfulOutput)
-	// - Avoids expensive blocking tmux calls during polling
-	// - Relies on WebSocket streaming or HasUpdated() for accurate timestamp management
+	// LastMeaningfulOutput is updated by getContent() above via UpdateTerminalTimestamps()
+	// when new terminal content is detected. The persisted content-signature dedup prevents
+	// false positives: sessions stay snoozed after acknowledgment unless output genuinely changes.
 
 	// Check for terminal staleness (no meaningful output for configured threshold)
 	// This helps identify sessions that might be stuck or waiting without showing obvious idle state
 	// IMPORTANT: Respect acknowledgment - don't flag as stale if user already acknowledged
 	timeSinceOutput := inst.GetTimeSinceLastMeaningfulOutput()
-	log.InfoLog.Printf("[ReviewQueue] Session '%s': Staleness check - %s since last meaningful output (threshold: %s, shouldAdd=%v, priority=%v)",
-		inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold), shouldAdd, priority)
 
 	// Check if user has acknowledged this session after it became stale
 	// If acknowledged after last output, don't re-flag as stale
@@ -942,31 +945,30 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 
 	if timeSinceOutput > rqp.config.StalenessThreshold {
 		if alreadyAcknowledged {
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': STALE but already acknowledged - skipping staleness flag",
-				inst.Title)
+			if log.IsDebugEnabled() {
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': STALE but already acknowledged - skipping staleness flag",
+					inst.Title)
+			}
 		} else {
-			log.InfoLog.Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - time since output (%s) > threshold (%s)",
-				inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold))
-
 			// Only override if we don't already have a higher-priority reason.
 			// Only set stale if not already flagged with Medium priority or higher.
 			if !shouldAdd || priority.IsLowerThan(PriorityMedium) {
-				// Use semantic ReasonStale instead of deprecated ReasonIdleTimeout
 				reason = ReasonStale
 				priority = PriorityLow // Lower priority than approval/error, but should be reviewed
 				shouldAdd = true
 				context = fmt.Sprintf("No activity for %s - session may be stuck or waiting",
 					detection.FormatDuration(timeSinceOutput))
-
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': SETTING shouldAdd=true - flagged as stale - %s since last meaningful output",
-					inst.Title, detection.FormatDuration(timeSinceOutput))
-			} else {
-				log.InfoLog.Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
+				if log.IsDebugEnabled() {
+					log.DebugLog.Printf("[ReviewQueue] Session '%s': STALENESS DETECTED - flagged as stale, %s since last meaningful output",
+						inst.Title, detection.FormatDuration(timeSinceOutput))
+				}
+			} else if log.IsDebugEnabled() {
+				log.DebugLog.Printf("[ReviewQueue] Session '%s': Stale but already has higher priority reason (%s)",
 					inst.Title, reason.String())
 			}
 		}
-	} else {
-		log.InfoLog.Printf("[ReviewQueue] Session '%s': NOT STALE - time since output (%s) <= threshold (%s)",
+	} else if log.IsDebugEnabled() {
+		log.DebugLog.Printf("[ReviewQueue] Session '%s': NOT STALE - %s since last meaningful output (threshold: %s)",
 			inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(rqp.config.StalenessThreshold))
 	}
 

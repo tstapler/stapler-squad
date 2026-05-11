@@ -8,6 +8,51 @@ import (
 )
 
 var (
+	// AnalyticsEventsColumns holds the columns for the "analytics_events" table.
+	AnalyticsEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString, Unique: true},
+		{Name: "event_name", Type: field.TypeString},
+		{Name: "event_category", Type: field.TypeString},
+		{Name: "session_id", Type: field.TypeString, Nullable: true},
+		{Name: "duration_ms", Type: field.TypeInt64, Nullable: true},
+		{Name: "page", Type: field.TypeString, Nullable: true},
+		{Name: "component", Type: field.TypeString, Nullable: true},
+		{Name: "labels", Type: field.TypeJSON, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// AnalyticsEventsTable holds the schema information for the "analytics_events" table.
+	AnalyticsEventsTable = &schema.Table{
+		Name:       "analytics_events",
+		Columns:    AnalyticsEventsColumns,
+		PrimaryKey: []*schema.Column{AnalyticsEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "analyticsevent_event_name",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[1]},
+			},
+			{
+				Name:    "analyticsevent_event_category",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[2]},
+			},
+			{
+				Name:    "analyticsevent_session_id",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[3]},
+			},
+			{
+				Name:    "analyticsevent_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[8]},
+			},
+			{
+				Name:    "analyticsevent_event_name_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[1], AnalyticsEventsColumns[8]},
+			},
+		},
+	}
 	// ApprovalRulesColumns holds the columns for the "approval_rules" table.
 	ApprovalRulesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -381,6 +426,7 @@ var (
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		AnalyticsEventsTable,
 		ApprovalRulesTable,
 		ClassificationAnalyticsTable,
 		ClaudeMetadataTable,

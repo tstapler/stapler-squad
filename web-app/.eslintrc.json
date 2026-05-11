@@ -1,6 +1,6 @@
 {
   "extends": ["next/core-web-vitals"],
-  "plugins": ["boundaries", "@typescript-eslint"],
+  "plugins": ["boundaries", "analytics", "@typescript-eslint"],
   "settings": {
     "boundaries/elements": [
       { "type": "app",        "pattern": "src/app/**" },
@@ -55,8 +55,16 @@
       {
         "selector": "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property > Literal[value=/^#[0-9a-fA-F]{3,8}$/]",
         "message": "Use vars.color.* tokens from theme.css.ts instead of hardcoded hex values in style props."
+      },
+      {
+        "selector": "ImportDeclaration[source.value='@/lib/telemetry']",
+        "message": "Use useAnalytics().track() instead of the legacy track() from lib/telemetry."
       }
     ],
+    "analytics/require-on-click":         "warn",
+    "analytics/require-omnibar-dispatch": "error",
+    "analytics/require-page-analytics":   "error",
+    "analytics/require-rpc-analytics":    "error",
     "boundaries/dependencies": [
       "error",
       {

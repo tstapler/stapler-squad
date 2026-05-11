@@ -1,5 +1,7 @@
+// analytics-exempt
 import type { Metadata } from "next";
 import { UnfinishedSourcesSettings } from "@/components/settings/UnfinishedSourcesSettings";
+import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 
 export const metadata: Metadata = {
   title: "Unfinished Sources - Settings - Stapler Squad",
@@ -7,5 +9,10 @@ export const metadata: Metadata = {
 };
 
 export default function UnfinishedSettingsPage() {
-  return <UnfinishedSourcesSettings />;
+  return (
+    <>
+      <PageViewTracker />
+      <UnfinishedSourcesSettings />
+    </>
+  );
 }

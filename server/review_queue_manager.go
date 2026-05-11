@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
 	"time"
 
@@ -165,6 +166,20 @@ func (rqm *ReactiveQueueManager) signalActivity() {
 	case rqm.activityCh <- struct{}{}:
 	default:
 	}
+}
+
+// OnControllerStatusChange is called by a ClaudeController's status-change goroutine
+// when it detects a terminal status transition. Safe to call from any goroutine.
+func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance, _ detection.DetectedStatus) {
+	rqm.signalActivity()
+	go func() {
+		select {
+		case <-rqm.ctx.Done():
+			return
+		default:
+		}
+		rqm.poller.CheckSession(inst)
+	}()
 }
 
 // handleUserInteraction handles user interaction events and immediately re-evaluates the queue.

@@ -360,6 +360,34 @@ export const unavailableSubtext = style({
   color: vars.color.textMuted,
 });
 
+// ---- Resize overlay (Task 4.2.1 / R1.4) ----
+// Non-blocking dimmed overlay shown while the server waits for tmux quiescence after resize.
+// pointer-events: none ensures the user can still interact with the terminal.
+export const resizingOverlay = style({
+  position: "absolute",
+  inset: 0,
+  background: "rgba(0, 0, 0, 0.3)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  pointerEvents: "none",
+  zIndex: 5,
+});
+
+const resizeSpin = keyframes({
+  "0%": { transform: "rotate(0deg)" },
+  "100%": { transform: "rotate(360deg)" },
+});
+
+export const resizingSpinner = style({
+  width: "32px",
+  height: "32px",
+  border: `3px solid ${vars.color.terminalBorder}`,
+  borderTop: `3px solid ${vars.color.primary}`,
+  borderRadius: "50%",
+  animation: `${resizeSpin} 0.8s linear infinite`,
+});
+
 export const mobileKeyboard = style({
   display: "none",
   flexDirection: "column",

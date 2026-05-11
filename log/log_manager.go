@@ -19,6 +19,9 @@ type LogManager struct {
 	logFile      io.WriteCloser
 	structured   *StructuredLogger
 	asyncHandler *AsyncHandler
+	// asyncFileWriter and asyncConsoleWriter are drained before logFile is closed.
+	asyncFileWriter    *asyncWriter
+	asyncConsoleWriter *asyncWriter
 
 	sessionsMu sync.RWMutex
 	sessions   map[string]*SessionLoggers
@@ -32,17 +35,20 @@ func newLogManager(
 	logFile io.WriteCloser,
 	structured *StructuredLogger,
 	async *AsyncHandler,
+	asyncFileW, asyncConsoleW *asyncWriter,
 ) *LogManager {
 	return &LogManager{
-		config:       cfg,
-		infoLog:      info,
-		warnLog:      warn,
-		errorLog:     errL,
-		debugLog:     debug,
-		logFile:      logFile,
-		structured:   structured,
-		asyncHandler: async,
-		sessions:     make(map[string]*SessionLoggers),
+		config:             cfg,
+		infoLog:            info,
+		warnLog:            warn,
+		errorLog:           errL,
+		debugLog:           debug,
+		logFile:            logFile,
+		structured:         structured,
+		asyncHandler:       async,
+		asyncFileWriter:    asyncFileW,
+		asyncConsoleWriter: asyncConsoleW,
+		sessions:           make(map[string]*SessionLoggers),
 	}
 }
 
@@ -104,8 +110,18 @@ func (m *LogManager) CloseSession(id string) {
 	}
 }
 
-// Close flushes and closes the global log file and all session log files.
+// Close drains async writers, flushes the slog handler, and closes all log files.
+// Drain order matters: async writers must be drained before the underlying file is
+// closed, otherwise buffered entries are lost.
 func (m *LogManager) Close() {
+	// Drain stdlib log async writers first — they write to the underlying file.
+	if m.asyncConsoleWriter != nil {
+		_ = m.asyncConsoleWriter.Close()
+	}
+	if m.asyncFileWriter != nil {
+		_ = m.asyncFileWriter.Close()
+	}
+	// Flush the slog async handler after the stdlib writers are drained.
 	if m.asyncHandler != nil {
 		_ = m.asyncHandler.Flush(context.Background())
 	}

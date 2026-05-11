@@ -116,5 +116,6 @@ func (h *TelemetryHandler) HandleTelemetry(w http.ResponseWriter, r *http.Reques
 		log.ErrorLog.Printf("[telemetry] analytics.Record: %v", err)
 	}
 
+
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -23,6 +23,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
@@ -40,6 +41,7 @@ var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
 type ReactiveQueueManager interface {
 	AddStreamClient(ctx context.Context, filters interface{}) (<-chan *sessionv1.ReviewQueueEvent, string)
 	RemoveStreamClient(clientID string)
+	OnControllerStatusChange(inst *session.Instance, newStatus detection.DetectedStatus)
 }
 
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
@@ -222,6 +224,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 			inst.SetStatusManager(s.statusManager)
 		}
 		s.wireRateLimitCallbacks(inst)
+		s.wireStatusChangeCallback(inst)
 	}
 
 	return instances, nil
@@ -706,6 +709,7 @@ func (s *SessionService) CreateSession(
 
 	// Wire rate limit event callbacks so detection/recovery fire server-level notifications.
 	s.wireRateLimitCallbacks(instance)
+	s.wireStatusChangeCallback(instance)
 
 	// Inject Claude Code HTTP hook config for remote approval from the web UI.
 	// Non-fatal: session is fully functional even without this config.
@@ -2707,6 +2711,22 @@ func (s *SessionService) LogClientEvents(
 	return connect.NewResponse(&sessionv1.LogClientEventsResponse{}), nil
 }
 
+// wireStatusChangeCallback registers a ReactiveQueueManager callback on inst so that
+// ClaudeController status transitions immediately trigger a CheckSession call, bypassing
+// the poll cycle. Safe to call before or after the controller is started.
+func (s *SessionService) wireStatusChangeCallback(inst *session.Instance) {
+	if inst == nil || s.reviewQueueSvc == nil {
+		return
+	}
+	mgr := s.reviewQueueSvc.GetReactiveQueueManager()
+	if mgr == nil {
+		return
+	}
+	inst.SetStatusChangeCallback(func(newStatus detection.DetectedStatus, _ string) {
+		mgr.OnControllerStatusChange(inst, newStatus)
+	})
+}
+
 // wireRateLimitCallbacks registers server-level callbacks on an Instance so that
 // rate-limit detection and recovery events are published to the event bus and
 // trigger desktop push notifications.
@@ -2758,7 +2778,6 @@ func (s *SessionService) wireRateLimitCallbacks(inst *session.Instance) {
 		},
 	)
 }
-
 
 // logClientEntry writes a single browser log entry to the server log.
 func logClientEntry(e *sessionv1.ClientLogEntry) {
