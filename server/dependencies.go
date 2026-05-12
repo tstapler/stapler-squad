@@ -387,6 +387,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 	// Perform heavy initialization (tmux starting, controllers, scanning) in the background
 	// so the HTTP server can bind and start immediately.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.ErrorLog.Printf("[startup] panic in background init goroutine: %v", r)
+			}
+		}()
 		// Step 6: start tmux sessions for loaded instances (non-fatal failures).
 		// Stagger starts by 200ms each to avoid a fork burst that saturates the
 		// cgroup pids.max limit when many sessions restore simultaneously.
