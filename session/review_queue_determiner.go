@@ -55,6 +55,14 @@ func NewDefaultStatusDeterminer(config ReviewQueuePollerConfig) *DefaultStatusDe
 	return &DefaultStatusDeterminer{config: config}
 }
 
+// effectiveCtx returns provided when non-empty, otherwise fallback.
+func effectiveCtx(provided, fallback string) string {
+	if provided != "" {
+		return provided
+	}
+	return fallback
+}
+
 // Determine evaluates a session's state and returns a DetectionResult.
 // It is pure: no queue mutations, no storage calls, no side effects.
 func (d *DefaultStatusDeterminer) Determine(
@@ -84,65 +92,36 @@ func (d *DefaultStatusDeterminer) Determine(
 		// idle state because they represent explicit user prompts that need attention,
 		// even if terminal activity makes the session appear "active".
 
-		// Check for approval needs (highest priority for user prompts)
-		if statusInfo.ClaudeStatus == detection.StatusNeedsApproval || statusInfo.PendingApprovals > 0 {
+		// Map controller-reported Claude status to queue action.
+		// PendingApprovals is checked alongside StatusNeedsApproval because the controller
+		// may set the count before it advances the status string.
+		switch {
+		case statusInfo.ClaudeStatus == detection.StatusNeedsApproval || statusInfo.PendingApprovals > 0:
 			reason = ReasonApprovalPending
 			priority = PriorityHigh
 			shouldAdd = true
-			if statusInfo.StatusContext != "" {
-				ctx = statusInfo.StatusContext
-			} else {
-				ctx = "Waiting for approval to proceed"
-			}
-		}
-
-		// Check for input required (explicit prompts asking for user input)
-		if statusInfo.ClaudeStatus == detection.StatusInputRequired {
+			ctx = effectiveCtx(statusInfo.StatusContext, "Waiting for approval to proceed")
+		case statusInfo.ClaudeStatus == detection.StatusInputRequired:
 			reason = ReasonInputRequired
 			priority = PriorityMedium
 			shouldAdd = true
-			if statusInfo.StatusContext != "" {
-				ctx = statusInfo.StatusContext
-			} else {
-				ctx = "Waiting for explicit user input"
-			}
-		}
-
-		// Check for errors (highest priority)
-		if statusInfo.ClaudeStatus == detection.StatusError {
+			ctx = effectiveCtx(statusInfo.StatusContext, "Waiting for explicit user input")
+		case statusInfo.ClaudeStatus == detection.StatusError:
 			reason = ReasonErrorState
 			priority = PriorityUrgent
 			shouldAdd = true
-			if statusInfo.StatusContext != "" {
-				ctx = statusInfo.StatusContext
-			} else {
-				ctx = "Error state detected"
-			}
-		}
-
-		// Check for tests failing (high priority - actionable failures)
-		if statusInfo.ClaudeStatus == detection.StatusTestsFailing {
+			ctx = effectiveCtx(statusInfo.StatusContext, "Error state detected")
+		case statusInfo.ClaudeStatus == detection.StatusTestsFailing:
 			reason = ReasonTestsFailing
 			priority = PriorityHigh
 			shouldAdd = true
-			if statusInfo.StatusContext != "" {
-				ctx = statusInfo.StatusContext
-			} else {
-				ctx = "Tests are failing"
-			}
+			ctx = effectiveCtx(statusInfo.StatusContext, "Tests are failing")
 			log.InfoLog.Printf("[ReviewQueue] Session '%s': Tests failing - %s", inst.Title, ctx)
-		}
-
-		// Check for task completion (low priority - informational, not blocking)
-		if statusInfo.ClaudeStatus == detection.StatusSuccess {
+		case statusInfo.ClaudeStatus == detection.StatusSuccess:
 			reason = ReasonTaskComplete
 			priority = PriorityLow
 			shouldAdd = true
-			if statusInfo.StatusContext != "" {
-				ctx = statusInfo.StatusContext
-			} else {
-				ctx = "Task completed successfully"
-			}
+			ctx = effectiveCtx(statusInfo.StatusContext, "Task completed successfully")
 			log.InfoLog.Printf("[ReviewQueue] Session '%s': Task completion - %s", inst.Title, ctx)
 		}
 
@@ -200,47 +179,27 @@ func (d *DefaultStatusDeterminer) Determine(
 			detectedStatus, statusContext := detector.DetectWithContext([]byte(content))
 			claudeStatus = detectedStatus
 
-			// Check for approval needs (highest priority for user prompts)
-			if detectedStatus == detection.StatusNeedsApproval {
+			// Map terminal-detected status to queue action.
+			switch detectedStatus {
+			case detection.StatusNeedsApproval:
 				reason = ReasonApprovalPending
 				priority = PriorityHigh
 				shouldAdd = true
-				if statusContext != "" {
-					ctx = statusContext
-				} else {
-					ctx = "Waiting for approval to proceed"
-				}
+				ctx = effectiveCtx(statusContext, "Waiting for approval to proceed")
 				log.InfoLog.Printf("[ReviewQueue] Session '%s': Approval needed (no controller) - %s", inst.Title, ctx)
-			}
-
-			// Check for input required (explicit prompts asking for user input)
-			if detectedStatus == detection.StatusInputRequired {
+			case detection.StatusInputRequired:
 				reason = ReasonInputRequired
 				priority = PriorityMedium
 				shouldAdd = true
-				if statusContext != "" {
-					ctx = statusContext
-				} else {
-					ctx = "Waiting for explicit user input"
-				}
+				ctx = effectiveCtx(statusContext, "Waiting for explicit user input")
 				log.InfoLog.Printf("[ReviewQueue] Session '%s': Input required (no controller) - %s", inst.Title, ctx)
-			}
-
-			// Check for errors (highest priority)
-			if detectedStatus == detection.StatusError {
+			case detection.StatusError:
 				reason = ReasonErrorState
 				priority = PriorityUrgent
 				shouldAdd = true
-				if statusContext != "" {
-					ctx = statusContext
-				} else {
-					ctx = "Error state detected"
-				}
+				ctx = effectiveCtx(statusContext, "Error state detected")
 				log.InfoLog.Printf("[ReviewQueue] Session '%s': Error detected (no controller) - %s", inst.Title, ctx)
-			}
-
-			// If actively processing, remove from queue
-			if detectedStatus == detection.StatusActive || detectedStatus == detection.StatusProcessing {
+			case detection.StatusActive, detection.StatusProcessing:
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 			}
 		}
