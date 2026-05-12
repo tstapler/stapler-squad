@@ -10,6 +10,8 @@ import {
   truncationWarning, viewer, shikiOutput, plainPre, codeMirrorEditor,
   binaryPlaceholder, binaryIcon, binaryTitle, binaryMeta,
   downloadButton, imageViewer, imagePreview,
+  pdfViewer, pdfEmbed,
+  videoViewer, videoPlayer, videoMeta,
 } from "./FileContentViewer.css";
 
 // Language detection map: file extension → Shiki/CodeMirror language ID.
@@ -340,6 +342,15 @@ const IMAGE_CONTENT_TYPES = new Set([
   "image/bmp",
 ]);
 
+const PDF_CONTENT_TYPES = new Set(["application/pdf"]);
+
+const VIDEO_CONTENT_TYPES = new Set([
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/ogg",
+]);
+
 // ---- Main component ----
 
 interface FileContentViewerProps {
@@ -401,6 +412,51 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
             alt={filePath}
             className={imagePreview}
           />
+        </div>
+      </div>
+    );
+  }
+
+  const isPdf = data.isBinary && PDF_CONTENT_TYPES.has(data.contentType ?? "");
+  if (isPdf) {
+    return (
+      <div className={container}>
+        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <div className={pdfViewer}>
+          <embed
+            src={`${rawUrl}#view=FitH&navpanes=0`}
+            type="application/pdf"
+            className={pdfEmbed}
+            title={filePath}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const isVideo = data.isBinary && VIDEO_CONTENT_TYPES.has(data.contentType ?? "");
+  if (isVideo) {
+    const sizeKb = Number(data.size) / 1024;
+    const sizeLabel = sizeKb >= 1024
+      ? `${(sizeKb / 1024).toFixed(1)} MB`
+      : `${sizeKb.toFixed(1)} KB`;
+
+    return (
+      <div className={container}>
+        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <div className={videoViewer}>
+          <video
+            src={rawUrl}
+            controls
+            preload="metadata"
+            className={videoPlayer}
+          >
+            Your browser does not support the video element.
+          </video>
+          <p className={videoMeta}>
+            {filePath.split("/").pop()} · {sizeLabel}
+            {data.contentType ? ` · ${data.contentType}` : ""}
+          </p>
         </div>
       </div>
     );

@@ -48,6 +48,17 @@ var hardSkipDirs = map[string]bool{
 	"build":        true,
 }
 
+// videoMIMEOverrides maps video file extensions to their canonical MIME types.
+// mime.TypeByExtension reads /etc/mime.types which may be absent on minimal Linux installs,
+// and .ogg returns "audio/ogg" rather than "video/ogg". Chrome rejects application/octet-stream
+// for <video> sources, so explicit overrides are required.
+var videoMIMEOverrides = map[string]string{
+	".mp4":  "video/mp4",
+	".webm": "video/webm",
+	".mov":  "video/quicktime",
+	".ogg":  "video/ogg",
+}
+
 // knownTextExtensions is the allowlist for extensions we know are always text.
 // Files with these extensions skip the MIME and null-byte binary checks.
 var knownTextExtensions = map[string]bool{
@@ -724,8 +735,13 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enforce same 10 MB hard limit used by GetFileContent.
-	if info.Size() > maxFileSize {
+	ext := strings.ToLower(filepath.Ext(absPath))
+
+	// PDF and video are streamed by http.ServeContent without buffering — no size cap.
+	// All other binary types retain the 10 MB limit (same as GetFileContent).
+	isPDF := ext == ".pdf"
+	isVideo := videoMIMEOverrides[ext] != ""
+	if !isPDF && !isVideo && info.Size() > maxFileSize {
 		http.Error(w, "file too large", http.StatusRequestEntityTooLarge)
 		return
 	}
@@ -737,8 +753,11 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = f.Close() }()
 
-	// Determine content type: try extension first, fall back to sniffing.
-	contentType := mime.TypeByExtension(filepath.Ext(absPath))
+	// Determine content type: explicit video override → mime.TypeByExtension → sniff fallback.
+	contentType := videoMIMEOverrides[ext]
+	if contentType == "" {
+		contentType = mime.TypeByExtension(ext)
+	}
 	if contentType == "" {
 		buf := make([]byte, 512)
 		n, _ := f.Read(buf)
@@ -754,6 +773,13 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 	// Sandbox SVG to prevent XSS via embedded scripts.
 	if strings.Contains(contentType, "svg") {
 		w.Header().Set("Content-Security-Policy", "sandbox")
+	}
+
+	// PDF: prevent MIME-sniffing; do NOT apply CSP sandbox (it breaks Chrome's PDFium renderer).
+	if isPDF {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Content-Disposition",
+			fmt.Sprintf(`inline; filename="%s"`, filepath.Base(absPath)))
 	}
 
 	if download {
