@@ -583,6 +583,9 @@ export function FileTree({
       const tree = treeRef.current;
       if (!tree) return;
 
+      // Don't intercept modified shortcuts (Ctrl+G, Cmd+K, Alt+j, etc.)
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
       const focusedNode = tree.focusedNode;
       const visible = tree.visibleNodes;
       if (!visible || visible.length === 0) return;

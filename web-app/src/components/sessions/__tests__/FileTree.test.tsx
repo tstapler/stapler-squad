@@ -27,34 +27,57 @@ let capturedChildren:
   | ((props: { node: MockNodeApi; style: React.CSSProperties; dragHandle?: unknown }) => React.ReactNode)
   | undefined;
 let capturedData: TreeNode[] = [];
+// Captured ref so keyboard tests can inject a mock TreeApi.
+let capturedTreeRef: React.MutableRefObject<MockTreeApi | undefined> | null = null;
 
 interface MockNodeApi {
   id: string;
   data: TreeNode;
   isOpen: boolean;
+  isFocused: boolean;
   level: number;
+  parent: { isRoot: boolean; id: string } | null;
   toggle: jest.Mock;
   activate: jest.Mock;
 }
 
-jest.mock("react-arborist", () => ({
-  Tree: jest.fn(
-    (props: {
-      data: TreeNode[];
-      onToggle?: (id: string) => void;
-      onActivate?: (node: unknown) => void;
-      children: (props: { node: MockNodeApi; style: React.CSSProperties; dragHandle?: unknown }) => React.ReactNode;
-      idAccessor?: (node: TreeNode) => string;
-      childrenAccessor?: (node: TreeNode) => TreeNode[] | null;
-      ref?: unknown;
-    }) => {
+/** Minimal mock of TreeApi methods used by handleTreeKeyDown. */
+interface MockTreeApi {
+  focus: jest.Mock;
+  open: jest.Mock;
+  close: jest.Mock;
+  visibleNodes: MockNodeApi[];
+  focusedNode: MockNodeApi | null;
+}
+
+jest.mock("react-arborist", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const React = require("react");
+  const MockTree = React.forwardRef(
+    (
+      props: {
+        data: TreeNode[];
+        onToggle?: (id: string) => void;
+        onActivate?: (node: unknown) => void;
+        children: (props: { node: MockNodeApi; style: React.CSSProperties; dragHandle?: unknown }) => React.ReactNode;
+        idAccessor?: (node: TreeNode) => string;
+        childrenAccessor?: (node: TreeNode) => TreeNode[] | null;
+      },
+      ref: React.Ref<unknown>
+    ) => {
       capturedOnToggle = props.onToggle;
       capturedChildren = props.children;
       capturedData = props.data;
-      return <div data-testid="mock-tree" />;
+      // Expose the ref so keyboard tests can inject a mock TreeApi.
+      if (ref && typeof ref === "object" && "current" in ref) {
+        capturedTreeRef = ref as React.MutableRefObject<MockTreeApi | undefined>;
+      }
+      return React.createElement("div", { "data-testid": "mock-tree" });
     }
-  ),
-}));
+  );
+  MockTree.displayName = "MockTree";
+  return { Tree: MockTree };
+});
 
 const mockFetchDirectoryFiles = jest.fn();
 const mockSearchFiles = jest.fn();
@@ -103,9 +126,29 @@ function makeMockNode(data: TreeNode, overrides: Partial<MockNodeApi> = {}): Moc
     id: data.id,
     data,
     isOpen: false,
+    isFocused: false,
     level: 0,
+    parent: null,
     toggle: jest.fn(),
     activate: jest.fn(),
+    ...overrides,
+  };
+}
+
+/** Build a minimal mock TreeApi and inject it into the captured ref. */
+function injectMockTreeApi(api: MockTreeApi): void {
+  if (!capturedTreeRef) throw new Error("capturedTreeRef not set — render FileTree first");
+  capturedTreeRef.current = api as unknown as (typeof capturedTreeRef)["current"];
+}
+
+/** Build a default MockTreeApi with no focused node and empty visible list. */
+function makeMockTreeApi(overrides: Partial<MockTreeApi> = {}): MockTreeApi {
+  return {
+    focus: jest.fn(),
+    open: jest.fn(),
+    close: jest.fn(),
+    visibleNodes: [],
+    focusedNode: null,
     ...overrides,
   };
 }
@@ -445,5 +488,147 @@ describe("FileTree – NodeRenderer click behavior", () => {
 
     expect(mockNode.toggle).toHaveBeenCalledTimes(1);
     expect(mockNode.activate).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FileTree – keyboard navigation
+// ---------------------------------------------------------------------------
+
+describe("FileTree – keyboard navigation", () => {
+  /**
+   * Render a loaded FileTree, wait for the container div (with onKeyDown),
+   * inject a mock TreeApi, and return a helper to fire key events.
+   */
+  async function setupKeyboard(treeApi: MockTreeApi) {
+    mockFetchDirectoryFiles.mockResolvedValue(
+      makeFileResponse([{ path: "a.go", isDir: false }])
+    );
+
+    const { container } = render(<FileTree {...defaultProps} />);
+
+    // Wait for the tree to render (root loading completes).
+    await waitFor(() => expect(capturedTreeRef).not.toBeNull());
+
+    injectMockTreeApi(treeApi);
+
+    // The container div has tabIndex=0 and onKeyDown.
+    const div = container.querySelector("[tabindex='0']") as HTMLElement;
+    expect(div).not.toBeNull();
+
+    function fireKey(key: string, modifiers: Partial<KeyboardEventInit> = {}) {
+      fireEvent.keyDown(div, { key, ...modifiers });
+    }
+
+    return { fireKey };
+  }
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    capturedOnToggle = undefined;
+    capturedChildren = undefined;
+    capturedData = [];
+    capturedTreeRef = null;
+  });
+
+  it("j key moves focus to next visible node", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB],
+      focusedNode: nodeA,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("j");
+
+    expect(api.focus).toHaveBeenCalledWith(nodeB.id);
+  });
+
+  it("k key moves focus to previous visible node", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB],
+      focusedNode: nodeB,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("k");
+
+    expect(api.focus).toHaveBeenCalledWith(nodeA.id);
+  });
+
+  it("l key on directory opens it", async () => {
+    const dirData = makeFileNode("src", true, []);
+    const dirNode = makeMockNode(dirData);
+    const api = makeMockTreeApi({
+      visibleNodes: [dirNode],
+      focusedNode: dirNode,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("l");
+
+    expect(api.open).toHaveBeenCalledWith(dirNode.id);
+    expect(dirNode.activate).not.toHaveBeenCalled();
+  });
+
+  it("l key on file activates it", async () => {
+    const fileData = makeFileNode("main.go", false);
+    const fileNode = makeMockNode(fileData);
+    const api = makeMockTreeApi({
+      visibleNodes: [fileNode],
+      focusedNode: fileNode,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("l");
+
+    expect(fileNode.activate).toHaveBeenCalledTimes(1);
+    expect(api.open).not.toHaveBeenCalled();
+  });
+
+  it("h key collapses open directory", async () => {
+    const dirData = makeFileNode("src", true, []);
+    const dirNode = makeMockNode(dirData, { isOpen: true });
+    const api = makeMockTreeApi({
+      visibleNodes: [dirNode],
+      focusedNode: dirNode,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("h");
+
+    expect(api.close).toHaveBeenCalledWith(dirNode.id);
+  });
+
+  it("G key jumps to last visible node", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const nodeC = makeMockNode(makeFileNode("c.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB, nodeC],
+      focusedNode: nodeA,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("G");
+
+    expect(api.focus).toHaveBeenCalledWith(nodeC.id);
+  });
+
+  it("modifier key (Ctrl+j) does not move focus", async () => {
+    const nodeA = makeMockNode(makeFileNode("a.go", false));
+    const nodeB = makeMockNode(makeFileNode("b.go", false));
+    const api = makeMockTreeApi({
+      visibleNodes: [nodeA, nodeB],
+      focusedNode: nodeA,
+    });
+
+    const { fireKey } = await setupKeyboard(api);
+    fireKey("j", { ctrlKey: true });
+
+    expect(api.focus).not.toHaveBeenCalled();
   });
 });
