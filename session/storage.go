@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -142,6 +143,25 @@ type ClaudeSessionData struct {
 	LastAttached     time.Time         `json:"last_attached,omitempty"`    // When this session was last used
 	Settings         ClaudeSettings    `json:"settings,omitempty"`         // User preferences for Claude Code
 	Metadata         map[string]string `json:"metadata,omitempty"`         // Additional session metadata
+}
+
+// UnmarshalJSON keeps backward compatibility with persisted state written
+// before SquadSessionID was renamed from ConversationID. The legacy
+// "conversation_id" key is read as a fallback when "squad_session_id" is
+// absent, so existing JSON state files continue to hydrate the field on load.
+func (c *ClaudeSessionData) UnmarshalJSON(data []byte) error {
+	type alias ClaudeSessionData
+	aux := struct {
+		*alias
+		LegacyConversationID string `json:"conversation_id,omitempty"`
+	}{alias: (*alias)(c)}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	if c.SquadSessionID == "" && aux.LegacyConversationID != "" {
+		c.SquadSessionID = aux.LegacyConversationID
+	}
+	return nil
 }
 
 // ClaudeSettings contains user preferences for Claude Code integration
