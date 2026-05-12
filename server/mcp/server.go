@@ -4,7 +4,6 @@ package mcp
 
 import (
 	"context"
-	"net/http"
 	"os"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
@@ -37,17 +36,6 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store})
 	}
 	return s
-}
-
-// sessionUUIDMiddleware is an HTTP middleware that reads the X-Stapler-Session-UUID
-// header and injects the UUID into the request context via WithSessionUUID.
-func sessionUUIDMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
-			r = r.WithContext(WithSessionUUID(r.Context(), uuid))
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // NewHTTPHandler returns an http.Handler that serves the MCP protocol over
