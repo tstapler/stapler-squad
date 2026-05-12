@@ -946,23 +946,23 @@ func buildTriagePrompt(item *session.BacklogItemData, artifactRelPath, slug stri
 	var sb strings.Builder
 
 	sb.WriteString("You are a senior software architect performing pre-implementation triage.\n\n")
-	sb.WriteString(fmt.Sprintf("# Backlog Item: %s\n\n", item.Title))
+	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
 	if item.Description != "" {
-		sb.WriteString(fmt.Sprintf("## Description\n%s\n\n", item.Description))
+		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
 	}
 	if item.AcceptanceCriteria != "" {
 		criteria, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
 		if len(criteria) > 0 {
 			sb.WriteString("## Acceptance Criteria\n")
 			for _, c := range criteria {
-				sb.WriteString(fmt.Sprintf("%d. %s\n", c.Index, c.Text))
+				fmt.Fprintf(&sb, "%d. %s\n", c.Index, c.Text)
 			}
 			sb.WriteString("\n")
 		}
 	}
 
 	researchDir := artifactRelPath + "/research"
-	sb.WriteString(fmt.Sprintf(`## Your Task
+	fmt.Fprintf(&sb, `## Your Task
 
 Perform pre-implementation triage for this backlog item. Work in parallel:
 
@@ -992,7 +992,7 @@ After all files are written, call the update_backlog_item MCP tool:
 
 Do not modify any source code. Only write planning documents.
 `, researchDir, researchDir, researchDir, researchDir,
-		artifactRelPath, artifactRelPath, artifactRelPath))
+		artifactRelPath, artifactRelPath, artifactRelPath)
 
 	_ = slug // used in title, kept for clarity
 	return sb.String()

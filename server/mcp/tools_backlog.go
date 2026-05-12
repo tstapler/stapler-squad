@@ -84,8 +84,8 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 
 	// Build human-readable text output.
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# %s\n", session.SanitizeForAgentContext(item.Title, 200)))
-	sb.WriteString(fmt.Sprintf("Priority: %d | Status: %s\n\n", item.Priority, item.Status))
+	fmt.Fprintf(&sb, "# %s\n", session.SanitizeForAgentContext(item.Title, 200))
+	fmt.Fprintf(&sb, "Priority: %d | Status: %s\n\n", item.Priority, item.Status)
 
 	// Acceptance criteria checklist.
 	criteria, parseErr := session.ParseAcCriteria(item.AcceptanceCriteria)
@@ -101,7 +101,7 @@ func (h *backlogHandlers) getBacklogItem(ctx context.Context, req mcpgo.CallTool
 			default:
 				marker = "[ ]"
 			}
-			sb.WriteString(fmt.Sprintf("%d. %s %s\n", i+1, marker, session.SanitizeForAgentContext(c.Text, 500)))
+			fmt.Fprintf(&sb, "%d. %s %s\n", i+1, marker, session.SanitizeForAgentContext(c.Text, 500))
 		}
 		sb.WriteString("\n")
 	}

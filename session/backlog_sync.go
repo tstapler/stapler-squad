@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -189,12 +190,12 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 
 		// Check if an item with this external_id already exists.
 		existing, lookupErr := er.GetBacklogItemByExternalID(ctx, extItem.ExternalID)
-		if lookupErr != nil && lookupErr.Error() != ErrNotFound.Error() {
+		if lookupErr != nil && !errors.Is(lookupErr, ErrNotFound) {
 			log.ErrorLog.Printf("[SyncLoop] GetBacklogItemByExternalID(%s) error: %v", extItem.ExternalID, lookupErr)
 			continue
 		}
 
-		if existing == nil {
+		if errors.Is(lookupErr, ErrNotFound) || existing == nil {
 			// New item — create it.
 			if _, createErr := sl.storage.CreateBacklogItem(ctx, data); createErr != nil {
 				log.ErrorLog.Printf("[SyncLoop] CreateBacklogItem external_id=%s error: %v", extItem.ExternalID, createErr)

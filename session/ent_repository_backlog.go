@@ -388,7 +388,7 @@ func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, external
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
-			return nil, nil
+			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("failed to query backlog item by external_id %q: %w", externalID, err)
 	}

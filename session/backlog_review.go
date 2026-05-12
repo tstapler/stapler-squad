@@ -95,7 +95,7 @@ func BuildReviewPrompt(item *ent.BacklogItem, acSnapshot []AcCriterion, diff str
 // GetGitDiff returns the diff of changes in worktreePath relative to baseSHA
 // (or HEAD~1 if baseSHA is empty). If the diff exceeds maxDiffSize bytes it is
 // truncated and truncated=true is returned.
-func GetGitDiff(_ context.Context, worktreePath string, baseSHA string) (diff string, truncated bool, err error) {
+func GetGitDiff(ctx context.Context, worktreePath string, baseSHA string) (diff string, truncated bool, err error) {
 	var rangeArg string
 	if baseSHA == "" {
 		rangeArg = "HEAD~1..HEAD"
@@ -103,7 +103,7 @@ func GetGitDiff(_ context.Context, worktreePath string, baseSHA string) (diff st
 		rangeArg = baseSHA + "..HEAD"
 	}
 
-	cmd := exec.Command("git", "diff", rangeArg)
+	cmd := exec.CommandContext(ctx, "git", "diff", rangeArg)
 	cmd.Dir = worktreePath
 	out, runErr := cmd.Output()
 	if runErr != nil {

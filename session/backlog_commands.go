@@ -68,8 +68,8 @@ func WriteSlashCommands(item *ent.BacklogItem, worktreePath string) error {
 	helpSb.WriteString("# Available Backlog Commands\n\n")
 	helpSb.WriteString("- `/backlog/status` — Show current item status and checklist\n")
 	for _, c := range criteria {
-		helpSb.WriteString(fmt.Sprintf("- `/backlog/done-%d` — Mark criterion %d as complete\n", c.Index, c.Index))
-		helpSb.WriteString(fmt.Sprintf("- `/backlog/fail-%d` — Mark criterion %d as failed\n", c.Index, c.Index))
+		fmt.Fprintf(&helpSb, "- `/backlog/done-%d` — Mark criterion %d as complete\n", c.Index, c.Index)
+		fmt.Fprintf(&helpSb, "- `/backlog/fail-%d` — Mark criterion %d as failed\n", c.Index, c.Index)
 	}
 	helpSb.WriteString("- `/backlog/review` — Submit for review with a summary\n")
 	if err := writeFile(filepath.Join(cmdDir, "help.md"), helpSb.String()); err != nil {

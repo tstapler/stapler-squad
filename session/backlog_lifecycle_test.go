@@ -359,5 +359,5 @@ type mockReviewGateSpawner struct {
 func (m *mockReviewGateSpawner) SpawnReviewSession(ctx context.Context, item *ent.BacklogItem, itemSessionID string, prompt string) (*Instance, error) {
 	m.spawnCalled = true
 	m.lastItem = item
-	return nil, nil
+	return &Instance{}, nil
 }
