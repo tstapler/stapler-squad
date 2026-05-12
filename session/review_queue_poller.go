@@ -604,11 +604,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		return
 	}
 
-	// Sessions with an active controller get status updates via events; skip fast-path poll.
-	if inst.GetController() != nil {
-		return
-	}
-
 	// Get comprehensive status
 	statusInfo := rqp.statusManager.GetStatus(inst)
 
@@ -827,11 +822,8 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 			}
 		}
 	} else {
-		// No controller - but we can still detect status from terminal content.
-
-		// IMPORTANT: Check terminal content for approval/input prompts.
-		// 'content' was already fetched at STEP 1 via getContent(); for no-controller
-		// sessions getContent() always calls Preview(), so no extra subprocess needed.
+		// No active controller (either none wired or not yet started) — detect status
+		// from terminal content captured at STEP 1.
 		if content != "" {
 			// Detect status from terminal content using the shared status detector
 			detectedStatus, statusContext := rqp.statusDetector.DetectWithContext([]byte(content))

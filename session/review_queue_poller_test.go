@@ -567,43 +567,89 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 	}
 }
 
-// TestReviewQueuePoller_ControllerSessions_SkipFastPath verifies that sessions with an
-// active ClaudeController are skipped by the fast-path poller. When a controller is
-// wired into an instance, checkSession must return before calling statusManager.GetStatus
-// so that controller-managed sessions are not double-polled.
+// TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue verifies
+// that sessions with GetController() != nil (controller wired but not yet started) are
+// evaluated by the poller rather than skipped. When approval-prompt content is present in
+// the terminal cache the session must appear in the review queue.
 //
-// Observable proxy: a started, Running instance without a controller would be added to the
-// review queue (basic idle threshold elapsed since UpdatedAt zero value). With a controller
-// wired in, checkSession returns immediately and the queue stays empty.
-func TestReviewQueuePoller_ControllerSessions_SkipFastPath(t *testing.T) {
+// This is the regression test for the bug where the early-return guard prevented any
+// queue update for sessions with a non-nil controller, regardless of their actual state.
+func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue(t *testing.T) {
 	poller := newSimpleTestPoller()
 
-	// Build a started, Running instance — would normally reach statusManager.GetStatus.
 	inst := &Instance{
 		Title:  "controller-session",
 		UUID:   "uuid-ctrl",
 		Status: Running,
 	}
 	inst.started = true
-	// UpdatedAt zero value means idleDuration > basicIdleThreshold (5s), so without a
-	// controller the poller would add this instance to the review queue.
 
-	// Wire a minimal ClaudeController so GetController() returns non-nil.
-	// We only need the controller pointer to be non-nil; we do not start it.
+	// Wire a controller that is NOT started (ctx == nil → IsStarted() = false).
+	// GetController() returns non-nil, but IsControllerActive will be false so the
+	// no-controller terminal-content path runs.
 	bareController := &ClaudeController{
 		sessionName: inst.Title,
 		instance:    inst,
 	}
 	inst.controllerManager.SetController(bareController)
 
-	poller.AddInstance(inst)
+	// Pre-populate the content cache with an approval prompt so the no-controller
+	// detection path finds it without needing a live tmux session.
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	poller.cacheMu.Lock()
+	poller.cachedContent[inst.Title] = approvalContent
+	poller.lastPreviewTime[inst.Title] = time.Now()
+	poller.cacheMu.Unlock()
 
-	// checkSession should return at the "active controller → skip" guard.
+	poller.AddInstance(inst)
 	poller.checkSession(inst, nil)
 
-	// The queue must remain empty — no item was added because the fast path was skipped.
-	if _, exists := poller.queue.Get(inst.Title); exists {
-		t.Error("checkSession should not add a controller-managed session to the review queue (fast-path skip)")
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with approval prompt must be added to the review queue")
+	}
+	if item.Reason != ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	}
+}
+
+// TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue verifies that
+// sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
+// added to the review queue via the controller-based detection path (lines 696-828).
+func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	// Use a mock InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
+	// without requiring a real tmux session.
+	approvalContent := "Yes, allow reading /home/user/file.go\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{
+		Title:  "active-controller-session",
+		UUID:   "uuid-active",
+		Status: Running,
+	}
+	inst.started = true
+	ctrl.sessionName = inst.Title
+
+	// Mark the controller as started by setting a non-nil context.
+	ctrl.ctx = t.Context()
+
+	inst.controllerManager.SetController(ctrl)
+	poller.statusManager.RegisterController(inst.Title, ctrl)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if item.Reason != ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	}
+	if item.Priority != PriorityHigh {
+		t.Errorf("expected priority %s, got %s", PriorityHigh, item.Priority)
 	}
 }
 

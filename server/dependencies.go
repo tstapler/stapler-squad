@@ -137,8 +137,10 @@ func scanSessionsOnStartup(
 				added++
 				log.InfoLog.Printf("[StartupScan] Session '%s': detected %s via controller (status=%s)",
 					inst.Title, reason, statusInfo.ClaudeStatus.String())
+				continue
 			}
-			continue
+			// Controller returned StatusUnknown (not yet initialized) — fall through to
+			// terminal content scan so startup approval prompts are never silently dropped.
 		}
 
 		// Fallback: terminal content detection
