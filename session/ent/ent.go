@@ -13,13 +13,18 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/errorevent"
+	"github.com/tstapler/stapler-squad/session/ent/itemsession"
+	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -83,13 +88,18 @@ func checkColumn(t, c string) error {
 	initCheck.Do(func() {
 		columnCheck = sql.NewColumnCheck(map[string]func(string) bool{
 			approvalrule.Table:            approvalrule.ValidColumn,
+			backlogitem.Table:             backlogitem.ValidColumn,
 			classificationanalytics.Table: classificationanalytics.ValidColumn,
 			claudemetadata.Table:          claudemetadata.ValidColumn,
 			claudesession.Table:           claudesession.ValidColumn,
 			diffstats.Table:               diffstats.ValidColumn,
 			errorevent.Table:              errorevent.ValidColumn,
+			itemsession.Table:             itemsession.ValidColumn,
+			itemsource.Table:              itemsource.ValidColumn,
 			project.Table:                 project.ValidColumn,
+			reviewverdict.Table:           reviewverdict.ValidColumn,
 			session.Table:                 session.ValidColumn,
+			sourcesyncevent.Table:         sourcesyncevent.ValidColumn,
 			tag.Table:                     tag.ValidColumn,
 			worktree.Table:                worktree.ValidColumn,
 		})

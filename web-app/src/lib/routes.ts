@@ -16,6 +16,8 @@ export const routes = {
   settings: "/settings",
   settingsDefaults: "/settings/defaults",
   settingsUnfinished: "/settings/unfinished",
+  backlog: "/backlog",
+  backlogBoard: "/backlog/board",
   login: "/login",
   account: "/account",
   sessionDetail: (id: string) => `/?session=${id}`,

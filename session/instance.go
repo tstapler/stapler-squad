@@ -196,6 +196,11 @@ type Instance struct {
 	// settings-file injection is needed.
 	MCPServerURL string `json:"mcp_server_url,omitempty"`
 
+	// AppendSystemPrompt, when non-empty and the program is claude, passes
+	// --append-system-prompt to inject extra instructions into the system prompt
+	// without modifying any file on disk. Survives context compaction.
+	AppendSystemPrompt string `json:"append_system_prompt,omitempty"`
+
 	// LaunchCommand is the full command passed to tmux on session start, including
 	// any injected flags (--resume, --mcp-config, -y, initial prompt). Set once on
 	// first start and updated on restart. Empty for external (mux-discovered) sessions.
@@ -352,6 +357,11 @@ type InstanceOptions struct {
 	// session can call back into stapler-squad without any file injection.
 	MCPServerURL string
 
+	// AppendSystemPrompt, when non-empty and the program is claude, passes
+	// --append-system-prompt so extra instructions are injected into the system
+	// prompt without touching any file on disk.
+	AppendSystemPrompt string
+
 	// CreateIfMissing: when SessionTypeDirectory, create the directory and run git init
 	// if the path does not exist. Only set when the user has confirmed the action.
 	CreateIfMissing bool
@@ -430,9 +440,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		GitHubSourceRef: opts.GitHubSourceRef,
 		ClonedRepoPath:  opts.ClonedRepoPath,
 		// One-shot mode and project
-		OneShot:      opts.OneShot,
-		ProjectID:    opts.ProjectID,
-		MCPServerURL: opts.MCPServerURL,
+		OneShot:            opts.OneShot,
+		ProjectID:          opts.ProjectID,
+		MCPServerURL:       opts.MCPServerURL,
+		AppendSystemPrompt: opts.AppendSystemPrompt,
 		// Directory creation on missing path (R2 confirmation flow)
 		CreateIfMissing: opts.CreateIfMissing,
 	}

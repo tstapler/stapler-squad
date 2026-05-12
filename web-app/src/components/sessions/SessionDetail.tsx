@@ -27,6 +27,8 @@ interface SessionDetailProps {
   onDismissFromQueue?: () => void;
   queuePosition?: number;
   queueTotal?: number;
+  /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
+  backlogItemId?: string;
 }
 
 export function SessionDetail({
@@ -43,6 +45,7 @@ export function SessionDetail({
   onDismissFromQueue,
   queuePosition,
   queueTotal,
+  backlogItemId,
 }: SessionDetailProps) {
   const actions = useSessionActions(session.id);
   const allSessions = useAppSelector(selectAllSessions);
@@ -71,6 +74,7 @@ export function SessionDetail({
         onDismissFromQueue={onDismissFromQueue}
         queuePosition={queuePosition}
         queueTotal={queueTotal}
+        backlogItemId={backlogItemId}
       />
     </SessionVcsProvider>
   );

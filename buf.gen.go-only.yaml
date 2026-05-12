@@ -1,0 +1,16 @@
+version: v2
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/tstapler/stapler-squad/gen/proto/go
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: gen/proto/go
+    opt:
+      - paths=source_relative
+
+  - remote: buf.build/connectrpc/go
+    out: gen/proto/go
+    opt:
+      - paths=source_relative

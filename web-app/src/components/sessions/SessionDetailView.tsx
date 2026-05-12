@@ -15,6 +15,7 @@ import { getProgramDisplay, isKnownProgram, PROGRAMS } from "@/lib/constants/pro
 import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Modal";
 import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
+import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import * as styles from "./SessionDetail.css";
 import type { SessionDetailTab } from "./SessionDetail";
 
@@ -48,6 +49,8 @@ export interface SessionDetailViewProps {
   onDismissFromQueue?: () => void;
   queuePosition?: number;
   queueTotal?: number;
+  /** Backlog item ID to display in right-side panel. If provided, shows BacklogItemPanel. */
+  backlogItemId?: string;
 }
 
 function getStatusLabel(status: SessionStatus): string {
@@ -93,6 +96,7 @@ export function SessionDetailView({
   onDismissFromQueue,
   queuePosition,
   queueTotal,
+  backlogItemId,
 }: SessionDetailViewProps) {
   const [activeTab, setActiveTab] = useState<SessionDetailTab>(initialTab);
 
@@ -440,57 +444,69 @@ export function SessionDetailView({
           role="tabpanel"
           aria-labelledby="tab-terminal"
           aria-hidden={activeTab !== "terminal"}
-          style={{ display: activeTab === "terminal" ? undefined : 'none' }}
+          style={{ display: activeTab === "terminal" ? "flex" : "none", flexDirection: "row" }}
         >
-          {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
-          {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
-            <div className={styles.noTerminalPlaceholder}>
-              <span className={styles.noTerminalIcon}>⛓️</span>
-              <p className={styles.noTerminalText}>Terminal not available</p>
-              <p className={styles.noTerminalSubtext}>
-                This session is running in an external terminal. Use Approve / Deny above to respond to pending requests.
-              </p>
-            </div>
-          ) : session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
-            <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-              {pooledMuxPaths.map(poolPath => (
-                <div
-                  key={poolPath}
-                  style={{
-                    ...POOL_PANE_BASE,
-                    visibility: poolPath === session.externalMetadata?.muxSocketPath ? "visible" : "hidden",
-                    pointerEvents: poolPath === session.externalMetadata?.muxSocketPath ? "auto" : "none",
-                  }}
-                >
-                  <TerminalOutput
-                    sessionId={poolPath}
-                    baseUrl={getApiBaseUrl()}
-                    isExternal={true}
-                    tmuxSessionName={session.externalMetadata?.tmuxSessionName}
-                    isVisible={poolPath === session.externalMetadata?.muxSocketPath}
-                  />
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
-              {pooledSessionIds.map(poolId => (
-                <div
-                  key={poolId}
-                  style={{
-                    ...POOL_PANE_BASE,
-                    visibility: poolId === session.id ? "visible" : "hidden",
-                    pointerEvents: poolId === session.id ? "auto" : "none",
-                  }}
-                >
-                  <TerminalOutput
-                    sessionId={poolId}
-                    baseUrl={getApiBaseUrl()}
-                    isVisible={poolId === session.id}
-                  />
-                </div>
-              ))}
-            </div>
+          {/* Terminal content wrapper with flex: 1 to allow BacklogItemPanel to sit beside it */}
+          <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+            {/* ApprovalPanel removed — approvals now handled in the global ApprovalDrawer in Header */}
+            {session.instanceType === InstanceType.EXTERNAL && !session.externalMetadata?.muxSocketPath ? (
+              <div className={styles.noTerminalPlaceholder}>
+                <span className={styles.noTerminalIcon}>⛓️</span>
+                <p className={styles.noTerminalText}>Terminal not available</p>
+                <p className={styles.noTerminalSubtext}>
+                  This session is running in an external terminal. Use Approve / Deny above to respond to pending requests.
+                </p>
+              </div>
+            ) : session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
+              <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+                {pooledMuxPaths.map(poolPath => (
+                  <div
+                    key={poolPath}
+                    style={{
+                      ...POOL_PANE_BASE,
+                      visibility: poolPath === session.externalMetadata?.muxSocketPath ? "visible" : "hidden",
+                      pointerEvents: poolPath === session.externalMetadata?.muxSocketPath ? "auto" : "none",
+                    }}
+                  >
+                    <TerminalOutput
+                      sessionId={poolPath}
+                      baseUrl={getApiBaseUrl()}
+                      isExternal={true}
+                      tmuxSessionName={session.externalMetadata?.tmuxSessionName}
+                      isVisible={poolPath === session.externalMetadata?.muxSocketPath}
+                    />
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
+                {pooledSessionIds.map(poolId => (
+                  <div
+                    key={poolId}
+                    style={{
+                      ...POOL_PANE_BASE,
+                      visibility: poolId === session.id ? "visible" : "hidden",
+                      pointerEvents: poolId === session.id ? "auto" : "none",
+                    }}
+                  >
+                    <TerminalOutput
+                      sessionId={poolId}
+                      baseUrl={getApiBaseUrl()}
+                      isVisible={poolId === session.id}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* BacklogItemPanel — collapsible right sidebar showing linked backlog item */}
+          {backlogItemId && (
+            <BacklogItemPanel
+              backlogItemId={backlogItemId}
+              sessionId={session.id}
+              isSessionActive={session.status === SessionStatus.RUNNING}
+            />
           )}
         </div>
         {activeTab === "diff" && (

@@ -16,6 +16,7 @@ export interface NavPage {
 
 export const NAV_PAGES: NavPage[] = [
   { href: routes.home,          label: "Sessions",      icon: "⊞" },
+  { href: routes.backlog,       label: "Backlog",       icon: "☰" },
   { href: routes.unfinished,    label: "Unfinished",    icon: "✎" },
   { href: routes.reviewQueue,   label: "Review Queue",  shortLabel: "Review", icon: "📋" },
   { href: routes.notifications, label: "Notifications", shortLabel: "Alerts", icon: "🔔" },

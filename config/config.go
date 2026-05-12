@@ -2,12 +2,15 @@ package config
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -252,6 +255,9 @@ type Config struct {
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
 	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
 	NewProjectBaseDir string `json:"new_project_base_dir,omitempty"`
+	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
+	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
+	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
 }
 
 // SessionDefaults is the top-level container for all session default configuration.
@@ -681,4 +687,32 @@ func (c *Config) RemoveKeyCategory(key string) {
 	if c.KeyCategories != nil {
 		delete(c.KeyCategories, key)
 	}
+}
+
+// GetOrCreateEncryptionKey returns the 32-byte AES-256-GCM key for local data encryption.
+// Generates and persists a new key on first call. Non-fatal errors during save are logged.
+func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
+	if c.MachineEncryptionKey != "" {
+		data, err := base64.StdEncoding.DecodeString(c.MachineEncryptionKey)
+		if err == nil && len(data) == 32 {
+			return data, nil
+		}
+		// If existing key is invalid, regenerate
+		log.WarningLog.Printf("[Config] existing encryption key is invalid, regenerating")
+	}
+
+	// Generate new 32-byte key
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, fmt.Errorf("generate encryption key: %w", err)
+	}
+
+	c.MachineEncryptionKey = base64.StdEncoding.EncodeToString(key)
+
+	// Persist to disk; non-fatal if it fails
+	if err := SaveConfig(c); err != nil {
+		log.WarningLog.Printf("[Config] failed to persist encryption key: %v", err)
+	}
+
+	return key, nil
 }

@@ -1,0 +1,10 @@
+{
+  "id": "use-backlog-service",
+  "type": "frontend",
+  "component": "useBacklogService",
+  "path": "web-app/src/lib/hooks/useBacklogService.ts",
+  "markerLine": 0,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-12T00:00:00Z"
+}

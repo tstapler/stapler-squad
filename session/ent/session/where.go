@@ -2070,6 +2070,29 @@ func HasProjectWith(preds ...predicate.Project) predicate.Session {
 	})
 }
 
+// HasBacklogItems applies the HasEdge predicate on the "backlog_items" edge.
+func HasBacklogItems() predicate.Session {
+	return predicate.Session(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.M2M, true, BacklogItemsTable, BacklogItemsPrimaryKey...),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasBacklogItemsWith applies the HasEdge predicate on the "backlog_items" edge with a given conditions (other predicates).
+func HasBacklogItemsWith(preds ...predicate.BacklogItem) predicate.Session {
+	return predicate.Session(func(s *sql.Selector) {
+		step := newBacklogItemsStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // And groups predicates with the AND operator between them.
 func And(predicates ...predicate.Session) predicate.Session {
 	return predicate.Session(sql.AndPredicates(predicates...))

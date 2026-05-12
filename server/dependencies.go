@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,9 @@ type ServerDependencies struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
+
+	BacklogService *services.BacklogService
+	SyncLoop       *session.SyncLoop
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -67,6 +71,8 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedScanner:       rt.UnfinishedScanner,
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
+		BacklogService:          rt.BacklogService,
+		SyncLoop:                rt.SyncLoop,
 	}
 }
 
@@ -76,6 +82,9 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 //
 // Delegates to the three-phase constructors: BuildCoreDeps -> BuildServiceDeps -> BuildRuntimeDeps.
 func BuildDependencies() (*ServerDependencies, error) {
+	// Load config early for encryption key support
+	cfg := config.LoadConfig()
+
 	// Phase 1 (core): SessionService, Storage, EventBus, ReviewQueue, ApprovalStore
 	// was: step 1 - SessionService + getter calls
 	core, err := BuildCoreDeps()
@@ -96,7 +105,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 	if err != nil {
 		log.WarningLog.Printf("BuildDependencies: failed to ensure tmux server running: %v", err)
 	}
-	rt, err := BuildRuntimeDeps(tmuxReady, svc)
+	rt, err := BuildRuntimeDeps(tmuxReady, svc, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("phase 3 (runtime): %w", err)
 	}
@@ -419,6 +428,10 @@ type RuntimeDeps struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
+
+	BacklogService *services.BacklogService
+	SyncLoop       *session.SyncLoop
+	Config         *config.Config // Used for encryption of sensitive data
 }
 
 // BuildRuntimeDeps constructs Phase 3 dependencies using Phase 2 outputs.
@@ -438,7 +451,8 @@ type RuntimeDeps struct {
 // tmux.EnsureServerRunning was called before sessions are loaded. Without this
 // ordering, DoesSessionExist() may trigger recoverFromServerFailure, which starts
 // a fresh server that considers all sessions non-existent and cold-restores them.
-func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, error) {
+// cfg may be nil; when non-nil, is used for token encryption in backlog sources.
+func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Config) (*RuntimeDeps, error) {
 	if svc == nil {
 		return nil, fmt.Errorf("BuildRuntimeDeps: ServiceDeps is nil (Phase 2 not completed)")
 	}
@@ -457,12 +471,16 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		return nil, fmt.Errorf("load instances: %w", err)
 	}
 
+	// Backlog lifecycle listener — wired per-instance below.
+	backlogLifecycleListener := session.NewBacklogLifecycleListener(storage)
+
 	// Step 5 (continued): wire dependencies to each instance
 	// inst.SetReviewQueue and inst.SetStatusManager are called per-instance in a loop;
 	// Warren is designed for named scalar setters, not loop iterations. Left unwrapped.
 	for _, inst := range instances {
 		inst.SetReviewQueue(reviewQueue)
 		inst.SetStatusManager(statusManager)
+		backlogLifecycleListener.WireToInstance(inst)
 	}
 
 	// Wire instances to pollers.
@@ -580,6 +598,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		reviewQueuePoller.AddInstance(instance)
 		svc.PRStatusPoller.AddInstance(instance)
 		historyLinker.AddInstance(instance)
+		backlogLifecycleListener.WireToInstance(instance)
 		log.InfoLog.Printf("Added external session '%s' to review queue poller, PR status poller, and history linker", instance.Title)
 	})
 	externalDiscovery.OnSessionRemoved(func(instance *session.Instance) {
@@ -672,6 +691,34 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		log.WarningLog.Printf("Could not initialize UnfinishedWork state store: %v", configErr)
 	}
 
+	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		ctx := context.Background()
+		for range ticker.C {
+			backlogLifecycleListener.ReconcileStuck(ctx)
+		}
+	}()
+
+	// Start the backlog sync loop for external item sources.
+	syncRegistry := session.NewDefaultRegistry()
+	var syncLoop *session.SyncLoop
+	if cfg != nil {
+		syncLoop = session.NewSyncLoopWithKeyProvider(storage, syncRegistry, cfg.GetOrCreateEncryptionKey)
+	} else {
+		syncLoop = session.NewSyncLoop(storage, syncRegistry)
+	}
+	go syncLoop.Start(context.Background())
+
+	// Create BacklogService with encryption support if config is available.
+	var backlogSvc *services.BacklogService
+	if cfg != nil {
+		backlogSvc = services.NewBacklogServiceWithConfig(storage, cfg)
+	} else {
+		backlogSvc = services.NewBacklogService(storage)
+	}
+
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
 		Instances:               instances,
@@ -686,5 +733,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,
+		BacklogService:          backlogSvc,
+		SyncLoop:                syncLoop,
+		Config:                  cfg,
 	}, nil
 }
