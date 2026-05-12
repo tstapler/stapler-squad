@@ -56,7 +56,7 @@ func (s *SetupManager) Init() (string, error) {
 	s.expiresAt = time.Now().Add(setupTokenTTL)
 	s.used = false
 
-	log.InfoLog.Printf("auth: setup token generated (expires in 1h)")
+	log.Info("auth: setup token generated", "expires_in", "1h")
 	return token, nil
 }
 
@@ -96,7 +96,7 @@ func (s *SetupManager) LoadFromFile(path string) error {
 		return fmt.Errorf("setup token file has empty token")
 	}
 	s.loadRecord(rec)
-	log.InfoLog.Printf("auth: setup token loaded from file (expires %s)", rec.ExpiresAt.Format(time.RFC3339))
+	log.Info("auth: setup token loaded from file", "expires_at", rec.ExpiresAt.Format(time.RFC3339))
 	return nil
 }
 
@@ -113,7 +113,7 @@ func (s *SetupManager) loadRecord(rec setupTokenRecord) {
 func (s *SetupManager) WatchFile(ctx context.Context, path string) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.WarningLog.Printf("auth: setup token watcher: %v", err)
+		log.Warn("auth: setup token watcher", "err", err)
 		return
 	}
 	defer watcher.Close()
@@ -121,7 +121,7 @@ func (s *SetupManager) WatchFile(ctx context.Context, path string) {
 	// Watch the directory so we catch file creation events (file may not exist yet).
 	dir := dirOf(path)
 	if err := watcher.Add(dir); err != nil {
-		log.WarningLog.Printf("auth: setup token watcher add dir: %v", err)
+		log.Warn("auth: setup token watcher add dir", "err", err)
 		return
 	}
 
@@ -130,11 +130,11 @@ func (s *SetupManager) WatchFile(ctx context.Context, path string) {
 		_ = watcher.Add(path)
 		// Load any token that's already on disk.
 		if loadErr := s.LoadFromFile(path); loadErr != nil {
-			log.WarningLog.Printf("auth: initial setup token load: %v", loadErr)
+			log.Warn("auth: initial setup token load", "err", loadErr)
 		}
 	}
 
-	log.InfoLog.Printf("auth: watching %s for new setup tokens", path)
+	log.Info("auth: watching for new setup tokens", "path", path)
 
 	for {
 		select {
@@ -151,7 +151,7 @@ func (s *SetupManager) WatchFile(ctx context.Context, path string) {
 				// Re-add the file on create so we catch future writes.
 				_ = watcher.Add(path)
 				if loadErr := s.LoadFromFile(path); loadErr != nil {
-					log.WarningLog.Printf("auth: reload setup token: %v", loadErr)
+					log.Warn("auth: reload setup token", "err", loadErr)
 				}
 			}
 			if event.Has(fsnotify.Rename) {
@@ -161,14 +161,14 @@ func (s *SetupManager) WatchFile(ctx context.Context, path string) {
 				// file is already present by the time we process the event.
 				_ = watcher.Add(path)
 				if loadErr := s.LoadFromFile(path); loadErr != nil {
-					log.WarningLog.Printf("auth: reload setup token during rename: %v", loadErr)
+					log.Warn("auth: reload setup token during rename", "err", loadErr)
 				}
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
 				return
 			}
-			log.WarningLog.Printf("auth: setup token watcher error: %v", err)
+			log.Warn("auth: setup token watcher error", "err", err)
 		}
 	}
 }

@@ -123,7 +123,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	migratedPath := data.Path
 	if strings.Contains(data.Path, "/~/") {
 		// Path contains unexpanded tilde - extract and expand it
-		log.WarningLog.Printf("Migrating corrupted path for instance '%s': %s", data.Title, data.Path)
+		log.Warn("migrating corrupted path for instance", "session", data.Title, "path", data.Path)
 
 		// Find the index of "/~/"
 		idx := strings.Index(data.Path, "/~/")
@@ -135,11 +135,11 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			if strings.HasPrefix(tildePath, "~/") {
 				usr, err := user.Current()
 				if err != nil {
-					log.ErrorLog.Printf("Failed to expand corrupted path for '%s': %v", data.Title, err)
+					log.Error("failed to expand corrupted path", "session", data.Title, "err", err)
 					// Fall back to original path
 				} else {
 					migratedPath = filepath.Join(usr.HomeDir, tildePath[2:])
-					log.InfoLog.Printf("Migrated path for instance '%s': %s -> %s", data.Title, data.Path, migratedPath)
+					log.Info("migrated corrupted path", "session", data.Title, "from", data.Path, "to", migratedPath)
 				}
 			}
 		}
@@ -152,7 +152,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		// Migrate existing category to tag format
 		// Support both simple ("Work") and nested ("Work/Frontend") categories
 		tags = []string{data.Category}
-		log.InfoLog.Printf("Migrating category '%s' to tags for instance '%s'", data.Category, data.Title)
+		log.Info("migrating category to tags", "category", data.Category, "session", data.Title)
 	}
 
 	instance := &Instance{
@@ -259,11 +259,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	// This populates IsWorktree, MainRepoPath, GitHubOwner, and GitHubRepo
 	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
 		if err := instance.DetectAndPopulateWorktreeInfo(); err != nil {
-			log.WarningLog.Printf("Failed to detect worktree info for '%s': %v", instance.Title, err)
+			log.Warn("failed to detect worktree info", "session", instance.Title, "err", err)
 			// Non-fatal - session can still work without this info
 		} else if instance.GitHubOwner != "" {
-			log.InfoLog.Printf("Auto-detected GitHub info for '%s': %s/%s (worktree=%v)",
-				instance.Title, instance.GitHubOwner, instance.GitHubRepo, instance.IsWorktree)
+			log.Info("auto-detected github info", "session", instance.Title, "owner", instance.GitHubOwner, "repo", instance.GitHubRepo, "worktree", instance.IsWorktree)
 		}
 	}
 
@@ -277,10 +276,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
 			// Ready → Paused and Loading → Paused are explicitly allowed for this case.
-			log.ForSession(instance.Title).Warning("Worktree directory doesn't exist at '%s', marking as paused", worktreePath)
+			log.ForSession(instance.Title).Warn("worktree directory missing, marking as paused", "path", worktreePath)
 			if err := instance.transitionTo(Paused); err != nil {
 				// If the transition is somehow invalid (e.g. already Stopped), fall back to setStatus.
-				log.ForSession(instance.Title).Warning("Could not transition to Paused via state machine (%v), using setStatus", err)
+				log.ForSession(instance.Title).Warn("could not transition to paused via state machine, using setStatus", "err", err)
 				instance.setStatus(Paused)
 			}
 		}
@@ -316,10 +315,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		// If the underlying tmux session is still alive (e.g. server crashed mid-write
 		// or exit callback fired falsely), recover it rather than leave it stuck as Stopped.
 		if instance.tmuxManager.DoesSessionExist() {
-			log.WarningLog.Printf("[FromInstanceData] Session '%s' stored as Stopped but tmux is alive — recovering to Running", instance.Title)
+			log.Warn("session stored as stopped but tmux is alive, recovering to running", "session", instance.Title)
 			instance.setStatus(Running)
 			if err := instance.Start(false); err != nil {
-				log.WarningLog.Printf("[FromInstanceData] Recovery Start failed for '%s': %v — keeping Stopped", instance.Title, err)
+				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
 				instance.setStatus(Stopped)
 				instance.started = true
 			}
@@ -334,4 +333,3 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 
 	return instance, nil
 }
-

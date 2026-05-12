@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, Suspense } from "react";
+import { usePageView } from "@/lib/analytics/usePageView";
 import { useRouter, useSearchParams } from "next/navigation";
 import { loginWithPasskey, registerPasskey } from "@/lib/auth/passkey";
 import { useAuth } from "@/lib/contexts/AuthContext";
@@ -126,6 +127,7 @@ function LoginContent() {
 }
 
 export default function LoginPage() {
+  usePageView();
   return (
     <Suspense>
       <LoginContent />

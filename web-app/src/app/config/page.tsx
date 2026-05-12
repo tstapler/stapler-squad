@@ -2,6 +2,7 @@
 // +feature: config-management settings
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { usePageView } from "@/lib/analytics/usePageView";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ClaudeConfigFile } from "@/gen/session/v1/session_pb";
 import { createClient } from "@connectrpc/connect";
@@ -52,6 +53,7 @@ interface ServerInfo {
 }
 
 export default function ConfigEditorPage() {
+  usePageView();
   const [configs, setConfigs] = useState<ClaudeConfigFile[]>([]);
   const [selectedConfig, setSelectedConfig] = useState<ClaudeConfigFile | null>(null);
   const [content, setContent] = useState("");

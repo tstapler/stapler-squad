@@ -1,4 +1,5 @@
 "use client";
+// analytics-exempt
 
 import { useState, useEffect, useCallback } from "react";
 import { getApiBaseUrl } from "@/lib/config";

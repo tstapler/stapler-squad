@@ -59,14 +59,14 @@ func DetectWithOptions(repoPath string, opts DetectOptions) (VCS, error) {
 	switch opts.Preference {
 	case PreferenceJJ:
 		if jjAvailable(absPath) {
-			log.InfoLog.Printf("[VCS] Using JJ (user preference) for %s", absPath)
+			log.Info("using VCS", "vcs", "jj", "reason", "user preference", "path", absPath)
 			return NewJJClient(absPath), nil
 		}
 		return nil, fmt.Errorf("JJ preferred but not available at %s", absPath)
 
 	case PreferenceGit:
 		if gitAvailable(absPath) {
-			log.InfoLog.Printf("[VCS] Using Git (user preference) for %s", absPath)
+			log.Info("using VCS", "vcs", "git", "reason", "user preference", "path", absPath)
 			return NewGitClient(absPath), nil
 		}
 		return nil, fmt.Errorf("git preferred but not available at %s", absPath)
@@ -74,11 +74,11 @@ func DetectWithOptions(repoPath string, opts DetectOptions) (VCS, error) {
 	default: // PreferenceAuto
 		// Auto-detect: prefer JJ if available (colocated repos work with both)
 		if jjAvailable(absPath) {
-			log.InfoLog.Printf("[VCS] Auto-detected JJ for %s", absPath)
+			log.Info("using VCS", "vcs", "jj", "reason", "auto-detected", "path", absPath)
 			return NewJJClient(absPath), nil
 		}
 		if gitAvailable(absPath) {
-			log.InfoLog.Printf("[VCS] Auto-detected Git for %s", absPath)
+			log.Info("using VCS", "vcs", "git", "reason", "auto-detected", "path", absPath)
 			return NewGitClient(absPath), nil
 		}
 		return nil, fmt.Errorf("no VCS detected at %s", absPath)

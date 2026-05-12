@@ -247,7 +247,7 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 		if spec.ToolPattern != "" {
 			re, err := regexp.Compile(spec.ToolPattern)
 			if err != nil {
-				log.WarningLog.Printf("[RulesStore] Skipping rule %q: invalid tool_pattern %q: %v", spec.ID, spec.ToolPattern, err)
+				log.Warn("[RulesStore] skipping rule: invalid tool_pattern", "id", spec.ID, "pattern", spec.ToolPattern, "err", err)
 				continue
 			}
 			r.ToolPattern = re
@@ -255,7 +255,7 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 		if spec.CommandPattern != "" {
 			re, err := regexp.Compile(spec.CommandPattern)
 			if err != nil {
-				log.WarningLog.Printf("[RulesStore] Skipping rule %q: invalid command_pattern %q: %v", spec.ID, spec.CommandPattern, err)
+				log.Warn("[RulesStore] skipping rule: invalid command_pattern", "id", spec.ID, "pattern", spec.CommandPattern, "err", err)
 				continue
 			}
 			r.CommandPattern = re
@@ -263,7 +263,7 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 		if spec.FilePattern != "" {
 			re, err := regexp.Compile(spec.FilePattern)
 			if err != nil {
-				log.WarningLog.Printf("[RulesStore] Skipping rule %q: invalid file_pattern %q: %v", spec.ID, spec.FilePattern, err)
+				log.Warn("[RulesStore] skipping rule: invalid file_pattern", "id", spec.ID, "pattern", spec.FilePattern, "err", err)
 				continue
 			}
 			r.FilePattern = re

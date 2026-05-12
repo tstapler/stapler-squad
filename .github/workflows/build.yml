@@ -177,7 +177,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           go install golang.org/x/perf/cmd/benchstat@latest
-          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=BenchmarkNavigation -benchmem -count=5 ./app/... \
+          TMUX_BIN="$(pwd)/bin/tmux" go test -bench=BenchmarkNavigation -benchmem -count=5 ./... \
             -timeout=15m > bench-current.txt || true
           if [ -f bench-baseline.txt ]; then
             benchstat bench-baseline.txt bench-current.txt || true
@@ -329,7 +329,7 @@ jobs:
       - name: Run benchmarks (count=10 for significance)
         run: |
           TMUX_BIN="$(pwd)/bin/tmux" go test -bench=. -benchmem -count=10 \
-            ./app/... -timeout=30m > bench-current.txt
+            ./... -timeout=30m > bench-current.txt
 
       - name: Install benchstat
         run: go install golang.org/x/perf/cmd/benchstat@latest

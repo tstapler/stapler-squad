@@ -34,12 +34,12 @@ func NewBridge() *Bridge {
 
 	// Debug: Check if registry is properly initialized
 	allCommands := registry.GetAllCommands()
-	log.InfoLog.Printf("Bridge initialized with %d commands", len(allCommands))
+	log.Info("bridge initialized", "command_count", len(allCommands))
 
 	// Check for navigation commands specifically
 	upCmd := registry.ResolveCommand(ContextList, "up")
 	downCmd := registry.ResolveCommand(ContextList, "down")
-	log.InfoLog.Printf("Navigation commands - up: %v, down: %v", upCmd != nil, downCmd != nil)
+	log.Info("navigation commands resolved", "up", upCmd != nil, "down", downCmd != nil)
 
 	bridge := &Bridge{
 		registry:     registry,
@@ -77,9 +77,9 @@ func (b *Bridge) HandleLegacyKey(keyName interface{}) error {
 // HandleKeyString processes a key string through the new command system
 func (b *Bridge) HandleKeyString(key string) error {
 	currentContext := b.GetCurrentContext()
-	log.DebugLog.Printf("HandleKeyString: key=%s, context=%s", key, currentContext)
+	log.Debug("HandleKeyString", "key", key, "context", currentContext)
 	command := b.registry.ResolveCommand(currentContext, key)
-	log.DebugLog.Printf("HandleKeyString: command resolved: %v (handler: %v)", command != nil, command != nil && command.Handler != nil)
+	log.Debug("HandleKeyString command resolved", "found", command != nil, "has_handler", command != nil && command.Handler != nil)
 
 	if command != nil && command.Handler != nil {
 		// Create command context
@@ -107,13 +107,13 @@ func (b *Bridge) GetContextualHelp() string {
 
 // SetContext switches to a different application context
 func (b *Bridge) SetContext(contextID ContextID) {
-	log.InfoLog.Printf("SetContext: changing context from %s to %s", b.GetCurrentContext(), contextID)
+	log.Info("SetContext: changing context", "from", b.GetCurrentContext(), "to", contextID)
 	// Clear stack and set new context
 	b.contextStack = []ContextID{ContextGlobal}
 	if contextID != ContextGlobal {
 		b.contextStack = append(b.contextStack, contextID)
 	}
-	log.InfoLog.Printf("SetContext: context stack is now %v", b.contextStack)
+	log.Info("SetContext: context stack updated", "stack", b.contextStack)
 	// No need to invalidate cache - it's per-context
 }
 
@@ -318,7 +318,7 @@ func (b *Bridge) prewarmKeyCategories() {
 		b.cacheMutex.Unlock()
 	}
 
-	log.DebugLog.Printf("Prewarmed key categories cache for %d contexts", len(commonContexts))
+	log.Debug("prewarmed key categories cache", "context_count", len(commonContexts))
 }
 
 // DetectKeyConflicts checks for duplicate key bindings within the current context

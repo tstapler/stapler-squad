@@ -161,11 +161,11 @@ func (m *Manager) Start() {
 	defer m.mu.Unlock()
 
 	if !m.enabled {
-		log.InfoLog.Printf("[RateLimit] Manager disabled for session %s", m.sessionID)
+		log.Info("rate limit manager disabled", "session", m.sessionID)
 		return
 	}
 
-	log.InfoLog.Printf("[RateLimit] Manager started for session %s", m.sessionID)
+	log.Info("rate limit manager started", "session", m.sessionID)
 }
 
 func (m *Manager) Stop() {
@@ -176,7 +176,7 @@ func (m *Manager) Stop() {
 		m.scheduler.CancelRecovery()
 	}
 
-	log.InfoLog.Printf("[RateLimit] Manager stopped for session %s", m.sessionID)
+	log.Info("rate limit manager stopped", "session", m.sessionID)
 }
 
 func (m *Manager) ProcessOutput(data []byte) {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
 
@@ -21,21 +22,21 @@ func (i *Instance) StartController() error {
 	// Only start if we have a status manager
 	if i.controllerManager.statusManager == nil {
 		i.stateMutex.Unlock()
-		log.DebugLog.Printf("No status manager set for instance %s, skipping controller", i.Title)
+		log.Debug("no status manager set for instance, skipping controller", "session", i.Title)
 		return nil
 	}
 
 	// Don't create controller if instance isn't started
 	if !i.started {
 		i.stateMutex.Unlock()
-		log.DebugLog.Printf("Instance %s not started yet, skipping controller", i.Title)
+		log.Debug("instance not started yet, skipping controller", "session", i.Title)
 		return nil
 	}
 
 	// Don't recreate if already exists
 	if i.controllerManager.controller != nil {
 		i.stateMutex.Unlock()
-		log.DebugLog.Printf("Controller already exists for instance %s", i.Title)
+		log.Debug("controller already exists for instance", "session", i.Title)
 		return nil
 	}
 
@@ -51,17 +52,27 @@ func (i *Instance) StartController() error {
 
 	// Wire PTY-EOF callback: when the ResponseStream detects PTY exit without an
 	// explicit Stop(), transition the instance to Stopped and notify listeners.
+	// If the exit tail contains a stale --resume error, auto-recover by clearing
+	// the UUID and restarting fresh (no --resume on the next attempt).
 	controller.SetOnEOFCallback(func() {
-		log.InfoLog.Printf("Instance '%s': PTY EOF received from ResponseStream", i.Title)
+		log.Info("pty eof received from response stream", "session", i.Title)
+		exitContent := controller.GetExitContent()
 		i.stateMutex.Lock()
 		if i.Status == Running || i.Status == Ready {
 			if err := i.transitionTo(Stopped); err != nil {
-				log.WarningLog.Printf("Instance '%s': exit callback transition failed: %v", i.Title, err)
+				log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 			}
 		}
 		i.stateMutex.Unlock()
 		i.fireLifecycleEvent(EventExited, "pty-eof")
+
+		if isStaleResumeExit(exitContent) {
+			go i.recoverFromStaleResume()
+		}
 	})
+
+	// Wire status-change listener before Start() so no events are lost.
+	i.wireStatusChangeCallback(controller)
 
 	// Start the controller - this initializes all components and begins background operations
 	// Single call replaces the old Initialize() + Start() pattern
@@ -75,7 +86,7 @@ func (i *Instance) StartController() error {
 
 	// Double-check controller hasn't been set by another goroutine (defensive)
 	if i.controllerManager.controller != nil {
-		log.DebugLog.Printf("Controller already exists for instance %s (race detected)", i.Title)
+		log.Debug("controller already exists for instance (race detected)", "session", i.Title)
 		return nil
 	}
 
@@ -85,7 +96,7 @@ func (i *Instance) StartController() error {
 	// Wire rate limit callbacks from the server layer (if already set).
 	i.wireRateLimitCallbacks(controller)
 
-	log.InfoLog.Printf("Started ClaudeController for instance %s", i.Title)
+	log.Info("started claudecontroller for instance", "session", i.Title)
 	return nil
 }
 
@@ -122,7 +133,7 @@ func (i *Instance) StopController() {
 
 	i.controllerManager.UnregisterController(i.Title)
 
-	log.InfoLog.Printf("Stopped ClaudeController for instance %s", i.Title)
+	log.Info("stopped claudecontroller for instance", "session", i.Title)
 }
 
 // GetController returns the ClaudeController if one exists.
@@ -170,6 +181,34 @@ func (i *Instance) SetRateLimitEnabled(enabled bool) {
 	if ctrl != nil {
 		ctrl.SetRateLimitEnabled(enabled)
 	}
+}
+
+// SetStatusChangeCallback registers fn to be called on every terminal status change
+// detected by the ClaudeController. Safe to call before or after the controller is
+// started; the callback is wired at controller start time via wireStatusChangeCallback.
+func (i *Instance) SetStatusChangeCallback(fn func(detection.DetectedStatus, string)) {
+	i.onStatusChangeMu.Lock()
+	i.onStatusChange = fn
+	i.onStatusChangeMu.Unlock()
+
+	// If a controller is already running, wire immediately.
+	i.wireStatusChangeCallback(i.GetController())
+}
+
+// wireStatusChangeCallback wires the instance-level status-change callback to the
+// ClaudeController's listener. Called both from SetStatusChangeCallback and from
+// StartController before controller.Start().
+func (i *Instance) wireStatusChangeCallback(ctrl *ClaudeController) {
+	if ctrl == nil {
+		return
+	}
+	i.onStatusChangeMu.RLock()
+	fn := i.onStatusChange
+	i.onStatusChangeMu.RUnlock()
+	if fn == nil {
+		return
+	}
+	ctrl.SetStatusChangeListener(fn)
 }
 
 // SetRateLimitCallbacks registers server-layer callbacks for rate limit events.

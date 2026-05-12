@@ -57,7 +57,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 		if _, ok := hookEventName[h]; ok {
 			wanted[h] = struct{}{}
 		} else {
-			log.WarningLog.Printf("[InjectHooksConfig] unknown hook name %q, skipping", h)
+			log.Warn("[InjectHooksConfig] unknown hook name, skipping", "name", h)
 		}
 	}
 
@@ -69,7 +69,7 @@ func InjectHooksConfig(rootDir, sessionTitle string, hooks []HookName) error {
 	}
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &raw); err != nil {
-			log.WarningLog.Printf("[InjectHooksConfig] %s has invalid JSON (%v), attempting repair", settingsPath, err)
+			log.Warn("[InjectHooksConfig] settings file has invalid JSON, attempting repair", "path", settingsPath, "err", err)
 			repaired, repairErr := repairSettingsJSON(data)
 			if repairErr == nil {
 				_ = json.Unmarshal(repaired, &raw)

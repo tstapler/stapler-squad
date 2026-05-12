@@ -148,7 +148,7 @@ func (d *DomainAgeChecker) lookupRegistrationDate(ctx context.Context, domain st
 	// Perform RDAP lookup.
 	regDate, notFound, err := fetchRDAPRegistrationDate(ctx, d.httpClient, domain)
 	if err != nil {
-		log.WarningLog.Printf("[DomainAgeChecker] RDAP lookup failed for %s: %v", domain, err)
+		log.Warn("[DomainAgeChecker] RDAP lookup failed", "domain", domain, "err", err)
 		return time.Time{}, err
 	}
 

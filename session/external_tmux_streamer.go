@@ -80,7 +80,7 @@ func (s *ExternalTmuxStreamer) Start() error {
 	// Get initial content
 	content, err := s.capturePane()
 	if err != nil {
-		log.WarningLog.Printf("Initial capture failed for external session '%s': %v", s.tmuxSessionName, err)
+		log.Warn("initial capture failed for external session", "session", s.tmuxSessionName, "err", err)
 		// Continue anyway - session might not be fully ready yet
 	} else {
 		s.lastContentMu.Lock()
@@ -90,11 +90,10 @@ func (s *ExternalTmuxStreamer) Start() error {
 
 	// Try to start control mode for event-driven streaming
 	if s.startControlMode() {
-		log.InfoLog.Printf("ExternalTmuxStreamer started for session '%s' (control mode)", s.tmuxSessionName)
+		log.Info("external tmux streamer started (control mode)", "session", s.tmuxSessionName)
 	} else {
 		// Fall back to polling
-		log.InfoLog.Printf("ExternalTmuxStreamer started for session '%s' (capture-pane polling at %v)",
-			s.tmuxSessionName, s.pollInterval)
+		log.Info("external tmux streamer started (capture-pane polling)", "session", s.tmuxSessionName, "interval", s.pollInterval)
 		s.wg.Add(1)
 		go s.pollLoop()
 	}
@@ -121,7 +120,7 @@ func (s *ExternalTmuxStreamer) Stop() {
 
 	s.wg.Wait()
 
-	log.InfoLog.Printf("ExternalTmuxStreamer stopped for session '%s'", s.tmuxSessionName)
+	log.Info("external tmux streamer stopped", "session", s.tmuxSessionName)
 }
 
 // IsRunning returns whether the streamer is currently running.
@@ -191,7 +190,7 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.WarningLog.Printf("Control mode stdout pipe failed for '%s': %v", s.tmuxSessionName, err)
+		log.Warn("control mode stdout pipe failed", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
 
@@ -199,12 +198,12 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		stdout.Close()
-		log.WarningLog.Printf("Control mode stderr pipe failed for '%s': %v", s.tmuxSessionName, err)
+		log.Warn("control mode stderr pipe failed", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.WarningLog.Printf("Control mode failed to start for '%s': %v", s.tmuxSessionName, err)
+		log.Warn("control mode failed to start", "session", s.tmuxSessionName, "err", err)
 		return false
 	}
 	tmux.TrackChildPID(cmd.Process.Pid, "tmux external control-mode session="+s.tmuxSessionName)
@@ -212,8 +211,7 @@ func (s *ExternalTmuxStreamer) startControlMode() bool {
 	s.controlModeCmd = cmd
 	s.controlModeActive = true
 
-	log.InfoLog.Printf("Control mode started for external session '%s' (pid: %d)",
-		s.tmuxSessionName, cmd.Process.Pid)
+	log.Info("control mode started for external session", "session", s.tmuxSessionName, "pid", cmd.Process.Pid)
 
 	// Goroutine: read control mode stdout and trigger captures on %output events
 	s.wg.Add(1)
@@ -249,7 +247,7 @@ func (s *ExternalTmuxStreamer) stopControlMode() {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		log.WarningLog.Printf("Control mode process for '%s' did not exit, force killing", s.tmuxSessionName)
+		log.Warn("control mode process did not exit, force killing", "session", s.tmuxSessionName)
 		if s.controlModeCmd.Process != nil {
 			s.controlModeCmd.Process.Kill()
 		}
@@ -297,10 +295,10 @@ func (s *ExternalTmuxStreamer) readControlMode(stdout io.ReadCloser) {
 				// Already signaled, debouncer will handle it
 			}
 		} else if strings.HasPrefix(line, "%exit") {
-			log.InfoLog.Printf("Control mode received %%exit for external session '%s'", s.tmuxSessionName)
+			log.Info("control mode received %exit for external session", "session", s.tmuxSessionName)
 			return
 		} else if strings.HasPrefix(line, "%error") {
-			log.WarningLog.Printf("Control mode error for '%s': %s", s.tmuxSessionName, line)
+			log.Warn("control mode error", "session", s.tmuxSessionName, "line", line)
 		}
 		// Ignore %begin, %end, %session-changed, and other notifications silently
 	}
@@ -310,11 +308,11 @@ func (s *ExternalTmuxStreamer) readControlMode(stdout io.ReadCloser) {
 		case <-s.ctx.Done():
 			// Expected during shutdown
 		default:
-			log.WarningLog.Printf("Control mode scanner error for '%s': %v", s.tmuxSessionName, err)
+			log.Warn("control mode scanner error", "session", s.tmuxSessionName, "err", err)
 		}
 	}
 
-	log.InfoLog.Printf("Control mode reader finished for external session '%s'", s.tmuxSessionName)
+	log.Info("control mode reader finished for external session", "session", s.tmuxSessionName)
 
 	// If control mode exits unexpectedly while we're still running, fall back to polling
 	s.runningMu.Lock()
@@ -323,7 +321,7 @@ func (s *ExternalTmuxStreamer) readControlMode(stdout io.ReadCloser) {
 
 	if stillRunning && s.controlModeActive {
 		s.controlModeActive = false
-		log.WarningLog.Printf("Control mode exited for '%s', falling back to capture-pane polling", s.tmuxSessionName)
+		log.Warn("control mode exited, falling back to capture-pane polling", "session", s.tmuxSessionName)
 		s.wg.Add(1)
 		go s.pollLoop()
 	}
@@ -372,7 +370,7 @@ func (s *ExternalTmuxStreamer) drainStderr(stderr io.ReadCloser) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line != "" {
-			log.WarningLog.Printf("Control mode stderr for '%s': %s", s.tmuxSessionName, line)
+			log.Warn("control mode stderr", "session", s.tmuxSessionName, "line", line)
 		}
 	}
 }
@@ -407,7 +405,7 @@ func (s *ExternalTmuxStreamer) checkForUpdates() {
 	content, err := s.capturePane()
 	if err != nil {
 		// Session might have ended
-		log.DebugLog.Printf("Capture failed for '%s': %v", s.tmuxSessionName, err)
+		log.Debug("capture failed", "session", s.tmuxSessionName, "err", err)
 		return
 	}
 
@@ -452,7 +450,7 @@ func (s *ExternalTmuxStreamer) notifyConsumers(content string) {
 		go func(c func(string)) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.WarningLog.Printf("Consumer panic: %v", r)
+					log.Warn("consumer panic", "err", r)
 				}
 			}()
 			c(content)

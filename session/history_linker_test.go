@@ -9,7 +9,14 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/session/git"
 )
+
+// newTestGitWorktree builds a GitWorktree value for use in unit tests without
+// touching the real filesystem or running git commands.
+func newTestGitWorktree(repoPath, worktreePath string) *git.GitWorktree {
+	return git.NewGitWorktreeFromStorage(repoPath, worktreePath, "test-session", "test-branch", "abc123")
+}
 
 // makeTestInstance creates a minimal Instance for testing (no tmux, not started).
 func makeTestInstance(title string) *Instance {
@@ -160,4 +167,78 @@ func TestHistoryLinker_Instances_SnapshotIsIndependent(t *testing.T) {
 	internal := linker.Instances()
 	require.Len(t, internal, 1)
 	assert.Equal(t, "original", internal[0].Title)
+}
+
+// TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath is a regression
+// test for the bug where DetectByPath was called with inst.Path (the base repo path)
+// instead of inst.GetEffectiveRootDir() (the worktree path). All worktree sessions
+// sharing the same base repo would be linked to the same (wrong) conversation UUID.
+//
+// This test FAILS against pre-fix code that calls DetectByPath(inst.Path).
+func TestHistoryLinker_CorrelateSession_UsesWorktreePath_NotBasePath(t *testing.T) {
+	tempHome := t.TempDir()
+	inspector := &mockProcessInspector{files: []string{}} // no open files → always falls through to DetectByPath
+	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+
+	// Create two separate Claude project directories: one for the base repo and
+	// one for the worktree. Each contains a distinct UUID so we can tell them apart.
+	repoPath := "/repo/myproject"
+	worktreePath := "/repo/myproject-worktrees/feature-branch"
+
+	repoUUID := "aaaaaaaa-0000-0000-0000-000000000000"
+	worktreeUUID := "bbbbbbbb-1111-1111-1111-111111111111"
+
+	// Build the on-disk directory structure under tempHome.
+	repoDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(repoPath))
+	worktreeDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(worktreePath))
+	require.NoError(t, os.MkdirAll(repoDir, 0755))
+	require.NoError(t, os.MkdirAll(worktreeDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(repoDir, repoUUID+".jsonl"), []byte("{}"), 0644))
+	// Give the worktree file a later mod time so it wins if both dirs are scanned.
+	time.Sleep(2 * time.Millisecond)
+	require.NoError(t, os.WriteFile(filepath.Join(worktreeDir, worktreeUUID+".jsonl"), []byte("{}"), 0644))
+
+	// Build an instance whose Path is the base repo but whose gitManager worktree
+	// points at the worktree path — exactly what a worktree session looks like.
+	inst := &Instance{
+		Title:  "feature-session",
+		Path:   repoPath,
+		Status: Running,
+	}
+	inst.gitManager.SetWorktree(newTestGitWorktree(repoPath, worktreePath))
+
+	linker := NewHistoryLinker(detector, nil)
+	linker.correlateSession(inst)
+
+	require.True(t, inst.HasClaudeSession(), "instance should be linked after correlateSession")
+	assert.Equal(t, worktreeUUID, inst.claudeSession.ConversationUUID,
+		"must use the worktree-path UUID, not the base-repo UUID")
+}
+
+// TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree verifies
+// that DetectByPath uses inst.Path when there is no worktree (the non-worktree case).
+func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *testing.T) {
+	tempHome := t.TempDir()
+	inspector := &mockProcessInspector{files: []string{}}
+	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+
+	sessionPath := "/home/user/myproject"
+	sessionUUID := "cccccccc-2222-2222-2222-222222222222"
+
+	sessionDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(sessionPath))
+	require.NoError(t, os.MkdirAll(sessionDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, sessionUUID+".jsonl"), []byte("{}"), 0644))
+
+	inst := &Instance{
+		Title:  "plain-session",
+		Path:   sessionPath,
+		Status: Running,
+	}
+	// No worktree set — gitManager.HasWorktree() returns false.
+
+	linker := NewHistoryLinker(detector, nil)
+	linker.correlateSession(inst)
+
+	require.True(t, inst.HasClaudeSession())
+	assert.Equal(t, sessionUUID, inst.claudeSession.ConversationUUID)
 }

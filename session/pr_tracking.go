@@ -16,16 +16,14 @@ func (i *Instance) RefreshPRInfo() (*github.PRInfo, error) {
 		return nil, fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.InfoLog.Printf("Refreshing PR info for instance '%s' (PR #%d on %s/%s)",
-		i.Title, i.GitHubPRNumber, i.GitHubOwner, i.GitHubRepo)
+	log.Info("refreshing PR info", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
 
 	prInfo, err := github.GetPRInfo(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch PR info for instance '%s': %w", i.Title, err)
 	}
 
-	log.InfoLog.Printf("Successfully refreshed PR info for instance '%s': %s (state: %s)",
-		i.Title, prInfo.Title, prInfo.State)
+	log.Info("successfully refreshed PR info", "session", i.Title, "title", prInfo.Title, "state", prInfo.State)
 
 	return prInfo, nil
 }
@@ -37,15 +35,14 @@ func (i *Instance) GetPRComments() ([]github.PRComment, error) {
 		return nil, fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.InfoLog.Printf("Fetching PR comments for instance '%s' (PR #%d on %s/%s)",
-		i.Title, i.GitHubPRNumber, i.GitHubOwner, i.GitHubRepo)
+	log.Info("fetching PR comments", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
 
 	comments, err := github.GetPRComments(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch PR comments for instance '%s': %w", i.Title, err)
 	}
 
-	log.InfoLog.Printf("Successfully fetched %d comments for instance '%s'", len(comments), i.Title)
+	log.Info("successfully fetched PR comments", "session", i.Title, "count", len(comments))
 
 	return comments, nil
 }
@@ -57,15 +54,14 @@ func (i *Instance) GetPRDiff() (string, error) {
 		return "", fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.InfoLog.Printf("Fetching PR diff for instance '%s' (PR #%d on %s/%s)",
-		i.Title, i.GitHubPRNumber, i.GitHubOwner, i.GitHubRepo)
+	log.Info("fetching PR diff", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
 
 	diff, err := github.GetPRDiff(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch PR diff for instance '%s': %w", i.Title, err)
 	}
 
-	log.InfoLog.Printf("Successfully fetched PR diff for instance '%s' (%d bytes)", i.Title, len(diff))
+	log.Info("successfully fetched PR diff", "session", i.Title, "bytes", len(diff))
 
 	return diff, nil
 }
@@ -81,13 +77,13 @@ func (i *Instance) PostComment(body string) error {
 		return fmt.Errorf("comment body cannot be empty")
 	}
 
-	log.InfoLog.Printf("Posting comment to PR #%d for instance '%s'", i.GitHubPRNumber, i.Title)
+	log.Info("posting comment to PR", "pr", i.GitHubPRNumber, "session", i.Title)
 
 	if err := github.PostPRComment(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber, body); err != nil {
 		return fmt.Errorf("failed to post comment to PR for instance '%s': %w", i.Title, err)
 	}
 
-	log.InfoLog.Printf("Successfully posted comment to PR #%d for instance '%s'", i.GitHubPRNumber, i.Title)
+	log.Info("successfully posted comment to PR", "pr", i.GitHubPRNumber, "session", i.Title)
 
 	return nil
 }
@@ -110,14 +106,13 @@ func (i *Instance) MergePR(method string) error {
 		return fmt.Errorf("invalid merge method '%s': must be 'merge', 'squash', or 'rebase'", method)
 	}
 
-	log.InfoLog.Printf("Merging PR #%d for instance '%s' using method '%s'",
-		i.GitHubPRNumber, i.Title, method)
+	log.Info("merging PR", "pr", i.GitHubPRNumber, "session", i.Title, "method", method)
 
 	if err := github.MergePR(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber, method); err != nil {
 		return fmt.Errorf("failed to merge PR for instance '%s': %w", i.Title, err)
 	}
 
-	log.InfoLog.Printf("Successfully merged PR #%d for instance '%s'", i.GitHubPRNumber, i.Title)
+	log.Info("successfully merged PR", "pr", i.GitHubPRNumber, "session", i.Title)
 
 	return nil
 }
@@ -129,14 +124,13 @@ func (i *Instance) ClosePR() error {
 		return fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.InfoLog.Printf("Closing PR #%d for instance '%s' without merging",
-		i.GitHubPRNumber, i.Title)
+	log.Info("closing PR without merging", "pr", i.GitHubPRNumber, "session", i.Title)
 
 	if err := github.ClosePR(i.GitHubOwner, i.GitHubRepo, i.GitHubPRNumber); err != nil {
 		return fmt.Errorf("failed to close PR for instance '%s': %w", i.Title, err)
 	}
 
-	log.InfoLog.Printf("Successfully closed PR #%d for instance '%s'", i.GitHubPRNumber, i.Title)
+	log.Info("successfully closed PR", "pr", i.GitHubPRNumber, "session", i.Title)
 
 	return nil
 }
@@ -149,8 +143,7 @@ func (i *Instance) GeneratePRContextPrompt() (string, error) {
 		return "", fmt.Errorf("instance '%s' is not a PR session", i.Title)
 	}
 
-	log.InfoLog.Printf("Generating PR context prompt for instance '%s' (PR #%d on %s/%s)",
-		i.Title, i.GitHubPRNumber, i.GitHubOwner, i.GitHubRepo)
+	log.Info("generating PR context prompt", "session", i.Title, "pr", i.GitHubPRNumber, "owner", i.GitHubOwner, "repo", i.GitHubRepo)
 
 	// Fetch PR information
 	prInfo, err := i.RefreshPRInfo()
@@ -161,8 +154,7 @@ func (i *Instance) GeneratePRContextPrompt() (string, error) {
 	// Generate prompt with PR description
 	prompt := github.GeneratePRPrompt(prInfo, true)
 
-	log.InfoLog.Printf("Successfully generated PR context prompt for instance '%s' (%d bytes)",
-		i.Title, len(prompt))
+	log.Info("successfully generated PR context prompt", "session", i.Title, "bytes", len(prompt))
 
 	return prompt, nil
 }

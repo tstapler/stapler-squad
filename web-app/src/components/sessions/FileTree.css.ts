@@ -70,6 +70,11 @@ export const selected = style({
   background: "var(--selection-bg, rgba(40, 100, 255, 0.25)) !important",
 });
 
+export const keyboardFocused = style({
+  outline: `2px solid ${vars.color.primary}`,
+  outlineOffset: "-2px",
+});
+
 export const nodeInner = style({
   display: "flex",
   alignItems: "center",

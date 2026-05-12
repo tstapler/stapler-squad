@@ -3,12 +3,11 @@ package services
 import (
 	"bytes"
 	"context"
-	"log"
+	"log/slog"
 	"strings"
 	"testing"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	applog "github.com/tstapler/stapler-squad/log"
 
 	"connectrpc.com/connect"
 )
@@ -20,28 +19,22 @@ func newLogClientEventsRequest(entries ...*sessionv1.ClientLogEntry) *connect.Re
 	})
 }
 
-// captureInfoLog temporarily redirects InfoLog to a buffer and returns a
-// function that restores it and returns the captured output.
+// captureInfoLog temporarily redirects the slog default logger to a buffer
+// and returns a function that restores it and returns the captured output.
 func captureInfoLog() func() string {
 	var buf bytes.Buffer
-	original := applog.InfoLog
-	applog.InfoLog = log.New(&buf, "", 0)
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+	original := slog.Default()
+	slog.SetDefault(slog.New(h))
 	return func() string {
-		applog.InfoLog = original
+		slog.SetDefault(original)
 		return buf.String()
 	}
 }
 
-// captureErrorLog temporarily redirects ErrorLog to a buffer and returns a
-// function that restores it and returns the captured output.
+// captureErrorLog captures slog output (same handler; error-level calls are filtered in).
 func captureErrorLog() func() string {
-	var buf bytes.Buffer
-	original := applog.ErrorLog
-	applog.ErrorLog = log.New(&buf, "", 0)
-	return func() string {
-		applog.ErrorLog = original
-		return buf.String()
-	}
+	return captureInfoLog()
 }
 
 // minimalService returns a SessionService that is usable for logClientEntry tests

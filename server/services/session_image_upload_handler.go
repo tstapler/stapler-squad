@@ -163,7 +163,7 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 		// Fallback: storage scan (also covers the no-poller test path).
 		instances, err := h.storage.LoadInstances()
 		if err != nil {
-			log.ErrorLog.Printf("[SessionImageUpload] LoadInstances: %v", err)
+			log.Error("[SessionImageUpload] LoadInstances", "err", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -175,7 +175,7 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 		}
 	}
 	if inst == nil {
-		log.ErrorLog.Printf("[SessionImageUpload] session not found: %q", sessionID)
+		log.Error("[SessionImageUpload] session not found", "session", sessionID)
 		http.Error(w, "session not found", http.StatusNotFound)
 		return
 	}
@@ -194,7 +194,7 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 
 	uploadsDir := filepath.Join(inst.Path, "uploads")
 	if err := os.MkdirAll(uploadsDir, sessionUploadDirMode); err != nil {
-		log.ErrorLog.Printf("[SessionImageUpload] MkdirAll %s: %v", uploadsDir, err)
+		log.Error("[SessionImageUpload] MkdirAll failed", "dir", uploadsDir, "err", err)
 		http.Error(w, "failed to create uploads directory", http.StatusInternalServerError)
 		return
 	}
@@ -205,7 +205,7 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 
 	f, err := os.CreateTemp(uploadsDir, pattern)
 	if err != nil {
-		log.ErrorLog.Printf("[SessionImageUpload] CreateTemp in %s: %v", uploadsDir, err)
+		log.Error("[SessionImageUpload] CreateTemp failed", "dir", uploadsDir, "err", err)
 		http.Error(w, "failed to save image", http.StatusInternalServerError)
 		return
 	}
@@ -221,17 +221,17 @@ func (h *SessionImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.
 
 	if _, writeErr = io.Copy(f, file); writeErr != nil {
 		f.Close()
-		log.ErrorLog.Printf("[SessionImageUpload] write failed: %v", writeErr)
+		log.Error("[SessionImageUpload] write failed", "err", writeErr)
 		http.Error(w, "failed to save image", http.StatusInternalServerError)
 		return
 	}
 	f.Close()
 
 	if err := os.Chmod(savedPath, sessionUploadFileMode); err != nil {
-		log.ErrorLog.Printf("[SessionImageUpload] chmod failed (non-fatal): %v", err)
+		log.Error("[SessionImageUpload] chmod failed (non-fatal)", "err", err)
 	}
 
-	log.InfoLog.Printf("[SessionImageUpload] session=%s saved → %s", sessionID, savedPath)
+	log.Info("[SessionImageUpload] saved image", "session", sessionID, "path", savedPath)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(sessionImageUploadResponse{

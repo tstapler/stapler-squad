@@ -57,7 +57,7 @@ func (m *InviteManager) Generate(label string) (token string, expiresAt time.Tim
 		expiresAt: expiresAt,
 	})
 
-	log.InfoLog.Printf("auth: invite token generated for %q (expires in 15m)", label)
+	log.Info("auth: invite token generated", "label", label, "expires_in", "15m")
 	return token, expiresAt, nil
 }
 
@@ -85,7 +85,7 @@ func (m *InviteManager) Consume(candidate string) (label string, ok bool) {
 	for i, e := range m.entries {
 		if now.Before(e.expiresAt) && subtle.ConstantTimeCompare([]byte(e.token), []byte(candidate)) == 1 {
 			m.entries = append(m.entries[:i], m.entries[i+1:]...)
-			log.InfoLog.Printf("auth: invite token consumed for %q", e.label)
+			log.Info("auth: invite token consumed", "label", e.label)
 			return e.label, true
 		}
 	}

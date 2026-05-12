@@ -112,6 +112,7 @@
     "@vanilla-extract/next-plugin": "^2.5.1",
     "eslint": "^9",
     "eslint-config-next": "15.3.2",
+    "eslint-plugin-analytics": "file:./eslint-plugin-analytics",
     "eslint-plugin-boundaries": "^6.0.2",
     "identity-obj-proxy": "^3.0.0",
     "jest": "^30.2.0",

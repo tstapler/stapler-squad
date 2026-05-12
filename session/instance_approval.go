@@ -63,7 +63,7 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 			filteredContent, _ = i.tmuxManager.FilterBanners(content)
 		} else {
 			hasMeaningful := i.tmuxManager.HasMeaningfulContent(content)
-			log.ForSession(i.Title).Debug("HasMeaningfulContent=%v for %d bytes: %q", hasMeaningful, len(content), content)
+			log.ForSession(i.Title).Debug("HasMeaningfulContent check", "hasMeaningful", hasMeaningful, "bytes", len(content))
 			if hasMeaningful {
 				shouldUpdateMeaningful = true
 				filteredContent, _ = i.tmuxManager.FilterBanners(content)

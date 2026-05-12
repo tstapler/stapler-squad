@@ -140,7 +140,7 @@ func (t *TmuxSession) StopControlMode() error {
 		select {
 		case <-t.cmSenderExited:
 		case <-time.After(2 * time.Second):
-			log.WarningLog.Printf("CM sender goroutine did not exit in time for session '%s'", t.sanitizedName)
+			log.Warn("CM sender goroutine did not exit in time", "session", t.sanitizedName)
 		}
 		t.cmSenderExited = nil
 	}
@@ -167,11 +167,11 @@ func (t *TmuxSession) StopControlMode() error {
 	select {
 	case err := <-done:
 		if err != nil && err.Error() != "signal: killed" {
-			log.WarningLog.Printf("Control mode process exited with error: %v", err)
+			log.Warn("control mode process exited with error", "session", t.sanitizedName, "err", err)
 		}
 	case <-time.After(2 * time.Second):
 		// Timeout after 2 seconds - force kill
-		log.WarningLog.Printf("Control mode process did not exit cleanly, killing")
+		log.Warn("control mode process did not exit cleanly, killing", "session", t.sanitizedName)
 		_ = t.controlModeCmd.Process.Kill()
 		<-done // Wait for kill to complete
 	}
@@ -221,7 +221,7 @@ func (t *TmuxSession) readControlModeOutput() {
 		case <-doneCh:
 			// Shutdown was initiated — pipe closure is expected, not an error.
 		default:
-			log.ErrorLog.Printf("Control mode output scanner error for session '%s': %v", t.sanitizedName, err)
+			log.Error("control mode output scanner error", "session", t.sanitizedName, "err", err)
 		}
 	}
 
@@ -278,7 +278,7 @@ func (t *TmuxSession) monitorControlModeErrors(stderr io.ReadCloser) {
 		default:
 			line := scanner.Text()
 			if line != "" {
-				log.WarningLog.Printf("Control mode stderr for session '%s': %s", t.sanitizedName, line)
+				log.Debug("control mode stderr", "session", t.sanitizedName, "line", line)
 			}
 		}
 	}
@@ -308,9 +308,7 @@ func (t *TmuxSession) processControlModeLine(line string) {
 	}
 
 	if !strings.HasPrefix(line, "%") {
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("Unexpected non-control line from tmux: %s", line)
-		}
+		log.Debug("unexpected non-control line from tmux", "line", line)
 		return
 	}
 
@@ -326,10 +324,7 @@ func (t *TmuxSession) processControlModeLine(line string) {
 			data := t.decodeControlModeOutput(encodedData)
 			if len(data) > 0 {
 				t.broadcastControlModeUpdate(data)
-				if log.DebugLog != nil {
-					log.DebugLog.Printf("Control mode output for session '%s' pane %s: %d bytes",
-						t.sanitizedName, paneID, len(data))
-				}
+				log.Debug("control mode output", "session", t.sanitizedName, "pane", paneID, "bytes", len(data))
 			}
 		}
 
@@ -385,7 +380,7 @@ func (t *TmuxSession) processControlModeLine(line string) {
 			t.cmdBodyBuf.Reset()
 		} else {
 			if len(fields) >= 2 {
-				log.ErrorLog.Printf("Control mode error for session '%s': %s", t.sanitizedName, strings.Join(fields[1:], " "))
+				log.Error("control mode error", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
 			}
 		}
 
@@ -423,7 +418,7 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 		t.controlModeSubMu.Unlock()
 
-		log.InfoLog.Printf("Control mode received %%exit for session '%s'", t.sanitizedName)
+		log.Info("control mode received %exit", "session", t.sanitizedName)
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
 				if t.onExit != nil {
@@ -434,7 +429,7 @@ func (t *TmuxSession) processControlModeLine(line string) {
 
 	case "%session-closed":
 		if len(fields) >= 2 {
-			log.InfoLog.Printf("Control mode session-closed for '%s': %s", t.sanitizedName, strings.Join(fields[1:], " "))
+			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
 		}
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
@@ -446,13 +441,11 @@ func (t *TmuxSession) processControlModeLine(line string) {
 
 	case "%session-changed":
 		if len(fields) >= 3 {
-			log.InfoLog.Printf("Control mode session-changed for '%s': %s", t.sanitizedName, fields[2])
+			log.Info("control mode session-changed", "session", t.sanitizedName, "newSession", fields[2])
 		}
 
 	default:
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("Unknown control mode notification for session '%s': %s", t.sanitizedName, line)
-		}
+		log.Debug("unknown control mode notification", "session", t.sanitizedName, "line", line)
 	}
 }
 
@@ -485,9 +478,7 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 		t.controlModeSubMu.Unlock()
 
 		if _, err := fmt.Fprintf(stdin, "%s\n", req.line); err != nil {
-			if log.DebugLog != nil {
-				log.DebugLog.Printf("CM sender write error for session '%s': %v", t.sanitizedName, err)
-			}
+			log.Debug("CM sender write error", "session", t.sanitizedName, "err", err)
 		}
 	}
 
@@ -616,8 +607,7 @@ func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
 		default:
 			// Channel full - subscriber can't keep up
 			// Don't block other subscribers, just log
-			log.WarningLog.Printf("Control mode subscriber %s channel full for session '%s', dropping update",
-				subscriberID, t.sanitizedName)
+			log.Warn("control mode subscriber channel full, dropping update", "subscriber", subscriberID, "session", t.sanitizedName)
 		}
 	}
 }
@@ -635,8 +625,7 @@ func (t *TmuxSession) SubscribeToControlModeUpdates() (string, chan []byte) {
 	// If the control mode process already exited before we subscribed, return a
 	// pre-closed channel so the caller immediately sees end-of-stream.
 	if t.controlModeExited {
-		log.InfoLog.Printf("Control mode already exited for session '%s', returning pre-closed channel to subscriber %s",
-			t.sanitizedName, subscriberID)
+		log.Info("control mode already exited, returning pre-closed channel", "session", t.sanitizedName, "subscriber", subscriberID)
 		close(ch)
 		return subscriberID, ch
 	}

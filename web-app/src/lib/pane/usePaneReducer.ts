@@ -22,8 +22,23 @@ export function usePaneReducer(
   const [state, dispatch] = useReducer(paneReducer, undefined, initialPaneState);
   const restoredRef = useRef(false);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // True once sessions have been seen as non-empty — distinguishes "server hasn't responded
+  // yet" (sessions=[]) from "user genuinely has no sessions" (sessions=[]).
+  const sessionsLoadedRef = useRef(false);
 
-  // Restore layout once sessions first become available
+  // Track the first moment sessions arrive from the server.
+  // Must be defined before the re-validate effect so the ref is updated first.
+  useEffect(() => {
+    if (sessions !== null && sessions.length > 0) {
+      sessionsLoadedRef.current = true;
+    }
+  }, [sessions]);
+
+  // Restore layout once sessions first become available.
+  // Sessions start as [] in the Redux store before the server responds, so we
+  // restore the tree structure immediately but skip session-ID validation until
+  // sessions actually load — otherwise validateAndRepair would clear every saved
+  // session ID against an empty validIds set.
   useEffect(() => {
     if (sessions === null) return;
     if (restoredRef.current) return;
@@ -32,8 +47,12 @@ export function usePaneReducer(
     const layout = loadPaneLayout();
     if (!layout) return;
 
-    const validIds = new Set(sessions.map((s) => s.id));
-    const repairedRoot = validateAndRepair(layout.root, validIds);
+    // If sessions haven't loaded from the server yet, restore the layout as-is
+    // (preserving saved session IDs). The re-validate effect below will clean up
+    // genuinely stale IDs once the real session list arrives.
+    const repairedRoot = sessionsLoadedRef.current
+      ? validateAndRepair(layout.root, new Set(sessions.map((s) => s.id)))
+      : layout.root;
 
     // Pre-tiling layouts have no session-list pane. Discard them so the user
     // gets the default split layout rather than a grid of empty detail panes.
@@ -61,10 +80,13 @@ export function usePaneReducer(
     });
   }, [sessions]);
 
-  // Re-validate when sessions change (sessions deleted externally)
+  // Re-validate when sessions change (sessions deleted externally).
+  // Skipped while sessions haven't loaded yet to avoid clearing saved IDs
+  // against an empty validIds set on the very first render.
   useEffect(() => {
     if (sessions === null) return;
     if (!restoredRef.current) return;
+    if (!sessionsLoadedRef.current) return;
 
     const validIds = new Set(sessions.map((s) => s.id));
     const allLeaves = getAllLeaves(state.root);
@@ -80,8 +102,11 @@ export function usePaneReducer(
     });
   }, [sessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Save to localStorage on state change (debounced 300ms)
+  // Save to localStorage on state change (debounced 300ms).
+  // Guarded by restoredRef so we never overwrite a valid saved layout with the
+  // default initialPaneState before the restore effect has had a chance to fire.
   useEffect(() => {
+    if (!restoredRef.current) return;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
     }

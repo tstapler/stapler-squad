@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/protocol"
 	"github.com/tstapler/stapler-squad/session"
@@ -171,8 +171,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 	h.snapshotCacheMu.RUnlock()
 
 	if ok && !snap.dirty {
-		log.InfoLog.Printf("[SnapshotCache] Serving cached snapshot for '%s' (%d bytes, age: %s)",
-			sessionID, len(snap.content), time.Since(snap.capturedAt).Round(time.Millisecond))
+		log.Info("[SnapshotCache] serving cached snapshot", "session", sessionID, "bytes", len(snap.content), "age", time.Since(snap.capturedAt).Round(time.Millisecond))
 		return snap.content, nil
 	}
 
@@ -189,7 +188,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 	}
 	h.snapshotCacheMu.Unlock()
 
-	log.InfoLog.Printf("[SnapshotCache] Refreshed snapshot for '%s' (%d bytes)", sessionID, len(content))
+	log.Info("[SnapshotCache] refreshed snapshot", "session", sessionID, "bytes", len(content))
 	return content, nil
 }
 
@@ -200,7 +199,7 @@ func (h *ConnectRPCWebSocketHandler) SetExternalSessionSupport(
 	discovery *session.ExternalSessionDiscovery,
 ) {
 	h.externalDiscovery = discovery
-	log.InfoLog.Printf("External session discovery enabled for ConnectRPC WebSocket handler")
+	log.Info("external session discovery enabled for ConnectRPC WebSocket handler")
 }
 
 // resolveSession looks up a session by ID, checking multiple sources in priority order:
@@ -216,7 +215,7 @@ func (h *ConnectRPCWebSocketHandler) resolveSession(sessionID string) (*session.
 	// Fallback to storage would call LoadInstances() which RESTARTS all sessions!
 	if h.sessionService.reviewQueuePoller != nil {
 		if instance := h.sessionService.reviewQueuePoller.FindInstance(sessionID); instance != nil {
-			log.InfoLog.Printf("[resolveSession] Found managed session '%s' in ReviewQueuePoller", sessionID)
+			log.Info("[resolveSession] found managed session in ReviewQueuePoller", "session", sessionID)
 			return instance, false // Not external
 		}
 	}
@@ -229,14 +228,14 @@ func (h *ConnectRPCWebSocketHandler) resolveSession(sessionID string) (*session.
 		sessions := h.externalDiscovery.GetSessions()
 		for _, inst := range sessions {
 			if inst.MatchesID(sessionID) {
-				log.InfoLog.Printf("[resolveSession] Found external session '%s' via ExternalDiscovery", sessionID)
+				log.Info("[resolveSession] found external session via ExternalDiscovery", "session", sessionID)
 				return inst, true // External session
 			}
 		}
 
 		// Also try by tmux session name (for direct tmux connections)
 		if inst := h.externalDiscovery.GetSessionByTmux(sessionID); inst != nil {
-			log.InfoLog.Printf("[resolveSession] Found external session by tmux name '%s'", sessionID)
+			log.Info("[resolveSession] found external session by tmux name", "session", sessionID)
 			return inst, true // External session
 		}
 	}
@@ -245,7 +244,7 @@ func (h *ConnectRPCWebSocketHandler) resolveSession(sessionID string) (*session.
 	// every managed session as a side effect and must never be used for a lookup.
 	// If the session isn't in the poller or external discovery, it doesn't exist from
 	// this handler's perspective. The caller returns a proper not-found response.
-	log.WarningLog.Printf("[resolveSession] Session '%s' not found in poller or external discovery", sessionID)
+	log.Warn("[resolveSession] session not found in poller or external discovery", "session", sessionID)
 	return nil, false
 }
 
@@ -254,12 +253,12 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	// Upgrade to WebSocket
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.ErrorLog.Printf("Failed to upgrade connection: %v", err)
+		log.Error("failed to upgrade connection", "err", err)
 		return
 	}
 	defer conn.Close()
 
-	log.InfoLog.Printf("ConnectRPC WebSocket connection established")
+	log.Info("ConnectRPC WebSocket connection established")
 
 	// Read headers from first message (text format: "key: value\r\nkey: value\r\n\r\n")
 	// 30s deadline: a client that never sends headers should not hold the connection open.
@@ -267,25 +266,25 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	_, headersBytes, err := conn.ReadMessage()
 	conn.SetReadDeadline(time.Time{}) //nolint:errcheck // clear deadline for subsequent reads
 	if err != nil {
-		log.ErrorLog.Printf("Failed to read headers: %v", err)
+		log.Error("failed to read headers", "err", err)
 		return
 	}
 
 	headers := parseConnectHeaders(string(headersBytes))
-	log.InfoLog.Printf("Received headers: %v", headers)
+	log.Info("received headers", "headers", headers)
 
 	// Read enveloped request body
 	conn.SetReadDeadline(time.Now().Add(30 * time.Second)) //nolint:errcheck
 	_, bodyBytes, err := conn.ReadMessage()
 	conn.SetReadDeadline(time.Time{}) //nolint:errcheck
 	if err != nil {
-		log.ErrorLog.Printf("Failed to read request body: %v", err)
+		log.Error("failed to read request body", "err", err)
 		return
 	}
 
 	envelope, _, err := protocol.ParseEnvelope(bodyBytes)
 	if err != nil {
-		log.ErrorLog.Printf("Failed to parse envelope: %v", err)
+		log.Error("failed to parse envelope", "err", err)
 		sendErrorResponse(conn, fmt.Sprintf("Invalid envelope: %v", err))
 		return
 	}
@@ -294,7 +293,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	// For now, we only support StreamTerminal
 	methodPath := r.URL.Path
 	if !strings.HasSuffix(methodPath, sessionv1connect.SessionServiceStreamTerminalProcedure) {
-		log.ErrorLog.Printf("Unsupported RPC method: %s", methodPath)
+		log.Error("unsupported RPC method", "method", methodPath)
 		sendErrorResponse(conn, fmt.Sprintf("Unsupported method: %s", methodPath))
 		return
 	}
@@ -302,7 +301,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	// Send response headers (text format with Status-Code header)
 	responseHeaders := "Status-Code: 200\r\nContent-Type: application/proto\r\n\r\n"
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(responseHeaders)); err != nil {
-		log.ErrorLog.Printf("Failed to send response headers: %v", err)
+		log.Error("failed to send response headers", "err", err)
 		return
 	}
 
@@ -314,18 +313,18 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	}
 	responseBytes, err := proto.Marshal(emptyResponse)
 	if err != nil {
-		log.ErrorLog.Printf("Failed to marshal initial response: %v", err)
+		log.Error("failed to marshal initial response", "err", err)
 		return
 	}
 
 	// Send response body envelope (no EndStream flag yet)
 	responseEnvelope := protocol.CreateEnvelope(0, responseBytes)
 	if err := conn.WriteMessage(websocket.BinaryMessage, responseEnvelope); err != nil {
-		log.ErrorLog.Printf("Failed to send initial response body: %v", err)
+		log.Error("failed to send initial response body", "err", err)
 		return
 	}
 
-	log.InfoLog.Printf("Sent initial response body, starting terminal stream")
+	log.Info("sent initial response body, starting terminal stream")
 
 	// Create a WebSocket stream wrapper
 	stream := &connectWebSocketStream{
@@ -337,7 +336,7 @@ func (h *ConnectRPCWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *h
 	// HandleWebSocket is the single place responsible for sending EndStream, ensuring
 	// it is always sent regardless of which code path streamTerminal takes.
 	if err := h.streamTerminal(stream); err != nil {
-		log.ErrorLog.Printf("StreamTerminal error: %v", err)
+		log.Error("StreamTerminal error", "err", err)
 		sendEndStreamError(stream, err)
 		return
 	}
@@ -367,11 +366,11 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	}
 
 	sessionID := terminalData.SessionId
-	log.InfoLog.Printf("StreamTerminal called for session: %s", sessionID)
+	log.Info("StreamTerminal called", "session", sessionID)
 
 	// Extract streaming mode from initial request (will be overridden by CurrentPaneRequest if provided)
 	streamingMode := h.streamingMode // Use handler's default
-	log.InfoLog.Printf("Initial streaming mode for session %s: %s", sessionID, streamingMode)
+	log.Info("initial streaming mode", "session", sessionID, "mode", streamingMode)
 
 	// Resolve session using unified resolution strategy
 	// This checks ReviewQueuePoller, Storage, and ExternalDiscovery in priority order
@@ -385,7 +384,7 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Set STAPLER_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling
 	useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
 	if (useControlMode == "" || useControlMode == "true") && instance.IsManaged {
-		log.InfoLog.Printf("[WebSocket] Routing managed session '%s' to control mode streaming", sessionID)
+		log.Info("[WebSocket] routing managed session to control mode streaming", "session", sessionID)
 		return h.streamViaControlMode(stream, instance, streamingMode)
 	}
 
@@ -399,7 +398,7 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// - It polls tmux's internal pane buffer at regular intervals
 	// - It detects content changes and only sends deltas
 	// - It works reliably for both managed and external tmux sessions
-	log.InfoLog.Printf("[WebSocket] Routing session '%s' to capture-pane polling (correct method for tmux sessions)", sessionID)
+	log.Info("[WebSocket] routing session to capture-pane polling", "session", sessionID)
 	return h.streamViaTmuxCapturePane(stream, instance, streamingMode)
 }
 
@@ -423,8 +422,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	}
 	tmuxSessionName := tmuxPrefix + instance.Title
 
-	log.InfoLog.Printf("[streamViaControlMode] Starting for session '%s' (tmux: %s), mode: %s",
-		sessionID, tmuxSessionName, streamingMode)
+	log.Info("[streamViaControlMode] starting", "session", sessionID, "tmux", tmuxSessionName, "mode", streamingMode)
 
 	// Update LastViewed timestamp - user is viewing this session
 	instance.MarkViewed()
@@ -463,7 +461,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	// Use no-cache check: a stale positive (cache still true after session died) causes
 	// control mode to attach to a dead session and immediately receive %exit.
 	if tmuxSession != nil && !tmuxSession.DoesSessionExistNoCache() {
-		log.InfoLog.Printf("[streamViaControlMode] Session '%s' not in tmux, restoring before control mode", sessionID)
+		log.Info("[streamViaControlMode] session not in tmux, restoring before control mode", "session", sessionID)
 		workDir := instance.GetWorkingDirectory()
 		if restoreErr := tmuxSession.RestoreWithWorkDir(workDir); restoreErr != nil {
 			return fmt.Errorf("tmux session missing and restore failed: %w", restoreErr)
@@ -475,7 +473,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	}
 	defer func() {
 		if err := streamer.StopControlMode(); err != nil {
-			log.WarningLog.Printf("[waitForQuiescence] StopControlMode: %v", err)
+			log.Warn("[streamViaControlMode] StopControlMode error", "err", err)
 		}
 	}()
 
@@ -495,27 +493,33 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		targetCols := int(*currentPaneReq.TargetCols)
 		targetRows := int(*currentPaneReq.TargetRows)
 
-		log.InfoLog.Printf("[streamViaControlMode] Handshake dimensions: %dx%d, forcing redraw via ±1 nudge", targetCols, targetRows)
+		log.Info("[streamViaControlMode] handshake dimensions, forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
 
 		// Nudge to (cols-1) so tmux always sends SIGWINCH regardless of current size
 		if targetCols > 1 {
 			if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr != nil {
-				log.WarningLog.Printf("[streamViaControlMode] Pre-nudge resize failed: %v", resizeErr)
+				log.Warn("[streamViaControlMode] pre-nudge resize failed", "err", resizeErr)
 			}
 		}
 
 		if err := instance.ResizePTY(targetCols, targetRows); err != nil {
-			log.ErrorLog.Printf("[streamViaControlMode] Failed to resize: %v", err)
+			log.Error("[streamViaControlMode] failed to resize", "err", err)
 		} else {
 			// Wait for TUI to complete its full redraw using quiescence detection
 			waitForQuiescence(quiescenceCh, 500*time.Millisecond, 50*time.Millisecond)
-			log.InfoLog.Printf("[streamViaControlMode] Tmux resized to %dx%d, redraw complete", targetCols, targetRows)
+			log.Info("[streamViaControlMode] tmux resized, redraw complete", "cols", targetCols, "rows", targetRows)
 		}
 	} else {
-		log.WarningLog.Printf("[streamViaControlMode] Handshake missing dimensions, layout may be incorrect")
+		log.Warn("[streamViaControlMode] handshake missing dimensions, layout may be incorrect")
 	}
 
-	streamer.UnsubscribeControlModeUpdates(quiescenceSubID)
+	// Do NOT unsubscribe quiescenceCh here — keep the subscription alive for the
+	// stream's lifetime so the resize goroutine can call waitForQuiescence after
+	// each SetWindowSize (R1.1: tmux reflow takes 100–400 ms; without quiescence
+	// the next capture-pane sees partially-reflowed content).
+	// The subscription is implicitly stopped when the underlying channel is closed
+	// (i.e. when StopControlMode is called via the defer above).
+	_ = quiescenceSubID // prevent unused-variable lint error
 
 	// Now capture content at correct dimensions.
 	// If capture fails (session died), proceed with empty content rather than trying
@@ -525,7 +529,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 		return instance.CapturePaneContentRaw()
 	})
 	if err != nil {
-		log.InfoLog.Printf("[streamViaControlMode] capture-pane failed for '%s', sending stopped notice: %v", sessionID, err)
+		log.Info("[streamViaControlMode] capture-pane failed, sending stopped notice", "session", sessionID, "err", err)
 		// Send a visible notice instead of leaving the terminal blank so the user
 		// knows why there is no output (session stopped, not a connection failure).
 		initialContent = "\r\n\x1b[33m[session stopped — no terminal content available]\x1b[0m\r\n"
@@ -559,19 +563,60 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			return fmt.Errorf("failed to send initial content: %w", err)
 		}
 
-		log.InfoLog.Printf("[streamViaControlMode] Sent initial snapshot (%d bytes) for session '%s'",
-			len(initialContent), sessionID)
-		log.InfoLog.Printf("[streamViaControlMode] scrollback_lines_sent=%d for session '%s'",
-			strings.Count(initialContent, "\n")+1, sessionID)
+		log.Info("[streamViaControlMode] sent initial snapshot", "bytes", len(initialContent), "session", sessionID)
+		log.Info("[streamViaControlMode] scrollback lines sent", "lines", strings.Count(initialContent, "\n")+1, "session", sessionID)
 
 		instance.UpdateTerminalTimestamps(initialContent, true)
+	}
+
+	// Send initial ScrollbackResponse with the most recent history so the client
+	// can populate its scrollback buffer immediately on connect (R2.2).
+	if h.scrollbackManager != nil {
+		const initialScrollbackLines = 500
+		sbData, sbErr := h.scrollbackManager.GetRecentLines(sessionID, initialScrollbackLines)
+		if sbErr != nil {
+			log.Warn("[streamViaControlMode] failed to fetch initial scrollback", "session", sessionID, "err", sbErr)
+		} else if len(sbData) > 0 {
+			// GetRecentLines returns raw bytes; wrap as a single chunk.
+			sbStats, statsErr := h.scrollbackManager.GetStats(sessionID)
+			var oldestSeq, newestSeq uint64
+			if statsErr == nil {
+				oldestSeq = sbStats.OldestSequence
+				newestSeq = sbStats.NewestSequence
+			}
+			chunks := []*sessionv1.ScrollbackChunk{
+				{
+					Data:     sbData,
+					Sequence: newestSeq,
+				},
+			}
+			// has_more is true when the session has more history than the initial window.
+			hasMore := sbStats.MemoryLines > initialScrollbackLines || sbStats.StorageBytes > 0
+			sbResp := &sessionv1.TerminalData{
+				SessionId: sessionID,
+				Data: &sessionv1.TerminalData_ScrollbackResponse{
+					ScrollbackResponse: &sessionv1.ScrollbackResponse{
+						Chunks:          chunks,
+						HasMore:         hasMore,
+						TotalLines:      uint64(sbStats.MemoryLines),
+						OldestSequence:  oldestSeq,
+						NewestSequence:  newestSeq,
+					},
+				},
+			}
+			if sbBytes, merr := proto.Marshal(sbResp); merr != nil {
+				log.Error("[streamViaControlMode] failed to marshal initial scrollback", "session", sessionID, "err", merr)
+			} else if wsErr := stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, sbBytes)); wsErr == nil {
+				log.Info("[streamViaControlMode] sent initial scrollback", "bytes", len(sbData), "session", sessionID)
+			}
+		}
 	}
 
 	// Subscribe to control mode updates for streaming
 	subscriberID, updateChan := streamer.SubscribeControlModeUpdates()
 	defer streamer.UnsubscribeControlModeUpdates(subscriberID)
 
-	log.InfoLog.Printf("[streamViaControlMode] Subscribed to control mode as %s for session '%s'", subscriberID, sessionID)
+	log.Info("[streamViaControlMode] subscribed to control mode", "subscriber_id", subscriberID, "session", sessionID)
 
 	// Create channels for goroutine coordination
 	errChan := make(chan error, 2)
@@ -583,7 +628,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	go func() {
 		defer close(doneChan)
 
-		log.InfoLog.Printf("[streamViaControlMode] Output goroutine started for session '%s'", sessionID)
+		log.Info("[streamViaControlMode] output goroutine started", "session", sessionID)
 
 		// sendData marshals and writes a terminal output message, using a pooled proto.
 		sendData := func(data []byte) error {
@@ -619,8 +664,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						if exitBytes, merr := proto.Marshal(exitData); merr == nil {
 							_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, exitBytes))
 						}
-						log.InfoLog.Printf("[streamViaControlMode] Sent %d bytes of exit content to client for session '%s'",
-							len(exitContent), sessionID)
 					}
 					return
 				}
@@ -646,7 +689,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				}
 
 				if err := sendData(buf); err != nil {
-					log.ErrorLog.Printf("[streamViaControlMode] Failed to send output: %v", err)
+					log.Error("[streamViaControlMode] failed to send output", "err", err)
 					errChan <- fmt.Errorf("failed to send output: %w", err)
 					return
 				}
@@ -660,14 +703,82 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 	type resizeReq struct{ cols, rows int }
 	resizeCh := make(chan resizeReq, 1)
 	go func() {
+		// lastAppliedResize tracks the most recently applied resize dimensions and time.
+		// Used to suppress duplicate resize calls within 50 ms (R1.5 — avoid redundant
+		// PTY ioctls when rapid window-drag events produce identical dimensions).
+		type lastResize struct {
+			cols, rows int
+			t          time.Time
+		}
+		var last lastResize
 		for {
 			select {
 			case <-doneChan:
 				return
 			case r := <-resizeCh:
-				if err := instance.SetWindowSize(r.cols, r.rows); err != nil {
-					log.ErrorLog.Printf("[streamViaControlMode] Failed to resize: %v", err)
+				// Skip duplicate resizes within 50 ms to avoid unnecessary tmux reflows.
+				if r.cols == last.cols && r.rows == last.rows && time.Since(last.t) < 50*time.Millisecond {
+					continue
 				}
+				if err := instance.SetWindowSize(r.cols, r.rows); err != nil {
+					log.Error("[streamViaControlMode] failed to resize", "err", err)
+					continue
+				}
+				last = lastResize{cols: r.cols, rows: r.rows, t: time.Now()}
+
+				// sendResizeQuiescence is a helper to emit ResizeQuiescence signals (R1.4).
+				sendResizeQuiescence := func(resizing bool) {
+					rqMsg := &sessionv1.TerminalData{
+						SessionId: sessionID,
+						Data: &sessionv1.TerminalData_ResizeQuiescence{
+							ResizeQuiescence: &sessionv1.ResizeQuiescence{
+								Resizing: resizing,
+								Cols:     int32(r.cols),
+								Rows:     int32(r.rows),
+							},
+						},
+					}
+					if rqBytes, merr := proto.Marshal(rqMsg); merr != nil {
+						log.Error("[streamViaControlMode] failed to marshal ResizeQuiescence", "session", sessionID, "err", merr)
+					} else {
+						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, rqBytes))
+					}
+				}
+
+				// Signal client: tmux reflow is starting (R1.4).
+				sendResizeQuiescence(true)
+
+				// Wait for tmux to finish reflowing at the new dimensions before the
+				// next capture-pane, preventing partially-reflowed content (R1.1).
+				quiescenceDeadline := 300 * time.Millisecond
+				quiescenceStart := time.Now()
+				waitForQuiescence(quiescenceCh, quiescenceDeadline, 100*time.Millisecond)
+				if elapsed := time.Since(quiescenceStart); elapsed >= quiescenceDeadline-5*time.Millisecond {
+					log.Error("[streamViaControlMode] quiescence timed out, sending snapshot anyway", "elapsed", elapsed.Round(time.Millisecond), "session", sessionID, "cols", r.cols, "rows", r.rows)
+				}
+
+				// Capture and send a fresh snapshot at the new dimensions so the client
+				// display is immediately correct without waiting for the next PTY event
+				// (R1.3 — post-resize snapshot).
+				if snapContent, snapErr := instance.CapturePaneContentRaw(); snapErr == nil && snapContent != "" {
+					h.markSnapshotDirty(sessionID)
+					snapMsg := &sessionv1.TerminalData{
+						SessionId: sessionID,
+						Data: &sessionv1.TerminalData_Output{
+							Output: &sessionv1.TerminalOutput{
+								Data: []byte("\x1b[H" + sanitizeInitialContent(snapContent)),
+							},
+						},
+					}
+					if snapBytes, merr := proto.Marshal(snapMsg); merr != nil {
+						log.Error("[streamViaControlMode] failed to marshal post-resize snapshot", "session", sessionID, "err", merr)
+					} else {
+						_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, snapBytes))
+					}
+				}
+
+				// Signal client: reflow complete, stable snapshot sent (R1.4).
+				sendResizeQuiescence(false)
 			}
 		}
 	}()
@@ -682,10 +793,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				_, message, err := stream.conn.ReadMessage()
 				if err != nil {
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-						log.InfoLog.Printf("[streamViaControlMode] WebSocket closed for session '%s'", sessionID)
 						errChan <- nil
 					} else {
-						log.ErrorLog.Printf("[streamViaControlMode] WebSocket read error for session '%s': %v", sessionID, err)
+						log.Error("[streamViaControlMode] WebSocket read error", "session", sessionID, "err", err)
 						errChan <- err
 					}
 					return
@@ -694,7 +804,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				// Parse envelope
 				envelope, _, err := protocol.ParseEnvelope(message)
 				if err != nil {
-					log.ErrorLog.Printf("[streamViaControlMode] Failed to parse envelope: %v", err)
+					log.Error("[streamViaControlMode] failed to parse envelope", "err", err)
 					continue
 				}
 
@@ -712,7 +822,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				// Parse TerminalData
 				var incomingData sessionv1.TerminalData
 				if err := proto.Unmarshal(envelope.Data, &incomingData); err != nil {
-					log.ErrorLog.Printf("[streamViaControlMode] Failed to unmarshal TerminalData: %v", err)
+					log.Error("[streamViaControlMode] failed to unmarshal TerminalData", "err", err)
 					continue
 				}
 
@@ -720,7 +830,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				if input := incomingData.GetInput(); input != nil {
 					// Check send permission
 					if !instance.Permissions.CanSendCommand {
-						log.WarningLog.Printf("[streamViaControlMode] Send permission denied for session '%s'", sessionID)
+						log.Warn("[streamViaControlMode] send permission denied", "session", sessionID)
 						continue
 					}
 
@@ -736,11 +846,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					sendErr := instance.SendInputViaControlMode(sendCtx, input.Data)
 					sendCancel()
 					if sendErr != nil {
-						log.WarningLog.Printf("[streamViaControlMode] CM input failed for '%s', retrying via subprocess: %v",
-							tmuxSessionName, sendErr)
+						log.Warn("[streamViaControlMode] CM input failed, retrying via subprocess", "session", tmuxSessionName, "err", sendErr)
 						if fbErr := sendInputToTmux(tmuxSessionName, input.Data); fbErr != nil {
-							log.ErrorLog.Printf("[streamViaControlMode] Subprocess fallback also failed for '%s': %v",
-								tmuxSessionName, fbErr)
+							log.Error("[streamViaControlMode] subprocess fallback also failed", "session", tmuxSessionName, "err", fbErr)
 						}
 					}
 				}
@@ -758,6 +866,65 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						default:
 						}
 						resizeCh <- req
+					}
+				}
+
+				// Handle ScrollbackRequest — client requesting historical scrollback data (R2.4).
+				// FromSequence is the oldest sequence the client already has; we return
+				// the `limit` entries immediately BEFORE that sequence (older content).
+				// When FromSequence == 0, return the most recent lines instead.
+				if scrollbackReq := incomingData.GetScrollbackRequest(); scrollbackReq != nil {
+					if h.scrollbackManager != nil {
+						const maxScrollbackLimit = 1000
+						limit := int(scrollbackReq.Limit)
+						if limit <= 0 || limit > maxScrollbackLimit {
+							limit = maxScrollbackLimit
+						}
+
+						var entries []scrollback.ScrollbackEntry
+						var sbErr error
+						if scrollbackReq.FromSequence == 0 {
+							// Client wants the most recent history.
+							var sbData []byte
+							sbData, sbErr = h.scrollbackManager.GetRecentLines(sessionID, limit)
+							if sbErr == nil && len(sbData) > 0 {
+								entries = []scrollback.ScrollbackEntry{{Data: sbData}}
+							}
+						} else {
+							// Client wants content older than FromSequence.
+							entries, sbErr = h.scrollbackManager.GetScrollbackBefore(sessionID, scrollbackReq.FromSequence, limit)
+						}
+
+						if sbErr != nil {
+							log.Warn("[streamViaControlMode] ScrollbackRequest failed", "session", sessionID, "err", sbErr)
+						} else {
+							sbStats, _ := h.scrollbackManager.GetStats(sessionID)
+							chunks := make([]*sessionv1.ScrollbackChunk, 0, len(entries))
+							for _, e := range entries {
+								chunks = append(chunks, &sessionv1.ScrollbackChunk{
+									Data:     e.Data,
+									Sequence: e.Sequence,
+								})
+							}
+							hasMore := scrollbackReq.Limit > 0 && len(entries) == limit
+							sbResp := &sessionv1.TerminalData{
+								SessionId: sessionID,
+								Data: &sessionv1.TerminalData_ScrollbackResponse{
+									ScrollbackResponse: &sessionv1.ScrollbackResponse{
+										Chunks:         chunks,
+										HasMore:        hasMore,
+										TotalLines:     uint64(sbStats.MemoryLines),
+										OldestSequence: sbStats.OldestSequence,
+										NewestSequence: sbStats.NewestSequence,
+									},
+								},
+							}
+							if respBytes, merr := proto.Marshal(sbResp); merr != nil {
+								log.Error("[streamViaControlMode] failed to marshal scrollback response", "session", sessionID, "err", merr)
+							} else {
+								_ = stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, respBytes))
+							}
+						}
 					}
 				}
 
@@ -799,8 +966,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	}
 	sessionID := instance.Title
 
-	log.InfoLog.Printf("[streamViaTmuxCapture] Starting for session '%s' (tmux: %s, managed: %t), mode: %s",
-		sessionID, tmuxSessionName, instance.IsManaged, streamingMode)
+	log.Info("[streamViaTmuxCapture] starting", "session", sessionID, "tmux", tmuxSessionName, "managed", instance.IsManaged, "mode", streamingMode)
 
 	// Get or create tmux streamer for this session
 	if h.tmuxStreamerManager == nil {
@@ -814,7 +980,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 	// Update LastViewed timestamp - user is viewing this session
 	instance.MarkViewed()
-	log.InfoLog.Printf("Updated LastViewed timestamp for external session %s", sessionID)
+	log.Info("updated LastViewed timestamp for external session", "session", sessionID)
 
 	// For managed sessions: parse handshake dimensions and force a TUI redraw via ±1 nudge
 	// so the initial capture-pane snapshot reflects a freshly-drawn terminal state.
@@ -825,7 +991,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				paneReq.TargetCols != nil && paneReq.TargetRows != nil {
 				targetCols := int(*paneReq.TargetCols)
 				targetRows := int(*paneReq.TargetRows)
-				log.InfoLog.Printf("[streamViaTmuxCapture] Forcing redraw via ±1 nudge to %dx%d", targetCols, targetRows)
+				log.Info("[streamViaTmuxCapture] forcing redraw via nudge", "cols", targetCols, "rows", targetRows)
 				if targetCols > 1 {
 					if resizeErr := instance.ResizePTY(targetCols-1, targetRows); resizeErr == nil {
 						time.Sleep(50 * time.Millisecond)
@@ -833,7 +999,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				}
 				if resizeErr := instance.ResizePTY(targetCols, targetRows); resizeErr == nil {
 					time.Sleep(200 * time.Millisecond)
-					log.InfoLog.Printf("[streamViaTmuxCapture] Redraw complete at %dx%d", targetCols, targetRows)
+					log.Info("[streamViaTmuxCapture] redraw complete", "cols", targetCols, "rows", targetRows)
 				}
 			}
 		}
@@ -850,7 +1016,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		if freshContent, captureErr := instance.CapturePaneContentRaw(); captureErr == nil {
 			initialContent = freshContent
 		} else {
-			log.InfoLog.Printf("[streamViaTmuxCapture] Fresh capture failed, falling back to cached: %v", captureErr)
+			log.Info("[streamViaTmuxCapture] fresh capture failed, falling back to cached", "err", captureErr)
 			initialContent = streamer.GetContent()
 		}
 	} else {
@@ -877,8 +1043,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 			return fmt.Errorf("failed to send initial content: %w", err)
 		}
 
-		log.InfoLog.Printf("[streamViaTmuxCapture] Sent initial content (%d bytes) for session '%s'",
-			len(initialContent), sessionID)
+		log.Info("[streamViaTmuxCapture] sent initial content", "bytes", len(initialContent), "session", sessionID)
 
 		// Update timestamps to reflect web UI viewing activity
 		instance.UpdateTerminalTimestamps(initialContent, true)
@@ -898,7 +1063,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 		case outputChan <- content:
 		default:
 			// Drop content if channel is full (prevents blocking)
-			log.WarningLog.Printf("[streamViaTmuxCapture] Output channel full for session '%s', dropping content", sessionID)
+			log.Warn("[streamViaTmuxCapture] output channel full, dropping content", "session", sessionID)
 		}
 	}
 
@@ -912,7 +1077,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 			close(doneChan)
 		}()
 
-		log.InfoLog.Printf("[streamViaTmuxCapture] Output goroutine started for session '%s'", sessionID)
+		log.Info("[streamViaTmuxCapture] output goroutine started", "session", sessionID)
 
 		for {
 			select {
@@ -934,14 +1099,14 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 				dataBytes, err := proto.Marshal(terminalData)
 				if err != nil {
-					log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to marshal output: %v", err)
+					log.Error("[streamViaTmuxCapture] failed to marshal output", "err", err)
 					errChan <- fmt.Errorf("failed to marshal output: %w", err)
 					return
 				}
 
 				envelope := protocol.CreateEnvelope(0, dataBytes)
 				if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
-					log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to send output: %v", err)
+					log.Error("[streamViaTmuxCapture] failed to send output", "err", err)
 					errChan <- fmt.Errorf("failed to send output: %w", err)
 					return
 				}
@@ -963,7 +1128,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				stream.conn.SetReadDeadline(time.Time{}) //nolint:errcheck
 				if err != nil {
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-						log.InfoLog.Printf("[streamViaTmuxCapture] WebSocket closed for session '%s'", sessionID)
 						errChan <- nil
 						return
 					}
@@ -974,13 +1138,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				// Parse envelope
 				envelope, _, err := protocol.ParseEnvelope(message)
 				if err != nil {
-					log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to parse envelope: %v", err)
+					log.Error("[streamViaTmuxCapture] failed to parse envelope", "err", err)
 					continue
 				}
 
 				// Check for EndStream
 				if envelope.Flags&protocol.EndStreamFlag != 0 {
-					log.InfoLog.Printf("[streamViaTmuxCapture] Received EndStream for session '%s'", sessionID)
 					errChan <- nil
 					return
 				}
@@ -993,7 +1156,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				// Parse TerminalData
 				var incomingData sessionv1.TerminalData
 				if err := proto.Unmarshal(envelope.Data, &incomingData); err != nil {
-					log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to unmarshal TerminalData: %v", err)
+					log.Error("[streamViaTmuxCapture] failed to unmarshal TerminalData", "err", err)
 					continue
 				}
 
@@ -1001,7 +1164,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				if input := incomingData.GetInput(); input != nil {
 					// Check send permission
 					if !instance.Permissions.CanSendCommand {
-						log.WarningLog.Printf("[streamViaTmuxCapture] Send permission denied for session '%s'", sessionID)
+						log.Warn("[streamViaTmuxCapture] send permission denied", "session", sessionID)
 						continue
 					}
 
@@ -1010,8 +1173,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 					// Send input to tmux session — errors are non-fatal (stream stays alive).
 					if err := sendInputToTmux(tmuxSessionName, input.Data); err != nil {
-						log.WarningLog.Printf("[streamViaTmuxCapture] Error sending input to tmux '%s': %v",
-							tmuxSessionName, err)
+						log.Warn("[streamViaTmuxCapture] error sending input to tmux", "tmux_session", tmuxSessionName, "err", err)
 					}
 				}
 
@@ -1019,31 +1181,23 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 				if resize := incomingData.GetResize(); resize != nil {
 					targetCols := int(resize.Cols)
 					targetRows := int(resize.Rows)
-					log.InfoLog.Printf("[streamViaTmuxCapture] Resize request for session '%s': %dx%d",
-						sessionID, targetCols, targetRows)
+					log.ForSession(sessionID).Debug("resize request", "cols", targetCols, "rows", targetRows)
 
 					// Use different resize methods based on session type
 					if instance.IsManaged {
 						// Managed sessions: Use proper PTY resize method
 						// This handles ioctl, signal propagation, and tmux window resizing
 						if err := instance.ResizePTY(targetCols, targetRows); err != nil {
-							log.WarningLog.Printf("[streamViaTmuxCapture] Failed to resize managed session '%s': %v",
-								sessionID, err)
+							log.Warn("[streamViaTmuxCapture] failed to resize managed session", "session", sessionID, "err", err)
 						} else {
-							log.InfoLog.Printf("[streamViaTmuxCapture] Successfully resized managed session '%s' to %dx%d",
-								sessionID, targetCols, targetRows)
-
 							// PHASE 1: Verify resize actually succeeded
 							actualCols, actualRows, verifyErr := instance.GetPaneDimensions()
 							if verifyErr != nil {
-								log.WarningLog.Printf("[streamViaTmuxCapture] Failed to verify resize for '%s': %v",
-									sessionID, verifyErr)
+								log.Warn("[streamViaTmuxCapture] failed to verify resize", "session", sessionID, "err", verifyErr)
 							} else if actualCols != targetCols || actualRows != targetRows {
-								log.WarningLog.Printf("[streamViaTmuxCapture] DIMENSION MISMATCH after resize '%s': target=%dx%d, actual=%dx%d",
-									sessionID, targetCols, targetRows, actualCols, actualRows)
+								log.Warn("[streamViaTmuxCapture] dimension mismatch after resize", "session", sessionID, "target_cols", targetCols, "target_rows", targetRows, "actual_cols", actualCols, "actual_rows", actualRows)
 							} else {
-								log.InfoLog.Printf("[streamViaTmuxCapture] Resize verified for '%s': %dx%d",
-									sessionID, actualCols, actualRows)
+								log.ForSession(sessionID).Debug("resize verified", "cols", actualCols, "rows", actualRows)
 							}
 						}
 					} else {
@@ -1053,8 +1207,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						resizeCmd := safeexec.CommandContext(rwCtx, "tmux", "resize-window", "-t", tmuxSessionName,
 							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
 						if err := resizeCmd.Run(); err != nil {
-							log.WarningLog.Printf("[streamViaTmuxCapture] Failed to resize tmux window for external '%s': %v",
-								tmuxSessionName, err)
+							log.Warn("[streamViaTmuxCapture] failed to resize tmux window for external session", "tmux_session", tmuxSessionName, "err", err)
 						}
 						rwCancel()
 
@@ -1063,42 +1216,26 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						paneCmd := safeexec.CommandContext(rpCtx, "tmux", "resize-pane", "-t", tmuxSessionName,
 							"-x", fmt.Sprintf("%d", targetCols), "-y", fmt.Sprintf("%d", targetRows))
 						if err := paneCmd.Run(); err != nil {
-							log.WarningLog.Printf("[streamViaTmuxCapture] Failed to resize tmux pane for external '%s': %v",
-								tmuxSessionName, err)
+							log.Warn("[streamViaTmuxCapture] failed to resize tmux pane for external session", "tmux_session", tmuxSessionName, "err", err)
 						}
 						rpCancel()
 
 						// PHASE 1: Verify external session resize
 						actualCols, actualRows, verifyErr := instance.GetPaneDimensions()
 						if verifyErr != nil {
-							log.WarningLog.Printf("[streamViaTmuxCapture] Failed to verify external resize for '%s': %v",
-								sessionID, verifyErr)
+							log.Warn("[streamViaTmuxCapture] failed to verify external resize", "session", sessionID, "err", verifyErr)
 						} else if actualCols != targetCols || actualRows != targetRows {
-							log.WarningLog.Printf("[streamViaTmuxCapture] EXTERNAL DIMENSION MISMATCH for '%s': target=%dx%d, actual=%dx%d (external terminal may control size)",
-								sessionID, targetCols, targetRows, actualCols, actualRows)
+							log.Warn("[streamViaTmuxCapture] external dimension mismatch", "session", sessionID, "target_cols", targetCols, "target_rows", targetRows, "actual_cols", actualCols, "actual_rows", actualRows)
 						} else {
-							log.InfoLog.Printf("[streamViaTmuxCapture] External resize verified for '%s': %dx%d",
-								sessionID, actualCols, actualRows)
+							log.ForSession(sessionID).Debug("external resize verified", "cols", actualCols, "rows", actualRows)
 						}
 					}
 				}
 
 				// Handle current pane request - capture current tmux content
 				if currentPaneReq := incomingData.GetCurrentPaneRequest(); currentPaneReq != nil {
-					log.InfoLog.Printf("[streamViaTmuxCapture] Current pane request for session '%s'",
-						sessionID)
-
-					// Debug: Log the target dimensions to verify they're being received
-					if currentPaneReq.TargetCols != nil {
-						log.InfoLog.Printf("[streamViaTmuxCapture] TargetCols received: %d", *currentPaneReq.TargetCols)
-					} else {
-						log.InfoLog.Printf("[streamViaTmuxCapture] TargetCols is nil")
-					}
-					if currentPaneReq.TargetRows != nil {
-						log.InfoLog.Printf("[streamViaTmuxCapture] TargetRows received: %d", *currentPaneReq.TargetRows)
-					} else {
-						log.InfoLog.Printf("[streamViaTmuxCapture] TargetRows is nil")
-					}
+					log.ForSession(sessionID).Debug("current pane request",
+						"targetCols", currentPaneReq.TargetCols, "targetRows", currentPaneReq.TargetRows)
 
 					// CRITICAL: Resize tmux BEFORE capturing content to prevent wrapping issues
 					// If target dimensions are provided, resize the tmux pane first
@@ -1109,29 +1246,26 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						// Check current dimensions to see if resize is actually needed
 						currentCols, currentRows, dimensionErr := instance.GetPaneDimensions()
 						if dimensionErr != nil {
-							log.WarningLog.Printf("[streamViaTmuxCapture] Failed to get current pane dimensions: %v", dimensionErr)
+							log.Warn("[streamViaTmuxCapture] failed to get current pane dimensions", "err", dimensionErr)
 						}
 
 						// Only resize if dimensions don't match
 						if dimensionErr != nil || currentCols != targetCols || currentRows != targetRows {
-							log.InfoLog.Printf("[streamViaTmuxCapture] Resizing tmux from %dx%d to target %dx%d before capture",
-								currentCols, currentRows, targetCols, targetRows)
+							log.ForSession(sessionID).Debug("resizing tmux before capture",
+								"from", fmt.Sprintf("%dx%d", currentCols, currentRows),
+								"to", fmt.Sprintf("%dx%d", targetCols, targetRows))
 
 							if resizeErr := instance.ResizePTY(targetCols, targetRows); resizeErr != nil {
-								log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to resize tmux before capture: %v", resizeErr)
+								log.Error("[streamViaTmuxCapture] failed to resize tmux before capture", "err", resizeErr)
 								// Continue anyway - better to send content with wrong dimensions than no content
 							} else {
-								log.InfoLog.Printf("[streamViaTmuxCapture] Successfully resized tmux to %dx%d before capture", targetCols, targetRows)
-
 								// WORKAROUND: Send multiple SIGWINCH signals to help Claude Code detect new dimensions
 								// Claude Code has a bug where it sometimes renders wider than terminal dimensions.
 								// Sending multiple refresh signals gives it multiple chances to correct itself.
 								// See: https://github.com/anthropics/claude-code/issues (pending bug report)
 								for i := 0; i < 3; i++ {
 									if refreshErr := instance.RefreshTmuxClient(); refreshErr != nil {
-										log.WarningLog.Printf("[streamViaTmuxCapture] Failed to send refresh signal %d: %v", i+1, refreshErr)
-									} else {
-										log.InfoLog.Printf("[streamViaTmuxCapture] Sent refresh signal %d/3", i+1)
+										log.Warn("[streamViaTmuxCapture] failed to send refresh signal", "signal", i+1, "err", refreshErr)
 									}
 									// Small delay between signals to allow processing
 									if i < 2 {
@@ -1144,29 +1278,25 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 								// and regenerate cursor positions. Increased from 150ms to 250ms
 								// to ensure even complex interactive UIs have time to complete redraw.
 								time.Sleep(250 * time.Millisecond)
-								log.InfoLog.Printf("[streamViaTmuxCapture] Waited 250ms for process redraw after resize and multiple refresh signals")
 
 								// PHASE 1: Verify resize succeeded before capture
 								verifiedCols, verifiedRows, verifyErr := instance.GetPaneDimensions()
 								if verifyErr != nil {
-									log.WarningLog.Printf("[streamViaTmuxCapture] Failed to verify resize before capture: %v", verifyErr)
+									log.Warn("[streamViaTmuxCapture] failed to verify resize before capture", "err", verifyErr)
 								} else if verifiedCols != targetCols || verifiedRows != targetRows {
-									log.WarningLog.Printf("[streamViaTmuxCapture] CRITICAL: Dimensions still mismatched after resize! target=%dx%d, actual=%dx%d",
-										targetCols, targetRows, verifiedCols, verifiedRows)
+									log.Warn("[streamViaTmuxCapture] CRITICAL: dimensions still mismatched after resize", "target_cols", targetCols, "target_rows", targetRows, "actual_cols", verifiedCols, "actual_rows", verifiedRows)
 									// Log this as critical since we're about to capture with wrong dimensions
 								} else {
-									log.InfoLog.Printf("[streamViaTmuxCapture] Resize verification successful: %dx%d matches target", verifiedCols, verifiedRows)
+									log.ForSession(sessionID).Debug("resize before capture verified", "cols", verifiedCols, "rows", verifiedRows)
 								}
 							}
-						} else {
-							log.InfoLog.Printf("[streamViaTmuxCapture] Tmux already at target dimensions %dx%d, skipping resize", targetCols, targetRows)
 						}
 					}
 
 					// Force a fresh capture from tmux pane (bypasses streamer cache)
 					content, captureErr := instance.CapturePaneContent()
 					if captureErr != nil {
-						log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to capture fresh pane content: %v", captureErr)
+						log.Error("[streamViaTmuxCapture] failed to capture fresh pane content", "err", captureErr)
 						// Fallback to streamer content
 						content = streamer.GetContent()
 					}
@@ -1175,20 +1305,15 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					// PHASE 1: Log final captured dimensions for diagnostics
 					finalCols, finalRows, finalErr := instance.GetPaneDimensions()
 					if finalErr != nil {
-						log.WarningLog.Printf("[streamViaTmuxCapture] Failed to get final dimensions after capture: %v", finalErr)
+						log.Warn("[streamViaTmuxCapture] failed to get final dimensions after capture", "err", finalErr)
 					} else {
+						log.ForSession(sessionID).Debug("captured pane content", "cols", finalCols, "rows", finalRows)
 						if currentPaneReq.TargetCols != nil && currentPaneReq.TargetRows != nil {
 							expectedCols := int(*currentPaneReq.TargetCols)
 							expectedRows := int(*currentPaneReq.TargetRows)
-							log.InfoLog.Printf("[streamViaTmuxCapture] Captured content at dimensions: %dx%d (target was %dx%d)",
-								finalCols, finalRows, expectedCols, expectedRows)
 							if finalCols != expectedCols || finalRows != expectedRows {
-								log.WarningLog.Printf("[streamViaTmuxCapture] FINAL DIMENSION MISMATCH: captured=%dx%d, client expects=%dx%d",
-									finalCols, finalRows, expectedCols, expectedRows)
+								log.Warn("[streamViaTmuxCapture] final dimension mismatch", "captured_cols", finalCols, "captured_rows", finalRows, "expected_cols", expectedCols, "expected_rows", expectedRows)
 							}
-						} else {
-							log.InfoLog.Printf("[streamViaTmuxCapture] Captured content at dimensions: %dx%d (no target specified)",
-								finalCols, finalRows)
 						}
 
 						// WORKAROUND: Detect if Claude Code is rendering wider than terminal dimensions
@@ -1197,18 +1322,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 						// the issue and can inform future bug reports to Anthropic.
 						actualWidth := detectContentWidth(content)
 						if actualWidth > finalCols {
-							log.WarningLog.Printf(
-								"[streamViaTmuxCapture] ⚠️  CLAUDE CODE WIDTH BUG DETECTED: "+
-									"Content rendered at %d columns but terminal is only %d columns wide. "+
-									"This is a bug in Claude Code's terminal rendering. "+
-									"Claude Code should respect terminal dimensions but is rendering %d columns too wide. "+
-									"Workaround: Multiple SIGWINCH signals sent (may help). "+
-									"Report bug to: https://github.com/anthropics/claude-code/issues",
-								actualWidth, finalCols, actualWidth-finalCols,
-							)
-						} else {
-							log.InfoLog.Printf("[streamViaTmuxCapture] Content width validation: %d columns (within terminal width of %d)",
-								actualWidth, finalCols)
+							log.Warn("[streamViaTmuxCapture] CLAUDE CODE WIDTH BUG DETECTED: content rendered wider than terminal",
+								"actual_width", actualWidth, "terminal_cols", finalCols, "overage", actualWidth-finalCols)
 						}
 					}
 
@@ -1223,18 +1338,17 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 					respBytes, err := proto.Marshal(terminalData)
 					if err != nil {
-						log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to marshal pane response: %v", err)
+						log.Error("[streamViaTmuxCapture] failed to marshal pane response", "err", err)
 						continue
 					}
 
 					respEnvelope := protocol.CreateEnvelope(0, respBytes)
 					if err := stream.WriteMessage(websocket.BinaryMessage, respEnvelope); err != nil {
-						log.ErrorLog.Printf("[streamViaTmuxCapture] Failed to send pane response: %v", err)
+						log.Error("[streamViaTmuxCapture] failed to send pane response", "err", err)
 						continue
 					}
 
-					log.InfoLog.Printf("[streamViaTmuxCapture] Sent pane content (%d bytes) for session '%s'",
-						len(content), sessionID)
+					log.ForSession(sessionID).Debug("sent pane content", "bytes", len(content))
 				}
 			}
 		}
@@ -1244,7 +1358,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	// EndStream is sent by the caller (HandleWebSocket) after this function returns.
 	err = <-errChan
 
-	log.InfoLog.Printf("[streamViaTmuxCapture] Connection closed for session '%s'", sessionID)
+	log.Info("[streamViaTmuxCapture] connection closed", "session", sessionID)
 	return err
 }
 
@@ -1289,7 +1403,7 @@ func parseConnectHeaders(headersText string) map[string]string {
 func sendErrorResponse(conn *websocket.Conn, errorMsg string) {
 	responseHeaders := fmt.Sprintf("Status-Code: 500\r\nContent-Type: text/plain\r\n\r\n%s", errorMsg)
 	if err := conn.WriteMessage(websocket.TextMessage, []byte(responseHeaders)); err != nil {
-		log.ErrorLog.Printf("Failed to send error response headers: %v", err)
+		log.Error("failed to send error response headers", "err", err)
 	}
 }
 
@@ -1303,9 +1417,9 @@ func sendEndStreamSuccess(stream *connectWebSocketStream) {
 	if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
 		// "close sent" means the WebSocket was already closing — benign race on disconnect.
 		if strings.Contains(err.Error(), "close sent") {
-			log.InfoLog.Printf("EndStreamSuccess skipped — websocket already closing")
+			log.Info("EndStreamSuccess skipped — websocket already closing")
 		} else {
-			log.ErrorLog.Printf("Failed to send EndStreamSuccess: %v", err)
+			log.Error("failed to send EndStreamSuccess", "err", err)
 		}
 	}
 }
@@ -1319,7 +1433,7 @@ func sendEndStreamError(stream *connectWebSocketStream, err error) {
 
 	envelope := protocol.CreateEnvelope(protocol.EndStreamFlag, dataBytes)
 	if err := stream.WriteMessage(websocket.BinaryMessage, envelope); err != nil {
-		log.ErrorLog.Printf("Failed to send EndStreamError: %v", err)
+		log.Error("failed to send EndStreamError", "err", err)
 	}
 }
 

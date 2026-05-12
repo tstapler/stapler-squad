@@ -38,7 +38,7 @@ func (h *LogLevelHandler) HandleSet(w http.ResponseWriter, r *http.Request) {
 	}
 	level := log.ParseLogLevel(req.Level)
 	log.SetRuntimeLevel(level)
-	log.InfoLog.Printf("Runtime log level changed to %s via debug API", level)
+	log.Info("runtime log level changed via debug API", "level", level)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(logLevelResponse{Level: level.String()})

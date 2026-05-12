@@ -183,7 +183,7 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 	var mcpInjectionFailed bool
 	if shouldInjectMCP {
 		if injErr := injectMCPConfig(inst.GetEffectiveRootDir()); injErr != nil {
-			log.WarningLog.Printf("[mcp] MCP injection failed for session %q: %v", title, injErr)
+			log.Warn("mcp MCP injection failed for session", "title", title, "err", injErr)
 			mcpInjectionFailed = true
 		}
 	}
@@ -200,13 +200,13 @@ func (lh *lifecycleHandlers) createSession(ctx context.Context, req mcpgo.CallTo
 		}
 	}
 	if err := services.InjectHooksConfig(inst.GetEffectiveRootDir(), inst.Title, hookNames); err != nil {
-		log.WarningLog.Printf("[mcp] hook injection failed for session %q: %v", title, err)
+		log.Warn("mcp hook injection failed for session", "title", title, "err", err)
 	}
 
 	// Save to storage. AddInstance persists just this new instance.
 	if err := lh.store.AddInstance(inst); err != nil {
 		// Best-effort cleanup; don't fail the session just because save failed.
-		log.ErrorLog.Printf("[mcp] save instance failed after creating %q: %v", title, err)
+		log.Error("mcp save instance failed after creating session", "title", title, "err", err)
 		return errResult(ErrInternalError, fmt.Sprintf("save session: %v", err), ""), nil
 	}
 
@@ -337,11 +337,11 @@ func (lh *lifecycleHandlers) stopSession(ctx context.Context, req mcpgo.CallTool
 		// Hydrate for tmux access if the session is not paused (paused sessions have no tmux session).
 		if inst.Status != session.Paused && !inst.Started() {
 			if startErr := inst.Start(false); startErr != nil {
-				log.WarningLog.Printf("[mcp] hydration failed for stop %q: %v — attempting destroy anyway", sessionID, startErr)
+				log.Warn("mcp hydration failed for stop, attempting destroy anyway", "session", sessionID, "err", startErr)
 			}
 		}
 		if err := inst.Destroy(); err != nil {
-			log.WarningLog.Printf("[mcp] destroy session %q had errors: %v", sessionID, err)
+			log.Warn("mcp destroy session had errors", "session", sessionID, "err", err)
 		}
 	}
 
@@ -413,12 +413,12 @@ func (lh *lifecycleHandlers) updateSession(ctx context.Context, req mcpgo.CallTo
 	// MCP injection toggle on existing session.
 	if injectMCP, ok := args["inject_mcp"].(bool); ok && injectMCP {
 		if injErr := injectMCPConfig(inst.GetEffectiveRootDir()); injErr != nil {
-			log.WarningLog.Printf("[mcp] update: MCP injection failed for %q: %v", sessionID, injErr)
+			log.Warn("mcp update MCP injection failed", "session", sessionID, "err", injErr)
 		}
 	}
 	if removeMCP, ok := args["remove_mcp"].(bool); ok && removeMCP {
 		if rmErr := services.RemoveMCPConfig(inst.GetEffectiveRootDir()); rmErr != nil {
-			log.WarningLog.Printf("[mcp] update: MCP removal failed for %q: %v", sessionID, rmErr)
+			log.Warn("mcp update MCP removal failed", "session", sessionID, "err", rmErr)
 		}
 	}
 

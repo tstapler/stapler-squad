@@ -21,7 +21,7 @@ import (
 // It's expected that the main process kills the daemon when the main process starts.
 func RunDaemon(cfg *config.Config) error {
 	// Log initialization is done by the caller
-	log.InfoLog.Printf("starting daemon")
+	log.Info("starting daemon")
 
 	repo, err := session.NewEntRepository()
 	if err != nil {
@@ -50,7 +50,7 @@ func RunDaemon(cfg *config.Config) error {
 	if cfg.DetectNewSessions {
 		watcher, err = setupStateFileWatcher()
 		if err != nil {
-			log.ErrorLog.Printf("failed to setup file watcher: %v", err)
+			log.Error("failed to setup file watcher", "err", err)
 			// Continue without file watching
 		} else {
 			defer watcher.Close()
@@ -76,7 +76,7 @@ func RunDaemon(cfg *config.Config) error {
 						instance.TapEnter()
 						if err := instance.UpdateDiffStats(); err != nil {
 							if everyN.ShouldLog() {
-								log.WarningLog.Printf("could not update diff stats for %s: %v", instance.Title, err)
+								log.Warn("could not update diff stats", "session", instance.Title, "err", err)
 							}
 						}
 					}
@@ -109,17 +109,16 @@ func RunDaemon(cfg *config.Config) error {
 			ticker := time.NewTicker(time.Duration(cfg.StateRefreshInterval) * time.Millisecond)
 			defer ticker.Stop()
 
-			log.InfoLog.Printf("starting state refresh with interval %d ms", cfg.StateRefreshInterval)
+			log.Info("starting state refresh", "interval_ms", cfg.StateRefreshInterval)
 
 			for {
 				select {
 				case <-ticker.C:
 					// Refresh state and load any new instances
 					if err := detectAndAddNewSessions(&instances, storage); err != nil {
-						log.ErrorLog.Printf("failed to refresh state and detect new sessions: %v", err)
+						log.Error("failed to refresh state and detect new sessions", "err", err)
 					}
 				case <-stopCh:
-					log.InfoLog.Printf("stopping state refresh")
 					return
 				}
 			}
@@ -130,14 +129,14 @@ func RunDaemon(cfg *config.Config) error {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	sig := <-sigChan
-	log.InfoLog.Printf("received signal %s", sig.String())
+	log.Info("received signal", "signal", sig.String())
 
 	// Stop the goroutines so we don't race.
 	close(stopCh)
 	wg.Wait()
 
 	if err := storage.SaveInstances(instances); err != nil {
-		log.ErrorLog.Printf("failed to save instances when terminating daemon: %v", err)
+		log.Error("failed to save instances when terminating daemon", "err", err)
 	}
 	return nil
 }
@@ -170,9 +169,9 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 	statePath := filepath.Join(configDir, config.StateFileName)
 	if _, err := os.Stat(statePath); err == nil {
 		if err := watcher.Add(statePath); err != nil {
-			log.WarningLog.Printf("failed to add state file to watcher: %v", err)
+			log.Warn("failed to add state file to watcher", "err", err)
 		} else {
-			log.InfoLog.Printf("watching state file: %s", statePath)
+			log.Info("watching state file", "path", statePath)
 		}
 	}
 
@@ -180,13 +179,13 @@ func setupStateFileWatcher() (*fsnotify.Watcher, error) {
 	instancesPath := filepath.Join(configDir, config.InstancesFileName)
 	if _, err := os.Stat(instancesPath); err == nil {
 		if err := watcher.Add(instancesPath); err != nil {
-			log.WarningLog.Printf("failed to add instances file to watcher: %v", err)
+			log.Warn("failed to add instances file to watcher", "err", err)
 		} else {
-			log.InfoLog.Printf("watching instances file: %s", instancesPath)
+			log.Info("watching instances file", "path", instancesPath)
 		}
 	}
 
-	log.InfoLog.Printf("watching config directory for changes: %s", configDir)
+	log.Info("watching config directory for changes", "path", configDir)
 	return watcher, nil
 }
 
@@ -213,11 +212,11 @@ func watchForNewSessions(
 	pollTicker := time.NewTicker(time.Duration(cfg.SessionDetectionInterval) * time.Millisecond)
 	defer pollTicker.Stop()
 
-	log.InfoLog.Printf("starting new session detection with interval %d ms", cfg.SessionDetectionInterval)
+	log.Info("starting new session detection", "interval_ms", cfg.SessionDetectionInterval)
 
 	// Perform an initial detection to get any existing sessions
 	if err := detectAndAddNewSessions(instances, storage); err != nil {
-		log.ErrorLog.Printf("failed to detect initial sessions: %v", err)
+		log.Error("failed to detect initial sessions", "err", err)
 	}
 
 	for {
@@ -244,9 +243,8 @@ func watchForNewSessions(
 				}
 				lastProcessTime = time.Now()
 
-				log.InfoLog.Printf("detected change in file %s, checking for new sessions", event.Name)
 				if err := detectAndAddNewSessions(instances, storage); err != nil {
-					log.ErrorLog.Printf("failed to detect new sessions: %v", err)
+					log.Error("failed to detect new sessions", "err", err)
 				}
 
 				// Make sure we're watching the files if they were created or recreated
@@ -254,7 +252,7 @@ func watchForNewSessions(
 					// Re-add state file watcher if needed
 					if strings.Contains(event.Name, config.StateFileName) {
 						if err := watcher.Add(stateFilePath); err != nil {
-							log.WarningLog.Printf("failed to add state file to watcher after creation: %v", err)
+							log.Warn("failed to add state file to watcher after creation", "err", err)
 						}
 					}
 
@@ -262,7 +260,7 @@ func watchForNewSessions(
 					instancesPath := filepath.Join(configDir, config.InstancesFileName)
 					if strings.Contains(event.Name, config.InstancesFileName) {
 						if err := watcher.Add(instancesPath); err != nil {
-							log.WarningLog.Printf("failed to add instances file to watcher after creation: %v", err)
+							log.Warn("failed to add instances file to watcher after creation", "err", err)
 						}
 					}
 				}
@@ -272,16 +270,15 @@ func watchForNewSessions(
 			if !ok {
 				return
 			}
-			log.ErrorLog.Printf("watcher error: %v", err)
+			log.Error("watcher error", "err", err)
 
 		case <-pollTicker.C:
 			// Periodically poll for new sessions as a fallback mechanism
 			if err := detectAndAddNewSessions(instances, storage); err != nil {
-				log.ErrorLog.Printf("failed to detect new sessions during polling: %v", err)
+				log.Error("failed to detect new sessions during polling", "err", err)
 			}
 
 		case <-stopCh:
-			log.InfoLog.Printf("stopping session detection")
 			return
 		}
 	}
@@ -307,7 +304,7 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 	newInstances := []*session.Instance{}
 	for _, instance := range newlyLoadedInstances {
 		if !existingTitles[instance.Title] {
-			log.InfoLog.Printf("detected new session: %s (status: %d)", instance.Title, instance.Status)
+			log.Info("detected new session", "session", instance.Title, "status", instance.Status)
 
 			// Only add the instance if it's been properly started
 			if instance.Started() {
@@ -315,7 +312,7 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 				instance.AutoYes = true
 				newInstances = append(newInstances, instance)
 			} else {
-				log.InfoLog.Printf("skipping new session %s because it's not started (status: %d)", instance.Title, instance.Status)
+				log.Info("skipping new session because it's not started", "session", instance.Title, "status", instance.Status)
 			}
 		}
 	}
@@ -323,12 +320,12 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 	// Add new instances to our current list if any found
 	if len(newInstances) > 0 {
 		*currentInstances = append(*currentInstances, newInstances...)
-		log.InfoLog.Printf("added %d new session(s) to daemon", len(newInstances))
+		log.Info("added new sessions to daemon", "count", len(newInstances))
 
 		// Log all current sessions for debugging
-		log.InfoLog.Printf("current sessions (%d total):", len(*currentInstances))
+		log.Info("current sessions", "total", len(*currentInstances))
 		for i, instance := range *currentInstances {
-			log.InfoLog.Printf("  [%d] %s (status: %d)", i, instance.Title, instance.Status)
+			log.Info("  session", "index", i, "session", instance.Title, "status", instance.Status)
 		}
 	}
 
@@ -359,7 +356,7 @@ func LaunchDaemon() error {
 		return fmt.Errorf("failed to start child process: %w", err)
 	}
 
-	log.InfoLog.Printf("started daemon child process with PID: %d", cmd.Process.Pid)
+	log.Info("started daemon child process", "pid", cmd.Process.Pid)
 
 	// Save PID to a file for later management
 	pidDir, err := config.GetConfigDir()
@@ -375,7 +372,7 @@ func LaunchDaemon() error {
 	// Release the process so it won't become a zombie when it exits
 	// This tells the OS that the parent won't wait for the child
 	if err := cmd.Process.Release(); err != nil {
-		log.WarningLog.Printf("failed to release daemon process (may become zombie on exit): %v", err)
+		log.Warn("failed to release daemon process (may become zombie on exit)", "err", err)
 	}
 
 	// Don't wait for the child to exit, it's detached and released
@@ -418,6 +415,6 @@ func StopDaemon() error {
 		return fmt.Errorf("failed to remove PID file: %w", err)
 	}
 
-	log.InfoLog.Printf("daemon process (PID: %d) stopped successfully", pid)
+	log.Info("daemon process stopped successfully", "pid", pid)
 	return nil
 }

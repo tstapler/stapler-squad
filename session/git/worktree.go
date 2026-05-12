@@ -56,7 +56,7 @@ func NewGitWorktreeFromCommitSHA(repoPath, sessionName, branchName, commitSHA st
 
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
-		log.ErrorLog.Printf("git worktree path abs error, falling back to repoPath %s: %s", repoPath, err)
+		log.Error("git worktree path abs error, falling back to repoPath", "path", repoPath, "err", err)
 		absPath = repoPath
 	}
 
@@ -142,7 +142,7 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 	// Convert repoPath to absolute path
 	absPath, err := filepath.Abs(repoPath)
 	if err != nil {
-		log.ErrorLog.Printf("git worktree path abs error, falling back to repoPath %s: %s", repoPath, err)
+		log.Error("git worktree path abs error, falling back to repoPath", "path", repoPath, "err", err)
 		// If we can't get absolute path, use original path as fallback
 		absPath = repoPath
 	}
@@ -160,7 +160,7 @@ func NewGitWorktreeWithBranchAndExecutor(repoPath string, sessionName string, cu
 	// First check if the branch is already checked out in an existing worktree
 	existingWorktreePath, found := findExistingWorktreeForBranch(repoPath, branchName)
 	if found {
-		log.InfoLog.Printf("Found existing worktree for branch '%s' at '%s', reusing it", branchName, existingWorktreePath)
+		log.Info("found existing worktree for branch, reusing it", "branch", branchName, "path", existingWorktreePath)
 		return &GitWorktree{
 			repoPath:     repoPath,
 			sessionName:  sessionName,
@@ -242,7 +242,7 @@ func NewGitWorktreeFromExistingWithExecutor(existingWorktreePath string, session
 	baseCommitSHA, err := getHeadCommitSHA(existingWorktreePath)
 	if err != nil {
 		// This is not critical - we can continue without it
-		log.WarningLog.Printf("Failed to get base commit SHA for worktree '%s': %v", existingWorktreePath, err)
+		log.Warn("failed to get base commit SHA for worktree", "path", existingWorktreePath, "err", err)
 		baseCommitSHA = ""
 	}
 
@@ -267,7 +267,7 @@ func findExistingWorktreeForBranch(repoPath, branchName string) (string, bool) {
 	output, err := cmd.Output()
 	if err != nil {
 		// If the command fails, assume no existing worktrees
-		log.InfoLog.Printf("Failed to list worktrees for branch check: %v", err)
+		log.Info("failed to list worktrees for branch check", "err", err)
 		return "", false
 	}
 

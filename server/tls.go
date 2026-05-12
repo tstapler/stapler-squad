@@ -71,15 +71,15 @@ func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
 	// trusted by clients that imported the new CA, so force regeneration.
 	if caChanged {
 		_ = os.Remove(hashFile) // invalidate cached SAN hash so certCurrent returns false
-		log.InfoLog.Printf("tls: CA rotated — forcing server certificate regeneration")
+		log.Info("tls: CA rotated, forcing server certificate regeneration")
 	}
 	want := sanHash(hostnames)
 	if certCurrent(paths.CertFile, hashFile, want) {
-		log.InfoLog.Printf("tls: reusing existing certificate at %s", paths.CertFile)
+		log.Info("tls: reusing existing certificate", "cert", paths.CertFile)
 		return paths, nil
 	}
 
-	log.InfoLog.Printf("tls: (re)issuing server certificate for %v", hostnames)
+	log.Info("tls: (re)issuing server certificate", "hostnames", hostnames)
 
 	certPEM, keyPEM, err := generateServerCert(caKey, caCert, hostnames)
 	if err != nil {
@@ -95,8 +95,8 @@ func EnsureTLSCerts(hostnames []string) (*TLSPaths, error) {
 		return nil, fmt.Errorf("write cert hash: %w", err)
 	}
 
-	log.InfoLog.Printf("tls: certificate written to %s", paths.CertFile)
-	log.InfoLog.Printf("tls: CA certificate (import once on phones) at %s", paths.CAFile)
+	log.Info("tls: certificate written", "cert", paths.CertFile)
+	log.Info("tls: CA certificate (import once on phones)", "ca", paths.CAFile)
 	return paths, nil
 }
 
@@ -117,13 +117,13 @@ func ensureCA(caFile string) (caKey *ecdsa.PrivateKey, caCert *x509.Certificate,
 	if k, c, ok := loadCA(caFile, caKeyFile); ok {
 		// Regenerate only if within 30 days of expiry.
 		if time.Now().Add(30 * 24 * time.Hour).Before(c.NotAfter) {
-			log.InfoLog.Printf("tls: reusing existing CA (expires %s)", c.NotAfter.Format("2006-01-02"))
+			log.Info("tls: reusing existing CA", "expires", c.NotAfter.Format("2006-01-02"))
 			return k, c, false, nil
 		}
-		log.InfoLog.Printf("tls: CA near expiry (%s), regenerating", c.NotAfter.Format("2006-01-02"))
+		log.Info("tls: CA near expiry, regenerating", "expires", c.NotAfter.Format("2006-01-02"))
 	}
 
-	log.InfoLog.Printf("tls: generating new CA certificate")
+	log.Info("tls: generating new CA certificate")
 	caKey, caCert, caCertPEM, err := generateCA()
 	if err != nil {
 		return nil, nil, false, err

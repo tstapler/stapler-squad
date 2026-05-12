@@ -88,7 +88,7 @@ func (r *TmuxServerRegistry) Start(ctx context.Context) error {
 
 	// Bootstrap session map from list-sessions before connecting control mode.
 	if err := r.syncSessions(); err != nil {
-		log.WarningLog.Printf("[registry] initial list-sessions failed, continuing: %v", err)
+		log.Warn("[registry] initial list-sessions failed, continuing", "err", err)
 	}
 
 	// Launch the auto-reconnect loop; it starts the first control-mode process.
@@ -312,7 +312,7 @@ func (r *TmuxServerRegistry) reconnectLoop() {
 
 		cmd, scanner, stdin, err := r.startControlMode()
 		if err != nil {
-			log.WarningLog.Printf("[registry] control-mode start failed: %v; retrying in %v", err, backoff)
+			log.Warn("[registry] control-mode start failed, retrying", "err", err, "backoff", backoff)
 			select {
 			case <-r.ctx.Done():
 				return
@@ -330,7 +330,7 @@ func (r *TmuxServerRegistry) reconnectLoop() {
 		// Resync the session map before marking healthy so that sessions
 		// created while the control-mode connection was down are not missed.
 		if err := r.syncSessions(); err != nil {
-			log.WarningLog.Printf("[registry] syncSessions on reconnect failed: %v", err)
+			log.Warn("[registry] syncSessions on reconnect failed", "err", err)
 		}
 
 		// Mark healthy now that the control-mode process is running.
@@ -342,7 +342,7 @@ func (r *TmuxServerRegistry) reconnectLoop() {
 		// readLines processes the first event (which may immediately clear it).
 		runtime.Gosched()
 
-		log.InfoLog.Printf("[registry] control-mode connected (socket=%q)", r.serverSocket)
+		log.Info("[registry] control-mode connected", "socket", r.serverSocket)
 
 		connectTime := time.Now()
 
@@ -373,7 +373,7 @@ func (r *TmuxServerRegistry) reconnectLoop() {
 		case <-r.ctx.Done():
 			return
 		default:
-			log.InfoLog.Printf("[registry] control-mode exited; reconnecting in %v", backoff)
+			log.Info("[registry] control-mode exited; reconnecting", "backoff", backoff)
 			select {
 			case <-r.ctx.Done():
 				return
@@ -421,7 +421,7 @@ func (r *TmuxServerRegistry) handleEvent(line string) {
 			r.mu.Lock()
 			r.sessions[name] = true
 			r.mu.Unlock()
-			log.InfoLog.Printf("[registry] session created: %q", name)
+			log.Info("[registry] session created", "session", name)
 		}
 
 	case strings.HasPrefix(line, "%session-closed "):
@@ -432,7 +432,7 @@ func (r *TmuxServerRegistry) handleEvent(line string) {
 			r.mu.Lock()
 			delete(r.sessions, name)
 			r.mu.Unlock()
-			log.InfoLog.Printf("[registry] session closed: %q", name)
+			log.Info("[registry] session closed", "session", name)
 			r.firePaneExit(name)
 		}
 
@@ -444,7 +444,7 @@ func (r *TmuxServerRegistry) handleEvent(line string) {
 		}
 		debounceTimer = time.AfterFunc(debounceDelay, func() {
 			if err := r.syncSessions(); err != nil {
-				log.WarningLog.Printf("[registry] sync after sessions-changed failed: %v", err)
+				log.Warn("[registry] sync after sessions-changed failed", "err", err)
 			}
 		})
 		debounceMu.Unlock()

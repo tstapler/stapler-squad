@@ -123,8 +123,7 @@ func (p *PRStatusPoller) Start(ctx context.Context) {
 
 	p.wg.Add(1)
 	go p.pollLoop()
-	log.InfoLog.Printf("PRStatusPoller started (interval: %s, concurrency: %d)",
-		p.config.PollInterval, p.config.ConcurrentFetches)
+	log.Info("PR status poller started", "interval", p.config.PollInterval, "concurrency", p.config.ConcurrentFetches)
 }
 
 // Stop gracefully shuts down the poller and waits for in-flight requests.
@@ -135,7 +134,7 @@ func (p *PRStatusPoller) Stop() {
 	}
 	p.mu.Unlock()
 	p.wg.Wait()
-	log.InfoLog.Printf("PRStatusPoller stopped")
+	log.Info("PR status poller stopped")
 }
 
 // pollLoop runs the main ticker loop.
@@ -167,7 +166,7 @@ func (p *PRStatusPoller) checkAllSessions() {
 	p.mu.RUnlock()
 
 	if time.Now().Before(rateLimitedUntil) {
-		log.InfoLog.Printf("PRStatusPoller: rate limited until %v, skipping tick", rateLimitedUntil)
+		log.Info("PR status poller: rate limited, skipping tick", "until", rateLimitedUntil)
 		return
 	}
 
@@ -192,7 +191,7 @@ func (p *PRStatusPoller) checkAllSessions() {
 			continue // merged/closed; poller already marked it terminal
 		}
 		if isFork {
-			log.InfoLog.Printf("PRStatusPoller: skipping fork session '%s' (upstream PR lookup Phase 2)", inst.Title)
+			log.Info("PR status poller: skipping fork session (upstream PR lookup Phase 2)", "session", inst.Title)
 			continue
 		}
 
@@ -219,7 +218,7 @@ func (p *PRStatusPoller) isAuthOK() bool {
 	}
 
 	if err := github.CheckGHAuth(); err != nil {
-		log.WarningLog.Printf("PRStatusPoller: GitHub auth unavailable: %v", err)
+		log.Warn("PR status poller: github auth unavailable", "err", err)
 		p.mu.Lock()
 		p.authOK = false
 		p.authCheckedAt = time.Now()
@@ -261,8 +260,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 			if p.handleFetchError(err) {
 				return // rate limit or auth error handled
 			}
-			log.WarningLog.Printf("PRStatusPoller: PR discovery for '%s' (%s/%s %s): %v",
-				inst.Title, owner, repo, branch, err)
+			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
 			return
 		}
 		// Persist discovered PR number
@@ -271,7 +269,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 		inst.stateMutex.Unlock()
 		if p.storage != nil {
 			if err := p.storage.UpdateInstancePRNumber(inst.Title, prInfo.Number); err != nil {
-				log.WarningLog.Printf("PRStatusPoller: persist PR number for '%s': %v", inst.Title, err)
+				log.Warn("PR status poller: failed to persist PR number", "session", inst.Title, "err", err)
 			}
 		}
 		p.applyPRUpdate(inst, prInfo)
@@ -284,7 +282,7 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 		if p.handleFetchError(err) {
 			return
 		}
-		log.WarningLog.Printf("PRStatusPoller: fetch PR #%d for '%s': %v", prNumber, inst.Title, err)
+		log.Warn("PR status poller: failed to fetch PR", "pr", prNumber, "session", inst.Title, "err", err)
 		return
 	}
 
@@ -304,14 +302,14 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 func (p *PRStatusPoller) handleFetchError(err error) bool {
 	msg := err.Error()
 	if strings.Contains(msg, "rate limit") || strings.Contains(msg, "429") {
-		log.WarningLog.Printf("PRStatusPoller: GitHub rate limit hit, pausing for 60s")
+		log.Warn("PR status poller: github rate limit hit, pausing for 60s")
 		p.mu.Lock()
 		p.rateLimitedUntil = time.Now().Add(60 * time.Second)
 		p.mu.Unlock()
 		return true
 	}
 	if strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized") {
-		log.WarningLog.Printf("PRStatusPoller: GitHub auth error, invalidating auth cache")
+		log.Warn("PR status poller: github auth error, invalidating auth cache")
 		p.mu.Lock()
 		p.authOK = false
 		p.authCheckedAt = time.Now()
@@ -352,7 +350,7 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 	if p.storage != nil {
 		if err := p.storage.UpdateInstancePRStatus(inst.Title, state, priority, checkConclusion,
 			approvedCount, changesReqCount, isDraft, terminal); err != nil {
-			log.WarningLog.Printf("PRStatusPoller: persist PR status for '%s': %v", inst.Title, err)
+			log.Warn("PR status poller: failed to persist PR status", "session", inst.Title, "err", err)
 		}
 	}
 
@@ -363,6 +361,6 @@ func (p *PRStatusPoller) applyPRUpdate(inst *Instance, prInfo *github.PRInfo) {
 		if onUpdated != nil {
 			onUpdated(inst)
 		}
-		log.InfoLog.Printf("PRStatusPoller: '%s' PR priority %s → %s", inst.Title, oldPriority, priority)
+		log.Info("PR status poller: PR priority changed", "session", inst.Title, "old", oldPriority, "new", priority)
 	}
 }

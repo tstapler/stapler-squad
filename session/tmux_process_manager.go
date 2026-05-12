@@ -101,8 +101,7 @@ func (tm *TmuxProcessManager) SetDetachedSize(width, height int, instanceTitle s
 		if strings.Contains(err.Error(), "PTY is not initialized") {
 			// Rate-limit: warn at most once per 30 seconds per instance.
 			if time.Since(tm.lastPTYWarningTime) > 30*time.Second {
-				log.WarningLog.Printf("PTY not ready for instance '%s', skipping resize: %v",
-					instanceTitle, err)
+				log.Warn("PTY not ready for instance, skipping resize", "session", instanceTitle, "err", err)
 				tm.lastPTYWarningTime = time.Now()
 			}
 			return nil // Not fatal — don't disrupt the UI.

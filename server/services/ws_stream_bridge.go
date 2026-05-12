@@ -64,7 +64,7 @@ func (b *StreamingWSBridge) Handler(apiPrefix string) http.Handler {
 func (b *StreamingWSBridge) handleWebSocket(w http.ResponseWriter, r *http.Request, apiPrefix string) {
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.WarningLog.Printf("[WSBridge] upgrade failed at %s: %v", r.URL.Path, err)
+		log.Warn("[WSBridge] upgrade failed", "path", r.URL.Path, "err", err)
 		return
 	}
 	defer conn.Close()
@@ -74,7 +74,7 @@ func (b *StreamingWSBridge) handleWebSocket(w http.ResponseWriter, r *http.Reque
 	// Read the single Connect request envelope from the first WebSocket message.
 	_, requestData, err := conn.ReadMessage()
 	if err != nil {
-		log.WarningLog.Printf("[WSBridge] read request failed at %s: %v", r.URL.Path, err)
+		log.Warn("[WSBridge] read request failed", "path", r.URL.Path, "err", err)
 		return
 	}
 
@@ -84,7 +84,7 @@ func (b *StreamingWSBridge) handleWebSocket(w http.ResponseWriter, r *http.Reque
 		ctx, "POST", rpcPath, io.NopCloser(bytes.NewReader(requestData)),
 	)
 	if err != nil {
-		log.WarningLog.Printf("[WSBridge] build request failed: %v", err)
+		log.Warn("[WSBridge] build request failed", "err", err)
 		return
 	}
 	fakeReq.ContentLength = int64(len(requestData))

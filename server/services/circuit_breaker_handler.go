@@ -73,7 +73,7 @@ func (h *CircuitBreakerHandler) HandleCircuitBreakers(w http.ResponseWriter, r *
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.ErrorLog.Printf("Failed to encode circuit breaker response: %v", err)
+		log.Error("failed to encode circuit breaker response", "err", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }

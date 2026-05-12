@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
@@ -71,6 +71,7 @@ export function SessionActionsOverflow({
   const isRunning = session.status === SessionStatus.RUNNING;
 
   const [showOverflow, setShowOverflow] = useState(false);
+  const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
   const [isRestartConfirmOpen, setIsRestartConfirmOpen] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
   const [restartError, setRestartError] = useState("");
@@ -86,6 +87,7 @@ export function SessionActionsOverflow({
   const [oneShotResult, setOneShotResult] = useState<string | null>(null);
 
   const overflowContainerRef = useRef<HTMLDivElement>(null);
+  const overflowButtonRef = useRef<HTMLButtonElement>(null);
   const overflowMenuRef = useRef<HTMLDivElement>(null);
   const restartDialogRef = useRef<HTMLDivElement>(null);
   const deleteDialogRef = useRef<HTMLDivElement>(null);
@@ -108,13 +110,27 @@ export function SessionActionsOverflow({
   useEffect(() => {
     if (!showOverflow) return;
     const handler = (e: MouseEvent) => {
-      if (overflowContainerRef.current && !overflowContainerRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const inContainer = overflowContainerRef.current?.contains(target);
+      const inMenu = overflowMenuRef.current?.contains(target);
+      if (!inContainer && !inMenu) {
         setShowOverflow(false);
       }
     };
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showOverflow]);
+
+  const openMenu = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!overflowButtonRef.current) return;
+    const rect = overflowButtonRef.current.getBoundingClientRect();
+    setMenuPos({
+      top: rect.bottom + 4,
+      right: window.innerWidth - rect.right,
+    });
+    setShowOverflow((o) => !o);
+  }, []);
 
   const close = () => setShowOverflow(false);
 
@@ -314,9 +330,10 @@ export function SessionActionsOverflow({
 
         <div ref={overflowContainerRef} className={overflowContainer}>
           <button
+            ref={overflowButtonRef}
             id={`overflow-btn-${session.id}`}
             className={overflowButton}
-            onClick={(e) => { e.stopPropagation(); setShowOverflow((o) => !o); }}
+            onClick={openMenu}
             aria-label="More session actions"
             aria-expanded={showOverflow}
             aria-haspopup="menu"
@@ -324,11 +341,12 @@ export function SessionActionsOverflow({
           >
             ···
           </button>
-          {showOverflow && (
+          {showOverflow && createPortal(
             <div
               ref={overflowMenuRef}
               id={`overflow-menu-${session.id}`}
               className={overflowMenu}
+              style={{ top: menuPos.top, right: menuPos.right }}
               role="menu"
               aria-labelledby={`overflow-btn-${session.id}`}
               onClick={(e) => e.stopPropagation()}
@@ -456,7 +474,8 @@ export function SessionActionsOverflow({
                   {isDeleting ? "Deleting..." : <><span aria-hidden="true">🗑️</span> Delete</>}
                 </button>
               )}
-            </div>
+            </div>,
+            document.body
           )}
         </div>
       </div>

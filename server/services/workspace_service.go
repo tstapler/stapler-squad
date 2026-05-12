@@ -285,7 +285,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 	if instance.Started() && !instance.Paused() {
 		label := "pre-switch: " + req.Msg.Target
 		if _, cpErr := instance.CreateCheckpoint(label, 0); cpErr != nil {
-			log.WarningLog.Printf("SwitchWorkspace: pre-switch checkpoint for '%s' failed (non-fatal): %v", instance.Title, cpErr)
+			log.Warn("SwitchWorkspace: pre-switch checkpoint failed (non-fatal)", "session", instance.Title, "err", cpErr)
 		}
 	}
 
@@ -308,7 +308,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 	}
 
 	if err := ws.storage.SaveInstances(instances); err != nil {
-		log.WarningLog.Printf("Failed to save instances after workspace switch: %v", err)
+		log.Warn("failed to save instances after workspace switch", "err", err)
 	}
 
 	if ws.eventBus != nil {

@@ -36,7 +36,7 @@ func NewHistoryFileWatcher(watchDir string, callback func(filePath string)) *His
 // directory does not exist (degraded mode — polling fallback still works).
 func (w *HistoryFileWatcher) Start(ctx context.Context) error {
 	if _, err := os.Stat(w.watchDir); os.IsNotExist(err) {
-		log.WarningLog.Printf("HistoryFileWatcher: watch directory does not exist: %s", w.watchDir)
+		log.Warn("history file watcher: watch directory does not exist", "path", w.watchDir)
 		return nil
 	}
 
@@ -85,7 +85,7 @@ func (w *HistoryFileWatcher) run(ctx context.Context) {
 			if !ok {
 				return
 			}
-			log.WarningLog.Printf("HistoryFileWatcher error: %v", err)
+			log.Warn("history file watcher error", "err", err)
 		}
 	}
 }

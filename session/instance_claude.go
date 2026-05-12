@@ -4,22 +4,104 @@ package session
 // history file detection, UUID extraction, and conversation reattachment.
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
 )
 
+// staleResumePattern is the prefix Claude CLI emits when --resume is used with a
+// conversation ID that no longer exists in Claude's backend.
+const staleResumePattern = "No conversation found with session ID"
+
+// isStaleResumeExit returns true when the PTY exit tail contains the Claude CLI error
+// that indicates a stale or expired --resume argument.  ANSI escape sequences are
+// stripped before the check so colour output does not prevent matching.
+func isStaleResumeExit(exitContent []byte) bool {
+	if len(exitContent) == 0 {
+		return false
+	}
+	return bytes.Contains(stripANSISimple(exitContent), []byte(staleResumePattern))
+}
+
+// stripANSISimple removes ANSI CSI/OSC/single-char escape sequences so that
+// pattern matching works regardless of terminal colour output.  It is intentionally
+// minimal — only the forms emitted by common terminal programs are handled.
+func stripANSISimple(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	i := 0
+	for i < len(b) {
+		if b[i] != 0x1b {
+			out = append(out, b[i])
+			i++
+			continue
+		}
+		if i+1 >= len(b) {
+			break
+		}
+		switch b[i+1] {
+		case '[': // CSI: ESC [ <params> <final>
+			i += 2
+			for i < len(b) && b[i] >= 0x20 && b[i] <= 0x3f {
+				i++
+			}
+			if i < len(b) && b[i] >= 0x40 && b[i] <= 0x7e {
+				i++
+			}
+		case ']': // OSC: ESC ] ... ST or BEL
+			i += 2
+			for i < len(b) {
+				if b[i] == 0x07 {
+					i++
+					break
+				}
+				if b[i] == 0x1b && i+1 < len(b) && b[i+1] == '\\' {
+					i += 2
+					break
+				}
+				i++
+			}
+		default: // ESC + single char
+			i += 2
+		}
+	}
+	return out
+}
+
+// recoverFromStaleResume clears the stale conversation UUID and restarts the session
+// fresh (without --resume) so it does not loop forever on the same bad UUID.
+// Safe to call from a goroutine; uses startMu to serialise concurrent calls.
+func (i *Instance) recoverFromStaleResume() {
+	log.Info("stale --resume uuid detected, clearing and restarting fresh", "session", i.Title)
+	log.ForSession(i.Title).Info("stale --resume uuid detected, clearing conversation state and restarting fresh")
+
+	// Remove the UUID so the next Start does not inject --resume.
+	i.ClearConversationState()
+
+	// Reset state machine so Start(false) can proceed from Stopped.
+	i.RecoverFromStopped()
+
+	if err := i.Start(false); err != nil {
+		log.Error("stale-resume auto-recovery failed", "session", i.Title, "err", err)
+		log.ForSession(i.Title).Error("stale-resume auto-recovery failed", "err", err)
+		return
+	}
+
+	log.Info("auto-recovered from stale --resume uuid", "session", i.Title)
+	log.ForSession(i.Title).Info("auto-recovered from stale --resume uuid, session restarted fresh")
+}
+
 // handleClaudeSessionReattachment attempts to re-attach to stored Claude Code session.
 func (i *Instance) handleClaudeSessionReattachment() error {
 	if i.claudeSession == nil {
-		log.InfoLog.Printf("No Claude Code session data stored for instance '%s'", i.Title)
+		log.Info("no claude code session data stored", "session", i.Title)
 		return nil
 	}
 
 	// Check if auto-reattachment is enabled
 	if !i.claudeSession.Settings.AutoReattach {
-		log.InfoLog.Printf("Auto-reattachment disabled for instance '%s'", i.Title)
+		log.Info("auto-reattachment disabled", "session", i.Title)
 		return nil
 	}
 
@@ -28,8 +110,7 @@ func (i *Instance) handleClaudeSessionReattachment() error {
 	if timeoutMinutes > 0 {
 		timeout := time.Duration(timeoutMinutes) * time.Minute
 		if time.Since(i.claudeSession.LastAttached) > timeout {
-			log.InfoLog.Printf("Claude Code session for '%s' has timed out (%v ago), skipping re-attachment",
-				i.Title, time.Since(i.claudeSession.LastAttached))
+			log.Info("claude code session has timed out, skipping re-attachment", "session", i.Title, "elapsed", time.Since(i.claudeSession.LastAttached))
 			return nil
 		}
 	}
@@ -39,14 +120,13 @@ func (i *Instance) handleClaudeSessionReattachment() error {
 
 	// Try to find and attach to the stored session
 	if i.claudeSession.ConversationUUID != "" {
-		log.InfoLog.Printf("Attempting to re-attach to Claude Code session '%s' for instance '%s'",
-			i.claudeSession.ConversationUUID, i.Title)
+		log.Info("attempting to re-attach to claude code session", "session", i.Title, "uuid", i.claudeSession.ConversationUUID)
 
 		// Verify the session still exists
 		session, err := sessionManager.GetSessionByID(i.claudeSession.ConversationUUID)
 		if err != nil {
 			if i.claudeSession.Settings.CreateNewOnMissing {
-				log.InfoLog.Printf("Stored Claude session not found, will create new session for '%s'", i.Title)
+				log.Info("stored claude session not found, will create new session", "session", i.Title)
 				return i.createNewClaudeSession()
 			}
 			return fmt.Errorf("stored Claude session '%s' not found: %w", i.claudeSession.ConversationUUID, err)
@@ -59,7 +139,7 @@ func (i *Instance) handleClaudeSessionReattachment() error {
 
 		// Update last attached timestamp
 		i.claudeSession.LastAttached = time.Now()
-		log.InfoLog.Printf("Successfully re-attached to Claude Code session '%s'", session.ID)
+		log.Info("successfully re-attached to claude code session", "session_id", session.ID)
 	} else {
 		// No specific session ID stored, try to find matching sessions by project
 		if i.gitManager.HasWorktree() {
@@ -72,7 +152,7 @@ func (i *Instance) handleClaudeSessionReattachment() error {
 
 // createNewClaudeSession creates a new Claude Code session for this instance.
 func (i *Instance) createNewClaudeSession() error {
-	log.InfoLog.Printf("Creating new Claude Code session for instance '%s'", i.Title)
+	log.Info("creating new claude code session", "session", i.Title)
 
 	// TODO: Implement actual Claude Code session creation
 	// This would typically involve:
@@ -108,8 +188,7 @@ func (i *Instance) createNewClaudeSession() error {
 		},
 	}
 
-	log.InfoLog.Printf("Created new Claude Code session '%s' for instance '%s'",
-		newSessionID, i.Title)
+	log.Info("created new claude code session", "session_id", newSessionID, "session", i.Title)
 
 	return nil
 }
@@ -129,7 +208,7 @@ func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionMa
 
 	if len(matchingSessions) == 0 {
 		if i.claudeSession.Settings.CreateNewOnMissing {
-			log.InfoLog.Printf("No matching Claude sessions found for project '%s', creating new session", projectPath)
+			log.Info("no matching claude sessions found for project, creating new session", "path", projectPath)
 			return i.createNewClaudeSession()
 		}
 		return fmt.Errorf("no matching Claude sessions found for project '%s'", projectPath)
@@ -161,8 +240,7 @@ func (i *Instance) findAndAttachToProjectSession(sessionManager *ClaudeSessionMa
 	}
 	i.claudeSession.Metadata["working_dir"] = selectedSession.WorkingDir
 
-	log.InfoLog.Printf("Successfully attached to Claude Code session '%s' for project '%s'",
-		selectedSession.ID, projectPath)
+	log.Info("successfully attached to claude code session for project", "session_id", selectedSession.ID, "path", projectPath)
 
 	return nil
 }
@@ -220,29 +298,35 @@ func (i *Instance) tryExtractConversationUUID() {
 	if i.tmuxManager.DoesSessionExist() {
 		pid, err := i.tmuxManager.GetPanePID()
 		if err != nil {
-			log.DebugLog.Printf("tryExtractConversationUUID: could not get pane PID for '%s': %v", i.Title, err)
+			log.Debug("tryextractconversationuuid: could not get pane pid", "session", i.Title, "err", err)
 		} else {
 			info, err = detector.Detect(pid)
 			if err != nil {
-				log.WarningLog.Printf("tryExtractConversationUUID: detect error for '%s' (pid=%d): %v", i.Title, pid, err)
+				log.Warn("tryextractconversationuuid: detect error", "session", i.Title, "pid", pid, "err", err)
 			}
 		}
 	}
 
 	// Fallback: scan the project directory by path (works after reboot / tmux kill).
-	if info == nil && i.Path != "" {
+	// Use the effective root dir (worktree path for worktree sessions) so we look in
+	// the right ~/.claude/projects/ subdirectory, not the base repository path.
+	if info == nil {
+		effectivePath := i.GetEffectiveRootDir()
+		if effectivePath == "" {
+			return
+		}
 		var err error
-		info, err = detector.DetectByPath(i.Path)
+		info, err = detector.DetectByPath(effectivePath)
 		if err != nil {
-			log.WarningLog.Printf("tryExtractConversationUUID: path-based detect error for '%s': %v", i.Title, err)
+			log.Warn("tryextractconversationuuid: path-based detect error", "session", i.Title, "err", err)
 		}
 		if info != nil {
-			log.InfoLog.Printf("tryExtractConversationUUID: found conversation via path fallback for '%s'", i.Title)
+			log.Info("tryextractconversationuuid: found conversation via path fallback", "session", i.Title)
 		}
 	}
 
 	if info == nil {
-		log.DebugLog.Printf("tryExtractConversationUUID: no JSONL file found for '%s'", i.Title)
+		log.Debug("tryextractconversationuuid: no jsonl file found", "session", i.Title)
 		return
 	}
 
@@ -252,6 +336,7 @@ func (i *Instance) tryExtractConversationUUID() {
 	}
 	i.claudeSession.ConversationUUID = info.ConversationUUID
 	i.HistoryFilePath = info.HistoryFilePath
+	log.ForSession(i.Title).Info("uuid assigned via tryextractconversationuuid", "uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 }
 
 // GetConversationUUID returns the Claude conversation UUID, or "" if not linked.
@@ -282,4 +367,5 @@ func (i *Instance) SetHistoryInfo(conversationUUID, historyFilePath string) {
 	}
 	i.claudeSession.ConversationUUID = conversationUUID
 	i.HistoryFilePath = historyFilePath
+	log.ForSession(i.Title).Info("conversation uuid set", "uuid", conversationUUID, "history", historyFilePath)
 }

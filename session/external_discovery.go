@@ -67,13 +67,13 @@ func (e *ExternalSessionDiscovery) Start(interval time.Duration) {
 	// Fast initial discovery via tmux user options (single tmux list-sessions call).
 	// Run before polling so sessions are available immediately at startup.
 	if _, err := e.discovery.ScanFromUserOptions(); err != nil {
-		log.WarningLog.Printf("ScanFromUserOptions: %v", err)
+		log.Warn("ScanFromUserOptions failed", "err", err)
 	}
 
 	// Start polling
 	e.discovery.StartPolling(e.ctx, interval)
 
-	log.InfoLog.Printf("External session discovery started (interval: %v)", interval)
+	log.Info("external session discovery started", "interval", interval)
 }
 
 // Stop stops the discovery service.
@@ -81,7 +81,7 @@ func (e *ExternalSessionDiscovery) Stop() {
 	if e.cancel != nil {
 		e.cancel()
 	}
-	log.InfoLog.Println("External session discovery stopped")
+	log.Info("external session discovery stopped")
 }
 
 // GetSessions returns all currently discovered external sessions.
@@ -119,14 +119,13 @@ func (e *ExternalSessionDiscovery) GetSessionByTmux(tmuxSessionName string) *Ins
 // handleNewSession creates an Instance wrapper for a newly discovered mux session.
 func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSession) {
 	if discovered.Metadata == nil {
-		log.WarningLog.Printf("Discovered session without metadata: %s", discovered.SocketPath)
+		log.Warn("discovered session without metadata", "path", discovered.SocketPath)
 		return
 	}
 
 	// Skip sessions without tmux integration - we need this for unified streaming
 	if discovered.Metadata.TmuxSession == "" {
-		log.WarningLog.Printf("Discovered session without tmux session name: %s (cannot attach for unified streaming)",
-			discovered.SocketPath)
+		log.Warn("discovered session without tmux session name, cannot attach for unified streaming", "path", discovered.SocketPath)
 		return
 	}
 
@@ -167,16 +166,14 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	// This enables GetPTYReader() to work, which is required for WebSocket streaming.
 	tmuxSession := tmux.NewTmuxSessionFromExisting(discovered.Metadata.TmuxSession)
 	if err := tmuxSession.AttachToExisting(); err != nil {
-		log.ErrorLog.Printf("Failed to attach to tmux session '%s' for external session '%s': %v",
-			discovered.Metadata.TmuxSession, title, err)
+		log.Error("failed to attach to tmux session for external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title, "err", err)
 		// Continue without PTY attachment - session will still be visible but streaming won't work
 		// The streamExternalTerminal fallback can still handle it via capture-pane polling
 	} else {
 		// Successfully attached - set the tmux session on the instance
 		// This also sets instance.started = true, enabling GetPTYReader()
 		instance.SetTmuxSession(tmuxSession)
-		log.InfoLog.Printf("Attached to tmux session '%s' for unified streaming of external session '%s'",
-			discovered.Metadata.TmuxSession, title)
+		log.Info("attached to tmux session for unified streaming of external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title)
 	}
 
 	// Register the session
@@ -184,8 +181,7 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 	e.sessions[discovered.SocketPath] = instance
 	e.sessionsMu.Unlock()
 
-	log.InfoLog.Printf("Discovered external Claude session: %s (socket: %s, cwd: %s, tmux: %s)",
-		title, discovered.SocketPath, discovered.Metadata.Cwd, discovered.Metadata.TmuxSession)
+	log.Info("discovered external claude session", "title", title, "socket", discovered.SocketPath, "cwd", discovered.Metadata.Cwd, "tmux", discovered.Metadata.TmuxSession)
 
 	// Notify all registered callbacks
 	for _, callback := range e.onSessionAddedCallbacks {
@@ -203,7 +199,7 @@ func (e *ExternalSessionDiscovery) handleRemovedSession(discovered *mux.Discover
 	e.sessionsMu.Unlock()
 
 	if exists {
-		log.InfoLog.Printf("External session disconnected: %s", instance.Title)
+		log.Info("external session disconnected", "title", instance.Title)
 
 		// Notify all registered callbacks
 		for _, callback := range e.onSessionRemovedCallbacks {
@@ -285,8 +281,7 @@ func retryWithDelay(maxAttempts int, delay time.Duration, fn func() error) error
 			return lastErr
 		}
 		if attempt < maxAttempts-1 {
-			log.InfoLog.Printf("retryWithDelay: attempt %d/%d failed: %v — retrying in %v",
-				attempt+1, maxAttempts, lastErr, delay)
+			log.Info("retryWithDelay: attempt failed, retrying", "attempt", attempt+1, "max", maxAttempts, "err", lastErr, "delay", delay)
 			time.Sleep(delay)
 		}
 	}

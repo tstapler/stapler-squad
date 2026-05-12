@@ -206,27 +206,27 @@ func (r *CommandRegistry) ResolveCommand(contextID ContextID, key string) *Comma
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	log.DebugLog.Printf("ResolveCommand: contextID=%s, key=%s", contextID, key)
+	log.Debug("ResolveCommand", "contextID", contextID, "key", key)
 
 	// First check the specific context
 	if bindings, exists := r.bindings[contextID]; exists {
-		log.DebugLog.Printf("ResolveCommand: found bindings for context %s, contains %d keys", contextID, len(bindings))
+		log.Debug("ResolveCommand: found bindings for context", "context", contextID, "key_count", len(bindings))
 		if cmdID, found := bindings[key]; found {
-			log.DebugLog.Printf("ResolveCommand: found command %s for key %s", cmdID, key)
+			log.Debug("ResolveCommand: found command for key", "command", cmdID, "key", key)
 			return r.commands[cmdID]
 		}
-		log.DebugLog.Printf("ResolveCommand: key %s not found in context %s bindings", key, contextID)
+		log.Debug("ResolveCommand: key not found in context bindings", "key", key, "context", contextID)
 	} else {
-		log.DebugLog.Printf("ResolveCommand: no bindings exist for context %s", contextID)
+		log.Debug("ResolveCommand: no bindings exist for context", "context", contextID)
 	}
 
 	// If not found, check parent contexts
 	if context, exists := r.contexts[contextID]; exists && context.Parent != nil {
-		log.DebugLog.Printf("ResolveCommand: checking parent context %s", *context.Parent)
+		log.Debug("ResolveCommand: checking parent context", "parent", *context.Parent)
 		return r.ResolveCommand(*context.Parent, key)
 	}
 
-	log.DebugLog.Printf("ResolveCommand: no command found for key %s in context %s", key, contextID)
+	log.Debug("ResolveCommand: no command found", "key", key, "context", contextID)
 	return nil
 }
 

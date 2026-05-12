@@ -6,12 +6,14 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -275,6 +277,12 @@ type Instance struct {
 	// onRateLimitRecovery is called (in a goroutine) when recovery completes.
 	// success=true means recovery input was sent; false means it failed.
 	onRateLimitRecovery func(sessionID string, success bool, errMsg string)
+
+	// onStatusChangeMu protects onStatusChange.
+	onStatusChangeMu sync.RWMutex
+	// onStatusChange is called when the ClaudeController detects a status transition.
+	// Wired by the server layer to trigger reactive queue checks.
+	onStatusChange func(detection.DetectedStatus, string)
 }
 
 // SessionType indicates the type of session workflow to use
@@ -455,11 +463,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	// This extracts repository information from the git remote URL
 	if instance.GitHubOwner == "" || instance.GitHubRepo == "" {
 		if err := instance.DetectAndPopulateWorktreeInfo(); err != nil {
-			log.WarningLog.Printf("Failed to detect worktree info for new instance '%s': %v", opts.Title, err)
+			log.Warn("failed to detect worktree info for new instance", "session", opts.Title, "err", err)
 			// Non-fatal - instance can still be created without this info
 		} else if instance.GitHubOwner != "" {
-			log.InfoLog.Printf("Auto-detected GitHub info for new instance '%s': %s/%s (worktree=%v)",
-				opts.Title, instance.GitHubOwner, instance.GitHubRepo, instance.IsWorktree)
+			log.Info("auto-detected github info for new instance", "session", opts.Title, "owner", instance.GitHubOwner, "repo", instance.GitHubRepo, "worktree", instance.IsWorktree)
 		}
 	}
 
@@ -472,7 +479,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 				"resumed_from_history": "true",
 			},
 		}
-		log.InfoLog.Printf("Instance '%s' configured to resume Claude conversation: %s", opts.Title, opts.ResumeId)
+		log.Info("instance configured to resume claude conversation", "session", opts.Title, "resume_id", opts.ResumeId)
 	}
 
 	return instance, nil
@@ -526,7 +533,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.startMu.Lock()
 	defer i.startMu.Unlock()
 
-	log.InfoLog.Printf("Starting instance '%s' path=%q program=%q (firstTimeSetup: %v)", i.Title, i.Path, i.Program, firstTimeSetup)
+	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
 
 	if !firstTimeSetup {
 		i.trackRestartRate()
@@ -543,12 +550,12 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// the callback to fire again after the sync.Once was exhausted in the prior run.
 	i.tmuxManager.ResetExitOnce()
 	i.tmuxManager.SetOnExitCallback(func(reason string) {
-		log.InfoLog.Printf("Instance '%s': unexpected exit detected via control mode (%s)", i.Title, reason)
-		log.ForSession(i.Title).Info("Session exited unexpectedly (reason: %s)", reason)
+		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
+		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
 		i.stateMutex.Lock()
 		if i.Status == Running || i.Status == Ready {
 			if err := i.transitionTo(Stopped); err != nil {
-				log.WarningLog.Printf("Instance '%s': exit callback transition failed: %v", i.Title, err)
+				log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 			}
 		}
 		i.stateMutex.Unlock()
@@ -582,12 +589,10 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 				// Cold restore: we have a conversation UUID — relaunch with --resume.
 				// initTmuxSession() (called above) already built the program command
 				// with --resume via ClaudeCommandBuilder, so Start() uses it directly.
-				log.InfoLog.Printf("Cold restoring '%s' with --resume %s in %s",
-					i.Title, i.claudeSession.ConversationUUID, startPath)
+				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
 			} else {
 				// Dead tmux, no UUID — start a fresh session without --resume.
-				log.WarningLog.Printf("Cold start '%s': tmux dead, no conversation UUID, starting fresh in %s",
-					i.Title, startPath)
+				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
 			}
 			if err := i.tmuxManager.Start(startPath); err != nil {
 				setupErr = fmt.Errorf("cold restore Start failed for '%s': %w", i.Title, err)
@@ -596,7 +601,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// Attach PTY — same pattern as firstTimeSetup path (lines 867-870).
 			_ = i.tmuxManager.RestoreWithWorkDir(startPath)
 			if _, ptyErr := i.tmuxManager.GetPTY(); ptyErr != nil {
-				log.ErrorLog.Printf("Cold-restored session '%s': PTY attach failed (%v) — controller and SendKeys will be unavailable", i.Title, ptyErr)
+				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
 			}
 			// Clear the stored session ID so HistoryLinker re-detects the actual
 			// UUID from the running process's open files. The --resume flag was
@@ -614,19 +619,19 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			if i.gitManager.HasWorktree() {
 				workDir = i.gitManager.GetWorktreePath()
 			}
-			log.InfoLog.Printf("Restoring existing tmux session for instance '%s' with workDir '%s'", i.Title, workDir)
+			log.Info("restoring existing tmux session", "session", i.Title, "path", workDir)
 			if err := i.tmuxManager.RestoreWithWorkDir(workDir); err != nil {
 				setupErr = fmt.Errorf("failed to restore existing session: %w", err)
 				return setupErr
 			}
-			log.InfoLog.Printf("Successfully restored tmux session for instance '%s'", i.Title)
+			log.Info("successfully restored tmux session", "session", i.Title)
 		}
 	} else {
 		basePath := i.Path
 		if i.gitManager.HasWorktree() {
-			log.InfoLog.Printf("Setting up git worktree for instance '%s'", i.Title)
+			log.Info("setting up git worktree", "session", i.Title)
 			if err := i.gitManager.Setup(); err != nil {
-				log.ForSession(i.Title).Error("Failed to setup git worktree: %v", err)
+				log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
 				return setupErr
 			}
@@ -649,7 +654,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// Note: RestoreWithWorkDir always returns nil even on PTY failure; check GetPTY() to confirm.
 		_ = i.tmuxManager.RestoreWithWorkDir(startPath)
 		if _, ptyErr := i.tmuxManager.GetPTY(); ptyErr != nil {
-			log.ErrorLog.Printf("New session '%s': PTY attach failed after retries (%v) — controller and SendKeys will be unavailable", i.Title, ptyErr)
+			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
 		}
 	}
 
@@ -666,7 +671,7 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.stateMutex.Unlock()
 	i.started = true
 	i.fireLifecycleEvent(EventStarted, "")
-	log.ForSession(i.Title).Info("Session started (firstTimeSetup: %v)", firstTimeSetup)
+	log.ForSession(i.Title).Info("session started", "first_time_setup", firstTimeSetup)
 
 	// Start controller for new sessions only; loaded sessions are wired later by server.go.
 	if firstTimeSetup {
@@ -674,17 +679,17 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// One retry: brief delay gives the tmux session time to stabilise, then
 			// re-attempt PTY attachment (RestoreWithWorkDir is idempotent — skips
 			// recreation if the session exists, only re-attaches PTY if ptmx is nil).
-			log.WarningLog.Printf("Controller start failed for '%s': %v — retrying after PTY re-attach", i.Title, err)
+			log.Warn("controller start failed, retrying after pty re-attach", "session", i.Title, "err", err)
 			time.Sleep(200 * time.Millisecond)
 			// Session already exists; workDir only matters for the fallback recreation path.
 			_ = i.tmuxManager.RestoreWithWorkDir("")
 			if retryErr := i.StartController(); retryErr != nil {
-				log.ErrorLog.Printf("Controller start failed for '%s' after retry: %v — marking degraded", i.Title, retryErr)
+				log.Error("controller start failed after retry, marking degraded", "session", i.Title, "err", retryErr)
 				i.fireLifecycleEvent(EventExited, "controller-start-failed")
 			}
 		}
 	} else {
-		log.DebugLog.Printf("Skipping controller startup for loaded instance '%s' (will be started after wiring)", i.Title)
+		log.Debug("skipping controller startup for loaded instance, will be started after wiring", "session", i.Title)
 	}
 
 	return nil
@@ -739,13 +744,13 @@ func (i *Instance) Pause() error {
 	// Check if there are any changes to commit
 	if dirty, err := i.gitManager.IsDirty(); err != nil {
 		errs = append(errs, fmt.Errorf("failed to check if worktree is dirty: %w", err))
-		log.ErrorLog.Print(err)
+		log.Error("failed to check if worktree is dirty", "session", i.Title, "err", err)
 	} else if dirty {
 		// Commit changes locally (without pushing to GitHub)
 		commitMsg := fmt.Sprintf("[claudesquad] update from '%s' on %s (paused)", i.Title, time.Now().Format(time.RFC822))
 		if err := i.gitManager.CommitChanges(commitMsg); err != nil {
 			errs = append(errs, fmt.Errorf("failed to commit changes: %w", err))
-			log.ErrorLog.Print(err)
+			log.Error("failed to commit changes on pause", "err", err)
 			// Return early if we can't commit changes to avoid corrupted state
 			return i.combineErrors(errs)
 		}
@@ -754,7 +759,7 @@ func (i *Instance) Pause() error {
 	// Detach from tmux session instead of closing to preserve session output
 	if err := i.tmuxManager.DetachSafely(); err != nil {
 		errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", err))
-		log.ErrorLog.Print(err)
+		log.Error("failed to detach tmux session", "err", err)
 		// Continue with pause process even if detach fails
 	}
 
@@ -763,20 +768,20 @@ func (i *Instance) Pause() error {
 		// Remove worktree but keep branch
 		if err := i.gitManager.Remove(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
-			log.ErrorLog.Print(err)
+			log.Error("failed to remove git worktree", "err", err)
 			return i.combineErrors(errs)
 		}
 
 		// Only prune if remove was successful
 		if err := i.gitManager.Prune(); err != nil {
 			errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
-			log.ErrorLog.Print(err)
+			log.Error("failed to prune git worktrees", "err", err)
 			return i.combineErrors(errs)
 		}
 	}
 
 	if err := i.combineErrors(errs); err != nil {
-		log.ErrorLog.Print(err)
+		log.Error("pause encountered errors", "err", err)
 		return err
 	}
 
@@ -786,7 +791,7 @@ func (i *Instance) Pause() error {
 		return fmt.Errorf("failed to transition to Paused: %w", err)
 	}
 	i.stateMutex.Unlock()
-	log.ForSession(i.Title).Info("Session paused")
+	log.ForSession(i.Title).Info("session paused")
 	_ = clipboard.WriteAll(i.gitManager.GetBranchName())
 	return nil
 }
@@ -805,7 +810,7 @@ func (i *Instance) Resume() error {
 	if i.gitManager.HasWorktree() {
 		// Check if branch is checked out
 		if checked, err := i.gitManager.IsBranchCheckedOut(); err != nil {
-			log.ErrorLog.Print(err)
+			log.Error("failed to check if branch is checked out", "session", i.Title, "err", err)
 			return fmt.Errorf("failed to check if branch is checked out: %w", err)
 		} else if checked {
 			return fmt.Errorf("cannot resume: branch is checked out, please switch to a different branch")
@@ -813,8 +818,8 @@ func (i *Instance) Resume() error {
 
 		// Setup git worktree
 		if err := i.gitManager.Setup(); err != nil {
-			log.ErrorLog.Print(err)
-			log.ForSession(i.Title).Error("Failed to setup git worktree: %v", err)
+			log.Error("failed to setup git worktree on resume", "err", err)
+			log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
 			return fmt.Errorf("failed to setup git worktree: %w", err)
 		}
 
@@ -826,7 +831,7 @@ func (i *Instance) Resume() error {
 
 	// Handle Claude Code session re-attachment if configured
 	if err := i.handleClaudeSessionReattachment(); err != nil {
-		log.WarningLog.Printf("Failed to re-attach to Claude Code session: %v", err)
+		log.Warn("failed to re-attach to claude code session", "err", err)
 		// Continue with resume - Claude session attachment is not critical for basic functionality
 	}
 
@@ -834,15 +839,15 @@ func (i *Instance) Resume() error {
 	if i.tmuxManager.DoesSessionExist() {
 		// Session exists, just restore PTY connection to it (retains stdout from before pause)
 		if err := i.tmuxManager.RestoreWithWorkDir(worktreePath); err != nil {
-			log.ErrorLog.Print(err)
+			log.Error("restore failed, falling back to new session", "err", err)
 			// If restore fails, fall back to creating new session
 			if err := i.tmuxManager.Start(worktreePath); err != nil {
-				log.ErrorLog.Print(err)
+				log.Error("failed to start new session after restore failure", "err", err)
 				// Cleanup git worktree if tmux session creation fails
 				if i.gitManager.HasWorktree() {
 					if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 						err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-						log.ErrorLog.Print(err)
+						log.Error("cleanup also failed", "err", err)
 					}
 				}
 				return fmt.Errorf("failed to start new session: %w", err)
@@ -851,12 +856,12 @@ func (i *Instance) Resume() error {
 	} else {
 		// Create new tmux session
 		if err := i.tmuxManager.Start(worktreePath); err != nil {
-			log.ErrorLog.Print(err)
+			log.Error("failed to start new tmux session on resume", "err", err)
 			// Cleanup git worktree if tmux session creation fails
 			if i.gitManager.HasWorktree() {
 				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
 					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
-					log.ErrorLog.Print(err)
+					log.Error("cleanup also failed", "err", err)
 				}
 			}
 			return fmt.Errorf("failed to start new session: %w", err)
@@ -869,12 +874,12 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("failed to transition to Running on resume: %w", err)
 	}
 	i.stateMutex.Unlock()
-	log.ForSession(i.Title).Info("Session resumed")
+	log.ForSession(i.Title).Info("session resumed")
 
 	// Start ClaudeController for idle detection and automation
 	// This is non-critical - we log errors but don't fail the resume
 	if err := i.StartController(); err != nil {
-		log.WarningLog.Printf("Failed to start controller for instance '%s': %v", i.Title, err)
+		log.Warn("failed to start controller on resume", "session", i.Title, "err", err)
 		// Continue - controller is optional functionality
 	}
 
@@ -897,7 +902,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	if preserveOutput && i.tmuxManager.HasSession() {
 		output, err := i.tmuxManager.CapturePaneContentWithOptions("-", "-")
 		if err != nil {
-			log.WarningLog.Printf("Failed to capture terminal output before restart: %v", err)
+			log.Warn("failed to capture terminal output before restart", "err", err)
 		} else {
 			savedOutput = output
 		}
@@ -979,17 +984,17 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		marker := fmt.Sprintf("\n=== Session restarted at %s ===\n=== Previous output restored below ===\n\n",
 			time.Now().Format(time.RFC3339))
 		if _, err := i.tmuxManager.SendKeys(fmt.Sprintf("echo '%s'", marker)); err != nil {
-			log.WarningLog.Printf("Failed to write restart marker: %v", err)
+			log.Warn("failed to write restart marker", "err", err)
 		}
 		time.Sleep(100 * time.Millisecond)
 		if err := i.tmuxManager.TapEnter(); err != nil {
-			log.WarningLog.Printf("Failed to send enter after marker: %v", err)
+			log.Warn("failed to send enter after marker", "err", err)
 		}
 	}
 
 	// Restart the controller
 	if err := i.StartController(); err != nil {
-		log.WarningLog.Printf("Failed to restart controller for instance '%s': %v", i.Title, err)
+		log.Warn("failed to restart controller", "session", i.Title, "err", err)
 		// Continue - controller is optional functionality
 	}
 
@@ -998,7 +1003,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	i.stateMutex.Lock()
 	if waspaused {
 		if err := i.transitionTo(Running); err != nil {
-			log.WarningLog.Printf("Restart: failed to transition '%s' from Paused to Running: %v", i.Title, err)
+			log.Warn("restart: failed to transition from paused to running", "session", i.Title, "err", err)
 			i.setStatus(Running)
 		}
 		i.started = true
@@ -1006,6 +1011,6 @@ func (i *Instance) Restart(preserveOutput bool) error {
 	i.UpdatedAt = time.Now()
 	i.stateMutex.Unlock()
 
-	log.InfoLog.Printf("Successfully restarted session '%s'", i.Title)
+	log.Info("successfully restarted session", "session", i.Title)
 	return nil
 }

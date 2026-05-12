@@ -40,20 +40,20 @@ func (b *ClaudeCommandBuilder) Build() string {
 
 	// No session data means no resumption possible
 	if b.claudeSession == nil || b.claudeSession.ConversationUUID == "" {
-		log.DebugLog.Printf("No Claude session data available for resumption")
+		log.Debug("no claude session data available for resumption")
 		return b.baseProgram
 	}
 
 	// Validate session ID format before using it
 	sessionID := b.claudeSession.ConversationUUID
 	if !isValidUUID(sessionID) {
-		log.WarningLog.Printf("Invalid UUID format for session ID: %s, skipping resumption", sessionID)
+		log.Warn("invalid uuid format for session id, skipping resumption", "uuid", sessionID)
 		return b.baseProgram
 	}
 
 	// Construct command with resumption flag
 	enrichedCommand := fmt.Sprintf("%s --resume %s", b.baseProgram, sessionID)
-	log.InfoLog.Printf("Built Claude command with session resumption: %s --resume %s", b.baseProgram, sessionID)
+	log.Info("built claude command with session resumption", "program", b.baseProgram, "uuid", sessionID)
 	return enrichedCommand
 }
 

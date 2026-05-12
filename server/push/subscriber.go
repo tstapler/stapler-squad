@@ -18,14 +18,15 @@ import (
 // A single failing Notifier does not prevent delivery to the others.
 func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifiers []Notifier) {
 	if bus == nil {
-		log.WarningLog.Printf("[DeliverySubscriber] EventBus is nil, not starting")
+		log.Warn("DeliverySubscriber EventBus is nil, not starting")
 		return
 	}
 
 	ch, _ := bus.Subscribe(ctx)
 
 	go func() {
-		log.InfoLog.Printf("[DeliverySubscriber] started (%d notifier(s))", len(notifiers))
+		log.Info("DeliverySubscriber started", "notifiers", len(notifiers))
+		defer log.Info("DeliverySubscriber stopped")
 
 		var mu sync.Mutex
 		lastSent := make(map[string]time.Time)
@@ -35,7 +36,6 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 			select {
 			case event, ok := <-ch:
 				if !ok {
-					log.InfoLog.Printf("[DeliverySubscriber] event channel closed, stopping")
 					return
 				}
 				if event == nil {
@@ -59,7 +59,6 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 				fanout(ctx, notifiers, dn)
 
 			case <-ctx.Done():
-				log.InfoLog.Printf("[DeliverySubscriber] context cancelled, stopping")
 				return
 			}
 		}
@@ -70,7 +69,7 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 // StartDeliverySubscriber with an explicit []Notifier slice.
 func StartPushSubscriber(ctx context.Context, bus *events.EventBus, pushService *services.PushService) {
 	if pushService == nil {
-		log.WarningLog.Printf("[PushSubscriber] push service is nil, not starting")
+		log.Warn("PushSubscriber push service is nil, not starting")
 		return
 	}
 	StartDeliverySubscriber(ctx, bus, []Notifier{NewWebPushNotifier(pushService)})

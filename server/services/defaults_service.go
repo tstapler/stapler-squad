@@ -80,7 +80,7 @@ func (d *DefaultsService) UpdateGlobalDefaults(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
 	}
 
-	log.InfoLog.Printf("Updated global session defaults: program=%q tags=%v", cfg.SessionDefaults.Program, cfg.SessionDefaults.Tags)
+	log.Info("updated global session defaults", "program", cfg.SessionDefaults.Program, "tags", cfg.SessionDefaults.Tags)
 	return connect.NewResponse(&sessionv1.UpdateGlobalDefaultsResponse{
 		Defaults: sessionDefaultsToProto(cfg),
 	}), nil
@@ -131,7 +131,7 @@ func (d *DefaultsService) UpsertProfile(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
 	}
 
-	log.InfoLog.Printf("Upserted session profile: %q", p.Name)
+	log.Info("upserted session profile", "name", p.Name)
 	return connect.NewResponse(&sessionv1.UpsertProfileResponse{
 		Profile: profileDefaultsToProto(p),
 	}), nil
@@ -157,7 +157,7 @@ func (d *DefaultsService) DeleteProfile(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
 	}
 
-	log.InfoLog.Printf("Deleted session profile: %q", req.Msg.Name)
+	log.Info("deleted session profile", "name", req.Msg.Name)
 	return connect.NewResponse(&sessionv1.DeleteProfileResponse{}), nil
 }
 
@@ -200,7 +200,7 @@ func (d *DefaultsService) UpsertDirectoryRule(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
 	}
 
-	log.InfoLog.Printf("Upserted directory rule: %q", rule.Path)
+	log.Info("upserted directory rule", "path", rule.Path)
 	return connect.NewResponse(&sessionv1.UpsertDirectoryRuleResponse{
 		Rule: directoryRuleToProto(rule),
 	}), nil
@@ -236,7 +236,7 @@ func (d *DefaultsService) DeleteDirectoryRule(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
 	}
 
-	log.InfoLog.Printf("Deleted directory rule: %q", req.Msg.Path)
+	log.Info("deleted directory rule", "path", req.Msg.Path)
 	return connect.NewResponse(&sessionv1.DeleteDirectoryRuleResponse{}), nil
 }
 
@@ -251,8 +251,8 @@ func sessionDefaultsToProto(cfg *config.Config) *sessionv1.SessionDefaultsConfig
 		EnvVars:        sd.EnvVars,
 		CliFlags:       sd.CLIFlags,
 		Profiles:       make(map[string]*sessionv1.ProfileDefaultsProto),
-		DirectoryRules:   make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
-		OneOffBaseDir: cfg.OneOffBaseDir,
+		DirectoryRules: make([]*sessionv1.DirectoryRuleProto, 0, len(sd.DirectoryRules)),
+		OneOffBaseDir:  cfg.OneOffBaseDir,
 	}
 	// Use resolved defaults so the frontend receives ~/Projects rather than "" when unset.
 	if resolvedNewProjectDir, err := cfg.NewProjectBaseDirOrDefault(); err == nil {

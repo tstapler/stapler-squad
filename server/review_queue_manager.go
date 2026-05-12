@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"sync"
 	"time"
 
@@ -105,7 +106,7 @@ func (rqm *ReactiveQueueManager) Start(ctx context.Context) {
 	// Start the background poller (for safety and periodic checks)
 	rqm.poller.Start(ctx)
 
-	log.InfoLog.Printf("[ReactiveQueueManager] Started with event-driven updates")
+	log.Info("ReactiveQueueManager started with event-driven updates")
 }
 
 // processEvents processes events from the event bus.
@@ -156,7 +157,7 @@ func (rqm *ReactiveQueueManager) Stop() {
 	rqm.streamClientsMu.Unlock()
 
 	rqm.wg.Wait()
-	log.InfoLog.Printf("[ReactiveQueueManager] Stopped")
+	log.Info("ReactiveQueueManager stopped")
 }
 
 // signalActivity non-blockingly notifies the poll loop to snap to its fast interval.
@@ -167,6 +168,20 @@ func (rqm *ReactiveQueueManager) signalActivity() {
 	}
 }
 
+// OnControllerStatusChange is called by a ClaudeController's status-change goroutine
+// when it detects a terminal status transition. Safe to call from any goroutine.
+func (rqm *ReactiveQueueManager) OnControllerStatusChange(inst *session.Instance, _ detection.DetectedStatus) {
+	rqm.signalActivity()
+	go func() {
+		select {
+		case <-rqm.ctx.Done():
+			return
+		default:
+		}
+		rqm.poller.CheckSession(inst)
+	}()
+}
+
 // handleUserInteraction handles user interaction events and immediately re-evaluates the queue.
 func (rqm *ReactiveQueueManager) handleUserInteraction(event *events.Event) {
 	sessionID := event.SessionID
@@ -174,24 +189,23 @@ func (rqm *ReactiveQueueManager) handleUserInteraction(event *events.Event) {
 		return
 	}
 
-	log.DebugLog.Printf("[ReactiveQueueManager] User interaction on '%s' (type: %s)",
-		sessionID, event.InteractionType)
+	log.Debug("ReactiveQueueManager user interaction", "session", sessionID, "type", event.InteractionType)
 
 	// Find the instance
 	inst := rqm.poller.FindInstance(sessionID)
 	if inst == nil {
-		log.DebugLog.Printf("[ReactiveQueueManager] Instance '%s' not found", sessionID)
+		log.Debug("ReactiveQueueManager instance not found", "session", sessionID)
 		return
 	}
 
 	// Update LastUserResponse timestamp
 	respondedAt := inst.MarkUserResponded()
-	log.InfoLog.Printf("[ReactiveQueueManager] Updated LastUserResponse for '%s'", sessionID)
+	log.Info("ReactiveQueueManager updated LastUserResponse", "session", sessionID)
 
 	// Persist timestamp (critical for restart scenarios)
 	if rqm.storage != nil {
 		if err := rqm.storage.UpdateInstanceLastUserResponse(inst.Title, respondedAt); err != nil {
-			log.ErrorLog.Printf("Failed to persist LastUserResponse for '%s': %v", sessionID, err)
+			log.Error("failed to persist LastUserResponse", "session", sessionID, "err", err)
 		}
 	}
 
@@ -209,12 +223,12 @@ func (rqm *ReactiveQueueManager) handleSessionAcknowledged(event *events.Event) 
 		return
 	}
 
-	log.InfoLog.Printf("[ReactiveQueueManager] Session '%s' acknowledged - removing from queue", sessionID)
+	log.Info("ReactiveQueueManager session acknowledged, removing from queue", "session", sessionID)
 
 	// Immediate removal from queue
 	removed := rqm.queue.Remove(sessionID)
 	if removed {
-		log.DebugLog.Printf("[ReactiveQueueManager] Session '%s' removed from queue", sessionID)
+		log.Debug("ReactiveQueueManager session removed from queue", "session", sessionID)
 	}
 }
 
@@ -226,14 +240,13 @@ func (rqm *ReactiveQueueManager) handleApprovalResponse(event *events.Event) {
 	}
 
 	approved := event.Approved
-	log.InfoLog.Printf("[ReactiveQueueManager] Approval %s for '%s' - removing from queue",
-		map[bool]string{true: "given", false: "denied"}[approved], sessionID)
+	log.Info("ReactiveQueueManager approval response, removing from queue", "session", sessionID, "approved", approved)
 
 	// Find the instance and update status
 	inst := rqm.poller.FindInstance(sessionID)
 	if inst != nil && approved {
 		if err := inst.Approve(); err != nil {
-			log.ErrorLog.Printf("[ReactiveQueueManager] Failed to approve '%s': %v", sessionID, err)
+			log.Error("ReactiveQueueManager failed to approve session", "session", sessionID, "err", err)
 		}
 	}
 
@@ -379,7 +392,7 @@ func (rqm *ReactiveQueueManager) AddStreamClient(ctx context.Context, filtersInt
 	rqm.streamClients[clientID] = client
 	rqm.streamClientsMu.Unlock()
 
-	log.InfoLog.Printf("[ReactiveQueueManager] Added streaming client %s", clientID)
+	log.Info("ReactiveQueueManager added streaming client", "client", clientID)
 
 	// Send initial snapshot if requested
 	if filters != nil && filters.InitialSnapshot {
@@ -398,7 +411,7 @@ func (rqm *ReactiveQueueManager) RemoveStreamClient(clientID string) {
 		client.cancel()
 		close(client.eventCh)
 		delete(rqm.streamClients, clientID)
-		log.InfoLog.Printf("[ReactiveQueueManager] Removed streaming client %s", clientID)
+		log.Info("ReactiveQueueManager removed streaming client", "client", clientID)
 	}
 }
 
@@ -504,7 +517,7 @@ func (rqm *ReactiveQueueManager) sendInitialSnapshot(client *reviewQueueStreamCl
 	// Recover from panic if channel is closed (race condition with RemoveStreamClient)
 	defer func() {
 		if r := recover(); r != nil {
-			log.DebugLog.Printf("[ReactiveQueueManager] Recovered from panic in sendInitialSnapshot for client %s: %v (client likely disconnected)", client.id, r)
+			log.Debug("ReactiveQueueManager recovered from panic in sendInitialSnapshot (client likely disconnected)", "client", client.id, "err", r)
 		}
 	}()
 

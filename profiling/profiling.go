@@ -38,7 +38,7 @@ func StartProfiling(cfg Config) (func(), error) {
 	// Enable block profiling (shows where goroutines block)
 	if cfg.BlockProfile {
 		runtime.SetBlockProfileRate(1)
-		log.InfoLog.Printf("Block profiling enabled")
+		log.Info("Block profiling enabled")
 		cleanupFuncs = append(cleanupFuncs, func() {
 			runtime.SetBlockProfileRate(0)
 		})
@@ -47,7 +47,7 @@ func StartProfiling(cfg Config) (func(), error) {
 	// Enable mutex profiling (shows lock contention)
 	if cfg.MutexProfile {
 		runtime.SetMutexProfileFraction(1)
-		log.InfoLog.Printf("Mutex profiling enabled")
+		log.Info("Mutex profiling enabled")
 		cleanupFuncs = append(cleanupFuncs, func() {
 			runtime.SetMutexProfileFraction(0)
 		})
@@ -67,12 +67,12 @@ func StartProfiling(cfg Config) (func(), error) {
 			f.Close()
 			return nil, fmt.Errorf("failed to start trace: %w", err)
 		}
-		log.InfoLog.Printf("Execution trace enabled: %s", traceFile)
-		log.InfoLog.Printf("View with: go tool trace %s", traceFile)
+		log.Info("Execution trace enabled", "file", traceFile)
+		log.Info("View with: go tool trace <file>", "file", traceFile)
 		cleanupFuncs = append(cleanupFuncs, func() {
 			trace.Stop()
 			f.Close()
-			log.InfoLog.Printf("Trace saved to: %s", traceFile)
+			log.Info("Trace saved", "file", traceFile)
 		})
 	}
 
@@ -109,15 +109,15 @@ func StartProfiling(cfg Config) (func(), error) {
 		srv := &http.Server{Addr: addr, Handler: mux}
 
 		go func() {
-			log.InfoLog.Printf("Profiling server started on http://%s/debug/pprof/", addr)
-			log.InfoLog.Printf("  - Goroutines:    http://%s/debug/pprof/goroutine?debug=1", addr)
-			log.InfoLog.Printf("  - Heap:          http://%s/debug/pprof/heap", addr)
-			log.InfoLog.Printf("  - Block:         http://%s/debug/pprof/block?debug=1", addr)
-			log.InfoLog.Printf("  - Mutex:         http://%s/debug/pprof/mutex?debug=1", addr)
-			log.InfoLog.Printf("  - CPU:           curl http://%s/debug/pprof/profile?seconds=30 > cpu.prof", addr)
-			log.InfoLog.Printf("  - Fork pressure: http://%s/debug/fork-pressure", addr)
+			log.Info("Profiling server started", "url", fmt.Sprintf("http://%s/debug/pprof/", addr))
+			log.Info("  - Goroutines", "url", fmt.Sprintf("http://%s/debug/pprof/goroutine?debug=1", addr))
+			log.Info("  - Heap", "url", fmt.Sprintf("http://%s/debug/pprof/heap", addr))
+			log.Info("  - Block", "url", fmt.Sprintf("http://%s/debug/pprof/block?debug=1", addr))
+			log.Info("  - Mutex", "url", fmt.Sprintf("http://%s/debug/pprof/mutex?debug=1", addr))
+			log.Info("  - CPU", "cmd", fmt.Sprintf("curl http://%s/debug/pprof/profile?seconds=30 > cpu.prof", addr))
+			log.Info("  - Fork pressure", "url", fmt.Sprintf("http://%s/debug/fork-pressure", addr))
 			if err := srv.ListenAndServe(); err != http.ErrServerClosed {
-				log.ErrorLog.Printf("Profiling server error: %v", err)
+				log.Error("Profiling server error", "err", err)
 			}
 		}()
 
@@ -125,7 +125,7 @@ func StartProfiling(cfg Config) (func(), error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := srv.Shutdown(ctx); err != nil {
-				log.ErrorLog.Printf("Error shutting down profiling server: %v", err)
+				log.Error("Error shutting down profiling server", "err", err)
 			}
 		})
 	}
@@ -166,7 +166,7 @@ func StartContinuousProfiling(appName, serverAddr string) (func(), error) {
 func PrintGoroutineStacks() {
 	buf := make([]byte, 1<<20) // 1MB buffer
 	stacklen := runtime.Stack(buf, true)
-	log.InfoLog.Printf("=== Goroutine Stacks ===\n%s", buf[:stacklen])
+	log.Info("=== Goroutine Stacks ===", "stacks", string(buf[:stacklen]))
 }
 
 // MonitorGoroutines periodically logs goroutine counts
@@ -180,11 +180,10 @@ func MonitorGoroutines(ctx context.Context, interval time.Duration) {
 			return
 		case <-ticker.C:
 			count := runtime.NumGoroutine()
-			log.InfoLog.Printf("Active goroutines: %d", count)
 
 			// Alert on goroutine leak
 			if count > 100 {
-				log.ErrorLog.Printf("⚠️  High goroutine count detected: %d", count)
+				log.Error("high goroutine count detected", "count", count)
 			}
 		}
 	}

@@ -166,7 +166,7 @@ func (ns *NotificationService) GetNotificationHistory(
 
 	records, totalCount, err := ns.notificationStore.List(opts)
 	if err != nil {
-		log.ErrorLog.Printf("[NotificationHistory] Failed to list notifications: %v", err)
+		log.Error("[NotificationHistory] failed to list notifications", "err", err)
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -213,7 +213,7 @@ func (ns *NotificationService) MarkNotificationRead(
 	ids := req.Msg.NotificationIds
 	count, err := ns.notificationStore.MarkRead(ids)
 	if err != nil {
-		log.ErrorLog.Printf("[NotificationHistory] Failed to mark notifications read: %v", err)
+		log.Error("[NotificationHistory] failed to mark notifications read", "err", err)
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -246,7 +246,7 @@ func (ns *NotificationService) ClearNotificationHistory(
 
 	count, err := ns.notificationStore.Clear(before)
 	if err != nil {
-		log.ErrorLog.Printf("[NotificationHistory] Failed to clear notifications: %v", err)
+		log.Error("[NotificationHistory] failed to clear notifications", "err", err)
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 

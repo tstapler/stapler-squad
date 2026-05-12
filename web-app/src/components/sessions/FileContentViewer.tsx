@@ -10,6 +10,8 @@ import {
   truncationWarning, viewer, shikiOutput, plainPre, codeMirrorEditor,
   binaryPlaceholder, binaryIcon, binaryTitle, binaryMeta,
   downloadButton, imageViewer, imagePreview,
+  pdfViewer, pdfEmbed,
+  videoViewer, videoPlayer, videoMeta,
 } from "./FileContentViewer.css";
 
 // Language detection map: file extension → Shiki/CodeMirror language ID.
@@ -340,6 +342,23 @@ const IMAGE_CONTENT_TYPES = new Set([
   "image/bmp",
 ]);
 
+const PDF_CONTENT_TYPES = new Set(["application/pdf"]);
+
+const VIDEO_CONTENT_TYPES = new Set([
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/ogg",
+  "application/ogg",
+]);
+
+// Strip parameters (e.g. "; charset=utf-8") and normalize case before matching.
+function matchesContentType(contentType: string | undefined, types: Set<string>): boolean {
+  if (!contentType) return false;
+  const base = contentType.split(";")[0].trim().toLowerCase();
+  return types.has(base);
+}
+
 // ---- Main component ----
 
 interface FileContentViewerProps {
@@ -389,7 +408,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
   if (!data) return null;
 
   // Inline image rendering for known image content types.
-  const isImage = data.isBinary && IMAGE_CONTENT_TYPES.has(data.contentType ?? "");
+  const isImage = data.isBinary && matchesContentType(data.contentType, IMAGE_CONTENT_TYPES);
   if (isImage) {
     return (
       <div className={container}>
@@ -401,6 +420,51 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
             alt={filePath}
             className={imagePreview}
           />
+        </div>
+      </div>
+    );
+  }
+
+  const isPdf = data.isBinary && matchesContentType(data.contentType, PDF_CONTENT_TYPES);
+  if (isPdf) {
+    return (
+      <div className={container}>
+        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <div className={pdfViewer}>
+          <embed
+            src={`${rawUrl}#view=FitH&navpanes=0`}
+            type="application/pdf"
+            className={pdfEmbed}
+            title={filePath}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  const isVideo = data.isBinary && matchesContentType(data.contentType, VIDEO_CONTENT_TYPES);
+  if (isVideo) {
+    const sizeKb = Number(data.size) / 1024;
+    const sizeLabel = sizeKb >= 1024
+      ? `${(sizeKb / 1024).toFixed(1)} MB`
+      : `${sizeKb.toFixed(1)} KB`;
+
+    return (
+      <div className={container}>
+        <Breadcrumb path={filePath} downloadUrl={downloadUrl} />
+        <div className={videoViewer}>
+          <video
+            src={rawUrl}
+            controls
+            preload="metadata"
+            className={videoPlayer}
+          >
+            Your browser does not support the video element.
+          </video>
+          <p className={videoMeta}>
+            {filePath.split("/").pop()} · {sizeLabel}
+            {data.contentType ? ` · ${data.contentType}` : ""}
+          </p>
         </div>
       </div>
     );

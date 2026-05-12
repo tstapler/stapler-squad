@@ -322,7 +322,7 @@ func (s *UnfinishedWorkService) GetWorktreeAISummary(
 
 	summary := strings.TrimSpace(string(summaryOut))
 	if err := s.stateStore.CacheSummary(req.Msg.RepoPath, req.Msg.Branch, diffHash, summary); err != nil {
-		log.WarningLog.Printf("[unfinished] failed to cache AI summary: %v", err)
+		log.Warn("[unfinished] failed to cache AI summary", "err", err)
 	}
 
 	return connect.NewResponse(&sessionv1.GetWorktreeAISummaryResponse{

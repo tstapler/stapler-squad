@@ -175,7 +175,7 @@ func (cq *CommandQueue) Dequeue() *Command {
 	if cq.persistPath != "" {
 		if err := cq.saveUnsafe(); err != nil {
 			// Log error but don't fail the dequeue operation
-			log.ErrorLog.Printf("failed to persist command queue state for session %s: %v", cq.sessionName, err)
+			log.Error("failed to persist command queue state", "session", cq.sessionName, "err", err)
 		}
 	}
 

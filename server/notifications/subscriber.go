@@ -36,14 +36,15 @@ func StartSubscriber(ctx context.Context, bus *events.EventBus, store *Notificat
 // coalescing interval. This is primarily useful for tests that need shorter intervals.
 func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, store Appender, interval time.Duration) {
 	if bus == nil || store == nil {
-		log.WarningLog.Printf("[NotificationSubscriber] EventBus or store is nil, not starting subscriber")
+		log.Warn("NotificationSubscriber EventBus or store is nil, not starting subscriber")
 		return
 	}
 
 	ch, _ := bus.Subscribe(ctx)
 
 	go func() {
-		log.InfoLog.Printf("[NotificationSubscriber] Started listening for notification events (coalesce interval: %v)", interval)
+		log.Info("NotificationSubscriber started", "coalesce_interval", interval)
+		defer log.Info("NotificationSubscriber stopped")
 
 		var mu sync.Mutex
 		buffer := make(map[string]*NotificationRecord)
@@ -56,7 +57,7 @@ func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, stor
 			}
 			for key, record := range buffer {
 				if err := store.Append(record); err != nil {
-					log.ErrorLog.Printf("[NotificationSubscriber] Failed to append notification: %v", err)
+					log.Error("NotificationSubscriber failed to append notification", "err", err)
 				}
 				delete(buffer, key)
 			}
@@ -74,7 +75,6 @@ func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, stor
 			select {
 			case event, ok := <-ch:
 				if !ok {
-					log.InfoLog.Printf("[NotificationSubscriber] Event channel closed, stopping")
 					return
 				}
 				if event == nil || event.Type != events.EventNotification {
@@ -102,7 +102,6 @@ func StartSubscriberWithInterval(ctx context.Context, bus *events.EventBus, stor
 				mu.Unlock()
 
 			case <-ctx.Done():
-				log.InfoLog.Printf("[NotificationSubscriber] Context canceled, stopping")
 				// Drain any events already in the channel so the deferred flush captures them.
 				mu.Lock()
 				for {

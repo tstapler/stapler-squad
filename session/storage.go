@@ -209,13 +209,14 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 			continue
 		}
 		data := inst.ToInstanceData()
-		log.InfoLog.Printf("[SaveInstances] Converting instance '%s': IsWorktree=%v, MainRepoPath=%s, GitHubOwner=%s, GitHubRepo=%s",
-			data.Title, data.IsWorktree, data.MainRepoPath, data.GitHubOwner, data.GitHubRepo)
+		log.Info("SaveInstances: converting instance",
+			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
+			"github_owner", data.GitHubOwner, "github_repo", data.GitHubRepo)
 		if err := s.repo.Update(ctx, data); err != nil {
 			// Not found → create it
 			if createErr := s.repo.Create(ctx, data); createErr != nil {
-				log.ErrorLog.Printf("[SaveInstances] Failed to upsert instance '%s': update=%v, create=%v",
-					data.Title, err, createErr)
+				log.Error("SaveInstances: failed to upsert instance",
+					"session", data.Title, "update_err", err, "create_err", createErr)
 			}
 		}
 	}
@@ -237,7 +238,7 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 	for _, data := range dataSlice {
 		inst, err := FromInstanceData(data)
 		if err != nil {
-			log.WarningLog.Printf("Skipping instance '%s' from repository: %v", data.Title, err)
+			log.Warn("skipping instance from repository", "session", data.Title, "err", err)
 			continue
 		}
 		instances = append(instances, inst)
@@ -283,7 +284,7 @@ func (s *Storage) DeleteAllInstances() error {
 	}
 	for _, data := range dataSlice {
 		if err := s.repo.Delete(ctx, data.Title); err != nil {
-			log.WarningLog.Printf("Failed to delete instance '%s': %v", data.Title, err)
+			log.Warn("failed to delete instance", "session", data.Title, "err", err)
 		}
 	}
 	return nil

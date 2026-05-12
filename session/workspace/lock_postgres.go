@@ -220,7 +220,7 @@ func (h *postgresHandle) Release() error {
 	_, err := h.conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock($1)", h.key)
 	if err != nil {
 		// Lock will be released when connection closes anyway
-		log.DebugLog.Printf("failed to explicitly release advisory lock: %v", err)
+		log.Debug("failed to explicitly release advisory lock", "err", err)
 	}
 
 	// Close the connection (also releases the lock if explicit unlock failed)

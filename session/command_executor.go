@@ -130,19 +130,19 @@ func (ce *CommandExecutor) Start(ctx context.Context) error {
 	ce.wg.Add(1)
 	go ce.executionLoop()
 
-	log.InfoLog.Printf("Command executor started for session '%s'", ce.sessionName)
+	log.Info("command executor started", "session", ce.sessionName)
 	return nil
 }
 
 // executionLoop is the main execution loop that processes commands from the queue.
 func (ce *CommandExecutor) executionLoop() {
 	defer ce.wg.Done()
-	defer log.InfoLog.Printf("Command executor stopped for session '%s'", ce.sessionName)
+	defer log.Info("command executor stopped", "session", ce.sessionName)
 
 	// Subscribe to response stream
 	responseCh, err := ce.responseStream.Subscribe(ce.subscriberID)
 	if err != nil {
-		log.ErrorLog.Printf("Failed to subscribe to response stream for '%s': %v", ce.sessionName, err)
+		log.Error("failed to subscribe to response stream", "session", ce.sessionName, "err", err)
 		return
 	}
 	defer ce.responseStream.Unsubscribe(ce.subscriberID)
@@ -181,7 +181,7 @@ func (ce *CommandExecutor) executionLoop() {
 			cmd.EndTime = result.EndTime
 
 			if err := ce.queue.Update(cmd); err != nil {
-				log.ErrorLog.Printf("Failed to update command '%s' in queue: %v", cmd.ID, err)
+				log.Error("failed to update command in queue", "cmd_id", cmd.ID, "err", err)
 			}
 
 			// Invoke callback if set
@@ -226,7 +226,7 @@ func (ce *CommandExecutor) waitForCommandOrDrain(responseCh <-chan ResponseChunk
 
 // executeCommand executes a single command and returns the result.
 func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan ResponseChunk) *ExecutionResult {
-	log.InfoLog.Printf("Executing command '%s' for session '%s': %s", cmd.ID, ce.sessionName, cmd.Text)
+	log.Info("executing command", "cmd_id", cmd.ID, "session", ce.sessionName, "text", cmd.Text)
 
 	result := &ExecutionResult{
 		Command:       cmd,
@@ -244,7 +244,7 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 	cmd.Status = CommandExecuting
 	cmd.StartTime = result.StartTime
 	if err := ce.queue.Update(cmd); err != nil {
-		log.ErrorLog.Printf("Failed to update command status to executing: %v", err)
+		log.Error("failed to update command status to executing", "err", err)
 	}
 
 	// Write command to PTY
@@ -252,7 +252,7 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 	if _, err := ce.ptyAccess.Write([]byte(commandText)); err != nil {
 		result.Error = fmt.Errorf("failed to write command to PTY: %w", err)
 		result.EndTime = time.Now()
-		log.ErrorLog.Printf("Failed to write command '%s' to PTY: %v", cmd.ID, err)
+		log.Error("failed to write command to PTY", "cmd_id", cmd.ID, "err", err)
 		return result
 	}
 
@@ -277,7 +277,7 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 			// Timeout
 			result.Error = fmt.Errorf("command execution timed out after %v", ce.options.Timeout)
 			result.EndTime = time.Now()
-			log.WarningLog.Printf("Command '%s' timed out after %v", cmd.ID, ce.options.Timeout)
+			log.Warn("command timed out", "cmd_id", cmd.ID, "timeout", ce.options.Timeout)
 			return result
 
 		case chunk, ok := <-responseCh:
@@ -320,15 +320,12 @@ func (ce *CommandExecutor) executeCommand(cmd *Command, responseCh <-chan Respon
 					result.StatusChanges = append(result.StatusChanges, change)
 					lastStatus = status
 
-					log.InfoLog.Printf("Command '%s' status changed to %s", cmd.ID, status.String())
-
 					// Check if terminal status reached
 					if ce.isTerminalStatus(status) {
 						result.Success = (status == detection.StatusReady)
 						result.EndTime = time.Now()
 						result.Output = string(outputBuffer)
 						result.FinalStatus = status
-						log.InfoLog.Printf("Command '%s' reached terminal status: %s", cmd.ID, status.String())
 						return result
 					}
 				}
@@ -369,7 +366,7 @@ func (ce *CommandExecutor) Stop() error {
 	ce.currentCommand = nil
 	ce.mu.Unlock()
 
-	log.InfoLog.Printf("Command executor stopped for session '%s'", ce.sessionName)
+	log.Info("command executor stopped", "session", ce.sessionName)
 	return nil
 }
 

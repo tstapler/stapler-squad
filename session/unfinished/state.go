@@ -326,7 +326,7 @@ func (s *StateStore) cleanupStaleEntries() {
 		if _, err := os.Stat(d.RepoPath); err == nil {
 			keptDismissed = append(keptDismissed, d)
 		} else {
-			log.DebugLog.Printf("[unfinished] removing stale dismissed entry: %s|%s", d.RepoPath, d.Branch)
+			log.Debug("removing stale dismissed entry", "repo", d.RepoPath, "branch", d.Branch)
 			changed = true
 		}
 	}
@@ -337,7 +337,7 @@ func (s *StateStore) cleanupStaleEntries() {
 		if _, err := os.Stat(sn.RepoPath); err == nil {
 			keptSnoozed = append(keptSnoozed, sn)
 		} else {
-			log.DebugLog.Printf("[unfinished] removing stale snoozed entry: %s|%s", sn.RepoPath, sn.Branch)
+			log.Debug("removing stale snoozed entry", "repo", sn.RepoPath, "branch", sn.Branch)
 			changed = true
 		}
 	}
@@ -345,7 +345,7 @@ func (s *StateStore) cleanupStaleEntries() {
 
 	if changed {
 		if err := s.save(); err != nil {
-			log.WarningLog.Printf("[unfinished] failed to save after cleanup: %v", err)
+			log.Warn("failed to save after cleanup", "err", err)
 		}
 	}
 }

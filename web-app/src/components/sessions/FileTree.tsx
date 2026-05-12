@@ -7,7 +7,7 @@ import type { FileNode } from "@/gen/session/v1/types_pb";
 import { fetchDirectoryFiles, searchFiles } from "@/lib/hooks/useFileService";
 import {
   container, loading as loadingClass, error as errorClass, retryButton, empty,
-  node as nodeClass, selected, nodeInner, icon as iconClass, name as nameClass, ignored,
+  node as nodeClass, selected, keyboardFocused, nodeInner, icon as iconClass, name as nameClass, ignored,
   symlinkBadge, statusBadge, spinner, inlineError,
   searchContainer, searchInput, toolbar, toolbarButton, toolbarLabel,
   treeWrapper, mark, searchEmpty, searchTruncated as searchTruncatedClass,
@@ -248,7 +248,7 @@ function NodeRenderer({
   return (
     <div
       style={style}
-      className={`${nodeClass} ${isSelected ? selected : ""} ${data.isIgnored ? ignored : ""}`}
+      className={`${nodeClass} ${isSelected ? selected : ""} ${node.isFocused ? keyboardFocused : ""} ${data.isIgnored ? ignored : ""}`}
       onClick={() => {
         // Directories toggle open/close (fires onToggle → handleToggle → loadDirectory).
         // Files/symlinks activate (fires onActivate → onFileSelect).
@@ -351,6 +351,8 @@ export function FileTree({
   const savedOpenStateRef = useRef<Record<string, boolean>>({});
 
   const treeRef = useRef<TreeApi<TreeNode> | undefined>(undefined);
+  // Tracks the timestamp of the last 'g' keypress for the gg chord.
+  const lastGRef = useRef<number>(0);
 
   // ResizeObserver: track container dimensions for react-window (requires numeric width/height).
   const containerRef = useRef<HTMLDivElement>(null);
@@ -576,6 +578,88 @@ export function FileTree({
     [dirContents, errorPaths, knownDirIds, loadDirectory, searchResults]
   );
 
+  const handleTreeKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      const tree = treeRef.current;
+      if (!tree) return;
+
+      // Don't intercept modified shortcuts (Ctrl+G, Cmd+K, Alt+j, etc.)
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const focusedNode = tree.focusedNode;
+      const visible = tree.visibleNodes;
+      if (!visible || visible.length === 0) return;
+
+      switch (e.key) {
+        case "j": {
+          e.preventDefault();
+          const idx = focusedNode ? visible.findIndex((n) => n.id === focusedNode.id) : -1;
+          const next = visible[idx + 1];
+          if (next) tree.focus(next.id);
+          break;
+        }
+        case "k": {
+          e.preventDefault();
+          const idx = focusedNode ? visible.findIndex((n) => n.id === focusedNode.id) : -1;
+          const prev = visible[Math.max(0, idx - 1)];
+          if (prev) tree.focus(prev.id);
+          break;
+        }
+        case "l": {
+          e.preventDefault();
+          if (!focusedNode) break;
+          if (focusedNode.data.isDir) {
+            tree.open(focusedNode.id);
+          } else {
+            focusedNode.activate();
+          }
+          break;
+        }
+        case "h": {
+          e.preventDefault();
+          if (!focusedNode) break;
+          if (focusedNode.data.isDir && focusedNode.isOpen) {
+            tree.close(focusedNode.id);
+          } else if (focusedNode.parent && !focusedNode.parent.isRoot) {
+            tree.focus(focusedNode.parent.id);
+          }
+          break;
+        }
+        case "g": {
+          e.preventDefault();
+          const now = Date.now();
+          if (now - lastGRef.current < 400) {
+            const first = visible[0];
+            if (first) tree.focus(first.id);
+            lastGRef.current = 0;
+          } else {
+            lastGRef.current = now;
+          }
+          break;
+        }
+        case "G": {
+          e.preventDefault();
+          const last = visible[visible.length - 1];
+          if (last) tree.focus(last.id);
+          break;
+        }
+        case "Enter": {
+          if (!focusedNode) break;
+          e.preventDefault();
+          if (focusedNode.data.isDir) {
+            focusedNode.toggle();
+          } else {
+            focusedNode.activate();
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [] // treeRef and lastGRef are refs — stable, no deps needed
+  );
+
   if (rootLoading) {
     return (
       <div className={container}>
@@ -645,7 +729,12 @@ export function FileTree({
   }
 
   return (
-    <div className={container} ref={containerRef}>
+    <div
+      className={container}
+      ref={containerRef}
+      tabIndex={0}
+      onKeyDown={handleTreeKeyDown}
+    >
       {searchTruncated && (
         <div className={searchTruncatedClass}>
           Showing first 500 results — refine your search for more specific matches.

@@ -95,8 +95,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 		return nil, fmt.Errorf("cannot switch workspace for paused session - resume first")
 	}
 
-	log.InfoLog.Printf("[Workspace] Starting %s switch for session '%s' to '%s'",
-		req.Type, i.Title, req.Target)
+	log.Info("starting workspace switch", "type", req.Type, "session", i.Title, "target", req.Target)
 
 	// Handle simple directory change separately (no VCS, no restart)
 	if req.Type == SwitchTypeDirectory {
@@ -122,7 +121,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 	if err := os.MkdirAll(repoPath, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create repository directory: %w", err)
 	}
-	log.InfoLog.Printf("[Workspace] Ensured directory exists: %s", repoPath)
+	log.Info("ensured directory exists", "path", repoPath)
 
 	// 2. Get VCS client
 	detectOpts := vcs.DefaultDetectOptions()
@@ -134,18 +133,18 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 	if err != nil {
 		// For directory-type sessions, VCS is optional - fall back to simple directory change
 		if i.SessionType == SessionTypeDirectory {
-			log.InfoLog.Printf("[Workspace] No VCS detected at '%s', falling back to simple directory change", repoPath)
+			log.Info("no vcs detected, falling back to simple directory change", "path", repoPath)
 			// Just update the path and restart without VCS operations
 			i.Path = repoPath
 
 			// Kill and restart session in new directory
-			log.InfoLog.Printf("[Workspace] Stopping tmux session for directory change")
+			log.Info("stopping tmux session for directory change")
 			if err := i.KillSession(); err != nil {
 				return nil, fmt.Errorf("failed to stop session: %w", err)
 			}
 			i.started = false
 
-			log.InfoLog.Printf("[Workspace] Restarting session in new directory: %s", repoPath)
+			log.Info("restarting session in new directory", "path", repoPath)
 			if err := i.Start(false); err != nil {
 				result.Error = fmt.Errorf("failed to restart session: %w", err)
 				return result, result.Error
@@ -153,7 +152,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 
 			result.Success = true
 			result.ChangesHandled = "directory change without VCS"
-			log.InfoLog.Printf("[Workspace] Successfully switched directory session '%s' to '%s'", i.Title, repoPath)
+			log.Info("successfully switched directory session", "session", i.Title, "path", repoPath)
 			return result, nil
 		}
 		// For worktree sessions, VCS is required
@@ -171,13 +170,13 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 	// tryExtractConversationUUID() was called before acquiring stateMutex (double-checked
 	// locking pattern) to avoid I/O under the lock. Log the result here under the lock.
 	if i.claudeSession != nil && i.claudeSession.ConversationUUID != "" {
-		log.InfoLog.Printf("[Workspace] Captured conversation ID '%s' for resume", i.claudeSession.ConversationUUID)
+		log.Info("captured conversation id for resume", "uuid", i.claudeSession.ConversationUUID)
 	} else {
-		log.InfoLog.Printf("[Workspace] No conversation ID found -- restart will begin fresh conversation")
+		log.Info("no conversation id found, restart will begin fresh conversation")
 	}
 
 	// 5. Kill tmux session (but keep claudeSession data for resume)
-	log.InfoLog.Printf("[Workspace] Stopping tmux session for workspace switch")
+	log.Info("stopping tmux session for workspace switch")
 	if err := i.KillSession(); err != nil {
 		return nil, fmt.Errorf("failed to stop session: %w", err)
 	}
@@ -194,16 +193,16 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 
 	if switchErr != nil {
 		// Try to recover by restarting at original location
-		log.WarningLog.Printf("[Workspace] Switch failed, attempting recovery: %v", switchErr)
+		log.Warn("switch failed, attempting recovery", "err", switchErr)
 		if err := i.Start(false); err != nil {
-			log.ErrorLog.Printf("[Workspace] Recovery failed: %v", err)
+			log.Error("recovery failed", "err", err)
 		}
 		result.Error = switchErr
 		return result, switchErr
 	}
 
 	// 7. Restart Claude (ClaudeCommandBuilder adds --resume automatically)
-	log.InfoLog.Printf("[Workspace] Restarting session with Claude --resume")
+	log.Info("restarting session with claude --resume")
 	if err := i.Start(false); err != nil {
 		result.Error = fmt.Errorf("failed to restart session: %w", err)
 		return result, result.Error
@@ -215,8 +214,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 	}
 
 	result.Success = true
-	log.InfoLog.Printf("[Workspace] Successfully switched session '%s' to '%s'",
-		i.Title, req.Target)
+	log.Info("successfully switched session", "session", i.Title, "target", req.Target)
 
 	return result, nil
 }
@@ -253,7 +251,7 @@ func (i *Instance) switchWorktree(vcsClient vcs.VCS, req WorkspaceSwitchRequest,
 	// Check if target worktree exists
 	worktrees, err := vcsClient.ListWorktrees()
 	if err != nil {
-		log.WarningLog.Printf("[Workspace] Failed to list worktrees: %v", err)
+		log.Warn("failed to list worktrees", "err", err)
 	}
 
 	var targetWorktree *vcs.Worktree
@@ -348,7 +346,7 @@ func (i *Instance) changeDirectory(newDir string) error {
 	i.WorkingDir = absPath
 	i.UpdatedAt = timeNow()
 
-	log.InfoLog.Printf("[Workspace] Changed directory to %s", absPath)
+	log.Info("changed directory", "path", absPath)
 	return nil
 }
 
@@ -378,7 +376,7 @@ func (i *Instance) validatePathSecurity(targetPath string) error {
 		// Allow going to parent directories up to a reasonable limit
 		// This is a soft check - users should be able to navigate freely
 		// but we log a warning for paths outside the repo
-		log.WarningLog.Printf("[Workspace] Path %s is outside repository root %s", absPath, absRepo)
+		log.Warn("path is outside repository root", "path", absPath, "repo", absRepo)
 	}
 
 	// Hard block on obvious path traversal attempts

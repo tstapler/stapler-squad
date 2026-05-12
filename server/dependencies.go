@@ -10,10 +10,10 @@ import (
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	warren "github.com/tstapler/stapler-squad/pkg/warren"
+	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -47,6 +47,10 @@ type ServerDependencies struct {
 
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
+
+	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
+	// is used as a fallback in that case).
+	AnalyticsEntClient *ent.Client
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -73,6 +77,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
 		BacklogService:          rt.BacklogService,
 		SyncLoop:                rt.SyncLoop,
+		AnalyticsEntClient:      rt.AnalyticsEntClient,
 	}
 }
 
@@ -103,7 +108,7 @@ func BuildDependencies() (*ServerDependencies, error) {
 	// EnsureServerRunning must precede BuildRuntimeDeps — the token enforces it.
 	tmuxReady, err := tmux.EnsureServerRunning("")
 	if err != nil {
-		log.WarningLog.Printf("BuildDependencies: failed to ensure tmux server running: %v", err)
+		log.Warn("BuildDependencies: failed to ensure tmux server running", "err", err)
 	}
 	rt, err := BuildRuntimeDeps(tmuxReady, svc, cfg)
 	if err != nil {
@@ -111,109 +116,6 @@ func BuildDependencies() (*ServerDependencies, error) {
 	}
 
 	return rt.ToServerDeps(), nil
-}
-
-// scanSessionsOnStartup scans all running sessions for pre-existing approval prompts,
-// input required states, and errors. Adds matching sessions to the review queue immediately
-// so the user sees them before the regular polling cycle kicks in.
-func scanSessionsOnStartup(
-	instances []*session.Instance,
-	queue *session.ReviewQueue,
-	statusManager *session.InstanceStatusManager,
-) {
-	detector := detection.NewStatusDetector()
-	scanned, added := 0, 0
-
-	for _, inst := range instances {
-		if !inst.Started() || inst.Paused() {
-			continue
-		}
-		scanned++
-
-		// Try controller-based detection first
-		statusInfo := statusManager.GetStatus(inst)
-		if statusInfo.IsControllerActive {
-			reason, priority, context := mapDetectedStatus(statusInfo.ClaudeStatus, statusInfo.StatusContext)
-			if reason != "" {
-				addStartupItem(queue, inst, reason, priority, context)
-				added++
-				log.InfoLog.Printf("[StartupScan] Session '%s': detected %s via controller (status=%s)",
-					inst.Title, reason, statusInfo.ClaudeStatus.String())
-			}
-			continue
-		}
-
-		// Fallback: terminal content detection
-		content, err := inst.Preview()
-		if err != nil {
-			log.WarningLog.Printf("[StartupScan] Session '%s': failed to get terminal content: %v", inst.Title, err)
-			continue
-		}
-		if content == "" {
-			log.InfoLog.Printf("[StartupScan] Session '%s': empty terminal content, skipping", inst.Title)
-			continue
-		}
-
-		detectedStatus, statusContext := detector.DetectWithContext([]byte(content))
-		reason, priority, ctx := mapDetectedStatus(detectedStatus, statusContext)
-		if reason != "" {
-			addStartupItem(queue, inst, reason, priority, ctx)
-			added++
-			log.InfoLog.Printf("[StartupScan] Session '%s': detected %s via terminal (status=%s)",
-				inst.Title, reason, detectedStatus.String())
-		}
-	}
-
-	log.InfoLog.Printf("[StartupScan] Scanned %d sessions, added %d to review queue", scanned, added)
-}
-
-// mapDetectedStatus maps a DetectedStatus to a review queue reason, priority, and context string.
-// Returns empty reason if the status does not warrant adding to the review queue.
-func mapDetectedStatus(status detection.DetectedStatus, statusContext string) (session.AttentionReason, session.Priority, string) {
-	switch status {
-	case detection.StatusNeedsApproval:
-		ctx := statusContext
-		if ctx == "" {
-			ctx = "Waiting for approval to proceed"
-		}
-		return session.ReasonApprovalPending, session.PriorityHigh, ctx
-	case detection.StatusInputRequired:
-		ctx := statusContext
-		if ctx == "" {
-			ctx = "Waiting for explicit user input"
-		}
-		return session.ReasonInputRequired, session.PriorityMedium, ctx
-	case detection.StatusError:
-		ctx := statusContext
-		if ctx == "" {
-			ctx = "Error state detected"
-		}
-		return session.ReasonErrorState, session.PriorityUrgent, ctx
-	default:
-		return "", 0, ""
-	}
-}
-
-// addStartupItem creates a ReviewItem from an instance and adds it to the queue.
-func addStartupItem(queue session.ReviewQueueWriter, inst *session.Instance, reason session.AttentionReason, priority session.Priority, context string) {
-	item := &session.ReviewItem{
-		SessionID:    inst.Title,
-		SessionName:  inst.Title,
-		Reason:       reason,
-		Priority:     priority,
-		DetectedAt:   time.Now(),
-		Context:      context,
-		Program:      inst.Program,
-		Branch:       inst.Branch,
-		Path:         inst.Path,
-		WorkingDir:   inst.WorkingDir,
-		Status:       inst.Status.String(),
-		Tags:         inst.Tags,
-		Category:     inst.Category,
-		DiffStats:    inst.GetDiffStats(),
-		LastActivity: inst.LastMeaningfulOutput,
-	}
-	queue.Add(item)
 }
 
 // syncOrphanedApprovalsToQueue adds review queue items for orphaned (persisted) approvals.
@@ -287,12 +189,11 @@ func syncOrphanedApprovalsToQueue(
 
 		queue.Add(item)
 		added++
-		log.InfoLog.Printf("[ApprovalSync] Added orphaned approval to review queue: session=%s, tool=%s, approval_id=%s",
-			approval.SessionID, approval.ToolName, approval.ID)
+		log.Info("[ApprovalSync] added orphaned approval to review queue", "session", approval.SessionID, "tool", approval.ToolName, "approval_id", approval.ID)
 	}
 
 	if added > 0 {
-		log.InfoLog.Printf("[ApprovalSync] Synced %d orphaned approvals to review queue", added)
+		log.Info("[ApprovalSync] synced orphaned approvals", "count", added)
 	}
 }
 
@@ -432,6 +333,9 @@ type RuntimeDeps struct {
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
 	Config         *config.Config // Used for encryption of sensitive data
+
+	// Analytics storage.
+	AnalyticsEntClient *ent.Client
 }
 
 // BuildRuntimeDeps constructs Phase 3 dependencies using Phase 2 outputs.
@@ -447,6 +351,7 @@ type RuntimeDeps struct {
 //   - Step 11: ExternalDiscovery with session-added/removed callbacks
 //   - Step 12: ExternalApprovalMonitor with approval-to-review-queue bridge
 //   - SetExternalDiscovery on SessionService (moved from server.go)
+//
 // BuildRuntimeDeps requires a TmuxServerReady token to enforce that
 // tmux.EnsureServerRunning was called before sessions are loaded. Without this
 // ordering, DoesSessionExist() may trigger recoverFromServerFailure, which starts
@@ -498,6 +403,11 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// Perform heavy initialization (tmux starting, controllers, scanning) in the background
 	// so the HTTP server can bind and start immediately.
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.ErrorLog.Printf("[startup] panic in background init goroutine: %v", r)
+			}
+		}()
 		// Step 6: start tmux sessions for loaded instances (non-fatal failures).
 		// Stagger starts by 200ms each to avoid a fork burst that saturates the
 		// cgroup pids.max limit when many sessions restore simultaneously.
@@ -507,9 +417,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 					time.Sleep(200 * time.Millisecond)
 				}
 				if err := inst.Start(false); err != nil {
-					log.ErrorLog.Printf("Failed to start loaded instance '%s': %v", inst.Title, err)
+					log.Error("failed to start loaded instance", "session", inst.Title, "err", err)
 				} else {
-					log.InfoLog.Printf("Started loaded instance '%s'", inst.Title)
+					log.Info("started loaded instance", "session", inst.Title)
 				}
 			}
 		}
@@ -521,12 +431,12 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// guard) so Start(false) can hot-attach to the existing tmux session.
 		for _, inst := range instances {
 			if inst.Status == session.Stopped && inst.TmuxSessionExists() {
-				log.InfoLog.Printf("Reconcile: session '%s' is Stopped in DB but tmux is alive — restoring", inst.Title)
+				log.Info("Reconcile: session is Stopped in DB but tmux is alive — restoring", "session", inst.Title)
 				inst.RecoverFromStopped()
 				if err := inst.Start(false); err != nil {
-					log.WarningLog.Printf("Reconcile: hot-restore of '%s' failed: %v", inst.Title, err)
+					log.Warn("Reconcile: hot-restore failed", "session", inst.Title, "err", err)
 				} else {
-					log.InfoLog.Printf("Reconcile: restored '%s' (was Stopped, now Running)", inst.Title)
+					log.Info("Reconcile: restored session (was Stopped, now Running)", "session", inst.Title)
 				}
 			}
 		}
@@ -534,23 +444,23 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Step 6.5: Persist any auto-detected worktree info (must happen after Step 6)
 		if len(instances) > 0 {
 			if err := storage.SaveInstances(instances); err != nil {
-				log.WarningLog.Printf("Failed to persist migrated instance data: %v", err)
+				log.Warn("failed to persist migrated instance data", "err", err)
 			} else {
-				log.InfoLog.Printf("Persisted migrated instance data for %d instances", len(instances))
+				log.Info("persisted migrated instance data", "count", len(instances))
 			}
 		}
 
 		// Step 7: start controllers (requires started instances + StatusManager)
-		log.InfoLog.Printf("Attempting controller startup for %d loaded instances", len(instances))
+		log.Info("attempting controller startup", "instances", len(instances))
 		for _, inst := range instances {
 			started := inst.Started()
 			paused := inst.Paused()
 			if started && !paused && inst.Status != session.Stopped {
 				if inst.GetController() == nil {
 					if err := inst.StartController(); err != nil {
-						log.WarningLog.Printf("Failed to start controller for '%s': %v", inst.Title, err)
+						log.Warn("failed to start controller", "session", inst.Title, "err", err)
 					} else {
-						log.InfoLog.Printf("Started controller for '%s'", inst.Title)
+						log.Info("started controller", "session", inst.Title)
 					}
 				}
 			}
@@ -559,18 +469,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		// Step 7.5: Startup scan and orphaned approval sync
 		// Brief settling delay to allow controllers to initialize their terminal readers.
 		time.Sleep(500 * time.Millisecond)
-		scanSessionsOnStartup(instances, reviewQueue, statusManager)
+		contentProvider := session.NewPollerContentProvider()
+		scanner := session.NewStartupScanner(statusManager, contentProvider)
+		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()
 
 	// Step 8: ReactiveQueueManager
 	reactiveQueueMgr := NewReactiveQueueManager(reviewQueue, reviewQueuePoller, eventBus, statusManager, storage)
-	log.InfoLog.Printf("ReactiveQueueManager initialized")
+	log.Info("ReactiveQueueManager initialized")
 
 	// Step 8.5: HistoryLinker — detects Claude JSONL files and links conversation
 	// UUIDs to sessions so cold restore can use --resume on restart.
 	historyLinker := session.NewHistoryLinkerFromRealInspector()
-	log.InfoLog.Printf("HistoryLinker initialized with %d instances", len(instances))
+	log.Info("HistoryLinker initialized", "instances", len(instances))
 
 	// Step 9: ScrollbackManager (independent of above)
 	homeDir, _ := os.UserHomeDir()
@@ -578,8 +490,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	scrollbackConfig := scrollback.DefaultScrollbackConfig()
 	scrollbackConfig.StoragePath = scrollbackPath
 	scrollbackManager := scrollback.NewScrollbackManager(scrollbackConfig)
-	log.InfoLog.Printf("Initialized ScrollbackManager: path=%s, compression=%s, maxLines=%d",
-		scrollbackPath, scrollbackConfig.StoragePath, scrollbackConfig.MaxLines)
+	log.Info("initialized ScrollbackManager", "path", scrollbackPath, "compression", scrollbackConfig.StoragePath, "maxLines", scrollbackConfig.MaxLines)
 
 	// Step 10: TmuxStreamerManager (independent)
 	tmuxStreamerManager := session.NewExternalTmuxStreamerManager()
@@ -588,9 +499,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	externalDiscovery := session.NewExternalSessionDiscovery()
 	externalDiscovery.OnSessionAdded(func(instance *session.Instance) {
 		if err := storage.AddInstance(instance); err != nil {
-			log.ErrorLog.Printf("Failed to persist external session '%s': %v", instance.Title, err)
+			log.Error("failed to persist external session", "session", instance.Title, "err", err)
 		} else {
-			log.InfoLog.Printf("Persisted external session '%s' to storage", instance.Title)
+			log.Info("persisted external session to storage", "session", instance.Title)
 		}
 		// Wire dependencies so the external session appears in the review queue
 		instance.SetReviewQueue(reviewQueue)
@@ -599,18 +510,18 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		svc.PRStatusPoller.AddInstance(instance)
 		historyLinker.AddInstance(instance)
 		backlogLifecycleListener.WireToInstance(instance)
-		log.InfoLog.Printf("Added external session '%s' to review queue poller, PR status poller, and history linker", instance.Title)
+		log.Info("added external session to review queue poller, PR status poller, and history linker", "session", instance.Title)
 	})
 	externalDiscovery.OnSessionRemoved(func(instance *session.Instance) {
 		reviewQueuePoller.RemoveInstance(instance.Title)
 		svc.PRStatusPoller.RemoveInstance(instance.Title)
 		historyLinker.RemoveInstance(instance.Title)
-		log.InfoLog.Printf("Removed external session '%s' from review queue poller, PR status poller, and history linker", instance.Title)
+		log.Info("removed external session from review queue poller, PR status poller, and history linker", "session", instance.Title)
 		reviewQueue.Remove(instance.Title)
 		if err := storage.DeleteInstance(instance.Title); err != nil {
-			log.WarningLog.Printf("Failed to remove external session '%s' from storage: %v", instance.Title, err)
+			log.Warn("failed to remove external session from storage", "session", instance.Title, "err", err)
 		} else {
-			log.InfoLog.Printf("Removed external session '%s' from storage", instance.Title)
+			log.Info("removed external session from storage", "session", instance.Title)
 		}
 	})
 
@@ -652,8 +563,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 
 		reviewQueue.Add(item)
-		log.InfoLog.Printf("Added external session approval '%s' to review queue (type: %s, confidence: %.2f)",
-			event.SessionTitle, event.Request.Type, event.Request.Confidence)
+		log.Info("added external session approval to review queue", "session", event.SessionTitle, "type", event.Request.Type, "confidence", event.Request.Confidence)
 	})
 
 	// Wire external discovery to SessionService for unified session listing
@@ -685,10 +595,24 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		if unfinishedStateStore != nil {
 			unfinishedScanner = unfinished.NewScanner(eventBus, unfinishedStateStore)
 			unfinishedWorkSvc = services.NewUnfinishedWorkService(unfinishedScanner, unfinishedStateStore, eventBus, storage)
-			log.InfoLog.Printf("UnfinishedWorkService initialized (state: %s)", statePath)
+			log.Info("UnfinishedWorkService initialized", "state", statePath)
 		}
 	} else {
-		log.WarningLog.Printf("Could not initialize UnfinishedWork state store: %v", configErr)
+		log.Warn("could not initialize UnfinishedWork state store", "err", configErr)
+	}
+
+	// Open the dedicated analytics database (non-fatal: fall back gracefully on failure).
+	var analyticsClient *ent.Client
+	if configDir, configErr := config.GetConfigDir(); configErr == nil {
+		ctx := context.Background()
+		if ac, acErr := analytics.OpenAnalyticsDB(ctx, configDir); acErr != nil {
+			log.Warn("could not open analytics DB (will use log-only fallback)", "err", acErr)
+		} else {
+			analyticsClient = ac
+			log.Info("analytics DB opened", "path", configDir+"/analytics.db")
+		}
+	} else {
+		log.Warn("could not determine config dir for analytics DB", "err", configErr)
 	}
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
@@ -736,5 +660,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		BacklogService:          backlogSvc,
 		SyncLoop:                syncLoop,
 		Config:                  cfg,
+		AnalyticsEntClient:      analyticsClient,
 	}, nil
 }

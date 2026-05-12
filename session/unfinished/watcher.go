@@ -29,7 +29,7 @@ func NewWatchDirWatcher(scanner *Scanner, stateStore *StateStore) *WatchDirWatch
 	var err error
 	w.watcher, err = fsnotify.NewWatcher()
 	if err != nil {
-		log.WarningLog.Printf("[unfinished] fsnotify unavailable, falling back to polling: %v", err)
+		log.Warn("fsnotify unavailable, falling back to polling", "err", err)
 		w.watcher = nil
 	}
 	return w
@@ -92,7 +92,7 @@ func (w *WatchDirWatcher) walkDir(root string) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
 			if os.IsPermission(err) {
-				log.DebugLog.Printf("[unfinished] permission denied walking %s: %v", dir, err)
+				log.Debug("permission denied walking directory", "dir", dir, "err", err)
 			}
 			return
 		}
@@ -137,7 +137,7 @@ func (w *WatchDirWatcher) addRepo(repoPath string) {
 	}
 	gitDir := filepath.Join(repoPath, ".git")
 	if err := w.watcher.Add(gitDir); err != nil {
-		log.DebugLog.Printf("[unfinished] could not watch %s: %v", gitDir, err)
+		log.Debug("could not watch git dir", "dir", gitDir, "err", err)
 	}
 }
 
@@ -182,7 +182,7 @@ func (w *WatchDirWatcher) fsnotifyLoop(ctx context.Context) {
 			if !ok {
 				return
 			}
-			log.WarningLog.Printf("[unfinished] fsnotify error: %v", err)
+			log.Warn("fsnotify error", "err", err)
 		}
 	}
 }

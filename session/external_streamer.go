@@ -187,7 +187,7 @@ func (s *ExternalStreamer) Start() error {
 	s.wg.Add(1)
 	go s.readLoop()
 
-	log.InfoLog.Printf("External streamer started for socket: %s", s.socketPath)
+	log.Info("external streamer started", "path", s.socketPath)
 	return nil
 }
 
@@ -206,7 +206,7 @@ func (s *ExternalStreamer) Stop() {
 	s.connected = false
 	s.connMu.Unlock()
 
-	log.InfoLog.Printf("External streamer stopped for socket: %s", s.socketPath)
+	log.Info("external streamer stopped", "path", s.socketPath)
 }
 
 // SendInput sends input data to the mux session.
@@ -323,8 +323,7 @@ func (s *ExternalStreamer) connect() error {
 	s.metadata = metadata
 	s.metadataMu.Unlock()
 
-	log.InfoLog.Printf("Connected to mux socket: %s (pid: %d, cwd: %s)",
-		s.socketPath, metadata.PID, metadata.Cwd)
+	log.Info("connected to mux socket", "path", s.socketPath, "pid", metadata.PID, "cwd", metadata.Cwd)
 
 	return nil
 }
@@ -394,9 +393,9 @@ func (s *ExternalStreamer) readLoop() {
 			}
 
 			if err == io.EOF || errors.Is(err, io.EOF) {
-				log.InfoLog.Printf("Mux connection closed (EOF): %s", s.socketPath)
+				log.Info("mux connection closed (EOF)", "path", s.socketPath)
 			} else {
-				log.WarningLog.Printf("Error reading from mux (unhandled error type %T): %v", err, err)
+				log.Warn("error reading from mux (unhandled error type)", "type", fmt.Sprintf("%T", err), "err", err)
 			}
 
 			// Mark as disconnected
@@ -435,7 +434,7 @@ func (s *ExternalStreamer) readLoop() {
 
 		case mux.MessageTypeClose:
 			// Server is closing
-			log.InfoLog.Printf("Mux server closing connection: %s", s.socketPath)
+			log.Info("mux server closing connection", "path", s.socketPath)
 			s.connMu.Lock()
 			if s.conn != nil {
 				s.conn.Close()
@@ -456,10 +455,10 @@ func (s *ExternalStreamer) reconnect(delay time.Duration) error {
 	}
 
 	s.reconnects++
-	log.InfoLog.Printf("Attempting reconnect to %s (attempt %d)", s.socketPath, s.reconnects)
+	log.Info("attempting reconnect", "path", s.socketPath, "attempt", s.reconnects)
 
 	if err := s.connect(); err != nil {
-		log.WarningLog.Printf("Reconnect failed: %v", err)
+		log.Warn("reconnect failed", "err", err)
 		return err
 	}
 
@@ -480,7 +479,7 @@ func (s *ExternalStreamer) broadcast(data []byte) {
 		go func(c OutputConsumer) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.WarningLog.Printf("Consumer panic: %v", r)
+					log.Warn("consumer panic", "err", r)
 				}
 			}()
 			c(data)

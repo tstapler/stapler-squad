@@ -100,7 +100,7 @@ func (rs *RulesService) UpsertApprovalRule(
 	// Rebuild classifier rules.
 	rs.rebuildClassifier()
 
-	log.InfoLog.Printf("[RulesService] Upserted rule %s (create=%v)", saved.ID, isCreate)
+	log.Info("[RulesService] upserted rule", "id", saved.ID, "create", isCreate)
 	return connect.NewResponse(&sessionv1.UpsertApprovalRuleResponse{
 		Rule:    specToProto(saved),
 		Created: isCreate,
@@ -119,7 +119,7 @@ func (rs *RulesService) DeleteApprovalRule(
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
 	rs.rebuildClassifier()
-	log.InfoLog.Printf("[RulesService] Deleted rule %s", req.Msg.Id)
+	log.Info("[RulesService] deleted rule", "id", req.Msg.Id)
 	return connect.NewResponse(&sessionv1.DeleteApprovalRuleResponse{
 		Success: true,
 		Message: fmt.Sprintf("Rule %s deleted", req.Msg.Id),
@@ -142,7 +142,7 @@ func (rs *RulesService) GetApprovalAnalytics(
 	since := time.Now().AddDate(0, 0, -days)
 	entries, err := rs.analyticsStore.LoadWindow(since)
 	if err != nil {
-		log.WarningLog.Printf("[RulesService] Analytics load error: %v", err)
+		log.Warn("[RulesService] analytics load error", "err", err)
 		// Return empty summary rather than erroring.
 	}
 

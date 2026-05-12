@@ -33,7 +33,7 @@ func (i *Instance) RepoName() (string, error) {
 func (i *Instance) setupFirstTimeWorktree() error {
 	switch i.SessionType {
 	case SessionTypeNewWorktree:
-		log.InfoLog.Printf("Creating git worktree for instance '%s' at '%s'", i.Title, i.Path)
+		log.Info("creating git worktree for instance", "session", i.Title, "path", i.Path)
 		gitWorktree, branchName, err := git.NewGitWorktreeWithBranch(i.Path, i.Title, i.Branch)
 		if err != nil {
 			return fmt.Errorf("failed to create git worktree: %w", err)
@@ -42,29 +42,29 @@ func (i *Instance) setupFirstTimeWorktree() error {
 		if i.Branch == "" {
 			i.Branch = branchName
 		}
-		log.InfoLog.Printf("Git worktree created for instance '%s', branch: '%s'", i.Title, i.Branch)
+		log.Info("git worktree created", "session", i.Title, "branch", i.Branch)
 	case SessionTypeExistingWorktree:
 		if i.ExistingWorktree == "" {
 			return fmt.Errorf("existing worktree path required for SessionTypeExistingWorktree")
 		}
-		log.InfoLog.Printf("Connecting to existing worktree for instance '%s' at '%s'", i.Title, i.ExistingWorktree)
+		log.Info("connecting to existing worktree", "session", i.Title, "path", i.ExistingWorktree)
 		gitWorktree, err := git.NewGitWorktreeFromExisting(i.ExistingWorktree, i.Title)
 		if err != nil {
 			return fmt.Errorf("failed to connect to existing worktree: %w", err)
 		}
 		i.gitManager.SetWorktree(gitWorktree)
 		i.Branch = gitWorktree.GetBranchName()
-		log.InfoLog.Printf("Connected to existing worktree for instance '%s', branch: '%s'", i.Title, i.Branch)
+		log.Info("connected to existing worktree", "session", i.Title, "branch", i.Branch)
 	case SessionTypeNewProject:
-		log.InfoLog.Printf("New project session for instance '%s' at '%s', initializing git repo", i.Title, i.Path)
+		log.Info("new project session, initializing git repo", "session", i.Title, "path", i.Path)
 		if err := git.InitializeProjectDirectory(i.Path); err != nil {
 			return fmt.Errorf("new_project initialization failed: %w", err)
 		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
-		log.InfoLog.Printf("New project initialized at '%s'", i.Path)
+		log.Info("new project initialized", "path", i.Path)
 	default: // SessionTypeDirectory and unknown types → no worktree
-		log.InfoLog.Printf("Directory session for instance '%s' at '%s' (no git worktree)", i.Title, i.Path)
+		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
 		if i.CreateIfMissing {
 			if _, err := os.Stat(i.Path); os.IsNotExist(err) {
 				if err := git.InitializeProjectDirectory(i.Path); err != nil {
@@ -95,12 +95,12 @@ func (i *Instance) resolveStartPath(basePath string) string {
 		// when Claude cd's there), which would otherwise bypass worktree isolation.
 		rel, err := filepath.Rel(basePath, startPath)
 		if err != nil || strings.HasPrefix(rel, "..") {
-			log.WarningLog.Printf("WorkingDir '%s' is outside worktree '%s', using worktree path", startPath, basePath)
+			log.Warn("working dir is outside worktree, using worktree path", "path", startPath, "worktree", basePath)
 			return basePath
 		}
 	}
 	if _, err := os.Stat(startPath); os.IsNotExist(err) {
-		log.WarningLog.Printf("Working directory '%s' doesn't exist, using '%s' instead", startPath, basePath)
+		log.Warn("working directory doesn't exist, using fallback", "path", startPath, "fallback", basePath)
 		return basePath
 	}
 	return startPath
@@ -193,10 +193,10 @@ func (i *Instance) UpdateDiffStats() error {
 		i.gitManager.ClearDiffStats()
 		i.stateMutex.Unlock()
 		if didTransitionToPaused {
-			log.WarningLog.Printf("Worktree directory for '%s' doesn't exist, marking as paused", i.Title)
+			log.Warn("worktree directory doesn't exist, marking as paused", "session", i.Title)
 		}
 		if transitionErr != nil {
-			log.WarningLog.Printf("Failed to transition '%s' to Paused: %v", i.Title, transitionErr)
+			log.Warn("failed to transition to paused", "session", i.Title, "err", transitionErr)
 		}
 		return nil
 	}

@@ -124,7 +124,7 @@ func (h *ApprovalHandler) SetAutoApprovalLogger(l autoApprovalLogger) {
 // This endpoint is configured as an HTTP hook in Claude Code's settings.
 // It blocks until the user approves/denies or the context is canceled.
 func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http.Request) {
-	log.InfoLog.Printf("[ApprovalHandler] Received request from %s (method=%s, path=%s)", r.RemoteAddr, r.Method, r.URL.Path)
+	log.Info("[ApprovalHandler] received request", "remote_addr", r.RemoteAddr, "method", r.Method, "path", r.URL.Path)
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -133,7 +133,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// Parse the hook payload from request body
 	var payload classifier.PermissionRequestPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		log.WarningLog.Printf("[ApprovalHandler] Failed to parse hook payload: %v", err)
+		log.Warn("[ApprovalHandler] failed to parse hook payload", "err", err)
 		// Don't block Claude on parse errors - let the terminal handle it
 		h.writeDecision(w, "allow", "")
 		return
@@ -152,7 +152,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	if cmd, ok := payload.ToolInput["command"].(string); ok && cmd != "" {
 		if hit := ScanForSecrets(cmd); hit.Found {
 			msg := FormatSecretDenyMessage(hit.PatternName)
-			log.InfoLog.Printf("[ApprovalHandler] Auto-denied %s/%s — plaintext secret detected (%s)", sessionID, payload.ToolName, hit.PatternName)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied — plaintext secret detected", "tool", payload.ToolName, "pattern", hit.PatternName)
 			if h.analyticsStore != nil {
 				h.analyticsStore.RecordFromResult(payload, classifier.ClassificationResult{
 					Decision:  classifier.AutoDeny,
@@ -175,13 +175,13 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			for _, domain := range domains {
 				isNew, err := h.domainChecker.IsNewlyRegistered(r.Context(), domain)
 				if err != nil {
-					log.WarningLog.Printf("[ApprovalHandler] Domain age check error for %s: %v", domain, err)
+					log.Warn("[ApprovalHandler] domain age check error", "domain", domain, "err", err)
 					continue
 				}
 				if isNew {
 					threshDays := int(h.domainChecker.NewDomainThreshold().Hours() / 24)
 					reason := fmt.Sprintf("Domain %q was registered within the last %d days — possible phishing or supply-chain risk.", domain, threshDays)
-					log.InfoLog.Printf("[ApprovalHandler] Escalating %s/%s — newly-registered domain %s", sessionID, payload.ToolName, domain)
+					log.ForSession(sessionID).Info("[ApprovalHandler] escalating — newly-registered domain", "tool", payload.ToolName, "domain", domain)
 					if h.analyticsStore != nil {
 						h.analyticsStore.RecordFromResult(payload, classifier.ClassificationResult{
 							Decision:  classifier.Escalate,
@@ -205,7 +205,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 	// is included in the notification metadata so the UI renders a plain ❓ toast with
 	// no Approve/Deny buttons.
 	if strings.EqualFold(payload.ToolName, "AskUserQuestion") {
-		log.InfoLog.Printf("[ApprovalHandler] AskUserQuestion from session %s — notifying and deferring to native dialog", sessionID)
+		log.ForSession(sessionID).Info("[ApprovalHandler] AskUserQuestion — notifying and deferring to native dialog")
 		h.broadcastQuestionNotification(sessionID, payload)
 		h.writeDeferDecision(w)
 		return
@@ -224,7 +224,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 
 		switch result.Decision {
 		case classifier.AutoAllow:
-			log.InfoLog.Printf("[ApprovalHandler] Auto-allowed %s/%s (rule=%s)", sessionID, payload.ToolName, result.RuleID)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-allowed", "tool", payload.ToolName, "rule", result.RuleID)
 			if h.autoApprovalLog != nil {
 				filePath, _ := payload.ToolInput["file_path"].(string)
 				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "allow")
@@ -236,7 +236,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			if result.Alternative != "" {
 				msg = fmt.Sprintf("%s %s", msg, result.Alternative)
 			}
-			log.InfoLog.Printf("[ApprovalHandler] Auto-denied %s/%s (rule=%s): %s", sessionID, payload.ToolName, result.RuleID, msg)
+			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied", "tool", payload.ToolName, "rule", result.RuleID, "msg", msg)
 			if h.autoApprovalLog != nil {
 				filePath, _ := payload.ToolInput["file_path"].(string)
 				_ = h.autoApprovalLog.AppendAutoApproved(sessionID, "", payload.ToolName, filePath, result.RuleID, result.RuleName, result.Source, "deny")
@@ -265,7 +265,7 @@ createApproval:
 	}
 
 	if err := h.store.Create(approval); err != nil {
-		log.ErrorLog.Printf("[ApprovalHandler] Failed to store approval: %v", err)
+		log.Error("[ApprovalHandler] failed to store approval", "err", err)
 		h.writeDecision(w, "allow", "")
 		return
 	}
@@ -279,19 +279,18 @@ createApproval:
 	if h.queueChecker != nil && sessionID != "unknown" {
 		if inst := h.queueChecker.FindInstance(sessionID); inst != nil {
 			h.queueChecker.CheckSession(inst)
-			log.InfoLog.Printf("[ApprovalHandler] Triggered immediate queue check for session '%s'", sessionID)
+			log.ForSession(sessionID).Info("[ApprovalHandler] triggered immediate queue check")
 		}
 	}
 
-	log.InfoLog.Printf("[ApprovalHandler] Waiting for decision on approval %s (session=%s, tool=%s)",
-		approvalID, sessionID, payload.ToolName)
+	log.ForSession(sessionID).Info("[ApprovalHandler] waiting for decision", "approval_id", approvalID, "tool", payload.ToolName)
 
 	// Block until user decides, server times out, or connection closes
 	var decision ApprovalDecision
 	select {
 	case decision = <-approval.decisionCh:
 		// User responded via ResolveApproval RPC
-		log.InfoLog.Printf("[ApprovalHandler] Approval %s resolved: %s", approvalID, decision.Behavior)
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval resolved", "approval_id", approvalID, "behavior", decision.Behavior)
 	case <-time.After(h.approvalTimeout()):
 		// Server-side timeout (before the hook's 5-minute timeout).
 		// Return an empty HTTP response so the hook script gets no hookSpecificOutput
@@ -303,17 +302,17 @@ createApproval:
 		// live Approve/Deny buttons after page refresh.
 		if h.notificationStamper != nil {
 			if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", "timeout"); err != nil {
-				log.WarningLog.Printf("[ApprovalHandler] Could not stamp timeout on notification %s: %v", approvalID, err)
+				log.Warn("[ApprovalHandler] could not stamp timeout on notification", "approval_id", approvalID, "err", err)
 			}
 		}
-		log.InfoLog.Printf("[ApprovalHandler] Approval %s timed out — returning empty response (native dialog fallback)", approvalID)
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out — returning empty response (native dialog fallback)", "approval_id", approvalID)
 		w.WriteHeader(http.StatusOK)
 		return
 	case <-r.Context().Done():
 		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
 		h.store.Remove(approvalID)
 		decision = ApprovalDecision{Behavior: "allow", Message: ""}
-		log.InfoLog.Printf("[ApprovalHandler] Approval %s context canceled", approvalID)
+		log.ForSession(sessionID).Info("[ApprovalHandler] approval context canceled", "approval_id", approvalID)
 		return // Don't write to disconnected client
 	}
 
@@ -467,7 +466,7 @@ func (h *ApprovalHandler) writeDecision(w http.ResponseWriter, behavior, message
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
-		log.WarningLog.Printf("[ApprovalHandler] Failed to write decision response: %v", err)
+		log.Warn("[ApprovalHandler] failed to write decision response", "err", err)
 	}
 }
 
@@ -481,7 +480,7 @@ func StartExpirationCleanup(ctx context.Context, store *ApprovalStore) {
 			select {
 			case <-ticker.C:
 				if expired := store.CleanupExpired(); len(expired) > 0 {
-					log.InfoLog.Printf("[ApprovalStore] Cleaned up %d expired approvals: %v", len(expired), expired)
+					log.Info("[ApprovalStore] cleaned up expired approvals", "count", len(expired), "ids", expired)
 				}
 			case <-ctx.Done():
 				return
@@ -542,13 +541,13 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &raw); err != nil {
 			// Malformed JSON — attempt targeted repair before falling back to a fresh config.
-			log.WarningLog.Printf("[InjectHookConfig] %s has invalid JSON (%v), attempting repair", settingsPath, err)
+			log.Warn("[InjectHookConfig] invalid JSON, attempting repair", "path", settingsPath, "err", err)
 			repaired, repairErr := repairSettingsJSON(data)
 			if repairErr == nil {
-				log.InfoLog.Printf("[InjectHookConfig] Repaired %s successfully", settingsPath)
+				log.Info("[InjectHookConfig] repaired settings file", "path", settingsPath)
 				_ = json.Unmarshal(repaired, &raw) // best-effort; raw may still be partial
 			} else {
-				log.WarningLog.Printf("[InjectHookConfig] Could not repair %s (%v), resetting to minimal config", settingsPath, repairErr)
+				log.Warn("[InjectHookConfig] could not repair settings, resetting to minimal config", "path", settingsPath, "err", repairErr)
 				raw = map[string]json.RawMessage{}
 			}
 		}
@@ -564,7 +563,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 					for _, g := range groups {
 						for _, h := range g.Hooks {
 							if h.Type == "command" && strings.Contains(h.Command, hookApprovalURL) {
-								log.DebugLog.Printf("[InjectHookConfig] Hook already present in %s", settingsPath)
+								log.Debug("[InjectHookConfig] hook already present", "path", settingsPath)
 								return nil
 							}
 						}
@@ -636,7 +635,7 @@ func InjectHookConfig(rootDir, sessionTitle string) error {
 		os.Remove(tmpPath)
 		return fmt.Errorf("rename %s: %w", tmpPath, err)
 	}
-	log.InfoLog.Printf("[InjectHookConfig] Wrote hook config to %s (session=%s)", settingsPath, sessionTitle)
+	log.Info("[InjectHookConfig] wrote hook config", "path", settingsPath, "session", sessionTitle)
 	return nil
 }
 

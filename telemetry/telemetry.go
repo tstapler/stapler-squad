@@ -85,7 +85,7 @@ var globalProvider *Provider
 // If telemetry is disabled, it returns a no-op provider.
 func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 	if !cfg.Enabled {
-		log.InfoLog.Printf("Telemetry disabled (set OTEL_ENABLED=true or DD_TRACE_ENABLED=true to enable)")
+		log.Info("telemetry disabled (set OTEL_ENABLED=true or DD_TRACE_ENABLED=true to enable)")
 		// Return a provider with no-op tracer
 		globalProvider = &Provider{
 			tracer: otel.Tracer(ServiceName),
@@ -94,8 +94,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 		return globalProvider, nil
 	}
 
-	log.InfoLog.Printf("Initializing OpenTelemetry: endpoint=%s, env=%s, version=%s",
-		cfg.OTLPEndpoint, cfg.Environment, cfg.ServiceVersion)
+	log.Info("initializing OpenTelemetry", "endpoint", cfg.OTLPEndpoint, "env", cfg.Environment, "version", cfg.ServiceVersion)
 
 	// Create OTLP trace exporter
 	exporter, err := otlptracegrpc.New(ctx,
@@ -146,7 +145,7 @@ func Initialize(ctx context.Context, cfg Config) (*Provider, error) {
 
 	globalProvider = provider
 
-	log.InfoLog.Printf("OpenTelemetry initialized successfully")
+	log.Info("OpenTelemetry initialized successfully")
 	return provider, nil
 }
 
@@ -156,7 +155,7 @@ func (p *Provider) Shutdown(ctx context.Context) error {
 		return nil
 	}
 
-	log.InfoLog.Printf("Shutting down telemetry provider...")
+	log.Info("shutting down telemetry provider")
 	return p.tracerProvider.Shutdown(ctx)
 }
 

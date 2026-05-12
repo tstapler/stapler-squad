@@ -14,6 +14,7 @@ import {
   navItem,
   navIcon,
   navLabel,
+  navBadgeWrapper,
   toggleButton,
   drawerDivider,
 } from "./DrawerNav.css";
@@ -50,13 +51,19 @@ export function DrawerNav() {
                   {page.label}
                 </span>
                 {page.href === routes.reviewQueue && (
-                  <ReviewQueueNavBadge inline={true} />
+                  <span className={navBadgeWrapper({ collapsed: !isDrawerOpen })}>
+                    <ReviewQueueNavBadge inline={isDrawerOpen} />
+                  </span>
                 )}
                 {page.href === routes.unfinished && (
-                  <UnfinishedNavBadge inline={true} />
+                  <span className={navBadgeWrapper({ collapsed: !isDrawerOpen })}>
+                    <UnfinishedNavBadge inline={isDrawerOpen} />
+                  </span>
                 )}
                 {page.href === routes.notifications && (
-                  <NotificationsNavBadge inline={true} />
+                  <span className={navBadgeWrapper({ collapsed: !isDrawerOpen })}>
+                    <NotificationsNavBadge inline={isDrawerOpen} />
+                  </span>
                 )}
               </Link>
             </li>

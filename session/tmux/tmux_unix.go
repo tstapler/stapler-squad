@@ -26,12 +26,12 @@ func (t *TmuxSession) monitorWindowSize() {
 		cols, rows, err := term.GetSize(int(os.Stdin.Fd()))
 		if err != nil {
 			if everyN.ShouldLog() {
-				log.ErrorLog.Printf("failed to update window size: %v", err)
+				log.Error("failed to update window size", "err", err)
 			}
 		} else {
 			if err := t.updateWindowSize(cols, rows); err != nil {
 				if everyN.ShouldLog() {
-					log.ErrorLog.Printf("failed to update window size: %v", err)
+					log.Error("failed to update window size", "err", err)
 				}
 			}
 		}
@@ -76,7 +76,7 @@ func (t *TmuxSession) monitorWindowSize() {
 				// Handle external resize events (e.g., from BubbleTea/IntelliJ)
 				if err := t.updateWindowSize(extSize.cols, extSize.rows); err != nil {
 					if everyN.ShouldLog() {
-						log.ErrorLog.Printf("failed to update window size from external source: %v", err)
+						log.Error("failed to update window size from external source", "err", err)
 					}
 				}
 			}

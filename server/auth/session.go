@@ -86,13 +86,13 @@ func (sm *SessionManager) loadFromDisk() {
 	data, err := os.ReadFile(sm.sessionsPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			log.WarningLog.Printf("auth: failed to read sessions file: %v", err)
+			log.Warn("auth: failed to read sessions file", "err", err)
 		}
 		return
 	}
 	var p persistedSessions
 	if err := json.Unmarshal(data, &p); err != nil {
-		log.WarningLog.Printf("auth: failed to parse sessions file: %v", err)
+		log.Warn("auth: failed to parse sessions file", "err", err)
 		return
 	}
 	now := time.Now()
@@ -103,7 +103,7 @@ func (sm *SessionManager) loadFromDisk() {
 			loaded++
 		}
 	}
-	log.InfoLog.Printf("auth: loaded %d active session(s) from disk", loaded)
+	log.Info("auth: loaded active sessions from disk", "count", loaded)
 }
 
 // saveToDisk writes all non-expired auth sessions to disk.
@@ -121,11 +121,11 @@ func (sm *SessionManager) saveToDisk() {
 	}
 	data, err := json.Marshal(persistedSessions{Sessions: sessions})
 	if err != nil {
-		log.WarningLog.Printf("auth: failed to marshal sessions: %v", err)
+		log.Warn("auth: failed to marshal sessions", "err", err)
 		return
 	}
 	if err := os.WriteFile(sm.sessionsPath, data, 0600); err != nil {
-		log.WarningLog.Printf("auth: failed to write sessions file: %v", err)
+		log.Warn("auth: failed to write sessions file", "err", err)
 	}
 }
 

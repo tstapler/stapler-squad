@@ -18,13 +18,13 @@ func NewRecoveryHandler(sessionID string, sendInput func([]byte) error) *Recover
 }
 
 func (h *RecoveryHandler) Execute(input []byte) error {
-	log.InfoLog.Printf("[RateLimit] Sending recovery input to session %s: %q", h.sessionID, string(input))
+	log.Info("sending recovery input", "session", h.sessionID, "input", string(input))
 
 	if err := h.sendInput(input); err != nil {
-		log.WarningLog.Printf("[RateLimit] Failed to send recovery input to session %s: %v", h.sessionID, err)
+		log.Warn("failed to send recovery input", "session", h.sessionID, "err", err)
 		return err
 	}
 
-	log.InfoLog.Printf("[RateLimit] Successfully sent recovery input to session %s", h.sessionID)
+	log.Info("successfully sent recovery input", "session", h.sessionID)
 	return nil
 }

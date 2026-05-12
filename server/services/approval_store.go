@@ -73,7 +73,7 @@ func NewApprovalStore(filePath string) *ApprovalStore {
 	}
 	if filePath != "" {
 		if err := s.loadFromDisk(); err != nil {
-			log.WarningLog.Printf("[ApprovalPersistence] Failed to load persisted approvals from %s: %v (starting with empty state)", filePath, err)
+			log.Warn("[ApprovalPersistence] failed to load persisted approvals (starting with empty state)", "path", filePath, "err", err)
 		}
 	}
 	return s
@@ -171,7 +171,7 @@ func (s *ApprovalStore) Resolve(id string, decision ApprovalDecision) error {
 
 	// Orphaned approvals have no live HTTP connection -- just remove the record.
 	if a.Orphaned || a.decisionCh == nil {
-		log.InfoLog.Printf("[ApprovalPersistence] Removed orphaned approval %s (session=%s)", id, a.SessionID)
+		log.Info("[ApprovalPersistence] removed orphaned approval", "approval_id", id, "session", a.SessionID)
 		return nil
 	}
 
@@ -264,8 +264,7 @@ func (s *ApprovalStore) CleanupExpired() []string {
 	}
 	for _, a := range orphanedCleaned {
 		ids = append(ids, a.ID)
-		log.InfoLog.Printf("[ApprovalPersistence] Cleaned up orphaned approval %s (session=%s, age=%s)",
-			a.ID, a.SessionID, now.Sub(a.CreatedAt).Round(time.Second))
+		log.Info("[ApprovalPersistence] cleaned up orphaned approval", "approval_id", a.ID, "session", a.SessionID, "age", now.Sub(a.CreatedAt).Round(time.Second))
 	}
 	return ids
 }
@@ -312,30 +311,30 @@ func (s *ApprovalStore) persistToDiskLocked() {
 
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
-		log.ErrorLog.Printf("[ApprovalPersistence] Failed to marshal approvals: %v", err)
+		log.Error("[ApprovalPersistence] failed to marshal approvals", "err", err)
 		return
 	}
 
 	// Ensure directory exists
 	dir := filepath.Dir(s.filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.ErrorLog.Printf("[ApprovalPersistence] Failed to create directory %s: %v", dir, err)
+		log.Error("[ApprovalPersistence] failed to create directory", "dir", dir, "err", err)
 		return
 	}
 
 	// Atomic write: write to temp file, then rename
 	tmpPath := s.filePath + ".tmp"
 	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
-		log.ErrorLog.Printf("[ApprovalPersistence] Failed to write temp file %s: %v", tmpPath, err)
+		log.Error("[ApprovalPersistence] failed to write temp file", "path", tmpPath, "err", err)
 		return
 	}
 	if err := os.Rename(tmpPath, s.filePath); err != nil {
 		os.Remove(tmpPath)
-		log.ErrorLog.Printf("[ApprovalPersistence] Failed to rename temp file to %s: %v", s.filePath, err)
+		log.Error("[ApprovalPersistence] failed to rename temp file", "dest", s.filePath, "err", err)
 		return
 	}
 
-	log.InfoLog.Printf("[ApprovalPersistence] Persisted %d approvals to %s", len(persisted), s.filePath)
+	log.Info("[ApprovalPersistence] persisted approvals", "count", len(persisted), "path", s.filePath)
 }
 
 // loadFromDisk loads persisted approvals from disk and marks them all as orphaned
@@ -361,7 +360,7 @@ func (s *ApprovalStore) loadFromDisk() error {
 	var persisted []PersistedApproval
 	if err := json.Unmarshal(data, &persisted); err != nil {
 		// Corrupt JSON -- log warning and start fresh (don't crash).
-		log.WarningLog.Printf("[ApprovalPersistence] Corrupt JSON in %s, starting with empty state: %v", s.filePath, err)
+		log.Warn("[ApprovalPersistence] corrupt JSON, starting with empty state", "path", s.filePath, "err", err)
 		return nil
 	}
 
@@ -389,7 +388,7 @@ func (s *ApprovalStore) loadFromDisk() error {
 	}
 
 	if loaded > 0 {
-		log.InfoLog.Printf("[ApprovalPersistence] Loaded %d orphaned approvals from %s", loaded, s.filePath)
+		log.Info("[ApprovalPersistence] loaded orphaned approvals", "count", loaded, "path", s.filePath)
 	}
 	return nil
 }

@@ -48,7 +48,7 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 	// Load instances and find the requested session
 	instances, err := h.storage.LoadInstances()
 	if err != nil {
-		log.ErrorLog.Printf("Failed to load instances: %v", err)
+		log.Error("failed to load instances", "err", err)
 		http.Error(w, "Failed to load instances", http.StatusInternalServerError)
 		return
 	}
@@ -69,17 +69,17 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 	// Upgrade HTTP connection to WebSocket
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.ErrorLog.Printf("Failed to upgrade connection: %v", err)
+		log.Error("failed to upgrade connection", "err", err)
 		return
 	}
 	defer conn.Close()
 
-	log.InfoLog.Printf("WebSocket connection established for session '%s'", sessionID)
+	log.Info("WebSocket connection established", "session", sessionID)
 
 	// Get PTY reader from instance
 	ptyReader, err := instance.GetPTYReader()
 	if err != nil {
-		log.ErrorLog.Printf("Failed to get PTY reader: %v", err)
+		log.Error("failed to get PTY reader", "err", err)
 		_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Error: %v", err)))
 		return
 	}
@@ -88,13 +88,13 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 	// This ensures the client sees the existing screen content immediately on connect
 	initialContent, err := instance.CapturePaneContent()
 	if err != nil {
-		log.WarningLog.Printf("Failed to capture initial pane content for session '%s': %v", sessionID, err)
+		log.Warn("failed to capture initial pane content", "session", sessionID, "err", err)
 	} else if len(initialContent) > 0 {
 		// Send initial screen state as first message
 		if err := conn.WriteMessage(websocket.BinaryMessage, []byte(initialContent)); err != nil {
-			log.WarningLog.Printf("Failed to send initial content: %v", err)
+			log.Warn("failed to send initial content", "err", err)
 		} else {
-			log.InfoLog.Printf("Sent initial pane content (%d bytes) to WebSocket for session '%s'", len(initialContent), sessionID)
+			log.Info("sent initial pane content to WebSocket", "bytes", len(initialContent), "session", sessionID)
 		}
 	}
 
@@ -117,7 +117,7 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 				n, err := ptyReader.Read(buf)
 				if err != nil {
 					if err != io.EOF {
-						log.ErrorLog.Printf("Error reading from PTY: %v", err)
+						log.Error("error reading from PTY", "err", err)
 						_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("PTY error: %v", err)))
 					}
 					return
@@ -126,7 +126,7 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 				if n > 0 {
 					// Send terminal output to WebSocket as binary data
 					if err := conn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-						log.ErrorLog.Printf("Error writing to WebSocket: %v", err)
+						log.Error("error writing to WebSocket", "err", err)
 						return
 					}
 				}
@@ -147,7 +147,7 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 				messageType, message, err := conn.ReadMessage()
 				if err != nil {
 					if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-						log.ErrorLog.Printf("WebSocket read error: %v", err)
+						log.Error("WebSocket read error", "err", err)
 					}
 					done <- struct{}{}
 					return
@@ -159,7 +159,7 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 					// Forward input to PTY
 					_, err := instance.WriteToPTY(message)
 					if err != nil {
-						log.ErrorLog.Printf("Error writing to PTY: %v", err)
+						log.Error("error writing to PTY", "err", err)
 						_ = conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf("Input error: %v", err)))
 					} else {
 						// Publish user interaction event for immediate review queue reactivity
@@ -173,7 +173,7 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 					}
 
 				case websocket.CloseMessage:
-					log.InfoLog.Printf("WebSocket close message received for session '%s'", sessionID)
+					log.Info("WebSocket close message received", "session", sessionID)
 					done <- struct{}{}
 					return
 				}
@@ -183,5 +183,5 @@ func (h *TerminalWebSocketHandler) HandleWebSocket(w http.ResponseWriter, r *htt
 
 	// Wait for both goroutines to complete
 	wg.Wait()
-	log.InfoLog.Printf("WebSocket connection closed for session '%s'", sessionID)
+	log.Info("WebSocket connection closed", "session", sessionID)
 }

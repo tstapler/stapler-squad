@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { usePageView } from "@/lib/analytics/usePageView";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { routes } from "@/lib/routes";
@@ -269,6 +270,7 @@ function CredentialRow({
 // ─── Account Page ─────────────────────────────────────────────────────────────
 
 export default function AccountPage() {
+  usePageView();
   const router = useRouter();
   const { authEnabled, authenticated, loading: authLoading } = useAuth();
 

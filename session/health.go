@@ -63,7 +63,7 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 	// Attempting to recover them all at once would be destructive and incorrect.
 	// Skip health checks until the server is back up.
 	if tmux.IsServerDown(serverSocket) {
-		log.WarningLog.Printf("Health check: tmux server is down (socket=%q), skipping session checks", serverSocket)
+		log.Warn("health check: tmux server is down, skipping session checks", "socket", serverSocket)
 		return nil, nil
 	}
 
@@ -75,13 +75,12 @@ func (h *SessionHealthChecker) CheckAllSessions() ([]HealthCheckResult, error) {
 
 		// Log any issues found
 		if !result.IsHealthy {
-			log.WarningLog.Printf("Health check found issues for session '%s': %v",
-				result.InstanceTitle, result.Issues)
+			log.Warn("health check found issues for session", "session", result.InstanceTitle, "issues", result.Issues)
 			if result.RecoveryAttempted {
 				if result.RecoverySuccess {
-					log.DebugLog.Printf("Successfully recovered session '%s'", result.InstanceTitle)
+					log.Debug("successfully recovered session", "session", result.InstanceTitle)
 				} else {
-					log.ErrorLog.Printf("Failed to recover session '%s'", result.InstanceTitle)
+					log.Error("failed to recover session", "session", result.InstanceTitle)
 				}
 			}
 		}
@@ -119,8 +118,7 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 			h.failureCountsMu.Unlock()
 
 			if count < failureThreshold {
-				log.DebugLog.Printf("Health check: session '%s' failure count %d/%d, deferring recovery",
-					instance.Title, count, failureThreshold)
+				log.Debug("health check: deferring recovery", "session", instance.Title, "count", count, "threshold", failureThreshold)
 				result.Actions = append(result.Actions, fmt.Sprintf("Failure %d/%d: deferring recovery", count, failureThreshold))
 			} else {
 				// Threshold reached - attempt recovery
@@ -190,7 +188,7 @@ func (h *SessionHealthChecker) RecoverUnhealthySessions() error {
 		}
 	}
 
-	log.DebugLog.Printf("Session recovery completed: %d recovered, %d failed", recoveredCount, failedCount)
+	log.Debug("session recovery completed", "recovered", recoveredCount, "failed", failedCount)
 
 	// Save the updated state if any recoveries were attempted
 	if recoveredCount > 0 || failedCount > 0 {
@@ -200,7 +198,7 @@ func (h *SessionHealthChecker) RecoverUnhealthySessions() error {
 		}
 
 		if err := h.storage.SaveInstances(instances); err != nil {
-			log.WarningLog.Printf("Failed to save instances after recovery: %v", err)
+			log.Warn("failed to save instances after recovery", "err", err)
 		}
 	}
 
@@ -212,13 +210,13 @@ func (h *SessionHealthChecker) ScheduledHealthCheck(interval time.Duration, stop
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.DebugLog.Printf("Starting scheduled health checks every %v", interval)
+	log.Debug("starting scheduled health checks", "interval", interval)
 
 	for {
 		select {
 		case <-ticker.C:
 			if err := h.RecoverUnhealthySessions(); err != nil {
-				log.ErrorLog.Printf("Scheduled health check failed: %v", err)
+				log.Error("scheduled health check failed", "err", err)
 			}
 		case <-stopChan:
 			return

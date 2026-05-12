@@ -79,7 +79,7 @@ func findGitRepoRoot(path string) (string, error) {
 	// First check if the directory exists
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// Directory doesn't exist - create it and initialize git
-		log.InfoLog.Printf("Directory '%s' doesn't exist, creating it and initializing git repository", path)
+		log.Info("directory does not exist, creating and initializing git repository", "path", path)
 
 		if err := os.MkdirAll(path, 0755); err != nil {
 			return "", fmt.Errorf("failed to create directory '%s': %w", path, err)
@@ -97,7 +97,7 @@ func findGitRepoRoot(path string) (string, error) {
 			return "", fmt.Errorf("failed to create initial commit at '%s': %w", path, err)
 		}
 
-		log.InfoLog.Printf("Successfully created and initialized git repository at '%s' with initial commit", path)
+		log.Info("successfully created and initialized git repository with initial commit", "path", path)
 		return path, nil
 	}
 
@@ -111,11 +111,11 @@ func findGitRepoRoot(path string) (string, error) {
 			_, err := repo.Head()
 			if err != nil {
 				// Repository has no commits - create initial commit
-				log.InfoLog.Printf("Repository at '%s' has no commits, creating initial commit", currentPath)
+				log.Info("repository has no commits, creating initial commit", "path", currentPath)
 				if err := createInitialCommit(repo, currentPath); err != nil {
 					return "", fmt.Errorf("failed to create initial commit at '%s': %w", currentPath, err)
 				}
-				log.InfoLog.Printf("Successfully created initial commit at '%s'", currentPath)
+				log.Info("successfully created initial commit", "path", currentPath)
 			}
 			return currentPath, nil
 		}
@@ -199,7 +199,7 @@ func InitializeProjectDirectory(path string) error {
 	if err != nil {
 		if dirCreated {
 			if rmErr := os.RemoveAll(path); rmErr != nil {
-				log.ErrorLog.Printf("InitializeProjectDirectory: rollback failed for %s: %v", path, rmErr)
+				log.Error("InitializeProjectDirectory: rollback failed", "path", path, "err", rmErr)
 			}
 		}
 		return fmt.Errorf("failed to init git repo: %w", err)
@@ -209,7 +209,7 @@ func InitializeProjectDirectory(path string) error {
 	if err := createInitialCommit(repo, path); err != nil {
 		if dirCreated {
 			if rmErr := os.RemoveAll(path); rmErr != nil {
-				log.ErrorLog.Printf("InitializeProjectDirectory: rollback failed for %s: %v", path, rmErr)
+				log.Error("InitializeProjectDirectory: rollback failed", "path", path, "err", rmErr)
 			}
 		}
 		return fmt.Errorf("failed to create initial commit: %w", err)

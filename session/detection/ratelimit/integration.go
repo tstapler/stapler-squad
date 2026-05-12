@@ -45,7 +45,7 @@ func (i *Integration) Start() {
 	if i.manager != nil {
 		i.manager.Start()
 		i.started = true
-		log.InfoLog.Printf("Rate limit detection started for session '%s'", i.sessionID)
+		log.Info("rate limit detection started", "session", i.sessionID)
 	}
 }
 
@@ -60,7 +60,7 @@ func (i *Integration) Stop() {
 	if i.manager != nil {
 		i.manager.Stop()
 		i.started = false
-		log.InfoLog.Printf("Rate limit detection stopped for session '%s'", i.sessionID)
+		log.Info("rate limit detection stopped", "session", i.sessionID)
 	}
 }
 

@@ -47,13 +47,13 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	if isDirty {
 		// Stage all changes
 		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.ErrorLog.Print(err)
+			log.Error("failed to stage changes", "err", err)
 			return fmt.Errorf("failed to stage changes: %w", err)
 		}
 
 		// Create commit
 		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.ErrorLog.Print(err)
+			log.Error("failed to commit changes", "err", err)
 			return fmt.Errorf("failed to commit changes: %w", err)
 		}
 		g.InvalidateDirtyCache()
@@ -71,7 +71,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 		gitPushCmd := safeexec.CommandContext(gitPushCtx, "git", "push", "-u", "origin", g.branchName)
 		gitPushCmd.Dir = g.worktreePath
 		if pushOutput, pushErr := g.runCombinedOutput(gitPushCmd); pushErr != nil {
-			log.ErrorLog.Print(pushErr)
+			log.Error("failed to push branch", "err", pushErr)
 			return fmt.Errorf("failed to push branch: %s (%w)", pushOutput, pushErr)
 		}
 	}
@@ -82,7 +82,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	syncCmd := safeexec.CommandContext(syncCtx, "gh", "repo", "sync", "-b", g.branchName)
 	syncCmd.Dir = g.worktreePath
 	if output, err := g.runCombinedOutput(syncCmd); err != nil {
-		log.ErrorLog.Print(err)
+		log.Error("failed to sync changes", "err", err)
 		return fmt.Errorf("failed to sync changes: %s (%w)", output, err)
 	}
 
@@ -90,7 +90,7 @@ func (g *GitWorktree) PushChanges(commitMessage string, open bool) error {
 	if open {
 		if err := g.OpenBranchURL(); err != nil {
 			// Just log the error but don't fail the push operation
-			log.ErrorLog.Printf("failed to open branch URL: %v", err)
+			log.Error("failed to open branch URL", "err", err)
 		}
 	}
 
@@ -108,13 +108,13 @@ func (g *GitWorktree) CommitChanges(commitMessage string) error {
 	if isDirty {
 		// Stage all changes
 		if _, err := g.runGitCommand(g.worktreePath, "add", "."); err != nil {
-			log.ErrorLog.Print(err)
+			log.Error("failed to stage changes", "err", err)
 			return fmt.Errorf("failed to stage changes: %w", err)
 		}
 
 		// Create commit (local only)
 		if _, err := g.runGitCommand(g.worktreePath, "commit", "-m", commitMessage, "--no-verify"); err != nil {
-			log.ErrorLog.Print(err)
+			log.Error("failed to commit changes", "err", err)
 			return fmt.Errorf("failed to commit changes: %w", err)
 		}
 		g.InvalidateDirtyCache()

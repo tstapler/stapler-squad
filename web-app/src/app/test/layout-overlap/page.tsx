@@ -1,4 +1,5 @@
 "use client";
+// analytics-exempt
 
 /**
  * Layout overlap test page.

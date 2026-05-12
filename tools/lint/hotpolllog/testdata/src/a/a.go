@@ -13,7 +13,7 @@ func bad1(ch <-chan int) {
 	for {
 		select {
 		case <-ch:
-			DebugLog.Printf("got value") // want `DebugLog call inside a select case of a for loop`
+			DebugLog.Printf("got value") // want `hot-log call`
 		}
 	}
 }
@@ -24,7 +24,7 @@ func bad2(ch <-chan string) {
 		select {
 		case data := <-ch:
 			_ = data
-			DebugLog.Printf("got: %s", data) // want `DebugLog call inside a select case of a for loop`
+			DebugLog.Printf("got: %s", data) // want `hot-log call`
 		}
 	}
 }
@@ -40,7 +40,7 @@ func bad3(items []int, ch <-chan int) {
 	for range items {
 		select {
 		case <-ch:
-			logPkg.DebugLog.Printf("iteration") // want `DebugLog call inside a select case of a for loop`
+			logPkg.DebugLog.Printf("iteration") // want `hot-log call`
 		}
 	}
 }
@@ -52,7 +52,7 @@ func bad4(ch <-chan int) {
 		select {
 		case <-ch:
 			if DebugLog != nil {
-				DebugLog.Printf("guarded but still bad") // want `DebugLog call inside a select case of a for loop`
+				DebugLog.Printf("guarded but still bad") // want `hot-log call`
 			}
 		}
 	}
@@ -74,14 +74,16 @@ func good2() {
 	DebugLog.Printf("top-level call")
 }
 
-// GOOD3: InfoLog is not DebugLog — different variable name, should not fire.
+// BAD5: InfoLog.Printf inside a select case of a for loop. InfoLog serializes
+// concurrent goroutines on the stdlib log mutex (full I/O duration, not just
+// channel send), causing mutex-contention events identical to DebugLog's block events.
 var InfoLog = log.New(nil, "INFO: ", 0)
 
-func good3(ch <-chan int) {
+func bad5(ch <-chan int) {
 	for {
 		select {
 		case <-ch:
-			InfoLog.Printf("info inside select")
+			InfoLog.Printf("info inside select") // want `hot-log call`
 		}
 	}
 }

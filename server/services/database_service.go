@@ -211,7 +211,7 @@ func (ds *DatabaseService) MergeDatabase(
 	}
 
 	msg := fmt.Sprintf("Merged %d sessions (%d skipped — title already exists)", imported, skipped)
-	log.InfoLog.Printf("MergeDatabase: %s from %s", msg, sourceDir)
+	log.Info("MergeDatabase", "message", msg, "source", sourceDir)
 
 	return connect.NewResponse(&sessionv1.MergeDatabaseResponse{
 		Success:          true,
@@ -348,12 +348,12 @@ func countSessionsInDB(configDir string) int {
 func execRestart() {
 	executable, err := os.Executable()
 	if err != nil {
-		log.ErrorLog.Printf("exec restart: failed to get executable path: %v", err)
+		log.Error("exec restart: failed to get executable path", "err", err)
 		return
 	}
 
-	log.InfoLog.Printf("exec restart: replacing process with %s", executable)
+	log.Info("exec restart: replacing process", "executable", executable)
 	if err := execSyscall(executable, os.Args, os.Environ()); err != nil {
-		log.ErrorLog.Printf("exec restart: exec failed: %v", err)
+		log.Error("exec restart: exec failed", "err", err)
 	}
 }

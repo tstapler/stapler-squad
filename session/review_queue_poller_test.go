@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -290,6 +291,14 @@ func newSimpleTestPoller() *ReviewQueuePoller {
 	return NewReviewQueuePoller(queue, statusMgr, nil)
 }
 
+// newSimpleTestPollerWithManager creates a ReviewQueuePoller and returns the concrete
+// *InstanceStatusManager so tests can register controllers directly.
+func newSimpleTestPollerWithManager() (*ReviewQueuePoller, *InstanceStatusManager) {
+	queue := NewReviewQueue()
+	statusMgr := NewInstanceStatusManager()
+	return NewReviewQueuePoller(queue, statusMgr, nil), statusMgr
+}
+
 // newTestPollerInstance creates a minimal started/paused Instance for use in poller tests.
 func newTestPollerInstance(title, uuid string) *Instance {
 	inst := &Instance{
@@ -567,6 +576,89 @@ func TestReviewQueuePoller_AcknowledgedSession_ResurfacesAfterNewOutput(t *testi
 	}
 }
 
+// TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue verifies
+// that sessions with GetController() != nil (controller wired but not yet started) are
+// evaluated by the poller rather than skipped. When approval-prompt content is present in
+// the terminal cache the session must appear in the review queue.
+//
+// This is the regression test for the bug where the early-return guard prevented any
+// queue update for sessions with a non-nil controller, regardless of their actual state.
+func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue(t *testing.T) {
+	poller := newSimpleTestPoller()
+
+	inst := &Instance{
+		Title:  "controller-session",
+		UUID:   "uuid-ctrl",
+		Status: Running,
+	}
+	inst.started = true
+
+	// Wire a controller that is NOT started (ctx == nil → IsStarted() = false).
+	// GetController() returns non-nil, but IsControllerActive will be false so the
+	// no-controller terminal-content path runs.
+	bareController := &ClaudeController{
+		sessionName: inst.Title,
+		instance:    inst,
+	}
+	inst.controllerManager.SetController(bareController)
+
+	// Pre-populate the content cache with an approval prompt so the no-controller
+	// detection path finds it without needing a live tmux session.
+	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
+	poller.injectCachedContent(inst.Title, approvalContent)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with approval prompt must be added to the review queue")
+	}
+	if item.Reason != ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	}
+}
+
+// TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue verifies that
+// sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
+// added to the review queue via the controller-based detection path (lines 696-828).
+func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t *testing.T) {
+	poller, statusMgr := newSimpleTestPollerWithManager()
+
+	// Use a mock InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
+	// without requiring a real tmux session.
+	approvalContent := "Yes, allow reading /home/user/file.go\nYes, allow once"
+	ctrl, _ := newControllerWithMock(approvalContent)
+
+	inst := &Instance{
+		Title:  "active-controller-session",
+		UUID:   "uuid-active",
+		Status: Running,
+	}
+	inst.started = true
+	ctrl.sessionName = inst.Title
+
+	// Mark the controller as started by setting a non-nil context.
+	ctrl.ctx = t.Context()
+
+	inst.controllerManager.SetController(ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
+
+	poller.AddInstance(inst)
+	poller.checkSession(inst, nil)
+
+	item, exists := poller.queue.Get(inst.Title)
+	if !exists {
+		t.Fatal("session with active controller reporting NeedsApproval must be in the review queue")
+	}
+	if item.Reason != ReasonApprovalPending {
+		t.Errorf("expected reason %s, got %s", ReasonApprovalPending, item.Reason)
+	}
+	if item.Priority != PriorityHigh {
+		t.Errorf("expected priority %s, got %s", PriorityHigh, item.Priority)
+	}
+}
+
 // TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic documents the bypass that
 // caused the bug and asserts the corrected condition applies universally.
 func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
@@ -617,6 +709,59 @@ func TestReviewQueuePoller_AcknowledgmentSnooze_ConditionLogic(t *testing.T) {
 			inst := makeAcknowledgedInstance("test")
 			if !inst.IsAcknowledgedAfterOutput() {
 				t.Error("acknowledged session should report IsAcknowledgedAfterOutput=true")
+			}
+		})
+	}
+}
+
+// makeStaleInstance creates a minimal Instance that will reach the staleness-check
+// path in checkSession without calling tmux or git. The content cache is pre-warmed
+// so getContent returns immediately without spawning a subprocess.
+func makeStaleInstance(rqp *ReviewQueuePoller, title string) *Instance {
+	inst := &Instance{
+		Title:  title,
+		Status: Running,
+	}
+	inst.started = true
+	// CreatedAt well in the past → GetTimeSinceLastMeaningfulOutput() > StalenessThreshold
+	inst.CreatedAt = time.Now().Add(-10 * time.Minute)
+	inst.UpdatedAt = inst.CreatedAt
+
+	// Pre-warm content cache so getContent returns without calling inst.Preview() (tmux).
+	cp := rqp.contentProvider.(*pollerContentProvider)
+	cp.cacheMu.Lock()
+	cp.cachedContent[title] = ""
+	cp.lastPreviewTime[title] = time.Now() // within previewCacheTTL
+	cp.cacheMu.Unlock()
+
+	return inst
+}
+
+// BenchmarkCheckSessionsConcurrent exercises the concurrent hot path of checkSessions
+// with N stale sessions. It is the regression gate for hot-path log-mutex contention:
+// if InfoLog.Printf calls are re-added to the staleness section of checkSession, the
+// concurrent goroutines will serialise on the log mutex and ns/op will increase sharply.
+//
+// Run with: go test -bench=BenchmarkCheckSessionsConcurrent -benchmem ./session/
+func BenchmarkCheckSessionsConcurrent(b *testing.B) {
+	for _, n := range []int{1, 5, 10, 20} {
+		b.Run(fmt.Sprintf("sessions-%d", n), func(b *testing.B) {
+			queue := NewReviewQueue()
+			statusMgr := NewInstanceStatusManager()
+			cfg := DefaultReviewQueuePollerConfig()
+			cfg.StalenessThreshold = 1 * time.Minute // ensure all instances are stale
+			rqp := NewReviewQueuePollerWithConfig(queue, statusMgr, nil, cfg)
+
+			instances := make([]*Instance, n)
+			for i := 0; i < n; i++ {
+				instances[i] = makeStaleInstance(rqp, fmt.Sprintf("bench-session-%d", i))
+			}
+			rqp.SetInstances(instances)
+
+			b.ResetTimer()
+			b.ReportAllocs()
+			for i := 0; i < b.N; i++ {
+				rqp.checkSessions()
 			}
 		})
 	}

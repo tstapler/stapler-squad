@@ -52,14 +52,14 @@ func NewPushService(configDir string) *PushService {
 	}
 
 	if err := ps.loadVapidKeys(); err != nil {
-		log.ErrorLog.Printf("Failed to load VAPID keys: %v", err)
+		log.Error("failed to load VAPID keys", "err", err)
 		if err := ps.generateVapidKeys(); err != nil {
-			log.ErrorLog.Printf("Failed to generate VAPID keys: %v", err)
+			log.Error("failed to generate VAPID keys", "err", err)
 		}
 	}
 
 	if err := ps.loadSubscriptions(); err != nil {
-		log.ErrorLog.Printf("Failed to load push subscriptions: %v", err)
+		log.Error("failed to load push subscriptions", "err", err)
 	}
 
 	return ps
@@ -91,7 +91,7 @@ func (ps *PushService) generateVapidKeys() error {
 		return fmt.Errorf("failed to write VAPID keys: %w", err)
 	}
 
-	log.InfoLog.Printf("Generated new VAPID keys")
+	log.Info("generated new VAPID keys")
 	return nil
 }
 
@@ -151,7 +151,7 @@ func (ps *PushService) Subscribe(sub PushSubscription) string {
 	ps.subscriptions[subID] = sub
 	ps.saveSubscriptions()
 
-	log.InfoLog.Printf("Added push subscription: %s", subID[:8])
+	log.Info("added push subscription", "sub_id_prefix", subID[:8])
 	return subID
 }
 
@@ -165,7 +165,7 @@ func (ps *PushService) Unsubscribe(endpoint string) bool {
 	if _, ok := ps.subscriptions[subID]; ok {
 		delete(ps.subscriptions, subID)
 		ps.saveSubscriptions()
-		log.InfoLog.Printf("Removed push subscription: %s", subID[:8])
+		log.Info("removed push subscription", "sub_id_prefix", subID[:8])
 		return true
 	}
 
@@ -202,7 +202,7 @@ func (ps *PushService) SendNotification(notif PushNotification) int {
 			if len(endpoint) > 50 {
 				endpoint = endpoint[:50]
 			}
-			log.ErrorLog.Printf("Failed to send push notification to %s: %v", endpoint, err)
+			log.Error("failed to send push notification", "endpoint_prefix", endpoint, "err", err)
 			continue
 		}
 		successCount++
@@ -286,11 +286,11 @@ func (ps *PushService) loadSubscriptions() error {
 func (ps *PushService) saveSubscriptions() {
 	data, err := json.Marshal(ps.subscriptions)
 	if err != nil {
-		log.ErrorLog.Printf("Failed to marshal subscriptions: %v", err)
+		log.Error("failed to marshal subscriptions", "err", err)
 		return
 	}
 
 	if err := os.WriteFile(ps.subsPath, data, 0600); err != nil {
-		log.ErrorLog.Printf("Failed to save subscriptions: %v", err)
+		log.Error("failed to save subscriptions", "err", err)
 	}
 }

@@ -1,3 +1,8 @@
+/**
+ * @deprecated Use useAnalytics().track() from @/lib/analytics instead.
+ * This function remains for backward compatibility with the /api/telemetry endpoint.
+ * Do not add new callsites — the analytics/require-on-click ESLint rule will block it.
+ */
 export function track(
   event: string,
   durationMs: number,

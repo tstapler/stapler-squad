@@ -55,6 +55,11 @@ func (rqs *ReviewQueueService) SetReactiveQueueManager(mgr ReactiveQueueManager)
 	rqs.reactiveQueueMgr = mgr
 }
 
+// GetReactiveQueueManager returns the injected ReactiveQueueManager, or nil if not set.
+func (rqs *ReviewQueueService) GetReactiveQueueManager() ReactiveQueueManager {
+	return rqs.reactiveQueueMgr
+}
+
 // SetReviewQueuePoller injects the ReviewQueuePoller used to refresh instance
 // references after acknowledgement.
 func (rqs *ReviewQueueService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
@@ -168,7 +173,7 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 			}
 		}
 		if sessionTitle == "" {
-			log.InfoLog.Printf("[ReviewQueue] AcknowledgeSession: session '%s' not found in storage, removed from queue", req.Msg.Id)
+			log.Info("[ReviewQueue] AcknowledgeSession: session not found in storage, removed from queue", "session", req.Msg.Id)
 			return connect.NewResponse(&sessionv1.AcknowledgeSessionResponse{
 				Success: true,
 				Message: fmt.Sprintf("Session '%s' removed from review queue", req.Msg.Id),
@@ -176,7 +181,7 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 		}
 		// Persist the acknowledged timestamp using Title (the storage key), not the client-supplied ID.
 		if err := rqs.storage.UpdateInstanceAcknowledged(sessionTitle); err != nil {
-			log.WarningLog.Printf("[ReviewQueue] AcknowledgeSession: failed to persist ack for '%s': %v", req.Msg.Id, err)
+			log.Warn("[ReviewQueue] AcknowledgeSession: failed to persist ack", "session", req.Msg.Id, "err", err)
 		}
 		rqs.eventBus.Publish(events.NewSessionAcknowledgedEvent(req.Msg.Id, "user_acknowledged"))
 		return connect.NewResponse(&sessionv1.AcknowledgeSessionResponse{
@@ -190,10 +195,10 @@ func (rqs *ReviewQueueService) AcknowledgeSession(
 
 	// Persist only this instance. UpdateInstance does a targeted UPDATE by title.
 	if err := rqs.storage.UpdateInstance(instance); err != nil {
-		log.WarningLog.Printf("[ReviewQueue] AcknowledgeSession: failed to persist ack for '%s': %v", instance.Title, err)
+		log.Warn("[ReviewQueue] AcknowledgeSession: failed to persist ack", "session", instance.Title, "err", err)
 	}
 
-	log.InfoLog.Printf("[ReviewQueue] AcknowledgeSession: acknowledged live instance '%s'", instance.Title)
+	log.Info("[ReviewQueue] AcknowledgeSession: acknowledged live instance", "session", instance.Title)
 	rqs.eventBus.Publish(events.NewSessionAcknowledgedEvent(instance.Title, "user_acknowledged"))
 
 	return connect.NewResponse(&sessionv1.AcknowledgeSessionResponse{

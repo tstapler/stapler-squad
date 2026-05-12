@@ -53,7 +53,7 @@ func (r *ErrorRegistry) Record(ctx context.Context, errVal error, procedure stri
 		AddOccurrenceCount(1).
 		SetLastSeen(now).
 		Exec(ctx); err != nil {
-		log.ErrorLog.Printf("ErrorRegistry.Record: failed to persist error event: %v", err)
+		log.Error("ErrorRegistry.Record: failed to persist error event", "err", err)
 	}
 }
 

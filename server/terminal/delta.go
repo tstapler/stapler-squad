@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -49,8 +50,7 @@ func (dg *DeltaGenerator) GenerateDelta(output []byte) *sessionv1.TerminalDelta 
 		originalLineCount := len(newLines)
 		// Keep only the last N rows (most recent output, what user sees in viewport)
 		newLines = newLines[len(newLines)-dg.rows:]
-		log.DebugLog.Printf("[DeltaGenerator] Truncated %d lines to fit %d row terminal (kept last %d lines)",
-			originalLineCount, dg.rows, len(newLines))
+		log.Debug("DeltaGenerator truncated lines to fit terminal rows", "original", originalLineCount, "rows", dg.rows, "kept", len(newLines))
 	}
 
 	// Increment version
@@ -62,7 +62,7 @@ func (dg *DeltaGenerator) GenerateDelta(output []byte) *sessionv1.TerminalDelta 
 	shouldSendFullSync := dg.deltasSinceFullSync >= dg.fullSyncInterval
 
 	if shouldSendFullSync {
-		log.InfoLog.Printf("[DeltaGenerator] Sending periodic full sync (after %d deltas)", dg.deltasSinceFullSync)
+		log.Info("DeltaGenerator sending periodic full sync", "deltas_since_sync", dg.deltasSinceFullSync)
 		return dg.generateFullSync(output, dg.cols, dg.rows)
 	}
 
@@ -166,8 +166,7 @@ func (dg *DeltaGenerator) generateFullSync(output []byte, cols, rows int) *sessi
 		// Keep only the last N rows (most recent output)
 		// This matches what the user sees in their terminal viewport
 		newLines = newLines[len(newLines)-rows:]
-		log.DebugLog.Printf("[DeltaGenerator] Truncated %d lines to fit %d row terminal (kept last %d lines)",
-			originalLineCount, rows, len(newLines))
+		log.Debug("DeltaGenerator truncated lines to fit terminal rows (full sync)", "original", originalLineCount, "rows", rows, "kept", len(newLines))
 	}
 
 	// Reset version and full sync counter
@@ -227,8 +226,7 @@ func (dg *DeltaGenerator) UpdateDimensions(cols, rows int) {
 	dg.lastLines.UpdateDimensions(rows)
 
 	// Log dimension changes for debugging resize-related issues
-	log.InfoLog.Printf("[DeltaGenerator] Dimensions updated: %dx%d -> %dx%d (version %d)",
-		oldCols, oldRows, cols, rows, dg.version)
+	log.Info("DeltaGenerator dimensions updated", "old", fmt.Sprintf("%dx%d", oldCols, oldRows), "new", fmt.Sprintf("%dx%d", cols, rows), "version", dg.version)
 }
 
 // Reset resets the delta generator state (called on reconnect).

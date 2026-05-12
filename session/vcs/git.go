@@ -48,7 +48,7 @@ func (g *GitClient) run(args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	log.DebugLog.Printf("[Git] Running: git %s", strings.Join(args, " "))
+	log.Debug("running git command", "args", strings.Join(args, " "))
 
 	if err := cmd.Run(); err != nil {
 		errMsg := strings.TrimSpace(stderr.String())
@@ -213,7 +213,7 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 			if err != nil {
 				return fmt.Errorf("failed to stash changes: %w", err)
 			}
-			log.InfoLog.Printf("[Git] Stashed uncommitted changes")
+			log.Info("stashed uncommitted changes")
 
 		case BringAlong:
 			// Stash changes to restore after switch
@@ -222,7 +222,7 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 				return fmt.Errorf("failed to stash changes: %w", err)
 			}
 			g.stashRef = "stash@{0}" // Remember we stashed
-			log.InfoLog.Printf("[Git] Stashed changes to bring along")
+			log.Info("stashed changes to bring along")
 
 		case Abandon:
 			if err := g.AbandonChanges(); err != nil {
@@ -244,14 +244,14 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 		if err != nil {
 			return fmt.Errorf("failed to create branch %s: %w", target, err)
 		}
-		log.InfoLog.Printf("[Git] Created and switched to branch %s", target)
+		log.Info("created and switched to branch", "branch", target)
 	} else if targetExists {
 		// Switch to existing branch
 		_, err := g.run("checkout", target)
 		if err != nil {
 			return fmt.Errorf("failed to switch to %s: %w", target, err)
 		}
-		log.InfoLog.Printf("[Git] Switched to %s", target)
+		log.Info("switched to branch", "branch", target)
 	} else {
 		return fmt.Errorf("branch or commit not found: %s", target)
 	}
@@ -260,10 +260,10 @@ func (g *GitClient) SwitchTo(target string, opts SwitchOptions) error {
 	if g.stashRef != "" {
 		_, err := g.run("stash", "pop")
 		if err != nil {
-			log.WarningLog.Printf("[Git] Failed to pop stash: %v (changes saved in stash)", err)
+			log.Warn("failed to pop stash", "err", err)
 			// Don't fail the switch - changes are safe in stash
 		} else {
-			log.InfoLog.Printf("[Git] Restored stashed changes")
+			log.Info("restored stashed changes")
 		}
 		g.stashRef = ""
 	}
@@ -288,7 +288,7 @@ func (g *GitClient) CreateBookmark(name string, base string) error {
 		return fmt.Errorf("failed to create branch %s: %w", name, err)
 	}
 
-	log.InfoLog.Printf("[Git] Created branch %s at %s", name, base)
+	log.Info("created branch", "branch", name, "base", base)
 	return nil
 }
 
@@ -297,7 +297,7 @@ func (g *GitClient) DescribeWIP(message string) error {
 	// Git doesn't have the concept of describing uncommitted changes
 	// We could create a commit, but that changes the history
 	// For now, this is a no-op
-	log.DebugLog.Printf("[Git] DescribeWIP called (no-op): %s", message)
+	log.Debug("DescribeWIP called (no-op)", "message", message)
 	return nil
 }
 
@@ -313,10 +313,10 @@ func (g *GitClient) AbandonChanges() error {
 
 	// Remove untracked files
 	if _, err := g.run("clean", "-fd"); err != nil {
-		log.WarningLog.Printf("[Git] Failed to clean untracked files: %v", err)
+		log.Warn("failed to clean untracked files", "err", err)
 	}
 
-	log.InfoLog.Printf("[Git] Abandoned all uncommitted changes")
+	log.Info("abandoned all uncommitted changes")
 	return nil
 }
 
@@ -413,7 +413,7 @@ func (g *GitClient) CreateWorktree(path string, branch string) error {
 		return fmt.Errorf("failed to create worktree at %s: %w", path, err)
 	}
 
-	log.InfoLog.Printf("[Git] Created worktree at %s with branch %s", path, branch)
+	log.Info("created worktree", "path", path, "branch", branch)
 	return nil
 }
 

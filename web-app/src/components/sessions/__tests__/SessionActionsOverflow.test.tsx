@@ -25,12 +25,6 @@ jest.mock("@/lib/hooks/useFocusTrap", () => ({
   useFocusTrap: () => undefined,
 }));
 
-// createPortal must render into document.body in jsdom
-jest.mock("react-dom", () => ({
-  ...jest.requireActual("react-dom"),
-  createPortal: (node: React.ReactNode) => node,
-}));
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -81,6 +75,16 @@ describe("SessionActionsOverflow", () => {
       renderOverflow();
       openMenu();
       expect(screen.getByRole("menu")).toBeInTheDocument();
+    });
+
+    it("renders menu via portal into document.body, not inside the component container", () => {
+      // Regression guard: menu must escape the card's stacking context so it
+      // isn't hidden behind sibling cards lower in the DOM.
+      const { container } = renderOverflow({ onClone: jest.fn() });
+      openMenu();
+      const menu = screen.getByRole("menu");
+      expect(document.body).toContainElement(menu);
+      expect(container).not.toContainElement(menu);
     });
 
     it("closes menu on second toggle click", () => {

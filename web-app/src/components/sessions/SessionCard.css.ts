@@ -390,15 +390,13 @@ export const overflowButton = style({
 });
 
 export const overflowMenu = style({
-  position: "absolute",
-  right: 0,
-  top: "calc(100% + 4px)",
+  position: "fixed",
   minWidth: "180px",
   background: vars.color.cardBackground,
   border: `1px solid ${vars.color.borderColor}`,
   borderRadius: vars.radii.lg,
   boxShadow: "0 8px 24px rgba(0, 0, 0, 0.15)",
-  zIndex: 200,
+  zIndex: 1000,
   padding: "4px",
   display: "flex",
   flexDirection: "column",

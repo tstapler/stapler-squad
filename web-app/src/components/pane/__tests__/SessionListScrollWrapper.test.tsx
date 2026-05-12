@@ -44,6 +44,15 @@ jest.mock("@/lib/contexts/CockpitActionsContext", () => ({
   useCockpitActions: () => ({ sessions: [], loading: false, error: null }),
 }));
 
+jest.mock("@/lib/contexts/SessionServiceContext", () => ({
+  useSessionServiceContext: () => ({
+    sessions: [],
+    loading: false,
+    error: null,
+    listSessions: jest.fn(),
+  }),
+}));
+
 jest.mock("@/components/pane/PaneContext", () => ({
   usePaneContext: () => ({
     pickerPendingSession: null,

@@ -151,7 +151,7 @@ func (s *AnalyticsStore) Record(entry AnalyticsEntry) {
 	case s.ch <- entry:
 	default:
 		atomic.AddInt64(&s.dropped, 1)
-		log.WarningLog.Printf("[AnalyticsStore] Buffer full; dropped entry for %s/%s", entry.SessionID, entry.ToolName)
+		log.Warn("[AnalyticsStore] buffer full; dropped entry", "session", entry.SessionID, "tool", entry.ToolName)
 	}
 }
 

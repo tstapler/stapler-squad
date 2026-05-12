@@ -38,7 +38,7 @@ func (ism *InstanceStatusManager) RegisterController(instanceTitle string, contr
 	ism.mu.Lock()
 	defer ism.mu.Unlock()
 	ism.controllers[instanceTitle] = controller
-	log.DebugLog.Printf("[RegisterController] Registered controller for '%s' (total registered: %d)", instanceTitle, len(ism.controllers))
+	log.Debug("registered controller", "session", instanceTitle, "count", len(ism.controllers))
 }
 
 // UnregisterController removes a controller for an instance.

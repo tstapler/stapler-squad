@@ -90,7 +90,7 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 	}
 
 	if err := store.loadFromDisk(); err != nil {
-		log.WarningLog.Printf("[NotificationStore] Failed to load from disk, starting empty: %v", err)
+		log.Warn("NotificationStore failed to load from disk, starting empty", "err", err)
 		store.records = make([]*NotificationRecord, 0)
 	}
 
@@ -100,7 +100,7 @@ func NewNotificationHistoryStore(filePath string) (*NotificationHistoryStore, er
 	// Deduplicate existing records that were persisted before dedup logic was added.
 	// This consolidates unread duplicates into single records with accurate counts.
 	if err := store.deduplicateExisting(); err != nil {
-		log.WarningLog.Printf("[NotificationStore] Failed to deduplicate existing records: %v", err)
+		log.Warn("NotificationStore failed to deduplicate existing records", "err", err)
 	}
 
 	return store, nil

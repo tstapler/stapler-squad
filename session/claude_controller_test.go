@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -778,5 +779,148 @@ func Benchmark_GetCurrentStatus_CacheMiss(b *testing.B) {
 			inst.preview = tmuxOutputLarge + "b"
 		}
 		_, _ = cc.GetCurrentStatus()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests — StatusChangeListener
+// ---------------------------------------------------------------------------
+
+// newControllerWithMockAndChannel returns a ClaudeController with an initialized
+// statusCheckCh, suitable for StatusChangeListener tests that manually drive the
+// runStatusChangeLoop goroutine.
+func newControllerWithMockAndChannel(preview string) (*ClaudeController, *mockInstance, context.Context, context.CancelFunc) {
+	inst := &mockInstance{title: "test", preview: preview}
+	ctx, cancel := context.WithCancel(context.Background())
+	cc := &ClaudeController{
+		sessionName:    "test",
+		instance:       inst,
+		statusDetector: detection.NewStatusDetector(),
+		idleDetector:   detection.NewIdleDetector("test", nil),
+		statusCheckCh:  make(chan struct{}, 1),
+		ctx:            ctx,
+		cancel:         cancel,
+	}
+	return cc, inst, ctx, cancel
+}
+
+// TestClaudeController_StatusChangeListener_FiresOnStatusChange verifies that
+// the listener is invoked when a status transition is detected after an output signal.
+func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T) {
+	// Use content that produces a known status (StatusActive via "esc to interrupt").
+	preview := tmuxOutputSmall // contains "esc to interrupt" → StatusActive
+	cc, _, _, cancel := newControllerWithMockAndChannel(preview)
+	defer cancel()
+
+	fired := make(chan detection.DetectedStatus, 1)
+	cc.statusChangeListener = func(newStatus detection.DetectedStatus, _ string) {
+		select {
+		case fired <- newStatus:
+		default:
+		}
+	}
+
+	// Start the background goroutine.
+	go cc.runStatusChangeLoop(cc.ctx)
+
+	// Signal an output event.
+	cc.statusCheckCh <- struct{}{}
+
+	select {
+	case got := <-fired:
+		if got == detection.StatusUnknown {
+			t.Errorf("expected a non-Unknown status, got %v", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for StatusChangeListener to fire")
+	}
+}
+
+// TestClaudeController_StatusChangeListener_SuppressedOnNoChange verifies that
+// the listener fires only once when the status doesn't change across two signals.
+func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T) {
+	preview := tmuxOutputSmall
+	cc, _, _, cancel := newControllerWithMockAndChannel(preview)
+	defer cancel()
+
+	callCount := make(chan struct{}, 10)
+	cc.statusChangeListener = func(_ detection.DetectedStatus, _ string) {
+		callCount <- struct{}{}
+	}
+
+	go cc.runStatusChangeLoop(cc.ctx)
+
+	// Send two signals with the same preview content (same status both times).
+	cc.statusCheckCh <- struct{}{}
+	// Wait for first call to be processed before sending second signal.
+	select {
+	case <-callCount:
+		// First call received — good.
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for first StatusChangeListener call")
+	}
+
+	// Now send a second signal; status hasn't changed so listener must NOT fire again.
+	cc.statusCheckCh <- struct{}{}
+
+	// Wait for the goroutine to consume the second signal from the channel (without sleeping a
+	// fixed duration). Once the channel is empty the goroutine has processed the signal and
+	// decided — correctly — not to call the listener again.
+	deadline := time.After(2 * time.Second)
+	for len(cc.statusCheckCh) > 0 {
+		select {
+		case <-deadline:
+			// Timed out waiting for channel to drain — fall through to the assertion below.
+			goto checkResult
+		default:
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+	// Give the goroutine a brief window (10ms) to potentially call the listener after draining.
+	time.Sleep(10 * time.Millisecond)
+
+checkResult:
+	select {
+	case <-callCount:
+		t.Error("StatusChangeListener fired a second time for the same status")
+	default:
+		// Expected: no second call.
+	}
+}
+
+// TestClaudeController_StatusChangeListener_NotCalledAfterStop verifies that
+// the listener is not called after the context is cancelled (Stop).
+func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) {
+	preview := tmuxOutputSmall
+	cc, _, _, cancel := newControllerWithMockAndChannel(preview)
+
+	called := make(chan struct{}, 1)
+	cc.statusChangeListener = func(_ detection.DetectedStatus, _ string) {
+		select {
+		case called <- struct{}{}:
+		default:
+		}
+	}
+
+	go cc.runStatusChangeLoop(cc.ctx)
+
+	// Cancel the context (simulating Stop()).
+	cancel()
+
+	// Drain the channel to ensure the goroutine has exited.
+	time.Sleep(50 * time.Millisecond)
+
+	// Send a signal after stop — listener must not be called.
+	select {
+	case cc.statusCheckCh <- struct{}{}:
+	default:
+	}
+
+	// Allow time for any spurious delivery.
+	select {
+	case <-called:
+		t.Error("StatusChangeListener called after Stop()")
+	case <-time.After(200 * time.Millisecond):
+		// Expected: silence after stop.
 	}
 }

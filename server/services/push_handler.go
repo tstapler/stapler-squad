@@ -41,14 +41,14 @@ func (h *PushHandler) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 
 	var sub PushSubscription
 	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
-		log.ErrorLog.Printf("Failed to decode push subscription: %v", err)
+		log.Error("failed to decode push subscription", "err", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 	defer r.Body.Close()
 
 	subID := h.pushService.Subscribe(sub)
-	log.InfoLog.Printf("New push subscription registered: %s", subID[:8])
+	log.Info("new push subscription registered", "sub_id_prefix", subID[:8])
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -67,7 +67,7 @@ func (h *PushHandler) handleUnsubscribe(w http.ResponseWriter, r *http.Request) 
 		Endpoint string `json:"endpoint"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.ErrorLog.Printf("Failed to decode unsubscribe request: %v", err)
+		log.Error("failed to decode unsubscribe request", "err", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}

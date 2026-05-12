@@ -27,7 +27,7 @@ type ImageUploadHandler struct {
 
 func NewImageUploadHandler(dir string) *ImageUploadHandler {
 	if err := os.MkdirAll(dir, pasteDirMode); err != nil {
-		log.ErrorLog.Printf("[ImageUpload] cannot create paste dir %s: %v", dir, err)
+		log.Error("[ImageUpload] cannot create paste dir", "dir", dir, "err", err)
 	}
 	cleanOldPasteFiles(dir)
 	return &ImageUploadHandler{dir: dir}
@@ -50,7 +50,7 @@ func cleanOldPasteFiles(dir string) {
 		}
 		path := filepath.Join(dir, entry.Name())
 		if removeErr := os.Remove(path); removeErr == nil {
-			log.InfoLog.Printf("[ImageUpload] evicted old paste file: %s", path)
+			log.Info("[ImageUpload] evicted old paste file", "path", path)
 		}
 	}
 }
@@ -101,7 +101,7 @@ func (h *ImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request
 	// Use os.CreateTemp so the kernel guarantees a unique filename (no collision risk).
 	f, err := os.CreateTemp(h.dir, "paste-*"+ext)
 	if err != nil {
-		log.ErrorLog.Printf("[ImageUpload] create temp file failed: %v", err)
+		log.Error("[ImageUpload] create temp file failed", "err", err)
 		http.Error(w, "failed to save image", http.StatusInternalServerError)
 		return
 	}
@@ -110,17 +110,17 @@ func (h *ImageUploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request
 	if _, err := f.Write(data); err != nil {
 		f.Close()
 		os.Remove(path)
-		log.ErrorLog.Printf("[ImageUpload] write failed: %v", err)
+		log.Error("[ImageUpload] write failed", "err", err)
 		http.Error(w, "failed to save image", http.StatusInternalServerError)
 		return
 	}
 	f.Close()
 
 	if err := os.Chmod(path, imageFileMode); err != nil {
-		log.ErrorLog.Printf("[ImageUpload] chmod failed: %v", err)
+		log.Error("[ImageUpload] chmod failed", "err", err)
 	}
 
-	log.InfoLog.Printf("[ImageUpload] saved %d bytes → %s", len(data), path)
+	log.Info("[ImageUpload] saved image", "bytes", len(data), "path", path)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(imageUploadResponse{Path: path})

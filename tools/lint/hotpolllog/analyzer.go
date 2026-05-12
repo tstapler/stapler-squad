@@ -1,15 +1,18 @@
-// Package hotpolllog defines a go/analysis pass that detects calls to
-// DebugLog methods (e.g. log.DebugLog.Printf) made directly inside a
-// select-case clause that is itself inside a for loop.
+// Package hotpolllog defines a go/analysis pass that detects hot-poll log calls
+// made directly inside a select-case clause that is itself inside a for loop.
 //
-// This pattern was the root cause of 26,437 goroutine block events in
-// the stapler-squad streaming goroutine: every frame triggered a logging
-// call that blocked on a channel write even when debug logging was a no-op.
+// Flagged patterns:
+//   - log.DebugLog.Printf — was the root cause of 26,437 goroutine block events
+//     in the stapler-squad streaming goroutine (pprof block profile, 2026-05-10)
+//   - log.InfoLog.Printf — root cause of 155M mutex-contention cycles in the
+//     review-queue poll loop (pprof mutex profile, 2026-05-10); InfoLog.Printf
+//     serializes concurrent goroutines on the stdlib log mutex for the full I/O
+//     duration when called from a hot loop.
 //
-// The analyzer is purely syntactic — it looks for selector expressions
-// where the field name is "DebugLog" regardless of the package that owns
-// the variable. This keeps the rule simple and avoids import-path
-// resolution complexity while still catching the real pattern.
+// The analyzer is purely syntactic — it looks for selector expressions where the
+// field name is "DebugLog" or "InfoLog" regardless of the package that owns the
+// variable. This keeps the rule simple and avoids import-path resolution complexity
+// while still catching the real patterns.
 package hotpolllog
 
 import (
@@ -24,7 +27,7 @@ import (
 // Analyzer is the exported analysis.Analyzer for the hotpolllog check.
 var Analyzer = &analysis.Analyzer{
 	Name:     "hotpolllog",
-	Doc:      "detects DebugLog method calls inside select-case clauses of for loops, which cause hot-poll goroutine block events",
+	Doc:      "detects DebugLog or InfoLog method calls inside select-case clauses of for loops, which cause hot-poll goroutine block and mutex-contention events",
 	Run:      run,
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
@@ -53,15 +56,15 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		}
 
-		// Walk all statements in the case body looking for DebugLog calls.
+		// Walk all statements in the case body looking for hot-log calls.
 		for _, stmt := range clause.Body {
 			ast.Inspect(stmt, func(inner ast.Node) bool {
 				call, ok := extractCall(inner)
 				if !ok {
 					return true
 				}
-				if isDebugLogCall(call) {
-					pass.Reportf(call.Pos(), "DebugLog call inside a select case of a for loop causes hot-poll goroutine block events; remove or guard with a compile-time constant")
+				if isHotLogCall(call) {
+					pass.Reportf(call.Pos(), "hot-log call (DebugLog or InfoLog) inside a select case of a for loop causes goroutine block events and/or mutex contention; remove or move outside the loop")
 				}
 				return true
 			})
@@ -123,30 +126,28 @@ func extractCall(n ast.Node) (*ast.CallExpr, bool) {
 	return nil, false
 }
 
-// isDebugLogCall returns true when the call's function expression is a
-// selector on a receiver named "DebugLog", for example:
+// isHotLogCall returns true when the call's function expression is a selector
+// on a receiver named "DebugLog" or "InfoLog", for example:
 //
-//	log.DebugLog.Printf(...)   → SelectorExpr{X: SelectorExpr{X: "log", Sel: "DebugLog"}, Sel: "Printf"}
-//	DebugLog.Printf(...)       → SelectorExpr{X: Ident("DebugLog"), Sel: "Printf"}
-func isDebugLogCall(call *ast.CallExpr) bool {
+//	log.DebugLog.Printf(...)  → SelectorExpr{X: SelectorExpr{X: "log", Sel: "DebugLog"}, Sel: "Printf"}
+//	log.InfoLog.Printf(...)   → SelectorExpr{X: SelectorExpr{X: "log", Sel: "InfoLog"}, Sel: "Printf"}
+//	DebugLog.Printf(...)      → SelectorExpr{X: Ident("DebugLog"), Sel: "Printf"}
+func isHotLogCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
-	return receiverIsDebugLog(sel.X)
+	return receiverIsHotLog(sel.X)
 }
 
-// receiverIsDebugLog returns true if the expression resolves to a variable
-// named "DebugLog", either directly (DebugLog.Printf) or via a package
-// qualifier (log.DebugLog.Printf).
-func receiverIsDebugLog(expr ast.Expr) bool {
+// receiverIsHotLog returns true if the expression resolves to a variable named
+// "DebugLog" or "InfoLog", either directly or via a package qualifier.
+func receiverIsHotLog(expr ast.Expr) bool {
 	switch x := expr.(type) {
 	case *ast.Ident:
-		// Direct: DebugLog.Printf(...)
-		return x.Name == "DebugLog"
+		return x.Name == "DebugLog" || x.Name == "InfoLog"
 	case *ast.SelectorExpr:
-		// Qualified: log.DebugLog.Printf(...)
-		return x.Sel.Name == "DebugLog"
+		return x.Sel.Name == "DebugLog" || x.Sel.Name == "InfoLog"
 	}
 	return false
 }

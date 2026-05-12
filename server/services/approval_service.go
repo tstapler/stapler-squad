@@ -70,11 +70,11 @@ func (as *ApprovalService) ResolveApproval(
 	// (wired in ApprovalHandler.broadcastApprovalNotification).
 	if as.notificationStore != nil {
 		if err := as.notificationStore.SetMetadata(req.Msg.ApprovalId, "approval_decision", req.Msg.Decision); err != nil {
-			log.WarningLog.Printf("[ApprovalService] Could not persist approval decision in notification: %v", err)
+			log.Warn("[ApprovalService] could not persist approval decision in notification", "err", err)
 		}
 	}
 
-	log.InfoLog.Printf("[ApprovalService] Resolved approval %s: %s", req.Msg.ApprovalId, req.Msg.Decision)
+	log.Info("[ApprovalService] resolved approval", "approval_id", req.Msg.ApprovalId, "decision", req.Msg.Decision)
 
 	return connect.NewResponse(&sessionv1.ResolveApprovalResponse{
 		Success: true,

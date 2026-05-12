@@ -48,36 +48,34 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 		SQLiteDatabasePath: opts.SQLitePath,
 	}
 
-	log.InfoLog.Printf("Starting migration from JSON to Ent")
-	log.InfoLog.Printf("JSON source: %s", opts.JSONPath)
-	log.InfoLog.Printf("Ent DB target: %s", opts.SQLitePath)
-	log.InfoLog.Printf("Dry run: %v", opts.DryRun)
+	log.Info("starting migration from JSON to Ent",
+		"json_source", opts.JSONPath, "db_target", opts.SQLitePath, "dry_run", opts.DryRun)
 
 	// Step 1: Validate JSON file exists and is readable
-	log.InfoLog.Printf("Step 1/6: Validating JSON file...")
+	log.Info("step 1/6: validating JSON file")
 	jsonData, err := os.ReadFile(opts.JSONPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read JSON file: %w", err)
 	}
 
 	// Step 2: Parse JSON data
-	log.InfoLog.Printf("Step 2/6: Parsing JSON data...")
+	log.Info("step 2/6: parsing JSON data")
 	var instances []InstanceData
 	if err := json.Unmarshal(jsonData, &instances); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal JSON data: %w", err)
 	}
 
 	result.TotalSessions = len(instances)
-	log.InfoLog.Printf("Found %d sessions in JSON file", result.TotalSessions)
+	log.Info("found sessions in JSON file", "count", result.TotalSessions)
 
 	if result.TotalSessions == 0 {
-		log.WarningLog.Printf("No sessions found in JSON file, migration not needed")
+		log.Warn("no sessions found in JSON file, migration not needed")
 		result.Duration = time.Since(startTime)
 		return result, nil
 	}
 
 	// Step 3: Create backup of JSON file
-	log.InfoLog.Printf("Step 3/6: Creating backup of JSON file...")
+	log.Info("step 3/6: creating backup of JSON file")
 	if !opts.DryRun {
 		backupPath := opts.BackupPath
 		if backupPath == "" {
@@ -93,18 +91,18 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 
 		result.BackupCreated = true
 		result.BackupPath = backupPath
-		log.InfoLog.Printf("Backup created at: %s", backupPath)
+		log.Info("backup created", "path", backupPath)
 	} else {
-		log.InfoLog.Printf("Dry run: Backup creation skipped")
+		log.Info("dry run: backup creation skipped")
 	}
 
 	// Step 4: Check if Ent database already exists
-	log.InfoLog.Printf("Step 4/6: Checking Ent database...")
+	log.Info("step 4/6: checking Ent database")
 	if _, err := os.Stat(opts.SQLitePath); err == nil {
 		if !opts.ForceOverwrite {
 			return nil, fmt.Errorf("ent database already exists at %s (use ForceOverwrite to overwrite)", opts.SQLitePath)
 		}
-		log.WarningLog.Printf("Ent database exists, will be overwritten (ForceOverwrite=true)")
+		log.Warn("Ent database exists, will be overwritten (ForceOverwrite=true)")
 
 		if !opts.DryRun {
 			if err := os.Remove(opts.SQLitePath); err != nil {
@@ -114,9 +112,9 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 	}
 
 	// Step 5: Initialize Ent repository
-	log.InfoLog.Printf("Step 5/6: Initializing Ent repository...")
+	log.Info("step 5/6: initializing Ent repository")
 	if opts.DryRun {
-		log.InfoLog.Printf("Dry run: Database initialization skipped")
+		log.Info("dry run: database initialization skipped")
 	} else {
 		// Ensure directory exists
 		dbDir := filepath.Dir(opts.SQLitePath)
@@ -131,17 +129,17 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 		defer repo.Close()
 
 		// Step 6: Migrate each session
-		log.InfoLog.Printf("Step 6/6: Migrating sessions to Ent...")
+		log.Info("step 6/6: migrating sessions to Ent")
 		ctx := context.Background()
 
 		for i, instanceData := range instances {
-			log.DebugLog.Printf("Migrating session %d/%d: %s", i+1, result.TotalSessions, instanceData.Title)
+			log.Debug("migrating session", "index", i+1, "total", result.TotalSessions, "session", instanceData.Title)
 
 			if err := repo.Create(ctx, instanceData); err != nil {
 				errMsg := fmt.Sprintf("Failed to migrate session '%s': %v", instanceData.Title, err)
 				result.Errors = append(result.Errors, errMsg)
 				result.SkippedSessions++
-				log.ErrorLog.Printf("%s", errMsg)
+				log.Error("failed to migrate session", "session", instanceData.Title, "err", err)
 				continue
 			}
 
@@ -151,21 +149,22 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 
 	result.Duration = time.Since(startTime)
 
-	log.InfoLog.Printf("Migration completed in %v", result.Duration)
-	log.InfoLog.Printf("Total sessions: %d", result.TotalSessions)
-	log.InfoLog.Printf("Migrated: %d", result.MigratedSessions)
-	log.InfoLog.Printf("Skipped: %d", result.SkippedSessions)
-	log.InfoLog.Printf("Errors: %d", len(result.Errors))
+	log.Info("migration completed",
+		"duration", result.Duration,
+		"total", result.TotalSessions,
+		"migrated", result.MigratedSessions,
+		"skipped", result.SkippedSessions,
+		"errors", len(result.Errors))
 
 	if len(result.Errors) > 0 {
-		log.WarningLog.Printf("Migration completed with %d errors", len(result.Errors))
+		log.Warn("migration completed with errors", "count", len(result.Errors))
 		for _, errMsg := range result.Errors {
-			log.WarningLog.Printf("  - %s", errMsg)
+			log.Warn("migration error", "msg", errMsg)
 		}
 	}
 
 	if opts.DryRun {
-		log.InfoLog.Printf("Dry run completed - no changes made")
+		log.Info("dry run completed — no changes made")
 		result.MigratedSessions = result.TotalSessions
 	}
 
@@ -174,7 +173,7 @@ func MigrateJSONToEnt(opts MigrationOptions) (*MigrationResult, error) {
 
 // ValidateEntMigration verifies that all sessions from JSON were successfully migrated to Ent
 func ValidateEntMigration(jsonPath, entDBPath string) error {
-	log.InfoLog.Printf("Validating Ent migration from %s to %s", jsonPath, entDBPath)
+	log.Info("validating Ent migration", "json_path", jsonPath, "db_path", entDBPath)
 
 	// Load JSON data
 	jsonData, err := os.ReadFile(jsonPath)
@@ -218,7 +217,7 @@ func ValidateEntMigration(jsonPath, entDBPath string) error {
 	for _, jsonInst := range jsonInstances {
 		entInst, exists := entMap[jsonInst.Title]
 		if !exists {
-			log.ErrorLog.Printf("Session missing in Ent: %s", jsonInst.Title)
+			log.Error("session missing in Ent", "session", jsonInst.Title)
 			missingCount++
 			continue
 		}
@@ -227,7 +226,7 @@ func ValidateEntMigration(jsonPath, entDBPath string) error {
 			jsonInst.Branch != entInst.Branch ||
 			jsonInst.Status != entInst.Status ||
 			jsonInst.Program != entInst.Program {
-			log.ErrorLog.Printf("Session data mismatch for: %s", jsonInst.Title)
+			log.Error("session data mismatch in Ent", "session", jsonInst.Title)
 			mismatchCount++
 		}
 	}
@@ -236,15 +235,13 @@ func ValidateEntMigration(jsonPath, entDBPath string) error {
 		return fmt.Errorf("validation failed: %d missing, %d mismatched", missingCount, mismatchCount)
 	}
 
-	log.InfoLog.Printf("Ent migration validation successful: all %d sessions verified", len(jsonInstances))
+	log.Info("Ent migration validation successful", "count", len(jsonInstances))
 	return nil
 }
 
 // RollbackMigration restores the JSON backup and removes the SQLite database
 func RollbackMigration(backupPath, sqlitePath string) error {
-	log.InfoLog.Printf("Rolling back migration...")
-	log.InfoLog.Printf("Backup: %s", backupPath)
-	log.InfoLog.Printf("SQLite: %s", sqlitePath)
+	log.Info("rolling back migration", "backup", backupPath, "sqlite", sqlitePath)
 
 	// Verify backup exists
 	if _, err := os.Stat(backupPath); err != nil {
@@ -256,7 +253,6 @@ func RollbackMigration(backupPath, sqlitePath string) error {
 		return fmt.Errorf("failed to remove SQLite database: %w", err)
 	}
 
-	log.InfoLog.Printf("Rollback completed successfully")
-	log.InfoLog.Printf("Backup file available at: %s", backupPath)
+	log.Info("rollback completed successfully", "backup", backupPath)
 	return nil
 }

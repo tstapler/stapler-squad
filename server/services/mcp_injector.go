@@ -33,12 +33,12 @@ func InjectMCPConfig(rootDir, binaryPath string) error {
 	}
 	if len(data) > 0 {
 		if err := json.Unmarshal(data, &raw); err != nil {
-			log.WarningLog.Printf("[InjectMCPConfig] %s has invalid JSON (%v), attempting repair", settingsPath, err)
+			log.Warn("[InjectMCPConfig] settings file has invalid JSON, attempting repair", "path", settingsPath, "err", err)
 			repaired, repairErr := repairSettingsJSON(data)
 			if repairErr == nil {
 				_ = json.Unmarshal(repaired, &raw)
 			} else {
-				log.WarningLog.Printf("[InjectMCPConfig] could not repair %s (%v), resetting", settingsPath, repairErr)
+				log.Warn("[InjectMCPConfig] could not repair settings file, resetting", "path", settingsPath, "err", repairErr)
 				raw = map[string]json.RawMessage{}
 			}
 		}
@@ -53,7 +53,7 @@ func InjectMCPConfig(rootDir, binaryPath string) error {
 					Command string `json:"command"`
 				}
 				if err := json.Unmarshal(entryRaw, &entry); err == nil && entry.Command == binaryPath {
-					log.DebugLog.Printf("[InjectMCPConfig] entry already present in %s", settingsPath)
+					log.Debug("[InjectMCPConfig] entry already present", "path", settingsPath)
 					return nil
 				}
 			}
@@ -145,6 +145,6 @@ func writeSettingsAtomic(settingsPath, claudeDir string, raw map[string]json.Raw
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename %s: %w", tmpPath, err)
 	}
-	log.InfoLog.Printf("[InjectMCPConfig] wrote settings to %s", settingsPath)
+	log.Info("[InjectMCPConfig] wrote settings", "path", settingsPath)
 	return nil
 }

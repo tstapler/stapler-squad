@@ -43,7 +43,7 @@ func NewHandler(rpIDs []string, origins []string, store *CredentialStore, sessio
 		w[rpID] = wa
 	}
 
-	log.InfoLog.Printf("auth: WebAuthn configured – rpIDs=%v origins=%v", rpIDs, origins)
+	log.Info("auth: WebAuthn configured", "rpIDs", rpIDs, "origins", origins)
 
 	return &Handler{
 		webauthn: w,
@@ -120,7 +120,7 @@ func (h *Handler) FinishRegistration(ceremonyKey string, r *http.Request, displa
 		return "", fmt.Errorf("create auth session: %w", err)
 	}
 
-	log.InfoLog.Printf("auth: new passkey registered (credential ID %x)", cred.ID)
+	log.Info("auth: new passkey registered", "credential_id", fmt.Sprintf("%x", cred.ID))
 	return token, nil
 }
 
@@ -164,7 +164,7 @@ func (h *Handler) FinishLogin(ceremonyKey string, r *http.Request) (string, erro
 
 	// Update sign count to detect cloned authenticators.
 	if updateErr := h.store.UpdateCredential(*cred); updateErr != nil {
-		log.WarningLog.Printf("auth: failed to update credential sign count: %v", updateErr)
+		log.Warn("auth: failed to update credential sign count", "err", updateErr)
 	}
 
 	token, err := h.session.CreateAuthSession()
@@ -172,6 +172,6 @@ func (h *Handler) FinishLogin(ceremonyKey string, r *http.Request) (string, erro
 		return "", fmt.Errorf("create auth session: %w", err)
 	}
 
-	log.InfoLog.Printf("auth: login successful (credential ID %x)", cred.ID)
+	log.Info("auth: login successful", "credential_id", fmt.Sprintf("%x", cred.ID))
 	return token, nil
 }

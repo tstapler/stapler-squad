@@ -94,7 +94,7 @@ const (
 func DefaultState() *State {
 	configDir, err := GetConfigDir()
 	if err != nil {
-		log.ErrorLog.Printf("failed to get config directory: %v", err)
+		log.Error("failed to get config directory", "err", err)
 		// Return a minimal state without locking if we can't get the config dir
 		return &State{
 			HelpScreensSeen: 0,
@@ -131,7 +131,7 @@ func DefaultState() *State {
 func NewTestState(testDir string) *State {
 	// Create the test directory if it doesn't exist
 	if err := os.MkdirAll(testDir, 0755); err != nil {
-		log.WarningLog.Printf("failed to create test directory: %v", err)
+		log.Warn("failed to create test directory", "err", err)
 		// Return a minimal state without locking if we can't create the test dir
 		return &State{
 			HelpScreensSeen: 0,
@@ -170,7 +170,7 @@ func LoadState() *State {
 
 	// Attempt to load from disk with a shared read lock
 	if err := state.loadFromDisk(); err != nil {
-		log.WarningLog.Printf("failed to load state from disk: %v", err)
+		log.Warn("failed to load state from disk", "err", err)
 		// We already have the default state, so just continue
 	}
 
@@ -181,7 +181,7 @@ func LoadState() *State {
 func (s *State) loadFromDisk() error {
 	// Skip if we don't have a lock file initialized
 	if s.lockFile == nil {
-		log.WarningLog.Printf("lock file not initialized, loading state without locking")
+		log.Warn("lock file not initialized, loading state without locking")
 		return s.loadFromDiskWithoutLocking()
 	}
 
@@ -249,7 +249,7 @@ func SaveState(state *State) error {
 func (s *State) saveToDisk() error {
 	// Skip locking if lock file isn't initialized
 	if s.lockFile == nil {
-		log.WarningLog.Printf("lock file not initialized, saving state without locking")
+		log.Warn("lock file not initialized, saving state without locking")
 		return s.saveToDiskWithoutLocking()
 	}
 
@@ -338,7 +338,7 @@ func (s *State) Close() error {
 func (s *State) GetUIState() UIState {
 	// Refresh from disk first to get latest changes
 	if err := s.RefreshState(); err != nil {
-		log.WarningLog.Printf("failed to refresh UI state: %v", err)
+		log.Warn("failed to refresh UI state", "err", err)
 	}
 	return s.UI
 }

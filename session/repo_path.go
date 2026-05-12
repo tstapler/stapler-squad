@@ -150,12 +150,12 @@ func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
 	// Check if repo already exists
 	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
 		// Repo exists, fetch latest
-		log.InfoLog.Printf("[RepoPath] Repository exists at %s, fetching latest...", repoPath)
+		log.Info("repository exists, fetching latest", "path", repoPath)
 		fetchCtx, fetchCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer fetchCancel()
 		cmd := safeexec.CommandContext(fetchCtx, "git", "-C", repoPath, "fetch", "--all", "--prune")
 		if output, err := cmd.CombinedOutput(); err != nil {
-			log.WarningLog.Printf("[RepoPath] Failed to fetch: %v\nOutput: %s", err, string(output))
+			log.Warn("failed to fetch repository", "err", err, "output", string(output))
 			// Don't fail - the existing repo is still usable
 		}
 		return repoPath, nil
@@ -168,7 +168,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
 	}
 
 	// Clone the repository
-	log.InfoLog.Printf("[RepoPath] Cloning %s to %s...", cloneURL, repoPath)
+	log.Info("cloning repository", "url", cloneURL, "path", repoPath)
 	cloneCtx, cloneCancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cloneCancel()
 	cmd := safeexec.CommandContext(cloneCtx, "git", "clone", cloneURL, repoPath)
@@ -176,7 +176,7 @@ func (m *RepoPathManager) EnsureRepoCloned(ref *GitHubRef) (string, error) {
 		return "", fmt.Errorf("failed to clone repository: %w\nOutput: %s", err, string(output))
 	}
 
-	log.InfoLog.Printf("[RepoPath] Successfully cloned %s/%s", ref.Owner, ref.Repo)
+	log.Info("successfully cloned repository", "owner", ref.Owner, "repo", ref.Repo)
 	return repoPath, nil
 }
 

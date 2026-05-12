@@ -82,7 +82,7 @@ var (
 				}
 				// Set environment variable for config package to use
 				os.Setenv("STAPLER_SQUAD_TEST_DIR", testDir)
-				log.InfoLog.Printf("Test mode enabled: using isolated data directory %s", testDir)
+				log.Info("Test mode enabled: using isolated data directory", "dir", testDir)
 			}
 
 			// Load config first so we can configure logging properly
@@ -101,14 +101,14 @@ var (
 					return fmt.Errorf("invalid discovery mode '%s', must be one of: managed-only, external-only, all", discoveryModeFlag)
 				}
 				discoveryCfg.Mode = mode
-				log.InfoLog.Printf("Discovery mode set to: %s (from --discovery-mode flag)", mode)
+				log.Info("Discovery mode set from flag", "mode", mode)
 			}
 
 			// Apply --discover-external shorthand flag
 			if discoverExtFlag {
 				discoveryCfg.Mode = config.DiscoveryAll
 				discoveryCfg.AllowExternalAttach = true
-				log.InfoLog.Printf("External discovery enabled (from --discover-external flag)")
+				log.Info("External discovery enabled (from --discover-external flag)")
 			}
 
 			log.InitializeWithConfig(daemonFlag, buildLogConfig(daemonFlag, cfg, false))
@@ -142,7 +142,7 @@ var (
 
 			if daemonFlag {
 				err := daemon.RunDaemon(cfg)
-				log.ErrorLog.Printf("failed to start daemon %v", err)
+				log.Error("failed to start daemon", "err", err)
 				return err
 			}
 
@@ -151,13 +151,13 @@ var (
 			telemetryCfg := telemetry.DefaultConfig()
 			telemetryProvider, err := telemetry.Initialize(ctx, telemetryCfg)
 			if err != nil {
-				log.WarningLog.Printf("Failed to initialize telemetry: %v", err)
+				log.Warn("Failed to initialize telemetry", "err", err)
 			} else {
 				defer func() {
 					shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					if err := telemetryProvider.Shutdown(shutdownCtx); err != nil {
-						log.WarningLog.Printf("Failed to shutdown telemetry: %v", err)
+						log.Warn("Failed to shutdown telemetry", "err", err)
 					}
 				}()
 			}
@@ -168,7 +168,7 @@ var (
 				cfg.PyroscopeServerAddress,
 			)
 			if err != nil {
-				log.WarningLog.Printf("Continuous profiling unavailable: %v", err)
+				log.Warn("Continuous profiling unavailable", "err", err)
 			}
 			defer stopProfiling()
 
@@ -189,7 +189,7 @@ var (
 			// Warn when binding to non-localhost
 			host, _, _ := net.SplitHostPort(address)
 			if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-				log.WarningLog.Printf("WARNING: Binding to non-localhost address %s. Ensure firewall rules are configured.", address)
+				log.Warn("WARNING: Binding to non-localhost address. Ensure firewall rules are configured.", "address", address)
 				fmt.Fprintf(os.Stderr, "\nWARNING: stapler-squad is listening on %s (all interfaces).\nEnsure this is intentional and your network is secured.\n\n", address)
 			}
 
@@ -214,21 +214,21 @@ var (
 			)
 
 			app.Phase("core-deps", func(ctx context.Context, a *warren.App) error {
-				log.InfoLog.Printf("Building core dependencies (phase 1/3)...")
+				log.Info("Building core dependencies (phase 1/3)...")
 				var err error
 				coreDeps, err = server.BuildCoreDepsWithOptions(server.BuildOptions{})
 				return err
 			})
 
 			app.Phase("service-deps", func(ctx context.Context, a *warren.App) error {
-				log.InfoLog.Printf("Building service dependencies (phase 2/3)...")
+				log.Info("Building service dependencies (phase 2/3)...")
 				var err error
 				svcDeps, err = server.BuildServiceDeps(coreDeps)
 				return err
 			})
 
 			app.Phase("runtime", func(ctx context.Context, a *warren.App) error {
-				log.InfoLog.Printf("Building runtime dependencies (phase 3/3)...")
+				log.Info("Building runtime dependencies (phase 3/3)...")
 
 				strictStartup := os.Getenv("STAPLER_SQUAD_STRICT_STARTUP") == "true"
 
@@ -243,14 +243,14 @@ var (
 					if strictStartup {
 						return fmt.Errorf("tmux server startup failed (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", tmuxReadyErr)
 					}
-					log.WarningLog.Printf("Failed to ensure tmux server running: %v", tmuxReadyErr)
+					log.Warn("Failed to ensure tmux server running", "err", tmuxReadyErr)
 				}
 				// Create a keepalive session so the tmux server does not exit when all user sessions close.
 				if err := tmux.CreateKeepaliveSession(""); err != nil {
 					if strictStartup {
 						return fmt.Errorf("failed to create tmux keepalive session (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
 					}
-					log.WarningLog.Printf("Failed to create keepalive session: %v", err)
+					log.Warn("Failed to create keepalive session", "err", err)
 				}
 				// Set exit-empty off so the server survives even if the keepalive dies.
 				if tmuxKeepServerFlag {
@@ -258,7 +258,7 @@ var (
 						if strictStartup {
 							return fmt.Errorf("failed to set tmux exit-empty off (unset STAPLER_SQUAD_STRICT_STARTUP to suppress): %w", err)
 						}
-						log.WarningLog.Printf("Failed to set tmux exit-empty off: %v", err)
+						log.Warn("Failed to set tmux exit-empty off", "err", err)
 					}
 				}
 
@@ -281,9 +281,9 @@ var (
 				}
 
 				a.Go("http-server", func(ctx context.Context) {
-					log.InfoLog.Printf("Starting web server on %s", address)
+					log.Info("Starting web server", "address", address)
 					if err := srv.Start(ctx); err != nil {
-						log.ErrorLog.Printf("HTTP server stopped: %v", err)
+						log.Error("HTTP server stopped", "err", err)
 					}
 				})
 
@@ -774,7 +774,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	// Detect LAN IP for QR code URLs and TLS cert SANs.
 	lanIP, err := getOutboundIP()
 	if err != nil {
-		log.WarningLog.Printf("Could not detect LAN IP: %v; using localhost", err)
+		log.Warn("Could not detect LAN IP; using localhost", "err", err)
 		lanIP = net.ParseIP("127.0.0.1")
 	}
 	lanIPStr := lanIP.String()
@@ -870,7 +870,7 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	if !store.HasCredentials() {
 		token, tokenErr := setupMgr.Init()
 		if tokenErr != nil {
-			log.WarningLog.Printf("Failed to generate setup token: %v", tokenErr)
+			log.Warn("Failed to generate setup token", "err", tokenErr)
 		} else {
 			setupURL := fmt.Sprintf("https://%s:%d/login?setup_token=%s", displayHost, remotePort, token)
 			caURL := fmt.Sprintf("https://%s:%d/auth/ca.pem", displayHost, remotePort)
@@ -886,18 +886,18 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 
 			fmt.Fprintf(os.Stderr, "\n── QR Code 1: Install CA certificate (trust HTTPS on your phone) ──\n")
 			if qrErr := serverauth.PrintQRToTerminal(caURL); qrErr != nil {
-				log.WarningLog.Printf("CA QR print failed: %v", qrErr)
+				log.Warn("CA QR print failed", "err", qrErr)
 			}
 
 			fmt.Fprintf(os.Stderr, "\n── QR Code 2: Register passkey (after installing CA cert) ──\n")
 			if qrErr := serverauth.PrintQRToTerminal(setupURL); qrErr != nil {
-				log.WarningLog.Printf("Setup QR print failed: %v", qrErr)
+				log.Warn("Setup QR print failed", "err", qrErr)
 			}
 		}
 	}
 
-	log.InfoLog.Printf("auth: remote access enabled on port %d – rpID=%s host=%s LAN IP=%s", remotePort, rpID, displayHost, lanIPStr)
-	log.InfoLog.Printf("auth: TLS CA cert: %s", tlsPaths.CAFile)
+	log.Info("auth: remote access enabled", "port", remotePort, "rpID", rpID, "host", displayHost, "lan_ip", lanIPStr)
+	log.Info("auth: TLS CA cert", "path", tlsPaths.CAFile)
 	return nil
 }
 

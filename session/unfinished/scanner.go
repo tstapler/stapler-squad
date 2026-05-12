@@ -271,7 +271,7 @@ func (s *Scanner) EnqueueRepo(repoPath string) {
 	select {
 	case s.scanQueue <- scanTask{repoPath: repoPath}:
 	default:
-		log.WarningLog.Printf("[unfinished] scan queue full, dropping repo: %s", repoPath)
+		log.Warn("scan queue full, dropping repo", "repo", repoPath)
 	}
 }
 
@@ -301,9 +301,9 @@ func (s *Scanner) scanRepo(repoPath string) []ScanResult {
 	if err != nil {
 		if ctx.Err() != nil {
 			s.recordTimeout(repoPath)
-			log.WarningLog.Printf("[unfinished] git worktree list timed out: %s", repoPath)
+			log.Warn("git worktree list timed out", "repo", repoPath)
 		} else {
-			log.DebugLog.Printf("[unfinished] git worktree list error for %s: %v", repoPath, err)
+			log.Debug("git worktree list error", "repo", repoPath, "err", err)
 		}
 		return nil
 	}
@@ -718,7 +718,7 @@ func (s *Scanner) recordTimeout(repoPath string) {
 	b.consecutiveTimeouts++
 	if b.consecutiveTimeouts >= 3 {
 		b.backoffUntil = time.Now().Add(5 * time.Minute)
-		log.WarningLog.Printf("[unfinished] circuit breaker triggered for %s: backing off 5m", repoPath)
+		log.Warn("circuit breaker triggered, backing off", "repo", repoPath, "backoff", "5m")
 	}
 }
 

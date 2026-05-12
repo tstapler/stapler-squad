@@ -49,7 +49,7 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 				}
 			}
 			if scanErr := sc.Err(); scanErr != nil {
-				log.WarningLog.Printf("CreateCheckpoint: error scanning history file: %v", scanErr)
+				log.Warn("createcheckpoint: error scanning history file", "err", scanErr)
 			}
 		}
 	}
@@ -88,7 +88,7 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 		historyDir := filepath.Dir(i.HistoryFilePath)
 		uuid, err := ForkClaudeConversation(i.HistoryFilePath, cp.ConvLineCount, historyDir)
 		if err != nil {
-			log.WarningLog.Printf("ForkFromCheckpoint: skipping conversation fork: %v", err)
+			log.Warn("forkfromcheckpoint: skipping conversation fork", "err", err)
 		} else {
 			newConvUUID = uuid
 		}
@@ -98,7 +98,7 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 	srcScrollback := filepath.Join(configDir, i.Title, "scrollback.jsonl")
 	dstScrollback := filepath.Join(configDir, newTitle, "scrollback.jsonl")
 	if err := scrollback.ForkScrollback(srcScrollback, cp.ScrollbackSeq, dstScrollback); err != nil {
-		log.WarningLog.Printf("ForkFromCheckpoint: skipping scrollback fork: %v", err)
+		log.Warn("forkfromcheckpoint: skipping scrollback fork", "err", err)
 	}
 
 	// Build the new instance.
@@ -123,7 +123,7 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 		branchName := "fork/" + newTitle
 		wt, _, err := git.NewGitWorktreeFromCommitSHA(i.Path, newTitle, branchName, cp.GitCommitSHA)
 		if err != nil {
-			log.WarningLog.Printf("ForkFromCheckpoint: skipping git worktree: %v", err)
+			log.Warn("forkfromcheckpoint: skipping git worktree", "err", err)
 		} else {
 			newInst.gitManager.SetWorktree(wt)
 		}

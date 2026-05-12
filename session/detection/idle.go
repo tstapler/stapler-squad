@@ -300,8 +300,7 @@ func (id *IdleDetector) InitializeFromTimestamp(timestamp time.Time) {
 
 	// Reject future timestamps (clock skew protection)
 	if timestamp.After(now) {
-		log.WarningLog.Printf("[IdleDetector] Rejecting future timestamp for '%s': %s (now: %s) - possible clock skew",
-			id.sessionName, timestamp.Format(time.RFC3339), now.Format(time.RFC3339))
+		log.Warn("rejecting future timestamp for idle detector", "session", id.sessionName, "timestamp", timestamp.Format(time.RFC3339), "now", now.Format(time.RFC3339))
 		return
 	}
 
@@ -310,15 +309,13 @@ func (id *IdleDetector) InitializeFromTimestamp(timestamp time.Time) {
 	const maxRestorationAge = 24 * time.Hour
 	age := now.Sub(timestamp)
 	if age > maxRestorationAge {
-		log.InfoLog.Printf("[IdleDetector] Timestamp too old for '%s' (age: %s), using default",
-			id.sessionName, FormatDuration(age))
+		log.Info("timestamp too old for idle detector, using default", "session", id.sessionName, "age", FormatDuration(age))
 		return
 	}
 
 	// Restore the historical timestamp
 	id.lastActivity = timestamp
-	log.DebugLog.Printf("[IdleDetector] Restored lastActivity for '%s' to %s (age: %s)",
-		id.sessionName, timestamp.Format(time.RFC3339), FormatDuration(age))
+	log.Debug("restored lastActivity for idle detector", "session", id.sessionName, "timestamp", timestamp.Format(time.RFC3339), "age", FormatDuration(age))
 }
 
 // UpdateConfig updates the idle detector configuration.

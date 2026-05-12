@@ -54,7 +54,7 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.WarningLog.Printf("HistoryLinker: failed to get home dir, watcher disabled: %v", err)
+		log.Warn("HistoryLinker: failed to get home dir, watcher disabled", "err", err)
 		return &HistoryLinker{
 			detector:  detector,
 			instances: make([]*Instance, 0),
@@ -134,7 +134,7 @@ func (hl *HistoryLinker) Start(ctx context.Context) {
 	// Register watcher callback for fast-path detection.
 	if hl.watcher != nil {
 		if err := hl.watcher.Start(ctx); err != nil {
-			log.WarningLog.Printf("HistoryLinker: failed to start watcher: %v", err)
+			log.Warn("HistoryLinker: failed to start watcher", "err", err)
 		}
 	}
 
@@ -211,20 +211,24 @@ func (hl *HistoryLinker) correlateSession(inst *Instance) {
 	if pidErr == nil {
 		info, err = hl.detector.Detect(pid)
 		if err != nil {
-			log.WarningLog.Printf("HistoryLinker: detect error for '%s' (pid=%d): %v", inst.Title, pid, err)
+			log.Warn("HistoryLinker: detect error", "session", inst.Title, "pid", pid, "err", err)
 		}
 	}
 
 	// Fallback: scan the project directory by path (works after reboot / tmux kill).
-	if info == nil && inst.Path != "" {
-		info, err = hl.detector.DetectByPath(inst.Path)
-		if err != nil {
-			log.WarningLog.Printf("HistoryLinker: path-based detect error for '%s': %v", inst.Title, err)
+	// Use the effective root dir (worktree path for worktree sessions) so we look in
+	// the right ~/.claude/projects/ subdirectory, not the base repository path.
+	if info == nil {
+		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
+			info, err = hl.detector.DetectByPath(effectivePath)
+			if err != nil {
+				log.Warn("HistoryLinker: path-based detect error", "session", inst.Title, "err", err)
+			}
 		}
 	}
 
 	if info == nil {
-		log.DebugLog.Printf("HistoryLinker: no JSONL found for '%s' (path=%q)", inst.Title, inst.Path)
+		log.Debug("HistoryLinker: no JSONL found", "session", inst.Title, "path", inst.Path)
 		hl.recordMiss(inst.Title, now)
 		return
 	}
@@ -234,7 +238,9 @@ func (hl *HistoryLinker) correlateSession(inst *Instance) {
 	delete(hl.backoffs, inst.Title)
 	hl.mu.Unlock()
 
-	log.InfoLog.Printf("HistoryLinker: linked '%s' → conv UUID %s", inst.Title, info.ConversationUUID)
+	log.Info("HistoryLinker: linked session to conversation UUID",
+		"session", inst.Title, "conv_uuid", info.ConversationUUID)
+	log.ForSession(inst.Title).Info("UUID linked by HistoryLinker", "conv_uuid", info.ConversationUUID, "path", info.HistoryFilePath)
 	inst.SetHistoryInfo(info.ConversationUUID, info.HistoryFilePath)
 }
 

@@ -215,3 +215,43 @@ func TestHotRestore_ExistingSession(t *testing.T) {
 	assert.True(t, inst2.Started(), "inst2 must be marked as started after hot restore")
 	assert.Equal(t, Running, inst2.Status, "inst2 status must be Running after hot restore")
 }
+
+// TestIsStaleResumeExit verifies the detection function used by the auto-recovery path.
+func TestIsStaleResumeExit(t *testing.T) {
+	tests := []struct {
+		name    string
+		content []byte
+		want    bool
+	}{
+		{
+			name:    "plain text match",
+			content: []byte("No conversation found with session ID: 550e8400-e29b-41d4-a716-446655440000\n"),
+			want:    true,
+		},
+		{
+			name:    "ANSI colour codes around message",
+			content: []byte("\x1b[31mNo conversation found with session ID: 02c8a5f5-6604-4bcb-957c-be98ec8db4f3\x1b[0m\n"),
+			want:    true,
+		},
+		{
+			name:    "normal session output",
+			content: []byte("> Hello, how can I help you?\n"),
+			want:    false,
+		},
+		{
+			name:    "empty content",
+			content: nil,
+			want:    false,
+		},
+		{
+			name:    "rate limit error (should not match)",
+			content: []byte("Usage limit reached for claude-opus-4-5\n"),
+			want:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isStaleResumeExit(tt.content))
+		})
+	}
+}

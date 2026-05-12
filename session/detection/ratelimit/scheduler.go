@@ -67,7 +67,7 @@ func (s *Scheduler) ScheduleRecovery(resetTime time.Time) {
 
 	waitDuration += time.Duration(s.bufferSeconds) * time.Second
 
-	log.InfoLog.Printf("[RateLimit] Scheduling recovery for session %s in %v", s.sessionID, waitDuration)
+	log.Info("scheduling recovery", "session", s.sessionID, "wait", waitDuration)
 
 	s.resetTime = resetTime
 	s.fireTime = time.Now().Add(waitDuration)
@@ -83,7 +83,7 @@ func (s *Scheduler) CancelRecovery() {
 	if s.timer != nil {
 		s.timer.Stop()
 		s.timer = nil
-		log.InfoLog.Printf("[RateLimit] Cancelled recovery for session %s", s.sessionID)
+		log.Info("cancelled recovery", "session", s.sessionID)
 	}
 }
 
@@ -94,14 +94,14 @@ func (s *Scheduler) executeRecovery() {
 	s.mu.Unlock()
 
 	if sessionCheck != nil && !sessionCheck() {
-		log.InfoLog.Printf("[RateLimit] Session %s not running, skipping recovery", s.sessionID)
+		log.Info("session not running, skipping recovery", "session", s.sessionID)
 		return
 	}
 
 	if callback != nil {
-		log.InfoLog.Printf("[RateLimit] Executing recovery for session %s", s.sessionID)
+		log.Info("executing recovery", "session", s.sessionID)
 		if err := callback(); err != nil {
-			log.WarningLog.Printf("[RateLimit] Recovery failed for session %s: %v", s.sessionID, err)
+			log.Warn("recovery failed", "session", s.sessionID, "err", err)
 		}
 	}
 }

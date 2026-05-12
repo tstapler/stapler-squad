@@ -205,8 +205,7 @@ func (rs *ReviewState) DetectAndTrackPrompt(content string, statusInfo InstanceS
 	if isNewPrompt {
 		rs.LastPromptDetected = time.Now()
 		rs.LastPromptSignature = promptSignature
-		log.InfoLog.Printf("[Prompt] New prompt detected for '%s': signature=%s...",
-			sessionTitle, truncateString(promptSignature, 8))
+		log.Info("new prompt detected", "session", sessionTitle, "signature", truncateString(promptSignature, 8))
 	}
 	return isNewPrompt
 }

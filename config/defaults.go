@@ -114,7 +114,7 @@ func evalSymlinksOrOriginal(path string) string {
 	}
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
-		log.WarningLog.Printf("defaults: could not resolve symlink for %q: %v", path, err)
+		log.Warn("could not resolve symlink", "path", path, "err", err)
 		return path
 	}
 	return resolved

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/analytics"
 )
 
 // telemetryRequest is the expected JSON body for POST /api/telemetry.
@@ -43,15 +44,22 @@ func (r *rateLimiter) allow() bool {
 
 // TelemetryHandler handles frontend performance telemetry events.
 type TelemetryHandler struct {
-	limiter *rateLimiter
+	limiter  *rateLimiter
+	provider analytics.AnalyticsProvider
 }
 
 // NewTelemetryHandler creates a new TelemetryHandler.
-func NewTelemetryHandler() *TelemetryHandler {
+// The provider receives a forwarded analytics.Event for each valid telemetry request.
+// Pass analytics.NewLogAnalyticsProvider() in tests or when no DB is available.
+func NewTelemetryHandler(provider analytics.AnalyticsProvider) *TelemetryHandler {
+	if provider == nil {
+		provider = analytics.NewLogAnalyticsProvider()
+	}
 	return &TelemetryHandler{
 		limiter: &rateLimiter{
 			resetAt: time.Now().Add(time.Minute),
 		},
+		provider: provider,
 	}
 }
 
@@ -93,8 +101,20 @@ func (h *TelemetryHandler) HandleTelemetry(w http.ResponseWriter, r *http.Reques
 	safeEvent := strings.ReplaceAll(req.Event, "\n", `\n`)
 	safeEvent = strings.ReplaceAll(safeEvent, "\r", `\r`)
 
-	log.InfoLog.Printf("frontend_telemetry event=%s duration_ms=%d session_id=%s labels=%v",
-		safeEvent, req.DurationMs, req.SessionId, req.Labels)
+	log.Info("frontend telemetry", "event", safeEvent, "duration_ms", req.DurationMs, "session_id", req.SessionId, "labels", req.Labels)
+
+	// Forward to analytics provider (fire-and-forget; errors don't affect response).
+	durationMs := int64(req.DurationMs)
+	if err := h.provider.Record(r.Context(), analytics.Event{
+		EventName:     safeEvent,
+		EventCategory: "user_action",
+		DurationMs:    &durationMs,
+		SessionID:     req.SessionId,
+		Labels:        req.Labels,
+	}); err != nil {
+		log.Error("telemetry analytics.Record failed", "err", err)
+	}
+
 
 	w.WriteHeader(http.StatusNoContent)
 }

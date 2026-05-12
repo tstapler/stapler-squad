@@ -30,7 +30,7 @@ func (h *HookReceiver) RegisterRoutes(mux *http.ServeMux) {
 func (h *HookReceiver) HandleStop(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(sessionIDHeader)
 	size := h.drainBody(r)
-	log.InfoLog.Printf("[hook/stop] session=%q bytes=%d", sessionID, size)
+	log.Info("[hook/stop]", "session", sessionID, "bytes", size)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -39,7 +39,7 @@ func (h *HookReceiver) HandlePreToolUse(w http.ResponseWriter, r *http.Request) 
 	sessionID := r.Header.Get(sessionIDHeader)
 	tool := r.Header.Get("X-CS-Tool-Name")
 	size := h.drainBody(r)
-	log.InfoLog.Printf("[hook/pre-tool-use] session=%q tool=%q bytes=%d", sessionID, tool, size)
+	log.Info("[hook/pre-tool-use]", "session", sessionID, "tool", tool, "bytes", size)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -48,7 +48,7 @@ func (h *HookReceiver) HandlePostToolUse(w http.ResponseWriter, r *http.Request)
 	sessionID := r.Header.Get(sessionIDHeader)
 	tool := r.Header.Get("X-CS-Tool-Name")
 	size := h.drainBody(r)
-	log.InfoLog.Printf("[hook/post-tool-use] session=%q tool=%q bytes=%d", sessionID, tool, size)
+	log.Info("[hook/post-tool-use]", "session", sessionID, "tool", tool, "bytes", size)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -56,7 +56,7 @@ func (h *HookReceiver) HandlePostToolUse(w http.ResponseWriter, r *http.Request)
 func (h *HookReceiver) HandlePromptSubmit(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.Header.Get(sessionIDHeader)
 	size := h.drainBody(r)
-	log.InfoLog.Printf("[hook/prompt-submit] session=%q bytes=%d", sessionID, size)
+	log.Info("[hook/prompt-submit]", "session", sessionID, "bytes", size)
 	w.WriteHeader(http.StatusOK)
 }
 

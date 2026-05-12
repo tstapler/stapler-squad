@@ -213,6 +213,6 @@ func (cs *CredentialStore) save() error {
 		return fmt.Errorf("rename to final path: %w", err)
 	}
 
-	log.InfoLog.Printf("auth: saved %d passkey credential(s)", len(cs.data.Credentials))
+	log.Info("auth: saved passkey credentials", "count", len(cs.data.Credentials))
 	return nil
 }

@@ -500,7 +500,7 @@ func (rq *ReviewQueue) GetStatistics() ReviewQueueStatistics {
 		// migration ran, which would otherwise show "20412d ago" in statistics.
 		if item.DetectedAt.IsZero() || item.DetectedAt.Before(minValidTime) ||
 			item.LastActivity.IsZero() || item.LastActivity.Before(minValidTime) {
-			log.InfoLog.Printf("[ReviewQueue] GetStatistics: SKIPPING item '%s' due to invalid timestamps", item.SessionID)
+			log.Info("GetStatistics: skipping item due to invalid timestamps", "session", item.SessionID)
 			continue
 		}
 
@@ -522,7 +522,7 @@ func (rq *ReviewQueue) GetStatistics() ReviewQueueStatistics {
 		}
 	} else if len(rq.items) > 0 {
 		// Only log if there are items but none are valid (indicates a problem)
-		log.InfoLog.Printf("[ReviewQueue] GetStatistics: NO VALID ITEMS (validItemCount=0, totalItems=%d)", len(rq.items))
+		log.Info("GetStatistics: no valid items", "total_items", len(rq.items))
 	}
 
 	return stats

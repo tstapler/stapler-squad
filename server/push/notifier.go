@@ -51,9 +51,9 @@ func (n *WebPushNotifier) Send(_ context.Context, dn DeliveryNotification) error
 	}
 	sent := n.svc.SendNotification(pn)
 	if sent == 0 {
-		log.WarningLog.Printf("[WebPushNotifier] no active subscriptions for: %s", dn.Title)
+		log.Warn("WebPushNotifier no active subscriptions", "title", dn.Title)
 	} else {
-		log.InfoLog.Printf("[WebPushNotifier] delivered to %d subscription(s): %s", sent, dn.Title)
+		log.Info("WebPushNotifier delivered notification", "subscriptions", sent, "title", dn.Title)
 	}
 	return nil
 }
@@ -62,7 +62,7 @@ func (n *WebPushNotifier) Send(_ context.Context, dn DeliveryNotification) error
 func fanout(ctx context.Context, notifiers []Notifier, dn DeliveryNotification) {
 	for _, n := range notifiers {
 		if err := n.Send(ctx, dn); err != nil {
-			log.ErrorLog.Printf("[DeliverySubscriber] notifier %q error: %v", n.Name(), err)
+			log.Error("DeliverySubscriber notifier error", "notifier", n.Name(), "err", err)
 		}
 	}
 }

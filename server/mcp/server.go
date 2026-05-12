@@ -64,7 +64,7 @@ func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, s
 // sbMgr provides read access to terminal scrollback data persisted on disk.
 // storage is used for backlog tools (optional; pass nil to disable).
 func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage) error {
-	log.InfoLog.Printf("[mcp] server starting on stdio transport")
+	log.Info("mcp server starting on stdio transport")
 
 	// Inject session UUID from environment into the root context so that
 	// backlog tools can identify the calling session.

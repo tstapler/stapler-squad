@@ -1,6 +1,8 @@
+// analytics-exempt
 import type { Metadata } from "next";
 // +feature: unfinished-work
 import { UnfinishedTab } from "./UnfinishedTab";
+import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 
 export const metadata: Metadata = {
   title: "Unfinished Work - Stapler Squad",
@@ -8,5 +10,10 @@ export const metadata: Metadata = {
 };
 
 export default function UnfinishedPage() {
-  return <UnfinishedTab />;
+  return (
+    <>
+      <PageViewTracker />
+      <UnfinishedTab />
+    </>
+  );
 }

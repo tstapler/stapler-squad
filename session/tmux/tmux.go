@@ -294,7 +294,7 @@ func EnsureServerRunning(serverSocket string) (TmuxServerReady, error) {
 	if err != nil {
 		return TmuxServerReady{}, fmt.Errorf("tmux start-server failed: %w (output: %s)", err, out)
 	}
-	log.InfoLog.Printf("[tmux] server started successfully")
+	log.Info("[tmux] server started successfully")
 	return TmuxServerReady{}, nil
 }
 
@@ -356,7 +356,7 @@ func CreateKeepaliveSession(serverSocket string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create keepalive session: %w (output: %s)", err, out)
 	}
-	log.InfoLog.Printf("[tmux] keepalive session '%s' created", keepaliveName)
+	log.Info("[tmux] keepalive session created", "session", keepaliveName)
 	return nil
 }
 
@@ -562,7 +562,7 @@ func (t *TmuxSession) AttachToExisting() error {
 		}
 		t.ptmx = ptmx
 		t.attachCmd = cmd // CRITICAL: Save command so we can kill it on cleanup
-		log.InfoLog.Printf("Successfully attached PTY to existing tmux session '%s' (pid=%d)", t.sanitizedName, cmd.Process.Pid)
+		log.Info("successfully attached PTY to existing tmux session", "session", t.sanitizedName, "pid", cmd.Process.Pid)
 	}
 
 	// Set up status monitor
@@ -624,7 +624,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// would return false, causing new-session to fail with "duplicate session".
 	if t.DoesSessionExistNoCache() {
 		// Session already exists - we can reuse it
-		log.InfoLog.Printf("Tmux session '%s' already exists, reusing existing session", t.sanitizedName)
+		log.Info("tmux session already exists, reusing", "session", t.sanitizedName)
 
 		// Set up cleanup if requested
 		if setupCleanup && cleanup != nil {
@@ -688,7 +688,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 			registryDeadline := time.Now().Add(2 * time.Second)
 			for !t.registry.SessionExists(t.sanitizedName) {
 				if time.Now().After(registryDeadline) {
-					log.WarningLog.Printf("Registry lagged for session %s after creation; continuing", t.sanitizedName)
+					log.Warn("registry lagged for session after creation; continuing", "session", t.sanitizedName)
 					break
 				}
 				time.Sleep(5 * time.Millisecond)
@@ -727,7 +727,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// Set history limit to enable scrollback (default is 2000, we'll use 10000 for more history)
 	historyCmd := t.buildTmuxCommand("set-option", "-t", t.sanitizedName, "history-limit", "10000")
 	if err := t.cmdExec.Run(historyCmd); err != nil {
-		log.InfoLog.Printf("Warning: failed to set history-limit for session %s: %v", t.sanitizedName, err)
+		log.Warn("failed to set history-limit for session", "session", t.sanitizedName, "err", err)
 	}
 
 	// Set up monitoring for session status tracking
@@ -741,7 +741,7 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	}
 
 	// Session is created and ready - let the user handle any program-specific interactions
-	log.InfoLog.Printf("Tmux session '%s' created successfully, launching: %s", t.sanitizedName, programWithHistory)
+	log.Info("tmux session created successfully", "session", t.sanitizedName, "program", programWithHistory)
 	return nil
 }
 
@@ -763,7 +763,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 		if i < maxRetries-1 {
 			// Wait before retrying (exponential backoff: 100ms, 200ms, 400ms, 800ms)
 			delay := time.Duration(100*(1<<uint(i))) * time.Millisecond
-			log.InfoLog.Printf("Tmux session '%s' not found on attempt %d/%d, waiting %v before retry", t.sanitizedName, i+1, maxRetries, delay)
+			log.Info("tmux session not found, retrying", "session", t.sanitizedName, "attempt", i+1, "maxRetries", maxRetries, "delay", delay)
 			time.Sleep(delay)
 			t.invalidateExistsCache() // Clear cache before retry
 		}
@@ -772,23 +772,23 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 	if !sessionExists {
 		// Session doesn't exist after multiple retries
 		// CRITICAL: One final check without cache before recreating to prevent accidental destruction
-		log.InfoLog.Printf("Tmux session '%s' not found after %d cached checks, performing final non-cached verification", t.sanitizedName, maxRetries)
+		log.Info("tmux session not found, performing final non-cached verification", "session", t.sanitizedName, "cachedChecks", maxRetries)
 		finalCheck := t.DoesSessionExistNoCache()
 
 		if finalCheck {
 			// Session actually exists - cache was stale or timing issue
-			log.InfoLog.Printf("Found existing tmux session '%s' on final non-cached check (cache was stale), will reattach to preserve history", t.sanitizedName)
+			log.Info("found existing tmux session on final non-cached check (cache was stale), will reattach", "session", t.sanitizedName)
 			// Continue with PTY attachment below (session exists, just wasn't detected earlier)
 		} else {
 			// Session truly doesn't exist after all checks - safe to create new one
-			log.WarningLog.Printf("Tmux session '%s' doesn't exist after %d attempts plus final verification, creating new session instead of restoring", t.sanitizedName, maxRetries)
+			log.Warn("tmux session doesn't exist after all attempts, creating new session instead of restoring", "session", t.sanitizedName, "attempts", maxRetries)
 
 			// Use the provided working directory, fall back to current directory if not provided
 			if workDir == "" {
 				var err error
 				workDir, err = os.Getwd()
 				if err != nil {
-					log.WarningLog.Printf("Could not get working directory for session '%s': %v", t.sanitizedName, err)
+					log.Warn("could not get working directory for session", "session", t.sanitizedName, "err", err)
 					workDir = "."
 				}
 			}
@@ -806,12 +806,12 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 				if t.DoesSessionExist() {
 					// Session actually exists - the initial check was wrong (likely timeout)
 					// Continue with restore instead of returning error
-					log.InfoLog.Printf("Tmux session '%s' already exists (initial check was incorrect), continuing with restore", t.sanitizedName)
+					log.Info("tmux session already exists (initial check was incorrect), continuing with restore", "session", t.sanitizedName)
 				} else {
 					return fmt.Errorf("failed to create tmux session '%s': %w", t.sanitizedName, err)
 				}
 			} else {
-				log.InfoLog.Printf("Created new tmux session '%s' in directory '%s', launching: %s", t.sanitizedName, workDir, t.program)
+				log.Info("created new tmux session", "session", t.sanitizedName, "dir", workDir, "program", t.program)
 				t.invalidateExistsCache() // Session was created, invalidate cache
 				// new-session started the tmux server; reset this session's circuit breakers
 				// so subsequent DoesSessionExist() calls can verify the session is running.
@@ -821,7 +821,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			}
 		}
 	} else {
-		log.InfoLog.Printf("Found existing tmux session '%s', will reattach to preserve history", t.sanitizedName)
+		log.Info("found existing tmux session, will reattach to preserve history", "session", t.sanitizedName)
 	}
 
 	// Session exists - create PTY connection for detached operations
@@ -833,7 +833,7 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 		for attempt := 0; attempt < ptyMaxRetries; attempt++ {
 			if attempt > 0 {
 				delay := time.Duration(100*(1<<uint(attempt-1))) * time.Millisecond
-				log.InfoLog.Printf("Retrying PTY attach for session '%s' (attempt %d/%d, waiting %v)", t.sanitizedName, attempt+1, ptyMaxRetries, delay)
+				log.Info("retrying PTY attach for session", "session", t.sanitizedName, "attempt", attempt+1, "maxRetries", ptyMaxRetries, "delay", delay)
 				time.Sleep(delay)
 			}
 			ptmx, attachCmd, err := t.ptyFactory.Start(t.buildAttachCommand())
@@ -843,14 +843,14 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			}
 			t.ptmx = ptmx
 			t.attachCmd = attachCmd // CRITICAL: track so it can be killed on cleanup
-			log.InfoLog.Printf("Successfully restored PTY connection for tmux session '%s'", t.sanitizedName)
+			log.Info("successfully restored PTY connection for tmux session", "session", t.sanitizedName)
 			lastPTYErr = nil
 			break
 		}
 		if lastPTYErr != nil {
 			// Graceful degradation - session can still be viewed via tmux capture-pane,
 			// but PTY-based operations (resizing, SendKeys, controller) will be unavailable.
-			log.WarningLog.Printf("PTY initialization failed for session '%s' after %d attempts: %v", t.sanitizedName, ptyMaxRetries, lastPTYErr)
+			log.Warn("PTY initialization failed for session after all attempts", "session", t.sanitizedName, "attempts", ptyMaxRetries, "err", lastPTYErr)
 		}
 	}
 
@@ -911,7 +911,7 @@ func (t *TmuxSession) GetPTY() (*os.File, error) {
 func (t *TmuxSession) HasUpdated() (updated bool, hasPrompt bool, content string) {
 	content, err := t.CapturePaneContent()
 	if err != nil {
-		log.ErrorLog.Printf("error capturing pane content in status monitor: %v", err)
+		log.Error("error capturing pane content in status monitor", "session", t.sanitizedName, "err", err)
 		return false, false, ""
 	}
 
@@ -1064,7 +1064,7 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 			// This will properly close the attachCh and clean up resources
 			go func() {
 				if err := t.DetachSafely(); err != nil {
-					log.ErrorLog.Printf("Error during safe detach after session termination: %v", err)
+					log.Error("error during safe detach after session termination", "session", t.sanitizedName, "err", err)
 				}
 			}()
 		}
@@ -1099,7 +1099,7 @@ func (t *TmuxSession) Attach() (chan struct{}, error) {
 			select {
 			case <-timeoutCh:
 			default:
-				log.InfoLog.Printf("nuked first stdin: %s", buf[:nr])
+				log.Info("nuked first stdin", "bytes", string(buf[:nr]))
 				continue
 			}
 
@@ -1205,11 +1205,11 @@ func (t *TmuxSession) Detach() {
 		if isFatalError {
 			// This is a fatal error. We can't detach if we can't close the PTY properly.
 			msg := fmt.Sprintf("error closing attach pty session: %v", cleanupErrs)
-			log.ErrorLog.Println(msg)
+			log.Error("error closing attach pty session", "session", t.sanitizedName, "errs", cleanupErrs)
 			panic(msg)
 		} else {
 			// All errors are "file already closed" - expected in race conditions
-			log.InfoLog.Printf("PTY already closed during detach (expected in concurrent scenarios)")
+			log.Info("PTY already closed during detach (expected in concurrent scenarios)", "session", t.sanitizedName)
 		}
 	}
 
@@ -1218,7 +1218,7 @@ func (t *TmuxSession) Detach() {
 	if restoreErr := t.Restore(); restoreErr != nil {
 		// This is a fatal error. Our invariant that a started TmuxSession always has a valid ptmx is violated.
 		msg := fmt.Sprintf("error restoring session after detach: %v", restoreErr)
-		log.ErrorLog.Println(msg)
+		log.Error("error restoring session after detach", "session", t.sanitizedName, "err", restoreErr)
 		panic(msg)
 	}
 
@@ -1269,7 +1269,7 @@ func (t *TmuxSession) closePTYAndAttachCmd() []error {
 	// CRITICAL: Kill the tmux attach-session process to prevent PTY leak
 	// Closing the PTY FD does NOT kill the process - it keeps running and consuming PTYs
 	if t.attachCmd != nil && t.attachCmd.Process != nil {
-		log.InfoLog.Printf("Killing orphaned tmux attach process for '%s' (pid=%d)", t.sanitizedName, t.attachCmd.Process.Pid)
+		log.Info("killing orphaned tmux attach process", "session", t.sanitizedName, "pid", t.attachCmd.Process.Pid)
 		if err := t.attachCmd.Process.Kill(); err != nil {
 			// Process may already be dead, only log if it's a real error
 			if !strings.Contains(err.Error(), "process already finished") && !strings.Contains(err.Error(), "no such process") {
@@ -1298,16 +1298,16 @@ func (t *TmuxSession) Close() error {
 			// Check if this is the common "session not found" error
 			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
 				// Exit code 1 usually means session doesn't exist or was already killed
-				log.InfoLog.Printf("Tmux session '%s' was already killed or doesn't exist", t.sanitizedName)
+				log.Info("tmux session was already killed or doesn't exist", "session", t.sanitizedName)
 			} else {
 				errs = append(errs, fmt.Errorf("error killing tmux session: %w", err))
 			}
 		} else {
-			log.InfoLog.Printf("Successfully killed tmux session: %s", t.sanitizedName)
+			log.Info("successfully killed tmux session", "session", t.sanitizedName)
 		}
 		t.invalidateExistsCache() // Session was killed, invalidate cache
 	} else {
-		log.InfoLog.Printf("Tmux session '%s' doesn't exist, no need to kill", t.sanitizedName)
+		log.Info("tmux session doesn't exist, no need to kill", "session", t.sanitizedName)
 	}
 
 	// Unregister circuit breaker from global registry to prevent stale entries
@@ -1372,7 +1372,7 @@ func (t *TmuxSession) updateWindowSize(cols, rows int) error {
 func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 	// First resize the PTY using the existing method
 	if err := t.updateWindowSize(cols, rows); err != nil {
-		log.WarningLog.Printf("Failed to resize PTY for session '%s': %v", t.sanitizedName, err)
+		log.Warn("failed to resize PTY for session", "session", t.sanitizedName, "err", err)
 	}
 
 	// Also resize the tmux window itself to ensure the dimensions are applied.
@@ -1383,19 +1383,17 @@ func (t *TmuxSession) SetWindowSize(cols, rows int) error {
 		defer cancel()
 		if _, cmErr := t.sendCMCommand(ctx,
 			"resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr); cmErr != nil {
-			if log.DebugLog != nil {
-				log.DebugLog.Printf("SetWindowSize CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-			}
+			log.Debug("SetWindowSize CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 			cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
 			if err := t.cmdExec.Run(cmd); err != nil {
-				log.ErrorLog.Printf("tmux resize-window failed for '%s': %v", t.sanitizedName, err)
+				log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
 				return fmt.Errorf("failed to resize tmux window: %w", err)
 			}
 		}
 	} else {
 		cmd := t.buildTmuxCommand("resize-window", "-t", t.sanitizedName, "-x", colsStr, "-y", rowsStr)
 		if err := t.cmdExec.Run(cmd); err != nil {
-			log.ErrorLog.Printf("tmux resize-window failed for '%s': %v", t.sanitizedName, err)
+			log.Error("tmux resize-window failed", "session", t.sanitizedName, "err", err)
 			return fmt.Errorf("failed to resize tmux window: %w", err)
 		}
 	}
@@ -1417,7 +1415,7 @@ func recoverFromServerFailure(serverSocket, caller string) {
 	recoveryMu.Lock()
 	if recoveryInFlight {
 		recoveryMu.Unlock()
-		log.InfoLog.Printf("[tmux] server recovery already in progress, skipping from %s", caller)
+		log.Info("[tmux] server recovery already in progress, skipping", "caller", caller)
 		return
 	}
 	recoveryInFlight = true
@@ -1429,14 +1427,14 @@ func recoverFromServerFailure(serverSocket, caller string) {
 	}()
 
 	if _, restartErr := ensureServerRunning(serverSocket); restartErr == nil {
-		log.InfoLog.Printf("[tmux] server restarted from %s, resetting circuit breakers", caller)
+		log.Info("[tmux] server restarted, resetting circuit breakers", "caller", caller)
 		executor.GetGlobalRegistry().ResetAll()
 		if onServerRecovered != nil {
 			go onServerRecovered()
 		}
 		if serverSocket == "" {
 			if keepErr := CreateKeepaliveSession(serverSocket); keepErr != nil {
-				log.WarningLog.Printf("[tmux] failed to recreate keepalive session: %v", keepErr)
+				log.Warn("[tmux] failed to recreate keepalive session", "err", keepErr)
 			}
 		}
 	} else {
@@ -1444,7 +1442,7 @@ func recoverFromServerFailure(serverSocket, caller string) {
 		// will continue to fail until the user manually intervenes.
 		// Note: individual user sessions are NOT automatically re-created after recovery;
 		// they will be restarted on the next user interaction (e.g., Resume() call).
-		log.ErrorLog.Printf("[tmux] failed to restart tmux server from %s: %v", caller, restartErr)
+		log.Error("[tmux] failed to restart tmux server", "caller", caller, "err", restartErr)
 	}
 }
 
@@ -1518,7 +1516,7 @@ func (t *TmuxSession) DoesSessionExist() bool {
 
 	// Check if error is due to timeout
 	if ctx.Err() == context.DeadlineExceeded {
-		log.WarningLog.Printf("Timeout checking if tmux session exists: %s", t.sanitizedName)
+		log.Warn("timeout checking if tmux session exists", "session", t.sanitizedName)
 		t.existsCache = false
 		t.existsCacheTime = time.Now()
 		t.existsCacheMutex.Unlock()
@@ -1576,7 +1574,7 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 
 	output, err := t.listSessionsRaw(ctx)
 	if err != nil {
-		log.WarningLog.Printf("DoesSessionExistNoCache: tmux list-sessions failed: %v", err)
+		log.Warn("DoesSessionExistNoCache: tmux list-sessions failed", "session", t.sanitizedName, "err", err)
 		// Only attempt auto-recovery for the default server (not isolated test servers).
 		if t.serverSocket == "" && serverNotRunning(output) {
 			recoverFromServerFailure(t.serverSocket, "DoesSessionExistNoCache")
@@ -1586,7 +1584,7 @@ func (t *TmuxSession) DoesSessionExistNoCache() bool {
 
 	// Parse and log ALL sessions for debugging
 	sessions := strings.Split(strings.TrimSpace(string(output)), "\n")
-	log.InfoLog.Printf("DoesSessionExistNoCache: checking for '%s' in tmux sessions: %v", t.sanitizedName, sessions)
+	log.Info("DoesSessionExistNoCache: checking for session in tmux sessions", "session", t.sanitizedName, "sessions", sessions)
 
 	for _, session := range sessions {
 		if session == t.sanitizedName {
@@ -1610,15 +1608,13 @@ func (t *TmuxSession) RefreshClient() error {
 		}
 		// Fall through to subprocess path if CM fails (open question: refresh-client
 		// targeting the CM connection itself may behave differently).
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("RefreshClient CM path failed for '%s'; falling back to subprocess", t.sanitizedName)
-		}
+		log.Debug("RefreshClient CM path failed, falling back to subprocess", "session", t.sanitizedName)
 	}
 
 	// Method 1: Use refresh-client command (preferred)
 	cmd := t.buildTmuxCommand("refresh-client", "-t", t.sanitizedName)
 	if err := t.cmdExec.Run(cmd); err != nil {
-		log.WarningLog.Printf("refresh-client failed for '%s', trying alternative: %v", t.sanitizedName, err)
+		log.Warn("refresh-client failed, trying alternative", "session", t.sanitizedName, "err", err)
 
 		// Method 2: Send SIGWINCH via kill command
 		cmd = t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName, "#{pane_pid}")
@@ -1667,9 +1663,7 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 		if cmErr == nil {
 			return sanitizeUTF8String([]byte(body)), nil
 		}
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("CapturePaneContent CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-		}
+		log.Debug("CapturePaneContent CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
 	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
@@ -1681,9 +1675,7 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 		// waiting for the 5-second TTL. This prevents repeated ERROR-level subprocess
 		// failures when a session has died and the registry hasn't caught up yet.
 		t.invalidateExistsCache()
-		if log.WarningLog != nil {
-			log.WarningLog.Printf("Failed to capture pane content for session '%s': %v", t.sanitizedName, err)
-		}
+		log.Warn("failed to capture pane content for session", "session", t.sanitizedName, "err", err)
 		return "", fmt.Errorf("error capturing pane content for session '%s': %v", t.sanitizedName, err)
 	}
 	return sanitizeUTF8String(output), nil
@@ -1700,9 +1692,7 @@ func (t *TmuxSession) CapturePaneContentRaw() (string, error) {
 		if cmErr == nil {
 			return sanitizeUTF8String([]byte(body)), nil
 		}
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("CapturePaneContentRaw CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-		}
+		log.Debug("CapturePaneContentRaw CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
 	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-t", t.sanitizedName)
@@ -1711,9 +1701,7 @@ func (t *TmuxSession) CapturePaneContentRaw() (string, error) {
 	if err != nil {
 		recordFailure(time.Now())
 		t.invalidateExistsCache()
-		if log.WarningLog != nil {
-			log.WarningLog.Printf("Failed to capture raw pane content for session '%s': %v", t.sanitizedName, err)
-		}
+		log.Warn("failed to capture raw pane content for session", "session", t.sanitizedName, "err", err)
 		return "", fmt.Errorf("error capturing raw pane content: %v", err)
 	}
 	return sanitizeUTF8String(output), nil
@@ -1730,9 +1718,7 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 		if cmErr == nil {
 			return sanitizeUTF8String([]byte(body)), nil
 		}
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("CapturePaneContentWithOptions CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-		}
+		log.Debug("CapturePaneContentWithOptions CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
 	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
@@ -1778,9 +1764,7 @@ func (t *TmuxSession) GetCursorPosition() (x, y int, err error) {
 				return cx, cy, nil
 			}
 		}
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("GetCursorPosition CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-		}
+		log.Debug("GetCursorPosition CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
 	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
@@ -1818,9 +1802,7 @@ func (t *TmuxSession) GetPaneDimensions() (width, height int, err error) {
 				return paneWidth, paneHeight, nil
 			}
 		}
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("GetPaneDimensions CM path failed for '%s': %v; falling back to subprocess", t.sanitizedName, cmErr)
-		}
+		log.Debug("GetPaneDimensions CM path failed, falling back to subprocess", "session", t.sanitizedName, "err", cmErr)
 	}
 
 	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
@@ -1876,7 +1858,7 @@ func CleanupSessionsOnServer(cmdExec executor.Executor, serverSocket string) err
 	}
 
 	for _, match := range matches {
-		log.InfoLog.Printf("cleaning up session: %s", match)
+		log.Info("cleaning up session", "session", match)
 		killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		var killCmd *exec.Cmd
 		if serverSocket != "" {
@@ -1965,9 +1947,7 @@ func (t *TmuxSession) GetPaneCurrentPath() (string, error) {
 		if cmErr == nil {
 			return strings.TrimSpace(body), nil
 		}
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("GetPaneCurrentPath CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-		}
+		log.Debug("GetPaneCurrentPath CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
 	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,
@@ -1996,9 +1976,7 @@ func (t *TmuxSession) GetPanePID() (int32, error) {
 				return int32(pid), nil
 			}
 		}
-		if log.DebugLog != nil {
-			log.DebugLog.Printf("GetPanePID CM path failed for '%s': %v; falling back", t.sanitizedName, cmErr)
-		}
+		log.Debug("GetPanePID CM path failed, falling back", "session", t.sanitizedName, "err", cmErr)
 	}
 
 	cmd := t.buildTmuxCommand("display-message", "-p", "-t", t.sanitizedName,

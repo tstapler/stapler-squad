@@ -47,7 +47,7 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
 func (i *Instance) initTmuxSession() {
 	if i.tmuxManager.HasSession() {
-		log.InfoLog.Printf("Reusing existing tmux session for instance '%s'", i.Title)
+		log.Info("reusing existing tmux session", "session", i.Title)
 		return
 	}
 	var claudeSessionID string
@@ -56,7 +56,7 @@ func (i *Instance) initTmuxSession() {
 	}
 	enrichedProgram := i.buildLaunchCommand(claudeSessionID)
 	i.LaunchCommand = enrichedProgram
-	log.InfoLog.Printf("Creating tmux session for instance '%s' with program '%s'", i.Title, enrichedProgram)
+	log.Info("creating tmux session", "session", i.Title, "program", enrichedProgram)
 
 	tmuxPrefix := i.TmuxPrefix
 	if tmuxPrefix == "" {
@@ -142,7 +142,7 @@ func (i *Instance) TapEnter() {
 		return
 	}
 	if err := i.tmuxManager.TapEnter(); err != nil {
-		log.ErrorLog.Printf("error tapping enter: %v", err)
+		log.Error("error tapping enter", "err", err)
 	}
 }
 
@@ -186,10 +186,7 @@ func (i *Instance) trackRestartRate() {
 	i.recentRestartTimes = append(kept, now)
 
 	if int64(len(i.recentRestartTimes)) >= threshold {
-		log.WarningLog.Printf(
-			"[restart-storm] session '%s' has restarted %d times in the last %.0fs (total restarts: %d) — possible crash loop",
-			i.Title, len(i.recentRestartTimes), window.Seconds(), i.restartCount,
-		)
+		log.Warn("restart storm detected, possible crash loop", "session", i.Title, "count", len(i.recentRestartTimes), "window", window.Seconds(), "total", i.restartCount)
 	}
 }
 

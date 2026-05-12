@@ -71,7 +71,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 		// Check if the error is because the branch is already checked out elsewhere
 		if strings.Contains(err.Error(), "already checked out") {
 			// Try to find and connect to the existing worktree
-			log.InfoLog.Printf("Branch '%s' is already checked out, attempting to locate existing worktree", g.branchName)
+			log.Info("branch is already checked out, attempting to locate existing worktree", "branch", g.branchName)
 
 			// List all worktrees to find where this branch is checked out
 			output, listErr := g.runGitCommand(g.repoPath, "worktree", "list", "--porcelain")
@@ -82,7 +82,7 @@ func (g *GitWorktree) setupFromExistingBranch() error {
 			// Parse worktree list to find the one with our branch
 			existingPath, found := g.findWorktreeForBranch(output, g.branchName)
 			if found {
-				log.InfoLog.Printf("Found existing worktree for branch '%s' at '%s', using it instead", g.branchName, existingPath)
+				log.Info("found existing worktree for branch, using it instead", "branch", g.branchName, "path", existingPath)
 				g.worktreePath = existingPath
 				g.initBaseCommitSHA()
 				return nil
@@ -110,12 +110,12 @@ func (g *GitWorktree) initBaseCommitSHA() {
 		if err == nil {
 			if sha := strings.TrimSpace(output); sha != "" {
 				g.baseCommitSHA = sha
-				log.InfoLog.Printf("Set base commit SHA for branch '%s' to merge-base with '%s': %s", g.branchName, branch, sha[:min(8, len(sha))])
+				log.Info("set base commit SHA for branch to merge-base", "branch", g.branchName, "with_branch", branch, "sha", sha[:min(8, len(sha))])
 				return
 			}
 		}
 	}
-	log.WarningLog.Printf("Could not find merge-base for branch '%s' with any default branch (main/master/develop/trunk)", g.branchName)
+	log.Warn("could not find merge-base for branch with any default branch (main/master/develop/trunk)", "branch", g.branchName)
 }
 
 // findWorktreeForBranch parses the output of 'git worktree list --porcelain'
@@ -168,7 +168,7 @@ func (g *GitWorktree) setupNewWorktree() error {
 	branchRef := plumbing.NewBranchReferenceName(g.branchName)
 	if _, err := repo.Reference(branchRef, false); err == nil {
 		// Branch exists - use setupFromExistingBranch instead
-		log.InfoLog.Printf("Branch '%s' already exists, using existing branch for worktree", g.branchName)
+		log.Info("branch already exists, using existing branch for worktree", "branch", g.branchName)
 		return g.setupFromExistingBranch()
 	}
 
@@ -204,19 +204,19 @@ func (g *GitWorktree) setupNewWorktree() error {
 func (g *GitWorktree) Cleanup() error {
 	var errs []error
 
-	log.InfoLog.Printf("Starting cleanup for worktree: %s", g.worktreePath)
+	log.Info("starting cleanup for worktree", "path", g.worktreePath)
 
 	// Step 1: Check if worktree directory exists
 	worktreeExists := true
 	if _, err := os.Stat(g.worktreePath); os.IsNotExist(err) {
 		worktreeExists = false
-		log.InfoLog.Printf("Worktree directory does not exist: %s", g.worktreePath)
+		log.Info("worktree directory does not exist", "path", g.worktreePath)
 	}
 
 	// Step 2: First prune any stale worktree references (always safe to do)
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
 		// Log the prune error but don't fail - continue with removal
-		log.WarningLog.Printf("Warning: failed to prune worktrees during cleanup: %v", err)
+		log.Warn("failed to prune worktrees during cleanup", "err", err)
 	}
 
 	// Step 3: Try to remove the worktree using git command if it exists
@@ -229,32 +229,32 @@ func (g *GitWorktree) Cleanup() error {
 				strings.Contains(errStr, "worktree not found")
 
 			if isCorruptedWorktree {
-				log.InfoLog.Printf("Worktree is corrupted/invalid, cleaning up manually: %s", g.worktreePath)
+				log.Info("worktree is corrupted/invalid, cleaning up manually", "path", g.worktreePath)
 			} else {
-				log.WarningLog.Printf("Git worktree remove failed for %s: %v", g.worktreePath, err)
+				log.Warn("git worktree remove failed", "path", g.worktreePath, "err", err)
 			}
 
 			// If git command fails, try manual directory removal
 			if rmErr := os.RemoveAll(g.worktreePath); rmErr != nil {
-				log.WarningLog.Printf("Manual directory removal failed for %s: %v", g.worktreePath, rmErr)
+				log.Warn("manual directory removal failed", "path", g.worktreePath, "err", rmErr)
 				// Only add to errors if both git and manual removal fail
 				errs = append(errs, fmt.Errorf("failed to remove worktree directory %s: git remove failed (%v), manual remove failed (%v)",
 					g.worktreePath, err, rmErr))
 			} else {
 				if isCorruptedWorktree {
-					log.InfoLog.Printf("Successfully cleaned up corrupted worktree directory: %s", g.worktreePath)
+					log.Info("successfully cleaned up corrupted worktree directory", "path", g.worktreePath)
 				} else {
-					log.InfoLog.Printf("Successfully removed worktree directory manually: %s", g.worktreePath)
+					log.Info("successfully removed worktree directory manually", "path", g.worktreePath)
 				}
 			}
 		} else {
-			log.InfoLog.Printf("Successfully removed worktree with git command: %s", g.worktreePath)
+			log.Info("successfully removed worktree with git command", "path", g.worktreePath)
 		}
 	}
 
 	// Step 4: Always attempt to clean up git administrative files (safe even if directory is gone)
 	if err := g.forceCleanupWorktree(); err != nil {
-		log.WarningLog.Printf("Failed to cleanup worktree admin files for %s: %v", g.worktreePath, err)
+		log.Warn("failed to cleanup worktree admin files", "path", g.worktreePath, "err", err)
 		// Don't add to errors - this is supplementary cleanup
 	}
 
@@ -290,21 +290,21 @@ func (g *GitWorktree) Cleanup() error {
 
 // Remove removes the worktree but keeps the branch
 func (g *GitWorktree) Remove() error {
-	log.InfoLog.Printf("Starting worktree removal for: %s", g.worktreePath)
+	log.Info("starting worktree removal", "path", g.worktreePath)
 
 	// First, prune any stale worktree references
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
 		// Log the prune error but don't fail - continue with removal
-		log.WarningLog.Printf("Initial worktree prune failed (continuing with removal): %v", err)
+		log.Warn("initial worktree prune failed (continuing with removal)", "err", err)
 	} else {
-		log.InfoLog.Printf("Initial worktree prune completed successfully")
+		log.Info("initial worktree prune completed successfully")
 	}
 
 	// Check if worktree directory exists before attempting git removal
 	worktreeExists := true
 	if _, err := os.Stat(g.worktreePath); os.IsNotExist(err) {
 		worktreeExists = false
-		log.InfoLog.Printf("Worktree directory does not exist: %s", g.worktreePath)
+		log.Info("worktree directory does not exist", "path", g.worktreePath)
 	}
 
 	// Remove the worktree using git command if directory exists
@@ -317,14 +317,14 @@ func (g *GitWorktree) Remove() error {
 				strings.Contains(errStr, "worktree not found")
 
 			if isCorruptedWorktree {
-				log.InfoLog.Printf("Worktree is corrupted/invalid, cleaning up manually: %s", g.worktreePath)
+				log.Info("worktree is corrupted/invalid, cleaning up manually", "path", g.worktreePath)
 			} else {
-				log.WarningLog.Printf("Git worktree remove failed for %s: %v", g.worktreePath, err)
+				log.Warn("git worktree remove failed", "path", g.worktreePath, "err", err)
 			}
 
 			// Try manual directory removal as fallback
 			if rmErr := os.RemoveAll(g.worktreePath); rmErr != nil {
-				log.WarningLog.Printf("Manual directory removal also failed for %s: %v", g.worktreePath, rmErr)
+				log.Warn("manual directory removal also failed", "path", g.worktreePath, "err", rmErr)
 				// Only return error if both git and manual removal fail for non-corrupted worktrees
 				if !isCorruptedWorktree {
 					return fmt.Errorf("failed to remove worktree: git remove failed (%v), manual remove failed (%v)", err, rmErr)
@@ -333,23 +333,23 @@ func (g *GitWorktree) Remove() error {
 				}
 			} else {
 				if isCorruptedWorktree {
-					log.InfoLog.Printf("Successfully cleaned up corrupted worktree directory: %s", g.worktreePath)
+					log.Info("successfully cleaned up corrupted worktree directory", "path", g.worktreePath)
 				} else {
-					log.InfoLog.Printf("Successfully removed worktree directory manually: %s", g.worktreePath)
+					log.Info("successfully removed worktree directory manually", "path", g.worktreePath)
 				}
 			}
 		} else {
-			log.InfoLog.Printf("Successfully removed worktree with git command: %s", g.worktreePath)
+			log.Info("successfully removed worktree with git command", "path", g.worktreePath)
 		}
 	}
 
 	// Clean up any remaining administrative files
 	if err := g.forceCleanupWorktree(); err != nil {
-		log.WarningLog.Printf("Administrative cleanup had some issues (not critical): %v", err)
+		log.Warn("administrative cleanup had some issues (not critical)", "err", err)
 		// Don't fail the removal for admin cleanup issues
 	}
 
-	log.InfoLog.Printf("Worktree removal completed successfully: %s", g.worktreePath)
+	log.Info("worktree removal completed successfully", "path", g.worktreePath)
 	return nil
 }
 
@@ -362,32 +362,32 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 
 	// Ensure worktrees directory exists before attempting cleanup
 	if _, err := os.Stat(worktreesDir); os.IsNotExist(err) {
-		log.InfoLog.Printf("Git worktrees directory does not exist, no admin cleanup needed: %s", worktreesDir)
+		log.Info("git worktrees directory does not exist, no admin cleanup needed", "path", worktreesDir)
 		return nil
 	}
 
 	worktreeName := filepath.Base(g.worktreePath)
 	worktreeAdminDir := filepath.Join(worktreesDir, worktreeName)
 
-	log.InfoLog.Printf("Attempting cleanup of worktree admin directory: %s", worktreeAdminDir)
+	log.Info("attempting cleanup of worktree admin directory", "path", worktreeAdminDir)
 
 	// Remove the exact match administrative directory
 	if _, err := os.Stat(worktreeAdminDir); err == nil {
 		if rmErr := os.RemoveAll(worktreeAdminDir); rmErr != nil {
-			log.WarningLog.Printf("Failed to remove worktree admin dir %s: %v", worktreeAdminDir, rmErr)
+			log.Warn("failed to remove worktree admin dir", "path", worktreeAdminDir, "err", rmErr)
 			cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to remove admin dir %s: %w", worktreeAdminDir, rmErr))
 		} else {
-			log.InfoLog.Printf("Successfully removed worktree admin directory: %s", worktreeAdminDir)
+			log.Info("successfully removed worktree admin directory", "path", worktreeAdminDir)
 		}
 	} else {
-		log.InfoLog.Printf("Exact worktree admin directory does not exist: %s", worktreeAdminDir)
+		log.Info("exact worktree admin directory does not exist", "path", worktreeAdminDir)
 	}
 
 	// Strategy 2: Try to find and remove any matching worktree admin directories
 	// This handles cases where the directory name might be slightly different
 	entries, err := os.ReadDir(worktreesDir)
 	if err != nil {
-		log.WarningLog.Printf("Could not read worktrees directory %s: %v", worktreesDir, err)
+		log.Warn("could not read worktrees directory", "path", worktreesDir, "err", err)
 		cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to read worktrees dir: %w", err))
 	} else {
 		baseWorktreeName := filepath.Base(g.worktreePath)
@@ -399,12 +399,12 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 					continue
 				}
 
-				log.InfoLog.Printf("Found matching worktree admin directory: %s", adminPath)
+				log.Info("found matching worktree admin directory", "path", adminPath)
 				if rmErr := os.RemoveAll(adminPath); rmErr != nil {
-					log.WarningLog.Printf("Failed to remove matching admin dir %s: %v", adminPath, rmErr)
+					log.Warn("failed to remove matching admin dir", "path", adminPath, "err", rmErr)
 					cleanupErrors = append(cleanupErrors, fmt.Errorf("failed to remove matching admin dir %s: %w", adminPath, rmErr))
 				} else {
-					log.InfoLog.Printf("Successfully removed matching worktree admin directory: %s", adminPath)
+					log.Info("successfully removed matching worktree admin directory", "path", adminPath)
 				}
 			}
 		}
@@ -416,12 +416,12 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 	}
 
 	// Strategy 3: Try git commands only after manual cleanup
-	log.InfoLog.Printf("Attempting git worktree prune after manual cleanup")
+	log.Info("attempting git worktree prune after manual cleanup")
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune", "--verbose"); err != nil {
 		// Prune failed, but we've done manual cleanup, so this is not critical
-		log.WarningLog.Printf("Git worktree prune failed after manual cleanup (not critical): %v", err)
+		log.Warn("git worktree prune failed after manual cleanup (not critical)", "err", err)
 	} else {
-		log.InfoLog.Printf("Git worktree prune completed successfully")
+		log.Info("git worktree prune completed successfully")
 	}
 
 	// Strategy 4: Try to list and remove specific worktrees that might still be registered
@@ -432,28 +432,28 @@ func (g *GitWorktree) forceCleanupWorktree() error {
 			if strings.HasPrefix(line, "worktree ") && strings.Contains(line, filepath.Base(g.worktreePath)) {
 				// Found our worktree still listed, try to remove it by path
 				worktreePath := strings.TrimPrefix(line, "worktree ")
-				log.InfoLog.Printf("Found worktree still listed, attempting removal: %s", worktreePath)
+				log.Info("found worktree still listed, attempting removal", "path", worktreePath)
 				if _, err := g.runGitCommand(g.repoPath, "worktree", "remove", "--force", worktreePath); err != nil {
-					log.WarningLog.Printf("Failed to remove listed worktree (not critical): %v", err)
+					log.Warn("failed to remove listed worktree (not critical)", "err", err)
 				} else {
-					log.InfoLog.Printf("Successfully removed worktree from git registry: %s", worktreePath)
+					log.Info("successfully removed worktree from git registry", "path", worktreePath)
 				}
 			}
 		}
 	} else {
-		log.WarningLog.Printf("Failed to list worktrees for cleanup verification (not critical): %v", err)
+		log.Warn("failed to list worktrees for cleanup verification (not critical)", "err", err)
 	}
 
 	// Final prune to clean up any remaining stale references
-	log.InfoLog.Printf("Performing final git worktree prune")
+	log.Info("performing final git worktree prune")
 	if _, err := g.runGitCommand(g.repoPath, "worktree", "prune"); err != nil {
-		log.WarningLog.Printf("Final git worktree prune failed (not critical): %v", err)
+		log.Warn("final git worktree prune failed (not critical)", "err", err)
 	} else {
-		log.InfoLog.Printf("Final worktree prune completed successfully")
+		log.Info("final worktree prune completed successfully")
 	}
 
 	// Always return success - we've done our best with comprehensive cleanup
-	log.InfoLog.Printf("Worktree administrative cleanup completed successfully")
+	log.Info("worktree administrative cleanup completed successfully")
 	return nil
 }
 
@@ -517,7 +517,7 @@ func CleanupWorktrees() error {
 					delCancel()
 					if delErr != nil {
 						// Log the error but continue with other worktrees
-						log.ErrorLog.Printf("failed to delete branch %s: %v", branch, err)
+						log.Error("failed to delete branch", "branch", branch, "err", err)
 					}
 					break
 				}

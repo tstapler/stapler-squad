@@ -58,6 +58,7 @@ export const navItem = recipe({
     whiteSpace: "nowrap",
     userSelect: "none",
     minHeight: "44px", /* WCAG 2.1 AA touch target minimum */
+    position: "relative",
     "@media": {
       "(prefers-reduced-motion: reduce)": {
         transition: "none",
@@ -162,4 +163,24 @@ export const drawerDivider = style({
   height: "1px",
   background: vars.color.borderColor,
   margin: `${vars.space[1]} 0`,
+});
+
+export const navBadgeWrapper = recipe({
+  base: {
+    display: "flex",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  variants: {
+    collapsed: {
+      true: {
+        position: "absolute",
+        top: "2px",
+        right: vars.space[1],
+        pointerEvents: "none",
+      },
+      false: {},
+    },
+  },
+  defaultVariants: { collapsed: false },
 });

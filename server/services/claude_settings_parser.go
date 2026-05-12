@@ -81,7 +81,7 @@ func LoadClaudeSettingsRules(projectDir string) []classifier.Rule {
 	for _, p := range paths {
 		perms, err := ParseClaudeSettings(p.path)
 		if err != nil {
-			log.WarningLog.Printf("[ClaudeSettings] Skipping %s: %v", p.path, err)
+			log.Warn("[ClaudeSettings] skipping settings file", "path", p.path, "err", err)
 			continue
 		}
 		if perms == nil || len(perms.Allow) == 0 {
@@ -89,7 +89,7 @@ func LoadClaudeSettingsRules(projectDir string) []classifier.Rule {
 		}
 		rules := claudeAllowsToRules(perms.Allow, p.priority, p.label)
 		allRules = append(allRules, rules...)
-		log.InfoLog.Printf("[ClaudeSettings] Loaded %d allow rules from %s", len(rules), p.path)
+		log.Info("[ClaudeSettings] loaded allow rules", "count", len(rules), "path", p.path)
 	}
 	return allRules
 }
@@ -125,7 +125,7 @@ func claudeAllowsToRules(allows []string, basePriority int, label string) []clas
 			reStr := globToRegex(glob)
 			re, err := regexp.Compile(reStr)
 			if err != nil {
-				log.WarningLog.Printf("[ClaudeSettings] Skipping invalid pattern %q: %v", pattern, err)
+				log.Warn("[ClaudeSettings] skipping invalid pattern", "pattern", pattern, "err", err)
 				continue
 			}
 			rule.CommandPattern = re

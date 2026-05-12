@@ -392,14 +392,14 @@ func (pd *PTYDiscovery) monitorLoop() {
 
 	// Initial scan
 	if err := pd.Refresh(); err != nil {
-		log.ErrorLog.Printf("Initial PTY discovery failed: %v", err)
+		log.Error("initial PTY discovery failed", "err", err)
 	}
 
 	for {
 		select {
 		case <-ticker.C:
 			if err := pd.Refresh(); err != nil {
-				log.ErrorLog.Printf("PTY discovery refresh failed: %v", err)
+				log.Error("PTY discovery refresh failed", "err", err)
 			}
 		case <-pd.stopCh:
 			return
@@ -467,7 +467,7 @@ func (pd *PTYDiscovery) discoverSquadPTYsWithCache(paneInfoMap map[string]paneEn
 		}
 		info, ok := paneInfoMap[tmuxName]
 		if !ok {
-			log.DebugLog.Printf("No pane info found for session %s (tmux name: %s)", sessionName, tmuxName)
+			log.Debug("no pane info found for session", "session", sessionName, "tmux_name", tmuxName)
 			continue
 		}
 		pending = append(pending, pendingEntry{
@@ -686,7 +686,7 @@ func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[st
 		} else {
 			pty, pid, err := pd.getPTYInfoFromTmuxWithSocket(sessionName, socket)
 			if err != nil {
-				log.DebugLog.Printf("Failed to get PTY info for external session %s (socket: %s): %v", sessionName, socket, err)
+				log.Debug("failed to get PTY info for external session", "session", sessionName, "socket", socket, "err", err)
 				continue
 			}
 			info = paneEntry{pty: pty, pid: pid}

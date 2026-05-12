@@ -67,7 +67,7 @@ func DefaultDiscoveryConfig() *DiscoveryConfig {
 func LoadDiscoveryConfig() *DiscoveryConfig {
 	configDir, err := GetConfigDir()
 	if err != nil {
-		log.ErrorLog.Printf("failed to get config directory: %v", err)
+		log.Error("failed to get config directory", "err", err)
 		return DefaultDiscoveryConfig()
 	}
 
@@ -78,18 +78,18 @@ func LoadDiscoveryConfig() *DiscoveryConfig {
 			// Create and save default config if file doesn't exist
 			defaultCfg := DefaultDiscoveryConfig()
 			if saveErr := SaveDiscoveryConfig(defaultCfg); saveErr != nil {
-				log.WarningLog.Printf("failed to save default discovery config: %v", saveErr)
+				log.Warn("failed to save default discovery config", "err", saveErr)
 			}
 			return defaultCfg
 		}
 
-		log.WarningLog.Printf("failed to read discovery config file: %v", err)
+		log.Warn("failed to read discovery config file", "err", err)
 		return DefaultDiscoveryConfig()
 	}
 
 	var config DiscoveryConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		log.ErrorLog.Printf("failed to parse discovery config file: %v", err)
+		log.Error("failed to parse discovery config file", "err", err)
 		return DefaultDiscoveryConfig()
 	}
 
@@ -97,7 +97,7 @@ func LoadDiscoveryConfig() *DiscoveryConfig {
 	if config.Mode != DiscoveryManagedOnly &&
 		config.Mode != DiscoveryExternalOnly &&
 		config.Mode != DiscoveryAll {
-		log.WarningLog.Printf("invalid discovery mode '%s', using default", config.Mode)
+		log.Warn("invalid discovery mode, using default", "mode", config.Mode)
 		config.Mode = DiscoveryManagedOnly
 	}
 

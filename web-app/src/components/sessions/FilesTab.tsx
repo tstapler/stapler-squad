@@ -89,11 +89,15 @@ export function FilesTab({
   }, [initialSelectedPath]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cmd+F / Ctrl+F focuses the search input.
+  // Guard: only intercept when the files tab is actually visible (offsetParent is null when
+  // an ancestor has display:none, which happens when the tab panel is inactive).
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "f") {
+        if (!searchInputRef.current) return;
+        if (searchInputRef.current.offsetParent === null) return;
         e.preventDefault();
-        searchInputRef.current?.focus();
+        searchInputRef.current.focus();
       }
     };
     window.addEventListener("keydown", handleKeyDown);

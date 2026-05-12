@@ -105,7 +105,7 @@ function renderOmnibar(
       onNavigateToSession={onNavigateToSession}
     />
   );
-  const input = screen.getByRole("textbox", { name: /session source input/i });
+  const input = screen.getByRole("combobox", { name: /session source input/i });
   return { input, onClose, onCreateSession, onNavigateToSession };
 }
 

@@ -75,7 +75,7 @@ func NewExternalApprovalMonitor() *ExternalApprovalMonitor {
 // Start begins monitoring for approvals.
 func (m *ExternalApprovalMonitor) Start() {
 	m.ctx, m.cancel = context.WithCancel(context.Background())
-	log.InfoLog.Println("External approval monitor started")
+	log.Info("external approval monitor started")
 }
 
 // Stop stops all monitoring.
@@ -97,7 +97,7 @@ func (m *ExternalApprovalMonitor) Stop() {
 	}
 	m.sessionsMu.Unlock()
 
-	log.InfoLog.Println("External approval monitor stopped")
+	log.Info("external approval monitor stopped")
 }
 
 // OnApproval registers a callback for approval events.
@@ -139,8 +139,7 @@ func (m *ExternalApprovalMonitor) MonitorSession(
 
 	m.sessions[socketPath] = monitored
 
-	log.InfoLog.Printf("Started approval monitoring for external session: %s (%s)",
-		title, source)
+	log.Info("started approval monitoring for external session", "title", title, "source", source)
 
 	return nil
 }
@@ -158,7 +157,7 @@ func (m *ExternalApprovalMonitor) StopMonitoringSession(socketPath string) {
 			session.tmuxStreamer.RemoveConsumer(session.tmuxConsumerKey)
 		}
 		delete(m.sessions, socketPath)
-		log.InfoLog.Printf("Stopped approval monitoring for: %s", socketPath)
+		log.Info("stopped approval monitoring", "path", socketPath)
 	}
 }
 
@@ -282,15 +281,14 @@ func (m *ExternalApprovalMonitor) notifyCallbacks(event *ExternalApprovalEvent) 
 		go func(cb ExternalApprovalCallback) {
 			defer func() {
 				if r := recover(); r != nil {
-					log.WarningLog.Printf("Approval callback panic: %v", r)
+					log.Warn("approval callback panic", "err", r)
 				}
 			}()
 			cb(event)
 		}(callback)
 	}
 
-	log.InfoLog.Printf("Approval detected in external session %s: %s (type: %s, confidence: %.2f)",
-		event.SessionTitle, event.Request.DetectedText, event.Request.Type, event.Request.Confidence)
+	log.Info("approval detected in external session", "title", event.SessionTitle, "text", event.Request.DetectedText, "type", event.Request.Type, "confidence", event.Request.Confidence)
 }
 
 // MarkApprovalHandled marks an approval request as handled.
@@ -363,7 +361,7 @@ func (m *ExternalApprovalMonitor) IntegrateWithDiscovery(
 		// Get or create streamer
 		streamer, err := streamerManager.GetOrCreate(socketPath)
 		if err != nil {
-			log.WarningLog.Printf("Failed to create streamer for approval monitoring: %v", err)
+			log.Warn("failed to create streamer for approval monitoring", "err", err)
 			return
 		}
 
@@ -403,7 +401,7 @@ func (m *ExternalApprovalMonitor) IntegrateWithDiscoveryTmux(
 		// Get or create tmux streamer
 		streamer, err := tmuxStreamerManager.GetOrCreate(tmuxSessionName)
 		if err != nil {
-			log.WarningLog.Printf("Failed to create tmux streamer for approval monitoring: %v", err)
+			log.Warn("failed to create tmux streamer for approval monitoring", "err", err)
 			return
 		}
 
@@ -457,8 +455,7 @@ func (m *ExternalApprovalMonitor) MonitorSessionTmux(
 
 	m.sessions[tmuxSessionName] = monitored
 
-	log.InfoLog.Printf("Started tmux approval monitoring for external session: %s (%s)",
-		title, source)
+	log.Info("started tmux approval monitoring for external session", "title", title, "source", source)
 
 	return nil
 }

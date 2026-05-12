@@ -2,13 +2,14 @@ package terminal
 
 import (
 	"bytes"
-	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
-	"github.com/tstapler/stapler-squad/log"
+	"fmt"
 	"hash/fnv"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/mattn/go-runewidth"
 )
 
@@ -77,8 +78,7 @@ func (sg *StateGenerator) GenerateStateWithCursor(output []byte, cursorX, cursor
 	// This fixes dimension mismatch race conditions by ensuring StateGenerator dimensions
 	// are always in sync with actual tmux pane dimensions at state generation time
 	if paneWidth != nil && paneHeight != nil && (sg.cols != *paneWidth || sg.rows != *paneHeight) {
-		log.InfoLog.Printf("[StateGenerator] Atomic dimension sync: %dx%d -> %dx%d (sequence %d)",
-			sg.cols, sg.rows, *paneWidth, *paneHeight, sg.sequence)
+		log.Info("StateGenerator atomic dimension sync", "old", fmt.Sprintf("%dx%d", sg.cols, sg.rows), "new", fmt.Sprintf("%dx%d", *paneWidth, *paneHeight), "sequence", sg.sequence)
 		sg.cols = *paneWidth
 		sg.rows = *paneHeight
 	}
@@ -91,15 +91,14 @@ func (sg *StateGenerator) GenerateStateWithCursor(output []byte, cursorX, cursor
 	actualRows := sg.rows
 	if paneHeight != nil {
 		actualRows = *paneHeight
-		log.DebugLog.Printf("[StateGenerator] Using real pane height %d (sg.rows now updated)", actualRows)
+		log.Debug("StateGenerator using real pane height", "height", actualRows)
 	}
 
 	// Truncate to terminal row limit to match viewport
 	if len(lines) > actualRows {
 		// Keep only the last N rows (what user sees in terminal viewport)
 		lines = lines[len(lines)-actualRows:]
-		log.DebugLog.Printf("[StateGenerator] Truncated to %d rows for terminal viewport (pane=%v, sg.rows=%d)",
-			actualRows, paneHeight, sg.rows)
+		log.Debug("StateGenerator truncated to terminal viewport", "rows", actualRows, "sg_rows", sg.rows)
 	}
 
 	// Pad with empty lines if necessary to maintain consistent viewport size
@@ -119,10 +118,10 @@ func (sg *StateGenerator) GenerateStateWithCursor(output []byte, cursorX, cursor
 			Col:     uint32(*cursorX),
 			Visible: true,
 		}
-		log.DebugLog.Printf("[StateGenerator] Using real tmux cursor position: (%d,%d)", *cursorX, *cursorY)
+		log.Debug("StateGenerator using real tmux cursor position", "x", *cursorX, "y", *cursorY)
 	} else {
 		cursor = sg.calculateCursorPosition(lines)
-		log.DebugLog.Printf("[StateGenerator] Calculated cursor position from content: (%d,%d)", cursor.Col, cursor.Row)
+		log.Debug("StateGenerator calculated cursor position from content", "col", cursor.Col, "row", cursor.Row)
 	}
 
 	// Update compression dictionary with new patterns
@@ -145,13 +144,13 @@ func (sg *StateGenerator) GenerateStateWithCursor(output []byte, cursorX, cursor
 			Rows: uint32(*paneHeight),
 			Cols: uint32(*paneWidth),
 		}
-		log.DebugLog.Printf("[StateGenerator] Using real tmux dimensions: %dx%d", *paneWidth, *paneHeight)
+		log.Debug("StateGenerator using real tmux dimensions", "cols", *paneWidth, "rows", *paneHeight)
 	} else {
 		terminalDimensions = &sessionv1.TerminalDimensions{
 			Rows: uint32(sg.rows),
 			Cols: uint32(sg.cols),
 		}
-		log.DebugLog.Printf("[StateGenerator] Using StateGenerator dimensions: %dx%d", sg.cols, sg.rows)
+		log.Debug("StateGenerator using StateGenerator dimensions", "cols", sg.cols, "rows", sg.rows)
 	}
 
 	// Create terminal state
@@ -167,8 +166,7 @@ func (sg *StateGenerator) GenerateStateWithCursor(output []byte, cursorX, cursor
 	// Store state for future optimization
 	sg.lastState = state
 
-	log.DebugLog.Printf("[StateGenerator] Generated state sequence %d with %d lines, cursor at (%d,%d)",
-		sg.sequence, len(lines), cursor.Row, cursor.Col)
+	log.Debug("StateGenerator generated state", "sequence", sg.sequence, "lines", len(lines), "cursor_row", cursor.Row, "cursor_col", cursor.Col)
 
 	return state
 }
@@ -374,8 +372,7 @@ func (sg *StateGenerator) updateCompressionDictionary(output []byte) {
 
 	sg.compressionDict.updatedAt = time.Now()
 
-	log.DebugLog.Printf("[StateGenerator] Updated compression dictionary: %d patterns, %d bytes processed",
-		len(sg.compressionDict.patterns), sg.compressionDict.totalBytes)
+	log.Debug("StateGenerator updated compression dictionary", "patterns", len(sg.compressionDict.patterns), "bytes", sg.compressionDict.totalBytes)
 }
 
 // extractPatterns extracts byte patterns for dictionary learning
@@ -446,8 +443,7 @@ func (sg *StateGenerator) UpdateDimensions(cols, rows int) {
 	sg.cols = cols
 	sg.rows = rows
 
-	log.InfoLog.Printf("[StateGenerator] Dimensions updated: %dx%d -> %dx%d (sequence %d)",
-		oldCols, oldRows, cols, rows, sg.sequence)
+	log.Info("StateGenerator dimensions updated", "old", fmt.Sprintf("%dx%d", oldCols, oldRows), "new", fmt.Sprintf("%dx%d", cols, rows), "sequence", sg.sequence)
 }
 
 // Reset resets the state generator (called on reconnect)
@@ -458,7 +454,7 @@ func (sg *StateGenerator) Reset() {
 	sg.sequence = 0
 	sg.lastState = nil
 	// Keep compression dictionary for learning continuity
-	log.InfoLog.Printf("[StateGenerator] Reset state generator (preserving compression dictionary)")
+	log.Info("StateGenerator reset state (preserving compression dictionary)")
 }
 
 // GetCurrentSequence returns the current sequence number (thread-safe)

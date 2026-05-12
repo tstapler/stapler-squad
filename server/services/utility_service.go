@@ -155,8 +155,7 @@ func (us *UtilityService) FocusWindow(
 	outputStr := string(output)
 
 	if err != nil {
-		log.WarningLog.Printf("Failed to activate window (bundle=%s, app=%s): %v, output: %s",
-			bundleID, appName, err, outputStr)
+		log.Warn("failed to activate window", "bundle", bundleID, "app", appName, "err", err, "output", outputStr)
 
 		// Check for common permission-related errors
 		message := fmt.Sprintf("failed to activate window: %v", err)
@@ -183,7 +182,7 @@ func (us *UtilityService) FocusWindow(
 		}), nil
 	}
 
-	log.InfoLog.Printf("Window activated successfully (bundle=%s, app=%s)", bundleID, appName)
+	log.Info("window activated successfully", "bundle", bundleID, "app", appName)
 	return connect.NewResponse(&sessionv1.FocusWindowResponse{
 		Success:  true,
 		Message:  "Window activated successfully",
@@ -248,7 +247,7 @@ func (us *UtilityService) CreateDebugSnapshot(
 		summary += fmt.Sprintf(" (%d collection errors)", len(snap.Errors))
 	}
 
-	log.InfoLog.Printf("[DebugSnapshot] Written to %s (%d bytes)", filePath, fileSizeBytes)
+	log.Info("[DebugSnapshot] written", "path", filePath, "bytes", fileSizeBytes)
 
 	return connect.NewResponse(&sessionv1.CreateDebugSnapshotResponse{
 		FilePath:      filePath,

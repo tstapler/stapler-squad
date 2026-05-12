@@ -42,7 +42,7 @@ func RegisterRoutes(mux *http.ServeMux, waHandler *Handler, sessions *SessionMan
 	mux.HandleFunc("GET /auth/credentials", h.listCredentials)
 	mux.HandleFunc("POST /auth/credentials/{id}/revoke", h.revokeCredential)
 
-	log.InfoLog.Printf("auth: registered /auth/* routes")
+	log.Info("auth: registered /auth/* routes")
 }
 
 type httpHandlers struct {
@@ -122,7 +122,7 @@ func (h *httpHandlers) beginRegistration(w http.ResponseWriter, r *http.Request)
 
 	_, creation, ceremonyKey, err := h.wa.BeginRegistration(r)
 	if err != nil {
-		log.ErrorLog.Printf("auth: begin registration failed: %v", err)
+		log.Error("auth: begin registration failed", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -182,7 +182,7 @@ func (h *httpHandlers) finishRegistration(w http.ResponseWriter, r *http.Request
 
 	token, err := h.wa.FinishRegistration(ceremonyKey, r, displayName)
 	if err != nil {
-		log.ErrorLog.Printf("auth: finish registration failed: %v", err)
+		log.Error("auth: finish registration failed", "err", err)
 		http.Error(w, fmt.Sprintf("registration failed: %v", err), http.StatusBadRequest)
 		return
 	}
@@ -208,7 +208,7 @@ func (h *httpHandlers) beginLogin(w http.ResponseWriter, r *http.Request) {
 
 	assertion, ceremonyKey, err := h.wa.BeginLogin(r)
 	if err != nil {
-		log.ErrorLog.Printf("auth: begin login failed: %v", err)
+		log.Error("auth: begin login failed", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -238,7 +238,7 @@ func (h *httpHandlers) finishLogin(w http.ResponseWriter, r *http.Request) {
 
 	token, err := h.wa.FinishLogin(ceremonyKey, r)
 	if err != nil {
-		log.ErrorLog.Printf("auth: finish login failed: %v", err)
+		log.Error("auth: finish login failed", "err", err)
 		http.Error(w, fmt.Sprintf("login failed: %v", err), http.StatusUnauthorized)
 		return
 	}
@@ -286,7 +286,7 @@ func (h *httpHandlers) serveCACert(w http.ResponseWriter, r *http.Request) {
 
 	data, err := os.ReadFile(h.caPath)
 	if err != nil {
-		log.ErrorLog.Printf("auth: read CA cert: %v", err)
+		log.Error("auth: read CA cert", "err", err)
 		http.Error(w, "could not read CA cert", http.StatusInternalServerError)
 		return
 	}
@@ -408,7 +408,7 @@ func (h *httpHandlers) generateInvite(w http.ResponseWriter, r *http.Request) {
 
 	token, expiresAt, err := h.invites.Generate(body.Label)
 	if err != nil {
-		log.ErrorLog.Printf("auth: generate invite: %v", err)
+		log.Error("auth: generate invite", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -424,13 +424,13 @@ func (h *httpHandlers) generateInvite(w http.ResponseWriter, r *http.Request) {
 	// Render QR PNGs inline as base64 data URIs to avoid a second round-trip.
 	regQRPNG, err := GenerateQRPNG(registrationURL)
 	if err != nil {
-		log.ErrorLog.Printf("auth: generate registration QR: %v", err)
+		log.Error("auth: generate registration QR", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	caQRPNG, err := GenerateQRPNG(caURL)
 	if err != nil {
-		log.ErrorLog.Printf("auth: generate CA QR: %v", err)
+		log.Error("auth: generate CA QR", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -481,7 +481,7 @@ func (h *httpHandlers) revokeCredential(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "credential not found", http.StatusNotFound)
 			return
 		}
-		log.ErrorLog.Printf("auth: revoke credential: %v", err)
+		log.Error("auth: revoke credential", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -489,7 +489,7 @@ func (h *httpHandlers) revokeCredential(w http.ResponseWriter, r *http.Request) 
 	lastCredential := !h.store.HasCredentials()
 	if lastCredential {
 		h.sessions.RevokeAllSessions()
-		log.InfoLog.Printf("auth: last credential revoked — all sessions invalidated")
+		log.Info("auth: last credential revoked — all sessions invalidated")
 	}
 
 	jsonResponse(w, map[string]interface{}{
@@ -501,6 +501,6 @@ func (h *httpHandlers) revokeCredential(w http.ResponseWriter, r *http.Request) 
 func jsonResponse(w http.ResponseWriter, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		log.ErrorLog.Printf("auth: failed to write JSON response: %v", err)
+		log.Error("auth: failed to write JSON response", "err", err)
 	}
 }

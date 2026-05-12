@@ -16,10 +16,10 @@ func (t *TmuxSession) monitorWindowSize() {
 	doUpdate := func() {
 		cols, rows, err := term.GetSize(int(os.Stdin.Fd()))
 		if err != nil {
-			log.ErrorLog.Printf("failed to update window size: %v", err)
+			log.Error("failed to update window size", "err", err)
 		} else {
 			if err := t.updateWindowSize(cols, rows); err != nil {
-				log.ErrorLog.Printf("failed to update window size: %v", err)
+				log.Error("failed to update window size", "err", err)
 			}
 		}
 	}

@@ -198,11 +198,9 @@ func (d *Detector) ProcessOutput(data []byte) {
 		d.lastDetection = time.Now()
 		d.currentState = StateWaiting
 
-		log.InfoLog.Printf("[RateLimit] Detected rate limit for session %s: provider=%s, reset at %v",
-			d.sessionID, detection.Provider, detection.ResetTime)
+		log.Info("detected rate limit", "session", d.sessionID, "provider", detection.Provider, "reset_at", detection.ResetTime)
 
-		log.DebugLog.Printf("[RateLimit] Pattern matched in session %s: provider=%s, input=%q, detected_at=%v",
-			d.sessionID, detection.Provider, string(detection.InputToSend), detection.DetectedAt)
+		log.Debug("rate limit pattern matched", "session", d.sessionID, "provider", detection.Provider, "input", string(detection.InputToSend), "detected_at", detection.DetectedAt)
 
 		if d.onDetection != nil {
 			go d.onDetection(*detection)

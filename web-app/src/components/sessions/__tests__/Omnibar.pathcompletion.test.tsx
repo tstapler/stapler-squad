@@ -80,7 +80,7 @@ function renderOmnibar(
   const utils = render(
     <Omnibar isOpen={true} onClose={onClose} onCreateSession={onCreateSession} onNavigateToSession={onNavigateToSession} />
   );
-  const input = screen.getByRole("textbox", { name: /session source input/i });
+  const input = screen.getByRole("combobox", { name: /session source input/i });
   return { ...utils, input, onClose, onCreateSession, onNavigateToSession };
 }
 
@@ -215,7 +215,7 @@ describe("Omnibar path completion", () => {
 
     it("ArrowDown increments dropdownIndex (first entry becomes selected)", async () => {
       await setupWithDropdown();
-      fireEvent.keyDown(screen.getByRole("textbox", { name: /session source input/i }), {
+      fireEvent.keyDown(screen.getByRole("combobox", { name: /session source input/i }), {
         key: "ArrowDown",
       });
       // After ArrowDown from -1 → 0, first option is selected.
@@ -225,7 +225,7 @@ describe("Omnibar path completion", () => {
 
     it("ArrowUp from -1 stays at -1 (no selection)", async () => {
       await setupWithDropdown();
-      fireEvent.keyDown(screen.getByRole("textbox", { name: /session source input/i }), {
+      fireEvent.keyDown(screen.getByRole("combobox", { name: /session source input/i }), {
         key: "ArrowUp",
       });
       const options = screen.getAllByRole("option");
@@ -236,7 +236,7 @@ describe("Omnibar path completion", () => {
 
     it("Tab with single entry completes to that entry (appends /)", async () => {
       await setupWithDropdown([dir("projects")]);
-      const input = screen.getByRole("textbox", { name: /session source input/i });
+      const input = screen.getByRole("combobox", { name: /session source input/i });
       fireEvent.keyDown(input, { key: "Tab" });
       expect((input as HTMLInputElement).value).toBe("/home/user/projects/");
     });
@@ -244,14 +244,14 @@ describe("Omnibar path completion", () => {
     it("Tab with multiple entries extends input to longest common prefix", async () => {
       // "projects" and "profile" share "pro"
       await setupWithDropdown([dir("projects"), dir("profile")]);
-      const input = screen.getByRole("textbox", { name: /session source input/i });
+      const input = screen.getByRole("combobox", { name: /session source input/i });
       fireEvent.keyDown(input, { key: "Tab" });
       expect((input as HTMLInputElement).value).toBe("/home/user/pro");
     });
 
     it("Enter with dropdownIndex >= 0 accepts the selected entry", async () => {
       await setupWithDropdown([dir("projects")]);
-      const input = screen.getByRole("textbox", { name: /session source input/i });
+      const input = screen.getByRole("combobox", { name: /session source input/i });
       // Select first entry with ArrowDown, then accept with Enter.
       fireEvent.keyDown(input, { key: "ArrowDown" });
       fireEvent.keyDown(input, { key: "Enter" });
@@ -260,7 +260,7 @@ describe("Omnibar path completion", () => {
 
     it("Escape dismisses dropdown, then returns to discovery mode, then closes modal", async () => {
       const { onClose } = await setupWithDropdown();
-      const input = screen.getByRole("textbox", { name: /session source input/i });
+      const input = screen.getByRole("combobox", { name: /session source input/i });
       // First Escape: dismisses the path completion dropdown, stays in creation mode.
       fireEvent.keyDown(input, { key: "Escape" });
       expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
@@ -275,7 +275,7 @@ describe("Omnibar path completion", () => {
 
     it("aria-activedescendant set after ArrowDown and cleared after Escape", async () => {
       await setupWithDropdown([dir("projects"), dir("profile")]);
-      const input = screen.getByRole("textbox", { name: /session source input/i });
+      const input = screen.getByRole("combobox", { name: /session source input/i });
       // Before any ArrowDown, attribute is absent.
       expect(input).not.toHaveAttribute("aria-activedescendant");
       // After ArrowDown, points to first option.
@@ -291,7 +291,7 @@ describe("Omnibar path completion", () => {
 
     it("input onChange resets dropdownIndex to -1", async () => {
       await setupWithDropdown();
-      const input = screen.getByRole("textbox", { name: /session source input/i });
+      const input = screen.getByRole("combobox", { name: /session source input/i });
       // Move selection down.
       fireEvent.keyDown(input, { key: "ArrowDown" });
       const optsBefore = screen.getAllByRole("option");
@@ -306,7 +306,7 @@ describe("Omnibar path completion", () => {
 
     it("dropdownDismissed prevents dropdown from showing after Escape", async () => {
       await setupWithDropdown();
-      const input = screen.getByRole("textbox", { name: /session source input/i });
+      const input = screen.getByRole("combobox", { name: /session source input/i });
       // Dismiss the dropdown.
       fireEvent.keyDown(input, { key: "Escape" });
       expect(screen.queryByRole("listbox")).not.toBeInTheDocument();

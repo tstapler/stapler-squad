@@ -21,7 +21,7 @@ func NewClaudeSessionManager() *ClaudeSessionManager {
 	// Try to find Claude Code session directory
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		log.WarningLog.Printf("Could not get user home directory: %v", err)
+		log.Warn("could not get user home directory", "err", err)
 		return &ClaudeSessionManager{}
 	}
 
@@ -81,7 +81,7 @@ func (csm *ClaudeSessionManager) DetectAvailableSessions() ([]ClaudeSession, err
 		if session, err := csm.loadSessionMetadata(sessionID, sessionPath); err == nil {
 			sessions = append(sessions, session)
 		} else {
-			log.InfoLog.Printf("Could not load session metadata for %s: %v", sessionID, err)
+			log.Info("could not load session metadata", "session_id", sessionID, "err", err)
 		}
 	}
 
@@ -221,8 +221,7 @@ func (csm *ClaudeSessionManager) AttachToSession(sessionID string) error {
 		return err
 	}
 
-	log.InfoLog.Printf("Attempting to attach to Claude Code session: %s (project: %s)",
-		session.ID, session.ProjectName)
+	log.Info("attempting to attach to claude code session", "session_id", session.ID, "project", session.ProjectName)
 
 	// TODO: Implement actual Claude Code session attachment
 	// This would typically involve:
@@ -231,7 +230,7 @@ func (csm *ClaudeSessionManager) AttachToSession(sessionID string) error {
 	// 3. Waiting for attachment confirmation
 
 	// For now, just log the attempt
-	log.InfoLog.Printf("Successfully attached to Claude Code session %s", sessionID)
+	log.Info("successfully attached to claude code session", "session_id", sessionID)
 
 	return nil
 }

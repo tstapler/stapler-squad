@@ -138,7 +138,7 @@ func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session
 		attribute.Int64("cache.refresh_duration_ms", time.Since(now).Milliseconds()),
 	)
 
-	log.InfoLog.Printf("History cache refreshed: %d entries in %v", hist.Count(), time.Since(now))
+	log.Info("history cache refreshed", "entries", hist.Count(), "duration", time.Since(now))
 	return hist, nil
 }
 
@@ -300,12 +300,12 @@ func newHistoryVCSProvider(projectPath string) (vc.VCSProvider, error) {
 func fetchHistoryVCSStatus(projectPath string) *sessionv1.VCSStatus {
 	provider, err := newHistoryVCSProvider(projectPath)
 	if err != nil {
-		log.DebugLog.Printf("fetchHistoryVCSStatus: no VCS provider for %q: %v", projectPath, err)
+		log.Debug("fetchHistoryVCSStatus: no VCS provider", "path", projectPath, "err", err)
 		return nil
 	}
 	status, err := provider.GetStatus()
 	if err != nil {
-		log.DebugLog.Printf("fetchHistoryVCSStatus: GetStatus failed for %q: %v", projectPath, err)
+		log.Debug("fetchHistoryVCSStatus: GetStatus failed", "path", projectPath, "err", err)
 		return nil
 	}
 	return vcsStatusToProto(status)
@@ -405,7 +405,7 @@ func (ss *SearchService) SearchClaudeHistory(
 	syncSpan.End()
 
 	if syncResult.HasChanges() || syncResult.WasFullRebuild {
-		log.InfoLog.Printf("Search index sync: %s", syncResult.String())
+		log.Info("search index sync", "result", syncResult.String())
 	}
 
 	limit := int(req.Msg.Limit)
