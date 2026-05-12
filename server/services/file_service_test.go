@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,18 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
 )
+
+// fakeWorkspaceProvider implements WorkspaceProvider for tests.
+type fakeWorkspaceProvider struct {
+	effectivePath string
+}
+
+func (f *fakeWorkspaceProvider) GetWorkspace(sessionID string) (session.Workspace, error) {
+	if sessionID != "test-session" {
+		return session.Workspace{}, connect.NewError(connect.CodeNotFound, nil)
+	}
+	return session.Workspace{EffectivePath: f.effectivePath}, nil
+}
 
 // testFileService wraps FileService with a fake findInstance for unit tests.
 // It bypasses storage and injects a session instance with a known path.
@@ -814,5 +828,151 @@ func TestSearchFiles_PathMatchOnFullPath(t *testing.T) {
 	}
 	if resp.Msg.Files[0].Name != "run.go" {
 		t.Errorf("expected run.go, got %q", resp.Msg.Files[0].Name)
+	}
+}
+
+// ---- Tests for ServeFileRaw ----
+
+// serveFileRawRequest is a helper that issues a GET request to ServeFileRaw for the
+// given file path (relative to the test workspace) and returns the response.
+func serveFileRawRequest(t *testing.T, svc *FileService, relPath string, extraQuery string) *http.Response {
+	t.Helper()
+	ts := httptest.NewServer(http.HandlerFunc(svc.ServeFileRaw))
+	t.Cleanup(ts.Close)
+	url := ts.URL + "?sessionId=test-session&path=" + relPath
+	if extraQuery != "" {
+		url += "&" + extraQuery
+	}
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		t.Fatalf("HTTP GET failed: %v", err)
+	}
+	return resp
+}
+
+func TestServeFileRaw_PDF(t *testing.T) {
+	root := t.TempDir()
+	// Minimal PDF header so the file is recognisable.
+	pdfContent := []byte("%PDF-1.4 minimal pdf content for testing purposes")
+	if err := os.WriteFile(filepath.Join(root, "doc.pdf"), pdfContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	resp := serveFileRawRequest(t, svc, "doc.pdf", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Content-Type-Options"); got != "nosniff" {
+		t.Errorf("expected X-Content-Type-Options: nosniff, got %q", got)
+	}
+	cd := resp.Header.Get("Content-Disposition")
+	if !strings.HasPrefix(cd, "inline") {
+		t.Errorf("expected Content-Disposition to start with 'inline', got %q", cd)
+	}
+	if !strings.Contains(cd, "doc.pdf") {
+		t.Errorf("expected filename=doc.pdf in Content-Disposition, got %q", cd)
+	}
+	// PDF must NOT have CSP sandbox — it would break Chrome's PDFium renderer.
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "" {
+		t.Errorf("expected no Content-Security-Policy for PDF, got %q", csp)
+	}
+}
+
+func TestServeFileRaw_SVG(t *testing.T) {
+	root := t.TempDir()
+	svgContent := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>`)
+	if err := os.WriteFile(filepath.Join(root, "image.svg"), svgContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	resp := serveFileRawRequest(t, svc, "image.svg", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	// SVG must have CSP sandbox to prevent XSS via embedded scripts.
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "sandbox" {
+		t.Errorf("expected Content-Security-Policy: sandbox for SVG, got %q", csp)
+	}
+}
+
+func TestServeFileRaw_VideoMP4(t *testing.T) {
+	root := t.TempDir()
+	// Minimal ftyp box so Go's http.ServeContent doesn't choke; content-type is driven by extension.
+	mp4Content := make([]byte, 512)
+	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), mp4Content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	resp := serveFileRawRequest(t, svc, "clip.mp4", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "video/mp4") {
+		t.Errorf("expected Content-Type video/mp4, got %q", ct)
+	}
+}
+
+func TestServeFileRaw_VideoOGV(t *testing.T) {
+	root := t.TempDir()
+	ogvContent := make([]byte, 512)
+	if err := os.WriteFile(filepath.Join(root, "clip.ogv"), ogvContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	resp := serveFileRawRequest(t, svc, "clip.ogv", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "video/ogg") {
+		t.Errorf("expected Content-Type video/ogg for .ogv, got %q", ct)
+	}
+}
+
+func TestServeFileRaw_LargeFilePDF(t *testing.T) {
+	root := t.TempDir()
+	// PDF larger than maxFileSize (10 MB) — must still return 200 (no size cap for PDF).
+	largeContent := make([]byte, maxFileSize+1024)
+	copy(largeContent, []byte("%PDF-1.4 "))
+	if err := os.WriteFile(filepath.Join(root, "large.pdf"), largeContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	resp := serveFileRawRequest(t, svc, "large.pdf", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 for large PDF (no size cap), got %d", resp.StatusCode)
+	}
+}
+
+func TestServeFileRaw_LargeFileBinary(t *testing.T) {
+	root := t.TempDir()
+	// Generic binary (null bytes) larger than maxFileSize — must return 413.
+	largeContent := make([]byte, maxFileSize+1024)
+	if err := os.WriteFile(filepath.Join(root, "large.bin"), largeContent, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := NewFileService(&fakeWorkspaceProvider{effectivePath: root})
+	resp := serveFileRawRequest(t, svc, "large.bin", "")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413 for large binary file, got %d", resp.StatusCode)
 	}
 }

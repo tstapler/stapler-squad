@@ -49,14 +49,16 @@ var hardSkipDirs = map[string]bool{
 }
 
 // videoMIMEOverrides maps video file extensions to their canonical MIME types.
-// mime.TypeByExtension reads /etc/mime.types which may be absent on minimal Linux installs,
-// and .ogg returns "audio/ogg" rather than "video/ogg". Chrome rejects application/octet-stream
-// for <video> sources, so explicit overrides are required.
+// mime.TypeByExtension reads /etc/mime.types which may be absent on minimal Linux installs.
+// Chrome rejects application/octet-stream for <video> sources, so explicit overrides are required.
+// .ogg is intentionally absent: it is a container that can carry audio or video; .ogg files fall
+// through to mime.TypeByExtension (returns "audio/ogg" on most systems) or the sniff fallback,
+// which is correct behaviour. .ogv is the unambiguous video-only extension and maps to video/ogg.
 var videoMIMEOverrides = map[string]string{
 	".mp4":  "video/mp4",
 	".webm": "video/webm",
 	".mov":  "video/quicktime",
-	".ogg":  "video/ogg",
+	".ogv":  "video/ogg",
 }
 
 // knownTextExtensions is the allowlist for extensions we know are always text.
@@ -318,20 +320,6 @@ func (fs *FileService) GetFileContent(
 
 	size := info.Size()
 
-	// Reject files over maxFileSize.
-	if size > maxFileSize {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("file too large (%d bytes); maximum is %d bytes", size, maxFileSize))
-	}
-
-	// Determine read limit (truncate text files >1MB).
-	readLimit := size
-	isTruncated := false
-	if size > truncateSize {
-		readLimit = truncateSize
-		isTruncated = true
-	}
-
 	// Binary detection: known text extension → skip checks.
 	ext := strings.ToLower(filepath.Ext(fullPath))
 	if ext == "" {
@@ -386,12 +374,27 @@ func (fs *FileService) GetFileContent(
 		}
 	}
 
+	// Binary files: return metadata only — no size limit applies because no content is read.
 	if isBinary {
 		return connect.NewResponse(&sessionv1.GetFileContentResponse{
 			IsBinary:    true,
 			Size:        size,
 			ContentType: contentType,
 		}), nil
+	}
+
+	// Text files: enforce the hard size limit to prevent unbounded memory use.
+	if size > maxFileSize {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("file too large (%d bytes); maximum is %d bytes", size, maxFileSize))
+	}
+
+	// Determine read limit (truncate text files >1MB).
+	readLimit := size
+	isTruncated := false
+	if size > truncateSize {
+		readLimit = truncateSize
+		isTruncated = true
 	}
 
 	// Seek back to beginning and read up to readLimit bytes.
@@ -778,13 +781,17 @@ func (fs *FileService) ServeFileRaw(w http.ResponseWriter, r *http.Request) {
 	// PDF: prevent MIME-sniffing; do NOT apply CSP sandbox (it breaks Chrome's PDFium renderer).
 	if isPDF {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Disposition",
-			fmt.Sprintf(`inline; filename="%s"`, filepath.Base(absPath)))
+		cd := mime.FormatMediaType("inline", map[string]string{
+			"filename": filepath.Base(absPath),
+		})
+		w.Header().Set("Content-Disposition", cd)
 	}
 
 	if download {
-		w.Header().Set("Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(absPath)))
+		cd := mime.FormatMediaType("attachment", map[string]string{
+			"filename": filepath.Base(absPath),
+		})
+		w.Header().Set("Content-Disposition", cd)
 	}
 
 	http.ServeContent(w, r, filepath.Base(absPath), info.ModTime(), f)
