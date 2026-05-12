@@ -349,7 +349,15 @@ const VIDEO_CONTENT_TYPES = new Set([
   "video/webm",
   "video/quicktime",
   "video/ogg",
+  "application/ogg",
 ]);
+
+// Strip parameters (e.g. "; charset=utf-8") and normalize case before matching.
+function matchesContentType(contentType: string | undefined, types: Set<string>): boolean {
+  if (!contentType) return false;
+  const base = contentType.split(";")[0].trim().toLowerCase();
+  return types.has(base);
+}
 
 // ---- Main component ----
 
@@ -400,7 +408,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
   if (!data) return null;
 
   // Inline image rendering for known image content types.
-  const isImage = data.isBinary && IMAGE_CONTENT_TYPES.has(data.contentType ?? "");
+  const isImage = data.isBinary && matchesContentType(data.contentType, IMAGE_CONTENT_TYPES);
   if (isImage) {
     return (
       <div className={container}>
@@ -417,7 +425,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
     );
   }
 
-  const isPdf = data.isBinary && PDF_CONTENT_TYPES.has(data.contentType ?? "");
+  const isPdf = data.isBinary && matchesContentType(data.contentType, PDF_CONTENT_TYPES);
   if (isPdf) {
     return (
       <div className={container}>
@@ -434,7 +442,7 @@ export function FileContentViewer({ sessionId, filePath, baseUrl }: FileContentV
     );
   }
 
-  const isVideo = data.isBinary && VIDEO_CONTENT_TYPES.has(data.contentType ?? "");
+  const isVideo = data.isBinary && matchesContentType(data.contentType, VIDEO_CONTENT_TYPES);
   if (isVideo) {
     const sizeKb = Number(data.size) / 1024;
     const sizeLabel = sizeKb >= 1024
