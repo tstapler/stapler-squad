@@ -290,6 +290,14 @@ func newSimpleTestPoller() *ReviewQueuePoller {
 	return NewReviewQueuePoller(queue, statusMgr, nil)
 }
 
+// newSimpleTestPollerWithManager creates a ReviewQueuePoller and returns the concrete
+// *InstanceStatusManager so tests can register controllers directly.
+func newSimpleTestPollerWithManager() (*ReviewQueuePoller, *InstanceStatusManager) {
+	queue := NewReviewQueue()
+	statusMgr := NewInstanceStatusManager()
+	return NewReviewQueuePoller(queue, statusMgr, nil), statusMgr
+}
+
 // newTestPollerInstance creates a minimal started/paused Instance for use in poller tests.
 func newTestPollerInstance(title, uuid string) *Instance {
 	inst := &Instance{
@@ -596,10 +604,7 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 	// Pre-populate the content cache with an approval prompt so the no-controller
 	// detection path finds it without needing a live tmux session.
 	approvalContent := "Yes, allow reading /etc/hosts\nYes, allow once"
-	poller.cacheMu.Lock()
-	poller.cachedContent[inst.Title] = approvalContent
-	poller.lastPreviewTime[inst.Title] = time.Now()
-	poller.cacheMu.Unlock()
+	poller.injectCachedContent(inst.Title, approvalContent)
 
 	poller.AddInstance(inst)
 	poller.checkSession(inst, nil)
@@ -617,7 +622,7 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 // sessions with an active (started) ClaudeController that reports StatusNeedsApproval are
 // added to the review queue via the controller-based detection path (lines 696-828).
 func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t *testing.T) {
-	poller := newSimpleTestPoller()
+	poller, statusMgr := newSimpleTestPollerWithManager()
 
 	// Use a mock InstanceContext so GetCurrentStatus() returns StatusNeedsApproval
 	// without requiring a real tmux session.
@@ -636,7 +641,7 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 	ctrl.ctx = t.Context()
 
 	inst.controllerManager.SetController(ctrl)
-	poller.statusManager.RegisterController(inst.Title, ctrl)
+	statusMgr.RegisterController(inst.Title, ctrl)
 
 	poller.AddInstance(inst)
 	poller.checkSession(inst, nil)

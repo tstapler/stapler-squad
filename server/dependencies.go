@@ -14,7 +14,6 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -109,111 +108,6 @@ func BuildDependencies() (*ServerDependencies, error) {
 	}
 
 	return rt.ToServerDeps(), nil
-}
-
-// scanSessionsOnStartup scans all running sessions for pre-existing approval prompts,
-// input required states, and errors. Adds matching sessions to the review queue immediately
-// so the user sees them before the regular polling cycle kicks in.
-func scanSessionsOnStartup(
-	instances []*session.Instance,
-	queue *session.ReviewQueue,
-	statusManager *session.InstanceStatusManager,
-) {
-	detector := detection.NewStatusDetector()
-	scanned, added := 0, 0
-
-	for _, inst := range instances {
-		if !inst.Started() || inst.Paused() {
-			continue
-		}
-		scanned++
-
-		// Try controller-based detection first
-		statusInfo := statusManager.GetStatus(inst)
-		if statusInfo.IsControllerActive {
-			reason, priority, context := mapDetectedStatus(statusInfo.ClaudeStatus, statusInfo.StatusContext)
-			if reason != "" {
-				addStartupItem(queue, inst, reason, priority, context)
-				added++
-				log.InfoLog.Printf("[StartupScan] Session '%s': detected %s via controller (status=%s)",
-					inst.Title, reason, statusInfo.ClaudeStatus.String())
-				continue
-			}
-			// Controller returned StatusUnknown (not yet initialized) — fall through to
-			// terminal content scan so startup approval prompts are never silently dropped.
-		}
-
-		// Fallback: terminal content detection
-		content, err := inst.Preview()
-		if err != nil {
-			log.WarningLog.Printf("[StartupScan] Session '%s': failed to get terminal content: %v", inst.Title, err)
-			continue
-		}
-		if content == "" {
-			log.InfoLog.Printf("[StartupScan] Session '%s': empty terminal content, skipping", inst.Title)
-			continue
-		}
-
-		detectedStatus, statusContext := detector.DetectWithContext([]byte(content))
-		reason, priority, ctx := mapDetectedStatus(detectedStatus, statusContext)
-		if reason != "" {
-			addStartupItem(queue, inst, reason, priority, ctx)
-			added++
-			log.InfoLog.Printf("[StartupScan] Session '%s': detected %s via terminal (status=%s)",
-				inst.Title, reason, detectedStatus.String())
-		}
-	}
-
-	log.InfoLog.Printf("[StartupScan] Scanned %d sessions, added %d to review queue", scanned, added)
-}
-
-// mapDetectedStatus maps a DetectedStatus to a review queue reason, priority, and context string.
-// Returns empty reason if the status does not warrant adding to the review queue.
-func mapDetectedStatus(status detection.DetectedStatus, statusContext string) (session.AttentionReason, session.Priority, string) {
-	switch status {
-	case detection.StatusNeedsApproval:
-		ctx := statusContext
-		if ctx == "" {
-			ctx = "Waiting for approval to proceed"
-		}
-		return session.ReasonApprovalPending, session.PriorityHigh, ctx
-	case detection.StatusInputRequired:
-		ctx := statusContext
-		if ctx == "" {
-			ctx = "Waiting for explicit user input"
-		}
-		return session.ReasonInputRequired, session.PriorityMedium, ctx
-	case detection.StatusError:
-		ctx := statusContext
-		if ctx == "" {
-			ctx = "Error state detected"
-		}
-		return session.ReasonErrorState, session.PriorityUrgent, ctx
-	default:
-		return "", 0, ""
-	}
-}
-
-// addStartupItem creates a ReviewItem from an instance and adds it to the queue.
-func addStartupItem(queue session.ReviewQueueWriter, inst *session.Instance, reason session.AttentionReason, priority session.Priority, context string) {
-	item := &session.ReviewItem{
-		SessionID:    inst.Title,
-		SessionName:  inst.Title,
-		Reason:       reason,
-		Priority:     priority,
-		DetectedAt:   time.Now(),
-		Context:      context,
-		Program:      inst.Program,
-		Branch:       inst.Branch,
-		Path:         inst.Path,
-		WorkingDir:   inst.WorkingDir,
-		Status:       inst.Status.String(),
-		Tags:         inst.Tags,
-		Category:     inst.Category,
-		DiffStats:    inst.GetDiffStats(),
-		LastActivity: inst.LastMeaningfulOutput,
-	}
-	queue.Add(item)
 }
 
 // syncOrphanedApprovalsToQueue adds review queue items for orphaned (persisted) approvals.
@@ -554,7 +448,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		// Step 7.5: Startup scan and orphaned approval sync
 		// Brief settling delay to allow controllers to initialize their terminal readers.
 		time.Sleep(500 * time.Millisecond)
-		scanSessionsOnStartup(instances, reviewQueue, statusManager)
+		contentProvider := session.NewPollerContentProvider()
+		scanner := session.NewStartupScanner(statusManager, contentProvider)
+		scanner.Scan(instances, reviewQueue)
 		syncOrphanedApprovalsToQueue(svc.ApprovalStore, instances, reviewQueue)
 	}()
 

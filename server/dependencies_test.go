@@ -4,8 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/tstapler/stapler-squad/session"
-	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
@@ -84,61 +82,3 @@ func TestBuildServiceDeps_OnlyCoreNil_DifferentFromPartialCore(t *testing.T) {
 	}
 }
 
-// --- mapDetectedStatus tests ---
-
-func TestMapDetectedStatus_NeedsApproval(t *testing.T) {
-	reason, priority, ctx := mapDetectedStatus(detection.StatusNeedsApproval, "tool use blocked")
-	if reason != session.ReasonApprovalPending {
-		t.Errorf("expected ReasonApprovalPending, got %s", reason)
-	}
-	if priority != session.PriorityHigh {
-		t.Errorf("expected PriorityHigh, got %s", priority)
-	}
-	if ctx != "tool use blocked" {
-		t.Errorf("expected context to be passed through, got %q", ctx)
-	}
-}
-
-func TestMapDetectedStatus_NeedsApproval_DefaultContext(t *testing.T) {
-	reason, _, ctx := mapDetectedStatus(detection.StatusNeedsApproval, "")
-	if reason != session.ReasonApprovalPending {
-		t.Errorf("expected ReasonApprovalPending, got %s", reason)
-	}
-	if ctx == "" {
-		t.Error("expected a non-empty default context string")
-	}
-}
-
-func TestMapDetectedStatus_InputRequired(t *testing.T) {
-	reason, priority, _ := mapDetectedStatus(detection.StatusInputRequired, "")
-	if reason != session.ReasonInputRequired {
-		t.Errorf("expected ReasonInputRequired, got %s", reason)
-	}
-	if priority != session.PriorityMedium {
-		t.Errorf("expected PriorityMedium, got %s", priority)
-	}
-}
-
-func TestMapDetectedStatus_Error(t *testing.T) {
-	reason, priority, _ := mapDetectedStatus(detection.StatusError, "")
-	if reason != session.ReasonErrorState {
-		t.Errorf("expected ReasonErrorState, got %s", reason)
-	}
-	if priority != session.PriorityUrgent {
-		t.Errorf("expected PriorityUrgent, got %s", priority)
-	}
-}
-
-func TestMapDetectedStatus_UnknownReturnsEmpty(t *testing.T) {
-	for _, status := range []detection.DetectedStatus{
-		detection.StatusUnknown,
-		detection.StatusActive,
-		detection.StatusProcessing,
-		detection.StatusSuccess,
-	} {
-		reason, _, _ := mapDetectedStatus(status, "")
-		if reason != "" {
-			t.Errorf("status %v: expected empty reason (no queue action), got %s", status, reason)
-		}
-	}
-}
