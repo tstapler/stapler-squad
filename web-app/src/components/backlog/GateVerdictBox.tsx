@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as styles from "./GateVerdictBox.css";
+import { InlineError } from "./InlineError";
 
 interface GateVerdictBoxProps {
   verdict: "PASS" | "PARTIAL" | "FAIL" | "PENDING";
@@ -15,6 +16,8 @@ interface GateVerdictBoxProps {
   onSkipGate: () => Promise<void>;
   actionPending?: boolean;
 }
+
+const MIN_OVERRIDE_REASON_LENGTH = 5;
 
 const VERDICT_CONFIG = {
   PASS: {
@@ -62,6 +65,7 @@ export function GateVerdictBox({
   const [overrideReason, setOverrideReason] = useState("");
   const [showSkipConfirm, setShowSkipConfirm] = useState(false);
   const [localPending, setLocalPending] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const isPending = localPending || actionPending;
   const config = VERDICT_CONFIG[verdict];
@@ -102,6 +106,9 @@ export function GateVerdictBox({
     setLocalPending(true);
     try {
       await onApprove();
+    } catch (err) {
+      setActionError("Action failed. Please try again.");
+      console.error(err);
     } finally {
       setLocalPending(false);
     }
@@ -111,6 +118,33 @@ export function GateVerdictBox({
     setLocalPending(true);
     try {
       await onReopen();
+    } catch (err) {
+      setActionError("Action failed. Please try again.");
+      console.error(err);
+    } finally {
+      setLocalPending(false);
+    }
+  }
+
+  async function handleOverrideSubmit() {
+    setLocalPending(true);
+    try {
+      await onOverride(overrideReason);
+    } catch (err) {
+      setActionError("Action failed. Please try again.");
+      console.error(err);
+    } finally {
+      setLocalPending(false);
+    }
+  }
+
+  async function handleSkipGateConfirm() {
+    setLocalPending(true);
+    try {
+      await onSkipGate();
+    } catch (err) {
+      setActionError("Action failed. Please try again.");
+      console.error(err);
     } finally {
       setLocalPending(false);
     }
@@ -252,6 +286,15 @@ export function GateVerdictBox({
         )}
       </div>
 
+      {actionError && (
+        <InlineError
+          type="transient"
+          onRetry={() => setActionError(null)}
+          onDismiss={() => setActionError(null)}
+          customMessage={actionError}
+        />
+      )}
+
       {(verdict === "PARTIAL" || verdict === "FAIL") && (
         <div className={styles.overrideSection}>
           <button
@@ -298,16 +341,9 @@ export function GateVerdictBox({
                 </button>
                 <button
                   className={styles.dangerButton}
-                  aria-disabled={overrideReason.trim().length < 5}
-                  disabled={overrideReason.trim().length < 5}
-                  onClick={async () => {
-                    setLocalPending(true);
-                    try {
-                      await onOverride(overrideReason);
-                    } finally {
-                      setLocalPending(false);
-                    }
-                  }}
+                  aria-disabled={overrideReason.trim().length < MIN_OVERRIDE_REASON_LENGTH}
+                  disabled={overrideReason.trim().length < MIN_OVERRIDE_REASON_LENGTH}
+                  onClick={() => void handleOverrideSubmit()}
                 >
                   Mark Done — Override
                 </button>
@@ -342,14 +378,7 @@ export function GateVerdictBox({
             <button
               ref={confirmRef}
               className={styles.dangerButton}
-              onClick={async () => {
-                setLocalPending(true);
-                try {
-                  await onSkipGate();
-                } finally {
-                  setLocalPending(false);
-                }
-              }}
+              onClick={() => void handleSkipGateConfirm()}
             >
               Confirm — Skip Gate
             </button>

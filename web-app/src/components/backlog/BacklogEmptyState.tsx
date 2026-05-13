@@ -63,6 +63,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
   const [priority, setPriority] = useState(3);
   const [submitting, setSubmitting] = useState(false);
   const [titleError, setTitleError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const ctaRef = useRef<HTMLButtonElement>(null);
 
@@ -87,6 +88,9 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
     setSubmitting(true);
     try {
       await onCreateItem({ title: title.trim(), priority });
+    } catch (err) {
+      setSubmitError("Failed to create item. Please try again.");
+      console.error(err);
     } finally {
       setSubmitting(false);
     }
@@ -131,6 +135,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
             onChange={(e) => {
               setTitle(e.target.value);
               if (titleError) setTitleError(null);
+              if (submitError) setSubmitError(null);
             }}
             className={styles.formInput}
             onKeyDown={(e) => {
@@ -176,6 +181,9 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
             {submitting ? "Creating…" : "Create Item"}
           </button>
         </div>
+        {submitError && (
+          <span role="alert" className={styles.validationError}>{submitError}</span>
+        )}
       </div>
     </section>
   );

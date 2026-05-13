@@ -3,6 +3,10 @@
 
 import * as styles from "./TriageLoadingIndicator.css";
 
+const TRIAGE_TIMEOUT_SECONDS = 180;
+const TRIAGE_SLOW_THRESHOLD_SECONDS = 60;
+const ARIA_LABEL_INTERVAL_SECONDS = 30;
+
 interface TriageLoadingIndicatorProps {
   elapsedSeconds: number; // updated externally via setInterval
   context: "item" | "list";
@@ -12,11 +16,11 @@ interface TriageLoadingIndicatorProps {
 
 function getLabel(context: "item" | "list", elapsedSeconds: number): string {
   if (context === "item") {
-    if (elapsedSeconds < 60) return "Thinking about acceptance criteria...";
+    if (elapsedSeconds < TRIAGE_SLOW_THRESHOLD_SECONDS) return "Thinking about acceptance criteria...";
     return "Still thinking — up to 3 min";
   }
   // list / compact context
-  if (elapsedSeconds < 60) return "Thinking...";
+  if (elapsedSeconds < TRIAGE_SLOW_THRESHOLD_SECONDS) return "Thinking...";
   return "Still working — up to 3 min";
 }
 
@@ -26,11 +30,11 @@ export function TriageLoadingIndicator({
   onCancel,
   compact = false,
 }: TriageLoadingIndicatorProps) {
-  if (elapsedSeconds >= 180) {
+  if (elapsedSeconds >= TRIAGE_TIMEOUT_SECONDS) {
     return null;
   }
 
-  const ariaElapsed = Math.floor(elapsedSeconds / 30) * 30;
+  const ariaElapsed = Math.floor(elapsedSeconds / ARIA_LABEL_INTERVAL_SECONDS) * ARIA_LABEL_INTERVAL_SECONDS;
   const ariaLabel = `Triage in progress, ${ariaElapsed} seconds elapsed`;
   const labelText = getLabel(context, elapsedSeconds);
 
