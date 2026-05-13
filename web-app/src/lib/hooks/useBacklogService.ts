@@ -36,6 +36,11 @@ export interface LinkedSession {
   role: string;
   startedAt?: string;
   endedAt?: string;
+  reviewVerdict?: {
+    overallOutcome?: "PASS" | "PARTIAL" | "FAIL" | "PENDING";
+    summary?: string;
+    perCriterion?: Array<{ criterionIndex: number; outcome: string }>;
+  };
 }
 
 export interface BacklogItem {
@@ -55,6 +60,12 @@ export interface BacklogItem {
   notes?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Gate verdict from the most recent item session (if in review status) */
+  gateVerdict?: "PASS" | "PARTIAL" | "FAIL" | "PENDING";
+  gateVerdictSummary?: string;
+  gateCriteria?: Array<{ label: string; passed: boolean }>;
+  /** Triage progress indicator: when item is in "idea" status being triaged */
+  triageStatus?: "running" | "completed" | "failed";
 }
 
 export interface BacklogItemInput {
@@ -88,15 +99,53 @@ function mapAcCriterion(c: AcCriterionProto): AcCriterion {
 }
 
 function mapItemSession(s: ItemSessionProto): LinkedSession {
-  return {
+  const session: LinkedSession = {
     sessionId: s.sessionUuid,
     role: s.sessionRole,
     startedAt: s.startedAt ? new Date(Number(s.startedAt.seconds) * 1000).toISOString() : undefined,
     endedAt: s.endedAt ? new Date(Number(s.endedAt.seconds) * 1000).toISOString() : undefined,
   };
+
+  // Map review verdict if present
+  if (s.reviewVerdict) {
+    const rv = s.reviewVerdict;
+    session.reviewVerdict = {
+      overallOutcome: (rv.overallOutcome as "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "") || "PENDING",
+      summary: rv.summary,
+      perCriterion: (rv.perCriterion ?? []).map((c) => ({
+        criterionIndex: c.criterionIndex,
+        outcome: c.outcome,
+      })),
+    };
+  }
+
+  return session;
 }
 
 function mapBacklogItem(p: BacklogItemProto): BacklogItem {
+  const linkedSessions = (p.itemSessions ?? []).map(mapItemSession);
+
+  // Extract gate verdict from the most recent session (for review status)
+  let gateVerdict: "PASS" | "PARTIAL" | "FAIL" | "PENDING" | undefined;
+  let gateVerdictSummary: string | undefined;
+  let gateCriteria: Array<{ label: string; passed: boolean }> | undefined;
+
+  if (linkedSessions.length > 0) {
+    const mostRecentSession = linkedSessions[linkedSessions.length - 1];
+    if (mostRecentSession.reviewVerdict?.overallOutcome) {
+      gateVerdict = mostRecentSession.reviewVerdict.overallOutcome;
+      gateVerdictSummary = mostRecentSession.reviewVerdict.summary;
+
+      // Map per-criterion verdicts to criteria with pass/fail
+      if (mostRecentSession.reviewVerdict.perCriterion?.length) {
+        gateCriteria = mostRecentSession.reviewVerdict.perCriterion.map((c) => ({
+          label: `Criterion ${c.criterionIndex}: ${c.outcome}`,
+          passed: c.outcome === "PASS" || c.outcome === "pass",
+        }));
+      }
+    }
+  }
+
   return {
     id: p.id,
     title: p.title,
@@ -109,10 +158,13 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     planApproved: p.planApproved,
     planArtifactsPath: p.planArtifactsPath || undefined,
     acCriteria: (p.acceptanceCriteria ?? []).map(mapAcCriterion),
-    linkedSessions: (p.itemSessions ?? []).map(mapItemSession),
+    linkedSessions,
     notes: p.notes || undefined,
     createdAt: p.createdAt ? new Date(Number(p.createdAt.seconds) * 1000).toISOString() : undefined,
     updatedAt: p.updatedAt ? new Date(Number(p.updatedAt.seconds) * 1000).toISOString() : undefined,
+    gateVerdict,
+    gateVerdictSummary,
+    gateCriteria,
   };
 }
 

@@ -5,6 +5,8 @@ import { useState, useEffect, useCallback } from "react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { AcCriteriaList } from "./AcCriteriaList";
+import { GateVerdictBox } from "./GateVerdictBox";
+import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemDetail.css";
 
 interface BacklogItemDetailProps {
@@ -54,6 +56,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   const [editingNotes, setEditingNotes] = useState(false);
   const [notesValue, setNotesValue] = useState("");
 
+  // Triage progress tracking
+  const [triageElapsedSeconds, setTriageElapsedSeconds] = useState(0);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -75,6 +80,26 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Track triage progress: increment elapsed time while triageStatus === "running"
+  useEffect(() => {
+    if (item?.triageStatus !== "running") {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      setTriageElapsedSeconds((prev) => prev + 1);
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [item?.triageStatus]);
+
+  // Reset triage timer when status changes away from triage
+  useEffect(() => {
+    if (item?.triageStatus !== "running") {
+      setTriageElapsedSeconds(0);
+    }
+  }, [item?.triageStatus]);
 
   const handleAction = useCallback(
     async (action: string) => {
@@ -130,6 +155,59 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setActionLoading(false);
     }
   }, [item, notesValue, service]);
+
+  const handleCancelTriage = useCallback(async () => {
+    // TODO: implement cancel triage RPC call (if backend supports it)
+    // For now, just reload the item to reflect the current state
+    await load();
+  }, [load]);
+
+  const handleGateApprove = useCallback(async () => {
+    if (!item) return;
+    setActionLoading(true);
+    try {
+      await service.transitionStatus(item.id, "done");
+      await load();
+    } finally {
+      setActionLoading(false);
+    }
+  }, [item, service, load]);
+
+  const handleGateReopen = useCallback(async () => {
+    if (!item) return;
+    setActionLoading(true);
+    try {
+      await service.transitionStatus(item.id, "in_progress");
+      await load();
+    } finally {
+      setActionLoading(false);
+    }
+  }, [item, service, load]);
+
+  const handleGateOverride = useCallback(
+    async (reason: string) => {
+      if (!item) return;
+      setActionLoading(true);
+      try {
+        await service.overrideVerdict(item.id, reason, "done");
+        await load();
+      } finally {
+        setActionLoading(false);
+      }
+    },
+    [item, service, load]
+  );
+
+  const handleGateSkip = useCallback(async () => {
+    if (!item) return;
+    setActionLoading(true);
+    try {
+      await service.transitionStatus(item.id, "done");
+      await load();
+    } finally {
+      setActionLoading(false);
+    }
+  }, [item, service, load]);
 
   if (loading) {
     return (
@@ -204,6 +282,35 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             )}
           </div>
         </div>
+
+        {/* Triage Progress Indicator */}
+        {item.status === "idea" && item.triageStatus === "running" && (
+          <div className={styles.section}>
+            <TriageLoadingIndicator
+              elapsedSeconds={triageElapsedSeconds}
+              context="item"
+              onCancel={handleCancelTriage}
+              compact={false}
+            />
+          </div>
+        )}
+
+        {/* Gate Verdict */}
+        {item.status === "review" && item.gateVerdict && (
+          <div className={styles.section}>
+            <GateVerdictBox
+              verdict={item.gateVerdict}
+              summary={item.gateVerdictSummary || "Review in progress"}
+              criteria={item.gateCriteria}
+              elapsedSeconds={undefined}
+              onApprove={handleGateApprove}
+              onReopen={handleGateReopen}
+              onOverride={handleGateOverride}
+              onSkipGate={handleGateSkip}
+              actionPending={actionLoading}
+            />
+          </div>
+        )}
 
         {/* Description */}
         <div className={styles.section}>

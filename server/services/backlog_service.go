@@ -39,25 +39,16 @@ type BacklogService struct {
 	cfg            *config.Config
 }
 
-// NewBacklogService creates a BacklogService backed by Storage.
-// cfg may be nil; when non-nil, tokens are encrypted before storage.
-func NewBacklogService(storage *session.Storage) *BacklogService {
-	return &BacklogService{storage: storage, sourceBackend: storage}
-}
-
-// NewBacklogServiceWithConfig creates a BacklogService with encryption support.
-func NewBacklogServiceWithConfig(storage *session.Storage, cfg *config.Config) *BacklogService {
-	return &BacklogService{storage: storage, sourceBackend: storage, cfg: cfg}
-}
-
-// NewBacklogServiceWithCreator creates a BacklogService with session spawning capability.
-func NewBacklogServiceWithCreator(storage *session.Storage, creator SessionCreator) *BacklogService {
-	return &BacklogService{storage: storage, sourceBackend: storage, sessionCreator: creator}
-}
-
-// NewBacklogServiceWithCreatorAndConfig creates a BacklogService with session spawning and encryption.
-func NewBacklogServiceWithCreatorAndConfig(storage *session.Storage, creator SessionCreator, cfg *config.Config) *BacklogService {
-	return &BacklogService{storage: storage, sourceBackend: storage, sessionCreator: creator, cfg: cfg}
+// NewBacklogService creates a BacklogService with all optional dependencies.
+// storage and sourceBackend are typically the same (*session.Storage).
+// sessionCreator and cfg may be nil; handlers degrade gracefully when absent.
+func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config) *BacklogService {
+	return &BacklogService{
+		storage:        storage,
+		sourceBackend:  storage,
+		sessionCreator: creator,
+		cfg:            cfg,
+	}
 }
 
 // slugify converts s to a lowercase hyphen-delimited slug safe for file paths.

@@ -14,11 +14,11 @@ import (
 
 func newBacklogService(t *testing.T) *BacklogService {
 	t.Helper()
-	return NewBacklogService(createTestStorage(t))
+	return NewBacklogService(createTestStorage(t), nil, nil)
 }
 
 func newBacklogServiceNilStorage() *BacklogService {
-	return NewBacklogService(nil)
+	return NewBacklogService(nil, nil, nil)
 }
 
 // ─── CreateBacklogItem ────────────────────────────────────────────────────────
@@ -145,7 +145,7 @@ func TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition(t *testi
 // UT-032b: ApprovePlan happy path — sets plan_approved=true and plan_approved_at
 func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	storage := createTestStorage(t)
-	svc := NewBacklogService(storage)
+	svc := NewBacklogService(storage, nil, nil)
 
 	// Create item.
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{

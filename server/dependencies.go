@@ -635,13 +635,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 	go syncLoop.Start(context.Background())
 
-	// Create BacklogService with encryption support if config is available.
-	var backlogSvc *services.BacklogService
-	if cfg != nil {
-		backlogSvc = services.NewBacklogServiceWithConfig(storage, cfg)
-	} else {
-		backlogSvc = services.NewBacklogService(storage)
-	}
+	// Create BacklogService with optional config for encryption support.
+	backlogSvc := services.NewBacklogService(storage, nil, cfg)
 
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
