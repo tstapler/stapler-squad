@@ -65,6 +65,13 @@ if ! ./tools/scanner/backend/cmd/scanner \
   echo "ERROR: backend scanner failed (unfinished.proto)" >&2
   exit 2
 fi
+if ! ./tools/scanner/backend/cmd/scanner \
+      proto/session/v1/backlog.proto \
+      server/services/ \
+      "${TEMP_BACKEND}" 2>&1; then
+  echo "ERROR: backend scanner failed (backlog.proto)" >&2
+  exit 2
+fi
 
 list_ids() {
   local dir="$1"

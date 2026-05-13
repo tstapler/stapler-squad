@@ -4,9 +4,9 @@
   "service": "BacklogService",
   "method": "TransitionBacklogItemStatus",
   "protoFile": "proto/session/v1/backlog.proto",
-  "markerFound": false,
+  "markerFound": true,
   "handlerFile": "server/services/backlog_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "lastModified": "2026-05-11T22:40:57.735739889-07:00"
 }

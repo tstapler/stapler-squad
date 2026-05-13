@@ -184,6 +184,7 @@ func acCriteriaToJSON(protoAC []*sessionv1.AcCriterion) (string, error) {
 // --- CreateBacklogItem ---
 
 // CreateBacklogItem adds a new item to the backlog.
+// +api: backlog:create-item
 func (s *BacklogService) CreateBacklogItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateBacklogItemRequest],
@@ -230,6 +231,7 @@ func (s *BacklogService) CreateBacklogItem(
 // --- GetBacklogItem ---
 
 // GetBacklogItem retrieves a single backlog item by ID.
+// +api: backlog:get-item
 func (s *BacklogService) GetBacklogItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetBacklogItemRequest],
@@ -254,6 +256,7 @@ func (s *BacklogService) GetBacklogItem(
 // --- ListBacklogItems ---
 
 // ListBacklogItems returns backlog items with optional filtering and sorting.
+// +api: backlog:list-items
 func (s *BacklogService) ListBacklogItems(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListBacklogItemsRequest],
@@ -296,6 +299,7 @@ func (s *BacklogService) ListBacklogItems(
 // --- UpdateBacklogItem ---
 
 // UpdateBacklogItem modifies the properties of an existing backlog item.
+// +api: backlog:update-item
 func (s *BacklogService) UpdateBacklogItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateBacklogItemRequest],
@@ -368,6 +372,7 @@ func (s *BacklogService) UpdateBacklogItem(
 // --- ArchiveBacklogItem ---
 
 // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
+// +api: backlog:archive-item
 func (s *BacklogService) ArchiveBacklogItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ArchiveBacklogItemRequest],
@@ -392,6 +397,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 // --- TransitionBacklogItemStatus ---
 
 // TransitionBacklogItemStatus moves an item through the status state machine.
+// +api: backlog:transition-status
 func (s *BacklogService) TransitionBacklogItemStatus(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TransitionBacklogItemStatusRequest],
@@ -461,6 +467,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 // --- ApprovePlan ---
 
 // ApprovePlan marks the planning artifacts for an item as approved.
+// +api: backlog:approve-plan
 func (s *BacklogService) ApprovePlan(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ApprovePlanRequest],
@@ -502,6 +509,7 @@ func (s *BacklogService) ApprovePlan(
 // --- ItemSource handlers ---
 
 // CreateItemSource registers a new external plugin source.
+// +api: backlog:create-source
 func (s *BacklogService) CreateItemSource(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateItemSourceRequest],
@@ -566,6 +574,7 @@ func (s *BacklogService) CreateItemSource(
 }
 
 // ListItemSources returns all registered external item sources.
+// +api: backlog:list-sources
 func (s *BacklogService) ListItemSources(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListItemSourcesRequest],
@@ -590,6 +599,7 @@ func (s *BacklogService) ListItemSources(
 }
 
 // UpdateItemSource modifies configuration for an existing item source.
+// +api: backlog:update-source
 func (s *BacklogService) UpdateItemSource(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateItemSourceRequest],
@@ -639,6 +649,7 @@ func (s *BacklogService) UpdateItemSource(
 }
 
 // DeleteItemSource removes an external item source registration.
+// +api: backlog:delete-source
 func (s *BacklogService) DeleteItemSource(
 	ctx context.Context,
 	req *connect.Request[sessionv1.DeleteItemSourceRequest],
@@ -660,6 +671,7 @@ func (s *BacklogService) DeleteItemSource(
 // --- Session-linked handlers ---
 
 // SpawnSessionFromItem creates a new AI agent session for a backlog item.
+// +api: backlog:spawn-session
 func (s *BacklogService) SpawnSessionFromItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.SpawnSessionFromItemRequest],
@@ -785,6 +797,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 }
 
 // AttachSessionToItem links an existing session to a backlog item.
+// +api: backlog:attach-session
 func (s *BacklogService) AttachSessionToItem(
 	ctx context.Context,
 	req *connect.Request[sessionv1.AttachSessionToItemRequest],
@@ -872,6 +885,7 @@ func (s *BacklogService) AttachSessionToItem(
 }
 
 // TriggerTriage kicks off a triage planning session for a backlog item.
+// +api: backlog:trigger-triage
 func (s *BacklogService) TriggerTriage(
 	ctx context.Context,
 	req *connect.Request[sessionv1.TriggerTriageRequest],
@@ -999,6 +1013,7 @@ Do not modify any source code. Only write planning documents.
 }
 
 // SuggestNextItem recommends the highest-priority ready backlog item.
+// +api: backlog:suggest-next
 func (s *BacklogService) SuggestNextItem(
 	ctx context.Context,
 	_ *connect.Request[sessionv1.SuggestNextItemRequest],
@@ -1036,6 +1051,7 @@ func (s *BacklogService) SuggestNextItem(
 }
 
 // OverrideVerdict manually overrides a review verdict for an item session.
+// +api: backlog:override-verdict
 func (s *BacklogService) OverrideVerdict(
 	ctx context.Context,
 	req *connect.Request[sessionv1.OverrideVerdictRequest],
@@ -1112,6 +1128,7 @@ func (s *BacklogService) OverrideVerdict(
 }
 
 // TriggerReReview re-runs the review gate for a backlog item.
+// +api: backlog:trigger-re-review
 func (s *BacklogService) TriggerReReview(
 	_ context.Context,
 	_ *connect.Request[sessionv1.TriggerReReviewRequest],
@@ -1120,6 +1137,7 @@ func (s *BacklogService) TriggerReReview(
 }
 
 // TriggerSync initiates a sync run for an external item source.
+// +api: backlog:trigger-sync
 func (s *BacklogService) TriggerSync(
 	_ context.Context,
 	_ *connect.Request[sessionv1.TriggerSyncRequest],
@@ -1128,6 +1146,7 @@ func (s *BacklogService) TriggerSync(
 }
 
 // GetSyncHistory returns the sync event history for an item source.
+// +api: backlog:get-sync-history
 func (s *BacklogService) GetSyncHistory(
 	_ context.Context,
 	_ *connect.Request[sessionv1.GetSyncHistoryRequest],

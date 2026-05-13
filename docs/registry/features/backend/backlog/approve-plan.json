@@ -4,12 +4,12 @@
   "service": "BacklogService",
   "method": "ApprovePlan",
   "protoFile": "proto/session/v1/backlog.proto",
-  "markerFound": false,
+  "markerFound": true,
   "handlerFile": "server/services/backlog_service.go",
   "tested": true,
   "testIds": [
     "TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
     "TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp"
   ],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "lastModified": "2026-05-11T22:40:57.735739889-07:00"
 }

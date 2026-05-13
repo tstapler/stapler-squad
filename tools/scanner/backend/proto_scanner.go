@@ -115,6 +115,26 @@ var methodToID = map[string]string{
 	"QuickCommitPush":            "unfinished:commit-push",
 	"GetUnfinishedWorkConfig":    "unfinished:get-config",
 	"UpdateUnfinishedWorkConfig": "unfinished:update-config",
+	// Backlog RPCs (BacklogService in backlog.proto)
+	"CreateBacklogItem":           "backlog:create-item",
+	"GetBacklogItem":              "backlog:get-item",
+	"ListBacklogItems":            "backlog:list-items",
+	"UpdateBacklogItem":           "backlog:update-item",
+	"ArchiveBacklogItem":          "backlog:archive-item",
+	"TransitionBacklogItemStatus": "backlog:transition-status",
+	"SpawnSessionFromItem":        "backlog:spawn-session",
+	"AttachSessionToItem":         "backlog:attach-session",
+	"TriggerTriage":               "backlog:trigger-triage",
+	"ApprovePlan":                 "backlog:approve-plan",
+	"SuggestNextItem":             "backlog:suggest-next",
+	"OverrideVerdict":             "backlog:override-verdict",
+	"TriggerReReview":             "backlog:trigger-re-review",
+	"TriggerSync":                 "backlog:trigger-sync",
+	"CreateItemSource":            "backlog:create-source",
+	"ListItemSources":             "backlog:list-sources",
+	"UpdateItemSource":            "backlog:update-source",
+	"DeleteItemSource":            "backlog:delete-source",
+	"GetSyncHistory":              "backlog:get-sync-history",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
