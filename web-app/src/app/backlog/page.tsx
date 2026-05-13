@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { AppLink } from "@/components/ui/AppLink";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { BacklogItemForm } from "@/components/backlog/BacklogItemForm";
+import { BacklogEmptyState, FilterZeroState, FooterNudge } from "@/components/backlog/BacklogEmptyState";
 import {
   useBacklogService,
   type BacklogItem,
@@ -296,17 +297,10 @@ function BacklogPageInner() {
             <div role="status" aria-label="Loading backlog items" style={{ padding: "32px", textAlign: "center", color: "inherit", opacity: 0.6 }}>
               Loading…
             </div>
+          ) : sortedItems.length === 0 && items.length === 0 ? (
+            <BacklogEmptyState onCreateItem={handleCreateItem} />
           ) : sortedItems.length === 0 ? (
-            <div className={styles.emptyState} data-testid="backlog-empty-state">
-              <p className={styles.emptyTitle}>Your backlog is empty.</p>
-              <p className={styles.emptySubtitle}>Create your first item to get started.</p>
-              <button
-                className={styles.emptyActionButton}
-                onClick={() => setShowForm(true)}
-              >
-                + Create Item
-              </button>
-            </div>
+            <FilterZeroState onClearFilters={() => { setStatusFilter([]); setPriorityFilter([]); setSearch(""); }} />
           ) : (
             <table className={styles.table} aria-label="Backlog items">
               <thead className={styles.tableHead}>
@@ -406,6 +400,7 @@ function BacklogPageInner() {
               </tbody>
             </table>
           )}
+          {items.length > 0 && !items.some((i) => i.status === "in_progress") && <FooterNudge />}
         </div>
 
         {/* Detail pane */}
