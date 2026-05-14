@@ -21,6 +21,7 @@ export function Navigation() {
   const navItems = [
     { href: routes.home, label: "Sessions" },
     { href: routes.reviewQueue, label: "Review Queue" },
+    { href: routes.backlog, label: "Backlog" },
   ];
 
   return (

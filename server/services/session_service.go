@@ -404,6 +404,48 @@ func (s *SessionService) SetMCPServerURL(url string) {
 	s.mcpServerURL = url
 }
 
+// SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
+// BacklogLifecycleListener can spawn one-shot review sessions automatically when
+// a work session exits. The session is tagged "backlog:review" and runs one-shot.
+func (s *SessionService) SpawnReviewSession(ctx context.Context, item *ent.BacklogItem, itemSessionID string, prompt string) (*session.Instance, error) {
+	return s.CreateDirectorySession(ctx, "review:"+item.ID.String()[:8], item.RepoPath, prompt, []string{"backlog:review"}, true)
+}
+
+// CreateDirectorySession satisfies the services.SessionCreator interface so that
+// BacklogService can spawn sessions without importing SessionService directly.
+// It creates a directory-type session with the given title, path, system prompt,
+// tags, and oneShot flag, wires it into the live poller, and returns the Instance.
+func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, appendSystemPrompt string, tags []string, oneShot bool) (*session.Instance, error) {
+	opts := session.InstanceOptions{
+		Title:              title,
+		Path:               path,
+		SessionType:        session.SessionTypeDirectory,
+		AppendSystemPrompt: appendSystemPrompt,
+		Tags:               tags,
+		OneShot:            oneShot,
+		MCPServerURL:       s.mcpServerURL,
+		CreateIfMissing:    true,
+	}
+	instance, err := session.NewInstance(opts)
+	if err != nil {
+		return nil, fmt.Errorf("CreateDirectorySession: %w", err)
+	}
+	if err := instance.Start(true); err != nil {
+		return nil, fmt.Errorf("CreateDirectorySession start: %w", err)
+	}
+	s.wireRateLimitCallbacks(instance)
+	s.wireStatusChangeCallback(instance)
+	if err := s.storage.AddInstance(instance); err != nil {
+		_ = instance.Destroy()
+		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
+	}
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.AddInstance(instance)
+	}
+	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
+	return instance, nil
+}
+
 // SetHistoryLinker wires the HistoryLinker so deleted sessions are also removed
 // from it and cannot be re-persisted by the shutdown hook.
 func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {

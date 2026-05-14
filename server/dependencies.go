@@ -377,7 +377,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	// Backlog lifecycle listener — wired per-instance below.
-	backlogLifecycleListener := session.NewBacklogLifecycleListener(storage)
+	// Use WithSpawner so the review gate fires automatically when a work session exits.
+	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithSpawner(storage, sessionService)
 
 	// Step 5 (continued): wire dependencies to each instance
 	// inst.SetReviewQueue and inst.SetStatusManager are called per-instance in a loop;
@@ -635,8 +636,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 	go syncLoop.Start(context.Background())
 
-	// Create BacklogService with optional config for encryption support.
-	backlogSvc := services.NewBacklogService(storage, nil, cfg)
+	// Create BacklogService — wire sessionService as the SessionCreator so
+	// SpawnSessionFromItem, TriggerTriage, and TriggerReReview can spawn real sessions.
+	backlogSvc := services.NewBacklogService(storage, sessionService, cfg)
 
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
