@@ -92,7 +92,7 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 	}
 
 	// Recursion guard: only drive transitions for work sessions.
-	if is.SessionRole != "work" {
+	if is.SessionRole != SessionRoleWork {
 		return
 	}
 
@@ -141,6 +141,12 @@ func (l *BacklogLifecycleListener) onSessionExited(sessionUUID string) {
 func (l *BacklogLifecycleListener) spawnReviewGate(item *ent.BacklogItem, is *ent.ItemSession) {
 	ctx := context.Background()
 
+	// Precondition: repo_path must be set or we have nothing to review.
+	if item.RepoPath == "" {
+		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate item=%s has no repo path set; skipping review gate", item.ID)
+		return
+	}
+
 	// Get the git diff.
 	worktreePath := item.RepoPath
 	diff, truncated, diffErr := GetGitDiff(ctx, worktreePath, is.LastCommitSha)
@@ -156,7 +162,7 @@ func (l *BacklogLifecycleListener) spawnReviewGate(item *ent.BacklogItem, is *en
 		_, createErr := l.storage.CreateItemSession(ctx, ItemSessionData{
 			ItemID:      item.ID.String(),
 			SessionUUID: "review-blocked-" + item.ID.String(),
-			SessionRole: "review",
+			SessionRole: SessionRoleReview,
 		})
 		if createErr != nil {
 			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession (security block) item=%s: %v", item.ID, createErr)
@@ -188,7 +194,7 @@ func (l *BacklogLifecycleListener) spawnReviewGate(item *ent.BacklogItem, is *en
 	if _, createErr := l.storage.CreateItemSession(ctx, ItemSessionData{
 		ItemID:      item.ID.String(),
 		SessionUUID: reviewInst.UUID,
-		SessionRole: "review",
+		SessionRole: SessionRoleReview,
 		AcSnapshot:  is.AcSnapshot,
 	}); createErr != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession item=%s review=%s: %v", item.ID, reviewInst.UUID, createErr)

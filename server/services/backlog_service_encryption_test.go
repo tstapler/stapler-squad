@@ -222,6 +222,63 @@ func TestCreateItemSourceWithoutConfigDoesNotEncrypt(t *testing.T) {
 	}
 }
 
+// TestCreateItemSourceEncryptionRoundTrip verifies the full store-and-retrieve cycle:
+// a token stored via CreateItemSource can be decrypted back to the original plaintext.
+func TestCreateItemSourceEncryptionRoundTrip(t *testing.T) {
+	cfg := &config.Config{}
+	key, err := cfg.GetOrCreateEncryptionKey()
+	if err != nil {
+		t.Fatalf("GetOrCreateEncryptionKey: %v", err)
+	}
+
+	storage := &testStorageRecorder{}
+	svc := newTestEncryptionService(storage, cfg)
+
+	originalToken := "ghp_roundtrip_secret_abc123"
+
+	req := &connect.Request[sessionv1.CreateItemSourceRequest]{
+		Msg: &sessionv1.CreateItemSourceRequest{
+			PluginId:    "github_issues",
+			DisplayName: "Round-trip Test",
+			Token:       originalToken,
+			ConfigJson:  `{"owner":"testorg","repo":"testrepo"}`,
+		},
+	}
+
+	_, err = svc.CreateItemSource(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CreateItemSource: %v", err)
+	}
+
+	// Retrieve the stored record.
+	stored, ok := storage.createdData["github_issues"]
+	if !ok {
+		t.Fatal("no item source was stored")
+	}
+
+	// Parse stored config.
+	var cfgData map[string]interface{}
+	if err := json.Unmarshal([]byte(stored.Config), &cfgData); err != nil {
+		t.Fatalf("parse stored config: %v", err)
+	}
+
+	// Extract the encrypted token.
+	tokenStr, ok := cfgData["token"].(string)
+	if !ok {
+		t.Fatal("token field missing or not a string")
+	}
+
+	// Decrypt the token using the same key and verify it matches the original.
+	decrypted, err := session.DecryptToken(key, tokenStr)
+	if err != nil {
+		t.Fatalf("decrypt stored token: %v", err)
+	}
+
+	if decrypted != originalToken {
+		t.Errorf("round-trip decrypted token %q does not match original %q", decrypted, originalToken)
+	}
+}
+
 // TestSyncLoopDecryptsToken verifies SyncLoop decrypts tokens before passing to plugins
 func TestSyncLoopDecryptsToken(t *testing.T) {
 	// Generate encryption key

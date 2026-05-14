@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +10,16 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
+
+// waitWithTimeout waits for the done channel to be closed or fails the test after 2 seconds.
+func waitWithTimeout(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for goroutine to complete")
+	}
+}
 
 // TestBacklogLifecycleListener_OnSessionStarted verifies that when a session UUID
 // maps to an ItemSession, UpdateItemSessionStarted is called. When session UUID
@@ -45,11 +56,19 @@ func TestBacklogLifecycleListener_OnSessionStarted(t *testing.T) {
 	// Create the BacklogLifecycleListener and call onSessionStarted.
 	listener := NewBacklogLifecycleListener(storage)
 
-	// Call the private method directly (we're in the same package).
-	listener.onSessionStarted(sessionUUID)
-
-	// Wait for the goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	// Use a WaitGroup to synchronize with the goroutine spawned by onSessionStarted.
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		listener.onSessionStarted(sessionUUID)
+	}()
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	waitWithTimeout(t, done)
 
 	// Verify that UpdateItemSessionStarted was called by checking StartedAt is set.
 	repo := storage.repo.(*EntRepository)
@@ -68,10 +87,12 @@ func TestBacklogLifecycleListener_OnSessionStarted_NotFound(t *testing.T) {
 
 	// Call onSessionStarted with a non-existent UUID. This should not panic or error.
 	nonExistentUUID := uuid.New().String()
-	listener.onSessionStarted(nonExistentUUID)
-
-	// Wait for the goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionStarted(nonExistentUUID)
+	}()
+	waitWithTimeout(t, done)
 
 	// If we reach here without panic, the test passes.
 	// The method silently returns on ErrNotFound, so there's no observable state change.
@@ -112,10 +133,12 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToRevie
 
 	// Create the BacklogLifecycleListener and call onSessionExited.
 	listener := NewBacklogLifecycleListener(storage)
-	listener.onSessionExited(sessionUUID)
-
-	// Wait for the goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
 
 	// Verify that the item transitioned to review.
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -163,10 +186,12 @@ func TestBacklogLifecycleListener_OnSessionExited_WorkSession_TransitionsToDone_
 
 	// Create the BacklogLifecycleListener and call onSessionExited.
 	listener := NewBacklogLifecycleListener(storage)
-	listener.onSessionExited(sessionUUID)
-
-	// Wait for the goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
 
 	// Verify that the item transitioned to done (not review).
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -214,10 +239,12 @@ func TestBacklogLifecycleListener_OnSessionExited_ReviewSession_NoTransition(t *
 
 	// Create the BacklogLifecycleListener and call onSessionExited.
 	listener := NewBacklogLifecycleListener(storage)
-	listener.onSessionExited(sessionUUID)
-
-	// Wait for the goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
 
 	// Verify that the item status did NOT change (still in_progress).
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -241,10 +268,12 @@ func TestBacklogLifecycleListener_OnSessionExited_NotFound_NoError(t *testing.T)
 
 	// Call onSessionExited with a non-existent UUID. This should not panic or error.
 	nonExistentUUID := uuid.New().String()
-	listener.onSessionExited(nonExistentUUID)
-
-	// Wait for the goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(nonExistentUUID)
+	}()
+	waitWithTimeout(t, done)
 
 	// If we reach here without panic, the test passes.
 }
@@ -283,10 +312,12 @@ func TestBacklogLifecycleListener_OnSessionExited_ItemNotInProgress_NoTransition
 
 	// Create the BacklogLifecycleListener and call onSessionExited.
 	listener := NewBacklogLifecycleListener(storage)
-	listener.onSessionExited(sessionUUID)
-
-	// Wait for the goroutine to complete.
-	time.Sleep(100 * time.Millisecond)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		listener.onSessionExited(sessionUUID)
+	}()
+	waitWithTimeout(t, done)
 
 	// Verify that the item status did NOT change (still review).
 	fetchedItem, err := storage.GetBacklogItem(ctx, createdItem.ID)
@@ -301,26 +332,64 @@ func TestBacklogLifecycleListener_OnSessionExited_ItemNotInProgress_NoTransition
 }
 
 // TestBacklogLifecycleListener_WireToInstance verifies that WireToInstance correctly
-// registers a per-instance listener shim.
+// registers a per-instance listener shim that fires on lifecycle events.
 func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	storage, cleanup := createTestStorage(t)
 	defer cleanup()
 
+	ctx := context.Background()
+
 	listener := NewBacklogLifecycleListener(storage)
 
-	// We can't test the full integration without a real Instance (which requires tmux),
-	// but we can verify that the shim is created and registered. Since we can't easily
-	// check the registered listener list without accessing unexported fields, we verify
-	// the method completes without error.
-	//
-	// In a real integration test, one would:
-	// 1. Create a real Instance
-	// 2. Call WireToInstance(inst)
-	// 3. Trigger lifecycle events by starting/exiting the session
-	// 4. Verify backlog item status transitions
+	// Create a minimal Instance with a known UUID (without starting tmux).
+	inst := &Instance{
+		UUID: uuid.New().String(),
+	}
 
-	// For now, this is a smoke test that the API doesn't panic.
-	require.NotNil(t, listener)
+	// Wire the listener to the instance.
+	listener.WireToInstance(inst)
+
+	// Verify a listener was registered by checking the slice length.
+	inst.lifecycleListenersMu.Lock()
+	count := len(inst.lifecycleListeners)
+	inst.lifecycleListenersMu.Unlock()
+	require.Equal(t, 1, count, "WireToInstance should register exactly one lifecycle listener")
+
+	// Create a BacklogItem and ItemSession linked to inst.UUID so that
+	// firing EventStarted updates the session's StartedAt.
+	itemData := BacklogItemData{
+		Title:              "WireToInstance test item",
+		Description:        "Testing wire",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	isData := ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: "work",
+	}
+	createdIS, err := storage.CreateItemSession(ctx, isData)
+	require.NoError(t, err)
+
+	// Fire EventStarted through the registered shim. The shim dispatches to a goroutine.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		inst.fireLifecycleEvent(EventStarted, "")
+	}()
+	waitWithTimeout(t, done)
+
+	// Allow the goroutine inside onSessionStarted to complete.
+	// Since the shim spawns its own goroutine, we poll briefly.
+	require.Eventually(t, func() bool {
+		repo := storage.repo.(*EntRepository)
+		fetchedIS, ferr := repo.GetItemSession(ctx, createdIS.ID.String())
+		return ferr == nil && fetchedIS.StartedAt != nil
+	}, 2*time.Second, 20*time.Millisecond, "EventStarted should trigger UpdateItemSessionStarted")
 }
 
 // TestBacklogLifecycleListener_NewBacklogLifecycleListener creates a listener

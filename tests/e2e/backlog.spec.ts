@@ -17,10 +17,12 @@ test.describe('Backlog', () => {
       // Verify page title
       await expect(page).toHaveTitle(/Stapler Squad/);
 
-      // Check if backlog is empty, if not skip this test (pre-seeded data may exist)
+      // Check if backlog is empty. Fail loudly if items exist — the test environment
+      // must be clean for empty-state tests to be meaningful.
       const tableRows = await backlogPage.getTableRows().count();
       if (tableRows > 0) {
-        test.skip();
+        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s). Clear the backlog before running this test.`);
+        return;
       }
 
       // Verify empty state is visible
@@ -47,10 +49,11 @@ test.describe('Backlog', () => {
     test('e2e:backlog-empty-form-opens - Clicking CTA button reveals inline form', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
-      // Check if backlog is empty
+      // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
       if (tableRows > 0) {
-        test.skip();
+        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s).`);
+        return;
       }
 
       // Verify form is not initially visible
@@ -82,10 +85,11 @@ test.describe('Backlog', () => {
     test('e2e:backlog-empty-form-cancel - Clicking cancel hides form', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
-      // Check if backlog is empty
+      // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
       if (tableRows > 0) {
-        test.skip();
+        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s).`);
+        return;
       }
 
       // Open form
@@ -107,10 +111,11 @@ test.describe('Backlog', () => {
     test('e2e:backlog-empty-form-submit - Form requires title; submit button disabled when empty', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
-      // Check if backlog is empty
+      // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
       if (tableRows > 0) {
-        test.skip();
+        test.fail(true, `Empty-state test requires a clean backlog, but found ${tableRows} item(s).`);
+        return;
       }
 
       // Open form
@@ -132,10 +137,11 @@ test.describe('Backlog', () => {
     test('e2e:backlog-create-item - Creating first item via empty state form', async ({ page }) => {
       const backlogPage = new BacklogPage(page);
 
-      // Check if backlog is empty
+      // Check if backlog is empty. Fail loudly so the environment issue is surfaced.
       const tableRows = await backlogPage.getTableRows().count();
       if (tableRows > 0) {
-        test.skip();
+        test.fail(true, `This test requires a clean backlog, but found ${tableRows} item(s).`);
+        return;
       }
 
       const itemTitle = `Test Item ${Date.now()}`;
@@ -179,7 +185,8 @@ test.describe('Backlog', () => {
 
       const tableRows = await backlogPage.getTableRows().count();
       if (tableRows > 0) {
-        test.skip();
+        test.fail(true, `This test requires a clean backlog, but found ${tableRows} item(s).`);
+        return;
       }
 
       const itemTitle = `Test Item Priority ${Date.now()}`;
@@ -197,7 +204,7 @@ test.describe('Backlog', () => {
       await expect(itemRow.first()).toBeVisible();
 
       // Verify priority badge shows P3
-      const priorityBadge = itemRow.first().locator('[class*="priorityBadge"]');
+      const priorityBadge = itemRow.first().locator('[data-testid="priority-badge"]');
       const priorityText = await priorityBadge.textContent();
       expect(priorityText?.trim()).toMatch(/P3/);
     });
@@ -217,7 +224,7 @@ test.describe('Backlog', () => {
 
       // Apply a filter that should have no matches (if all items are P1, filter for P5)
       // First, let's check what priorities exist
-      const priorityBadges = await page.locator('[class*="priorityBadge"]').allTextContents();
+      const priorityBadges = await page.locator('[data-testid="priority-badge"]').allTextContents();
       const existingPriorities = new Set(priorityBadges);
 
       let targetPriority: number | null = null;
@@ -236,8 +243,8 @@ test.describe('Backlog', () => {
       // Apply filter for non-existent priority
       await backlogPage.applyPriorityFilter(targetPriority!);
 
-      // Wait for filter to apply
-      await page.waitForTimeout(500);
+      // Wait for filter zero state to appear (replaces waitForTimeout).
+      await expect(backlogPage.filterZeroState).toBeVisible();
 
       // Verify filter zero state appears
       await expect(backlogPage.filterZeroState).toBeVisible();
@@ -263,17 +270,14 @@ test.describe('Backlog', () => {
       // Apply a status filter
       await backlogPage.applyStatusFilter('done');
 
-      // Wait for filter to apply
-      await page.waitForTimeout(500);
-
       // If filter resulted in zero items, proceed to clear
       const filteredCount = await backlogPage.getTableRows().count();
       if (filteredCount === 0) {
         // Click clear filters
         await backlogPage.clearAllFilters();
 
-        // Wait for filter to clear
-        await page.waitForTimeout(500);
+        // Wait for items to reappear after clearing filters.
+        await expect(backlogPage.getTableRows().first()).toBeVisible();
 
         // Verify items reappear
         const clearedCount = await backlogPage.getTableRows().count();

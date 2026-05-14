@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -37,11 +38,19 @@ type BacklogService struct {
 	sourceBackend  itemSourceBackend
 	sessionCreator SessionCreator
 	cfg            *config.Config
+	// worktreeMu serializes context-file writes to the same worktree path so that
+	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
+	// a partially-written .claude/backlog-context.md.
+	worktreeMu sync.Mutex
 }
 
 // NewBacklogService creates a BacklogService with all optional dependencies.
 // storage and sourceBackend are typically the same (*session.Storage).
 // sessionCreator and cfg may be nil; handlers degrade gracefully when absent.
+//
+// Degradation contract: If creator is nil, RPCs that spawn sessions will return
+// CodeUnimplemented. This is expected in test environments where a real session
+// manager is unavailable.
 func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *config.Config) *BacklogService {
 	return &BacklogService{
 		storage:        storage,
@@ -49,6 +58,52 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		sessionCreator: creator,
 		cfg:            cfg,
 	}
+}
+
+// encryptAndMergeToken produces a token config JSON string suitable for storage.
+// If key is non-nil the token is AES-GCM encrypted and the result is
+// `{"token":"<ciphertext>","encrypted":true}`. Otherwise the token is stored
+// unencrypted (backwards-compat). The returned string can be stored as-is when
+// the existing config is empty. When existingConfig is non-empty the token JSON
+// is merged into it (token fields win). Returns the merged JSON or an error.
+func encryptAndMergeToken(cfg *config.Config, token, existingConfig string) (string, error) {
+	var tokenJSON string
+	if cfg != nil {
+		key, err := cfg.GetOrCreateEncryptionKey()
+		if err != nil {
+			return "", fmt.Errorf("get encryption key: %w", err)
+		}
+		encrypted, err := session.EncryptToken(key, token)
+		if err != nil {
+			return "", fmt.Errorf("encrypt token: %w", err)
+		}
+		tokenJSON = fmt.Sprintf(`{"token":%q,"encrypted":true}`, encrypted)
+	} else {
+		// No config available; store unencrypted (backwards compatibility).
+		tokenJSON = fmt.Sprintf(`{"token":%q}`, token)
+	}
+
+	if existingConfig == "" {
+		return tokenJSON, nil
+	}
+
+	// Merge token fields into the existing config JSON.
+	var cfgMap map[string]interface{}
+	if err := json.Unmarshal([]byte(existingConfig), &cfgMap); err != nil {
+		return "", fmt.Errorf("unmarshal existing config: %w", err)
+	}
+	var tokMap map[string]interface{}
+	if err := json.Unmarshal([]byte(tokenJSON), &tokMap); err != nil {
+		return "", fmt.Errorf("unmarshal token json: %w", err)
+	}
+	for k, v := range tokMap {
+		cfgMap[k] = v
+	}
+	merged, err := json.Marshal(cfgMap)
+	if err != nil {
+		return "", fmt.Errorf("marshal merged config: %w", err)
+	}
+	return string(merged), nil
 }
 
 // slugify converts s to a lowercase hyphen-delimited slug safe for file paths.
@@ -194,7 +249,7 @@ func (s *BacklogService) CreateBacklogItem(
 
 	priority := int(req.Msg.Priority)
 	if priority == 0 {
-		priority = 3 // default
+		priority = session.DefaultBacklogPriority
 	}
 
 	data := session.BacklogItemData{
@@ -414,17 +469,28 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 			fmt.Errorf("invalid transition from %q to %q", from, to))
 	}
 
+	// Load the most recent ReviewVerdict for this item so TransitionGuard can
+	// evaluate the review→done guard (ErrVerdictRequired).
+	overallOutcome, verdictErr := s.storage.GetMostRecentReviewVerdictForItem(ctx, req.Msg.ItemId)
+	if verdictErr != nil {
+		log.WarningLog.Printf("[TransitionBacklogItemStatus] failed to load review verdict for item %s: %v", req.Msg.ItemId, verdictErr)
+		// Non-fatal: proceed with empty outcome; TransitionGuard will block review→done if needed.
+	}
+
 	// Run transition guard for business rules.
 	guardInput := session.BacklogItemTransitionInput{
-		Status:         from,
-		AcCriteriaJSON: item.AcceptanceCriteria,
-		PlanApproved:   item.PlanApproved,
-		SkipPlanning:   item.SkipPlanning,
-		OverrideReason: req.Msg.OverrideReason,
+		Status:            from,
+		AcCriteriaJSON:    item.AcceptanceCriteria,
+		PlanApproved:      item.PlanApproved,
+		SkipPlanning:      item.SkipPlanning,
+		PlanArtifactsPath: item.PlanArtifactsPath,
+		OverallOutcome:    overallOutcome,
+		OverrideReason:    req.Msg.OverrideReason,
 	}
 	if guardErr := session.TransitionGuard(guardInput, to); guardErr != nil {
 		if errors.Is(guardErr, session.ErrACRequired) ||
 			errors.Is(guardErr, session.ErrPlanRequired) ||
+			errors.Is(guardErr, session.ErrPlanArtifactsRequired) ||
 			errors.Is(guardErr, session.ErrVerdictRequired) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, guardErr)
 		}
@@ -517,41 +583,11 @@ func (s *BacklogService) CreateItemSource(
 	}
 	if req.Msg.Token != "" {
 		data.TokenConfigured = true
-
-		var tokenJSON string
-		// Encrypt token if config is available.
-		if s.cfg != nil {
-			key, err := s.cfg.GetOrCreateEncryptionKey()
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get encryption key: %w", err))
-			}
-			encrypted, err := session.EncryptToken(key, req.Msg.Token)
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("encrypt token: %w", err))
-			}
-			tokenJSON = fmt.Sprintf(`{"token":%q,"encrypted":true}`, encrypted)
-		} else {
-			// No config; store unencrypted (backwards compatibility).
-			tokenJSON = fmt.Sprintf(`{"token":%q}`, req.Msg.Token)
+		merged, mergeErr := encryptAndMergeToken(s.cfg, req.Msg.Token, data.Config)
+		if mergeErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, mergeErr)
 		}
-
-		if data.Config == "" {
-			data.Config = tokenJSON
-		} else {
-			// Merge token into existing config JSON.
-			var cfg map[string]interface{}
-			if err := json.Unmarshal([]byte(data.Config), &cfg); err == nil {
-				var tokCfg map[string]interface{}
-				if err := json.Unmarshal([]byte(tokenJSON), &tokCfg); err == nil {
-					for k, v := range tokCfg {
-						cfg[k] = v
-					}
-					if merged, err := json.Marshal(cfg); err == nil {
-						data.Config = string(merged)
-					}
-				}
-			}
-		}
+		data.Config = merged
 	}
 
 	created, err := s.sourceBackend.CreateItemSource(ctx, data)
@@ -607,21 +643,10 @@ func (s *BacklogService) UpdateItemSource(
 	enabled := req.Msg.Enabled
 	update.Enabled = &enabled
 	if req.Msg.Token != "" {
-		var tokenJSON string
-		// Encrypt token if config is available.
-		if s.cfg != nil {
-			key, err := s.cfg.GetOrCreateEncryptionKey()
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get encryption key: %w", err))
-			}
-			encrypted, err := session.EncryptToken(key, req.Msg.Token)
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("encrypt token: %w", err))
-			}
-			tokenJSON = fmt.Sprintf(`{"token":%q,"encrypted":true}`, encrypted)
-		} else {
-			// No config; store unencrypted (backwards compatibility).
-			tokenJSON = fmt.Sprintf(`{"token":%q}`, req.Msg.Token)
+		// UpdateItemSource replaces the config wholesale (no prior config to merge).
+		tokenJSON, mergeErr := encryptAndMergeToken(s.cfg, req.Msg.Token, "")
+		if mergeErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, mergeErr)
 		}
 		update.Config = &tokenJSON
 	}
@@ -743,6 +768,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 	title := "backlog:" + slugify(item.Title)
 
 	// 10. Require SessionCreator.
+	// degraded: sessionCreator unavailable — return CodeUnimplemented so callers can detect the gap.
 	if s.sessionCreator == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented,
 			fmt.Errorf("SessionCreator not wired — contact admin"))
@@ -755,23 +781,32 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
 	}
 
+	// TODO: inject STAPLER_SESSION_UUID=<inst.UUID> into the spawned session's environment
+	// so that when the agent running inside it calls MCP tools (report_progress, request_review,
+	// submit_review_verdict), the MCP server can extract the caller UUID via callerSessionUUID()
+	// and verify the session is linked to the correct backlog item.
+	// Currently the SessionCreator interface (CreateDirectorySession) does not accept extra env
+	// vars. To fix: extend the interface to accept map[string]string extraEnv, propagate through
+	// session.Instance, and pass it to the tmux session via `tmux new-session -e KEY=VALUE`.
+
 	// 11. Update ItemSession with real UUID.
 	if updateErr := s.storage.UpdateItemSessionSessionUUID(ctx, is.ID.String(), inst.UUID); updateErr != nil {
 		log.ErrorLog.Printf("[SpawnSessionFromItem] failed to update item session UUID: %v", updateErr)
 	}
 
-	// 12. Write slash commands and context file non-blocking.
+	// 12. Write slash commands and context file synchronously under a mutex so
+	// concurrent spawn calls cannot interleave writes to the same worktree path.
 	worktreePath := inst.Path
-	go func() {
-		if err := session.WriteSlashCommands(entItem, worktreePath); err != nil {
-			log.ErrorLog.Printf("[SpawnSessionFromItem] WriteSlashCommands: %v", err)
-		}
-	}()
-	go func() {
-		if err := session.WriteBacklogContextFile(entItem, worktreePath); err != nil {
-			log.ErrorLog.Printf("[SpawnSessionFromItem] WriteBacklogContextFile: %v", err)
-		}
-	}()
+	s.worktreeMu.Lock()
+	if wErr := session.WriteSlashCommands(entItem, worktreePath); wErr != nil {
+		s.worktreeMu.Unlock()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
+	}
+	if wErr := session.WriteBacklogContextFile(entItem, worktreePath); wErr != nil {
+		s.worktreeMu.Unlock()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
+	}
+	s.worktreeMu.Unlock()
 
 	// 13. Transition item to in_progress.
 	if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
@@ -850,16 +885,17 @@ func (s *BacklogService) AttachSessionToItem(
 		for _, inst := range instances {
 			if inst.UUID == req.Msg.SessionUuid && inst.Path != "" {
 				worktreePath := inst.Path
-				go func() {
-					if wErr := session.WriteSlashCommands(entItem, worktreePath); wErr != nil {
-						log.ErrorLog.Printf("[AttachSessionToItem] WriteSlashCommands: %v", wErr)
-					}
-				}()
-				go func() {
-					if wErr := session.WriteBacklogContextFile(entItem, worktreePath); wErr != nil {
-						log.ErrorLog.Printf("[AttachSessionToItem] WriteBacklogContextFile: %v", wErr)
-					}
-				}()
+				// Write synchronously under mutex to prevent concurrent write races.
+				s.worktreeMu.Lock()
+				if wErr := session.WriteSlashCommands(entItem, worktreePath); wErr != nil {
+					s.worktreeMu.Unlock()
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
+				}
+				if wErr := session.WriteBacklogContextFile(entItem, worktreePath); wErr != nil {
+					s.worktreeMu.Unlock()
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
+				}
+				s.worktreeMu.Unlock()
 				break
 			}
 		}
@@ -912,6 +948,7 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 5. Require SessionCreator.
+	// degraded: sessionCreator unavailable — return CodeUnimplemented so callers can detect the gap.
 	if s.sessionCreator == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented,
 			fmt.Errorf("SessionCreator not wired — contact admin"))
@@ -1027,8 +1064,12 @@ func (s *BacklogService) SuggestNextItem(
 		return connect.NewResponse(&sessionv1.SuggestNextItemResponse{}), nil
 	}
 
-	// Return the first (highest-priority) item wrapped in a minimal ItemSession-like container.
-	// The proto response carries *ItemSession, so we synthesize a placeholder.
+	// HACK: SuggestNextItemResponse.item_session carries an ItemSession, not a
+	// BacklogItem. The proto definition (backlog.proto:210) only exposes ItemSession
+	// so we synthesise a minimal placeholder that reuses the Id field to convey the
+	// suggested item ID to callers. A proper fix requires adding a BacklogItem field
+	// to SuggestNextItemResponse in the proto and regenerating bindings.
+	// TODO: migrate SuggestNextItemResponse to include a BacklogItem field.
 	top := &items[0]
 	placeholder := &sessionv1.ItemSession{
 		// Reuse the Id field to carry the suggested item ID for callers.
@@ -1229,6 +1270,8 @@ Do not modify the code. Only write the review verdict.
 `, workSessionDiff)
 
 	// 9. Require SessionCreator to spawn review session.
+	// degraded: sessionCreator unavailable — return a placeholder response so the
+	// caller knows re-review was acknowledged, even without a live session spawner.
 	if s.sessionCreator == nil {
 		// No spawner configured; just return a placeholder indicating re-review was triggered.
 		log.InfoLog.Printf("[TriggerReReview] triggered for item %s but no SessionCreator available", item.ID)

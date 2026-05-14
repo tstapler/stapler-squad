@@ -149,10 +149,16 @@ func TestTransitionGuard_ReadyToInProgress_RequiresPlanApprovedOrSkipPlanning(t 
 		t.Errorf("TransitionGuard no plan approval = %v; want ErrPlanRequired", err)
 	}
 
-	// plan_approved=true → nil
+	// plan_approved=true with no artifacts path → ErrPlanArtifactsRequired
 	item.PlanApproved = true
+	if err := TransitionGuard(item, BacklogStatusInProgress); err != ErrPlanArtifactsRequired {
+		t.Errorf("TransitionGuard plan_approved=true no artifacts = %v; want ErrPlanArtifactsRequired", err)
+	}
+
+	// plan_approved=true with artifacts path → nil
+	item.PlanArtifactsPath = "/some/path"
 	if err := TransitionGuard(item, BacklogStatusInProgress); err != nil {
-		t.Errorf("TransitionGuard plan_approved=true = %v; want nil", err)
+		t.Errorf("TransitionGuard plan_approved=true with artifacts = %v; want nil", err)
 	}
 
 	// skip_planning=true → nil

@@ -520,6 +520,16 @@ func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUI
 	return er.GetItemSessionBySessionAndItem(ctx, sessionUUID, itemID)
 }
 
+// GetMostRecentReviewVerdictForItem returns the OverallOutcome of the most recent
+// ReviewVerdict linked to any ItemSession for itemID. Returns "" when none exists.
+func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (string, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return "", nil
+	}
+	return er.GetMostRecentReviewVerdictForItem(ctx, itemID)
+}
+
 // SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
 func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) (*ent.ReviewVerdict, error) {
 	er, ok := s.repo.(*EntRepository)

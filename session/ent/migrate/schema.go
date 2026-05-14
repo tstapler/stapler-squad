@@ -143,6 +143,16 @@ var (
 				Unique:  false,
 				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[18]},
 			},
+			{
+				Name:    "backlogitem_external_id",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[14]},
+			},
+			{
+				Name:    "backlogitem_status",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[5]},
+			},
 		},
 	}
 	// ClassificationAnalyticsColumns holds the columns for the "classification_analytics" table.
@@ -359,6 +369,18 @@ var (
 		Name:       "item_sources",
 		Columns:    ItemSourcesColumns,
 		PrimaryKey: []*schema.Column{ItemSourcesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "itemsource_plugin_id",
+				Unique:  false,
+				Columns: []*schema.Column{ItemSourcesColumns[1]},
+			},
+			{
+				Name:    "itemsource_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{ItemSourcesColumns[4]},
+			},
+		},
 	}
 	// ProjectsColumns holds the columns for the "projects" table.
 	ProjectsColumns = []*schema.Column{
@@ -408,6 +430,13 @@ var (
 				Columns:    []*schema.Column{ReviewVerdictsColumns[12]},
 				RefColumns: []*schema.Column{ItemSessionsColumns[0]},
 				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "reviewverdict_item_session_review_verdict",
+				Unique:  true,
+				Columns: []*schema.Column{ReviewVerdictsColumns[12]},
 			},
 		},
 	}
@@ -517,6 +546,13 @@ var (
 				Columns:    []*schema.Column{SourceSyncEventsColumns[9]},
 				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
 				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "sourcesyncevent_item_source_sync_events",
+				Unique:  false,
+				Columns: []*schema.Column{SourceSyncEventsColumns[9]},
 			},
 		},
 	}

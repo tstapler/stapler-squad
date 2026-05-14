@@ -24,6 +24,10 @@ const (
 	SessionRoleReview = "review"
 )
 
+// DefaultBacklogPriority is the default priority assigned to new backlog items
+// when no priority is specified. Lower values indicate higher priority.
+const DefaultBacklogPriority = 3
+
 // AcCriterion is a single acceptance criterion for a backlog item.
 type AcCriterion struct {
 	Index  int    `json:"index"`
@@ -141,19 +145,21 @@ func CanTransitionBacklog(from, to BacklogStatus) bool {
 
 // Sentinel errors for transition guards.
 var (
-	ErrACRequired      = errors.New("acceptance criteria required before marking ready")
-	ErrPlanRequired    = errors.New("plan must be approved or skip_planning must be true before spawning work session")
-	ErrVerdictRequired = errors.New("PASS verdict or manual override required before marking done")
+	ErrACRequired             = errors.New("acceptance criteria required before marking ready")
+	ErrPlanRequired           = errors.New("plan must be approved or skip_planning must be true before spawning work session")
+	ErrPlanArtifactsRequired  = errors.New("plan artifacts path is required when planning is not skipped")
+	ErrVerdictRequired        = errors.New("PASS verdict or manual override required before marking done")
 )
 
 // BacklogItemTransitionInput carries the fields needed by TransitionGuard.
 type BacklogItemTransitionInput struct {
-	Status         BacklogStatus
-	AcCriteriaJSON string
-	PlanApproved   bool
-	SkipPlanning   bool
-	OverallOutcome string // from linked ReviewVerdict
-	OverrideReason string
+	Status            BacklogStatus
+	AcCriteriaJSON    string
+	PlanApproved      bool
+	SkipPlanning      bool
+	PlanArtifactsPath string // path to plan artifacts written by triage session
+	OverallOutcome    string // from linked ReviewVerdict
+	OverrideReason    string
 }
 
 // TransitionGuard validates business rules before a status transition.
@@ -174,6 +180,9 @@ func TransitionGuard(item BacklogItemTransitionInput, to BacklogStatus) error {
 	case from == BacklogStatusReady && to == BacklogStatusInProgress:
 		if !item.PlanApproved && !item.SkipPlanning {
 			return ErrPlanRequired
+		}
+		if item.PlanApproved && !item.SkipPlanning && item.PlanArtifactsPath == "" {
+			return ErrPlanArtifactsRequired
 		}
 		return nil
 

@@ -381,6 +381,7 @@ function BacklogPageInner() {
                       <td className={styles.tableCell}>
                         <span
                           className={styles.priorityBadge}
+                          data-testid="priority-badge"
                           aria-label={`Priority: ${PRIORITY_LABELS[item.priority] ?? "Unknown"}`}
                         >
                           {PRIORITY_LABELS[item.priority] ?? "P?"}

@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"io"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestEncryptDecryptToken verifies round-trip encryption and decryption
@@ -66,33 +68,30 @@ func TestDecryptWithWrongKey(t *testing.T) {
 	}
 }
 
-// TestKeySize verifies that functions reject invalid key sizes
+// TestKeySize verifies that functions reject invalid key sizes with key-size errors.
 func TestKeySize(t *testing.T) {
 	plaintext := "test"
 
 	// Test with 16-byte key (too small)
 	badKey := make([]byte, 16)
 	_, err := EncryptToken(badKey, plaintext)
-	if err == nil {
-		t.Error("encrypt with 16-byte key should have failed")
-	}
+	require.Error(t, err, "encrypt with 16-byte key should have failed")
+	require.Contains(t, err.Error(), "key", "encrypt error should mention key size")
 
 	// Test with 48-byte key (too large)
 	badKey = make([]byte, 48)
 	_, err = EncryptToken(badKey, plaintext)
-	if err == nil {
-		t.Error("encrypt with 48-byte key should have failed")
-	}
+	require.Error(t, err, "encrypt with 48-byte key should have failed")
+	require.Contains(t, err.Error(), "key", "encrypt error should mention key size")
 
 	// Same for decrypt
 	key := make([]byte, 32)
-	io.ReadFull(rand.Reader, key)
+	io.ReadFull(rand.Reader, key) //nolint:errcheck
 	encrypted, _ := EncryptToken(key, plaintext)
 
 	_, err = DecryptToken(make([]byte, 16), encrypted)
-	if err == nil {
-		t.Error("decrypt with 16-byte key should have failed")
-	}
+	require.Error(t, err, "decrypt with 16-byte key should have failed")
+	require.Contains(t, err.Error(), "key", "decrypt error should mention key size")
 }
 
 // TestEmptyToken verifies encryption of empty strings

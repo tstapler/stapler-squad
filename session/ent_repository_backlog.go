@@ -145,6 +145,17 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Order(ent.Asc(backlogitem.FieldPriority), ent.Desc(backlogitem.FieldUpdatedAt))
 	}
 
+	// Apply safety cap: use caller-supplied limit when set, otherwise default to 1000.
+	const defaultSafetyLimit = 1000
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultSafetyLimit
+	}
+	q = q.Limit(limit)
+	if filter.Offset > 0 {
+		q = q.Offset(filter.Offset)
+	}
+
 	items, err := q.All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list backlog items: %w", err)

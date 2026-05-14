@@ -236,6 +236,10 @@ type BacklogItemFilter struct {
 	SortBy string
 	// ExcludeTerminal, when true, excludes items with status "done" or "archived".
 	ExcludeTerminal bool
+	// Limit caps the number of results returned. 0 means use the default safety cap (1000).
+	Limit int
+	// Offset skips the first N results (for pagination). Only applied when Limit > 0.
+	Offset int
 }
 
 // BacklogItemUpdate carries the mutable fields for UpdateBacklogItem.

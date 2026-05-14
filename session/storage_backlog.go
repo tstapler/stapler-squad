@@ -92,12 +92,15 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 }
 
 // GetItemSessionBySessionUUID looks up the most recent active ItemSession by session UUID alone.
-// Returns ErrNotFound if no matching record exists. Loads the BacklogItem edge.
+// session_uuid is not unique across records (a session may be reused), so we order by
+// created_at descending and take the first match. Returns ErrNotFound if no record exists.
+// Loads the BacklogItem edge.
 func (r *EntRepository) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (*ent.ItemSession, error) {
 	is, err := r.client.ItemSession.Query().
 		Where(itemsession.SessionUUID(sessionUUID)).
 		WithBacklogItem().
-		Only(ctx)
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: item session for session=%s", ErrNotFound, sessionUUID)
@@ -217,14 +220,23 @@ func (r *EntRepository) UpdateItemSessionFileTouch(ctx context.Context, id strin
 // --- ReviewVerdict ---
 
 // SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession.
+// The query-then-create/update is wrapped in a transaction to prevent a
+// check-then-act race condition when concurrent callers save verdicts for the
+// same item session.
 func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) (*ent.ReviewVerdict, error) {
 	parsedSessionID, err := uuid.Parse(itemSessionID)
 	if err != nil {
 		return nil, fmt.Errorf("invalid item session id %q: %w", itemSessionID, err)
 	}
 
-	// Try to find existing verdict for this item session.
-	existing, queryErr := r.client.ReviewVerdict.Query().
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	// Try to find existing verdict for this item session within the transaction.
+	existing, queryErr := tx.ReviewVerdict.Query().
 		Where(reviewverdict.HasItemSessionWith(itemsession.ID(parsedSessionID))).
 		Only(ctx)
 
@@ -232,9 +244,10 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 		return nil, fmt.Errorf("failed to query existing review verdict: %w", queryErr)
 	}
 
+	var rv *ent.ReviewVerdict
 	if ent.IsNotFound(queryErr) || existing == nil {
 		// Create new verdict.
-		rv, saveErr := r.client.ReviewVerdict.Create().
+		rv, err = tx.ReviewVerdict.Create().
 			SetOverallOutcome(verdict.OverallOutcome).
 			SetNillablePerCriterion(&verdict.PerCriterion).
 			SetNillableSummary(&verdict.Summary).
@@ -247,27 +260,30 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 			SetNillableOverrideAt(verdict.OverrideAt).
 			SetItemSessionID(parsedSessionID).
 			Save(ctx)
-		if saveErr != nil {
-			return nil, fmt.Errorf("failed to create review verdict: %w", saveErr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create review verdict: %w", err)
 		}
-		return rv, nil
+	} else {
+		// Update existing verdict.
+		rv, err = tx.ReviewVerdict.UpdateOne(existing).
+			SetOverallOutcome(verdict.OverallOutcome).
+			SetNillablePerCriterion(&verdict.PerCriterion).
+			SetNillableSummary(&verdict.Summary).
+			SetNillableDiffHash(&verdict.DiffHash).
+			SetNillablePromptHash(&verdict.PromptHash).
+			SetDiffTokenCount(verdict.DiffTokenCount).
+			SetDiffTruncated(verdict.DiffTruncated).
+			SetNillableOverrideBy(&verdict.OverrideBy).
+			SetNillableOverrideReason(&verdict.OverrideReason).
+			SetNillableOverrideAt(verdict.OverrideAt).
+			Save(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to update review verdict: %w", err)
+		}
 	}
 
-	// Update existing verdict.
-	rv, saveErr := r.client.ReviewVerdict.UpdateOne(existing).
-		SetOverallOutcome(verdict.OverallOutcome).
-		SetNillablePerCriterion(&verdict.PerCriterion).
-		SetNillableSummary(&verdict.Summary).
-		SetNillableDiffHash(&verdict.DiffHash).
-		SetNillablePromptHash(&verdict.PromptHash).
-		SetDiffTokenCount(verdict.DiffTokenCount).
-		SetDiffTruncated(verdict.DiffTruncated).
-		SetNillableOverrideBy(&verdict.OverrideBy).
-		SetNillableOverrideReason(&verdict.OverrideReason).
-		SetNillableOverrideAt(verdict.OverrideAt).
-		Save(ctx)
-	if saveErr != nil {
-		return nil, fmt.Errorf("failed to update review verdict: %w", saveErr)
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("failed to commit review verdict transaction: %w", err)
 	}
 	return rv, nil
 }
@@ -276,6 +292,7 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 
 // ReconcileStuckItems finds in_progress items whose all linked ItemSessions have ended,
 // and transitions them to review status. Returns the count of transitioned items.
+// All updates are wrapped in a single transaction so they succeed or fail atomically.
 func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 	// Find in_progress items that have at least one item session, where none have nil ended_at.
 	items, err := r.client.BacklogItem.Query().
@@ -291,6 +308,16 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to query stuck items: %w", err)
 	}
 
+	if len(items) == 0 {
+		return 0, nil
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
 	count := 0
 	now := time.Now()
 	for _, item := range items {
@@ -299,7 +326,7 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 			note += "\n"
 		}
 		note += "[auto] Transitioned to review: all work sessions ended."
-		_, updateErr := r.client.BacklogItem.UpdateOne(item).
+		_, updateErr := tx.BacklogItem.UpdateOne(item).
 			SetStatus(string(BacklogStatusReview)).
 			SetUserModifiedStatusAt(now).
 			SetNotes(note).
@@ -309,7 +336,45 @@ func (r *EntRepository) ReconcileStuckItems(ctx context.Context) (int, error) {
 		}
 		count++
 	}
+
+	if err = tx.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit reconcile transaction: %w", err)
+	}
 	return count, nil
+}
+
+// --- ReviewVerdict lookup ---
+
+// GetMostRecentReviewVerdictForItem returns the OverallOutcome string from the
+// most recently created ReviewVerdict associated with any ItemSession for the
+// given BacklogItem UUID. Returns an empty string (not an error) when no verdict
+// exists yet.
+func (r *EntRepository) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (string, error) {
+	parsedItemID, err := uuid.Parse(itemID)
+	if err != nil {
+		return "", fmt.Errorf("invalid item id %q: %w", itemID, err)
+	}
+
+	// Find the most recent ItemSession for this item that has a review verdict.
+	is, err := r.client.ItemSession.Query().
+		Where(
+			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
+			itemsession.HasReviewVerdict(),
+		).
+		WithReviewVerdict().
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		First(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to query review verdict for item %s: %w", itemID, err)
+	}
+
+	if is.Edges.ReviewVerdict == nil {
+		return "", nil
+	}
+	return is.Edges.ReviewVerdict.OverallOutcome, nil
 }
 
 // --- AC criterion update ---

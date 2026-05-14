@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useEffect } from "react";
+import { useCallback, useRef, useEffect, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
@@ -197,10 +197,17 @@ interface UseBacklogServiceReturn {
   approvePlan: (id: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
+  /** Last error from createBacklogItem, updateBacklogItem, transitionStatus, or spawnSessionFromItem. */
+  lastError: Error | null;
+  /** Clears the lastError state. */
+  clearError: () => void;
 }
 
 export function useBacklogService(): UseBacklogServiceReturn {
   const clientRef = useRef<ReturnType<typeof createClient<typeof BacklogService>> | null>(null);
+  const [lastError, setLastError] = useState<Error | null>(null);
+
+  const clearError = useCallback(() => setLastError(null), []);
 
   useEffect(() => {
     const transport = createConnectTransport({
@@ -244,6 +251,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (data: BacklogItemInput): Promise<BacklogItem | null> => {
       if (!clientRef.current) return null;
       try {
+        setLastError(null);
         const resp = await clientRef.current.createBacklogItem({
           title: data.title,
           description: data.description ?? "",
@@ -257,6 +265,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] createBacklogItem:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }
     },
@@ -267,6 +276,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (id: string, data: Partial<BacklogItemInput>): Promise<BacklogItem | null> => {
       if (!clientRef.current) return null;
       try {
+        setLastError(null);
         const resp = await clientRef.current.updateBacklogItem({
           itemId: id,
           title: data.title,
@@ -281,6 +291,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] updateBacklogItem:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }
     },
@@ -306,6 +317,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     ): Promise<BacklogItem | null> => {
       if (!clientRef.current) return null;
       try {
+        setLastError(null);
         const resp = await clientRef.current.transitionBacklogItemStatus({
           itemId: id,
           targetStatus: toStatus,
@@ -315,6 +327,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
         return resp.item ? mapBacklogItem(resp.item) : null;
       } catch (err) {
         console.error("[useBacklogService] transitionStatus:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }
     },
@@ -325,10 +338,12 @@ export function useBacklogService(): UseBacklogServiceReturn {
     async (id: string): Promise<{ sessionUuid: string } | null> => {
       if (!clientRef.current) return null;
       try {
+        setLastError(null);
         const resp = await clientRef.current.spawnSessionFromItem({ itemId: id });
         return { sessionUuid: resp.sessionUuid };
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);
+        setLastError(err instanceof Error ? err : new Error(String(err)));
         return null;
       }
     },
@@ -401,5 +416,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
     approvePlan,
     overrideVerdict,
     triggerReReview,
+    lastError,
+    clearError,
   };
 }

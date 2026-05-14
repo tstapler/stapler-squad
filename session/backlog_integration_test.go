@@ -243,9 +243,9 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 	require.NoError(t, err)
 	require.Equal(t, string(BacklogStatusReview), fetchedItem.Status)
 
-	// Notes should contain the auto-reconciliation marker.
-	// The actual notes format is implementation-defined; we just verify it's been updated.
-	require.NotEmpty(t, fetchedItem.Notes, "ReconcileStuckItems should update notes with reconciliation info")
+	// Notes must contain the exact auto-reconciliation marker written by ReconcileStuckItems.
+	require.Contains(t, fetchedItem.Notes, "[auto]", "ReconcileStuckItems should set notes with [auto] marker")
+	require.Contains(t, fetchedItem.Notes, "review", "ReconcileStuckItems notes should mention transition to review")
 }
 
 // IT-006: Review session exit does NOT transition item (recursion guard)

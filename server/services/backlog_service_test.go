@@ -102,10 +102,12 @@ func TestListBacklogItems_DefaultFilterHidesTerminalStatuses(t *testing.T) {
 	}
 
 	// Archive "archived item".
-	_, err = svc.ArchiveBacklogItem(t.Context(), connect.NewRequest(&sessionv1.ArchiveBacklogItemRequest{
+	archiveResp, err := svc.ArchiveBacklogItem(t.Context(), connect.NewRequest(&sessionv1.ArchiveBacklogItemRequest{
 		ItemId: idByTitle["archived item"],
 	}))
 	require.NoError(t, err)
+	// Pre-check: verify the archive transition actually happened before testing the list filter.
+	require.Equal(t, "archived", archiveResp.Msg.Item.Status, "item should be in archived status before testing list filter")
 
 	// Default list should exclude archived items.
 	listDefault, err := svc.ListBacklogItems(t.Context(), connect.NewRequest(&sessionv1.ListBacklogItemsRequest{}))
