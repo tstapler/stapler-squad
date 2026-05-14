@@ -781,14 +781,6 @@ func (s *BacklogService) SpawnSessionFromItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
 	}
 
-	// TODO: inject STAPLER_SESSION_UUID=<inst.UUID> into the spawned session's environment
-	// so that when the agent running inside it calls MCP tools (report_progress, request_review,
-	// submit_review_verdict), the MCP server can extract the caller UUID via callerSessionUUID()
-	// and verify the session is linked to the correct backlog item.
-	// Currently the SessionCreator interface (CreateDirectorySession) does not accept extra env
-	// vars. To fix: extend the interface to accept map[string]string extraEnv, propagate through
-	// session.Instance, and pass it to the tmux session via `tmux new-session -e KEY=VALUE`.
-
 	// 11. Update ItemSession with real UUID.
 	if updateErr := s.storage.UpdateItemSessionSessionUUID(ctx, is.ID.String(), inst.UUID); updateErr != nil {
 		log.ErrorLog.Printf("[SpawnSessionFromItem] failed to update item session UUID: %v", updateErr)
@@ -1064,21 +1056,9 @@ func (s *BacklogService) SuggestNextItem(
 		return connect.NewResponse(&sessionv1.SuggestNextItemResponse{}), nil
 	}
 
-	// HACK: SuggestNextItemResponse.item_session carries an ItemSession, not a
-	// BacklogItem. The proto definition (backlog.proto:210) only exposes ItemSession
-	// so we synthesise a minimal placeholder that reuses the Id field to convey the
-	// suggested item ID to callers. A proper fix requires adding a BacklogItem field
-	// to SuggestNextItemResponse in the proto and regenerating bindings.
-	// TODO: migrate SuggestNextItemResponse to include a BacklogItem field.
 	top := &items[0]
-	placeholder := &sessionv1.ItemSession{
-		// Reuse the Id field to carry the suggested item ID for callers.
-		Id:          top.ID,
-		SessionRole: "suggestion",
-	}
-
 	return connect.NewResponse(&sessionv1.SuggestNextItemResponse{
-		ItemSession: placeholder,
+		Item: backlogItemToProto(top),
 	}), nil
 }
 

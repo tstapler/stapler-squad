@@ -208,7 +208,9 @@ message ApprovePlanResponse {
 message SuggestNextItemRequest {}
 
 message SuggestNextItemResponse {
+  // Deprecated: use item instead. Left for wire compatibility.
   ItemSession item_session = 1;
+  BacklogItem item = 2;
 }
 
 message OverrideVerdictRequest {

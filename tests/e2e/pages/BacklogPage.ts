@@ -1,4 +1,4 @@
-import { Page, Locator } from '@playwright/test';
+import { Page, Locator, expect } from '@playwright/test';
 
 export class BacklogPage {
   readonly page: Page;
@@ -119,5 +119,98 @@ export class BacklogPage {
 
   async searchItems(query: string) {
     await this.searchInput.fill(query);
+  }
+
+  // ---------------------------------------------------------------------------
+  // New-item modal form (launched from backlog-new-item-button)
+  // ---------------------------------------------------------------------------
+
+  async openNewItemForm() {
+    await this.newItemButton.click();
+    await this.page.waitForSelector('[data-testid="backlog-form-modal"]', { timeout: 5000 });
+  }
+
+  async fillNewItemForm(title: string, options?: { priority?: number; addAcCriterion?: string }) {
+    const titleInput = this.page.locator('[data-testid="backlog-title-input"]');
+    await titleInput.fill(title);
+
+    if (options?.priority !== undefined) {
+      const prioritySelect = this.page.locator('[data-testid="backlog-priority-select"]');
+      await prioritySelect.selectOption({ value: String(options.priority) });
+    }
+
+    if (options?.addAcCriterion) {
+      const addBtn = this.page.locator('[data-testid="backlog-add-criterion"]');
+      await addBtn.click();
+      const criterionInput = this.page.locator('[data-testid="backlog-criterion-text-0"]');
+      await criterionInput.fill(options.addAcCriterion);
+    }
+  }
+
+  async submitNewItemForm() {
+    const submitButton = this.page.locator('[data-testid="backlog-form-submit"]');
+    await submitButton.click();
+  }
+
+  async cancelNewItemForm() {
+    const cancelButton = this.page.locator('[data-testid="backlog-form-cancel"]');
+    await cancelButton.click();
+  }
+
+  async createItemViaNewItemButton(
+    title: string,
+    options?: { priority?: number; addAcCriterion?: string }
+  ) {
+    await this.openNewItemForm();
+    await this.fillNewItemForm(title, options);
+    await this.submitNewItemForm();
+    // Wait for modal to close and item to appear
+    await this.page.waitForSelector('[data-testid="backlog-form-modal"]', {
+      state: 'hidden',
+      timeout: 5000,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Item detail pane
+  // ---------------------------------------------------------------------------
+
+  async openItemDetail(itemTitle: string) {
+    const row = this.getTableRows().filter({ hasText: itemTitle });
+    await row.first().click();
+    await this.page.waitForSelector('[data-testid="backlog-item-detail"]', { timeout: 5000 });
+  }
+
+  getItemDetailPane(): Locator {
+    return this.page.locator('[data-testid="backlog-item-detail"]');
+  }
+
+  getDetailStatusBadge(): Locator {
+    // In the detail pane the status badge uses aria-label "Status: <label>"
+    return this.page.locator('[data-testid="backlog-item-detail"] [aria-label^="Status:"]');
+  }
+
+  getTableRowStatusBadge(itemTitle: string): Locator {
+    const row = this.getTableRows().filter({ hasText: itemTitle });
+    return row.locator('[aria-label^="Status:"]');
+  }
+
+  async closeItemDetail() {
+    const closeBtn = this.page.locator('[data-testid="backlog-detail-close"]');
+    await closeBtn.click();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Status transition helpers
+  // ---------------------------------------------------------------------------
+
+  async transitionItemToReady(itemTitle: string) {
+    // Open the detail pane for the item, then click "Mark Ready"
+    await this.openItemDetail(itemTitle);
+    const markReadyBtn = this.page.locator('[data-testid="backlog-action-mark-ready"]');
+    await expect(markReadyBtn).toBeVisible();
+    await markReadyBtn.click();
+    // Wait for status to update in the detail pane
+    await expect(this.getDetailStatusBadge()).toContainText('Ready', { timeout: 10000 });
   }
 }

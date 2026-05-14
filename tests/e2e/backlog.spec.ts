@@ -318,4 +318,92 @@ test.describe('Backlog', () => {
       await expect(backlogPage.searchInput).toHaveValue('');
     });
   });
+
+  test.describe('Status Transitions', () => {
+    test('e2e:backlog-item-appears-in-list-after-creation - Item created via "+ New Item" button appears in list', async ({ page }) => {
+      const backlogPage = new BacklogPage(page);
+
+      const itemTitle = `New Item Button Test ${Date.now()}`;
+
+      // "+ New Item" button must be visible regardless of empty/non-empty state
+      await expect(backlogPage.newItemButton).toBeVisible();
+
+      // Open the new-item modal
+      await backlogPage.openNewItemForm();
+
+      // Verify the modal is visible with the form
+      const modal = page.locator('[data-testid="backlog-form-modal"]');
+      await expect(modal).toBeVisible();
+
+      const titleInput = page.locator('[data-testid="backlog-title-input"]');
+      await expect(titleInput).toBeVisible();
+
+      // Fill and submit the form
+      await backlogPage.fillNewItemForm(itemTitle);
+      await backlogPage.submitNewItemForm();
+
+      // Modal should close
+      await expect(modal).not.toBeVisible();
+
+      // Item must appear in the list
+      const itemRow = backlogPage.getTableRows().filter({ hasText: itemTitle });
+      await expect(itemRow.first()).toBeVisible();
+    });
+
+    test('e2e:backlog-transition-idea-to-ready - Item created as idea can be transitioned to ready via detail pane', async ({ page }) => {
+      const backlogPage = new BacklogPage(page);
+
+      const itemTitle = `Transition Test ${Date.now()}`;
+
+      // Create the item with one acceptance criterion so "Mark Ready" is enabled
+      // We must use the new-item modal form which supports adding AC criteria
+      await backlogPage.openNewItemForm();
+      await backlogPage.fillNewItemForm(itemTitle, {
+        addAcCriterion: 'At least one criterion to enable Mark Ready',
+      });
+      await backlogPage.submitNewItemForm();
+
+      // Wait for item to appear in list
+      const itemRow = backlogPage.getTableRows().filter({ hasText: itemTitle });
+      await expect(itemRow.first()).toBeVisible();
+
+      // Verify initial status is "Idea"
+      const statusBadge = backlogPage.getTableRowStatusBadge(itemTitle);
+      await expect(statusBadge).toHaveAttribute('aria-label', 'Status: Idea');
+
+      // Open the detail pane by clicking the row
+      await backlogPage.openItemDetail(itemTitle);
+
+      // Detail pane must be visible
+      await expect(backlogPage.getItemDetailPane()).toBeVisible();
+
+      // The "Mark Ready" button must be enabled (item has an AC criterion)
+      const markReadyBtn = page.locator('[data-testid="backlog-action-mark-ready"]');
+      await expect(markReadyBtn).toBeVisible();
+      await expect(markReadyBtn).not.toBeDisabled();
+
+      // Click "Mark Ready"
+      await markReadyBtn.click();
+
+      // Status badge in the detail pane must update to "Ready"
+      const detailStatus = backlogPage.getDetailStatusBadge();
+      await expect(detailStatus).toHaveAttribute('aria-label', 'Status: Ready', { timeout: 10000 });
+
+      // The status badge in the list row must also show "Ready" after closing the detail pane
+      await backlogPage.closeItemDetail();
+
+      // Re-check the row (it may have been re-rendered after the transition)
+      const updatedStatusBadge = backlogPage.getTableRowStatusBadge(itemTitle);
+      await expect(updatedStatusBadge).toHaveAttribute('aria-label', 'Status: Ready', { timeout: 10000 });
+    });
+
+    test('e2e:backlog-suggest-next-item - Suggest Next feature (not yet exposed in UI)', async () => {
+      // The SuggestNextItem RPC exists in the backend
+      // (gen/proto/go/session/v1/sessionv1connect/backlog.connect.go) but
+      // there is currently no "Suggest Next" button or data-testid in the
+      // frontend UI (web-app/src/app/backlog/page.tsx). This test is marked
+      // fixme until the feature is surfaced in the UI.
+      test.fixme(true, 'SuggestNextItem RPC is implemented but has no UI button yet — add data-testid="backlog-suggest-next-button" and implement the test once the feature is exposed');
+    });
+  });
 });

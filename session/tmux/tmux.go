@@ -92,6 +92,9 @@ type TmuxSession struct {
 	// would always start a reconnect loop even when the caller intends to use nil.
 	registryExplicit bool
 
+	// extraEnv holds KEY=VALUE pairs injected via -e flags in the new-session command.
+	extraEnv []string
+
 	// registryKey is the key used to register this session's circuit breaker executor
 	// in the global registry. Stored here so Close() can unregister it on teardown.
 	registryKey string
@@ -571,6 +574,12 @@ func (t *TmuxSession) AttachToExisting() error {
 	return nil
 }
 
+// SetExtraEnv sets additional KEY=VALUE environment variable pairs to inject via
+// tmux new-session -e flags. Must be called before Start().
+func (t *TmuxSession) SetExtraEnv(env []string) {
+	t.extraEnv = env
+}
+
 // buildTmuxCommand creates a tmux command with proper server isolation.
 // If serverSocket is set, adds -L flag for complete server isolation.
 // The returned command has no context; callers that need timeout protection
@@ -641,7 +650,13 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// nested Claude Code sessions are not blocked by the "nested session" guard.
 	historyPath := fmt.Sprintf("%s/.stapler_squad_history", workDir)
 	programWithHistory := fmt.Sprintf("env HISTFILE=%s %s", historyPath, t.program)
-	cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=", "-c", workDir, programWithHistory)
+	extraEnvArgs := make([]string, 0, len(t.extraEnv)*2)
+	for _, kv := range t.extraEnv {
+		extraEnvArgs = append(extraEnvArgs, "-e", kv)
+	}
+	newSessionArgs := append([]string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}, extraEnvArgs...)
+	newSessionArgs = append(newSessionArgs, "-c", workDir, programWithHistory)
+	cmd := t.buildTmuxCommand(newSessionArgs...)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
 	// since detached sessions don't need PTY attachment during creation
@@ -796,7 +811,13 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// Create a new detached tmux session directly (avoid recursive call to Start).
 			// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
 			// nested Claude Code sessions are not blocked by the "nested session" guard.
-			cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=", "-c", workDir, t.program)
+			restoreEnvArgs := make([]string, 0, len(t.extraEnv)*2)
+			for _, kv := range t.extraEnv {
+				restoreEnvArgs = append(restoreEnvArgs, "-e", kv)
+			}
+			restoreArgs := append([]string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}, restoreEnvArgs...)
+			restoreArgs = append(restoreArgs, "-c", workDir, t.program)
+			cmd := t.buildTmuxCommand(restoreArgs...)
 			err := t.cmdExec.Run(cmd)
 			if err != nil {
 				// Session creation failed - but it might be because the session already exists

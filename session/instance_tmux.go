@@ -69,6 +69,9 @@ func (i *Instance) initTmuxSession() {
 	} else {
 		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
 	}
+	if i.UUID != "" {
+		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
+	}
 	i.tmuxManager.SetSession(session)
 }
 
