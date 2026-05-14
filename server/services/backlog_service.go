@@ -1121,10 +1121,150 @@ func (s *BacklogService) OverrideVerdict(
 // TriggerReReview re-runs the review gate for a backlog item.
 // +api: backlog:trigger-re-review
 func (s *BacklogService) TriggerReReview(
-	_ context.Context,
-	_ *connect.Request[sessionv1.TriggerReReviewRequest],
+	ctx context.Context,
+	req *connect.Request[sessionv1.TriggerReReviewRequest],
 ) (*connect.Response[sessionv1.TriggerReReviewResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("TriggerReReview not yet implemented"))
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	// 1. Load item.
+	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
+	if err != nil {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+
+	// 2. Validate item is in review status.
+	if item.Status != string(session.BacklogStatusReview) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("item must be in %q status to re-trigger review, got %q", session.BacklogStatusReview, item.Status))
+	}
+
+	// 3. Repo path required.
+	if item.RepoPath == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("set repo_path before triggering re-review"))
+	}
+
+	// 4. Find the most recent review and work ItemSessions for this item.
+	sessions, err := s.storage.ListItemSessions(ctx, item.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list item sessions: %w", err))
+	}
+
+	var mostRecentReviewSession *ent.ItemSession
+	for _, is := range sessions {
+		if is.SessionRole == session.SessionRoleReview {
+			if mostRecentReviewSession == nil || is.CreatedAt.After(mostRecentReviewSession.CreatedAt) {
+				mostRecentReviewSession = is
+			}
+		}
+	}
+
+	// 5. Note: We don't need to delete the old verdict; a new one will overwrite it when the re-review
+	// session submits its findings via the MCP tool.
+
+	// 6. Get git diff from the most recent work session (if available).
+	var workSessionDiff string
+	var mostRecentWorkSession *ent.ItemSession
+	for _, is := range sessions {
+		if is.SessionRole == session.SessionRoleWork {
+			if mostRecentWorkSession == nil || is.CreatedAt.After(mostRecentWorkSession.CreatedAt) {
+				mostRecentWorkSession = is
+			}
+		}
+	}
+
+	if mostRecentWorkSession != nil && mostRecentWorkSession.LastCommitSha != "" {
+		diff, _, diffErr := session.GetGitDiff(ctx, item.RepoPath, mostRecentWorkSession.LastCommitSha)
+		if diffErr != nil {
+			log.WarningLog.Printf("[TriggerReReview] GetGitDiff failed: %v", diffErr)
+			diff = ""
+		}
+		workSessionDiff = diff
+	}
+
+	// 7. Deserialize AC snapshot (from most recent work session or item AC).
+	var acSnapshot []session.AcCriterion
+	if mostRecentWorkSession != nil && mostRecentWorkSession.AcSnapshot != "" {
+		acSnapshot, _ = session.ParseAcCriteria(mostRecentWorkSession.AcSnapshot)
+	}
+	if len(acSnapshot) == 0 {
+		acSnapshot, _ = session.ParseAcCriteria(item.AcceptanceCriteria)
+	}
+
+	// 8. Build re-review prompt.
+	acSnapshotJSON, _ := json.Marshal(acSnapshot)
+	reReviewPrompt := fmt.Sprintf(`You are re-reviewing a backlog item that previously entered the review state.
+
+# Item: %s
+
+## Description
+%s
+
+## Acceptance Criteria (at time of work session)
+`, item.Title, item.Description)
+
+	for _, ac := range acSnapshot {
+		reReviewPrompt += fmt.Sprintf("%d. %s (status: %s)\n", ac.Index, ac.Text, ac.Status)
+	}
+
+	reReviewPrompt += fmt.Sprintf(`
+## Recent Changes
+The work session made the following changes to the codebase:
+
+%s
+
+## Your Task
+Perform a comprehensive review and generate a ReviewVerdict using the update_backlog_item MCP tool:
+- Assess each acceptance criterion
+- Evaluate the diff against the requirements
+- Generate a PASS or FAIL verdict with detailed evidence
+- If FAIL, provide specific feedback for rework
+
+Do not modify the code. Only write the review verdict.
+`, workSessionDiff)
+
+	// 9. Require SessionCreator to spawn review session.
+	if s.sessionCreator == nil {
+		// No spawner configured; just return a placeholder indicating re-review was triggered.
+		log.InfoLog.Printf("[TriggerReReview] triggered for item %s but no SessionCreator available", item.ID)
+		return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
+			ItemSession: &sessionv1.ItemSession{
+				Id:          item.ID,
+				SessionRole: "re-review-triggered",
+			},
+		}), nil
+	}
+
+	// 10. Spawn one-shot re-review session.
+	slug := slugify(item.Title)
+	title := "re-review:" + slug
+	inst, spawnErr := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, reReviewPrompt,
+		[]string{"backlog:review"}, true)
+	if spawnErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn re-review session: %w", spawnErr))
+	}
+
+	// 11. Create ItemSession with role=review.
+	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleReview,
+		AcSnapshot:  string(acSnapshotJSON),
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create re-review item session: %w", err))
+	}
+
+	log.InfoLog.Printf("[TriggerReReview] spawned re-review session %s for item %s", inst.UUID, item.ID)
+
+	return connect.NewResponse(&sessionv1.TriggerReReviewResponse{
+		ItemSession: itemSessionToProto(is),
+	}), nil
 }
 
 // TriggerSync initiates a sync run for an external item source.

@@ -1,5 +1,5 @@
 {
-  "id": "GetWorktreeDiff",
+  "id": "unfinished:get-worktree-diff",
   "type": "backend",
   "service": "UnfinishedWorkService",
   "method": "GetWorktreeDiff",

@@ -1,5 +1,5 @@
 {
-  "id": "ClearConversationState",
+  "id": "session:clear-conversation-state",
   "type": "backend",
   "service": "SessionService",
   "method": "ClearConversationState",

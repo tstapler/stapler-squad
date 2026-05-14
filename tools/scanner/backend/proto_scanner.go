@@ -115,6 +115,13 @@ var methodToID = map[string]string{
 	"QuickCommitPush":            "unfinished:commit-push",
 	"GetUnfinishedWorkConfig":    "unfinished:get-config",
 	"UpdateUnfinishedWorkConfig": "unfinished:update-config",
+	"GetWorktreeDiff":            "unfinished:get-worktree-diff",
+	// Error tracking RPCs
+	"LogClientEvents":        "client-event:log",
+	"ListErrors":             "error:list",
+	"AcknowledgeError":       "error:acknowledge",
+	// Conversation state RPCs
+	"ClearConversationState": "session:clear-conversation-state",
 	// Backlog RPCs (BacklogService in backlog.proto)
 	"CreateBacklogItem":           "backlog:create-item",
 	"GetBacklogItem":              "backlog:get-item",

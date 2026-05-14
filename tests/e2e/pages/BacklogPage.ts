@@ -1,0 +1,123 @@
+import { Page, Locator } from '@playwright/test';
+
+export class BacklogPage {
+  readonly page: Page;
+  readonly newItemButton: Locator;
+  readonly searchInput: Locator;
+  readonly pageTitle: Locator;
+  readonly pageContent: Locator;
+  readonly emptyState: Locator;
+  readonly emptyHeadline: Locator;
+  readonly emptyCtaButton: Locator;
+  readonly lifecycleDiagram: Locator;
+  readonly filterZeroState: Locator;
+  readonly clearFiltersButton: Locator;
+
+  constructor(page: Page) {
+    this.page = page;
+    this.newItemButton = page.locator('[data-testid="backlog-new-item-button"]');
+    this.searchInput = page.locator('[data-testid="backlog-search-input"]');
+    this.pageTitle = page.locator('[data-testid="backlog-page"] h1');
+    this.pageContent = page.locator('[data-testid="backlog-page"]');
+    this.emptyState = page.locator('[data-testid="backlog-empty-state"]');
+    this.emptyHeadline = page.locator('[data-testid="backlog-empty-headline"]');
+    this.emptyCtaButton = page.locator('[data-testid="backlog-empty-cta-button"]');
+    this.lifecycleDiagram = page.locator('[data-testid="backlog-lifecycle-diagram"]');
+    this.filterZeroState = page.locator('[data-testid="backlog-filter-zero-state"]');
+    this.clearFiltersButton = page.locator('[data-testid="backlog-clear-filters-button"]');
+  }
+
+  async goto() {
+    await this.page.goto('/backlog');
+    await this.page.waitForLoadState('domcontentloaded');
+  }
+
+  async waitForPageLoad() {
+    await this.page.waitForSelector('[data-testid="backlog-page"]', { timeout: 10000 });
+  }
+
+  async waitForEmptyState() {
+    await this.page.waitForSelector('[data-testid="backlog-empty-state"]', { timeout: 5000 });
+  }
+
+  async waitForItemCards() {
+    await this.page.waitForSelector('[data-testid="backlog-item-card"]', { timeout: 5000 });
+  }
+
+  getItemCard(title: string): Locator {
+    return this.page.locator('[data-testid="backlog-item-card"]').filter({ hasText: title });
+  }
+
+  getItemCards(): Locator {
+    return this.page.locator('[data-testid="backlog-item-card"]');
+  }
+
+  getTableRows(): Locator {
+    return this.page.locator('[data-testid="backlog-table-row"]');
+  }
+
+  async openEmptyStateForm() {
+    await this.emptyCtaButton.click();
+    await this.page.waitForSelector('[data-testid="backlog-empty-form"]', { timeout: 5000 });
+  }
+
+  async fillEmptyStateForm(title: string, priority?: number) {
+    const titleInput = this.page.locator('[data-testid="backlog-empty-form-title"]');
+    await titleInput.fill(title);
+
+    if (priority !== undefined) {
+      const prioritySelect = this.page.locator('[data-testid="backlog-empty-form-priority"]');
+      await prioritySelect.selectOption({ value: String(priority) });
+    }
+  }
+
+  async submitEmptyStateForm() {
+    const submitButton = this.page.locator('[data-testid="backlog-empty-form-submit"]');
+    await submitButton.click();
+  }
+
+  async cancelEmptyStateForm() {
+    const cancelButton = this.page.locator('[data-testid="backlog-empty-form-cancel"]');
+    await cancelButton.click();
+  }
+
+  async createItemFromEmptyState(title: string, priority?: number) {
+    await this.openEmptyStateForm();
+    await this.fillEmptyStateForm(title, priority);
+    await this.submitEmptyStateForm();
+    // Wait for the item to appear in the list or board
+    await this.page.waitForSelector('[data-testid="backlog-item-card"]', { timeout: 5000 });
+  }
+
+  getLifecycleNode(label: string): Locator {
+    return this.page.locator(`[data-testid="backlog-lifecycle-node-${label}"]`);
+  }
+
+  getStatusFilterChip(status: string): Locator {
+    return this.page.locator(`[data-testid="backlog-filter-status-${status}"]`);
+  }
+
+  getPriorityFilterChip(priority: number): Locator {
+    return this.page.locator(`[data-testid="backlog-filter-priority-${priority}"]`);
+  }
+
+  async applyStatusFilter(status: string) {
+    const filterChip = this.getStatusFilterChip(status);
+    await filterChip.click();
+  }
+
+  async applyPriorityFilter(priority: number) {
+    const filterChip = this.getPriorityFilterChip(priority);
+    await filterChip.click();
+  }
+
+  async clearAllFilters() {
+    if (await this.clearFiltersButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+      await this.clearFiltersButton.click();
+    }
+  }
+
+  async searchItems(query: string) {
+    await this.searchInput.fill(query);
+  }
+}

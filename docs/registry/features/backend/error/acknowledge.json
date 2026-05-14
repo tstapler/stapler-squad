@@ -1,5 +1,5 @@
 {
-  "id": "AcknowledgeError",
+  "id": "error:acknowledge",
   "type": "backend",
   "service": "SessionService",
   "method": "AcknowledgeError",

@@ -32,11 +32,12 @@ const LIFECYCLE_NODES = [
 
 function LifecycleDiagram() {
   return (
-    <div className={styles.lifecycleDiagram} aria-hidden="true">
+    <div className={styles.lifecycleDiagram} aria-hidden="true" data-testid="backlog-lifecycle-diagram">
       {LIFECYCLE_NODES.map((node, i) => (
         <div key={node.label} style={{ display: "contents" }}>
           <div
             className={`${styles.lifecycleNode} ${node.active ? styles.lifecycleNodeActive : styles.lifecycleNodeInactive}`}
+            data-testid={`backlog-lifecycle-node-${node.label}`}
           >
             <span>{node.active ? "◉" : "○"}</span>
             <span>{node.label}</span>
@@ -98,8 +99,8 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
 
   if (!showForm) {
     return (
-      <section role="region" aria-label="Backlog — empty" className={styles.wrapper}>
-        <h2 className={styles.headline}>Your backlog is empty.</h2>
+      <section role="region" aria-label="Backlog — empty" className={styles.wrapper} data-testid="backlog-empty-state">
+        <h2 className={styles.headline} data-testid="backlog-empty-headline">Your backlog is empty.</h2>
         <p className={styles.subline}>
           Create a work item, define what &ldquo;done&rdquo; looks like, spawn an agent — the system reviews output automatically.
         </p>
@@ -109,6 +110,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
           className={styles.ctaButton}
           autoFocus
           onClick={() => setShowForm(true)}
+          data-testid="backlog-empty-cta-button"
         >
           + Create First Item
         </button>
@@ -117,10 +119,10 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
   }
 
   return (
-    <section role="region" aria-label="Backlog — empty" className={styles.wrapper}>
+    <section role="region" aria-label="Backlog — empty" className={styles.wrapper} data-testid="backlog-empty-state">
       <h2 className={styles.headline}>Your backlog is empty.</h2>
       <LifecycleDiagram />
-      <div role="form" aria-label="Create new backlog item" className={styles.inlineForm}>
+      <div role="form" aria-label="Create new backlog item" className={styles.inlineForm} data-testid="backlog-empty-form">
         <div>
           <label htmlFor="item-title" className={styles.formLabel}>
             Title
@@ -138,6 +140,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
               if (submitError) setSubmitError(null);
             }}
             className={styles.formInput}
+            data-testid="backlog-empty-form-title"
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 handleCancel();
@@ -159,6 +162,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
             value={priority}
             onChange={(e) => setPriority(Number(e.target.value))}
             className={styles.formSelect}
+            data-testid="backlog-empty-form-priority"
           >
             <option value={1}>P1 — Critical</option>
             <option value={2}>P2 — High</option>
@@ -168,7 +172,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
           </select>
         </div>
         <div className={styles.formActions}>
-          <button type="button" className={styles.cancelButton} onClick={handleCancel}>
+          <button type="button" className={styles.cancelButton} onClick={handleCancel} data-testid="backlog-empty-form-cancel">
             Cancel
           </button>
           <button
@@ -177,6 +181,7 @@ export function BacklogEmptyState({ onCreateItem }: BacklogEmptyStateProps) {
             aria-disabled={!title.trim()}
             disabled={submitting}
             onClick={handleSubmit}
+            data-testid="backlog-empty-form-submit"
           >
             {submitting ? "Creating…" : "Create Item"}
           </button>
@@ -200,9 +205,10 @@ export function FilterZeroState({ onClearFilters }: FilterZeroStateProps) {
       aria-live="polite"
       aria-label="No results"
       className={styles.filterZeroWrapper}
+      data-testid="backlog-filter-zero-state"
     >
       <p className={styles.filterZeroText}>No items match your filters.</p>
-      <button className={styles.clearFiltersButton} onClick={onClearFilters}>
+      <button className={styles.clearFiltersButton} onClick={onClearFilters} data-testid="backlog-clear-filters-button">
         Clear filters
       </button>
     </div>

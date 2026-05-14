@@ -171,3 +171,119 @@ func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	assert.True(t, approveResp.Msg.Item.PlanApproved)
 	assert.NotNil(t, approveResp.Msg.Item.PlanApprovedAt)
 }
+
+// ─── TriggerReReview ──────────────────────────────────────────────────────
+
+// UT-040a: TriggerReReview on item not in review status → CodeFailedPrecondition
+func TestTriggerReReview_NotInReviewStatus_ReturnsFailedPrecondition(t *testing.T) {
+	svc := newBacklogService(t)
+
+	// Create item (starts as "idea").
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "test item",
+	}))
+	require.NoError(t, err)
+
+	// Try to trigger re-review on item in "idea" status.
+	_, err = svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{
+		ItemId: createResp.Msg.Item.Id,
+	}))
+	require.Error(t, err)
+
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connErr.Code())
+	assert.Contains(t, connErr.Error(), "review")
+}
+
+// UT-040b: TriggerReReview on item with no repo_path → CodeFailedPrecondition
+func TestTriggerReReview_MissingRepoPath_ReturnsFailedPrecondition(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil)
+
+	// Create item with AC so it can transition to ready.
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "test item",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true, // Skip planning gate for simpler transition
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	// Transition: idea → ready → in_progress → review.
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReady),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusInProgress),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+
+	// Try to trigger re-review without repo_path.
+	_, err = svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{
+		ItemId: itemID,
+	}))
+	require.Error(t, err)
+
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connErr.Code())
+	assert.Contains(t, connErr.Error(), "repo_path")
+}
+
+// UT-040c: TriggerReReview happy path — item in review, no SessionCreator returns placeholder
+func TestTriggerReReview_HappyPath_NoSessionCreator_ReturnsPlaceholder(t *testing.T) {
+	svc := newBacklogService(t)
+
+	// Create item with repo_path and AC.
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "test item",
+		RepoPath: "/tmp/test-repo",
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: "test", Status: "pending"},
+		},
+		SkipPlanning: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	// Transition through states to reach review.
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReady),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusInProgress),
+	}))
+	require.NoError(t, err)
+
+	_, err = svc.TransitionBacklogItemStatus(t.Context(), connect.NewRequest(&sessionv1.TransitionBacklogItemStatusRequest{
+		ItemId:       itemID,
+		TargetStatus: string(session.BacklogStatusReview),
+	}))
+	require.NoError(t, err)
+
+	// Trigger re-review without a SessionCreator.
+	resp, err := svc.TriggerReReview(t.Context(), connect.NewRequest(&sessionv1.TriggerReReviewRequest{
+		ItemId: itemID,
+	}))
+	require.NoError(t, err)
+	assert.NotNil(t, resp.Msg.ItemSession)
+	assert.Equal(t, itemID, resp.Msg.ItemSession.Id)
+	assert.Equal(t, "re-review-triggered", resp.Msg.ItemSession.SessionRole)
+}
