@@ -526,7 +526,7 @@ export function SessionDetailView({
         )}
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
-            <SessionLogsTab sessionId={session.id} baseUrl={getApiBaseUrl()} />
+            <SessionLogsTab sessionId={session.id} />
           </div>
         )}
         {activeTab === "info" && (
