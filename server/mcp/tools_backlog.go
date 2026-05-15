@@ -180,8 +180,11 @@ func (h *backlogHandlers) reportProgress(ctx context.Context, req mcpgo.CallTool
 
 	// Map status to AC criterion status values.
 	acStatus := status
-	if status == "pass" {
+	switch status {
+	case "pass":
 		acStatus = "done"
+	case "fail":
+		acStatus = "in_progress"
 	}
 
 	if err := h.storage.UpdateAcCriterionStatus(ctx, itemID, criteriaIndex, acStatus, note); err != nil {
@@ -332,9 +335,10 @@ func (h *backlogHandlers) submitReviewVerdict(ctx context.Context, req mcpgo.Cal
 		return errResult(ErrInternalError, fmt.Sprintf("save review verdict: %v", saveErr), ""), nil
 	}
 
-	// If PASS, transition item to done.
+	// If PASS, transition item to done (only from review status).
 	if overallOutcome == session.ReviewVerdictPass {
-		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, nil); transErr != nil {
+		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusReview)}
+		if _, transErr := h.storage.TransitionBacklogItemStatus(ctx, itemID, session.BacklogStatusDone, precondition); transErr != nil {
 			log.InfoLog.Printf("[mcp:submit_review_verdict] PASS but transition to done failed: %v", transErr)
 			// Non-fatal — verdict is saved, status transition is best-effort.
 		}

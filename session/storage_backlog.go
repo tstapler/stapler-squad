@@ -88,6 +88,7 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 	sessions, err := r.client.ItemSession.Query().
 		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID))).
 		WithReviewVerdict().
+		Order(ent.Asc(itemsession.FieldCreatedAt)).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list item sessions for item %s: %w", itemID, err)

@@ -313,10 +313,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         )}
 
         {/* Gate Verdict */}
-        {item.status === "review" && item.gateVerdict && (
+        {item.status === "review" && (
           <div className={styles.section}>
             <GateVerdictBox
-              verdict={item.gateVerdict}
+              verdict={item.gateVerdict ?? "PENDING"}
               summary={item.gateVerdictSummary || "Review in progress"}
               criteria={item.gateCriteria}
               elapsedSeconds={undefined}

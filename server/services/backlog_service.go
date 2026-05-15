@@ -885,10 +885,12 @@ func (s *BacklogService) AttachSessionToItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	if item.Status != string(session.BacklogStatusIdea) && item.Status != string(session.BacklogStatusReady) {
+	if item.Status != string(session.BacklogStatusIdea) &&
+		item.Status != string(session.BacklogStatusReady) &&
+		item.Status != string(session.BacklogStatusInProgress) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("item must be in %q or %q status to attach a session, got %q",
-				session.BacklogStatusIdea, session.BacklogStatusReady, item.Status))
+			fmt.Errorf("item must be in %q, %q, or %q status to attach a session, got %q",
+				session.BacklogStatusIdea, session.BacklogStatusReady, session.BacklogStatusInProgress, item.Status))
 	}
 
 	// 3. Snapshot current AC.
@@ -966,34 +968,41 @@ func (s *BacklogService) TriggerTriage(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
 	}
 
-	// 2. Repo path required.
+	// 2. Status guard — triage is only valid for idea or ready items.
+	if item.Status != string(session.BacklogStatusIdea) && item.Status != string(session.BacklogStatusReady) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("item must be in %q or %q status to trigger triage, got %q",
+				session.BacklogStatusIdea, session.BacklogStatusReady, item.Status))
+	}
+
+	// 3. Repo path required.
 	if item.RepoPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("set repo_path before triggering triage"))
 	}
 
-	// 3. Build slug and artifact dir path.
+	// 4. Build slug and artifact dir path.
 	slug := slugify(item.Title)
 	artifactRelPath := filepath.Join("docs", "tasks", slug)
 	artifactAbsPath := filepath.Join(item.RepoPath, artifactRelPath)
 
-	// 4. Create artifact dir.
+	// 5. Create artifact dir.
 	if mkErr := os.MkdirAll(artifactAbsPath, 0o755); mkErr != nil {
 		return nil, connect.NewError(connect.CodeInternal,
 			fmt.Errorf("failed to create artifact dir %s: %w", artifactAbsPath, mkErr))
 	}
 
-	// 5. Require SessionCreator.
+	// 6. Require SessionCreator.
 	// degraded: sessionCreator unavailable — return CodeUnimplemented so callers can detect the gap.
 	if s.sessionCreator == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented,
 			fmt.Errorf("SessionCreator not wired — contact admin"))
 	}
 
-	// 6. Build triage prompt (use absolute path so agent submits a path os.Stat can verify).
+	// 7. Build triage prompt (use absolute path so agent submits a path os.Stat can verify).
 	triagePrompt := buildTriagePrompt(item, artifactAbsPath, slug)
 
-	// 7. Spawn one-shot triage session.
+	// 8. Spawn one-shot triage session.
 	title := "triage:" + slug
 	inst, err := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, triagePrompt,
 		[]string{"backlog:triage"}, true)
@@ -1001,7 +1010,7 @@ func (s *BacklogService) TriggerTriage(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn triage session: %w", err))
 	}
 
-	// 8. Create ItemSession with role=triage.
+	// 9. Create ItemSession with role=triage.
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
