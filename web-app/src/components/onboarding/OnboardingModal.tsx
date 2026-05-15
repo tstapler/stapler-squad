@@ -4,6 +4,7 @@ import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import * as styles from "./OnboardingModal.css";
+import { ONBOARDED_KEY } from "./useOnboarding";
 
 interface OnboardingModalProps {
   isOpen: boolean;
@@ -68,7 +69,7 @@ export function OnboardingModal({ isOpen, onClose }: OnboardingModalProps) {
   const handleGetStarted = () => {
     if (dontShowAgain) {
       try {
-        localStorage.setItem("stapler-squad:onboarded", "true");
+        localStorage.setItem(ONBOARDED_KEY, "true");
       } catch {
         // ignore storage errors
       }

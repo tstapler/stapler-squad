@@ -1,18 +1,20 @@
 import { useState, useEffect, useCallback } from "react";
 
-const ONBOARDED_KEY = "stapler-squad:onboarded";
+export const ONBOARDED_KEY = "stapler-squad:onboarded";
 
 export function useOnboarding() {
   const [showOnboarding, setShow] = useState(false);
 
   useEffect(() => {
+    let timerId: ReturnType<typeof setTimeout>;
     try {
       if (!localStorage.getItem(ONBOARDED_KEY)) {
-        setTimeout(() => setShow(true), 800);
+        timerId = setTimeout(() => setShow(true), 800);
       }
     } catch {
       // ignore storage errors (private browsing mode, etc.)
     }
+    return () => clearTimeout(timerId);
   }, []);
 
   const setOnboardingComplete = useCallback(() => {

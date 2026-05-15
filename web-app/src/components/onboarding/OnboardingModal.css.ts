@@ -187,7 +187,7 @@ export const primaryButton = style({
   padding: `${vars.space["2"]} ${vars.space["4"]}`,
   fontSize: vars.fontSize.sm,
   fontWeight: vars.fontWeight.semibold,
-  color: vars.color.textInverse,
+  color: vars.color.primaryText,
   background: vars.color.primary,
   border: "none",
   borderRadius: vars.radii.md,

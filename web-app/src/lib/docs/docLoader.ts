@@ -16,9 +16,10 @@ const DOC_FILES = [
 ];
 
 export async function loadDocs(): Promise<DocEntry[]> {
-  const entries = await Promise.all(
+  const results = await Promise.allSettled(
     DOC_FILES.map(async (slug) => {
       const res = await fetch(`/docs/${slug}.md`);
+      if (!res.ok) throw new Error(`Failed to load ${slug}: ${res.status}`);
       const content = await res.text();
       const titleMatch = content.match(/^#\s+(.+)$/m);
       return {
@@ -28,7 +29,11 @@ export async function loadDocs(): Promise<DocEntry[]> {
       };
     })
   );
-  return entries;
+  return results
+    .filter(
+      (r): r is PromiseFulfilledResult<DocEntry> => r.status === "fulfilled"
+    )
+    .map((r) => r.value);
 }
 
 export function buildFuseIndex(docs: DocEntry[]): Fuse<DocEntry> {
