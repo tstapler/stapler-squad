@@ -1243,10 +1243,16 @@ func (s *BacklogService) TriggerReReview(
 	}
 
 	var mostRecentReviewSession *ent.ItemSession
+	var mostRecentWorkSession *ent.ItemSession
 	for _, is := range sessions {
-		if is.SessionRole == session.SessionRoleReview {
+		switch is.SessionRole {
+		case session.SessionRoleReview:
 			if mostRecentReviewSession == nil || is.CreatedAt.After(mostRecentReviewSession.CreatedAt) {
 				mostRecentReviewSession = is
+			}
+		case session.SessionRoleWork:
+			if mostRecentWorkSession == nil || is.CreatedAt.After(mostRecentWorkSession.CreatedAt) {
+				mostRecentWorkSession = is
 			}
 		}
 	}
@@ -1254,24 +1260,19 @@ func (s *BacklogService) TriggerReReview(
 	// 5. Note: We don't need to delete the old verdict; a new one will overwrite it when the re-review
 	// session submits its findings via the MCP tool.
 
-	// 6. Get git diff from the most recent work session (if available).
+	// 6. Get git diff from the most recent work session (use HEAD~1..HEAD if no commit SHA tracked).
 	var workSessionDiff string
-	var mostRecentWorkSession *ent.ItemSession
-	for _, is := range sessions {
-		if is.SessionRole == session.SessionRoleWork {
-			if mostRecentWorkSession == nil || is.CreatedAt.After(mostRecentWorkSession.CreatedAt) {
-				mostRecentWorkSession = is
-			}
+	if mostRecentWorkSession != nil {
+		fromSHA := mostRecentWorkSession.LastCommitSha
+		if fromSHA == "" {
+			fromSHA = "HEAD~1"
 		}
-	}
-
-	if mostRecentWorkSession != nil && mostRecentWorkSession.LastCommitSha != "" {
-		diff, _, diffErr := session.GetGitDiff(ctx, item.RepoPath, mostRecentWorkSession.LastCommitSha)
+		diff, _, diffErr := session.GetGitDiff(ctx, item.RepoPath, fromSHA)
 		if diffErr != nil {
 			log.WarningLog.Printf("[TriggerReReview] GetGitDiff failed: %v", diffErr)
-			diff = ""
+		} else {
+			workSessionDiff = diff
 		}
-		workSessionDiff = diff
 	}
 
 	// 7. Deserialize AC snapshot (from most recent work session or item AC).
@@ -1285,15 +1286,22 @@ func (s *BacklogService) TriggerReReview(
 
 	// 8. Build re-review prompt.
 	acSnapshotJSON, _ := json.Marshal(acSnapshot)
+
+	priorVerdictSection := ""
+	if mostRecentReviewSession != nil && mostRecentReviewSession.Edges.ReviewVerdict != nil {
+		rv := mostRecentReviewSession.Edges.ReviewVerdict
+		priorVerdictSection = fmt.Sprintf("\n## Prior Review Verdict\nOutcome: %s\nSummary: %s\n", rv.OverallOutcome, rv.Summary)
+	}
+
 	reReviewPrompt := fmt.Sprintf(`You are re-reviewing a backlog item that previously entered the review state.
 
 # Item: %s
 
 ## Description
 %s
-
+%s
 ## Acceptance Criteria (at time of work session)
-`, item.Title, item.Description)
+`, item.Title, item.Description, priorVerdictSection)
 
 	for _, ac := range acSnapshot {
 		reReviewPrompt += fmt.Sprintf("%d. %s (status: %s)\n", ac.Index, ac.Text, ac.Status)

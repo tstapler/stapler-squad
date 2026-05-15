@@ -218,7 +218,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         await service.overrideVerdict(reviewSession.entityId, "Gate skipped by user", "done");
       } else {
         // No review session yet — direct transition (item.skipReviewGate path)
-        await service.transitionStatus(item.id, "done");
+        const ok = await service.transitionStatus(item.id, "done");
+        if (!ok) {
+          setError(service.lastError?.message ?? "Failed to skip gate — please try again.");
+          return;
+        }
       }
       await load();
     } finally {
