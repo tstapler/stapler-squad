@@ -1020,7 +1020,8 @@ func (s *BacklogService) TriggerTriage(
 }
 
 // buildTriagePrompt builds the one-shot triage agent prompt.
-func buildTriagePrompt(item *session.BacklogItemData, artifactRelPath, slug string) string {
+// artifactAbsPath is the absolute path to the artifact directory on disk.
+func buildTriagePrompt(item *session.BacklogItemData, artifactAbsPath, slug string) string {
 	var sb strings.Builder
 
 	sb.WriteString("You are a senior software architect performing pre-implementation triage.\n\n")
@@ -1039,7 +1040,7 @@ func buildTriagePrompt(item *session.BacklogItemData, artifactRelPath, slug stri
 		}
 	}
 
-	researchDir := artifactRelPath + "/research"
+	researchDir := artifactAbsPath + "/research"
 	fmt.Fprintf(&sb, `## Your Task
 
 Perform pre-implementation triage for this backlog item. Work in parallel:
@@ -1073,7 +1074,7 @@ This notifies the operator that triage is complete and ready for review.
 
 Do not modify any source code. Only write planning documents.
 `, researchDir, researchDir, researchDir, researchDir,
-		artifactRelPath, artifactRelPath, artifactRelPath)
+		artifactAbsPath, artifactAbsPath, artifactAbsPath)
 
 	_ = slug // used in title, kept for clarity
 	return sb.String()
@@ -1161,10 +1162,19 @@ func (s *BacklogService) OverrideVerdict(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save review verdict: %w", verdictErr))
 	}
 
-	// 5. Transition item to target status if valid.
+	// 5. Transition item to target status if valid (validate via state machine).
 	var updatedItem *session.BacklogItemData
 	if req.Msg.ToStatus != "" {
 		toStatus := session.BacklogStatus(req.Msg.ToStatus)
+		currentItem, currentErr := s.storage.GetBacklogItem(ctx, itemID)
+		if currentErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load item for transition: %w", currentErr))
+		}
+		from := session.BacklogStatus(currentItem.Status)
+		if !session.CanTransitionBacklog(from, toStatus) {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				fmt.Errorf("cannot transition item from %q to %q", from, toStatus))
+		}
 		updated, transErr := s.storage.TransitionBacklogItemStatus(ctx, itemID, toStatus, nil)
 		if transErr != nil {
 			log.ErrorLog.Printf("[OverrideVerdict] failed to transition item %s to %s: %v", itemID, toStatus, transErr)

@@ -76,7 +76,9 @@ type CriterionVerdict struct {
 // Returns PASS only if every verdict is PASS.
 func AggregateOutcome(verdicts []CriterionVerdict) string {
 	if len(verdicts) == 0 {
-		return ReviewVerdictPass
+		// No criteria evaluated — treat as FAIL, not PASS, to prevent auto-approval
+		// of reviews that somehow bypassed the non-empty validation in submit_review_verdict.
+		return ReviewVerdictFail
 	}
 
 	hasFail := false

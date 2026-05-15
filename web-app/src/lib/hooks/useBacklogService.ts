@@ -113,11 +113,14 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
   // Map review verdict if present
   if (s.reviewVerdict) {
     const rv = s.reviewVerdict;
-    const knownOutcomes = new Set(["PASS", "FAIL", "PARTIAL", "UNVERIFIABLE"]);
+    const knownOutcomes = new Set(["PASS", "FAIL", "PARTIAL"]);
     session.reviewVerdict = {
+      // Map UNVERIFIABLE → PARTIAL so GateVerdictBox always gets a known verdict
       overallOutcome: knownOutcomes.has(rv.overallOutcome)
         ? (rv.overallOutcome as "PASS" | "PARTIAL" | "FAIL" | "PENDING")
-        : "PENDING",
+        : rv.overallOutcome
+          ? "PARTIAL"
+          : "PENDING",
       summary: rv.summary,
       perCriterion: (rv.perCriterion ?? []).map((c) => ({
         criterionIndex: c.criterionIndex,

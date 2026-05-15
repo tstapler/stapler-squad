@@ -170,7 +170,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     if (!item) return;
     setActionLoading(true);
     try {
-      await service.transitionStatus(item.id, "done");
+      const ok = await service.transitionStatus(item.id, "done");
+      if (!ok) {
+        setError(service.lastError?.message ?? "Failed to approve — please try again.");
+        return;
+      }
       await load();
     } finally {
       setActionLoading(false);
@@ -297,7 +301,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         </div>
 
         {/* Triage Progress Indicator */}
-        {item.status === "idea" && item.triageStatus === "running" && (
+        {(item.status === "idea" || item.status === "ready") && item.triageStatus === "running" && (
           <div className={styles.section}>
             <TriageLoadingIndicator
               elapsedSeconds={triageElapsedSeconds}

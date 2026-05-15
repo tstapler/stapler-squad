@@ -49,8 +49,8 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 		SetSessionUUID(data.SessionUUID).
 		SetSessionRole(data.SessionRole).
 		SetBacklogItemID(parsedItemID).
-		SetNillableAcSnapshot(&data.AcSnapshot).
-		SetNillableTriageResult(&data.TriageResult).
+		SetNillableAcSnapshot(nilIfEmpty(data.AcSnapshot)).
+		SetNillableTriageResult(nilIfEmpty(data.TriageResult)).
 		Save(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create item session: %w", err)
