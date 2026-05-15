@@ -193,18 +193,15 @@ func (p *EscapeCodeParser) emitEventWithStage(code ParsedEscapeCode, sessionSeq 
 	}
 
 	// Compute payload hash — FNV-64a for summary (fast), SHA-256 for full (collision-resistant)
-	if p.captureLevel == "full" {
+	switch p.captureLevel {
+	case "full":
 		h := sha256.Sum256(code.RawBytes)
 		record.PayloadHash = hex.EncodeToString(h[:])[:16]
-	} else if p.captureLevel == "summary" {
+		record.RawBytes = code.RawBytes
+	case "summary":
 		h := fnv.New64a()
 		h.Write(code.RawBytes)
 		record.PayloadHash = strconv.FormatUint(h.Sum64(), 16)
-	}
-
-	// Include raw bytes only for full capture
-	if p.captureLevel == "full" {
-		record.RawBytes = code.RawBytes
 	}
 
 	// Apply OSC redaction
