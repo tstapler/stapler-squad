@@ -327,7 +327,7 @@ func (s *BacklogService) GetBacklogItem(
 
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -452,7 +452,7 @@ func (s *BacklogService) UpdateBacklogItem(
 		if errors.Is(err, session.ErrPreconditionFailed) {
 			return nil, connect.NewError(connect.CodeAborted, err)
 		}
-		if ent.IsNotFound(err) {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to update backlog item: %w", err))
@@ -477,7 +477,7 @@ func (s *BacklogService) ArchiveBacklogItem(
 
 	archived, err := s.storage.ArchiveBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to archive backlog item: %w", err))
@@ -503,7 +503,7 @@ func (s *BacklogService) TransitionBacklogItemStatus(
 	// Load current item to check CanTransitionBacklog.
 	item, err := s.storage.GetBacklogItem(ctx, req.Msg.ItemId)
 	if err != nil {
-		if ent.IsNotFound(err) {
+		if ent.IsNotFound(err) || errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
@@ -775,19 +775,15 @@ func (s *BacklogService) SpawnSessionFromItem(
 			fmt.Errorf("set repo_path before spawning a session"))
 	}
 
-	// 5. Snapshot current AC.
-	acSnapshot := item.AcceptanceCriteria
-
-	// 6. Create an ItemSession record (UUID TBD — will be updated after spawn).
-	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
-		ItemID:      item.ID,
-		SessionUUID: "<pending>",
-		SessionRole: session.SessionRoleWork,
-		AcSnapshot:  acSnapshot,
-	})
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
+	// 5. Require SessionCreator before doing any DB writes.
+	// degraded: sessionCreator unavailable — return CodeUnimplemented so callers can detect the gap.
+	if s.sessionCreator == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented,
+			fmt.Errorf("SessionCreator not wired — contact admin"))
 	}
+
+	// 6. Snapshot current AC.
+	acSnapshot := item.AcceptanceCriteria
 
 	// 7. Load prior sessions for context.
 	priorSessions, err := s.storage.ListItemSessions(ctx, item.ID)
@@ -819,23 +815,22 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// 9. Generate session title.
 	title := "backlog:" + slugify(item.Title)
 
-	// 10. Require SessionCreator.
-	// degraded: sessionCreator unavailable — return CodeUnimplemented so callers can detect the gap.
-	if s.sessionCreator == nil {
-		return nil, connect.NewError(connect.CodeUnimplemented,
-			fmt.Errorf("SessionCreator not wired — contact admin"))
-	}
-
-	// Spawn session.
+	// 10. Spawn session first so we have the real UUID before creating the ItemSession record.
 	inst, err := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, prompt,
 		[]string{"backlog:work"}, false)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
 	}
 
-	// 11. Update ItemSession with real UUID.
-	if updateErr := s.storage.UpdateItemSessionSessionUUID(ctx, is.ID.String(), inst.UUID); updateErr != nil {
-		log.ErrorLog.Printf("[SpawnSessionFromItem] failed to update item session UUID: %v", updateErr)
+	// 11. Create ItemSession with the real session UUID (avoids "<pending>" orphan records on failure).
+	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: inst.UUID,
+		SessionRole: session.SessionRoleWork,
+		AcSnapshot:  acSnapshot,
+	})
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
 	}
 
 	// 12. Write slash commands and context file synchronously under a mutex so
@@ -856,9 +851,6 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
 		log.ErrorLog.Printf("[SpawnSessionFromItem] failed to transition item to in_progress: %v", transErr)
 	}
-
-	// Reload updated item session.
-	is.SessionUUID = inst.UUID
 
 	return connect.NewResponse(&sessionv1.SpawnSessionFromItemResponse{
 		SessionUuid: inst.UUID,
@@ -998,8 +990,8 @@ func (s *BacklogService) TriggerTriage(
 			fmt.Errorf("SessionCreator not wired — contact admin"))
 	}
 
-	// 6. Build triage prompt.
-	triagePrompt := buildTriagePrompt(item, artifactRelPath, slug)
+	// 6. Build triage prompt (use absolute path so agent submits a path os.Stat can verify).
+	triagePrompt := buildTriagePrompt(item, artifactAbsPath, slug)
 
 	// 7. Spawn one-shot triage session.
 	title := "triage:" + slug

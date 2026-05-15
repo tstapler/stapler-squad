@@ -113,8 +113,11 @@ function mapItemSession(s: ItemSessionProto): LinkedSession {
   // Map review verdict if present
   if (s.reviewVerdict) {
     const rv = s.reviewVerdict;
+    const knownOutcomes = new Set(["PASS", "FAIL", "PARTIAL", "UNVERIFIABLE"]);
     session.reviewVerdict = {
-      overallOutcome: (rv.overallOutcome as "PASS" | "PARTIAL" | "FAIL" | "PENDING" | "") || "PENDING",
+      overallOutcome: knownOutcomes.has(rv.overallOutcome)
+        ? (rv.overallOutcome as "PASS" | "PARTIAL" | "FAIL" | "PENDING")
+        : "PENDING",
       summary: rv.summary,
       perCriterion: (rv.perCriterion ?? []).map((c) => ({
         criterionIndex: c.criterionIndex,
@@ -150,6 +153,13 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     }
   }
 
+  // Derive triageStatus from linked sessions: running if a triage session has no endedAt.
+  let triageStatus: BacklogItem["triageStatus"];
+  const triageSession = linkedSessions.filter((s) => s.role === "triage").at(-1);
+  if (triageSession) {
+    triageStatus = triageSession.endedAt ? "completed" : "running";
+  }
+
   return {
     id: p.id,
     title: p.title,
@@ -169,6 +179,7 @@ function mapBacklogItem(p: BacklogItemProto): BacklogItem {
     gateVerdict,
     gateVerdictSummary,
     gateCriteria,
+    triageStatus,
   };
 }
 

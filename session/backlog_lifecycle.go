@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -158,8 +159,9 @@ func (l *BacklogLifecycleListener) spawnReviewGate(item *ent.BacklogItem, is *en
 	// Security check — block if secrets detected.
 	if secErr := RunPreGateSecurityCheck(diff); secErr != nil {
 		log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate security check blocked item=%s: %v", item.ID, secErr)
-		// Record a failed review ItemSession so the status is visible.
-		_, createErr := l.storage.CreateItemSession(ctx, ItemSessionData{
+		// Record a failed review ItemSession with a FAIL verdict so the gate verdict
+		// is visible in the UI and operators can act (override or re-review).
+		blockedSession, createErr := l.storage.CreateItemSession(ctx, ItemSessionData{
 			ItemID:      item.ID.String(),
 			SessionUUID: "review-blocked-" + item.ID.String(),
 			SessionRole: SessionRoleReview,
@@ -168,11 +170,15 @@ func (l *BacklogLifecycleListener) spawnReviewGate(item *ent.BacklogItem, is *en
 			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate CreateItemSession (security block) item=%s: %v", item.ID, createErr)
 			return
 		}
-		// The review verdict saving requires an ItemSession ID obtained above.
-		// We log and do not attempt to save a verdict here because SaveReviewVerdict
-		// needs an item session that the MCP tool would normally create. For the
-		// security-blocked case we rely on the log entry to surface the issue.
-		log.InfoLog.Printf("[BacklogLifecycle] spawnReviewGate security check blocked for item %s — no review session spawned", item.ID)
+		summary := fmt.Sprintf("Review blocked by security check: %v. Override required to proceed.", secErr)
+		if _, verdictErr := l.storage.SaveReviewVerdict(ctx, blockedSession.ID.String(), ReviewVerdictData{
+			ItemSessionID:  blockedSession.ID.String(),
+			OverallOutcome: ReviewVerdictFail,
+			Summary:        summary,
+		}); verdictErr != nil {
+			log.ErrorLog.Printf("[BacklogLifecycle] spawnReviewGate SaveReviewVerdict (security block) item=%s: %v", item.ID, verdictErr)
+		}
+		log.InfoLog.Printf("[BacklogLifecycle] spawnReviewGate security check blocked for item %s — FAIL verdict recorded", item.ID)
 		return
 	}
 

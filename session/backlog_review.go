@@ -83,11 +83,13 @@ func BuildReviewPrompt(item *ent.BacklogItem, acSnapshot []AcCriterion, diff str
 
 	// --- instructions ---
 	sb.WriteString("## Instructions\n")
-	sb.WriteString("For each acceptance criterion listed above, call the submit_review_verdict MCP tool once with:\n")
-	sb.WriteString("  - outcome: one of PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
-	sb.WriteString("  - evidence: a direct quote or reference from the diff\n\n")
-	sb.WriteString("Then call submit_review_verdict with the overall verdict.\n\n")
-	fmt.Fprintf(&sb, "item_session_id is: %s\n", itemSessionID)
+	sb.WriteString("Call submit_review_verdict ONCE with ALL criteria verdicts in the verdicts array:\n")
+	sb.WriteString("  - item_id: the backlog item UUID shown below\n")
+	sb.WriteString("  - summary: a concise overall assessment\n")
+	sb.WriteString("  - verdicts: [{criterion_index, outcome, evidence}, ...] for each criterion\n")
+	sb.WriteString("  - outcome values: PASS, FAIL, PARTIAL, UNVERIFIABLE\n")
+	sb.WriteString("  - evidence: direct quote or reference from the diff\n\n")
+	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_review_verdict): %s\n", item.ID.String())
 
 	return sb.String()
 }
