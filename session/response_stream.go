@@ -443,6 +443,17 @@ func (rs *ResponseStream) GetEscapeParser() *analytics.EscapeCodeParser {
 	return rs.escapeParser
 }
 
+// GetTotalBytesWritten returns the monotonic PTY byte offset from the circular
+// buffer. This is the same counter used by Stage 1 (Parse) so Stage 2
+// (ParseStage2) session_seq values are stable across WebSocket reconnections.
+// Returns 0 if no buffer is available.
+func (rs *ResponseStream) GetTotalBytesWritten() int64 {
+	if rs.ptyAccess == nil || rs.ptyAccess.buffer == nil {
+		return 0
+	}
+	return rs.ptyAccess.buffer.TotalBytesWritten()
+}
+
 // GetExitTail returns a copy of the last bytes seen before the PTY exited.
 // Returns nil if the stream has not yet exited or no output was captured.
 func (rs *ResponseStream) GetExitTail() []byte {

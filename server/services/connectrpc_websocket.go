@@ -700,8 +700,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			return stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes))
 		}
 
-		// stage2BytesWritten tracks cumulative transport bytes for Stage 2 session_seq.
-		var stage2BytesWritten int64
 		// escapeParser is fetched once; may be nil if no controller is running.
 		escapeParser := instance.GetEscapeParser()
 
@@ -754,9 +752,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					escapeParser = instance.GetEscapeParser()
 				}
 				if escapeParser != nil && escapeParser.IsEnabled() {
-					escapeParser.ParseStage2(buf, stage2BytesWritten)
+					// Use the monotonic PTY byte offset from the circular buffer so
+					// session_seq is stable across WebSocket reconnections (mirrors
+					// the Stage 1 counter in ResponseStream.streamLoop).
+					escapeParser.ParseStage2(buf, instance.GetTotalBytesWritten())
 				}
-				stage2BytesWritten += int64(len(buf))
 
 				if err := sendData(buf); err != nil {
 					log.Error("[streamViaControlMode] failed to send output", "err", err)

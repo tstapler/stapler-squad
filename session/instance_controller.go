@@ -164,6 +164,18 @@ func (i *Instance) GetEscapeParser() *analytics.EscapeCodeParser {
 	return ctrl.GetEscapeParser()
 }
 
+// GetTotalBytesWritten returns the monotonic PTY byte offset from the session's
+// circular buffer. This is the same counter used by Stage 1 analytics so Stage
+// 2 session_seq values remain stable across WebSocket reconnections.
+// Returns 0 if no controller is active or the buffer is unavailable.
+func (i *Instance) GetTotalBytesWritten() int64 {
+	ctrl := i.GetController()
+	if ctrl == nil {
+		return 0
+	}
+	return ctrl.GetTotalBytesWritten()
+}
+
 // GetRateLimitState returns the current rate limit detection state.
 func (i *Instance) GetRateLimitState() int {
 	ctrl := i.GetController()

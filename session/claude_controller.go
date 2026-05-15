@@ -840,6 +840,18 @@ func (cc *ClaudeController) GetEscapeParser() *analytics.EscapeCodeParser {
 	return cc.responseStream.GetEscapeParser()
 }
 
+// GetTotalBytesWritten returns the monotonic PTY byte offset from the response
+// stream's circular buffer. Returns 0 if the controller is not started or has
+// no response stream.
+func (cc *ClaudeController) GetTotalBytesWritten() int64 {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+	if cc.responseStream == nil {
+		return 0
+	}
+	return cc.responseStream.GetTotalBytesWritten()
+}
+
 // GetRateLimitResetTime returns the reset time from the rate limit handler.
 // Returns zero time if no handler is active or no reset time is known.
 func (cc *ClaudeController) GetRateLimitResetTime() time.Time {
