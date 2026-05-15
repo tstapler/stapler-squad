@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 
 	"connectrpc.com/connect"
@@ -59,9 +60,10 @@ func (s *SessionService) QueryEscapeAnalytics(
 	// Cursor-based pagination via session_seq
 	if req.Msg.PageToken != "" {
 		cursor, err := strconv.ParseInt(req.Msg.PageToken, 10, 64)
-		if err == nil {
-			query = query.Where(escapeevent.SessionSeqGT(cursor))
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid page_token: %w", err))
 		}
+		query = query.Where(escapeevent.SessionSeqGT(cursor))
 	}
 
 	events, err := query.All(ctx)

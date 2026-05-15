@@ -624,7 +624,8 @@ func TestEscapeAnalyticsDefaults(t *testing.T) {
 
 	t.Run("default SamplingRate is 1.0 when zero", func(t *testing.T) {
 		cfg := writeAndLoad(t, `{}`)
-		assert.Equal(t, 1.0, cfg.EscapeAnalyticsSamplingRate)
+		require.NotNil(t, cfg.EscapeAnalyticsSamplingRate)
+		assert.Equal(t, 1.0, *cfg.EscapeAnalyticsSamplingRate)
 	})
 
 	t.Run("default MaxRowsPerSession is 10000 when zero", func(t *testing.T) {
@@ -645,7 +646,8 @@ func TestEscapeAnalyticsDefaults(t *testing.T) {
 			"escapeAnalyticsRetentionDays": 14
 		}`)
 		assert.Equal(t, "full", cfg.EscapeAnalyticsCaptureLevel)
-		assert.Equal(t, 0.5, cfg.EscapeAnalyticsSamplingRate)
+		require.NotNil(t, cfg.EscapeAnalyticsSamplingRate)
+		assert.Equal(t, 0.5, *cfg.EscapeAnalyticsSamplingRate)
 		assert.Equal(t, 5000, cfg.EscapeAnalyticsMaxRowsPerSession)
 		assert.Equal(t, 14, cfg.EscapeAnalyticsRetentionDays)
 	})
@@ -696,6 +698,7 @@ func TestEscapeAnalyticsSamplingRate_Clamping(t *testing.T) {
 		{"1.0 is valid", `{"escapeAnalyticsSamplingRate": 1.0}`, 1.0},
 		{"negative clamped to 0", `{"escapeAnalyticsSamplingRate": -0.1}`, 0},
 		{"above 1.0 clamped to 1.0", `{"escapeAnalyticsSamplingRate": 1.5}`, 1.0},
+		{"explicit 0.0 captures nothing", `{"escapeAnalyticsSamplingRate": 0.0}`, 0.0},
 	}
 
 	for _, tc := range cases {
@@ -705,7 +708,8 @@ func TestEscapeAnalyticsSamplingRate_Clamping(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, []byte(tc.json), 0600))
 			cfg, err := LoadConfigFromPath(path)
 			require.NoError(t, err)
-			assert.Equal(t, tc.expected, cfg.EscapeAnalyticsSamplingRate)
+			require.NotNil(t, cfg.EscapeAnalyticsSamplingRate)
+			assert.Equal(t, tc.expected, *cfg.EscapeAnalyticsSamplingRate)
 		})
 	}
 }

@@ -269,8 +269,10 @@ type Config struct {
 	EscapeAnalyticsCaptureLevel string `json:"escapeAnalyticsCaptureLevel,omitempty"`
 	// EscapeAnalyticsSamplingRate is the fraction of sessions to capture, in [0.0, 1.0].
 	// 1.0 captures all sessions; 0.0 captures none.
+	// A nil pointer means "unset" and defaults to 1.0 at load time.
+	// Using a pointer allows 0.0 (capture nothing) to be distinguished from the zero value.
 	// Default: 1.0.
-	EscapeAnalyticsSamplingRate float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
+	EscapeAnalyticsSamplingRate *float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
 	// EscapeAnalyticsMaxRowsPerSession is the maximum number of escape event rows stored per session.
 	// Default: 10000.
 	EscapeAnalyticsMaxRowsPerSession int `json:"escapeAnalyticsMaxRowsPerSession,omitempty"`
@@ -673,8 +675,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if cfg.EscapeAnalyticsCaptureLevel == "" {
 		cfg.EscapeAnalyticsCaptureLevel = "summary"
 	}
-	if cfg.EscapeAnalyticsSamplingRate == 0 {
-		cfg.EscapeAnalyticsSamplingRate = 1.0
+	if cfg.EscapeAnalyticsSamplingRate == nil {
+		defaultRate := 1.0
+		cfg.EscapeAnalyticsSamplingRate = &defaultRate
 	}
 	if cfg.EscapeAnalyticsMaxRowsPerSession == 0 {
 		cfg.EscapeAnalyticsMaxRowsPerSession = 10000
@@ -690,11 +693,13 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	default:
 		cfg.EscapeAnalyticsCaptureLevel = "summary"
 	}
-	if cfg.EscapeAnalyticsSamplingRate < 0 {
-		cfg.EscapeAnalyticsSamplingRate = 0
+	if *cfg.EscapeAnalyticsSamplingRate < 0 {
+		zero := 0.0
+		cfg.EscapeAnalyticsSamplingRate = &zero
 	}
-	if cfg.EscapeAnalyticsSamplingRate > 1.0 {
-		cfg.EscapeAnalyticsSamplingRate = 1.0
+	if *cfg.EscapeAnalyticsSamplingRate > 1.0 {
+		one := 1.0
+		cfg.EscapeAnalyticsSamplingRate = &one
 	}
 
 	// Unmarshaling produces a zero Config with no executor; initialize it now

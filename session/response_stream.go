@@ -80,19 +80,18 @@ func loadAnalyticsConfig() escapeAnalyticsConfig {
 		samplingRate: 1.0,
 	}
 	appCfg := loadAppConfig()
-	if appCfg != nil {
-		if appCfg.EscapeAnalyticsCaptureLevel != "" {
-			cfg.captureLevel = appCfg.EscapeAnalyticsCaptureLevel
-		}
-		cfg.redactOSC = appCfg.OSCPayloadsAreRedacted()
-		if appCfg.EscapeAnalyticsSamplingRate > 0 {
-			cfg.samplingRate = appCfg.EscapeAnalyticsSamplingRate
-		}
+	if appCfg.EscapeAnalyticsCaptureLevel != "" {
+		cfg.captureLevel = appCfg.EscapeAnalyticsCaptureLevel
+	}
+	cfg.redactOSC = appCfg.OSCPayloadsAreRedacted()
+	if appCfg.EscapeAnalyticsSamplingRate != nil {
+		cfg.samplingRate = *appCfg.EscapeAnalyticsSamplingRate
 	}
 	return cfg
 }
 
-// loadAppConfig loads the application config. Returns nil if config cannot be loaded.
+// loadAppConfig loads the application config. Always returns a non-nil config;
+// config.LoadConfig falls back to DefaultConfig on any load error.
 func loadAppConfig() *config.Config {
 	appCfg := config.LoadConfig()
 	return appCfg

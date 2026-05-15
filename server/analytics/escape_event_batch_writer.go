@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tstapler/stapler-squad/log"
 	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
@@ -72,10 +73,16 @@ func (w *EscapeEventBatchWriter) Start(ctx context.Context) {
 		case <-ticker.C:
 			flush()
 		case <-ctx.Done():
-			// Drain remaining
+			// Drain remaining, applying the same per-session row cap as normal processing.
 			for {
 				select {
 				case ev := <-w.ch:
+					if w.maxRowsPerSession > 0 {
+						if w.sessionRowCounts[ev.SessionID] >= w.maxRowsPerSession {
+							continue
+						}
+						w.sessionRowCounts[ev.SessionID]++
+					}
 					batch = append(batch, ev)
 				default:
 					flush()
@@ -126,8 +133,7 @@ func (w *EscapeEventBatchWriter) flushBatch(ctx context.Context, batch []pkganal
 	}
 
 	if err := w.client.EscapeEvent.CreateBulk(creators...).Exec(ctx); err != nil {
-		// Log error but don't block the pipeline
-		_ = err
+		log.Warn("escape analytics: flush batch failed", "err", err, "batch_size", len(batch))
 	}
 }
 

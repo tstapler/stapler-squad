@@ -6,8 +6,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"hash/fnv"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -52,9 +52,10 @@ type EscapeCodeParser struct {
 	writer            EscapeEventWriter
 	captureLevel      string // "full", "summary", "off"
 	redactOSCPayloads bool
-	samplingRate      float64
-	chunkSeqNum       int64 // incremented per Parse call
-	correlator        *MangleCorrelator
+	samplingRate        float64
+	chunkSeqNum         int64 // incremented per Parse call (Stage 1)
+	stage2ChunkSeqNum   int64 // incremented per ParseStage2 call (Stage 2, independent counter)
+	correlator          *MangleCorrelator
 	totalSequences    int64 // total escape sequences emitted
 	totalMangled      int64 // total sequences flagged as mangled
 }
@@ -149,30 +150,40 @@ func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 // ParseStage2 performs a secondary parse pass over data (a coalesced transport frame)
 // and emits EscapeEventRecord entries with Stage=StageTransport.
 // sessionSeq is the cumulative transport byte offset at the start of this frame.
+// ParseStage2 uses its own independent chunk counter (stage2ChunkSeqNum) for sampling
+// so that calling it independently does not interfere with the Stage 1 counter.
 func (p *EscapeCodeParser) ParseStage2(data []byte, sessionSeq int64) {
 	if !p.enabled || p.writer == nil || p.captureLevel == "off" || len(data) == 0 {
 		return
 	}
 
+	p.stage2ChunkSeqNum++
+
 	codes := p.extractEscapeSequences(data)
 	for _, code := range codes {
-		p.emitEventWithStage(code, sessionSeq, StageTransport)
+		p.emitEventWithStageAndSeq(code, sessionSeq, StageTransport, p.stage2ChunkSeqNum)
 	}
 }
 
 // emitEvent sends an EscapeEventRecord to the writer if configured.
 func (p *EscapeCodeParser) emitEvent(code ParsedEscapeCode, sessionSeq int64) {
-	p.emitEventWithStage(code, sessionSeq, StagePTYRead)
+	p.emitEventWithStageAndSeq(code, sessionSeq, StagePTYRead, p.chunkSeqNum)
 }
 
-// emitEventWithStage sends an EscapeEventRecord with a specified stage.
+// emitEventWithStage sends an EscapeEventRecord with a specified stage, using the Stage 1 chunk counter.
 func (p *EscapeCodeParser) emitEventWithStage(code ParsedEscapeCode, sessionSeq int64, stage Stage) {
+	p.emitEventWithStageAndSeq(code, sessionSeq, stage, p.chunkSeqNum)
+}
+
+// emitEventWithStageAndSeq sends an EscapeEventRecord with a specified stage and explicit chunk counter.
+// The chunkSeq parameter is used for sampling decisions.
+func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessionSeq int64, stage Stage, chunkSeq int64) {
 	if p.writer == nil || p.captureLevel == "off" {
 		return
 	}
 
-	// Apply sampling: use chunkSeqNum with modulo check
-	if p.samplingRate < 1.0 && (p.chunkSeqNum%1000) >= int64(p.samplingRate*1000) {
+	// Apply sampling: use the provided chunkSeq with modulo check
+	if p.samplingRate < 1.0 && (chunkSeq%1000) >= int64(p.samplingRate*1000) {
 		return
 	}
 
@@ -201,7 +212,7 @@ func (p *EscapeCodeParser) emitEventWithStage(code ParsedEscapeCode, sessionSeq 
 	case "summary":
 		h := fnv.New64a()
 		h.Write(code.RawBytes)
-		record.PayloadHash = strconv.FormatUint(h.Sum64(), 16)
+		record.PayloadHash = fmt.Sprintf("%016x", h.Sum64())
 	}
 
 	// Apply OSC redaction
