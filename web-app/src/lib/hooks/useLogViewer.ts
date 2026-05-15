@@ -99,6 +99,11 @@ export function useLogViewer(
     clientRef.current = createClient(SessionService, transport);
   }, []);
 
+  // --- Live-tail cursor: tracks server-side total_count so polling can detect new entries ---
+  // GetLogs returns entries newest-first (DESC). Using offset:0 always yields the most-recent
+  // entries. We compare total_count to knownTotalRef to find how many new entries arrived.
+  const knownTotalRef = useRef(0);
+
   // --- Initial fetch ---
   const fetchInitialLogs = useCallback(async () => {
     if (!clientRef.current) return;
@@ -118,6 +123,9 @@ export function useLogViewer(
         message: e.message,
         raw: e.message,
       }));
+      // Seed knownTotalRef from the initial fetch so live-tail polling knows
+      // how many entries the server already had.
+      knownTotalRef.current = response.totalCount ?? entries.length;
       logsRef.current = entries;
       setVersion((v) => v + 1);
     } catch {
@@ -138,17 +146,27 @@ export function useLogViewer(
   const fetchNewLogs = useCallback(async () => {
     if (!clientRef.current) return;
     try {
-      // Fetch only entries after the last known entry by offset
-      const currentCount = logsRef.current.length;
+      const knownTotal = knownTotalRef.current;
       // Pass multi-level filter via repeated levels field; fall back to no filter for "ALL"
       const activeLevels = levelFilters.filter((l) => l !== "ALL");
+      // Request from offset:0 (newest-first) with a limit that covers any newly
+      // arrived entries since the last poll. Cap at 200 to bound payload size.
+      const limit = Math.min(Math.max(100, 200), 200);
       const response = await clientRef.current.getLogs({
-        limit: 100,
-        offset: currentCount,
+        limit,
+        offset: 0,
         sessionId: source === "session" ? sessionId : undefined,
         levels: activeLevels.length > 0 ? activeLevels : undefined,
       });
-      const newEntries: LogEntry[] = (response.entries ?? []).map((e) => ({
+      const serverTotal = response.totalCount ?? 0;
+      const newCount = serverTotal - knownTotal;
+      if (newCount <= 0) return;
+
+      // The first `newCount` entries in the newest-first response are the ones
+      // we haven't seen yet. Slice them off and reverse so they're oldest-first
+      // for appending at the end of logsRef.current.
+      const freshSlice = (response.entries ?? []).slice(0, newCount);
+      const newEntries: LogEntry[] = freshSlice.reverse().map((e) => ({
         id: makeId(),
         timestamp: e.timestamp
           ? new Date(Number(e.timestamp.seconds) * 1000).toISOString()
@@ -159,6 +177,7 @@ export function useLogViewer(
       }));
       if (newEntries.length === 0) return;
 
+      knownTotalRef.current = serverTotal;
       logsRef.current = [...logsRef.current, ...newEntries];
 
       startTransition(() => {

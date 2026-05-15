@@ -1,12 +1,9 @@
 // logParser.test.ts — unit tests for the security-critical ANSI pipeline and
 // core parsing utilities.
 //
-// renderAnsi uses DOMPurify which requires a real browser DOM. In jsdom/Node:
-//   - DOMPurify.sanitize is unavailable (typeof window === "undefined")
-//   - renderAnsi skips DOMPurify and returns the raw ansi-to-html output
-//   - OSC stripping (the critical security step) still runs before ansi-to-html
-//   - XSS/script-tag tests rely on ansi-to-html's escapeXML:true option
-//   - Full DOMPurify coverage is delegated to e2e tests in a real browser
+// In jsdom (Jest's default environment), `window` is defined so DOMPurify runs.
+// The OSC-strip pre-pass and `escapeXML: true` in ansi-to-html are the primary
+// XSS defenses tested here; DOMPurify provides an additional layer.
 
 import { detectLevel, segmentText, tryParseJson, renderAnsi } from "../logParser";
 
@@ -177,14 +174,13 @@ describe("tryParseJson", () => {
 });
 
 // ---------------------------------------------------------------------------
-// renderAnsi — security tests (Node/jsdom context, DOMPurify bypassed)
+// renderAnsi — security tests (jsdom context, DOMPurify active)
 //
-// In Node context (typeof window === "undefined"), renderAnsi returns the raw
-// ansi-to-html output (DOMPurify is not called). The critical security layer
-// tested here is OSC stripping, which runs unconditionally.
-//
-// ansi-to-html is configured with escapeXML:true, so HTML injection via log
-// content is blocked at that layer. Full DOMPurify coverage is in e2e tests.
+// jsdom defines `window`, so DOMPurify.sanitize runs in the test environment.
+// The critical security layers tested here are:
+//   1. OSC stripping — runs unconditionally before ansi-to-html
+//   2. ansi-to-html escapeXML:true — escapes < and > in log content
+//   3. DOMPurify — additional sanitization layer (active in jsdom)
 // ---------------------------------------------------------------------------
 
 describe("renderAnsi security (Node/jsdom context)", () => {

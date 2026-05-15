@@ -90,7 +90,6 @@ export function LogViewer({ source, sessionId }: LogViewerProps) {
           break;
         case "G":
           virtuosoRef.current?.scrollToIndex({ index: "LAST", behavior: "smooth" });
-          setLiveTailEnabled(true);
           break;
         case "=":
           setLiveTailEnabled(!liveTailEnabledRef.current);

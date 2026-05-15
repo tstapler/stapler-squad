@@ -10,6 +10,8 @@ import {
   searchExpandableRow,
   searchExpandableRowOpen,
   searchDoneButton,
+  liveTailButton,
+  liveTailDot,
 } from "./LogViewerToolbar.css";
 
 interface LogViewerToolbarProps {
@@ -45,6 +47,9 @@ export function LogViewerToolbar({
   levelFilters,
   onLevelFiltersChange,
   searchInputRef,
+  liveTailEnabled = false,
+  isFollowing = false,
+  onLiveTailChange,
 }: LogViewerToolbarProps) {
   // T3: narrow-screen expanded state
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
@@ -92,8 +97,22 @@ export function LogViewerToolbar({
 
   return (
     <div className={toolbar}>
-      {/* Primary row: chips + search icon (narrow) + search input (wide) */}
+      {/* Primary row: live-tail toggle + chips + search icon (narrow) + search input (wide) */}
       <div className={toolbarRow}>
+        {/* Live-tail toggle — always visible; green dot when live and following */}
+        <button
+          type="button"
+          className={liveTailButton}
+          aria-label="Toggle live tail"
+          aria-pressed={liveTailEnabled}
+          data-testid="live-tail-toggle"
+          data-live={liveTailEnabled && isFollowing ? "true" : "false"}
+          onClick={() => onLiveTailChange?.(!liveTailEnabled)}
+        >
+          <span className={liveTailDot} />
+          {liveTailEnabled && isFollowing ? "Live" : "Paused"}
+        </button>
+
         {/* T3: search icon button — visible only on narrow screens via CSS */}
         <button
           type="button"

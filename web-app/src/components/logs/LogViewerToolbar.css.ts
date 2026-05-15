@@ -111,6 +111,48 @@ export const searchExpandableRowOpen = style({
   },
 });
 
+/**
+ * Live-tail toggle button — always visible in the toolbar row.
+ * Green dot when live, muted when paused. min-height 44px for mobile tap target.
+ */
+export const liveTailButton = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 5,
+  minHeight: 44,
+  padding: "0 10px",
+  border: "1px solid rgba(255,255,255,0.15)",
+  borderRadius: 6,
+  background: "transparent",
+  cursor: "pointer",
+  color: "inherit",
+  fontSize: 12,
+  fontWeight: 600,
+  flexShrink: 0,
+  touchAction: "manipulation",
+  whiteSpace: "nowrap",
+  selectors: {
+    "&:focus-visible": {
+      outline: "2px solid rgba(59,130,246,0.6)",
+      outlineOffset: 2,
+    },
+  },
+});
+
+export const liveTailDot = style({
+  width: 8,
+  height: 8,
+  borderRadius: "50%",
+  background: "rgba(156,163,175,0.5)",
+  flexShrink: 0,
+  selectors: {
+    "[data-live='true'] &": {
+      background: "#22c55e",
+      boxShadow: "0 0 4px #22c55e",
+    },
+  },
+});
+
 export const searchDoneButton = style({
   minWidth: 44,
   minHeight: 44,

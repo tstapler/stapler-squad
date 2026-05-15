@@ -51,7 +51,7 @@ export const LogRow = React.memo(function LogRow({
       aria-selected={isSelected}
       tabIndex={isSelected ? 0 : -1}
       data-testid={`log-row-${index}`}
-      onPointerDown={onToggle}
+      onClick={onToggle}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();

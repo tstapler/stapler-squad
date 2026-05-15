@@ -5,7 +5,6 @@ import * as styles from "./SessionLogsTab.css";
 
 interface SessionLogsTabProps {
   sessionId: string;
-  baseUrl: string;
 }
 
 export function SessionLogsTab({ sessionId }: SessionLogsTabProps) {

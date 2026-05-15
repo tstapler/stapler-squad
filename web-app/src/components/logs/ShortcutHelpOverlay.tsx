@@ -6,7 +6,6 @@ const SHORTCUTS = [
   { key: "g", desc: "Scroll to top" },
   { key: "G", desc: "Scroll to bottom" },
   { key: "=", desc: "Toggle live tail" },
-  { key: "e / E", desc: "Next / Prev ERROR" },
   { key: "?", desc: "Toggle this help" },
 ];
 
