@@ -483,6 +483,15 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 
 // --- ItemSession (direct EntRepository delegation) ---
 
+// GetItemSession looks up an ItemSession by entity UUID (loads BacklogItem edge).
+func (s *Storage) GetItemSession(ctx context.Context, id string) (*ent.ItemSession, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.GetItemSession(ctx, id)
+}
+
 // GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
 func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (*ent.ItemSession, error) {
 	er, ok := s.repo.(*EntRepository)
@@ -490,6 +499,15 @@ func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID s
 		return nil, ErrNotFound
 	}
 	return er.GetItemSessionBySessionUUID(ctx, sessionUUID)
+}
+
+// UpdateItemSessionTriageResult stores the triage result JSON payload on an ItemSession.
+func (s *Storage) UpdateItemSessionTriageResult(ctx context.Context, id string, triageResult string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionTriageResult(ctx, id, triageResult)
 }
 
 // UpdateItemSessionStarted records the start time for an ItemSession.

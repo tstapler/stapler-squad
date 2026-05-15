@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/ent"
 )
 
 // ErrPreconditionFailed is returned when an optimistic-locking precondition check fails.
@@ -224,6 +226,9 @@ type BacklogItemData struct {
 	SourceID           string
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	// ItemSessions holds the eagerly-loaded item sessions for this backlog item.
+	// Only populated when explicitly loaded by the caller (e.g. GetBacklogItem).
+	ItemSessions []*ent.ItemSession
 }
 
 // BacklogItemFilter controls which items ListBacklogItems returns.

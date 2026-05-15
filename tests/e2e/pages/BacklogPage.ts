@@ -41,15 +41,15 @@ export class BacklogPage {
   }
 
   async waitForItemCards() {
-    await this.page.waitForSelector('[data-testid="backlog-item-card"]', { timeout: 5000 });
+    await this.page.waitForSelector('[data-testid="backlog-table-row"]', { timeout: 5000 });
   }
 
   getItemCard(title: string): Locator {
-    return this.page.locator('[data-testid="backlog-item-card"]').filter({ hasText: title });
+    return this.page.locator('[data-testid="backlog-table-row"]').filter({ hasText: title });
   }
 
   getItemCards(): Locator {
-    return this.page.locator('[data-testid="backlog-item-card"]');
+    return this.page.locator('[data-testid="backlog-table-row"]');
   }
 
   getTableRows(): Locator {
@@ -85,8 +85,8 @@ export class BacklogPage {
     await this.openEmptyStateForm();
     await this.fillEmptyStateForm(title, priority);
     await this.submitEmptyStateForm();
-    // Wait for the item to appear in the list or board
-    await this.page.waitForSelector('[data-testid="backlog-item-card"]', { timeout: 5000 });
+    // Wait for the item to appear in the list
+    await this.page.waitForSelector('[data-testid="backlog-table-row"]', { timeout: 5000 });
   }
 
   getLifecycleNode(label: string): Locator {

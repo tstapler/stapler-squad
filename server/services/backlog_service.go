@@ -142,6 +142,22 @@ func itemSessionToProto(is *ent.ItemSession) *sessionv1.ItemSession {
 	if is.LastFileTouchAt != nil {
 		p.LastFileTouchAt = timestamppb.New(*is.LastFileTouchAt)
 	}
+	// Populate the review verdict when it was eagerly loaded.
+	if rv := is.Edges.ReviewVerdict; rv != nil {
+		p.ReviewVerdict = &sessionv1.ReviewVerdict{
+			Id:             rv.ID.String(),
+			OverallOutcome: rv.OverallOutcome,
+			Summary:        rv.Summary,
+			DiffTokenCount: int32(rv.DiffTokenCount),
+			DiffTruncated:  rv.DiffTruncated,
+			OverrideBy:     rv.OverrideBy,
+			OverrideReason: rv.OverrideReason,
+			CreatedAt:      timestamppb.New(rv.CreatedAt),
+		}
+		if rv.OverrideAt != nil {
+			p.ReviewVerdict.OverrideAt = timestamppb.New(*rv.OverrideAt)
+		}
+	}
 	return p
 }
 
@@ -185,6 +201,15 @@ func backlogItemToProto(item *session.BacklogItemData) *sessionv1.BacklogItem {
 			}
 			p.AcceptanceCriteria = protoAC
 		}
+	}
+
+	// Populate item sessions when they were eagerly loaded.
+	if len(item.ItemSessions) > 0 {
+		protoSessions := make([]*sessionv1.ItemSession, len(item.ItemSessions))
+		for i, is := range item.ItemSessions {
+			protoSessions[i] = itemSessionToProto(is)
+		}
+		p.ItemSessions = protoSessions
 	}
 
 	return p
@@ -292,6 +317,15 @@ func (s *BacklogService) GetBacklogItem(
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get backlog item: %w", err))
+	}
+
+	// Load item sessions with review verdicts so the detail panel can show gate results.
+	isSessions, isErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
+	if isErr != nil {
+		log.ErrorLog.Printf("[GetBacklogItem] failed to load item sessions for %s: %v", req.Msg.ItemId, isErr)
+		// Non-fatal: return item without sessions.
+	} else {
+		item.ItemSessions = isSessions
 	}
 
 	return connect.NewResponse(&sessionv1.GetBacklogItemResponse{
@@ -1020,9 +1054,12 @@ Write %s/validation.md containing:
 - Edge cases and error scenarios
 
 ### Step 4 — Submit
-After all files are written, call the update_backlog_item MCP tool:
-- Set plan_artifacts_path to %q
-- This notifies the operator that triage is complete and ready for review
+After all files are written, call the submit_triage_result MCP tool with:
+- item_id: the backlog item UUID you were given
+- plan_artifact_path: %q
+- summary: a 2-3 sentence executive summary of your triage findings
+- suggestions: (optional) array of improvement suggestions, each with text and rationale
+This notifies the operator that triage is complete and ready for review.
 
 Do not modify any source code. Only write planning documents.
 `, researchDir, researchDir, researchDir, researchDir,
@@ -1077,8 +1114,8 @@ func (s *BacklogService) OverrideVerdict(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("override_reason is required"))
 	}
 
-	// 2. Load the ItemSession to get the linked BacklogItem ID.
-	is, err := s.storage.GetItemSessionBySessionUUID(ctx, req.Msg.ItemSessionId)
+	// 2. Load the ItemSession by entity UUID to get the linked BacklogItem ID.
+	is, err := s.storage.GetItemSession(ctx, req.Msg.ItemSessionId)
 	if err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound,
@@ -1087,7 +1124,7 @@ func (s *BacklogService) OverrideVerdict(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get item session: %w", err))
 	}
 
-	// Load the linked BacklogItem (edge must be loaded via GetItemSessionBySessionUUID).
+	// Load the linked BacklogItem (edge is loaded via GetItemSession).
 	var itemID string
 	if is.Edges.BacklogItem != nil {
 		itemID = is.Edges.BacklogItem.ID.String()

@@ -231,7 +231,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
 
   const canSpawnSession =
     item.status === "ready" &&
-    (item.skipPlanning || !!item.planArtifactsPath);
+    (item.skipPlanning || item.planApproved);
 
   return (
     <article

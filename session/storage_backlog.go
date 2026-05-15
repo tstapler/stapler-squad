@@ -58,14 +58,17 @@ func (r *EntRepository) CreateItemSession(ctx context.Context, data ItemSessionD
 	return is, nil
 }
 
-// GetItemSession retrieves an ItemSession by UUID string.
+// GetItemSession retrieves an ItemSession by entity UUID string. Loads the BacklogItem edge.
 func (r *EntRepository) GetItemSession(ctx context.Context, id string) (*ent.ItemSession, error) {
 	parsedID, err := uuid.Parse(id)
 	if err != nil {
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
 
-	is, err := r.client.ItemSession.Get(ctx, parsedID)
+	is, err := r.client.ItemSession.Query().
+		Where(itemsession.ID(parsedID)).
+		WithBacklogItem().
+		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: item session %s", ErrNotFound, id)
@@ -84,6 +87,7 @@ func (r *EntRepository) ListItemSessions(ctx context.Context, itemID string) ([]
 
 	sessions, err := r.client.ItemSession.Query().
 		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID))).
+		WithReviewVerdict().
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list item sessions for item %s: %w", itemID, err)
@@ -213,6 +217,22 @@ func (r *EntRepository) UpdateItemSessionFileTouch(ctx context.Context, id strin
 		Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to update file touch on item session %s: %w", id, err)
+	}
+	return nil
+}
+
+// UpdateItemSessionTriageResult stores the triage result JSON payload on an ItemSession.
+func (r *EntRepository) UpdateItemSessionTriageResult(ctx context.Context, id string, triageResult string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("invalid id %q: %w", id, err)
+	}
+
+	_, err = r.client.ItemSession.UpdateOneID(parsedID).
+		SetTriageResult(triageResult).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update triage_result on item session %s: %w", id, err)
 	}
 	return nil
 }

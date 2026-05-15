@@ -105,6 +105,10 @@ type SessionService struct {
 	// errorRegistry persists deduplicated RPC errors to SQLite.
 	// May be nil when wired without an ent-backed storage (e.g. in tests).
 	errorRegistry *ErrorRegistry
+
+	// backlogLifecycleListener is wired to each newly created session so that
+	// backlog item state transitions fire when the session exits.
+	backlogLifecycleListener *session.BacklogLifecycleListener
 }
 
 // ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -404,6 +408,12 @@ func (s *SessionService) SetMCPServerURL(url string) {
 	s.mcpServerURL = url
 }
 
+// SetBacklogLifecycleListener wires the listener to all sessions created via
+// CreateDirectorySession so that backlog state transitions fire on session exit.
+func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
+	s.backlogLifecycleListener = l
+}
+
 // SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
 // BacklogLifecycleListener can spawn one-shot review sessions automatically when
 // a work session exits. The session is tagged "backlog:review" and runs one-shot.
@@ -443,6 +453,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		s.reviewQueuePoller.AddInstance(instance)
 	}
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
+	if s.backlogLifecycleListener != nil {
+		s.backlogLifecycleListener.WireToInstance(instance)
+	}
 	return instance, nil
 }
 

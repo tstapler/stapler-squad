@@ -640,6 +640,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	// SpawnSessionFromItem, TriggerTriage, and TriggerReReview can spawn real sessions.
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg)
 
+	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
+
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
 		Instances:               instances,
