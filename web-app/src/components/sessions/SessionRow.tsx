@@ -114,6 +114,7 @@ export function SessionRow({ session, onClick, onPause, onResume, onDelete }: Se
         <span
           className={statusDot}
           data-status={dotStatus}
+          role="img"
           aria-label={`Status: ${dotStatus}`}
         />
       </Tooltip>
