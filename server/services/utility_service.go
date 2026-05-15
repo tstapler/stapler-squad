@@ -330,9 +330,17 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 		searchQuery = strings.ToLower(*req.SearchQuery)
 	}
 
-	var levelFilter string
-	if req.Level != nil {
-		levelFilter = strings.ToUpper(*req.Level)
+	// Build level filter set: prefer repeated Levels field; fall back to single Level for backward compat.
+	var levelFilterSet map[string]struct{}
+	if len(req.Levels) > 0 {
+		levelFilterSet = make(map[string]struct{}, len(req.Levels))
+		for _, l := range req.Levels {
+			if l != "" {
+				levelFilterSet[strings.ToUpper(l)] = struct{}{}
+			}
+		}
+	} else if req.Level != nil && *req.Level != "" {
+		levelFilterSet = map[string]struct{}{strings.ToUpper(*req.Level): {}}
 	}
 
 	var startTime, endTime *time.Time
@@ -371,9 +379,11 @@ func parseLogs(reader io.Reader, req *sessionv1.GetLogsRequest) (*parseLogsResul
 			continue
 		}
 
-		// Apply level filter
-		if levelFilter != "" && level != levelFilter {
-			continue
+		// Apply level filter (OR logic across multi-level set)
+		if len(levelFilterSet) > 0 {
+			if _, ok := levelFilterSet[strings.ToUpper(level)]; !ok {
+				continue
+			}
 		}
 
 		// Apply time range filters

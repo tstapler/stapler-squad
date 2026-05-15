@@ -1202,6 +1202,7 @@ type GetLogsRequest struct {
 	// Optional: Search query to filter log entries by content.
 	SearchQuery *string `protobuf:"bytes,1,opt,name=search_query,json=searchQuery,proto3,oneof" json:"search_query,omitempty"`
 	// Optional: Filter by log level (DEBUG, INFO, WARNING, ERROR).
+	// Deprecated: prefer levels for multi-level filtering. If both are set, levels takes precedence.
 	Level *string `protobuf:"bytes,2,opt,name=level,proto3,oneof" json:"level,omitempty"`
 	// Optional: Start time for log range (RFC3339 format).
 	StartTime *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=start_time,json=startTime,proto3,oneof" json:"start_time,omitempty"`
@@ -1212,7 +1213,10 @@ type GetLogsRequest struct {
 	// Optional: Number of entries to skip for pagination (default: 0).
 	Offset *int32 `protobuf:"varint,6,opt,name=offset,proto3,oneof" json:"offset,omitempty"`
 	// Optional: Filter to a specific session's log file. Uses session title/id.
-	SessionId     *string `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
+	SessionId *string `protobuf:"bytes,7,opt,name=session_id,json=sessionId,proto3,oneof" json:"session_id,omitempty"`
+	// Optional: Filter by multiple log levels using OR logic (e.g., ["ERROR", "WARN"]).
+	// Takes precedence over the single level field when non-empty.
+	Levels        []string `protobuf:"bytes,8,rep,name=levels,proto3" json:"levels,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1294,6 +1298,13 @@ func (x *GetLogsRequest) GetSessionId() string {
 		return *x.SessionId
 	}
 	return ""
+}
+
+func (x *GetLogsRequest) GetLevels() []string {
+	if x != nil {
+		return x.Levels
+	}
+	return nil
 }
 
 type GetLogsResponse struct {
@@ -10233,7 +10244,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"P\n" +
 	"\x1aAcknowledgeSessionResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"\x86\x03\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\x9e\x03\n" +
 	"\x0eGetLogsRequest\x12&\n" +
 	"\fsearch_query\x18\x01 \x01(\tH\x00R\vsearchQuery\x88\x01\x01\x12\x19\n" +
 	"\x05level\x18\x02 \x01(\tH\x01R\x05level\x88\x01\x01\x12>\n" +
@@ -10243,7 +10254,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x05limit\x18\x05 \x01(\x05H\x04R\x05limit\x88\x01\x01\x12\x1b\n" +
 	"\x06offset\x18\x06 \x01(\x05H\x05R\x06offset\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"session_id\x18\a \x01(\tH\x06R\tsessionId\x88\x01\x01B\x0f\n" +
+	"session_id\x18\a \x01(\tH\x06R\tsessionId\x88\x01\x01\x12\x16\n" +
+	"\x06levels\x18\b \x03(\tR\x06levelsB\x0f\n" +
 	"\r_search_queryB\b\n" +
 	"\x06_levelB\r\n" +
 	"\v_start_timeB\v\n" +

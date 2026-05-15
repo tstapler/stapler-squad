@@ -494,6 +494,7 @@ message GetLogsRequest {
   optional string search_query = 1;
 
   // Optional: Filter by log level (DEBUG, INFO, WARNING, ERROR).
+  // Deprecated: prefer levels for multi-level filtering. If both are set, levels takes precedence.
   optional string level = 2;
 
   // Optional: Start time for log range (RFC3339 format).
@@ -510,6 +511,10 @@ message GetLogsRequest {
 
   // Optional: Filter to a specific session's log file. Uses session title/id.
   optional string session_id = 7;
+
+  // Optional: Filter by multiple log levels using OR logic (e.g., ["ERROR", "WARN"]).
+  // Takes precedence over the single level field when non-empty.
+  repeated string levels = 8;
 }
 
 message GetLogsResponse {

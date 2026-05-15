@@ -16,6 +16,7 @@ import { LiveTailToggle } from "@/components/shared/LiveTailToggle";
 import { ExportButton } from "@/components/logs/ExportButton";
 import { SearchWithHistory } from "@/components/logs/SearchWithHistory";
 import { DensityToggle, type LogDensity } from "@/components/logs/DensityToggle";
+import { LogViewer } from "@/components/logs/LogViewer";
 import { useLiveTail } from "@/lib/hooks/useLiveTail";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { usePageView } from "@/lib/analytics/usePageView";
@@ -454,128 +455,9 @@ export default function LogsPage() {
         </div>
       )}
 
-      {!loading && !error && logs.length > 0 && (
-        <div
-          className={styles.logsContainer}
-          ref={logsContainerRef}
-          role="log"
-          aria-label="Log entries"
-          aria-live="polite"
-        >
-          <table className={`${styles.logsTable} ${(styles as Record<string, string>)[`density${density.charAt(0).toUpperCase()}${density.slice(1)}`] ?? ""}`}>
-            <thead>
-              <tr>
-                <th className={styles.expandColumn} aria-label="Expand"></th>
-                <th className={styles.timestampColumn}>Timestamp</th>
-                <th className={styles.levelColumn}>Level</th>
-                <th className={styles.sourceColumn}>Source</th>
-                <th className={styles.messageColumn}>Message</th>
-                <th className={styles.actionsColumn} aria-label="Actions"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((log, index) => (
-                <>
-                  <tr
-                    key={index}
-                    className={`${styles.logRow} ${expandedRow === index ? styles.logRowExpanded : ''}`}
-                  >
-                    <td className={styles.expandCell}>
-                      <button
-                        className={styles.expandButton}
-                        onClick={() => toggleRowExpand(index)}
-                        aria-expanded={expandedRow === index}
-                        aria-label={expandedRow === index ? 'Collapse log details' : 'Expand log details'}
-                      >
-                        {expandedRow === index ? '▼' : '▶'}
-                      </button>
-                    </td>
-                    <td
-                      className={styles.timestamp}
-                      title={log.timestamp ? formatTimestamp(timestampDate(log.timestamp)) : 'N/A'}
-                    >
-                      {log.timestamp
-                        ? formatRelativeTime(timestampDate(log.timestamp).getTime())
-                        : "N/A"}
-                    </td>
-                    <td
-                      className={`${styles.level} ${getLevelClass(log.level)} ${styles.clickable}`}
-                      onClick={() => handleLevelClick(log.level)}
-                      title="Click to filter by this level"
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => e.key === 'Enter' && handleLevelClick(log.level)}
-                    >
-                      {log.level}
-                      <span className={styles.filterIcon}>⊕</span>
-                    </td>
-                    <td
-                      className={`${styles.source} ${styles.clickable}`}
-                      onClick={() => log.source && handleSourceClick(log.source)}
-                      title="Click to filter by this source"
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => e.key === 'Enter' && log.source && handleSourceClick(log.source)}
-                    >
-                      {log.source || "-"}
-                      {log.source && <span className={styles.filterIcon}>⊕</span>}
-                    </td>
-                    <td className={styles.message}>
-                      {log.message.length > 150 && expandedRow !== index
-                        ? `${log.message.substring(0, 150)}...`
-                        : log.message}
-                    </td>
-                    <td className={styles.actionsCell}>
-                      <button
-                        className={styles.actionButton}
-                        onClick={() => copyLog(log)}
-                        title="Copy log entry"
-                        aria-label="Copy log entry to clipboard"
-                      >
-                        📋
-                      </button>
-                    </td>
-                  </tr>
-                  {expandedRow === index && (
-                    <tr className={styles.expandedRow}>
-                      <td colSpan={6}>
-                        <div className={styles.logDetail}>
-                          <div className={styles.logDetailSection}>
-                            <strong>Full Timestamp:</strong>
-                            <span>{log.timestamp ? formatTimestamp(timestampDate(log.timestamp)) : 'N/A'}</span>
-                          </div>
-                          <div className={styles.logDetailSection}>
-                            <strong>Level:</strong>
-                            <span className={getLevelClass(log.level)}>{log.level}</span>
-                          </div>
-                          <div className={styles.logDetailSection}>
-                            <strong>Source:</strong>
-                            <span>{log.source || '-'}</span>
-                          </div>
-                          <div className={styles.logDetailSection}>
-                            <strong>Message:</strong>
-                            <pre className={styles.logDetailMessage}>{log.message}</pre>
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
-
-          {loadingMore && (
-            <div className={styles.loadingMore} role="status" aria-live="polite">
-              Loading more logs...
-            </div>
-          )}
-
-          {!hasMore && logs.length > 0 && (
-            <div className={styles.endOfLogs}>
-              End of logs (showing all {totalCount} entries)
-            </div>
-          )}
+      {!loading && !error && (
+        <div className={styles.logsContainer} ref={logsContainerRef}>
+          <LogViewer source="app" />
         </div>
       )}
 
