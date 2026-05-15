@@ -52,10 +52,10 @@ type EscapeCodeParser struct {
 	writer            EscapeEventWriter
 	captureLevel      string // "full", "summary", "off"
 	redactOSCPayloads bool
-	samplingRate        float64
-	chunkSeqNum         int64 // incremented per Parse call (Stage 1)
-	stage2ChunkSeqNum   int64 // incremented per ParseStage2 call (Stage 2, independent counter)
-	correlator          *MangleCorrelator
+	samplingRate      float64
+	chunkSeqNum       int64 // incremented per Parse call (Stage 1)
+	stage2ChunkSeqNum int64 // incremented per ParseStage2 call (Stage 2, independent counter)
+	correlator        *MangleCorrelator
 	totalSequences    int64 // total escape sequences emitted
 	totalMangled      int64 // total sequences flagged as mangled
 }
@@ -168,11 +168,6 @@ func (p *EscapeCodeParser) ParseStage2(data []byte, sessionSeq int64) {
 // emitEvent sends an EscapeEventRecord to the writer if configured.
 func (p *EscapeCodeParser) emitEvent(code ParsedEscapeCode, sessionSeq int64) {
 	p.emitEventWithStageAndSeq(code, sessionSeq, StagePTYRead, p.chunkSeqNum)
-}
-
-// emitEventWithStage sends an EscapeEventRecord with a specified stage, using the Stage 1 chunk counter.
-func (p *EscapeCodeParser) emitEventWithStage(code ParsedEscapeCode, sessionSeq int64, stage Stage) {
-	p.emitEventWithStageAndSeq(code, sessionSeq, stage, p.chunkSeqNum)
 }
 
 // emitEventWithStageAndSeq sends an EscapeEventRecord with a specified stage and explicit chunk counter.
