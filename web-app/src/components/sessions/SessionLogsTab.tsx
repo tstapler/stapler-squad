@@ -1,202 +1,23 @@
 "use client";
 
-import { useEffect, useState, useRef, useCallback } from "react";
-import { createClient } from "@connectrpc/connect";
-import { SessionService } from "@/gen/session/v1/session_pb";
-import { getConnectTransport } from "@/lib/api/transport";
-import type { LogEntry } from "@/gen/session/v1/session_pb";
-import { timestampDate } from "@bufbuild/protobuf/wkt";
-import { formatTimestamp, formatRelativeTime } from "@/lib/utils/datetime";
-import { useDebounce } from "@/lib/hooks/useDebounce";
-import { MultiSelect, LOG_LEVEL_OPTIONS } from "@/components/shared/MultiSelect";
-import { LiveTailToggle } from "@/components/shared/LiveTailToggle";
-import { useLiveTail } from "@/lib/hooks/useLiveTail";
+import { LogViewer } from "@/components/logs/LogViewer";
 import * as styles from "./SessionLogsTab.css";
 
 interface SessionLogsTabProps {
   sessionId: string;
-  baseUrl: string;
 }
 
-export function SessionLogsTab({ sessionId, baseUrl }: SessionLogsTabProps) {
-  const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [searchQuery, setSearchQuery] = useState("");
-  const [levelFilters, setLevelFilters] = useState<string[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [hasMore, setHasMore] = useState(false);
-  const [totalCount, setTotalCount] = useState(0);
-  const [liveTailEnabled, setLiveTailEnabled] = useState(false);
-  const [liveTailInterval, setLiveTailInterval] = useState(3000);
-
-  const debouncedSearch = useDebounce(searchQuery, 300);
-  const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    clientRef.current = createClient(SessionService, getConnectTransport());
-  }, []);
-
-  const fetchLogs = useCallback(async (reset = true) => {
-    if (!clientRef.current) return;
-    if (abortRef.current) abortRef.current.abort();
-    abortRef.current = new AbortController();
-
-    if (reset) setLoading(true);
-    setError(null);
-
-    const currentOffset = reset ? 0 : offset;
-    try {
-      const singleLevel = levelFilters.length === 1 ? levelFilters[0] : undefined;
-      const response = await clientRef.current.getLogs({
-        sessionId,
-        searchQuery: debouncedSearch || undefined,
-        level: singleLevel,
-        limit: 100,
-        offset: currentOffset,
-      });
-
-      let entries = response.entries || [];
-      if (levelFilters.length > 1) {
-        entries = entries.filter(e => levelFilters.includes(e.level.toUpperCase()));
-      }
-
-      if (reset) {
-        setLogs(entries);
-        setOffset(entries.length);
-      } else {
-        setLogs(prev => [...prev, ...entries]);
-        setOffset(prev => prev + entries.length);
-      }
-      setHasMore(response.hasMore || false);
-      setTotalCount(response.totalCount || 0);
-    } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") return;
-      setError(err instanceof Error ? err.message : "Failed to fetch logs");
-    } finally {
-      setLoading(false);
-    }
-  }, [sessionId, debouncedSearch, levelFilters, offset]);
-
-  useEffect(() => {
-    fetchLogs(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, debouncedSearch, levelFilters]);
-
-  const [liveTailState, liveTailControls] = useLiveTail(
-    useCallback(() => fetchLogs(true), [fetchLogs]),
-    { interval: liveTailInterval, enabled: liveTailEnabled }
-  );
-
-  const getLevelClass = (level: string) => {
-    switch (level.toUpperCase()) {
-      case "DEBUG": return styles.levelDebug;
-      case "INFO": return styles.levelInfo;
-      case "WARNING":
-      case "WARN": return styles.levelWarning;
-      case "ERROR": return styles.levelError;
-      case "FATAL": return styles.levelFatal;
-      default: return "";
-    }
-  };
-
+export function SessionLogsTab({ sessionId }: SessionLogsTabProps) {
   return (
     <div className={styles.container}>
-      <div className={styles.toolbar}>
-        <input
-          type="text"
-          className={styles.searchInput}
-          placeholder="Search logs..."
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          aria-label="Search logs"
-        />
-        <MultiSelect
-          label="Level"
-          options={LOG_LEVEL_OPTIONS}
-          value={levelFilters}
-          onChange={setLevelFilters}
-          placeholder="All"
-        />
-        <LiveTailToggle
-          isEnabled={liveTailEnabled}
-          onToggle={() => setLiveTailEnabled(prev => !prev)}
-          isPaused={liveTailState.isPaused}
-          onPauseToggle={liveTailControls.toggle}
-          interval={liveTailInterval}
-          onIntervalChange={setLiveTailInterval}
-          lastRefresh={liveTailState.lastFetch}
-        />
-        <button
-          className={styles.refreshButton}
-          onClick={() => fetchLogs(true)}
-          aria-label="Refresh logs"
-        >
-          Refresh
-        </button>
+      {/*
+        Explicit flex column wrapper ensures react-virtuoso can measure its
+        scroll container height. The inner div fills the remaining space via
+        flex: 1; minHeight: 0 prevents overflow in a flex parent (P-10).
+      */}
+      <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", height: "100%" }}>
+        <LogViewer source="session" sessionId={sessionId} />
       </div>
-
-      {loading && (
-        <div className={styles.status} role="status">Loading logs...</div>
-      )}
-
-      {error && (
-        <div className={styles.statusError} role="alert">Error: {error}</div>
-      )}
-
-      {!loading && !error && logs.length === 0 && (
-        <div className={styles.empty}>
-          No logs recorded for this session yet.
-        </div>
-      )}
-
-      {!loading && !error && logs.length > 0 && (
-        <>
-          <div className={styles.tableWrapper}>
-            <table className={styles.table}>
-              <thead>
-                <tr>
-                  <th className={styles.colTimestamp}>Timestamp</th>
-                  <th className={styles.colLevel}>Level</th>
-                  <th className={styles.colSource}>Source</th>
-                  <th className={styles.colMessage}>Message</th>
-                </tr>
-              </thead>
-              <tbody>
-                {logs.map((entry, i) => (
-                  <tr key={i} className={styles.row}>
-                    <td
-                      className={styles.timestamp}
-                      title={entry.timestamp ? formatTimestamp(timestampDate(entry.timestamp)) : "N/A"}
-                    >
-                      {entry.timestamp
-                        ? formatRelativeTime(timestampDate(entry.timestamp).getTime())
-                        : "N/A"}
-                    </td>
-                    <td className={`${styles.level} ${getLevelClass(entry.level)}`}>
-                      {entry.level}
-                    </td>
-                    <td className={styles.source}>{entry.source || "-"}</td>
-                    <td className={styles.message}>{entry.message}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          {hasMore && (
-            <button
-              className={styles.loadMoreButton}
-              onClick={() => fetchLogs(false)}
-              disabled={loadingMore}
-            >
-              {loadingMore ? "Loading..." : `Load more (${totalCount - logs.length} remaining)`}
-            </button>
-          )}
-        </>
-      )}
     </div>
   );
 }
