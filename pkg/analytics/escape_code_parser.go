@@ -2,7 +2,14 @@
 package analytics
 
 import (
+	"bytes"
+	"context"
+	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
+	"hash/fnv"
+	"strings"
+	"time"
 )
 
 // EscapeCategory represents the type of escape sequence
@@ -38,10 +45,34 @@ type ParsedEscapeCode struct {
 
 // EscapeCodeParser extracts escape sequences from terminal output
 type EscapeCodeParser struct {
-	store         *EscapeCodeStore
-	sessionID     string
-	enabled       bool
-	partialBuffer []byte // Buffer for partial escape sequences between chunks
+	store             *EscapeCodeStore
+	sessionID         string
+	enabled           bool
+	partialBuffer     []byte // Buffer for partial escape sequences between chunks
+	writer            EscapeEventWriter
+	captureLevel      string // "full", "summary", "off"
+	redactOSCPayloads bool
+	samplingRate      float64
+	chunkSeqNum       int64 // incremented per Parse call (Stage 1)
+	stage2ChunkSeqNum int64 // incremented per ParseStage2 call (Stage 2, independent counter)
+	correlator        *MangleCorrelator
+	totalSequences    int64 // total escape sequences emitted
+	totalMangled      int64 // total sequences flagged as mangled
+}
+
+// ParserStats holds lifetime counters for a parser session.
+type ParserStats struct {
+	TotalSequences int64
+	TotalMangled   int64
+	Dropped        int64
+}
+
+// GetStats returns lifetime counters for this parser.
+func (p *EscapeCodeParser) GetStats() ParserStats {
+	return ParserStats{
+		TotalSequences: p.totalSequences,
+		TotalMangled:   p.totalMangled,
+	}
 }
 
 // NewEscapeCodeParser creates a new parser with the given store and session ID
@@ -52,6 +83,19 @@ func NewEscapeCodeParser(store *EscapeCodeStore, sessionID string) *EscapeCodePa
 		enabled:       false,
 		partialBuffer: nil,
 	}
+}
+
+// SetEventWriter configures the event writer and capture settings.
+func (p *EscapeCodeParser) SetEventWriter(w EscapeEventWriter, captureLevel string, redactOSC bool, samplingRate float64) {
+	p.writer = w
+	p.captureLevel = captureLevel
+	p.redactOSCPayloads = redactOSC
+	p.samplingRate = samplingRate
+}
+
+// SetCorrelator attaches a MangleCorrelator to this parser for Stage 1/2 mangle detection.
+func (p *EscapeCodeParser) SetCorrelator(c *MangleCorrelator) {
+	p.correlator = c
 }
 
 // SetEnabled enables or disables escape code parsing
@@ -65,8 +109,11 @@ func (p *EscapeCodeParser) IsEnabled() bool {
 }
 
 // Parse extracts all escape sequences from data and records them to the store.
+// sessionSeq is the cumulative PTY byte offset at the start of this chunk.
 // Returns the original data unchanged (passthrough).
-func (p *EscapeCodeParser) Parse(data []byte) []byte {
+func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
+	p.chunkSeqNum++
+
 	if !p.enabled || p.store == nil || len(data) == 0 {
 		return data
 	}
@@ -85,9 +132,10 @@ func (p *EscapeCodeParser) Parse(data []byte) []byte {
 	// Extract all escape sequences
 	codes := p.extractEscapeSequences(parseData)
 
-	// Record each code to the store
+	// Record each code to the store and emit events
 	for _, code := range codes {
 		p.store.Record(p.sessionID, code.RawBytes, code.Category, code.Description)
+		p.emitEvent(code, sessionSeq)
 	}
 
 	// Check if data ends with a partial escape sequence
@@ -97,6 +145,121 @@ func (p *EscapeCodeParser) Parse(data []byte) []byte {
 	}
 
 	return data
+}
+
+// ParseStage2 performs a secondary parse pass over data (a coalesced transport frame)
+// and emits EscapeEventRecord entries with Stage=StageTransport.
+// sessionSeq is the cumulative transport byte offset at the start of this frame.
+// ParseStage2 uses its own independent chunk counter (stage2ChunkSeqNum) for sampling
+// so that calling it independently does not interfere with the Stage 1 counter.
+func (p *EscapeCodeParser) ParseStage2(data []byte, sessionSeq int64) {
+	if !p.enabled || p.writer == nil || p.captureLevel == "off" || len(data) == 0 {
+		return
+	}
+
+	p.stage2ChunkSeqNum++
+
+	codes := p.extractEscapeSequences(data)
+	for _, code := range codes {
+		p.emitEventWithStageAndSeq(code, sessionSeq, StageTransport, p.stage2ChunkSeqNum)
+	}
+}
+
+// emitEvent sends an EscapeEventRecord to the writer if configured.
+func (p *EscapeCodeParser) emitEvent(code ParsedEscapeCode, sessionSeq int64) {
+	p.emitEventWithStageAndSeq(code, sessionSeq, StagePTYRead, p.chunkSeqNum)
+}
+
+// emitEventWithStageAndSeq sends an EscapeEventRecord with a specified stage and explicit chunk counter.
+// The chunkSeq parameter is used for sampling decisions.
+func (p *EscapeCodeParser) emitEventWithStageAndSeq(code ParsedEscapeCode, sessionSeq int64, stage Stage, chunkSeq int64) {
+	if p.writer == nil || p.captureLevel == "off" {
+		return
+	}
+
+	// Apply sampling: use the provided chunkSeq with modulo check
+	if p.samplingRate < 1.0 && (chunkSeq%1000) >= int64(p.samplingRate*1000) {
+		return
+	}
+
+	// Determine subtype from description (first word)
+	subtype := code.Description
+	if idx := strings.IndexByte(subtype, ' '); idx >= 0 {
+		subtype = subtype[:idx]
+	}
+
+	record := EscapeEventRecord{
+		SessionID:       p.sessionID,
+		Stage:           stage,
+		SequenceType:    string(code.Category),
+		SequenceSubtype: subtype,
+		ByteLen:         len(code.RawBytes),
+		WallTime:        time.Now(),
+		SessionSeq:      sessionSeq + int64(code.StartOffset),
+	}
+
+	// Compute payload hash — FNV-64a for summary (fast), SHA-256 for full (collision-resistant)
+	switch p.captureLevel {
+	case "full":
+		h := sha256.Sum256(code.RawBytes)
+		record.PayloadHash = hex.EncodeToString(h[:])[:16]
+		record.RawBytes = code.RawBytes
+	case "summary":
+		h := fnv.New64a()
+		h.Write(code.RawBytes)
+		record.PayloadHash = fmt.Sprintf("%016x", h.Sum64())
+	}
+
+	// Apply OSC redaction
+	if code.Category == CategoryOSC && p.redactOSCPayloads {
+		cmd := extractOSCCommand(code.RawBytes)
+		switch cmd {
+		case "52":
+			record.PayloadHash = ""
+			record.RawBytes = nil
+			record.SequenceSubtype = "clipboard"
+		case "0", "1", "2", "7":
+			record.PayloadHash = ""
+			record.RawBytes = nil
+		}
+	}
+
+	// Record Stage 1 observation for mangle correlation
+	if p.correlator != nil && record.PayloadHash != "" {
+		p.correlator.RecordStage1(record.SessionID, record.SessionSeq, record.PayloadHash, record.ByteLen)
+	}
+
+	p.totalSequences++
+	if record.Mangled {
+		p.totalMangled++
+	}
+
+	p.writer.WriteEscapeEvent(context.Background(), record)
+}
+
+// extractOSCCommand extracts the OSC command number string from raw OSC bytes.
+// Raw bytes are: ESC ] <cmd> ; <payload> <terminator>
+func extractOSCCommand(rawBytes []byte) string {
+	if len(rawBytes) < 4 {
+		return ""
+	}
+	// Skip ESC and ]
+	content := rawBytes[2:]
+	// Find ';' or terminator
+	end := bytes.IndexAny(content, ";\x07\x9c")
+	if end < 0 {
+		// Check for ESC \ (ST)
+		for i, b := range content {
+			if b == 0x1b {
+				end = i
+				break
+			}
+		}
+		if end < 0 {
+			end = len(content)
+		}
+	}
+	return string(content[:end])
 }
 
 // extractEscapeSequences finds all escape sequences in the data
@@ -227,7 +390,7 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 	}
 
 	// Look for BEL (0x07) or ST (ESC \)
-	for end := offset + 2; end < len(data); end++ {
+	for end := offset + 2; end < len(data) && end-offset < 65536; end++ {
 		// BEL terminator
 		if data[end] == 0x07 {
 			rawBytes := data[offset : end+1]
@@ -525,6 +688,11 @@ func (p *EscapeCodeParser) formatParams(params string) string {
 
 // findPartialEscapeAtEnd checks if data ends with a partial escape sequence
 func (p *EscapeCodeParser) findPartialEscapeAtEnd(data []byte) []byte {
+	// Cap partial buffer to prevent unbounded growth from malformed sequences
+	if len(p.partialBuffer) > 4096 {
+		p.partialBuffer = nil
+	}
+
 	if len(data) == 0 {
 		return nil
 	}

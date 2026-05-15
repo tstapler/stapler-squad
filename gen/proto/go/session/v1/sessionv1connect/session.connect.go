@@ -261,6 +261,12 @@ const (
 	// SessionServiceAcknowledgeErrorProcedure is the fully-qualified name of the SessionService's
 	// AcknowledgeError RPC.
 	SessionServiceAcknowledgeErrorProcedure = "/session.v1.SessionService/AcknowledgeError"
+	// SessionServiceQueryEscapeAnalyticsProcedure is the fully-qualified name of the SessionService's
+	// QueryEscapeAnalytics RPC.
+	SessionServiceQueryEscapeAnalyticsProcedure = "/session.v1.SessionService/QueryEscapeAnalytics"
+	// SessionServiceGetEscapeAnalyticsSummaryProcedure is the fully-qualified name of the
+	// SessionService's GetEscapeAnalyticsSummary RPC.
+	SessionServiceGetEscapeAnalyticsSummaryProcedure = "/session.v1.SessionService/GetEscapeAnalyticsSummary"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -461,6 +467,10 @@ type SessionServiceClient interface {
 	// AcknowledgeError marks an error event as acknowledged so it no longer appears
 	// in the default (unacknowledged) listing.
 	AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error)
+	// QueryEscapeAnalytics returns paginated escape event records for a session.
+	QueryEscapeAnalytics(context.Context, *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error)
+	// GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
+	GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -936,88 +946,102 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("AcknowledgeError")),
 			connect.WithClientOptions(opts...),
 		),
+		queryEscapeAnalytics: connect.NewClient[v1.QueryEscapeAnalyticsRequest, v1.QueryEscapeAnalyticsResponse](
+			httpClient,
+			baseURL+SessionServiceQueryEscapeAnalyticsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("QueryEscapeAnalytics")),
+			connect.WithClientOptions(opts...),
+		),
+		getEscapeAnalyticsSummary: connect.NewClient[v1.GetEscapeAnalyticsSummaryRequest, v1.GetEscapeAnalyticsSummaryResponse](
+			httpClient,
+			baseURL+SessionServiceGetEscapeAnalyticsSummaryProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsSummary")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // sessionServiceClient implements SessionServiceClient.
 type sessionServiceClient struct {
-	listSessions             *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
-	getSession               *connect.Client[v1.GetSessionRequest, v1.GetSessionResponse]
-	createSession            *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
-	updateSession            *connect.Client[v1.UpdateSessionRequest, v1.UpdateSessionResponse]
-	deleteSession            *connect.Client[v1.DeleteSessionRequest, v1.DeleteSessionResponse]
-	watchSessions            *connect.Client[v1.WatchSessionsRequest, v1.SessionEvent]
-	streamTerminal           *connect.Client[v1.TerminalData, v1.TerminalData]
-	getSessionDiff           *connect.Client[v1.GetSessionDiffRequest, v1.GetSessionDiffResponse]
-	getVCSStatus             *connect.Client[v1.GetVCSStatusRequest, v1.GetVCSStatusResponse]
-	getReviewQueue           *connect.Client[v1.GetReviewQueueRequest, v1.GetReviewQueueResponse]
-	acknowledgeSession       *connect.Client[v1.AcknowledgeSessionRequest, v1.AcknowledgeSessionResponse]
-	getLogs                  *connect.Client[v1.GetLogsRequest, v1.GetLogsResponse]
-	watchReviewQueue         *connect.Client[v1.WatchReviewQueueRequest, v1.ReviewQueueEvent]
-	logUserInteraction       *connect.Client[v1.LogUserInteractionRequest, v1.LogUserInteractionResponse]
-	getClaudeConfig          *connect.Client[v1.GetClaudeConfigRequest, v1.GetClaudeConfigResponse]
-	listClaudeConfigs        *connect.Client[v1.ListClaudeConfigsRequest, v1.ListClaudeConfigsResponse]
-	updateClaudeConfig       *connect.Client[v1.UpdateClaudeConfigRequest, v1.UpdateClaudeConfigResponse]
-	listClaudeHistory        *connect.Client[v1.ListClaudeHistoryRequest, v1.ListClaudeHistoryResponse]
-	getClaudeHistoryDetail   *connect.Client[v1.GetClaudeHistoryDetailRequest, v1.GetClaudeHistoryDetailResponse]
-	getClaudeHistoryMessages *connect.Client[v1.GetClaudeHistoryMessagesRequest, v1.GetClaudeHistoryMessagesResponse]
-	searchClaudeHistory      *connect.Client[v1.SearchClaudeHistoryRequest, v1.SearchClaudeHistoryResponse]
-	getPRInfo                *connect.Client[v1.GetPRInfoRequest, v1.GetPRInfoResponse]
-	getPRComments            *connect.Client[v1.GetPRCommentsRequest, v1.GetPRCommentsResponse]
-	postPRComment            *connect.Client[v1.PostPRCommentRequest, v1.PostPRCommentResponse]
-	mergePR                  *connect.Client[v1.MergePRRequest, v1.MergePRResponse]
-	closePR                  *connect.Client[v1.ClosePRRequest, v1.ClosePRResponse]
-	sendNotification         *connect.Client[v1.SendNotificationRequest, v1.SendNotificationResponse]
-	focusWindow              *connect.Client[v1.FocusWindowRequest, v1.FocusWindowResponse]
-	renameSession            *connect.Client[v1.RenameSessionRequest, v1.RenameSessionResponse]
-	restartSession           *connect.Client[v1.RestartSessionRequest, v1.RestartSessionResponse]
-	getWorkspaceInfo         *connect.Client[v1.GetWorkspaceInfoRequest, v1.GetWorkspaceInfoResponse]
-	listWorkspaceTargets     *connect.Client[v1.ListWorkspaceTargetsRequest, v1.ListWorkspaceTargetsResponse]
-	switchWorkspace          *connect.Client[v1.SwitchWorkspaceRequest, v1.SwitchWorkspaceResponse]
-	resolveApproval          *connect.Client[v1.ResolveApprovalRequest, v1.ResolveApprovalResponse]
-	listPendingApprovals     *connect.Client[v1.ListPendingApprovalsRequest, v1.ListPendingApprovalsResponse]
-	createDebugSnapshot      *connect.Client[v1.CreateDebugSnapshotRequest, v1.CreateDebugSnapshotResponse]
-	getNotificationHistory   *connect.Client[v1.GetNotificationHistoryRequest, v1.GetNotificationHistoryResponse]
-	markNotificationRead     *connect.Client[v1.MarkNotificationReadRequest, v1.MarkNotificationReadResponse]
-	clearNotificationHistory *connect.Client[v1.ClearNotificationHistoryRequest, v1.ClearNotificationHistoryResponse]
-	listApprovalRules        *connect.Client[v1.ListApprovalRulesRequest, v1.ListApprovalRulesResponse]
-	upsertApprovalRule       *connect.Client[v1.UpsertApprovalRuleRequest, v1.UpsertApprovalRuleResponse]
-	deleteApprovalRule       *connect.Client[v1.DeleteApprovalRuleRequest, v1.DeleteApprovalRuleResponse]
-	getApprovalAnalytics     *connect.Client[v1.GetApprovalAnalyticsRequest, v1.GetApprovalAnalyticsResponse]
-	listDatabases            *connect.Client[v1.ListDatabasesRequest, v1.ListDatabasesResponse]
-	getCurrentDatabase       *connect.Client[v1.GetCurrentDatabaseRequest, v1.GetCurrentDatabaseResponse]
-	switchDatabase           *connect.Client[v1.SwitchDatabaseRequest, v1.SwitchDatabaseResponse]
-	mergeDatabase            *connect.Client[v1.MergeDatabaseRequest, v1.MergeDatabaseResponse]
-	createCheckpoint         *connect.Client[v1.CreateCheckpointRequest, v1.CreateCheckpointResponse]
-	listCheckpoints          *connect.Client[v1.ListCheckpointsRequest, v1.ListCheckpointsResponse]
-	forkSession              *connect.Client[v1.ForkSessionRequest, v1.ForkSessionResponse]
-	clearConversationState   *connect.Client[v1.ClearConversationStateRequest, v1.ClearConversationStateResponse]
-	listFiles                *connect.Client[v1.ListFilesRequest, v1.ListFilesResponse]
-	getFileContent           *connect.Client[v1.GetFileContentRequest, v1.GetFileContentResponse]
-	searchFiles              *connect.Client[v1.SearchFilesRequest, v1.SearchFilesResponse]
-	listPathCompletions      *connect.Client[v1.ListPathCompletionsRequest, v1.ListPathCompletionsResponse]
-	getSessionDefaults       *connect.Client[v1.GetSessionDefaultsRequest, v1.GetSessionDefaultsResponse]
-	resolveDefaults          *connect.Client[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse]
-	updateGlobalDefaults     *connect.Client[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse]
-	upsertProfile            *connect.Client[v1.UpsertProfileRequest, v1.UpsertProfileResponse]
-	deleteProfile            *connect.Client[v1.DeleteProfileRequest, v1.DeleteProfileResponse]
-	upsertDirectoryRule      *connect.Client[v1.UpsertDirectoryRuleRequest, v1.UpsertDirectoryRuleResponse]
-	deleteDirectoryRule      *connect.Client[v1.DeleteDirectoryRuleRequest, v1.DeleteDirectoryRuleResponse]
-	listWorktrees            *connect.Client[v1.ListWorktreesRequest, v1.ListWorktreesResponse]
-	listPromptHistory        *connect.Client[v1.ListPromptHistoryRequest, v1.ListPromptHistoryResponse]
-	deletePromptHistory      *connect.Client[v1.DeletePromptHistoryRequest, v1.DeletePromptHistoryResponse]
-	batchCreateSessions      *connect.Client[v1.BatchCreateSessionsRequest, v1.BatchCreateSessionsResponse]
-	runOneShot               *connect.Client[v1.RunOneShotRequest, v1.RunOneShotResponse]
-	createProject            *connect.Client[v1.CreateProjectRequest, v1.CreateProjectResponse]
-	listProjects             *connect.Client[v1.ListProjectsRequest, v1.ListProjectsResponse]
-	updateProject            *connect.Client[v1.UpdateProjectRequest, v1.UpdateProjectResponse]
-	deleteProject            *connect.Client[v1.DeleteProjectRequest, v1.DeleteProjectResponse]
-	assignSessionsToProject  *connect.Client[v1.AssignSessionsToProjectRequest, v1.AssignSessionsToProjectResponse]
-	listBranches             *connect.Client[v1.ListBranchesRequest, v1.ListBranchesResponse]
-	getTerminalSnapshot      *connect.Client[v1.GetTerminalSnapshotRequest, v1.GetTerminalSnapshotResponse]
-	logClientEvents          *connect.Client[v1.LogClientEventsRequest, v1.LogClientEventsResponse]
-	listErrors               *connect.Client[v1.ListErrorsRequest, v1.ListErrorsResponse]
-	acknowledgeError         *connect.Client[v1.AcknowledgeErrorRequest, v1.AcknowledgeErrorResponse]
+	listSessions              *connect.Client[v1.ListSessionsRequest, v1.ListSessionsResponse]
+	getSession                *connect.Client[v1.GetSessionRequest, v1.GetSessionResponse]
+	createSession             *connect.Client[v1.CreateSessionRequest, v1.CreateSessionResponse]
+	updateSession             *connect.Client[v1.UpdateSessionRequest, v1.UpdateSessionResponse]
+	deleteSession             *connect.Client[v1.DeleteSessionRequest, v1.DeleteSessionResponse]
+	watchSessions             *connect.Client[v1.WatchSessionsRequest, v1.SessionEvent]
+	streamTerminal            *connect.Client[v1.TerminalData, v1.TerminalData]
+	getSessionDiff            *connect.Client[v1.GetSessionDiffRequest, v1.GetSessionDiffResponse]
+	getVCSStatus              *connect.Client[v1.GetVCSStatusRequest, v1.GetVCSStatusResponse]
+	getReviewQueue            *connect.Client[v1.GetReviewQueueRequest, v1.GetReviewQueueResponse]
+	acknowledgeSession        *connect.Client[v1.AcknowledgeSessionRequest, v1.AcknowledgeSessionResponse]
+	getLogs                   *connect.Client[v1.GetLogsRequest, v1.GetLogsResponse]
+	watchReviewQueue          *connect.Client[v1.WatchReviewQueueRequest, v1.ReviewQueueEvent]
+	logUserInteraction        *connect.Client[v1.LogUserInteractionRequest, v1.LogUserInteractionResponse]
+	getClaudeConfig           *connect.Client[v1.GetClaudeConfigRequest, v1.GetClaudeConfigResponse]
+	listClaudeConfigs         *connect.Client[v1.ListClaudeConfigsRequest, v1.ListClaudeConfigsResponse]
+	updateClaudeConfig        *connect.Client[v1.UpdateClaudeConfigRequest, v1.UpdateClaudeConfigResponse]
+	listClaudeHistory         *connect.Client[v1.ListClaudeHistoryRequest, v1.ListClaudeHistoryResponse]
+	getClaudeHistoryDetail    *connect.Client[v1.GetClaudeHistoryDetailRequest, v1.GetClaudeHistoryDetailResponse]
+	getClaudeHistoryMessages  *connect.Client[v1.GetClaudeHistoryMessagesRequest, v1.GetClaudeHistoryMessagesResponse]
+	searchClaudeHistory       *connect.Client[v1.SearchClaudeHistoryRequest, v1.SearchClaudeHistoryResponse]
+	getPRInfo                 *connect.Client[v1.GetPRInfoRequest, v1.GetPRInfoResponse]
+	getPRComments             *connect.Client[v1.GetPRCommentsRequest, v1.GetPRCommentsResponse]
+	postPRComment             *connect.Client[v1.PostPRCommentRequest, v1.PostPRCommentResponse]
+	mergePR                   *connect.Client[v1.MergePRRequest, v1.MergePRResponse]
+	closePR                   *connect.Client[v1.ClosePRRequest, v1.ClosePRResponse]
+	sendNotification          *connect.Client[v1.SendNotificationRequest, v1.SendNotificationResponse]
+	focusWindow               *connect.Client[v1.FocusWindowRequest, v1.FocusWindowResponse]
+	renameSession             *connect.Client[v1.RenameSessionRequest, v1.RenameSessionResponse]
+	restartSession            *connect.Client[v1.RestartSessionRequest, v1.RestartSessionResponse]
+	getWorkspaceInfo          *connect.Client[v1.GetWorkspaceInfoRequest, v1.GetWorkspaceInfoResponse]
+	listWorkspaceTargets      *connect.Client[v1.ListWorkspaceTargetsRequest, v1.ListWorkspaceTargetsResponse]
+	switchWorkspace           *connect.Client[v1.SwitchWorkspaceRequest, v1.SwitchWorkspaceResponse]
+	resolveApproval           *connect.Client[v1.ResolveApprovalRequest, v1.ResolveApprovalResponse]
+	listPendingApprovals      *connect.Client[v1.ListPendingApprovalsRequest, v1.ListPendingApprovalsResponse]
+	createDebugSnapshot       *connect.Client[v1.CreateDebugSnapshotRequest, v1.CreateDebugSnapshotResponse]
+	getNotificationHistory    *connect.Client[v1.GetNotificationHistoryRequest, v1.GetNotificationHistoryResponse]
+	markNotificationRead      *connect.Client[v1.MarkNotificationReadRequest, v1.MarkNotificationReadResponse]
+	clearNotificationHistory  *connect.Client[v1.ClearNotificationHistoryRequest, v1.ClearNotificationHistoryResponse]
+	listApprovalRules         *connect.Client[v1.ListApprovalRulesRequest, v1.ListApprovalRulesResponse]
+	upsertApprovalRule        *connect.Client[v1.UpsertApprovalRuleRequest, v1.UpsertApprovalRuleResponse]
+	deleteApprovalRule        *connect.Client[v1.DeleteApprovalRuleRequest, v1.DeleteApprovalRuleResponse]
+	getApprovalAnalytics      *connect.Client[v1.GetApprovalAnalyticsRequest, v1.GetApprovalAnalyticsResponse]
+	listDatabases             *connect.Client[v1.ListDatabasesRequest, v1.ListDatabasesResponse]
+	getCurrentDatabase        *connect.Client[v1.GetCurrentDatabaseRequest, v1.GetCurrentDatabaseResponse]
+	switchDatabase            *connect.Client[v1.SwitchDatabaseRequest, v1.SwitchDatabaseResponse]
+	mergeDatabase             *connect.Client[v1.MergeDatabaseRequest, v1.MergeDatabaseResponse]
+	createCheckpoint          *connect.Client[v1.CreateCheckpointRequest, v1.CreateCheckpointResponse]
+	listCheckpoints           *connect.Client[v1.ListCheckpointsRequest, v1.ListCheckpointsResponse]
+	forkSession               *connect.Client[v1.ForkSessionRequest, v1.ForkSessionResponse]
+	clearConversationState    *connect.Client[v1.ClearConversationStateRequest, v1.ClearConversationStateResponse]
+	listFiles                 *connect.Client[v1.ListFilesRequest, v1.ListFilesResponse]
+	getFileContent            *connect.Client[v1.GetFileContentRequest, v1.GetFileContentResponse]
+	searchFiles               *connect.Client[v1.SearchFilesRequest, v1.SearchFilesResponse]
+	listPathCompletions       *connect.Client[v1.ListPathCompletionsRequest, v1.ListPathCompletionsResponse]
+	getSessionDefaults        *connect.Client[v1.GetSessionDefaultsRequest, v1.GetSessionDefaultsResponse]
+	resolveDefaults           *connect.Client[v1.ResolveDefaultsRequest, v1.ResolveDefaultsResponse]
+	updateGlobalDefaults      *connect.Client[v1.UpdateGlobalDefaultsRequest, v1.UpdateGlobalDefaultsResponse]
+	upsertProfile             *connect.Client[v1.UpsertProfileRequest, v1.UpsertProfileResponse]
+	deleteProfile             *connect.Client[v1.DeleteProfileRequest, v1.DeleteProfileResponse]
+	upsertDirectoryRule       *connect.Client[v1.UpsertDirectoryRuleRequest, v1.UpsertDirectoryRuleResponse]
+	deleteDirectoryRule       *connect.Client[v1.DeleteDirectoryRuleRequest, v1.DeleteDirectoryRuleResponse]
+	listWorktrees             *connect.Client[v1.ListWorktreesRequest, v1.ListWorktreesResponse]
+	listPromptHistory         *connect.Client[v1.ListPromptHistoryRequest, v1.ListPromptHistoryResponse]
+	deletePromptHistory       *connect.Client[v1.DeletePromptHistoryRequest, v1.DeletePromptHistoryResponse]
+	batchCreateSessions       *connect.Client[v1.BatchCreateSessionsRequest, v1.BatchCreateSessionsResponse]
+	runOneShot                *connect.Client[v1.RunOneShotRequest, v1.RunOneShotResponse]
+	createProject             *connect.Client[v1.CreateProjectRequest, v1.CreateProjectResponse]
+	listProjects              *connect.Client[v1.ListProjectsRequest, v1.ListProjectsResponse]
+	updateProject             *connect.Client[v1.UpdateProjectRequest, v1.UpdateProjectResponse]
+	deleteProject             *connect.Client[v1.DeleteProjectRequest, v1.DeleteProjectResponse]
+	assignSessionsToProject   *connect.Client[v1.AssignSessionsToProjectRequest, v1.AssignSessionsToProjectResponse]
+	listBranches              *connect.Client[v1.ListBranchesRequest, v1.ListBranchesResponse]
+	getTerminalSnapshot       *connect.Client[v1.GetTerminalSnapshotRequest, v1.GetTerminalSnapshotResponse]
+	logClientEvents           *connect.Client[v1.LogClientEventsRequest, v1.LogClientEventsResponse]
+	listErrors                *connect.Client[v1.ListErrorsRequest, v1.ListErrorsResponse]
+	acknowledgeError          *connect.Client[v1.AcknowledgeErrorRequest, v1.AcknowledgeErrorResponse]
+	queryEscapeAnalytics      *connect.Client[v1.QueryEscapeAnalyticsRequest, v1.QueryEscapeAnalyticsResponse]
+	getEscapeAnalyticsSummary *connect.Client[v1.GetEscapeAnalyticsSummaryRequest, v1.GetEscapeAnalyticsSummaryResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1405,6 +1429,16 @@ func (c *sessionServiceClient) AcknowledgeError(ctx context.Context, req *connec
 	return c.acknowledgeError.CallUnary(ctx, req)
 }
 
+// QueryEscapeAnalytics calls session.v1.SessionService.QueryEscapeAnalytics.
+func (c *sessionServiceClient) QueryEscapeAnalytics(ctx context.Context, req *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error) {
+	return c.queryEscapeAnalytics.CallUnary(ctx, req)
+}
+
+// GetEscapeAnalyticsSummary calls session.v1.SessionService.GetEscapeAnalyticsSummary.
+func (c *sessionServiceClient) GetEscapeAnalyticsSummary(ctx context.Context, req *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error) {
+	return c.getEscapeAnalyticsSummary.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -1603,6 +1637,10 @@ type SessionServiceHandler interface {
 	// AcknowledgeError marks an error event as acknowledged so it no longer appears
 	// in the default (unacknowledged) listing.
 	AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error)
+	// QueryEscapeAnalytics returns paginated escape event records for a session.
+	QueryEscapeAnalytics(context.Context, *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error)
+	// GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
+	GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2074,6 +2112,18 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("AcknowledgeError")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceQueryEscapeAnalyticsHandler := connect.NewUnaryHandler(
+		SessionServiceQueryEscapeAnalyticsProcedure,
+		svc.QueryEscapeAnalytics,
+		connect.WithSchema(sessionServiceMethods.ByName("QueryEscapeAnalytics")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceGetEscapeAnalyticsSummaryHandler := connect.NewUnaryHandler(
+		SessionServiceGetEscapeAnalyticsSummaryProcedure,
+		svc.GetEscapeAnalyticsSummary,
+		connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsSummary")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -2230,6 +2280,10 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListErrorsHandler.ServeHTTP(w, r)
 		case SessionServiceAcknowledgeErrorProcedure:
 			sessionServiceAcknowledgeErrorHandler.ServeHTTP(w, r)
+		case SessionServiceQueryEscapeAnalyticsProcedure:
+			sessionServiceQueryEscapeAnalyticsHandler.ServeHTTP(w, r)
+		case SessionServiceGetEscapeAnalyticsSummaryProcedure:
+			sessionServiceGetEscapeAnalyticsSummaryHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -2545,4 +2599,12 @@ func (UnimplementedSessionServiceHandler) ListErrors(context.Context, *connect.R
 
 func (UnimplementedSessionServiceHandler) AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.AcknowledgeError is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) QueryEscapeAnalytics(context.Context, *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.QueryEscapeAnalytics is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetEscapeAnalyticsSummary is not implemented"))
 }

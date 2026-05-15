@@ -16,12 +16,13 @@ package nocommandpattern
 
 import (
 	"go/ast"
-	"go/token"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/tstapler/stapler-squad/tools/lint/internal/nolintcomment"
 )
 
 // Analyzer is the exported analysis.Analyzer for the nocommandpattern check.
@@ -32,7 +33,17 @@ var Analyzer = &analysis.Analyzer{
 	Requires: []*analysis.Analyzer{inspect.Analyzer},
 }
 
+// onlyPackage restricts the check to packages whose import path contains this
+// substring. CommandPattern is a pattern defined only in pkg/classifier; there
+// is no value checking unrelated packages that happen to have a field with the
+// same name.
+const onlyPackage = "pkg/classifier"
+
 func run(pass *analysis.Pass) (interface{}, error) {
+	if !strings.Contains(pass.Pkg.Path(), onlyPackage) {
+		return nil, nil
+	}
+
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
 	nodeFilter := []ast.Node{
@@ -56,7 +67,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 
 			// CommandPattern is set. Require a justification comment.
-			if !hasJustificationComment(pass, kv.Pos()) {
+			if !nolintcomment.Contains(pass, kv.Pos(), "commandpattern") {
 				pass.Reportf(kv.Pos(),
 					"CommandPattern set without a //nolint:commandpattern justification comment; prefer Criteria (AST-based) matching, or document why Criteria cannot express this match")
 			}
@@ -66,40 +77,3 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	return nil, nil
 }
 
-// hasJustificationComment returns true if a comment that starts with
-// "//nolint:commandpattern" (no space between // and nolint) appears on
-// the same line as pos or the immediately preceding line.
-//
-// We require the nolint directive to start at the beginning of the comment
-// text (after //) to avoid matching "//nolint:commandpattern" mentioned
-// inside analysistest // want annotations.
-func hasJustificationComment(pass *analysis.Pass, pos token.Pos) bool {
-	fset := pass.Fset
-	file := fset.File(pos)
-	if file == nil {
-		return false
-	}
-	targetLine := file.Line(pos)
-
-	for _, f := range pass.Files {
-		if fset.File(f.Pos()) != file {
-			continue
-		}
-		for _, cg := range f.Comments {
-			for _, c := range cg.List {
-				commentLine := file.Line(c.Pos())
-				if commentLine == targetLine || commentLine == targetLine-1 {
-					// Match //nolint:commandpattern at the start of the comment,
-					// not merely anywhere inside the text (guards against want annotations).
-					text := strings.TrimPrefix(c.Text, "//")
-					if strings.HasPrefix(strings.TrimSpace(text), "nolint:commandpattern") {
-						return true
-					}
-				}
-			}
-		}
-	}
-	return false
-}
-
-var _ token.Pos // keep token import used

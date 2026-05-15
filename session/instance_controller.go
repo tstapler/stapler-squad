@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
@@ -151,6 +152,28 @@ func (i *Instance) GetExitContent() []byte {
 		return nil
 	}
 	return ctrl.GetExitContent()
+}
+
+// GetEscapeParser returns the escape code parser from the session's response stream.
+// Returns nil if the controller is not running or has no response stream.
+func (i *Instance) GetEscapeParser() *analytics.EscapeCodeParser {
+	ctrl := i.GetController()
+	if ctrl == nil {
+		return nil
+	}
+	return ctrl.GetEscapeParser()
+}
+
+// GetTotalBytesWritten returns the monotonic PTY byte offset from the session's
+// circular buffer. This is the same counter used by Stage 1 analytics so Stage
+// 2 session_seq values remain stable across WebSocket reconnections.
+// Returns 0 if no controller is active or the buffer is unavailable.
+func (i *Instance) GetTotalBytesWritten() int64 {
+	ctrl := i.GetController()
+	if ctrl == nil {
+		return 0
+	}
+	return ctrl.GetTotalBytesWritten()
 }
 
 // GetRateLimitState returns the current rate limit detection state.

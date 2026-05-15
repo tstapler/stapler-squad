@@ -700,6 +700,9 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			return stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes))
 		}
 
+		// escapeParser is fetched once; may be nil if no controller is running.
+		escapeParser := instance.GetEscapeParser()
+
 		for {
 			select {
 			case <-doneChan:
@@ -740,6 +743,19 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					default:
 						break coalesce
 					}
+				}
+
+				// Stage 2 escape analytics tap: observe the coalesced transport frame.
+				// Re-fetch parser lazily if it was nil at goroutine start (controller may
+				// have started after the WebSocket connection was established).
+				if escapeParser == nil {
+					escapeParser = instance.GetEscapeParser()
+				}
+				if escapeParser != nil && escapeParser.IsEnabled() {
+					// Use the monotonic PTY byte offset from the circular buffer so
+					// session_seq is stable across WebSocket reconnections (mirrors
+					// the Stage 1 counter in ResponseStream.streamLoop).
+					escapeParser.ParseStage2(buf, instance.GetTotalBytesWritten())
 				}
 
 				if err := sendData(buf); err != nil {

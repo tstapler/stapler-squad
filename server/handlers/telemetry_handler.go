@@ -115,6 +115,5 @@ func (h *TelemetryHandler) HandleTelemetry(w http.ResponseWriter, r *http.Reques
 		log.Error("telemetry analytics.Record failed", "err", err)
 	}
 
-
 	w.WriteHeader(http.StatusNoContent)
 }

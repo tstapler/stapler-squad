@@ -12,6 +12,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/errorevent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/schema"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -151,6 +152,32 @@ func init() {
 	erroreventDescAcknowledged := erroreventFields[8].Descriptor()
 	// errorevent.DefaultAcknowledged holds the default value on creation for the acknowledged field.
 	errorevent.DefaultAcknowledged = erroreventDescAcknowledged.Default.(bool)
+	escapeeventFields := schema.EscapeEvent{}.Fields()
+	_ = escapeeventFields
+	// escapeeventDescSessionID is the schema descriptor for session_id field.
+	escapeeventDescSessionID := escapeeventFields[1].Descriptor()
+	// escapeevent.SessionIDValidator is a validator for the "session_id" field. It is called by the builders before save.
+	escapeevent.SessionIDValidator = escapeeventDescSessionID.Validators[0].(func(string) error)
+	// escapeeventDescStage is the schema descriptor for stage field.
+	escapeeventDescStage := escapeeventFields[2].Descriptor()
+	// escapeevent.StageValidator is a validator for the "stage" field. It is called by the builders before save.
+	escapeevent.StageValidator = escapeeventDescStage.Validators[0].(func(string) error)
+	// escapeeventDescSequenceType is the schema descriptor for sequence_type field.
+	escapeeventDescSequenceType := escapeeventFields[3].Descriptor()
+	// escapeevent.SequenceTypeValidator is a validator for the "sequence_type" field. It is called by the builders before save.
+	escapeevent.SequenceTypeValidator = escapeeventDescSequenceType.Validators[0].(func(string) error)
+	// escapeeventDescMangled is the schema descriptor for mangled field.
+	escapeeventDescMangled := escapeeventFields[8].Descriptor()
+	// escapeevent.DefaultMangled holds the default value on creation for the mangled field.
+	escapeevent.DefaultMangled = escapeeventDescMangled.Default.(bool)
+	// escapeeventDescWallTime is the schema descriptor for wall_time field.
+	escapeeventDescWallTime := escapeeventFields[10].Descriptor()
+	// escapeevent.DefaultWallTime holds the default value on creation for the wall_time field.
+	escapeevent.DefaultWallTime = escapeeventDescWallTime.Default.(func() time.Time)
+	// escapeeventDescID is the schema descriptor for id field.
+	escapeeventDescID := escapeeventFields[0].Descriptor()
+	// escapeevent.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	escapeevent.IDValidator = escapeeventDescID.Validators[0].(func(string) error)
 	projectFields := schema.Project{}.Fields()
 	_ = projectFields
 	// projectDescName is the schema descriptor for name field.

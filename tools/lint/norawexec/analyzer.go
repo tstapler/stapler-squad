@@ -24,13 +24,14 @@ package norawexec
 
 import (
 	"go/ast"
-	"go/token"
 	"go/types"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
+
+	"github.com/tstapler/stapler-squad/tools/lint/internal/nolintcomment"
 )
 
 // Analyzer is the exported analysis.Analyzer for the norawexec check.
@@ -69,7 +70,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if !isRawExecCall(call, pass) {
 			return
 		}
-		if hasNolintComment(pass, call.Pos()) {
+		if nolintcomment.Contains(pass, call.Pos(), "norawexec") {
 			return
 		}
 		pass.Reportf(call.Pos(),
@@ -110,33 +111,3 @@ func calleeName(call *ast.CallExpr) string {
 	return "Command"
 }
 
-// hasNolintComment returns true if a //nolint:norawexec comment appears on
-// the same line as pos or the immediately preceding line.
-func hasNolintComment(pass *analysis.Pass, pos token.Pos) bool {
-	fset := pass.Fset
-	file := fset.File(pos)
-	if file == nil {
-		return false
-	}
-	targetLine := file.Line(pos)
-
-	for _, f := range pass.Files {
-		if fset.File(f.Pos()) != file {
-			continue
-		}
-		for _, cg := range f.Comments {
-			for _, c := range cg.List {
-				commentLine := file.Line(c.Pos())
-				if commentLine == targetLine || commentLine == targetLine-1 {
-					text := strings.TrimPrefix(c.Text, "//")
-					if strings.HasPrefix(strings.TrimSpace(text), "nolint:norawexec") {
-						return true
-					}
-				}
-			}
-		}
-	}
-	return false
-}
-
-var _ token.Pos // keep token import used

@@ -26,6 +26,8 @@ type Tx struct {
 	DiffStats *DiffStatsClient
 	// ErrorEvent is the client for interacting with the ErrorEvent builders.
 	ErrorEvent *ErrorEventClient
+	// EscapeEvent is the client for interacting with the EscapeEvent builders.
+	EscapeEvent *EscapeEventClient
 	// Project is the client for interacting with the Project builders.
 	Project *ProjectClient
 	// Session is the client for interacting with the Session builders.
@@ -172,6 +174,7 @@ func (tx *Tx) init() {
 	tx.ClaudeSession = NewClaudeSessionClient(tx.config)
 	tx.DiffStats = NewDiffStatsClient(tx.config)
 	tx.ErrorEvent = NewErrorEventClient(tx.config)
+	tx.EscapeEvent = NewEscapeEventClient(tx.config)
 	tx.Project = NewProjectClient(tx.config)
 	tx.Session = NewSessionClient(tx.config)
 	tx.Tag = NewTagClient(tx.config)

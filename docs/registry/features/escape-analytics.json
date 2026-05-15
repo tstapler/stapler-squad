@@ -1,0 +1,29 @@
+[
+  {
+    "id": "escape:query",
+    "type": "backend",
+    "rpc": "QueryEscapeAnalytics",
+    "markerFound": true,
+    "tested": false,
+    "testIds": [],
+    "lastModified": "2026-05-14T00:00:00Z"
+  },
+  {
+    "id": "escape:summary",
+    "type": "backend",
+    "rpc": "GetEscapeAnalyticsSummary",
+    "markerFound": true,
+    "tested": false,
+    "testIds": [],
+    "lastModified": "2026-05-14T00:00:00Z"
+  },
+  {
+    "id": "escape-analytics",
+    "type": "frontend",
+    "component": "EscapeAnalyticsPage",
+    "filePath": "web-app/src/components/analytics/EscapeAnalyticsPage.tsx",
+    "tested": false,
+    "testIds": [],
+    "lastModified": "2026-05-14T00:00:00Z"
+  }
+]

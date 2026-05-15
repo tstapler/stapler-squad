@@ -70,6 +70,12 @@ func ScanZombies() ([]ZombieInfo, error) {
 // StartZombieWatcher starts a background goroutine that periodically scans for zombie
 // processes and records them via RecordZombieProcess when found. ctx controls its lifetime.
 // interval is how often to scan (recommended: 30s).
+//
+// The first scan establishes a baseline: zombies already present at startup are silently
+// added to the reported set without triggering fork-pressure alerts. Only zombies that
+// appear after the baseline (i.e. growth over time) are recorded and counted toward the
+// alert threshold. This prevents a burst of spurious critical alerts on service restart
+// when a stable set of zombie children already exists.
 func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func(string, ...any)) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -78,6 +84,7 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 		// Track which PIDs we've already reported to avoid repeated alerts for the
 		// same long-lived zombie (uncommon but possible on a slow reaper).
 		reported := make(map[int]bool)
+		firstScan := true
 
 		for {
 			select {
@@ -106,9 +113,16 @@ func StartZombieWatcher(ctx context.Context, interval time.Duration, warnFn func
 					current[z.PID] = true
 					if !reported[z.PID] {
 						reported[z.PID] = true
-						RecordZombieProcess(z.PID, z.Command, warnFn)
+						if firstScan {
+							// Baseline: log but don't record against the pressure threshold.
+							warnFn("[zombie-watcher] baseline zombie at startup: pid=%d comm=%q (not counted toward alert threshold)", z.PID, z.Command)
+						} else {
+							RecordZombieProcess(z.PID, z.Command, warnFn)
+						}
 					}
 				}
+
+				firstScan = false
 
 				// Evict reaped zombies from the reported set
 				for pid := range reported {

@@ -46,6 +46,8 @@ linters:
     paths:
       - session/tmux/tmux_windows
       - web-app
+      - \.stapler-squad
+      - \.claude-squad
     rules:
       # Allow fmt.Print* in main.go, test files, cmd/, and tests/demo/ (CLI/test output)
       - path: "main\\.go"

@@ -1,4 +1,4 @@
-module github.com/tstapler/stapler-squad/tools/lint/nocommandpattern
+module github.com/tstapler/stapler-squad/tools/lint
 
 go 1.24.0
 

@@ -431,32 +431,16 @@ lint: ensure-tools proto-gen server/web/dist lint-custom ## Run golangci-lint wi
 	fi; \
 	golangci-lint run --enable=nilnil,staticcheck,ineffassign,govet
 
-HOTPOLLLOG_BIN       := $(CURDIR)/bin/hotpolllog-lint
-NOCOMMANDPATTERN_BIN := $(CURDIR)/bin/nocommandpattern-lint
-NORAWEXEC_BIN        := $(CURDIR)/bin/norawexec-lint
+LINTER_BIN := $(CURDIR)/bin/linter
 
-lint-custom: $(HOTPOLLLOG_BIN) $(NOCOMMANDPATTERN_BIN) $(NORAWEXEC_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern, norawexec)
-	@echo "Running custom lint: hotpolllog..."
-	@$(HOTPOLLLOG_BIN) ./...
-	@echo "hotpolllog: ok"
-	@echo "Running custom lint: nocommandpattern..."
-	@$(NOCOMMANDPATTERN_BIN) ./pkg/classifier/...
-	@echo "nocommandpattern: ok"
-	@echo "Running custom lint: norawexec..."
-	@$(NORAWEXEC_BIN) ./...
-	@echo "norawexec: ok"
+lint-custom: $(LINTER_BIN) ## Run project-specific custom linters (hotpolllog, nocommandpattern, norawexec) in a single pass
+	@echo "Running custom lint..."
+	@$(LINTER_BIN) ./...
+	@echo "custom lint: ok"
 
-$(HOTPOLLLOG_BIN):
+$(LINTER_BIN):
 	@mkdir -p $(CURDIR)/bin
-	@cd tools/lint/hotpolllog && go build -o $(HOTPOLLLOG_BIN) ./cmd/hotpolllog
-
-$(NOCOMMANDPATTERN_BIN):
-	@mkdir -p $(CURDIR)/bin
-	@cd tools/lint/nocommandpattern && go build -o $(NOCOMMANDPATTERN_BIN) ./cmd/nocommandpattern
-
-$(NORAWEXEC_BIN):
-	@mkdir -p $(CURDIR)/bin
-	@cd tools/lint/norawexec && go build -o $(NORAWEXEC_BIN) ./cmd/norawexec
+	@go -C tools/lint build -o $(LINTER_BIN) ./cmd/linter
 
 lint-no-sleep-tests: ## ADR-003 audit: count time.Sleep calls in test files outside testutil/ (target: 0)
 	@violations=$$(grep -rn 'time\.Sleep(' --include='*_test.go' . \

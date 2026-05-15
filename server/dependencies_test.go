@@ -81,4 +81,3 @@ func TestBuildServiceDeps_OnlyCoreNil_DifferentFromPartialCore(t *testing.T) {
 		t.Logf("note: nil and zero-value CoreDeps produce the same error: %v", nilErr)
 	}
 }
-

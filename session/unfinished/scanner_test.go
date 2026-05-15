@@ -138,27 +138,24 @@ func TestIsUnfinished_AllCriteria(t *testing.T) {
 
 func TestParseDiffShortstat(t *testing.T) {
 	t.Run("full stats", func(t *testing.T) {
-		var r ScanResult
-		parseDiffShortstat("3 files changed, 142 insertions(+), 28 deletions(-)", &r)
-		assert.Equal(t, 3, r.ChangedFiles)
-		assert.Equal(t, 142, r.LinesAdded)
-		assert.Equal(t, 28, r.LinesRemoved)
+		d := parseDiffShortstat("3 files changed, 142 insertions(+), 28 deletions(-)")
+		assert.Equal(t, 3, d.Files)
+		assert.Equal(t, 142, d.Insertions)
+		assert.Equal(t, 28, d.Deletions)
 	})
 
 	t.Run("only insertions", func(t *testing.T) {
-		var r ScanResult
-		parseDiffShortstat("1 file changed, 10 insertions(+)", &r)
-		assert.Equal(t, 1, r.ChangedFiles)
-		assert.Equal(t, 10, r.LinesAdded)
-		assert.Equal(t, 0, r.LinesRemoved)
+		d := parseDiffShortstat("1 file changed, 10 insertions(+)")
+		assert.Equal(t, 1, d.Files)
+		assert.Equal(t, 10, d.Insertions)
+		assert.Equal(t, 0, d.Deletions)
 	})
 
 	t.Run("empty", func(t *testing.T) {
-		var r ScanResult
-		parseDiffShortstat("", &r)
-		assert.Equal(t, 0, r.ChangedFiles)
-		assert.Equal(t, 0, r.LinesAdded)
-		assert.Equal(t, 0, r.LinesRemoved)
+		d := parseDiffShortstat("")
+		assert.Equal(t, 0, d.Files)
+		assert.Equal(t, 0, d.Insertions)
+		assert.Equal(t, 0, d.Deletions)
 	})
 }
 
