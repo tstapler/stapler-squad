@@ -123,6 +123,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
             const reviewSession = item.linkedSessions.filter((s) => s.role === "review").at(-1);
             if (reviewSession) {
               await service.overrideVerdict(reviewSession.entityId, "Manual override to done", "done");
+            } else {
+              setError("No review session found — cannot override verdict.");
+              return;
             }
             break;
           }
@@ -198,9 +201,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       setActionLoading(true);
       try {
         const reviewSession = item.linkedSessions.filter((s) => s.role === "review").at(-1);
-        if (reviewSession) {
-          await service.overrideVerdict(reviewSession.entityId, reason, "done");
+        if (!reviewSession) {
+          setError("No review session found — cannot override verdict.");
+          return;
         }
+        await service.overrideVerdict(reviewSession.entityId, reason, "done");
         await load();
       } finally {
         setActionLoading(false);

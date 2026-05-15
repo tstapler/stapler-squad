@@ -939,9 +939,11 @@ func (s *BacklogService) AttachSessionToItem(
 		}
 	}
 
-	// 6. Transition item to in_progress.
-	if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
-		log.ErrorLog.Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
+	// 6. Transition item to in_progress (only if the state machine permits it).
+	if session.CanTransitionBacklog(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
+		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
+			log.ErrorLog.Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)
+		}
 	}
 
 	return connect.NewResponse(&sessionv1.AttachSessionToItemResponse{
@@ -1035,6 +1037,7 @@ func buildTriagePrompt(item *session.BacklogItemData, artifactAbsPath, slug stri
 
 	sb.WriteString("You are a senior software architect performing pre-implementation triage.\n\n")
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
+	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_triage_result): %s\n\n", item.ID)
 	if item.Description != "" {
 		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
 	}
