@@ -18,6 +18,7 @@ export const routes = {
   settingsUnfinished: "/settings/unfinished",
   login: "/login",
   account: "/account",
+  escapeAnalytics: "/analytics/escape",
   sessionDetail: (id: string) => `/?session=${id}`,
   newSessionFromWorktree: (worktreePath: string, branch: string, title?: string) => {
     const params = new URLSearchParams({ worktree: worktreePath, branch });

@@ -105,6 +105,10 @@ type SessionService struct {
 	// errorRegistry persists deduplicated RPC errors to SQLite.
 	// May be nil when wired without an ent-backed storage (e.g. in tests).
 	errorRegistry *ErrorRegistry
+
+	// analyticsClient is the ent client for the analytics database (escape events, etc.).
+	// May be nil when escape analytics is disabled or in tests that don't need it.
+	analyticsClient *ent.Client
 }
 
 // ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -327,6 +331,12 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 // AcknowledgeError RPCs.  Must be called before the first RPC request.
 func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
 	s.errorRegistry = r
+}
+
+// SetAnalyticsClient wires the ent client used for escape analytics queries.
+// Must be called before the first QueryEscapeAnalytics or GetEscapeAnalyticsSummary RPC.
+func (s *SessionService) SetAnalyticsClient(c *ent.Client) {
+	s.analyticsClient = c
 }
 
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the

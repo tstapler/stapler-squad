@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
+	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
@@ -403,8 +404,28 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cfg := config.LoadConfig()
 	if deps.AnalyticsEntClient != nil {
 		analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
-			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(), cfg.EscapeAnalyticsRetentionDays)
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
+	}
+
+	// Start escape analytics batch writer and register it as the global writer.
+	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
+	if deps.AnalyticsEntClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
+		escapeWriter := analytics.NewEscapeEventBatchWriter(deps.AnalyticsEntClient, cfg.EscapeAnalyticsMaxRowsPerSession)
+		go escapeWriter.Start(serverCtx)
+		pkganalytics.SetGlobalEscapeWriter(escapeWriter)
+		log.Info("Escape analytics batch writer started",
+			"captureLevel", cfg.EscapeAnalyticsCaptureLevel,
+			"maxRowsPerSession", cfg.EscapeAnalyticsMaxRowsPerSession,
+		)
+	} else {
+		log.Info("Escape analytics disabled (no DB client or captureLevel=off)")
+	}
+
+	// Wire analytics ent client into SessionService for escape analytics RPC handlers.
+	if deps.AnalyticsEntClient != nil {
+		deps.SessionService.SetAnalyticsClient(deps.AnalyticsEntClient)
+		log.Info("Wired analytics ent client into SessionService for escape analytics RPCs")
 	}
 
 	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).

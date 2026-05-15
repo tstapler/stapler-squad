@@ -700,6 +700,11 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 			return stream.WriteMessage(websocket.BinaryMessage, protocol.CreateEnvelope(0, dataBytes))
 		}
 
+		// stage2BytesWritten tracks cumulative transport bytes for Stage 2 session_seq.
+		var stage2BytesWritten int64
+		// escapeParser is fetched once; may be nil if no controller is running.
+		escapeParser := instance.GetEscapeParser()
+
 		for {
 			select {
 			case <-doneChan:
@@ -741,6 +746,17 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 						break coalesce
 					}
 				}
+
+				// Stage 2 escape analytics tap: observe the coalesced transport frame.
+				// Re-fetch parser lazily if it was nil at goroutine start (controller may
+				// have started after the WebSocket connection was established).
+				if escapeParser == nil {
+					escapeParser = instance.GetEscapeParser()
+				}
+				if escapeParser != nil && escapeParser.IsEnabled() {
+					escapeParser.ParseStage2(buf, stage2BytesWritten)
+				}
+				stage2BytesWritten += int64(len(buf))
 
 				if err := sendData(buf); err != nil {
 					log.Error("[streamViaControlMode] failed to send output", "err", err)

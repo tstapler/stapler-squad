@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
@@ -151,6 +152,16 @@ func (i *Instance) GetExitContent() []byte {
 		return nil
 	}
 	return ctrl.GetExitContent()
+}
+
+// GetEscapeParser returns the escape code parser from the session's response stream.
+// Returns nil if the controller is not running or has no response stream.
+func (i *Instance) GetEscapeParser() *analytics.EscapeCodeParser {
+	ctrl := i.GetController()
+	if ctrl == nil {
+		return nil
+	}
+	return ctrl.GetEscapeParser()
 }
 
 // GetRateLimitState returns the current rate limit detection state.

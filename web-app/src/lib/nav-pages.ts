@@ -10,6 +10,7 @@ import {
   SlidersHorizontal,
   ScrollText,
   AlertTriangle,
+  BarChart2,
 } from "lucide-react";
 import { routes } from "./routes";
 
@@ -39,6 +40,7 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.config,  label: "Config",  icon: SlidersHorizontal, headerNav: false },
   { href: routes.logs,    label: "Logs",    icon: ScrollText,  mobileNav: false, headerNav: false },
   { href: routes.errors,  label: "Errors",  icon: AlertTriangle, mobileNav: false, headerNav: false },
+  { href: routes.escapeAnalytics, label: "Escape Analytics", icon: BarChart2, mobileNav: false, headerNav: false },
 ];
 
 export const MOBILE_NAV_PAGES = NAV_PAGES.filter((p) => p.mobileNav !== false);

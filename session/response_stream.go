@@ -5,6 +5,7 @@ import "github.com/linkdata/deadlock"
 import (
 	"context"
 	"fmt"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"io"
@@ -48,37 +49,77 @@ type ResponseStream struct {
 	exitTail     []byte                      // Rolling buffer of last exitTailSize bytes; logged on PTY EOF
 }
 
+// newEscapeParserForSession creates and configures an EscapeCodeParser for a session,
+// wiring in the global escape event writer and config-driven settings.
+func newEscapeParserForSession(sessionName string) *analytics.EscapeCodeParser {
+	cfg := loadAnalyticsConfig()
+	parser := analytics.NewEscapeCodeParser(analytics.GetGlobalStore(), sessionName)
+	writer := analytics.GetGlobalEscapeWriter()
+	if cfg.captureLevel != "off" {
+		parser.SetEventWriter(writer, cfg.captureLevel, cfg.redactOSC, cfg.samplingRate)
+	} else {
+		parser.SetEventWriter(analytics.NoopEscapeEventWriter{}, "off", true, 0)
+	}
+	parser.SetEnabled(true)
+	return parser
+}
+
+// escapeAnalyticsConfig holds the subset of config fields needed for parser wiring.
+type escapeAnalyticsConfig struct {
+	captureLevel string
+	redactOSC    bool
+	samplingRate float64
+}
+
+// loadAnalyticsConfig reads the current config for escape analytics.
+// Falls back to safe defaults if config cannot be loaded.
+func loadAnalyticsConfig() escapeAnalyticsConfig {
+	cfg := escapeAnalyticsConfig{
+		captureLevel: "summary",
+		redactOSC:    true,
+		samplingRate: 1.0,
+	}
+	appCfg := loadAppConfig()
+	if appCfg != nil {
+		if appCfg.EscapeAnalyticsCaptureLevel != "" {
+			cfg.captureLevel = appCfg.EscapeAnalyticsCaptureLevel
+		}
+		cfg.redactOSC = appCfg.OSCPayloadsAreRedacted()
+		if appCfg.EscapeAnalyticsSamplingRate > 0 {
+			cfg.samplingRate = appCfg.EscapeAnalyticsSamplingRate
+		}
+	}
+	return cfg
+}
+
+// loadAppConfig loads the application config. Returns nil if config cannot be loaded.
+func loadAppConfig() *config.Config {
+	appCfg := config.LoadConfig()
+	return appCfg
+}
+
 // NewResponseStream creates a new response stream for the given session.
 // The bufferSize parameter determines how many chunks can be buffered per subscriber.
 func NewResponseStream(sessionName string, ptyAccess *PTYAccess) *ResponseStream {
-	// Create escape code parser using global store
-	escapeParser := analytics.NewEscapeCodeParser(analytics.GetGlobalStore(), sessionName)
-	// Parser is enabled/disabled via the global store's enabled state
-	escapeParser.SetEnabled(true) // Always parse when store is enabled
-
 	return &ResponseStream{
 		sessionName:  sessionName,
 		ptyAccess:    ptyAccess,
 		subscribers:  make(map[string]*Subscriber),
 		bufferSize:   10000, // Large buffer to handle high-output scenarios (build errors, code generation)
 		started:      false,
-		escapeParser: escapeParser,
+		escapeParser: newEscapeParserForSession(sessionName),
 	}
 }
 
 // NewResponseStreamWithBuffer creates a response stream with a custom buffer size.
 func NewResponseStreamWithBuffer(sessionName string, ptyAccess *PTYAccess, bufferSize int) *ResponseStream {
-	// Create escape code parser using global store
-	escapeParser := analytics.NewEscapeCodeParser(analytics.GetGlobalStore(), sessionName)
-	escapeParser.SetEnabled(true) // Always parse when store is enabled
-
 	return &ResponseStream{
 		sessionName:  sessionName,
 		ptyAccess:    ptyAccess,
 		subscribers:  make(map[string]*Subscriber),
 		bufferSize:   bufferSize,
 		started:      false,
-		escapeParser: escapeParser,
+		escapeParser: newEscapeParserForSession(sessionName),
 	}
 }
 
@@ -115,9 +156,23 @@ func (rs *ResponseStream) Start(ctx context.Context) error {
 	return nil
 }
 
+// logEscapeAnalyticsSummary logs a summary of escape analytics for NFR-4.
+func (rs *ResponseStream) logEscapeAnalyticsSummary() {
+	if rs.escapeParser == nil {
+		return
+	}
+	stats := rs.escapeParser.GetStats()
+	log.Info("escape analytics: session closed",
+		"session", rs.sessionName,
+		"sequences", stats.TotalSequences,
+		"mangled", stats.TotalMangled,
+	)
+}
+
 // streamLoop is the main streaming loop that reads from PTY and broadcasts to subscribers.
 func (rs *ResponseStream) streamLoop() {
 	defer rs.wg.Done()
+	defer rs.logEscapeAnalyticsSummary()
 	defer log.Info("response stream stopped", "session", rs.sessionName)
 
 	// Buffer for reading PTY output
@@ -213,9 +268,16 @@ func (rs *ResponseStream) streamLoop() {
 					rs.onOutput()
 				}
 
+				// Capture the byte offset BEFORE writing to buffer so sessionSeq
+				// represents the start of this chunk in the cumulative stream.
+				var sessionSeq int64
+				if rs.ptyAccess.buffer != nil {
+					sessionSeq = rs.ptyAccess.buffer.TotalBytesWritten()
+				}
+
 				// Parse escape codes for analytics (passthrough - doesn't modify data)
 				if rs.escapeParser != nil {
-					rs.escapeParser.Parse(chunk.Data)
+					rs.escapeParser.Parse(chunk.Data, sessionSeq)
 				}
 
 				// Also write to circular buffer for history
@@ -373,6 +435,13 @@ func (rs *ResponseStream) GetBufferSize() int {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
 	return rs.bufferSize
+}
+
+// GetEscapeParser returns the escape code parser for this stream.
+// Used by the WebSocket handler for Stage 2 analytics observations.
+// Returns nil if no parser is configured.
+func (rs *ResponseStream) GetEscapeParser() *analytics.EscapeCodeParser {
+	return rs.escapeParser
 }
 
 // GetExitTail returns a copy of the last bytes seen before the PTY exited.

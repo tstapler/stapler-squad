@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/detection/ratelimit"
 )
@@ -826,6 +827,17 @@ func (cc *ClaudeController) GetExitContent() []byte {
 		return nil
 	}
 	return cc.responseStream.GetExitTail()
+}
+
+// GetEscapeParser returns the escape code parser from the response stream.
+// Returns nil if the controller is not started or has no response stream.
+func (cc *ClaudeController) GetEscapeParser() *analytics.EscapeCodeParser {
+	cc.mu.RLock()
+	defer cc.mu.RUnlock()
+	if cc.responseStream == nil {
+		return nil
+	}
+	return cc.responseStream.GetEscapeParser()
 }
 
 // GetRateLimitResetTime returns the reset time from the rate limit handler.
