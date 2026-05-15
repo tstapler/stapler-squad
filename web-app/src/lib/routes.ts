@@ -15,6 +15,7 @@ export const routes = {
   notifications: "/notifications",
   settings: "/settings",
   settingsDefaults: "/settings/defaults",
+  help: "/help",
   settingsUnfinished: "/settings/unfinished",
   login: "/login",
   account: "/account",

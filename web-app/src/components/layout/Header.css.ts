@@ -14,7 +14,7 @@ export const header = style({
   top: 0,
   zIndex: 1100,
   backdropFilter: "blur(8px)",
-  backgroundColor: "rgba(26, 26, 26, 0.95)",
+  backgroundColor: "rgba(15, 17, 23, 0.95)",
   isolation: "isolate",
   // Header always uses a dark backdrop regardless of OS color scheme.
   // Override text tokens so all children get sufficient contrast.

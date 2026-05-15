@@ -108,6 +108,8 @@ export const lightTheme = createTheme(vars, {
     glowSecondary: "rgba(0,112,243,0.2)",
     scanlineColor: "transparent",
     terminalCursor: "#0070f3",
+
+    statusDot: { running: "#22c55e", paused: "#f59e0b", idle: "#475569" },
   },
   shadow: {
     none: "none",
@@ -136,6 +138,7 @@ export const lightTheme = createTheme(vars, {
     processingFg: "#4338ca",
     processingBorder: "#c7d2fe",
   },
+  transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
   ...sharedTokens,
 });
 
@@ -195,6 +198,8 @@ export const darkTheme = createTheme(vars, {
     glowSecondary: "rgba(45,156,219,0.2)",
     scanlineColor: "transparent",
     terminalCursor: "#2d9cdb",
+
+    statusDot: { running: "#22c55e", paused: "#f59e0b", idle: "#475569" },
   },
   shadow: {
     none: "none",
@@ -223,6 +228,7 @@ export const darkTheme = createTheme(vars, {
     processingFg: "#a5b4fc",
     processingBorder: "#4338ca",
   },
+  transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
   ...sharedTokens,
 });
 
@@ -285,6 +291,8 @@ export const matrixTheme = createTheme(vars, {
     glowSecondary: "rgba(0,255,65,0.25)",
     scanlineColor: "rgba(0,255,65,0.03)",
     terminalCursor: "#00ff41",
+
+    statusDot: { running: "#22c55e", paused: "#f59e0b", idle: "#475569" },
   },
   shadow: {
     none: "none",
@@ -322,6 +330,7 @@ export const matrixTheme = createTheme(vars, {
   radii: sharedTokens.radii,
   fontSize: sharedTokens.fontSize,
   fontWeight: sharedTokens.fontWeight,
+  transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
 });
 
 // ---------------------------------------------------------------------------
@@ -383,6 +392,8 @@ export const cyberpunk77Theme = createTheme(vars, {
     glowSecondary: "rgba(0,212,255,0.4)",
     scanlineColor: "rgba(255,45,120,0.02)",
     terminalCursor: "#00d4ff",
+
+    statusDot: { running: "#22c55e", paused: "#f59e0b", idle: "#475569" },
   },
   shadow: {
     none: "none",
@@ -420,6 +431,7 @@ export const cyberpunk77Theme = createTheme(vars, {
   radii: sharedTokens.radii,
   fontSize: sharedTokens.fontSize,
   fontWeight: sharedTokens.fontWeight,
+  transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
 });
 
 // ---------------------------------------------------------------------------
@@ -481,6 +493,8 @@ export const wh40kTheme = createTheme(vars, {
     glowSecondary: "rgba(139,26,26,0.4)",
     scanlineColor: "transparent",
     terminalCursor: "#c0a020",
+
+    statusDot: { running: "#22c55e", paused: "#f59e0b", idle: "#475569" },
   },
   shadow: {
     none: "none",
@@ -518,42 +532,43 @@ export const wh40kTheme = createTheme(vars, {
   radii: sharedTokens.radii,
   fontSize: sharedTokens.fontSize,
   fontWeight: sharedTokens.fontWeight,
+  transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
 });
 
 // ---------------------------------------------------------------------------
-// Clean theme — purple accent on deep charcoal, Inter everywhere
+// Clean theme — indigo accent on deep slate, Inter everywhere (Linear/Vercel palette)
 // ---------------------------------------------------------------------------
 export const cleanTheme = createTheme(vars, {
   color: {
-    textPrimary: "#ededed",
-    textSecondary: "#b4b4b4",
-    textMuted: "#8a8a8a",
-    textDisabled: "#767676",
+    textPrimary: "#e2e8f0",
+    textSecondary: "#94a3b8",
+    textMuted: "#7d8ea8",
+    textDisabled: "#475569",
     textTertiary: "#808080",
     textInverse: "#0a0a0a",
 
-    background: "#0f0f11",
-    cardBackground: "#1a1a1f",
-    hoverBackground: "#22222a",
-    modalBackground: "#1a1a1f",
+    background: "#0f1117",
+    cardBackground: "#161b22",
+    hoverBackground: "#1e2530",
+    modalBackground: "#161b22",
     overlayBackground: "rgba(0,0,0,0.7)",
-    panelBgSecondary: "#22222a",
-    surfaceSubtle: "#1f1f27",
+    panelBgSecondary: "#1a2232",
+    surfaceSubtle: "#161b22",
     surfaceMuted: "#374151",
 
-    borderColor: "#2a2a35",
-    borderSubtle: "#252530",
+    borderColor: "#1e293b",
+    borderSubtle: "#1a2232",
     borderMuted: "#35354a",
     borderStrong: "#6b7280",
-    borderHover: "#7c3aed",
-    modalBorder: "#2a2a35",
+    borderHover: "#6366f1",
+    modalBorder: "#1e293b",
     inputBorder: "#35354a",
-    inputFocusBorder: "#8b5cf6",
+    inputFocusBorder: "#818cf8",
 
-    primary: "#7c3aed",
-    primaryHover: "#8b5cf6",
-    primaryActive: "#6d28d9",
-    primaryDark: "#4c1d95",
+    primary: "#6366f1",
+    primaryHover: "#818cf8",
+    primaryActive: "#4f46e5",
+    primaryDark: "#3730a3",
     primaryText: "#ffffff",
 
     success: "#10b981",
@@ -566,19 +581,21 @@ export const cleanTheme = createTheme(vars, {
     errorText: "#fca5a5",
     errorDark: "#ef4444",
 
-    accentBg: "rgba(124,58,237,0.1)",
-    accentHover: "rgba(124,58,237,0.2)",
+    accentBg: "rgba(99,102,241,0.1)",
+    accentHover: "rgba(99,102,241,0.2)",
 
-    inputBackground: "#1a1a1f",
-    inputText: "#ededed",
+    inputBackground: "#161b22",
+    inputText: "#e2e8f0",
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
 
-    glowPrimary: "rgba(124,58,237,0.4)",
-    glowSecondary: "rgba(124,58,237,0.2)",
+    glowPrimary: "rgba(99,102,241,0.3)",
+    glowSecondary: "rgba(99,102,241,0.15)",
     scanlineColor: "transparent",
-    terminalCursor: "#8b5cf6",
+    terminalCursor: "#818cf8",
+
+    statusDot: { running: "#22c55e", paused: "#f59e0b", idle: "#475569" },
   },
   shadow: {
     none: "none",
@@ -608,12 +625,13 @@ export const cleanTheme = createTheme(vars, {
     processingBorder: "#4338ca",
   },
   font: {
-    mono: "'Monaco', 'Menlo', 'Ubuntu Mono', monospace",
-    sans: "Inter,system-ui,sans-serif",
-    display: "Inter,system-ui,sans-serif",
+    mono: "var(--font-jetbrains-mono, 'JetBrains Mono', 'Fira Code', 'Monaco', monospace)",
+    sans: "var(--font-inter, 'Inter', system-ui, sans-serif)",
+    display: "var(--font-inter, 'Inter', system-ui, sans-serif)",
   },
   space: sharedTokens.space,
   radii: sharedTokens.radii,
   fontSize: sharedTokens.fontSize,
   fontWeight: sharedTokens.fontWeight,
+  transition: { fast: "100ms ease", base: "150ms ease", slow: "250ms ease" },
 });

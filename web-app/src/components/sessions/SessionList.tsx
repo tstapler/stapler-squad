@@ -7,6 +7,10 @@ import { getConnectTransport } from "@/lib/api/transport";
 import { AppLink } from "@/components/ui/AppLink";
 import { Session, SessionStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
+import { SessionRow } from "./SessionRow";
+import { SessionListEmptyState } from "./SessionListEmptyState";
+import { SessionListSkeleton } from "./SessionListSkeleton";
+import { groupHeader as groupHeaderStyle } from "./SessionRow.css";
 import { BulkActions } from "./BulkActions";
 import { TagEditor } from "./TagEditor";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions, cycleGroupingStrategy } from "@/lib/grouping/strategies";
@@ -40,10 +44,6 @@ import {
   categoryContent,
   empty,
   clearButton,
-  emptyActions,
-  emptyHint,
-  newSessionButtonLarge,
-  newSessionIcon,
   newSessionHeaderButton,
 } from "./SessionList.css";
 
@@ -68,10 +68,14 @@ interface SessionListProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
+  /** When true, renders the loading skeleton instead of the session list. */
+  isLoading?: boolean;
   /** Prefix for localStorage keys, used when multiple instances are rendered (e.g. split view). */
   storageKeyPrefix?: string;
   /** Extra action buttons rendered in the header beside the "+" button. */
   extraHeaderActions?: React.ReactNode;
+  /** Display mode: compact single-line rows ("row") or full cards ("card"). Default: "row". */
+  viewMode?: "card" | "row";
 }
 
 type SortField = 'lastActivity' | 'name' | 'createdAt' | 'updatedAt';
@@ -141,8 +145,10 @@ export function SessionList({
   onRunOneShot,
   onSetRateLimitEnabled,
   onClearConversationState,
+  isLoading = false,
   storageKeyPrefix,
   extraHeaderActions,
+  viewMode = "row",
 }: SessionListProps) {
   // Stable storage key set — only recomputed when storageKeyPrefix changes
   const STORAGE_KEYS = useMemo(() => makeStorageKeys(storageKeyPrefix), [storageKeyPrefix]);
@@ -696,40 +702,31 @@ export function SessionList({
       )}
 
       {/* Session list */}
-      {filteredSessions.length === 0 ? (
-        <div className={empty}>
-          <p>{searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused
-            ? "No sessions found"
-            : "No sessions yet"
-          }</p>
-          {searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused ? (
-            <button
-              className={clearButton}
-              onClick={() => {
-                setSearchQuery("");
-                setSelectedStatus("all");
-                setSelectedCategory("all");
-                setSelectedTag("all");
-                setHidePaused(false);
-              }}
-            >
-              Clear filters
-            </button>
-          ) : (
-            <div className={emptyActions}>
-              <p className={emptyHint}>
-                Get started by creating your first AI coding session
-              </p>
+      {isLoading ? (
+        <SessionListSkeleton />
+      ) : filteredSessions.length === 0 ? (
+        (() => {
+          const hasActiveFilters = !!(searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused);
+          return hasActiveFilters ? (
+            <div className={empty}>
+              <p>No sessions found</p>
               <button
-                className={newSessionButtonLarge}
-                onClick={() => onNewSession?.()}
+                className={clearButton}
+                onClick={() => {
+                  setSearchQuery("");
+                  setSelectedStatus("all");
+                  setSelectedCategory("all");
+                  setSelectedTag("all");
+                  setHidePaused(false);
+                }}
               >
-                <span className={newSessionIcon}>+</span>
-                Create Your First Session
+                Clear filters
               </button>
             </div>
-          )}
-        </div>
+          ) : (
+            <SessionListEmptyState />
+          );
+        })()
       ) : (
         <div className={sessionList}>
           {groupedSessions.map(({ groupKey, displayName, sessions: groupSessions }) => {
@@ -742,7 +739,7 @@ export function SessionList({
 
             return (
             <div key={groupKey} className={categoryGroup}>
-              <h3 className={categoryTitle} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+              <h3 className={viewMode === "row" ? groupHeaderStyle : categoryTitle} style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                 {/* Inline rename input for project groups */}
                 {isProjectGrouping && projectData && renamingProjectId === projectData.id ? (
                   <form
@@ -837,37 +834,52 @@ export function SessionList({
                   </>
                 )}
               </h3>
-              <div className={categoryContent}>
-                {groupSessions.map((session, index) => (
-                  <div key={session.id} style={{'--card-index': index} as React.CSSProperties}>
-                    <SessionCard
+              {viewMode === "row" ? (
+                <ul style={{ margin: 0, padding: 0 }}>
+                  {groupSessions.map((session) => (
+                    <SessionRow
+                      key={session.id}
                       session={session}
                       onClick={() => onSessionClick?.(session)}
-                      onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
-                      onDelete={() => onDeleteSession?.(session.id)}
-                      onPause={() => onPauseSession?.(session.id)}
-                      onResume={() => onResumeSession?.(session)}
-                      onClone={() => onCloneSession?.(session.id)}
-                      onNewWorkspace={() => onNewWorkspaceSession?.(session.id)}
-                      onRename={onRenameSession}
-                      onRestart={onRestartSession}
-                      onUpdateTags={onUpdateTags}
-                      onCreateCheckpoint={onCreateCheckpoint}
-                      onListCheckpoints={onListCheckpoints}
-                      onForkFromCheckpoint={onForkFromCheckpoint}
-                      onRunOneShot={onRunOneShot}
-                      onSetRateLimitEnabled={onSetRateLimitEnabled}
-                      onClearConversationState={onClearConversationState}
-                      selectMode={selectMode}
-                      isSelected={selectedSessions.has(session.id)}
-                      onToggleSelect={() => handleToggleSession(session.id)}
-                      reviewItem={reviewItemBySessionId.get(session.id)}
-                      detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
-                      detectedContext={detectedStatusMap[session.id]?.detectedContext}
+                      onPause={onPauseSession ? () => onPauseSession(session.id) : undefined}
+                      onResume={onResumeSession ? () => onResumeSession(session) : undefined}
+                      onDelete={onDeleteSession ? () => onDeleteSession(session.id) : undefined}
                     />
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </ul>
+              ) : (
+                <div className={categoryContent}>
+                  {groupSessions.map((session, index) => (
+                    <div key={session.id} style={{'--card-index': index} as React.CSSProperties}>
+                      <SessionCard
+                        session={session}
+                        onClick={() => onSessionClick?.(session)}
+                        onOpenInNewPane={onSessionOpenInNewPane ? () => onSessionOpenInNewPane(session) : undefined}
+                        onDelete={() => onDeleteSession?.(session.id)}
+                        onPause={() => onPauseSession?.(session.id)}
+                        onResume={() => onResumeSession?.(session)}
+                        onClone={() => onCloneSession?.(session.id)}
+                        onNewWorkspace={() => onNewWorkspaceSession?.(session.id)}
+                        onRename={onRenameSession}
+                        onRestart={onRestartSession}
+                        onUpdateTags={onUpdateTags}
+                        onCreateCheckpoint={onCreateCheckpoint}
+                        onListCheckpoints={onListCheckpoints}
+                        onForkFromCheckpoint={onForkFromCheckpoint}
+                        onRunOneShot={onRunOneShot}
+                        onSetRateLimitEnabled={onSetRateLimitEnabled}
+                        onClearConversationState={onClearConversationState}
+                        selectMode={selectMode}
+                        isSelected={selectedSessions.has(session.id)}
+                        onToggleSelect={() => handleToggleSession(session.id)}
+                        reviewItem={reviewItemBySessionId.get(session.id)}
+                        detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
+                        detectedContext={detectedStatusMap[session.id]?.detectedContext}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           );
           })}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, ReactNode } from "react";
+import { useState, useCallback, useEffect, ReactNode } from "react";
 import { DrawerNav } from "./DrawerNav";
 import { BottomNav } from "./BottomNav";
 import { KeyboardShortcutOverlay } from "@/components/ui/KeyboardShortcutOverlay";
@@ -37,6 +37,22 @@ export function CockpitShell({ children }: CockpitShellProps) {
   // Global: ? → open keyboard shortcut overlay
   useShortcut("shortcuts:open", {
     key: "?",
+    context: "global",
+    label: "Show keyboard shortcuts",
+    action: openShortcuts,
+  });
+
+  // Listen for the custom event dispatched by OnboardingModal "View all shortcuts" link
+  useEffect(() => {
+    const handler = () => setShortcutsOpen(true);
+    window.addEventListener("stapler-squad:open-shortcuts", handler);
+    return () => window.removeEventListener("stapler-squad:open-shortcuts", handler);
+  }, []);
+
+  // Global: ⌘? / Ctrl+? → also open keyboard shortcut overlay
+  useShortcut("shortcuts:open-meta", {
+    key: "?",
+    modifiers: { meta: true },
     context: "global",
     label: "Show keyboard shortcuts",
     action: openShortcuts,
