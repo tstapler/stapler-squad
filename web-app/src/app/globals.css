@@ -211,16 +211,13 @@
   background: var(--text-muted);  /* #7d8ea8 — more visible on hover */
 }
 
-/* Firefox */
-* {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border-color) transparent;
-}
-
 * {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
+  /* Firefox scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
 }
 
 html,
