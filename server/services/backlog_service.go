@@ -157,6 +157,20 @@ func itemSessionToProto(is *ent.ItemSession) *sessionv1.ItemSession {
 		if rv.OverrideAt != nil {
 			p.ReviewVerdict.OverrideAt = timestamppb.New(*rv.OverrideAt)
 		}
+		// Deserialize per-criterion verdicts from JSON storage.
+		if rv.PerCriterion != "" {
+			var cvs []session.CriterionVerdict
+			if jsonErr := json.Unmarshal([]byte(rv.PerCriterion), &cvs); jsonErr == nil {
+				p.ReviewVerdict.PerCriterion = make([]*sessionv1.CriterionVerdict, len(cvs))
+				for i, cv := range cvs {
+					p.ReviewVerdict.PerCriterion[i] = &sessionv1.CriterionVerdict{
+						CriterionIndex: int32(cv.CriterionIndex),
+						Outcome:        cv.Outcome,
+						Evidence:       cv.Evidence,
+					}
+				}
+			}
+		}
 	}
 	return p
 }
@@ -578,6 +592,10 @@ func (s *BacklogService) ApprovePlan(
 	if item.PlanArtifactsPath == "" {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("no plan artifacts found — run TriggerTriage first"))
+	}
+	if _, statErr := os.Stat(item.PlanArtifactsPath); statErr != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("plan artifacts path %q does not exist on disk — re-run TriggerTriage", item.PlanArtifactsPath))
 	}
 
 	now := time.Now()
@@ -1277,11 +1295,15 @@ The work session made the following changes to the codebase:
 %s
 
 ## Your Task
-Perform a comprehensive review and generate a ReviewVerdict using the update_backlog_item MCP tool:
-- Assess each acceptance criterion
+Perform a comprehensive review and submit your verdict using the submit_review_verdict MCP tool:
+- Assess each acceptance criterion listed above
 - Evaluate the diff against the requirements
-- Generate a PASS or FAIL verdict with detailed evidence
-- If FAIL, provide specific feedback for rework
+- For each criterion provide: criterion_index, outcome (PASS/FAIL/PARTIAL), evidence
+
+Call submit_review_verdict with:
+  item_id: "<item UUID>"
+  summary: "<overall summary of your findings>"
+  verdicts: [{"criterion_index": N, "outcome": "PASS|FAIL|PARTIAL", "evidence": "<specific evidence>"}]
 
 Do not modify the code. Only write the review verdict.
 `, workSessionDiff)

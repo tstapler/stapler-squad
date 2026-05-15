@@ -108,7 +108,10 @@ func (r *EntRepository) GetBacklogItem(ctx context.Context, id string) (*Backlog
 		return nil, fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
 	}
 
-	item, err := r.client.BacklogItem.Get(ctx, parsedID)
+	item, err := r.client.BacklogItem.Query().
+		Where(backlogitem.ID(parsedID)).
+		WithSource().
+		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
@@ -156,7 +159,7 @@ func (r *EntRepository) ListBacklogItems(ctx context.Context, filter BacklogItem
 		q = q.Offset(filter.Offset)
 	}
 
-	items, err := q.All(ctx)
+	items, err := q.WithSource().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list backlog items: %w", err)
 	}

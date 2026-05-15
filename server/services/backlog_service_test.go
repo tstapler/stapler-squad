@@ -157,7 +157,8 @@ func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	itemID := createResp.Msg.Item.Id
 
 	// Simulate TriggerTriage by directly setting plan_artifacts_path via storage.
-	artifactsPath := "/some/plan/path"
+	// os.Stat check in ApprovePlan requires the path to exist on disk.
+	artifactsPath := t.TempDir()
 	planApproved := false
 	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
 		PlanArtifactsPath: &artifactsPath,
