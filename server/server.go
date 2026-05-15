@@ -373,8 +373,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// without spawning a subprocess. The URL is passed via --mcp-server to
 	// claude when creating new sessions (no settings-file injection needed).
 	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage)
-	srv.mux.Handle("/mcp", mcpHTTPHandler)
-	srv.mux.Handle("/mcp/", mcpHTTPHandler)
+	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
+	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
+			r = r.WithContext(servermcp.WithSessionUUID(r.Context(), uuid))
+		}
+		mcpHTTPHandler.ServeHTTP(w, r)
+	})
+	srv.mux.Handle("/mcp", mcpWithUUID)
+	srv.mux.Handle("/mcp/", mcpWithUUID)
 	mcpURL := "http://" + srv.addr + "/mcp"
 	deps.SessionService.SetMCPServerURL(mcpURL)
 	log.Info("Registered MCP HTTP handler at /mcp", "url", mcpURL)

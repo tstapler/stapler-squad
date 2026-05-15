@@ -119,9 +119,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "approve_plan":
             await service.approvePlan(item.id);
             break;
-          case "override_done":
-            await service.overrideVerdict(item.id, "done");
+          case "override_done": {
+            const reviewSession = item.linkedSessions.filter((s) => s.role === "review").at(-1);
+            if (reviewSession) {
+              await service.overrideVerdict(reviewSession.entityId, "Manual override to done", "done");
+            }
             break;
+          }
           case "re_review":
             await service.triggerReReview(item.id);
             break;
@@ -189,7 +193,10 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       if (!item) return;
       setActionLoading(true);
       try {
-        await service.overrideVerdict(item.id, reason, "done");
+        const reviewSession = item.linkedSessions.filter((s) => s.role === "review").at(-1);
+        if (reviewSession) {
+          await service.overrideVerdict(reviewSession.entityId, reason, "done");
+        }
         await load();
       } finally {
         setActionLoading(false);
@@ -202,7 +209,13 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     if (!item) return;
     setActionLoading(true);
     try {
-      await service.transitionStatus(item.id, "done");
+      const reviewSession = item.linkedSessions.filter((s) => s.role === "review").at(-1);
+      if (reviewSession) {
+        await service.overrideVerdict(reviewSession.entityId, "Gate skipped by user", "done");
+      } else {
+        // No review session yet — direct transition (item.skipReviewGate path)
+        await service.transitionStatus(item.id, "done");
+      }
       await load();
     } finally {
       setActionLoading(false);

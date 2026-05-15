@@ -32,6 +32,9 @@ export interface AcCriterion {
 }
 
 export interface LinkedSession {
+  /** Entity UUID of the ItemSession record — use for overrideVerdict calls. */
+  entityId: string;
+  /** Tmux session UUID — use for linking to the session terminal. */
   sessionId: string;
   role: string;
   startedAt?: string;
@@ -100,6 +103,7 @@ function mapAcCriterion(c: AcCriterionProto): AcCriterion {
 
 function mapItemSession(s: ItemSessionProto): LinkedSession {
   const session: LinkedSession = {
+    entityId: s.id,
     sessionId: s.sessionUuid,
     role: s.sessionRole,
     startedAt: s.startedAt ? new Date(Number(s.startedAt.seconds) * 1000).toISOString() : undefined,
@@ -227,7 +231,16 @@ export function useBacklogService(): UseBacklogServiceReturn {
           includeTerminal: filter?.includeTerminal ?? false,
           sortBy: "",
         });
-        return (resp.items ?? []).map(mapBacklogItem);
+        const items = (resp.items ?? []).map(mapBacklogItem);
+        if (filter?.search) {
+          const q = filter.search.toLowerCase();
+          return items.filter(
+            (item) =>
+              item.title.toLowerCase().includes(q) ||
+              item.description?.toLowerCase().includes(q)
+          );
+        }
+        return items;
       } catch (err) {
         console.error("[useBacklogService] listBacklogItems:", err);
         return [];

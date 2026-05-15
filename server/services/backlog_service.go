@@ -1301,12 +1301,12 @@ Perform a comprehensive review and submit your verdict using the submit_review_v
 - For each criterion provide: criterion_index, outcome (PASS/FAIL/PARTIAL), evidence
 
 Call submit_review_verdict with:
-  item_id: "<item UUID>"
+  item_id: "%s"
   summary: "<overall summary of your findings>"
   verdicts: [{"criterion_index": N, "outcome": "PASS|FAIL|PARTIAL", "evidence": "<specific evidence>"}]
 
 Do not modify the code. Only write the review verdict.
-`, workSessionDiff)
+`, workSessionDiff, item.ID)
 
 	// 9. Require SessionCreator to spawn review session.
 	// degraded: sessionCreator unavailable — return a placeholder response so the

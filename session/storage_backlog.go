@@ -126,7 +126,8 @@ func (r *EntRepository) GetItemSessionBySessionAndItem(ctx context.Context, sess
 			itemsession.SessionUUID(sessionUUID),
 			itemsession.HasBacklogItemWith(backlogitem.ID(parsedItemID)),
 		).
-		Only(ctx)
+		Order(ent.Desc(itemsession.FieldCreatedAt)).
+		First(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: item session for session=%s item=%s", ErrNotFound, sessionUUID, itemID)
@@ -269,14 +270,14 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 		// Create new verdict.
 		rv, err = tx.ReviewVerdict.Create().
 			SetOverallOutcome(verdict.OverallOutcome).
-			SetNillablePerCriterion(&verdict.PerCriterion).
-			SetNillableSummary(&verdict.Summary).
-			SetNillableDiffHash(&verdict.DiffHash).
-			SetNillablePromptHash(&verdict.PromptHash).
+			SetNillablePerCriterion(nilIfEmpty(verdict.PerCriterion)).
+			SetNillableSummary(nilIfEmpty(verdict.Summary)).
+			SetNillableDiffHash(nilIfEmpty(verdict.DiffHash)).
+			SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 			SetDiffTokenCount(verdict.DiffTokenCount).
 			SetDiffTruncated(verdict.DiffTruncated).
-			SetNillableOverrideBy(&verdict.OverrideBy).
-			SetNillableOverrideReason(&verdict.OverrideReason).
+			SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
+			SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 			SetNillableOverrideAt(verdict.OverrideAt).
 			SetItemSessionID(parsedSessionID).
 			Save(ctx)
@@ -287,14 +288,14 @@ func (r *EntRepository) SaveReviewVerdict(ctx context.Context, itemSessionID str
 		// Update existing verdict.
 		rv, err = tx.ReviewVerdict.UpdateOne(existing).
 			SetOverallOutcome(verdict.OverallOutcome).
-			SetNillablePerCriterion(&verdict.PerCriterion).
-			SetNillableSummary(&verdict.Summary).
-			SetNillableDiffHash(&verdict.DiffHash).
-			SetNillablePromptHash(&verdict.PromptHash).
+			SetNillablePerCriterion(nilIfEmpty(verdict.PerCriterion)).
+			SetNillableSummary(nilIfEmpty(verdict.Summary)).
+			SetNillableDiffHash(nilIfEmpty(verdict.DiffHash)).
+			SetNillablePromptHash(nilIfEmpty(verdict.PromptHash)).
 			SetDiffTokenCount(verdict.DiffTokenCount).
 			SetDiffTruncated(verdict.DiffTruncated).
-			SetNillableOverrideBy(&verdict.OverrideBy).
-			SetNillableOverrideReason(&verdict.OverrideReason).
+			SetNillableOverrideBy(nilIfEmpty(verdict.OverrideBy)).
+			SetNillableOverrideReason(nilIfEmpty(verdict.OverrideReason)).
 			SetNillableOverrideAt(verdict.OverrideAt).
 			Save(ctx)
 		if err != nil {
