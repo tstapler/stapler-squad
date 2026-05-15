@@ -106,7 +106,6 @@ export function SessionRow({ session, onClick, onPause, onResume, onDelete }: Se
       data-testid="session-row"
       onClick={onClick}
       onKeyDown={handleKeyDown}
-      role="button"
       tabIndex={0}
       aria-label={`Session ${session.title}, status: ${dotStatus}, program: ${session.program}`}
     >
