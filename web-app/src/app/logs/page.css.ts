@@ -145,7 +145,12 @@ export const noLogs = style({
 
 export const logsContainer = style({
   flex: 1,
-  overflow: "auto",
+  // overflow: hidden required so react-virtuoso's ResizeObserver can measure
+  // the scroll container height. The VirtualLogList manages its own overflow.
+  overflow: "hidden",
+  minHeight: 0,
+  display: "flex",
+  flexDirection: "column",
   backgroundColor: vars.color.background,
   borderRadius: vars.radii.md,
   border: `1px solid ${vars.color.borderColor}`,
