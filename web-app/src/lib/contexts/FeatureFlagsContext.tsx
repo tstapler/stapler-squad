@@ -55,23 +55,31 @@ export function FeatureFlagsProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [client]);
 
   useEffect(() => { fetchFlags(); }, [fetchFlags]);
 
   const setFlag = useCallback(async (name: string, enabled: boolean) => {
     try {
       const res = await client.updateFeatureFlag({ name, enabled });
-      setFlags((prev) => ({ ...prev, [res.flag!.name]: res.flag!.enabled }));
-      setFlagList((prev) => prev.map((f) => f.name === res.flag!.name ? { ...f, enabled: res.flag!.enabled } : f));
+      const flag = res.flag;
+      if (flag) {
+        setFlags((prev) => ({ ...prev, [flag.name]: flag.enabled }));
+        setFlagList((prev) => prev.map((f) => f.name === flag.name ? { ...f, enabled: flag.enabled } : f));
+      }
     } catch (err) {
       console.error("Failed to update feature flag", name, err);
       setError("Failed to update feature flag");
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [client]);
+
+  const value = useMemo(
+    () => ({ flags, flagList, isLoading, error, setFlag }),
+    [flags, flagList, isLoading, error, setFlag]
+  );
 
   return (
-    <FeatureFlagsContext.Provider value={{ flags, flagList, isLoading, error, setFlag }}>
+    <FeatureFlagsContext.Provider value={value}>
       {children}
     </FeatureFlagsContext.Provider>
   );
