@@ -71,8 +71,8 @@ func ScanZombies() ([]ZombieInfo, error) {
 // processes and records them via RecordZombieProcess when found. ctx controls its lifetime.
 // interval is how often to scan (recommended: 30s).
 //
-// The first scan establishes a baseline: zombies already present at startup are silently
-// added to the reported set without triggering fork-pressure alerts. Only zombies that
+// The first scan establishes a baseline: zombies already present at startup are logged
+// via warnFn but not counted toward the alert threshold. Only zombies that
 // appear after the baseline (i.e. growth over time) are recorded and counted toward the
 // alert threshold. This prevents a burst of spurious critical alerts on service restart
 // when a stable set of zombie children already exists.

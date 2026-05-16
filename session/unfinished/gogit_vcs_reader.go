@@ -21,7 +21,7 @@ type GoGitVCSReader struct{}
 var _ VCSReader = (*GoGitVCSReader)(nil)
 
 func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := openWorktree(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("open repo %s: %w", repoPath, err)
 	}
@@ -39,7 +39,7 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 	worktrees := []WorktreeInfo{main}
 
 	// Linked worktrees live in .git/worktrees/<name>/.
-	worktreesDir := filepath.Join(repoPath, ".git", "worktrees")
+	worktreesDir := filepath.Join(gitCommonDir(repoPath), "worktrees")
 	entries, err := os.ReadDir(worktreesDir)
 	if err != nil {
 		return worktrees, nil // no linked worktrees — not an error
@@ -150,15 +150,15 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 		return 0, 0, err
 	}
 
-	ahead, err := countCommitsNotIn(repo, headRef.Hash(), baseHash)
+	headSet, err := reachableSet(repo, headRef.Hash())
 	if err != nil {
 		return 0, 0, err
 	}
-	behind, err := countCommitsNotIn(repo, baseHash, headRef.Hash())
+	baseSet, err := reachableSet(repo, baseHash)
 	if err != nil {
 		return 0, 0, err
 	}
-	return ahead, behind, nil
+	return countNotIn(headSet, baseSet), countNotIn(baseSet, headSet), nil
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
@@ -262,8 +262,28 @@ func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
 func LinesDiff(old, newContent string) (insertions, deletions int) {
 	oldLines := splitLines(old)
 	newLines := splitLines(newContent)
-	lcs := lcsLength(oldLines, newLines)
-	return len(newLines) - lcs, len(oldLines) - lcs
+
+	// Trim common prefix and suffix — reduces the LCS problem size significantly
+	// for typical edits that touch a small region of a large file.
+	start := 0
+	for start < len(oldLines) && start < len(newLines) && oldLines[start] == newLines[start] {
+		start++
+	}
+	end := 0
+	for end < len(oldLines)-start && end < len(newLines)-start &&
+		oldLines[len(oldLines)-1-end] == newLines[len(newLines)-1-end] {
+		end++
+	}
+	trimOld := oldLines[start : len(oldLines)-end]
+	trimNew := newLines[start : len(newLines)-end]
+
+	// Avoid O(n*m) DP on very large diffs — treat all remaining lines as changed.
+	const lcsMaxCells = 5_000_000
+	if len(trimOld)*len(trimNew) > lcsMaxCells {
+		return len(trimNew), len(trimOld)
+	}
+	lcs := lcsLength(trimOld, trimNew)
+	return len(trimNew) - lcs, len(trimOld) - lcs
 }
 
 // lcsLength computes the length of the longest common subsequence of two line slices.
@@ -306,6 +326,35 @@ func splitLines(s string) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// gitCommonDir returns the path to the common git directory (the real .git dir)
+// for both regular repos (where .git is a directory) and linked worktrees (where
+// .git is a file pointing at the per-worktree gitdir, which contains a commondir file).
+func gitCommonDir(repoPath string) string {
+	gitPath := filepath.Join(repoPath, ".git")
+	data, err := os.ReadFile(gitPath)
+	if err != nil {
+		// .git is a directory (or missing).
+		return gitPath
+	}
+	// .git is a file: "gitdir: /abs/path/to/.git/worktrees/<name>\n"
+	line := strings.TrimSpace(string(data))
+	const prefix = "gitdir: "
+	if !strings.HasPrefix(line, prefix) {
+		return gitPath
+	}
+	wtGitDir := strings.TrimPrefix(line, prefix)
+	// Each per-worktree gitdir contains a "commondir" file pointing to the main .git.
+	if cdData, err := os.ReadFile(filepath.Join(wtGitDir, "commondir")); err == nil {
+		commondir := strings.TrimSpace(string(cdData))
+		if !filepath.IsAbs(commondir) {
+			commondir = filepath.Join(wtGitDir, commondir)
+		}
+		return commondir
+	}
+	// Fallback: parent of the per-worktree gitdir is typically the main .git.
+	return filepath.Dir(wtGitDir)
 }
 
 // openWorktree opens a git repo that may be a linked worktree (has a .git file
@@ -354,27 +403,15 @@ func reachableSet(repo *git.Repository, start plumbing.Hash) (map[plumbing.Hash]
 	return seen, nil
 }
 
-// countCommitsNotIn counts commits reachable from 'from' that are not
-// reachable from 'exclude'.
-func countCommitsNotIn(repo *git.Repository, from, exclude plumbing.Hash) (int, error) {
-	excludeSet, err := reachableSet(repo, exclude)
-	if err != nil {
-		return 0, err
-	}
-	iter, err := repo.Log(&git.LogOptions{From: from})
-	if err != nil {
-		return 0, err
-	}
-	defer iter.Close()
-	count := 0
-	err = iter.ForEach(func(c *object.Commit) error {
-		if excludeSet[c.Hash] {
-			return storer.ErrStop
+// countNotIn counts entries in a that are absent from b.
+func countNotIn(a, b map[plumbing.Hash]bool) int {
+	n := 0
+	for h := range a {
+		if !b[h] {
+			n++
 		}
-		count++
-		return nil
-	})
-	return count, err
+	}
+	return n
 }
 
 func firstLine(s string) string {
