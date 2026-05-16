@@ -7,6 +7,7 @@ import (
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/events"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,6 +23,7 @@ type notificationMetadataStore interface {
 type ApprovalService struct {
 	approvalStore     *ApprovalStore
 	notificationStore notificationMetadataStore // optional; nil-safe
+	eventBus          *events.EventBus          // optional; nil-safe; broadcasts resolution to connected clients
 }
 
 // NewApprovalService creates an ApprovalService with the given ApprovalStore.
@@ -33,6 +35,13 @@ func NewApprovalService(store *ApprovalStore) *ApprovalService {
 // approvals are stamped with their decision in the notification metadata.
 func (as *ApprovalService) SetNotificationStore(store notificationMetadataStore) {
 	as.notificationStore = store
+}
+
+// SetEventBus wires in the event bus so that resolved approvals are broadcast to all
+// connected clients via the watchSessions stream. Without this, Device B has no
+// real-time signal when Device A resolves an approval.
+func (as *ApprovalService) SetEventBus(bus *events.EventBus) {
+	as.eventBus = bus
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +70,12 @@ func (as *ApprovalService) ResolveApproval(
 		Message:  message,
 	}
 
+	// Fetch session ID before removing from store (needed for event broadcast below).
+	sessionID := ""
+	if a, ok := as.approvalStore.Get(req.Msg.ApprovalId); ok {
+		sessionID = a.SessionID
+	}
+
 	if err := as.approvalStore.Resolve(req.Msg.ApprovalId, decision); err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, err)
 	}
@@ -72,6 +87,14 @@ func (as *ApprovalService) ResolveApproval(
 		if err := as.notificationStore.SetMetadata(req.Msg.ApprovalId, "approval_decision", req.Msg.Decision); err != nil {
 			log.Warn("[ApprovalService] could not persist approval decision in notification", "err", err)
 		}
+	}
+
+	// Broadcast resolution to all connected clients so Device B updates in real-time
+	// without waiting for reconnect. Context carries the approval ID so clients can
+	// correlate the event with the pending notification they're displaying.
+	if as.eventBus != nil && sessionID != "" {
+		approved := req.Msg.Decision == "allow"
+		as.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, approved, req.Msg.ApprovalId))
 	}
 
 	log.Info("[ApprovalService] resolved approval", "approval_id", req.Msg.ApprovalId, "decision", req.Msg.Decision)

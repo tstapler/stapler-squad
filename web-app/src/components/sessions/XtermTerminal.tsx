@@ -322,6 +322,13 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
           requestAnimationFrame(() => {
             requestAnimationFrame(() => {
               fitAddonRef.current?.fit();
+              // Sync lastContainerSize to the post-fit DOM dimensions so the next
+              // ResizeObserver entry (triggered by fit() resizing xterm.js internals)
+              // is filtered out, breaking the scrollbar-appearance oscillation loop.
+              if (containerRef.current) {
+                const r = containerRef.current.getBoundingClientRect();
+                lastContainerSize = { width: r.width, height: r.height };
+              }
               console.log(`[XtermTerminal] Terminal dimensions AFTER fit: ${terminalRef.current?.cols} cols × ${terminalRef.current?.rows} rows`);
             });
           });

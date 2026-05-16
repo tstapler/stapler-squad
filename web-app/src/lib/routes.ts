@@ -15,12 +15,14 @@ export const routes = {
   notifications: "/notifications",
   settings: "/settings",
   settingsDefaults: "/settings/defaults",
+  help: "/help",
   settingsUnfinished: "/settings/unfinished",
   settingsFeatures: "/settings/features",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
   login: "/login",
   account: "/account",
+  escapeAnalytics: "/analytics/escape",
   sessionDetail: (id: string) => `/?session=${id}`,
   newSessionFromWorktree: (worktreePath: string, branch: string, title?: string) => {
     const params = new URLSearchParams({ worktree: worktreePath, branch });

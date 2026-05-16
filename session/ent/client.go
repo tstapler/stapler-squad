@@ -24,6 +24,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/errorevent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/project"
@@ -55,6 +56,8 @@ type Client struct {
 	DiffStats *DiffStatsClient
 	// ErrorEvent is the client for interacting with the ErrorEvent builders.
 	ErrorEvent *ErrorEventClient
+	// EscapeEvent is the client for interacting with the EscapeEvent builders.
+	EscapeEvent *EscapeEventClient
 	// ItemSession is the client for interacting with the ItemSession builders.
 	ItemSession *ItemSessionClient
 	// ItemSource is the client for interacting with the ItemSource builders.
@@ -90,6 +93,7 @@ func (c *Client) init() {
 	c.ClaudeSession = NewClaudeSessionClient(c.config)
 	c.DiffStats = NewDiffStatsClient(c.config)
 	c.ErrorEvent = NewErrorEventClient(c.config)
+	c.EscapeEvent = NewEscapeEventClient(c.config)
 	c.ItemSession = NewItemSessionClient(c.config)
 	c.ItemSource = NewItemSourceClient(c.config)
 	c.Project = NewProjectClient(c.config)
@@ -198,6 +202,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		ClaudeSession:           NewClaudeSessionClient(cfg),
 		DiffStats:               NewDiffStatsClient(cfg),
 		ErrorEvent:              NewErrorEventClient(cfg),
+		EscapeEvent:             NewEscapeEventClient(cfg),
 		ItemSession:             NewItemSessionClient(cfg),
 		ItemSource:              NewItemSourceClient(cfg),
 		Project:                 NewProjectClient(cfg),
@@ -233,6 +238,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		ClaudeSession:           NewClaudeSessionClient(cfg),
 		DiffStats:               NewDiffStatsClient(cfg),
 		ErrorEvent:              NewErrorEventClient(cfg),
+		EscapeEvent:             NewEscapeEventClient(cfg),
 		ItemSession:             NewItemSessionClient(cfg),
 		ItemSource:              NewItemSourceClient(cfg),
 		Project:                 NewProjectClient(cfg),
@@ -271,9 +277,9 @@ func (c *Client) Close() error {
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
 		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.ClassificationAnalytics,
-		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.ItemSession,
-		c.ItemSource, c.Project, c.ReviewVerdict, c.Session, c.SourceSyncEvent, c.Tag,
-		c.Worktree,
+		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
+		c.ItemSession, c.ItemSource, c.Project, c.ReviewVerdict, c.Session,
+		c.SourceSyncEvent, c.Tag, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -284,9 +290,9 @@ func (c *Client) Use(hooks ...Hook) {
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
 		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.ClassificationAnalytics,
-		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.ItemSession,
-		c.ItemSource, c.Project, c.ReviewVerdict, c.Session, c.SourceSyncEvent, c.Tag,
-		c.Worktree,
+		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
+		c.ItemSession, c.ItemSource, c.Project, c.ReviewVerdict, c.Session,
+		c.SourceSyncEvent, c.Tag, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -311,6 +317,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.DiffStats.mutate(ctx, m)
 	case *ErrorEventMutation:
 		return c.ErrorEvent.mutate(ctx, m)
+	case *EscapeEventMutation:
+		return c.EscapeEvent.mutate(ctx, m)
 	case *ItemSessionMutation:
 		return c.ItemSession.mutate(ctx, m)
 	case *ItemSourceMutation:
@@ -1505,6 +1513,139 @@ func (c *ErrorEventClient) mutate(ctx context.Context, m *ErrorEventMutation) (V
 		return (&ErrorEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown ErrorEvent mutation op: %q", m.Op())
+	}
+}
+
+// EscapeEventClient is a client for the EscapeEvent schema.
+type EscapeEventClient struct {
+	config
+}
+
+// NewEscapeEventClient returns a client for the EscapeEvent from the given config.
+func NewEscapeEventClient(c config) *EscapeEventClient {
+	return &EscapeEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `escapeevent.Hooks(f(g(h())))`.
+func (c *EscapeEventClient) Use(hooks ...Hook) {
+	c.hooks.EscapeEvent = append(c.hooks.EscapeEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `escapeevent.Intercept(f(g(h())))`.
+func (c *EscapeEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.EscapeEvent = append(c.inters.EscapeEvent, interceptors...)
+}
+
+// Create returns a builder for creating a EscapeEvent entity.
+func (c *EscapeEventClient) Create() *EscapeEventCreate {
+	mutation := newEscapeEventMutation(c.config, OpCreate)
+	return &EscapeEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of EscapeEvent entities.
+func (c *EscapeEventClient) CreateBulk(builders ...*EscapeEventCreate) *EscapeEventCreateBulk {
+	return &EscapeEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *EscapeEventClient) MapCreateBulk(slice any, setFunc func(*EscapeEventCreate, int)) *EscapeEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &EscapeEventCreateBulk{err: fmt.Errorf("calling to EscapeEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*EscapeEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &EscapeEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for EscapeEvent.
+func (c *EscapeEventClient) Update() *EscapeEventUpdate {
+	mutation := newEscapeEventMutation(c.config, OpUpdate)
+	return &EscapeEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *EscapeEventClient) UpdateOne(_m *EscapeEvent) *EscapeEventUpdateOne {
+	mutation := newEscapeEventMutation(c.config, OpUpdateOne, withEscapeEvent(_m))
+	return &EscapeEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *EscapeEventClient) UpdateOneID(id string) *EscapeEventUpdateOne {
+	mutation := newEscapeEventMutation(c.config, OpUpdateOne, withEscapeEventID(id))
+	return &EscapeEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for EscapeEvent.
+func (c *EscapeEventClient) Delete() *EscapeEventDelete {
+	mutation := newEscapeEventMutation(c.config, OpDelete)
+	return &EscapeEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *EscapeEventClient) DeleteOne(_m *EscapeEvent) *EscapeEventDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *EscapeEventClient) DeleteOneID(id string) *EscapeEventDeleteOne {
+	builder := c.Delete().Where(escapeevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &EscapeEventDeleteOne{builder}
+}
+
+// Query returns a query builder for EscapeEvent.
+func (c *EscapeEventClient) Query() *EscapeEventQuery {
+	return &EscapeEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeEscapeEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a EscapeEvent entity by its id.
+func (c *EscapeEventClient) Get(ctx context.Context, id string) (*EscapeEvent, error) {
+	return c.Query().Where(escapeevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *EscapeEventClient) GetX(ctx context.Context, id string) *EscapeEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *EscapeEventClient) Hooks() []Hook {
+	return c.hooks.EscapeEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *EscapeEventClient) Interceptors() []Interceptor {
+	return c.inters.EscapeEvent
+}
+
+func (c *EscapeEventClient) mutate(ctx context.Context, m *EscapeEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&EscapeEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&EscapeEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&EscapeEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&EscapeEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown EscapeEvent mutation op: %q", m.Op())
 	}
 }
 
@@ -2816,13 +2957,14 @@ func (c *WorktreeClient) mutate(ctx context.Context, m *WorktreeMutation) (Value
 type (
 	hooks struct {
 		AnalyticsEvent, ApprovalRule, BacklogItem, ClassificationAnalytics,
-		ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent, ItemSession, ItemSource,
-		Project, ReviewVerdict, Session, SourceSyncEvent, Tag, Worktree []ent.Hook
+		ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession,
+		ItemSource, Project, ReviewVerdict, Session, SourceSyncEvent, Tag,
+		Worktree []ent.Hook
 	}
 	inters struct {
 		AnalyticsEvent, ApprovalRule, BacklogItem, ClassificationAnalytics,
-		ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent, ItemSession, ItemSource,
-		Project, ReviewVerdict, Session, SourceSyncEvent, Tag,
+		ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession,
+		ItemSource, Project, ReviewVerdict, Session, SourceSyncEvent, Tag,
 		Worktree []ent.Interceptor
 	}
 )

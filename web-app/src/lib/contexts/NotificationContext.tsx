@@ -56,39 +56,60 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const auditLog = useAuditLog();
   const history = useNotificationHistory();
 
-  // Hydrate notificationHistory from the backend on initial load
+  // Hydrate and refresh notificationHistory from the backend.
+  // Runs on initial load and whenever refreshHistory() is called (e.g. on reconnect
+  // or after an approval_response event). Backend data is authoritative: existing
+  // local items are UPDATED with the server version so isRead state and metadata
+  // (e.g. approval_decision stamped after resolution) always reflect server truth.
   useEffect(() => {
-    if (history.notifications.length > 0) {
-      const backendItems: NotificationHistoryItem[] = history.notifications.map((record) => ({
-        id: record.id,
-        sessionId: record.sessionId,
-        sessionName: record.sessionName,
-        title: record.title,
-        message: record.message,
-        timestamp: record.createdAt ? Number(record.createdAt.seconds) * 1000 : Date.now(),
-        priority: mapPriority(record.priority),
-        notificationType: mapNotificationType(record.notificationType),
-        metadata: record.metadata ? Object.fromEntries(Object.entries(record.metadata)) : undefined,
-        isRead: record.isRead,
-        occurrenceCount: record.occurrenceCount,
-      }));
+    if (history.notifications.length === 0) return;
 
-      setNotificationHistory((prev) => {
-        const existingIds = new Set(prev.map((n) => n.id));
-        const existingDedupKeys = new Set(
-          prev.map((n) => `${n.sessionId ?? ""}:${n.notificationType ?? ""}`)
-        );
+    const backendItems: NotificationHistoryItem[] = history.notifications.map((record) => ({
+      id: record.id,
+      sessionId: record.sessionId,
+      sessionName: record.sessionName,
+      title: record.title,
+      message: record.message,
+      timestamp: record.createdAt ? Number(record.createdAt.seconds) * 1000 : Date.now(),
+      priority: mapPriority(record.priority),
+      notificationType: mapNotificationType(record.notificationType),
+      metadata: record.metadata ? Object.fromEntries(Object.entries(record.metadata)) : undefined,
+      isRead: record.isRead,
+      occurrenceCount: record.occurrenceCount,
+    }));
 
-        const newFromBackend = backendItems.filter((n) => {
-          if (existingIds.has(n.id)) return false;
-          const dedupKey = `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
-          if (existingDedupKeys.has(dedupKey)) return false;
-          return true;
-        });
+    setNotificationHistory((prev) => {
+      const backendById = new Map(backendItems.map((n) => [n.id, n]));
+      // Maps dedup key -> backend item, so stream-added items (with client-generated
+      // IDs) also get replaced by the authoritative server version.
+      const backendByDedupKey = new Map(
+        backendItems.map((n) => [`${n.sessionId ?? ""}:${n.notificationType ?? ""}`, n])
+      );
 
-        return [...prev, ...newFromBackend];
+      // Pass 1: walk existing local items and replace with server version where available.
+      const updated: NotificationHistoryItem[] = [];
+      const consumedDedupKeys = new Set<string>();
+      for (const n of prev) {
+        const dk = `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
+        if (consumedDedupKeys.has(dk)) continue; // skip duplicate local entries
+        const serverVersion = backendById.get(n.id) ?? backendByDedupKey.get(dk);
+        // Preserve local callbacks (onView, onApprove, etc.) on the server version
+        // since they are not persisted and are only meaningful for the current session.
+        updated.push(serverVersion ? { ...serverVersion, onView: n.onView, onApprove: n.onApprove, onDeny: n.onDeny, onFocusWindow: n.onFocusWindow } : n);
+        consumedDedupKeys.add(dk);
+      }
+
+      // Pass 2: add backend items not covered by any local item.
+      const existingIds = new Set(updated.map((n) => n.id));
+      const existingDedupKeys = new Set(updated.map((n) => `${n.sessionId ?? ""}:${n.notificationType ?? ""}`));
+      const newFromBackend = backendItems.filter((n) => {
+        if (existingIds.has(n.id)) return false;
+        const dk = `${n.sessionId ?? ""}:${n.notificationType ?? ""}`;
+        return !existingDedupKeys.has(dk);
       });
-    }
+
+      return [...newFromBackend, ...updated];
+    });
   }, [history.notifications]);
 
   const addNotification = useCallback(

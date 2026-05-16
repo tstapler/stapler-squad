@@ -10,5 +10,5 @@ import (
 
 func TestAnalyzer(t *testing.T) {
 	testdata := analysistest.TestData()
-	analysistest.Run(t, testdata, nocommandpattern.Analyzer, "a")
+	analysistest.Run(t, testdata, nocommandpattern.Analyzer, "pkg/classifier")
 }

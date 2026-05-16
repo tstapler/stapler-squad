@@ -76,7 +76,7 @@ const makeSession = (): Session =>
     id: "sess-1",
     title: "Test Session",
     status: SessionStatus.RUNNING,
-    instanceType: InstanceType.LOCAL,
+    instanceType: InstanceType.MANAGED,
     sessionType: SessionType.DIRECTORY,
     path: "/tmp/test",
     branch: "main",

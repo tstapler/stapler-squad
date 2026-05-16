@@ -322,3 +322,53 @@ func TestEventBusEventTypes(t *testing.T) {
 		})
 	}
 }
+
+// TestEventsSince verifies catch-up replay semantics for reconnecting clients.
+func TestEventsSince(t *testing.T) {
+	bus := NewEventBus(10)
+	defer bus.Close()
+
+	// Publish 5 events.
+	for i := 0; i < 5; i++ {
+		bus.Publish(NewSessionCreatedEvent(&session.Instance{Title: "s"}))
+	}
+
+	// Seq numbers are 1–5 (nextSeq starts at 0, Add(1) gives 1..5).
+	t.Run("returns events after given seq", func(t *testing.T) {
+		got := bus.EventsSince(3)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 events (seq 4,5), got %d", len(got))
+		}
+		if got[0].Seq != 4 || got[1].Seq != 5 {
+			t.Errorf("unexpected seqs: %d, %d", got[0].Seq, got[1].Seq)
+		}
+	})
+
+	t.Run("zero returns nil (no replay)", func(t *testing.T) {
+		if bus.EventsSince(0) != nil {
+			t.Error("expected nil for afterSeq=0")
+		}
+	})
+
+	t.Run("seq past end returns nil", func(t *testing.T) {
+		if bus.EventsSince(999) != nil {
+			t.Error("expected nil for afterSeq beyond last published seq")
+		}
+	})
+
+	t.Run("seq assigns monotonically", func(t *testing.T) {
+		got := bus.EventsSince(0)
+		// EventsSince(0) returns nil, so verify via the published events directly.
+		all := bus.EventsSince(0)
+		if all != nil {
+			t.Error("should be nil")
+		}
+		// Publish one more and check Seq increments.
+		e := NewSessionCreatedEvent(&session.Instance{Title: "s"})
+		bus.Publish(e)
+		if e.Seq != 6 {
+			t.Errorf("expected seq 6, got %d", e.Seq)
+		}
+		_ = got
+	})
+}

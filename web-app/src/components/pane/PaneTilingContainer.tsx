@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback } from "react";
+import { Columns2, Rows2, LayoutList, X } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { usePaneReducer } from "@/lib/pane/usePaneReducer";
 import { usePaneShortcuts } from "@/lib/pane/usePaneShortcuts";
@@ -8,6 +9,11 @@ import { getAllLeaves } from "@/lib/pane/paneReducer";
 import type { SplitDirection } from "@/lib/pane/paneTypes";
 import { PaneSplitRenderer } from "./PaneSplitRenderer";
 import { PaneContext } from "./PaneContext";
+import {
+  pickerActionBar,
+  pickerActionButton,
+  pickerActionKbd,
+} from "@/styles/pane/panePickerOverlay.css";
 
 interface PaneTilingContainerProps {
   sessions: Session[];
@@ -106,11 +112,23 @@ export function PaneTilingContainer({
         cancelPicker();
         return;
       }
-      const letter = e.key.toUpperCase();
-      if (letter.length === 1 && letter >= "A" && letter <= "Z") {
+      const upper = e.key.toUpperCase();
+      if (upper === "V") {
+        e.stopPropagation();
+        dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "vertical" });
+        cancelPicker();
+        return;
+      }
+      if (upper === "H") {
+        e.stopPropagation();
+        dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "horizontal" });
+        cancelPicker();
+        return;
+      }
+      if (upper.length === 1 && upper >= "A" && upper <= "Z") {
         const allLeaves = getAllLeaves(state.root);
         const eligiblePanes = allLeaves.filter((l) => l.viewKind !== "session-list");
-        const idx = letter.charCodeAt(0) - 65;
+        const idx = upper.charCodeAt(0) - 65;
         const target = eligiblePanes[idx];
         if (target) {
           e.stopPropagation();
@@ -141,11 +159,14 @@ export function PaneTilingContainer({
     }
   }, [externalSessionAssign, sessions, triggerPicker, triggerPickerForceNew]);
 
+  const allLeaves = pickerPendingSession ? getAllLeaves(state.root) : [];
+  const listPane = allLeaves.find((l) => l.viewKind === "session-list") ?? null;
+
   return (
     <PaneContext.Provider value={{ state, dispatch, sessions, pickerPendingSession, triggerPicker, triggerPickerForceNew, cancelPicker }}>
       <div
         ref={containerRef}
-        style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0 }}
+        style={{ display: "flex", flex: 1, overflow: "hidden", minHeight: 0, position: "relative" }}
         data-context="cockpit"
       >
         <PaneSplitRenderer
@@ -153,6 +174,57 @@ export function PaneTilingContainer({
           dispatch={dispatch}
           sessions={sessions}
         />
+        {pickerPendingSession && (
+          <div className={pickerActionBar}>
+            <button
+              className={pickerActionButton}
+              onClick={() => {
+                dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "vertical" });
+                cancelPicker();
+              }}
+              title="Open in a new pane side by side"
+            >
+              <Columns2 size={14} />
+              Side by side
+              <span className={pickerActionKbd}>V</span>
+            </button>
+            <button
+              className={pickerActionButton}
+              onClick={() => {
+                dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "horizontal" });
+                cancelPicker();
+              }}
+              title="Open in a new pane stacked top/bottom"
+            >
+              <Rows2 size={14} />
+              Top / Bottom
+              <span className={pickerActionKbd}>H</span>
+            </button>
+            {listPane && (
+              <button
+                className={pickerActionButton}
+                onClick={() => {
+                  dispatch({ type: "SET_PANE_VIEW", paneId: listPane.id, viewKind: "session-detail" });
+                  dispatch({ type: "ASSIGN_SESSION", paneId: listPane.id, sessionId: pickerPendingSession.id });
+                  cancelPicker();
+                }}
+                title="Replace the session list pane with this session"
+              >
+                <LayoutList size={14} />
+                Replace list
+              </button>
+            )}
+            <button
+              className={pickerActionButton}
+              onClick={cancelPicker}
+              title="Cancel (Esc)"
+            >
+              <X size={14} />
+              Cancel
+              <span className={pickerActionKbd}>Esc</span>
+            </button>
+          </div>
+        )}
       </div>
     </PaneContext.Provider>
   );

@@ -22,6 +22,12 @@ message SessionEvent {
     ApprovalResponseEvent approval_response = 8;
     NotificationEvent notification = 9;
   }
+
+  // Monotonically increasing sequence number assigned by the server EventBus.
+  // Clients should track the highest seq they have received and pass it as
+  // after_seq in WatchSessionsRequest on reconnect to replay missed events.
+  // Events are retained for up to one hour.
+  uint64 seq = 10;
 }
 
 // SessionCreatedEvent is emitted when a new session is created

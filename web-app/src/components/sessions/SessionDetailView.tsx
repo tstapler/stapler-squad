@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import type { LucideIcon } from "lucide-react";
+import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info } from "lucide-react";
 import dynamic from "next/dynamic";
 import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
@@ -17,6 +19,7 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import * as styles from "./SessionDetail.css";
+import { diffAdded } from "./SessionDetailView.css";
 import type { SessionDetailTab } from "./SessionDetail";
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
@@ -175,13 +178,13 @@ export function SessionDetailView({
     onFullscreenChange?.(isFullscreen);
   }, [isFullscreen, onFullscreenChange]);
 
-  const tabs: { id: SessionDetailTab; label: string; icon: string }[] = [
-    { id: "terminal", label: "Terminal", icon: "⌨️" },
-    { id: "diff", label: "Diff", icon: "📝" },
-    { id: "vcs", label: "VCS", icon: "🌿" },
-    { id: "files", label: "Files", icon: "📁" },
-    { id: "logs", label: "Logs", icon: "📋" },
-    { id: "info", label: "Info", icon: "ℹ️" },
+  const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon }[] = [
+    { id: "terminal", label: "Terminal", icon: Terminal },
+    { id: "diff", label: "Diff", icon: GitCompare },
+    { id: "vcs", label: "VCS", icon: GitBranch },
+    { id: "files", label: "Files", icon: FolderOpen },
+    { id: "logs", label: "Logs", icon: ScrollText },
+    { id: "info", label: "Info", icon: Info },
   ];
 
   const handleTabChange = (tabId: SessionDetailTab) => {
@@ -422,19 +425,22 @@ export function SessionDetailView({
           }
         }}
       >
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            id={`tab-${tab.id}`}
-            role="tab"
-            aria-selected={activeTab === tab.id}
-            className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""}`}
-            onClick={() => handleTabChange(tab.id)}
-          >
-            <span className={styles.tabIcon}>{tab.icon}</span>
-            <span className={styles.tabLabel}>{tab.label}</span>
-          </button>
-        ))}
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.id}
+              id={`tab-${tab.id}`}
+              role="tab"
+              aria-selected={activeTab === tab.id}
+              className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""}`}
+              onClick={() => handleTabChange(tab.id)}
+            >
+              <span className={styles.tabIcon}><Icon size={16} /></span>
+              <span className={styles.tabLabel}>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>}
 
       <div className={`${styles.content} ${isFullscreen ? styles.fullscreenContent : ""}`}>
@@ -537,7 +543,7 @@ export function SessionDetailView({
         )}
         {activeTab === "logs" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-logs">
-            <SessionLogsTab sessionId={session.id} baseUrl={getApiBaseUrl()} />
+            <SessionLogsTab sessionId={session.id} />
           </div>
         )}
         {activeTab === "info" && (
@@ -838,7 +844,7 @@ export function SessionDetailView({
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>Diff Stats:</span>
                   <span className={styles.infoValue}>
-                    <span style={{ color: 'var(--color-success, #22c55e)' }}>+{session.diffStats.added}</span>
+                    <span className={diffAdded}>+{session.diffStats.added}</span>
                     {" / "}
                     <span style={{ color: 'var(--color-error, #ef4444)' }}>-{session.diffStats.removed}</span>
                   </span>
@@ -872,7 +878,7 @@ export function SessionDetailView({
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>Reviews:</span>
                   <span className={styles.infoValue}>
-                    {session.githubApprovedCount > 0 && <span style={{ color: 'var(--color-success, #22c55e)' }}>{session.githubApprovedCount} approved</span>}
+                    {session.githubApprovedCount > 0 && <span className={diffAdded}>{session.githubApprovedCount} approved</span>}
                     {session.githubApprovedCount > 0 && session.githubChangesReqCount > 0 && " · "}
                     {session.githubChangesReqCount > 0 && <span style={{ color: 'var(--color-error, #ef4444)' }}>{session.githubChangesReqCount} changes requested</span>}
                   </span>

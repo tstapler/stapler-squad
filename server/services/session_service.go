@@ -122,6 +122,10 @@ type SessionService struct {
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
+
+	// analyticsClient is the ent client for the analytics database (escape events, etc.).
+	// May be nil when escape analytics is disabled or in tests that don't need it.
+	analyticsClient *ent.Client
 }
 
 // ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -174,6 +178,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 
 	notificationSvc := NewNotificationService(NewNotificationRateLimiter(10, 20), eventBus)
 	approvalSvc := NewApprovalService(approvalStore)
+	approvalSvc.SetEventBus(eventBus)
 	utilitySvc := NewUtilityService(approvalStore)
 
 	// Build rules store, analytics store, and classifier for approval rules service.
@@ -343,6 +348,12 @@ func (s *SessionService) GetAnalyticsStore() *AnalyticsStore {
 // AcknowledgeError RPCs.  Must be called before the first RPC request.
 func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
 	s.errorRegistry = r
+}
+
+// SetAnalyticsClient wires the ent client used for escape analytics queries.
+// Must be called before the first QueryEscapeAnalytics or GetEscapeAnalyticsSummary RPC.
+func (s *SessionService) SetAnalyticsClient(c *ent.Client) {
+	s.analyticsClient = c
 }
 
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the
@@ -1107,45 +1118,49 @@ func (s *SessionService) WatchSessions(
 	req *connect.Request[sessionv1.WatchSessionsRequest],
 	stream *connect.ServerStream[sessionv1.SessionEvent],
 ) error {
-	// Send initial snapshot using in-memory poller cache — avoids a full SQLite
-	// scan on every new WatchSessions connection (same approach as ListSessions).
-	var instances []*session.Instance
-	if s.reviewQueuePoller != nil {
-		instances = s.reviewQueuePoller.GetInstances()
-	} else {
-		var err error
-		instances, err = s.loadInstancesWithWiring()
-		if err != nil {
-			return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
-		}
-	}
-
-	// Apply optional filters from request
-	for _, inst := range instances {
-		// Filter by category if specified
-		if req.Msg.CategoryFilter != nil && *req.Msg.CategoryFilter != "" {
-			if inst.Category != *req.Msg.CategoryFilter {
-				continue
-			}
-		}
-
-		// Filter by status if specified
-		if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-			if adapters.StatusToProto(inst.Status) != *req.Msg.StatusFilter {
-				continue
-			}
-		}
-
-		// Send as SessionCreated event for initial snapshot
-		event := createInitialSnapshotEvent(inst)
-		if err := stream.Send(event); err != nil {
-			return fmt.Errorf("failed to send initial snapshot: %w", err)
-		}
-	}
-
-	// Subscribe to real-time events from event bus
+	// Subscribe before building the snapshot so no events are lost between the
+	// two phases (snapshot races are resolved by client-side upsert semantics).
 	eventCh, subID := s.eventBus.Subscribe(ctx)
 	defer s.eventBus.Unsubscribe(subID)
+
+	if req.Msg.AfterSeq > 0 {
+		// Reconnecting client: replay events missed since last disconnect.
+		// This covers the period between disconnect and the new subscription above.
+		for _, event := range s.eventBus.EventsSince(req.Msg.AfterSeq) {
+			if err := stream.Send(convertEventToProto(event)); err != nil {
+				return fmt.Errorf("failed to send replayed event: %w", err)
+			}
+		}
+	} else {
+		// Fresh connection: send initial snapshot using in-memory poller cache —
+		// avoids a full SQLite scan on every new WatchSessions connection.
+		var instances []*session.Instance
+		if s.reviewQueuePoller != nil {
+			instances = s.reviewQueuePoller.GetInstances()
+		} else {
+			var err error
+			instances, err = s.loadInstancesWithWiring()
+			if err != nil {
+				return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+			}
+		}
+
+		for _, inst := range instances {
+			if req.Msg.CategoryFilter != nil && *req.Msg.CategoryFilter != "" {
+				if inst.Category != *req.Msg.CategoryFilter {
+					continue
+				}
+			}
+			if req.Msg.StatusFilter != nil && *req.Msg.StatusFilter != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
+				if adapters.StatusToProto(inst.Status) != *req.Msg.StatusFilter {
+					continue
+				}
+			}
+			if err := stream.Send(createInitialSnapshotEvent(inst)); err != nil {
+				return fmt.Errorf("failed to send initial snapshot: %w", err)
+			}
+		}
+	}
 
 	// Stream events until client disconnects or context is canceled
 	for {

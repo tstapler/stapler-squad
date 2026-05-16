@@ -3,7 +3,22 @@ package events
 import (
 	"context"
 	"sync"
+	"sync/atomic"
+	"time"
 )
+
+const (
+	// eventBufTTL is how long events are retained for catch-up replay.
+	eventBufTTL = time.Hour
+	// eventBufMaxLen is the hard cap on ring-buffer size (safety valve for bursts).
+	eventBufMaxLen = 10_000
+)
+
+// bufferedEvent is a ring-buffer entry pairing an event with its publish time.
+type bufferedEvent struct {
+	event       *Event
+	publishedAt time.Time
+}
 
 // EventBus provides a thread-safe pub/sub event bus for session events.
 // It uses Go channels for event distribution and supports multiple concurrent subscribers.
@@ -11,6 +26,11 @@ type EventBus struct {
 	mu          sync.RWMutex
 	subscribers map[string]chan *Event
 	bufferSize  int
+
+	nextSeq atomic.Uint64 // monotonically increasing; zero is reserved (unpublished)
+
+	bufMu sync.Mutex
+	buf   []bufferedEvent // ordered by Seq ascending; pruned on each Publish
 }
 
 // NewEventBus creates a new event bus with the specified buffer size.
@@ -45,22 +65,80 @@ func (eb *EventBus) Subscribe(ctx context.Context) (<-chan *Event, string) {
 	return ch, id
 }
 
-// Publish broadcasts an event to all active subscribers.
+// Publish assigns a sequence number to the event, appends it to the ring buffer,
+// then broadcasts it to all active subscribers.
 // Events are sent asynchronously and non-blocking. If a subscriber's buffer is full,
 // the event is dropped for that subscriber to prevent blocking other subscribers.
 func (eb *EventBus) Publish(event *Event) {
+	// Assign a monotonically increasing sequence number.
+	event.Seq = eb.nextSeq.Add(1)
+
+	// Append to the ring buffer and prune expired entries.
+	eb.bufMu.Lock()
+	eb.buf = append(eb.buf, bufferedEvent{event: event, publishedAt: time.Now()})
+	eb.pruneBuffer()
+	eb.bufMu.Unlock()
+
+	// Fan out to live subscribers.
 	eb.mu.RLock()
 	defer eb.mu.RUnlock()
 
 	for _, ch := range eb.subscribers {
 		select {
 		case ch <- event:
-			// Event sent successfully
 		default:
-			// Subscriber is slow, drop event to prevent blocking
-			// In production, this could be logged for monitoring
+			// Subscriber is slow; drop to prevent blocking others.
+			// Client can recover via EventsSince on reconnect.
 		}
 	}
+}
+
+// pruneBuffer removes entries older than eventBufTTL and enforces eventBufMaxLen.
+// Must be called with bufMu held.
+func (eb *EventBus) pruneBuffer() {
+	cutoff := time.Now().Add(-eventBufTTL)
+	i := 0
+	for i < len(eb.buf) && eb.buf[i].publishedAt.Before(cutoff) {
+		i++
+	}
+	if i > 0 {
+		eb.buf = eb.buf[i:]
+	}
+	if len(eb.buf) > eventBufMaxLen {
+		eb.buf = eb.buf[len(eb.buf)-eventBufMaxLen:]
+	}
+}
+
+// EventsSince returns buffered events with Seq > afterSeq in ascending order.
+// Returns nil when afterSeq is 0 (no replay requested) or all buffered events
+// are at or below afterSeq. Events older than one hour are not available.
+func (eb *EventBus) EventsSince(afterSeq uint64) []*Event {
+	if afterSeq == 0 {
+		return nil
+	}
+
+	eb.bufMu.Lock()
+	defer eb.bufMu.Unlock()
+
+	// Binary search: first index where buf[i].event.Seq > afterSeq.
+	lo, hi := 0, len(eb.buf)
+	for lo < hi {
+		mid := (lo + hi) / 2
+		if eb.buf[mid].event.Seq <= afterSeq {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo >= len(eb.buf) {
+		return nil
+	}
+
+	out := make([]*Event, len(eb.buf)-lo)
+	for i, be := range eb.buf[lo:] {
+		out[i] = be.event
+	}
+	return out
 }
 
 // Unsubscribe removes a subscriber and closes their channel.

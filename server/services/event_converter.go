@@ -13,6 +13,7 @@ import (
 func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 	protoEvent := &sessionv1.SessionEvent{
 		Timestamp: timestamppb.New(event.Timestamp),
+		Seq:       event.Seq,
 	}
 
 	switch event.Type {
@@ -65,6 +66,16 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 				Metadata:         event.NotificationMetadata,
 				Timestamp:        timestamppb.New(event.Timestamp),
 				NotificationId:   event.NotificationID,
+			},
+		}
+
+	case events.EventApprovalResponse:
+		protoEvent.Event = &sessionv1.SessionEvent_ApprovalResponse{
+			ApprovalResponse: &sessionv1.ApprovalResponseEvent{
+				SessionId:   event.SessionID,
+				Approved:    event.Approved,
+				Context:     event.Context, // carries approval ID for client-side correlation
+				RespondedAt: timestamppb.New(event.Timestamp),
 			},
 		}
 	}

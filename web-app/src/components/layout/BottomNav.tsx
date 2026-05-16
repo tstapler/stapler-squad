@@ -2,6 +2,21 @@
 // +feature: ui:bottom-nav
 
 import { useState, useEffect, useRef } from "react";
+import type { LucideIcon } from "lucide-react";
+import {
+  LayoutGrid,
+  Clock4,
+  ClipboardCheck,
+  History,
+  ScrollText,
+  BookOpen,
+  SlidersHorizontal,
+  Settings,
+  Bell,
+  Plus,
+  MoreHorizontal,
+  User,
+} from "lucide-react";
 import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { ReviewQueueNavBadge } from "@/components/sessions/ReviewQueueNavBadge";
@@ -11,22 +26,24 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { routes } from "@/lib/routes";
 import * as styles from "./BottomNav.css";
 
-const primaryItems = [
-  { href: routes.home, label: "Sessions", icon: "⊞" },
-  { href: routes.unfinished, label: "Unfinished", icon: "✎" },
-  { href: routes.reviewQueue, label: "Review", icon: "📋" },
-] as const;
+type BottomNavItem = { href: string; label: string; icon: LucideIcon };
 
-const moreItems = [
-  { href: routes.history, label: "History", icon: "🕐" },
-  { href: routes.logs, label: "Logs", icon: "📄" },
-  { href: routes.rules, label: "Rules", icon: "📜" },
-  { href: routes.config, label: "Config", icon: "⚙" },
-  { href: routes.settings, label: "Settings", icon: "🔧" },
-] as const;
+const primaryItems: BottomNavItem[] = [
+  { href: routes.home, label: "Sessions", icon: LayoutGrid },
+  { href: routes.unfinished, label: "Unfinished", icon: Clock4 },
+  { href: routes.reviewQueue, label: "Review", icon: ClipboardCheck },
+];
 
-type PrimaryItem = (typeof primaryItems)[number];
-type MoreItem = (typeof moreItems)[number];
+const moreItems: BottomNavItem[] = [
+  { href: routes.history, label: "History", icon: History },
+  { href: routes.logs, label: "Logs", icon: ScrollText },
+  { href: routes.rules, label: "Rules", icon: BookOpen },
+  { href: routes.config, label: "Config", icon: SlidersHorizontal },
+  { href: routes.settings, label: "Settings", icon: Settings },
+];
+
+type PrimaryItem = BottomNavItem;
+type MoreItem = BottomNavItem;
 
 export function BottomNav() {
   const pathname = usePathname();
@@ -75,6 +92,7 @@ export function BottomNav() {
       item.href === routes.home
         ? pathname === routes.home
         : pathname?.startsWith(item.href);
+    const Icon = item.icon;
 
     return (
       <AppLink
@@ -86,11 +104,11 @@ export function BottomNav() {
         <span className={styles.navItemIcon} aria-hidden="true">
           {item.label === "Review" ? (
             <>
-              {item.icon}
+              <Icon size={20} />
               <ReviewQueueNavBadge inline={true} />
             </>
           ) : (
-            item.icon
+            <Icon size={20} />
           )}
         </span>
         <span className={styles.navItemLabel}>{item.label}</span>
@@ -117,6 +135,7 @@ export function BottomNav() {
       >
         {moreItems.map((item: MoreItem) => {
           const isActive = pathname?.startsWith(item.href);
+          const Icon = item.icon;
           return (
             <AppLink
               key={item.href}
@@ -124,7 +143,7 @@ export function BottomNav() {
               className={`${styles.moreSheetItem} ${isActive ? styles.moreSheetItemActive : ""}`}
               aria-current={isActive ? "page" : undefined}
             >
-              <span className={styles.moreSheetItemIcon} aria-hidden="true">{item.icon}</span>
+              <span className={styles.moreSheetItemIcon} aria-hidden="true"><Icon size={20} /></span>
               <span>{item.label}</span>
             </AppLink>
           );
@@ -135,7 +154,7 @@ export function BottomNav() {
             className={`${styles.moreSheetItem} ${pathname === routes.account ? styles.moreSheetItemActive : ""}`}
             aria-current={pathname === routes.account ? "page" : undefined}
           >
-            <span className={styles.moreSheetItemIcon} aria-hidden="true">👤</span>
+            <span className={styles.moreSheetItemIcon} aria-hidden="true"><User size={20} /></span>
             <span>Account</span>
           </AppLink>
         )}
@@ -151,10 +170,7 @@ export function BottomNav() {
           aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : "Notifications"}
         >
           <span className={styles.notificationIconWrap} aria-hidden="true">
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-            </svg>
+            <Bell size={20} />
             {unreadCount > 0 && (
               <span className={styles.notificationBadge} aria-label={`${unreadCount} unread`}>
                 {unreadCount > 9 ? "9+" : unreadCount}
@@ -168,7 +184,7 @@ export function BottomNav() {
           onClick={openOmnibar}
           aria-label="Create new session"
         >
-          <span className={styles.newSessionButtonInner} aria-hidden="true">+</span>
+          <span className={styles.newSessionButtonInner} aria-hidden="true"><Plus size={20} /></span>
           <span className={styles.navItemLabel}>New</span>
         </button>
         <button
@@ -177,7 +193,7 @@ export function BottomNav() {
           aria-label="More navigation options"
           aria-expanded={moreOpen}
         >
-          <span className={styles.navItemIcon} aria-hidden="true">⋯</span>
+          <span className={styles.navItemIcon} aria-hidden="true"><MoreHorizontal size={20} /></span>
           <span className={styles.navItemLabel}>More</span>
         </button>
       </nav>

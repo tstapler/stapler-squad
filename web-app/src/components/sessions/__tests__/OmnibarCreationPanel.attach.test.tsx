@@ -26,6 +26,7 @@ const DEFAULT_FORM_STATE: OmnibarFormState = {
   projectName: "",
   newProjectSessionType: "new_worktree",
   firstPrompt: "",
+  createIfMissing: false,
 };
 
 function buildProps(overrides: Partial<OmnibarCreationPanelProps> = {}): OmnibarCreationPanelProps {

@@ -144,7 +144,12 @@ type SessionEvent struct {
 	//	*SessionEvent_SessionAcknowledged
 	//	*SessionEvent_ApprovalResponse
 	//	*SessionEvent_Notification
-	Event         isSessionEvent_Event `protobuf_oneof:"event"`
+	Event isSessionEvent_Event `protobuf_oneof:"event"`
+	// Monotonically increasing sequence number assigned by the server EventBus.
+	// Clients should track the highest seq they have received and pass it as
+	// after_seq in WatchSessionsRequest on reconnect to replay missed events.
+	// Events are retained for up to one hour.
+	Seq           uint64 `protobuf:"varint,10,opt,name=seq,proto3" json:"seq,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -263,6 +268,13 @@ func (x *SessionEvent) GetNotification() *NotificationEvent {
 		}
 	}
 	return nil
+}
+
+func (x *SessionEvent) GetSeq() uint64 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
 }
 
 type isSessionEvent_Event interface {
@@ -3610,7 +3622,7 @@ var File_session_v1_events_proto protoreflect.FileDescriptor
 const file_session_v1_events_proto_rawDesc = "" +
 	"\n" +
 	"\x17session/v1/events.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16session/v1/types.proto\"\xc6\x05\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x16session/v1/types.proto\"\xd8\x05\n" +
 	"\fSessionEvent\x128\n" +
 	"\ttimestamp\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12J\n" +
 	"\x0fsession_created\x18\x02 \x01(\v2\x1f.session.v1.SessionCreatedEventH\x00R\x0esessionCreated\x12J\n" +
@@ -3620,7 +3632,9 @@ const file_session_v1_events_proto_rawDesc = "" +
 	"\x10user_interaction\x18\x06 \x01(\v2 .session.v1.UserInteractionEventH\x00R\x0fuserInteraction\x12Y\n" +
 	"\x14session_acknowledged\x18\a \x01(\v2$.session.v1.SessionAcknowledgedEventH\x00R\x13sessionAcknowledged\x12P\n" +
 	"\x11approval_response\x18\b \x01(\v2!.session.v1.ApprovalResponseEventH\x00R\x10approvalResponse\x12C\n" +
-	"\fnotification\x18\t \x01(\v2\x1d.session.v1.NotificationEventH\x00R\fnotificationB\a\n" +
+	"\fnotification\x18\t \x01(\v2\x1d.session.v1.NotificationEventH\x00R\fnotification\x12\x10\n" +
+	"\x03seq\x18\n" +
+	" \x01(\x04R\x03seqB\a\n" +
 	"\x05event\"D\n" +
 	"\x13SessionCreatedEvent\x12-\n" +
 	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"k\n" +

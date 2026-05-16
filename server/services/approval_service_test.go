@@ -2,13 +2,74 @@ package services
 
 import (
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
+	"github.com/tstapler/stapler-squad/server/events"
 )
+
+// ─── ResolveApproval — event bus broadcasting ────────────────────────────────
+
+// TestResolveApproval_PublishesEventBusEvent is a regression test for the cross-device
+// sync bug: ResolveApproval must publish an EventApprovalResponse to the event bus so
+// all connected clients (including Device B) learn about the resolution in real-time.
+func TestResolveApproval_PublishesEventBusEvent(t *testing.T) {
+	store := NewApprovalStore("")
+	bus := events.NewEventBus(10)
+	svc := NewApprovalService(store)
+	svc.SetEventBus(bus)
+
+	a := newTestPendingApproval("appr-1", "session-X", "Bash")
+	require.NoError(t, store.Create(a))
+
+	ch, _ := bus.Subscribe(t.Context())
+
+	_, err := svc.ResolveApproval(t.Context(), connect.NewRequest(&sessionv1.ResolveApprovalRequest{
+		ApprovalId: "appr-1",
+		Decision:   "allow",
+	}))
+	require.NoError(t, err)
+
+	select {
+	case event := <-ch:
+		require.NotNil(t, event)
+		assert.Equal(t, pkgevents.EventApprovalResponse, event.Type)
+		assert.Equal(t, "session-X", event.SessionID)
+		assert.True(t, event.Approved)
+		assert.Equal(t, "appr-1", event.Context) // approval ID passed as context
+	case <-time.After(time.Second):
+		t.Fatal("expected EventApprovalResponse on bus within 1s, got nothing")
+	}
+}
+
+// TestResolveApproval_NoEventWhenApprovalNotFound ensures no event is published if the
+// approval ID is unknown (error path).
+func TestResolveApproval_NoEventWhenApprovalNotFound(t *testing.T) {
+	bus := events.NewEventBus(10)
+	svc := NewApprovalService(NewApprovalStore(""))
+	svc.SetEventBus(bus)
+
+	ch, _ := bus.Subscribe(t.Context())
+
+	_, err := svc.ResolveApproval(t.Context(), connect.NewRequest(&sessionv1.ResolveApprovalRequest{
+		ApprovalId: "does-not-exist",
+		Decision:   "allow",
+	}))
+	require.Error(t, err)
+
+	// Nothing should be published for a failed resolve
+	select {
+	case event := <-ch:
+		t.Fatalf("unexpected event on bus: %+v", event)
+	case <-time.After(50 * time.Millisecond):
+		// expected: no event
+	}
+}
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 

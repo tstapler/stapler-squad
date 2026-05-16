@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/errorevent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/project"
@@ -96,6 +97,7 @@ func checkColumn(t, c string) error {
 			claudesession.Table:           claudesession.ValidColumn,
 			diffstats.Table:               diffstats.ValidColumn,
 			errorevent.Table:              errorevent.ValidColumn,
+			escapeevent.Table:             escapeevent.ValidColumn,
 			itemsession.Table:             itemsession.ValidColumn,
 			itemsource.Table:              itemsource.ValidColumn,
 			project.Table:                 project.ValidColumn,

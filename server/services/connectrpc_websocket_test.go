@@ -643,3 +643,126 @@ func TestIsAllowedOriginMalformed(t *testing.T) {
 		t.Error("malformed Origin 'not-a-url' should be blocked (no scheme, not localhost)")
 	}
 }
+
+// --- prepareSnapshotContent ---
+//
+// Regression tests for the two snapshot rendering bugs:
+//
+//   Bug A (double display): post-resize snapshot written on top of existing
+//   content because the prefix lacked a screen clear → fixed by ansiSnapshotPrefix
+//   containing ansiEraseScreen.
+//
+//   Bug B (stairstepped newlines): tmux capture-pane -p emits rows separated by
+//   bare \n (LF). In xterm.js, LF only moves the cursor DOWN — it does not return
+//   to column 0 — unless convertEol/LNM is on. LNM is off by default and DECSTR
+//   resets it to off, so every row after the first was indented by the previous
+//   row's width. Fix: normalize \n → \r\n so rows always start at column 0.
+
+// TestPrepareSnapshotContentNormalizesNewlines is the direct regression test for
+// Bug B. It MUST fail against the old sanitizeInitialContent-only implementation
+// (which returned bare \n unchanged).
+func TestPrepareSnapshotContentNormalizesNewlines(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "bare LF separators converted to CRLF",
+			input: "line1\nline2\nline3",
+			want:  "line1\r\nline2\r\nline3",
+		},
+		{
+			name:  "single trailing newline",
+			input: "line1\n",
+			want:  "line1\r\n",
+		},
+		{
+			name:  "pre-existing CRLF not doubled to CRRLF",
+			input: "line1\r\nline2\r\n",
+			want:  "line1\r\nline2\r\n",
+		},
+		{
+			name:  "mixed bare LF and CRLF normalised uniformly",
+			input: "line1\nline2\r\nline3\n",
+			want:  "line1\r\nline2\r\nline3\r\n",
+		},
+		{
+			name:  "empty string unchanged",
+			input: "",
+			want:  "",
+		},
+		{
+			name:  "no newlines unchanged",
+			input: "no newline here",
+			want:  "no newline here",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := prepareSnapshotContent(tc.input)
+			if got != tc.want {
+				t.Errorf("prepareSnapshotContent(%q) =\n  %q\nwant\n  %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPrepareSnapshotContentStripsCursorPositioning verifies that sanitization
+// (stripping cursor-positioning codes) still runs before newline normalisation.
+func TestPrepareSnapshotContentStripsCursorPositioning(t *testing.T) {
+	// A realistic capture-pane fragment: cursor home + color + text + newline
+	input := "\x1b[H\x1b[1;32mline1\x1b[0m\nline2\n"
+	got := prepareSnapshotContent(input)
+
+	if strings.Contains(got, "\x1b[H") {
+		t.Errorf("prepareSnapshotContent: cursor home ESC[H not stripped; got %q", got)
+	}
+	if !strings.Contains(got, "\r\n") {
+		t.Errorf("prepareSnapshotContent: expected \\r\\n line endings; got %q", got)
+	}
+	if strings.Contains(got, "\x1b[H\r\n") {
+		t.Errorf("prepareSnapshotContent: cursor home was converted to \\r\\n instead of stripped; got %q", got)
+	}
+}
+
+// TestPrepareSnapshotContentPreservesSGR verifies that SGR color sequences are
+// preserved (they are safe to replay and must not be lost).
+func TestPrepareSnapshotContentPreservesSGR(t *testing.T) {
+	input := "\x1b[1;32mhello\x1b[0m\nworld\n"
+	got := prepareSnapshotContent(input)
+
+	for _, sgr := range []string{"\x1b[1;32m", "\x1b[0m"} {
+		if !strings.Contains(got, sgr) {
+			t.Errorf("prepareSnapshotContent: SGR sequence %q was lost; got %q", sgr, got)
+		}
+	}
+}
+
+// TestAnsiSnapshotPrefixContainsRequiredSequences verifies the prefix used before
+// every snapshot contains DECSTR, ED2, and CUP in that order.
+// Regression for Bug A: a prefix without ED2 (screen clear) caused double display.
+func TestAnsiSnapshotPrefixContainsRequiredSequences(t *testing.T) {
+	decstr := "\x1b[!p"
+	ed2 := "\x1b[2J"
+	cup := "\x1b[H"
+
+	for _, seq := range []string{decstr, ed2, cup} {
+		if !strings.Contains(ansiSnapshotPrefix, seq) {
+			t.Errorf("ansiSnapshotPrefix missing required sequence %q; prefix = %q", seq, ansiSnapshotPrefix)
+		}
+	}
+
+	// Order matters: DECSTR must precede ED2 (so the scroll region is reset before
+	// the clear), and ED2 must precede CUP (so the screen is blank before cursor
+	// home). A wrong order could still clear only a partial scroll region.
+	dIdx := strings.Index(ansiSnapshotPrefix, decstr)
+	eIdx := strings.Index(ansiSnapshotPrefix, ed2)
+	cIdx := strings.Index(ansiSnapshotPrefix, cup)
+
+	if dIdx >= eIdx || eIdx >= cIdx {
+		t.Errorf("ansiSnapshotPrefix sequence order wrong: DECSTR@%d ED2@%d CUP@%d; want DECSTR < ED2 < CUP; prefix = %q",
+			dIdx, eIdx, cIdx, ansiSnapshotPrefix)
+	}
+}

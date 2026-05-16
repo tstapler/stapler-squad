@@ -75,6 +75,7 @@ export function GlobalSessionServiceProvider({ children }: { children: React.Rea
     enabled: !authLoading && (!authEnabled || authenticated),
     onNotification: handleNotification,
     onReconnect: refreshHistory,
+    onApprovalResponse: refreshHistory,
   });
 
   return (

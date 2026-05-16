@@ -30,6 +30,8 @@ const (
 // Event represents a session state change event.
 // This is the internal Go representation that will be converted to protobuf events.
 type Event struct {
+	// Seq is assigned by the EventBus when Publish is called. Zero means unpublished.
+	Seq uint64
 	// Type of the event
 	Type EventType
 	// Timestamp when the event occurred

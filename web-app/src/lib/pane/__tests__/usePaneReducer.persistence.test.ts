@@ -65,7 +65,7 @@ describe("usePaneReducer persistence", () => {
 
     const { result, rerender } = renderHook(
       ({ sessions }: { sessions: { id: string }[] }) => usePaneReducer(sessions),
-      { initialProps: { sessions: [] } }
+      { initialProps: { sessions: [] as { id: string }[] } }
     );
 
     // Load sessions — session-abc is still alive.
@@ -87,7 +87,7 @@ describe("usePaneReducer persistence", () => {
 
     const { result, rerender } = renderHook(
       ({ sessions }: { sessions: { id: string }[] }) => usePaneReducer(sessions),
-      { initialProps: { sessions: [] } }
+      { initialProps: { sessions: [] as { id: string }[] } }
     );
 
     // First: session is alive → IDs preserved.

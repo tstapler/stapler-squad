@@ -23,14 +23,14 @@ var validCategories = map[string]bool{
 
 // analyticsEventRequest matches the frontend AnalyticsEvent JSON shape.
 type analyticsEventRequest struct {
-	ID           string            `json:"id,omitempty"`
-	EventName    string            `json:"name"`
-	EventCategory string           `json:"category"`
-	DurationMs   *int64            `json:"duration_ms,omitempty"`
-	SessionID    string            `json:"session_id,omitempty"`
-	Page         string            `json:"page,omitempty"`
-	Component    string            `json:"component,omitempty"`
-	Labels       map[string]string `json:"labels,omitempty"`
+	ID            string            `json:"id,omitempty"`
+	EventName     string            `json:"name"`
+	EventCategory string            `json:"category"`
+	DurationMs    *int64            `json:"duration_ms,omitempty"`
+	SessionID     string            `json:"session_id,omitempty"`
+	Page          string            `json:"page,omitempty"`
+	Component     string            `json:"component,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
 }
 
 // analyticsBatchRequest is the POST /api/analytics request body.
@@ -242,9 +242,9 @@ func (h *AnalyticsHandler) HandleSummary(w http.ResponseWriter, r *http.Request)
 
 	// Aggregate in Go.
 	type eventAgg struct {
-		count       int
-		totalDurMs  int64
-		durCount    int
+		count      int
+		totalDurMs int64
+		durCount   int
 	}
 
 	eventMap := make(map[string]*eventAgg)

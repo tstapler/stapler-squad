@@ -3,10 +3,10 @@ package session
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"regexp"
 	"strings"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/session/ent"
 )
 
@@ -105,7 +105,7 @@ func GetGitDiff(ctx context.Context, worktreePath string, baseSHA string) (diff 
 		rangeArg = baseSHA + "..HEAD"
 	}
 
-	cmd := exec.CommandContext(ctx, "git", "diff", rangeArg)
+	cmd := safeexec.CommandContext(ctx, "git", "diff", rangeArg)
 	cmd.Dir = worktreePath
 	out, runErr := cmd.Output()
 	if runErr != nil {

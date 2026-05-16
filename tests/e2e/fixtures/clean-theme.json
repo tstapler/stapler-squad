@@ -1,1 +1,1 @@
-{ "origins": [{ "origin": "http://localhost:8544", "localStorage": [{ "name": "stapler-theme", "value": "clean" }] }] }
+{"origins":[{"origin":"http://localhost:42103","localStorage":[{"name":"stapler-theme","value":"clean"}]}]}

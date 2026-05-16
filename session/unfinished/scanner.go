@@ -6,6 +6,7 @@ import "github.com/linkdata/deadlock"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,8 +17,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/tstapler/stapler-squad/executor"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	pkgevents "github.com/tstapler/stapler-squad/pkg/events"
 )
@@ -144,6 +143,7 @@ type scanTask struct {
 
 // Scanner is the central coordinator for the unfinished-work background scan.
 type Scanner struct {
+	reader       VCSReader
 	scanQueue    chan scanTask
 	resultStore  sync.Map // map[string]ScanResult  (key = repoPath+"|"+branch)
 	repoSet      sync.Map // map[string]bool (tracked repo paths, from any source)
@@ -169,7 +169,14 @@ type Scanner struct {
 
 // NewScanner constructs a Scanner. Call Start(ctx) to begin background processing.
 func NewScanner(eventBus *pkgevents.EventBus, stateStore *StateStore) *Scanner {
+	return NewScannerWithReader(eventBus, stateStore, &GoGitVCSReader{})
+}
+
+// NewScannerWithReader constructs a Scanner with an explicit VCSReader.
+// Used in tests to inject a fake or alternative implementation.
+func NewScannerWithReader(eventBus *pkgevents.EventBus, stateStore *StateStore, reader VCSReader) *Scanner {
 	s := &Scanner{
+		reader:       reader,
 		scanQueue:    make(chan scanTask, 50),
 		eventBus:     eventBus,
 		stateStore:   stateStore,
@@ -293,28 +300,22 @@ func (s *Scanner) worker(ctx context.Context) {
 
 // scanRepo enumerates all worktrees in the given repo root and scans each one.
 func (s *Scanner) scanRepo(repoPath string) []ScanResult {
-	// Run git worktree list --porcelain.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "worktree", "list", "--porcelain")
-	out, err := cmd.Output()
+	worktrees, err := s.reader.ListWorktrees(repoPath)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
 			s.recordTimeout(repoPath)
-			log.Warn("git worktree list timed out", "repo", repoPath)
+			log.Warn("worktree list timed out", "repo", repoPath)
 		} else {
-			log.Debug("git worktree list error", "repo", repoPath, "err", err)
+			log.Debug("worktree list error", "repo", repoPath, "err", err)
 		}
 		return nil
 	}
-
-	worktrees := ParseAllWorktrees(string(out))
 	if len(worktrees) == 0 {
 		return nil
 	}
 
 	// Resolve default branch once per repo.
-	defaultBranch := s.ResolveDefaultBranch(repoPath)
+	defaultBranch := s.reader.ResolveDefaultBranch(repoPath)
 
 	var results []ScanResult
 	for _, wt := range worktrees {
@@ -362,67 +363,46 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 		result.LastModified = fi.ModTime()
 	}
 
-	exec5s := executor.MakeTimeoutExecutor(5 * time.Second)
-	exec3s := executor.MakeTimeoutExecutor(3 * time.Second)
-
 	// Check cache.
 	cache := s.getOrCreateCache(wt.Path)
 	if cached, ok := cache.Get(); ok {
 		return cached
 	}
 
-	// git status --porcelain
-	statusCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "status", "--porcelain")
-	statusOut, err := exec5s.CombinedOutput(statusCmd)
+	uncommitted, err := s.reader.HasUncommitted(wt.Path)
 	if err != nil {
 		if strings.Contains(err.Error(), "timed out") {
 			result.Status = ScanResultStatusTimeout
-			result.ErrorMsg = fmt.Sprintf("git status timed out for %s", wt.Path)
+			result.ErrorMsg = fmt.Sprintf("HasUncommitted timed out for %s", wt.Path)
 			s.recordTimeout(repoPath)
 			cache.Set(result)
 			return result
 		}
-		// May be a permission error or non-git dir.
 		result.Status = ScanResultStatusError
 		result.ErrorMsg = err.Error()
 		cache.Set(result)
 		return result
 	}
-	result.HasUncommitted = strings.TrimSpace(string(statusOut)) != ""
+	result.HasUncommitted = uncommitted
 
-	// git rev-list --left-right --count HEAD...<defaultBranch>
 	if defaultBranch != "" {
-		revCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "rev-list", "--left-right", "--count",
-			"HEAD..."+defaultBranch)
-		revOut, revErr := exec3s.CombinedOutput(revCmd)
-		if revErr == nil {
-			parts := strings.Fields(strings.TrimSpace(string(revOut)))
-			if len(parts) == 2 {
-				result.AheadCount, _ = strconv.Atoi(parts[0])
-				result.BehindCount, _ = strconv.Atoi(parts[1])
-			}
+		ahead, behind, aErr := s.reader.AheadBehind(wt.Path, defaultBranch)
+		if aErr == nil {
+			result.AheadCount = ahead
+			result.BehindCount = behind
 		}
-
-		// git log defaultBranch..HEAD --oneline --max-count=5
 		if result.AheadCount > 0 {
-			logCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "log", defaultBranch+"..HEAD",
-				"--oneline", "--max-count=5")
-			logOut, logErr := exec3s.CombinedOutput(logCmd)
-			if logErr == nil {
-				for _, line := range strings.Split(strings.TrimSpace(string(logOut)), "\n") {
-					if line != "" {
-						result.AheadMessages = append(result.AheadMessages, line)
-					}
-				}
+			msgs, mErr := s.reader.CommitMessages(wt.Path, defaultBranch, 5)
+			if mErr == nil {
+				result.AheadMessages = msgs
 			}
 		}
 	}
 
-	// git diff --shortstat HEAD
-	diffCmd := safeexec.CommandContext(context.Background(), "git", "-C", wt.Path, "diff", "--shortstat", "HEAD")
-	diffOut, diffErr := exec3s.CombinedOutput(diffCmd)
-	if diffErr == nil {
-		parseDiffShortstat(strings.TrimSpace(string(diffOut)), &result)
+	if d, dErr := s.reader.DiffShortstat(wt.Path); dErr == nil {
+		result.ChangedFiles = d.Files
+		result.LinesAdded = d.Insertions
+		result.LinesRemoved = d.Deletions
 	}
 
 	result.Status = ScanResultStatusOK
@@ -430,49 +410,13 @@ func (s *Scanner) scanWorktree(wt WorktreeInfo, defaultBranch, repoPath string) 
 	return result
 }
 
-// ResolveDefaultBranch returns the ref to compare unfinished work against.
-// It prefers remote tracking refs (origin/main) over local copies so the
-// comparison reflects the fetched remote state rather than a potentially
-// stale local branch.
-func (s *Scanner) ResolveDefaultBranch(repoPath string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 
-	// Try symbolic-ref origin/HEAD — returns "origin/main". Keep the
-	// "origin/" prefix so git compares against the remote tracking ref.
-	cmd := safeexec.CommandContext(ctx, "git", "-C", repoPath, "symbolic-ref",
-		"refs/remotes/origin/HEAD", "--short")
-	out, err := cmd.Output()
-	if err == nil {
-		if ref := strings.TrimSpace(string(out)); ref != "" {
-			return ref // e.g. "origin/main"
-		}
-	}
-
-	// Fallback: prefer remote tracking refs; fall back to local branches for
-	// repos that have no remote configured.
-	for _, candidate := range []string{
-		"origin/main", "origin/master", "origin/develop", "origin/trunk",
-		"main", "master", "develop", "trunk",
-	} {
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
-		checkCmd := safeexec.CommandContext(ctx2, "git", "-C", repoPath, "rev-parse",
-			"--verify", candidate)
-		checkErr := checkCmd.Run()
-		cancel2()
-		if checkErr == nil {
-			return candidate
-		}
-	}
-	return ""
-}
-
-// parseDiffShortstat parses "3 files changed, 142 insertions(+), 28 deletions(-)" into result fields.
-func parseDiffShortstat(s string, result *ScanResult) {
+// parseDiffShortstat parses "3 files changed, 142 insertions(+), 28 deletions(-)" into a DiffStat.
+func parseDiffShortstat(s string) DiffStat {
+	var d DiffStat
 	if s == "" {
-		return
+		return d
 	}
-	// Flexible parse: look for digits before known keywords.
 	for _, part := range strings.Split(s, ",") {
 		part = strings.TrimSpace(part)
 		fields := strings.Fields(part)
@@ -486,13 +430,14 @@ func parseDiffShortstat(s string, result *ScanResult) {
 		kw := strings.ToLower(fields[1])
 		switch {
 		case strings.HasPrefix(kw, "file"):
-			result.ChangedFiles = n
+			d.Files = n
 		case strings.HasPrefix(kw, "insertion"):
-			result.LinesAdded = n
+			d.Insertions = n
 		case strings.HasPrefix(kw, "deletion"):
-			result.LinesRemoved = n
+			d.Deletions = n
 		}
 	}
+	return d
 }
 
 // publishResults emits UnfinishedWorkUpdated events for changed scan results.
@@ -538,6 +483,11 @@ func (s *Scanner) publishResults(results []ScanResult) {
 	case s.scanDoneCh <- time.Now():
 	default:
 	}
+}
+
+// ResolveDefaultBranch delegates to the underlying VCSReader.
+func (s *Scanner) ResolveDefaultBranch(repoPath string) string {
+	return s.reader.ResolveDefaultBranch(repoPath)
 }
 
 // GetAllResults returns a snapshot of all stored scan results (excluding dismissed/snoozed).

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useNavigation } from "@/lib/contexts/NavigationContext";
 import { NAV_PAGES } from "@/lib/nav-pages";
 import { routes } from "@/lib/routes";
@@ -36,6 +37,7 @@ export function DrawerNav() {
               ? pathname === routes.home
               : pathname.startsWith(page.href);
 
+          const Icon = page.icon;
           return (
             <li key={page.href}>
               <Link
@@ -45,7 +47,7 @@ export function DrawerNav() {
                 title={!isDrawerOpen ? page.label : undefined}
               >
                 <span className={navIcon} aria-hidden="true">
-                  {page.icon}
+                  <Icon size={18} />
                 </span>
                 <span className={navLabel({ visible: isDrawerOpen })}>
                   {page.label}
@@ -80,7 +82,9 @@ export function DrawerNav() {
         aria-expanded={isDrawerOpen}
         title={isDrawerOpen ? "Collapse navigation" : "Expand navigation"}
       >
-        <span aria-hidden="true">{isDrawerOpen ? "◀" : "▶"}</span>
+        <span aria-hidden="true">
+          {isDrawerOpen ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+        </span>
       </button>
     </nav>
   );

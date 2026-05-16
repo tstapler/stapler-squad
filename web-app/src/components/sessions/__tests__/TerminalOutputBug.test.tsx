@@ -556,9 +556,9 @@ describe('Output queuing: pending output flushed on RESIZING → STABLE', () => 
     // mock.results gives the return value of the constructor (the plain object), which is
     // what the component holds in streamManagerRef. mock.instances gives `this`, which is
     // different when mockImplementation returns a plain object literal.
-    const MockTSM = TerminalStreamManager as jest.MockedClass<typeof TerminalStreamManager>;
+    const MockTSM = TerminalStreamManager as unknown as jest.MockedClass<new (...args: unknown[]) => TerminalStreamManager>;
     const managerResult = MockTSM.mock.results[MockTSM.mock.results.length - 1];
-    const managerInstance = managerResult?.value as ReturnType<typeof MockTSM>;
+    const managerInstance = managerResult?.value as TerminalStreamManager;
     expect(managerInstance.write).toHaveBeenCalledWith('chunk-stable');
 
     const writeCallsBefore = (managerInstance.write as jest.Mock).mock.calls.length;
@@ -602,7 +602,7 @@ describe('Output queuing: pending output flushed on RESIZING → STABLE', () => 
 describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackBatch error', () => {
   beforeEach(() => {
     // TerminalStreamManager is lazily created only when xtermRef.current?.terminal is non-null.
-    (mockXtermHandle as any).terminal = {};
+    (mockXtermHandle as any).terminal = { scrollToBottom: jest.fn() };
   });
 
   afterEach(() => {
@@ -639,9 +639,9 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
     });
 
     // Now the manager has been created — grab it via mock.results.
-    const MockTSM = TerminalStreamManager as jest.MockedClass<typeof TerminalStreamManager>;
+    const MockTSM = TerminalStreamManager as unknown as jest.MockedClass<new (...args: unknown[]) => TerminalStreamManager>;
     const managerResult = MockTSM.mock.results[MockTSM.mock.results.length - 1];
-    const managerInstance = managerResult?.value as ReturnType<typeof MockTSM>;
+    const managerInstance = managerResult?.value as TerminalStreamManager;
 
     expect(managerInstance).toBeDefined();
 
@@ -700,6 +700,7 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
 
     // Give the mock handle a terminal with cell dimensions available
     (mockXtermHandle as any).terminal = {
+      scrollToBottom: jest.fn(),
       _core: {
         _renderService: {
           dimensions: {
@@ -742,6 +743,7 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     (useTerminalStream as jest.Mock).mockReturnValue(stream);
 
     (mockXtermHandle as any).terminal = {
+      scrollToBottom: jest.fn(),
       _core: {
         _renderService: {
           dimensions: {

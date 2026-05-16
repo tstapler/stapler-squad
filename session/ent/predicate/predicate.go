@@ -30,6 +30,9 @@ type DiffStats func(*sql.Selector)
 // ErrorEvent is the predicate function for errorevent builders.
 type ErrorEvent func(*sql.Selector)
 
+// EscapeEvent is the predicate function for escapeevent builders.
+type EscapeEvent func(*sql.Selector)
+
 // ItemSession is the predicate function for itemsession builders.
 type ItemSession func(*sql.Selector)
 

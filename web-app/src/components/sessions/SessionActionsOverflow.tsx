@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
+import { MoreHorizontal } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
@@ -30,6 +31,8 @@ export interface SessionActionsOverflowProps {
   session: Session;
   /** Show Resume/Pause as a shortcut button before the ··· */
   showPrimaryAction?: boolean;
+  /** Override className on the ··· trigger button (e.g. for compact toolbar use) */
+  buttonClassName?: string;
   onResume?: () => void;
   onPause?: () => void;
   onDelete?: () => Promise<void> | void;
@@ -51,6 +54,7 @@ export interface SessionActionsOverflowProps {
 export function SessionActionsOverflow({
   session,
   showPrimaryAction = false,
+  buttonClassName,
   onResume,
   onPause,
   onDelete,
@@ -332,14 +336,14 @@ export function SessionActionsOverflow({
           <button
             ref={overflowButtonRef}
             id={`overflow-btn-${session.id}`}
-            className={overflowButton}
+            className={buttonClassName ?? overflowButton}
             onClick={openMenu}
             aria-label="More session actions"
             aria-expanded={showOverflow}
             aria-haspopup="menu"
             aria-controls={`overflow-menu-${session.id}`}
           >
-            ···
+            <MoreHorizontal size={16} />
           </button>
           {showOverflow && createPortal(
             <div
