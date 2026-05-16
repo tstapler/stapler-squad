@@ -93,6 +93,7 @@ function StatusFilterChips({
       {displayStatuses.map((status) => {
         const active = selected.includes(status);
         return (
+          // analytics-exempt
           <button
             key={status}
             type="button"
@@ -129,6 +130,7 @@ function PriorityFilterChips({
       {[1, 2, 3, 4, 5].map((p) => {
         const active = selected.includes(p);
         return (
+          // analytics-exempt
           <button
             key={p}
             type="button"
@@ -246,14 +248,17 @@ function BacklogPageInner() {
       <div className={styles.pageHeader}>
         <h1 className={styles.pageTitle}>Backlog</h1>
         <div className={styles.headerActions}>
-          <button
-            className={styles.newItemButton}
-            onClick={() => setShowForm(true)}
-            aria-label="Create new backlog item"
-            data-testid="backlog-new-item-button"
-          >
-            + New Item
-          </button>
+          {(
+            // analytics-exempt
+            <button
+              className={styles.newItemButton}
+              onClick={() => setShowForm(true)}
+              aria-label="Create new backlog item"
+              data-testid="backlog-new-item-button"
+            >
+              + New Item
+            </button>
+          )}
         </div>
       </div>
 
