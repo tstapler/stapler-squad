@@ -1,8 +1,8 @@
 // +feature: settings-features
-// analytics-exempt
 "use client";
 
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
+import { usePageView } from "@/lib/analytics";
 import { vars } from "@/styles/theme.css";
 import {
   container,
@@ -26,6 +26,7 @@ const FEATURE_META: Record<string, { label: string }> = {
 };
 
 export default function FeaturesPage() {
+  usePageView();
   const { flagList, isLoading, error, setFlag } = useFeatureFlags();
 
   return (
