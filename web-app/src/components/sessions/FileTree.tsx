@@ -568,9 +568,13 @@ export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileT
       if (signal.aborted) return;
       // Load if not already loaded.
       if (!dirContents.has(ancestorPath)) {
-        await loadDirectoryRef.current(ancestorPath);
-        // Wait one tick for React to re-render with updated tree data.
-        await new Promise<void>((r) => setTimeout(r, 0));
+        try {
+          await loadDirectoryRef.current(ancestorPath);
+          await new Promise<void>((r) => setTimeout(r, 0));
+        } catch {
+          // Directory load failed; stop reveal at this ancestor
+          return;
+        }
       }
       // Open the directory in the tree.
       treeRef.current?.open(ancestorPath);

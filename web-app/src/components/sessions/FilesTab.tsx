@@ -154,7 +154,7 @@ export function FilesTab({
       {/* Left pane: file tree */}
       <div
         className={treePaneClasses}
-        style={{ width: panel.collapsed ? 0 : panel.width }}
+        style={{ width: (panel.collapsed || mobilePane === 'content') ? 0 : panel.width }}
       >
         <div className={toolbar}>
           <input

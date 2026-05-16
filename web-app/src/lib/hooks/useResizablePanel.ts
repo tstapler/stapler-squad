@@ -65,7 +65,7 @@ export function useResizablePanel({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const isDraggingRef = useRef(false);
-  const lastWidthRef = useRef<number>(defaultWidth);
+  const lastWidthRef = useRef<number>(readStoredNumber(storageKey, defaultWidth, minWidth));
   const rafRef = useRef<number | null>(null);
   const pendingWidthRef = useRef<number | null>(null);
 
