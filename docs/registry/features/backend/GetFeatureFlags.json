@@ -1,13 +1,11 @@
 {
-  "id": "notification:mark-read",
+  "id": "GetFeatureFlags",
   "type": "backend",
   "service": "SessionService",
-  "method": "MarkNotificationRead",
+  "method": "GetFeatureFlags",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestMarkNotificationRead_EmptyIDs"
-  ],
+  "tested": false,
+  "testIds": [],
   "lastModified": "2026-05-15T12:47:27.611370347-07:00"
 }
