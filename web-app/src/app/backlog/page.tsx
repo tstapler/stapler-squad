@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAnalytics } from "@/lib/analytics";
+import { usePageView } from "@/lib/analytics/usePageView";
 import { AppLink } from "@/components/ui/AppLink";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { BacklogItemForm } from "@/components/backlog/BacklogItemForm";
@@ -82,7 +83,6 @@ function StatusFilterChips({
     const next = selected.includes(status)
       ? selected.filter((s) => s !== status)
       : [...selected, status];
-    track({ name: "backlog_filter_status", category: "user_action", component: "BacklogPage", labels: { status, active: String(!selected.includes(status)) } });
     onChange(next);
   };
 
@@ -98,7 +98,7 @@ function StatusFilterChips({
             key={status}
             type="button"
             className={`${styles.filterChip} ${active ? styles.filterChipActive : ""}`}
-            onClick={() => toggle(status)}
+            onClick={() => { track({ name: "backlog_filter_status", category: "user_action", component: "BacklogPage", labels: { status, active: String(!selected.includes(status)) } }); toggle(status); }}
             aria-pressed={active}
             data-testid={`backlog-filter-status-${status}`}
           >
@@ -122,7 +122,6 @@ function PriorityFilterChips({
     const next = selected.includes(p)
       ? selected.filter((x) => x !== p)
       : [...selected, p];
-    track({ name: "backlog_filter_priority", category: "user_action", component: "BacklogPage", labels: { priority: String(p), active: String(!selected.includes(p)) } });
     onChange(next);
   };
 
@@ -135,7 +134,7 @@ function PriorityFilterChips({
             key={p}
             type="button"
             className={`${styles.filterChip} ${active ? styles.filterChipActive : ""}`}
-            onClick={() => toggle(p)}
+            onClick={() => { track({ name: "backlog_filter_priority", category: "user_action", component: "BacklogPage", labels: { priority: String(p), active: String(!selected.includes(p)) } }); toggle(p); }}
             aria-pressed={active}
             data-testid={`backlog-filter-priority-${p}`}
           >
@@ -152,6 +151,7 @@ function PriorityFilterChips({
 // ---------------------------------------------------------------------------
 
 function BacklogPageInner() {
+  usePageView();
   const { track } = useAnalytics();
   const service = useBacklogService();
   const router = useRouter();
