@@ -1,3 +1,4 @@
+// analytics-exempt
 "use client";
 // +feature: backlog:board-page
 

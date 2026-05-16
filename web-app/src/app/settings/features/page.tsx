@@ -1,4 +1,5 @@
 // +feature: settings-features
+// analytics-exempt
 "use client";
 
 import { useFeatureFlags } from "@/lib/contexts/FeatureFlagsContext";
