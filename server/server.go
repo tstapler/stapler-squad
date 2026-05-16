@@ -432,12 +432,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 // registerStaticRoutes mounts routes that are always registered regardless of
 // whether dependencies were successfully built (image upload, server-info, web UI).
 func registerStaticRoutes(srv *Server) {
-	// Register image upload endpoint — saves clipboard images to a temp directory
+	// Register file upload endpoint — saves clipboard files to a temp directory
 	// so the terminal process can reference them by path (e.g. for Claude Code image paste).
 	pasteDir := filepath.Join(os.TempDir(), "stapler-paste")
-	imageHandler := services.NewImageUploadHandler(pasteDir)
-	srv.mux.HandleFunc("/api/upload/image", imageHandler.HandleUpload)
-	log.Info("Registered image upload handler at /api/upload/image", "dir", pasteDir)
+	fileHandler := services.NewFileUploadHandler(pasteDir)
+	srv.mux.HandleFunc("/api/upload/file", fileHandler.HandleUpload)
+	log.Info("Registered file upload handler at /api/upload/file", "dir", pasteDir)
 
 	// Register server-info endpoint for settings UI
 	srv.registerServerInfoHandler()
