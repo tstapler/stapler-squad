@@ -11,6 +11,7 @@ import { GlobalSessionServiceProvider } from "@/lib/contexts/SessionServiceConte
 import { NavigationProvider } from "@/lib/contexts/NavigationContext";
 import { ThemeProvider } from "@/lib/contexts/ThemeContext";
 import { AnalyticsContextProvider } from "@/lib/contexts/AnalyticsContext";
+import { FeatureFlagsProvider } from "@/lib/contexts/FeatureFlagsContext";
 import { HttpAnalyticsProvider } from "@/lib/analytics/HttpAnalyticsProvider";
 import { ConsoleAnalyticsProvider } from "@/lib/analytics/ConsoleAnalyticsProvider";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
@@ -32,6 +33,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <PageViewTracker />
       <Provider store={store}>
         <ThemeProvider>
+          <FeatureFlagsProvider>
           <NavigationProvider>
             <NotificationProvider>
               <GlobalSessionServiceProvider>
@@ -45,6 +47,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
               </GlobalSessionServiceProvider>
             </NotificationProvider>
           </NavigationProvider>
+          </FeatureFlagsProvider>
         </ThemeProvider>
       </Provider>
     </AnalyticsContextProvider>

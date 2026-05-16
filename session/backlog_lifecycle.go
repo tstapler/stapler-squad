@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -21,10 +22,16 @@ type ReviewGateSpawner interface {
 // session lifecycle events. It must be registered via Instance.RegisterLifecycleListener.
 //
 // OnLifecycleEvent is non-blocking; all DB work is dispatched to a goroutine.
+// Call SetEnabled(false) to make all callbacks no-ops without unwiring.
 type BacklogLifecycleListener struct {
 	storage        *Storage
 	sessionCreator ReviewGateSpawner
+	enabled        atomic.Bool
 }
+
+// SetEnabled toggles whether this listener processes lifecycle events.
+// Safe to call concurrently.
+func (l *BacklogLifecycleListener) SetEnabled(v bool) { l.enabled.Store(v) }
 
 // NewBacklogLifecycleListener creates a listener backed by the given storage.
 // The review gate is disabled (sessionCreator=nil).
@@ -46,6 +53,9 @@ type instanceBacklogListener struct {
 }
 
 func (il *instanceBacklogListener) OnLifecycleEvent(event LifecycleEvent, _ string) {
+	if !il.parent.enabled.Load() {
+		return
+	}
 	switch event {
 	case EventStarted:
 		go il.parent.onSessionStarted(il.instanceUUID)
@@ -212,7 +222,11 @@ func (l *BacklogLifecycleListener) spawnReviewGate(item *ent.BacklogItem, is *en
 
 // ReconcileStuck calls ReconcileStuckItems and logs the result.
 // Intended to be called on a periodic ticker as a safety net for abnormal session exits.
+// No-op when the listener is disabled.
 func (l *BacklogLifecycleListener) ReconcileStuck(ctx context.Context) {
+	if !l.enabled.Load() {
+		return
+	}
 	er, ok := l.storage.repo.(*EntRepository)
 	if !ok {
 		return

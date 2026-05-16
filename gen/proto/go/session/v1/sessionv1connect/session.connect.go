@@ -261,6 +261,12 @@ const (
 	// SessionServiceAcknowledgeErrorProcedure is the fully-qualified name of the SessionService's
 	// AcknowledgeError RPC.
 	SessionServiceAcknowledgeErrorProcedure = "/session.v1.SessionService/AcknowledgeError"
+	// SessionServiceGetFeatureFlagsProcedure is the fully-qualified name of the SessionService's
+	// GetFeatureFlags RPC.
+	SessionServiceGetFeatureFlagsProcedure = "/session.v1.SessionService/GetFeatureFlags"
+	// SessionServiceUpdateFeatureFlagProcedure is the fully-qualified name of the SessionService's
+	// UpdateFeatureFlag RPC.
+	SessionServiceUpdateFeatureFlagProcedure = "/session.v1.SessionService/UpdateFeatureFlag"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -461,6 +467,10 @@ type SessionServiceClient interface {
 	// AcknowledgeError marks an error event as acknowledged so it no longer appears
 	// in the default (unacknowledged) listing.
 	AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error)
+	// GetFeatureFlags returns all known feature flags and their current state.
+	GetFeatureFlags(context.Context, *connect.Request[v1.GetFeatureFlagsRequest]) (*connect.Response[v1.GetFeatureFlagsResponse], error)
+	// UpdateFeatureFlag enables or disables a named feature flag.
+	UpdateFeatureFlag(context.Context, *connect.Request[v1.UpdateFeatureFlagRequest]) (*connect.Response[v1.UpdateFeatureFlagResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -936,6 +946,18 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("AcknowledgeError")),
 			connect.WithClientOptions(opts...),
 		),
+		getFeatureFlags: connect.NewClient[v1.GetFeatureFlagsRequest, v1.GetFeatureFlagsResponse](
+			httpClient,
+			baseURL+SessionServiceGetFeatureFlagsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetFeatureFlags")),
+			connect.WithClientOptions(opts...),
+		),
+		updateFeatureFlag: connect.NewClient[v1.UpdateFeatureFlagRequest, v1.UpdateFeatureFlagResponse](
+			httpClient,
+			baseURL+SessionServiceUpdateFeatureFlagProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("UpdateFeatureFlag")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -1018,6 +1040,8 @@ type sessionServiceClient struct {
 	logClientEvents          *connect.Client[v1.LogClientEventsRequest, v1.LogClientEventsResponse]
 	listErrors               *connect.Client[v1.ListErrorsRequest, v1.ListErrorsResponse]
 	acknowledgeError         *connect.Client[v1.AcknowledgeErrorRequest, v1.AcknowledgeErrorResponse]
+	getFeatureFlags          *connect.Client[v1.GetFeatureFlagsRequest, v1.GetFeatureFlagsResponse]
+	updateFeatureFlag        *connect.Client[v1.UpdateFeatureFlagRequest, v1.UpdateFeatureFlagResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1405,6 +1429,16 @@ func (c *sessionServiceClient) AcknowledgeError(ctx context.Context, req *connec
 	return c.acknowledgeError.CallUnary(ctx, req)
 }
 
+// GetFeatureFlags calls session.v1.SessionService.GetFeatureFlags.
+func (c *sessionServiceClient) GetFeatureFlags(ctx context.Context, req *connect.Request[v1.GetFeatureFlagsRequest]) (*connect.Response[v1.GetFeatureFlagsResponse], error) {
+	return c.getFeatureFlags.CallUnary(ctx, req)
+}
+
+// UpdateFeatureFlag calls session.v1.SessionService.UpdateFeatureFlag.
+func (c *sessionServiceClient) UpdateFeatureFlag(ctx context.Context, req *connect.Request[v1.UpdateFeatureFlagRequest]) (*connect.Response[v1.UpdateFeatureFlagResponse], error) {
+	return c.updateFeatureFlag.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -1603,6 +1637,10 @@ type SessionServiceHandler interface {
 	// AcknowledgeError marks an error event as acknowledged so it no longer appears
 	// in the default (unacknowledged) listing.
 	AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error)
+	// GetFeatureFlags returns all known feature flags and their current state.
+	GetFeatureFlags(context.Context, *connect.Request[v1.GetFeatureFlagsRequest]) (*connect.Response[v1.GetFeatureFlagsResponse], error)
+	// UpdateFeatureFlag enables or disables a named feature flag.
+	UpdateFeatureFlag(context.Context, *connect.Request[v1.UpdateFeatureFlagRequest]) (*connect.Response[v1.UpdateFeatureFlagResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2074,6 +2112,18 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("AcknowledgeError")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceGetFeatureFlagsHandler := connect.NewUnaryHandler(
+		SessionServiceGetFeatureFlagsProcedure,
+		svc.GetFeatureFlags,
+		connect.WithSchema(sessionServiceMethods.ByName("GetFeatureFlags")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceUpdateFeatureFlagHandler := connect.NewUnaryHandler(
+		SessionServiceUpdateFeatureFlagProcedure,
+		svc.UpdateFeatureFlag,
+		connect.WithSchema(sessionServiceMethods.ByName("UpdateFeatureFlag")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -2230,6 +2280,10 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListErrorsHandler.ServeHTTP(w, r)
 		case SessionServiceAcknowledgeErrorProcedure:
 			sessionServiceAcknowledgeErrorHandler.ServeHTTP(w, r)
+		case SessionServiceGetFeatureFlagsProcedure:
+			sessionServiceGetFeatureFlagsHandler.ServeHTTP(w, r)
+		case SessionServiceUpdateFeatureFlagProcedure:
+			sessionServiceUpdateFeatureFlagHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -2545,4 +2599,12 @@ func (UnimplementedSessionServiceHandler) ListErrors(context.Context, *connect.R
 
 func (UnimplementedSessionServiceHandler) AcknowledgeError(context.Context, *connect.Request[v1.AcknowledgeErrorRequest]) (*connect.Response[v1.AcknowledgeErrorResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.AcknowledgeError is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetFeatureFlags(context.Context, *connect.Request[v1.GetFeatureFlagsRequest]) (*connect.Response[v1.GetFeatureFlagsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetFeatureFlags is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) UpdateFeatureFlag(context.Context, *connect.Request[v1.UpdateFeatureFlagRequest]) (*connect.Response[v1.UpdateFeatureFlagResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.UpdateFeatureFlag is not implemented"))
 }

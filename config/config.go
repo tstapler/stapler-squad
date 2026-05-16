@@ -266,6 +266,10 @@ type Config struct {
 	// Events older than this are deleted. 0 means no age limit.
 	// Default: 90.
 	AnalyticsMaxAgeDays int `json:"analytics_max_age_days,omitempty"`
+	// FeatureFlags stores the enabled/disabled state of named runtime feature flags.
+	// Keys are machine names (e.g. "backlog"); values are booleans.
+	// Absent key == disabled (false is the safe default for all flags).
+	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
 }
 
 // SessionDefaults is the top-level container for all session default configuration.
@@ -741,4 +745,22 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 	}
 
 	return key, nil
+}
+
+// GetFeatureFlag returns the persisted enabled state of the named feature flag.
+// Absent key == false (disabled by default).
+func (c *Config) GetFeatureFlag(name string) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return false
+	}
+	return c.FeatureFlags[name]
+}
+
+// SetFeatureFlag sets the named feature flag and persists the config to disk.
+func (c *Config) SetFeatureFlag(name string, value bool) error {
+	if c.FeatureFlags == nil {
+		c.FeatureFlags = make(map[string]bool)
+	}
+	c.FeatureFlags[name] = value
+	return SaveConfig(c)
 }

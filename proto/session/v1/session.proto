@@ -282,6 +282,12 @@ service SessionService {
   // AcknowledgeError marks an error event as acknowledged so it no longer appears
   // in the default (unacknowledged) listing.
   rpc AcknowledgeError(AcknowledgeErrorRequest) returns (AcknowledgeErrorResponse) {}
+
+  // GetFeatureFlags returns all known feature flags and their current state.
+  rpc GetFeatureFlags(GetFeatureFlagsRequest) returns (GetFeatureFlagsResponse) {}
+
+  // UpdateFeatureFlag enables or disables a named feature flag.
+  rpc UpdateFeatureFlag(UpdateFeatureFlagRequest) returns (UpdateFeatureFlagResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -1794,4 +1800,35 @@ message ClearConversationStateRequest {
 message ClearConversationStateResponse {
   bool success = 1;
   string message = 2;
+}
+
+// ============================================================================
+// Feature Flag Messages
+// ============================================================================
+
+message FeatureFlag {
+  // Machine name of the feature (e.g. "backlog").
+  string name = 1;
+  // Whether the feature is currently enabled.
+  bool enabled = 2;
+  // Human-readable description of what the feature does.
+  string description = 3;
+}
+
+message GetFeatureFlagsRequest {}
+
+message GetFeatureFlagsResponse {
+  repeated FeatureFlag flags = 1;
+}
+
+message UpdateFeatureFlagRequest {
+  // The feature name to update (e.g. "backlog").
+  string name = 1;
+  // The new enabled state.
+  bool enabled = 2;
+}
+
+message UpdateFeatureFlagResponse {
+  // The updated flag state.
+  FeatureFlag flag = 1;
 }

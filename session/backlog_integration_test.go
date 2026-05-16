@@ -236,6 +236,7 @@ func TestBacklogIntegration_IT005_ReconcileStuckItemsTransitionsToReview(t *test
 
 	// 4. Call ReconcileStuckItems via listener
 	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
 	listener.ReconcileStuck(ctx)
 
 	// 5. Reload item, assert status == "review" and notes contain "[auto]"

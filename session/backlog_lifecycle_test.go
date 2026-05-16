@@ -340,6 +340,7 @@ func TestBacklogLifecycleListener_WireToInstance(t *testing.T) {
 	ctx := context.Background()
 
 	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
 
 	// Create a minimal Instance with a known UUID (without starting tmux).
 	inst := &Instance{
@@ -429,4 +430,99 @@ func (m *mockReviewGateSpawner) SpawnReviewSession(ctx context.Context, item *en
 	m.spawnCalled = true
 	m.lastItem = item
 	return &Instance{}, nil
+}
+
+// TestBacklogLifecycleListener_IgnoresEventsWhenDisabled verifies that when the listener
+// is disabled via SetEnabled(false), lifecycle events from an Instance are silently dropped
+// and no storage side effects occur.
+func TestBacklogLifecycleListener_IgnoresEventsWhenDisabled(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create a BacklogItem in in_progress status.
+	itemData := BacklogItemData{
+		Title:              "Disabled gate test item",
+		Description:        "Testing enabled gate",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	// Create an ItemSession linked to the item.
+	sessionUUID := uuid.New().String()
+	isData := ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}
+	_, err = storage.CreateItemSession(ctx, isData)
+	require.NoError(t, err)
+
+	// Build a listener and wire it to a minimal Instance.
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(false) // explicitly disabled
+
+	inst := &Instance{UUID: sessionUUID}
+	listener.WireToInstance(inst)
+
+	// Fire EventExited — the gate should stop processing immediately.
+	// Allow time for any goroutine that might have been started to settle.
+	require.Eventually(t, func() bool {
+		inst.fireLifecycleEvent(EventExited, "")
+		// Check that the item was NOT transitioned.
+		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
+		return ferr == nil && fetched.Status == string(BacklogStatusInProgress)
+	}, 500*time.Millisecond, 20*time.Millisecond,
+		"disabled listener should not transition item status")
+}
+
+// TestBacklogLifecycleListener_ProcessesEventsWhenEnabled verifies that when the listener
+// is enabled via SetEnabled(true), lifecycle events ARE processed and storage is updated.
+func TestBacklogLifecycleListener_ProcessesEventsWhenEnabled(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	// Create a BacklogItem in in_progress status.
+	itemData := BacklogItemData{
+		Title:              "Enabled gate test item",
+		Description:        "Testing enabled gate",
+		AcceptanceCriteria: `[]`,
+		Priority:           1,
+		Status:             string(BacklogStatusInProgress),
+		SkipReviewGate:     true, // go straight to done to make assertion easy
+	}
+	createdItem, err := storage.CreateBacklogItem(ctx, itemData)
+	require.NoError(t, err)
+
+	// Create an ItemSession linked to the item.
+	sessionUUID := uuid.New().String()
+	isData := ItemSessionData{
+		ItemID:      createdItem.ID,
+		SessionUUID: sessionUUID,
+		SessionRole: "work",
+	}
+	_, err = storage.CreateItemSession(ctx, isData)
+	require.NoError(t, err)
+
+	// Build a listener, enable it, and wire to an Instance.
+	listener := NewBacklogLifecycleListener(storage)
+	listener.SetEnabled(true)
+
+	inst := &Instance{UUID: sessionUUID}
+	listener.WireToInstance(inst)
+
+	// Fire EventExited — the listener must process it and transition the item.
+	inst.fireLifecycleEvent(EventExited, "")
+
+	require.Eventually(t, func() bool {
+		fetched, ferr := storage.GetBacklogItem(ctx, createdItem.ID)
+		return ferr == nil && fetched.Status == string(BacklogStatusDone)
+	}, 2*time.Second, 20*time.Millisecond,
+		"enabled listener should transition item from in_progress to done")
 }

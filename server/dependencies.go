@@ -376,8 +376,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		return nil, fmt.Errorf("load instances: %w", err)
 	}
 
-	// Backlog lifecycle listener — wired per-instance below.
-	// Use WithSpawner so the review gate fires automatically when a work session exits.
+	// Backlog lifecycle listener — always created, enabled state set from config below.
 	backlogLifecycleListener := session.NewBacklogLifecycleListenerWithSpawner(storage, sessionService)
 
 	// Step 5 (continued): wire dependencies to each instance
@@ -617,6 +616,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
+	// ReconcileStuck is a no-op when the listener is disabled, so this goroutine
+	// can run unconditionally.
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -626,21 +627,31 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		}
 	}()
 
-	// Start the backlog sync loop for external item sources.
+	// Build the BacklogController and initialize its enabled state from config.
 	syncRegistry := session.NewDefaultRegistry()
-	var syncLoop *session.SyncLoop
+	var keyFunc func() ([]byte, error)
 	if cfg != nil {
-		syncLoop = session.NewSyncLoopWithKeyProvider(storage, syncRegistry, cfg.GetOrCreateEncryptionKey)
-	} else {
-		syncLoop = session.NewSyncLoop(storage, syncRegistry)
+		keyFunc = cfg.GetOrCreateEncryptionKey
 	}
-	go syncLoop.Start(context.Background())
+	backlogCtrl := session.NewBacklogController(backlogLifecycleListener, storage, syncRegistry, keyFunc)
+	// GetFeatureFlag is nil-safe (returns false when cfg == nil), so no additional
+	// nil guard is needed here even though cfg may be nil when LoadConfig failed.
+	if cfg.GetFeatureFlag("backlog") {
+		if err := backlogCtrl.Enable(context.Background()); err != nil {
+			log.Warn("failed to enable backlog feature on startup", "err", err)
+		}
+		log.Info("backlog feature enabled")
+	} else {
+		log.Info("backlog feature disabled (toggle via Settings → Features)")
+	}
 
 	// Create BacklogService — wire sessionService as the SessionCreator so
 	// SpawnSessionFromItem, TriggerTriage, and TriggerReReview can spawn real sessions.
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg)
-
 	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
+
+	// Wire the BacklogController so UpdateFeatureFlag can enable/disable at runtime.
+	sessionService.SetFeatureController("backlog", backlogCtrl)
 
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
@@ -657,7 +668,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,
 		BacklogService:          backlogSvc,
-		SyncLoop:                syncLoop,
+		SyncLoop:                nil, // managed by BacklogController
 		Config:                  cfg,
 		AnalyticsEntClient:      analyticsClient,
 	}, nil

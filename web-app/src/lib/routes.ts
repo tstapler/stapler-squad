@@ -16,6 +16,7 @@ export const routes = {
   settings: "/settings",
   settingsDefaults: "/settings/defaults",
   settingsUnfinished: "/settings/unfinished",
+  settingsFeatures: "/settings/features",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
   login: "/login",

@@ -22,11 +22,12 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.notifications, label: "Notifications", shortLabel: "Alerts", icon: "🔔" },
   { href: routes.settings,      label: "Settings",      icon: "⚙", mobileNav: false },
   // Secondary — hamburger / More-sheet only
-  { href: routes.rules,   label: "Rules",   icon: "📜", headerNav: false },
-  { href: routes.history, label: "History", icon: "🕐", headerNav: false },
-  { href: routes.config,  label: "Config",  icon: "⚙", headerNav: false },
-  { href: routes.logs,    label: "Logs",    icon: "📋", mobileNav: false, headerNav: false },
-  { href: routes.errors,  label: "Errors",  icon: "⚠",  mobileNav: false, headerNav: false },
+  { href: routes.rules,           label: "Rules",    icon: "📜", headerNav: false },
+  { href: routes.history,         label: "History",  icon: "🕐", headerNav: false },
+  { href: routes.config,          label: "Config",   icon: "⚙", headerNav: false },
+  { href: routes.settingsFeatures, label: "Features", icon: "🚩", headerNav: false },
+  { href: routes.logs,            label: "Logs",     icon: "📋", mobileNav: false, headerNav: false },
+  { href: routes.errors,          label: "Errors",   icon: "⚠",  mobileNav: false, headerNav: false },
 ];
 
 export const MOBILE_NAV_PAGES = NAV_PAGES.filter((p) => p.mobileNav !== false);
