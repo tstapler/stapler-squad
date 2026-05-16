@@ -77,7 +77,7 @@ export function FileChipList({ files, onRemove }: FileChipListProps) {
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={f.previewUrl}
-                alt={f.name}
+                alt=""
                 aria-hidden="true"
                 className={chipThumbnail}
               />

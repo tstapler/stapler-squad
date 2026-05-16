@@ -232,6 +232,22 @@ func TestHandleUpload_OriginalFilenameExtFallback(t *testing.T) {
 	}
 }
 
+// TestHandleUpload_DecodedSizeLimitEnforced verifies that a file that decodes to
+// more than maxUploadBytes is rejected even if the encoded body fits in MaxBytesReader.
+func TestHandleUpload_DecodedSizeLimitEnforced(t *testing.T) {
+	h, _ := newFileUploadHandler(t)
+	// Construct decoded data just over the limit
+	oversize := make([]byte, maxUploadBytes+1)
+	encoded := base64.StdEncoding.EncodeToString(oversize)
+	rr := postJSON(t, h, map[string]string{
+		"data":        encoded,
+		"contentType": "application/octet-stream",
+	})
+	if rr.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // TestHandleUpload_PathTraversalInFilename verifies that a crafted originalFilename
 // cannot escape the paste directory.
 func TestHandleUpload_PathTraversalInFilename(t *testing.T) {

@@ -97,6 +97,10 @@ func (h *FileUploadHandler) HandleUpload(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "file data is empty", http.StatusBadRequest)
 		return
 	}
+	if len(data) > maxUploadBytes {
+		http.Error(w, "file exceeds 20 MB limit", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	// Use os.CreateTemp so the kernel guarantees a unique filename (no collision risk).
 	f, err := os.CreateTemp(h.dir, "paste-*"+ext)

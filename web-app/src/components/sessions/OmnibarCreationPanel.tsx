@@ -16,7 +16,7 @@ import {
   error as errorClass,
 } from "./Omnibar.css";
 import * as styles from "./OmnibarCreationPanel.css";
-import { FileChipList } from "./FileChipList";
+import { FileChipList, type AttachedFile } from "./FileChipList";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
@@ -121,13 +121,6 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-interface AttachedFile {
-  file: File;
-  path: string;        // absolute server path returned from upload
-  previewUrl?: string; // object URL; only set for image/* files
-  name: string;        // original filename for display
-  size: number;        // file size in bytes
-}
 
 export function OmnibarCreationPanel({
   formState,

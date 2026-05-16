@@ -925,7 +925,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               reader.onerror = reject;
               reader.readAsDataURL(blob);
             });
-            const uploadUrl = `${baseUrl}/upload/image`;
+            const uploadUrl = `${baseUrl}/upload/file`;
             const resp = await fetch(uploadUrl, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
