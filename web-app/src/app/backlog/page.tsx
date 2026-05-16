@@ -1,9 +1,9 @@
-// analytics-exempt
 "use client";
 // +feature: backlog:list-page
 
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { useAnalytics } from "@/lib/analytics";
 import { AppLink } from "@/components/ui/AppLink";
 import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { BacklogItemForm } from "@/components/backlog/BacklogItemForm";
@@ -77,12 +77,13 @@ function StatusFilterChips({
   selected: BacklogItemStatus[];
   onChange: (s: BacklogItemStatus[]) => void;
 }) {
+  const { track } = useAnalytics();
   const toggle = (status: BacklogItemStatus) => {
-    if (selected.includes(status)) {
-      onChange(selected.filter((s) => s !== status));
-    } else {
-      onChange([...selected, status]);
-    }
+    const next = selected.includes(status)
+      ? selected.filter((s) => s !== status)
+      : [...selected, status];
+    track({ name: "backlog_filter_status", category: "user_action", component: "BacklogPage", labels: { status, active: String(!selected.includes(status)) } });
+    onChange(next);
   };
 
   // Exclude "archived" from default chips (too noisy)
@@ -93,7 +94,6 @@ function StatusFilterChips({
       {displayStatuses.map((status) => {
         const active = selected.includes(status);
         return (
-          // analytics-exempt
           <button
             key={status}
             type="button"
@@ -117,12 +117,13 @@ function PriorityFilterChips({
   selected: number[];
   onChange: (p: number[]) => void;
 }) {
+  const { track } = useAnalytics();
   const toggle = (p: number) => {
-    if (selected.includes(p)) {
-      onChange(selected.filter((x) => x !== p));
-    } else {
-      onChange([...selected, p]);
-    }
+    const next = selected.includes(p)
+      ? selected.filter((x) => x !== p)
+      : [...selected, p];
+    track({ name: "backlog_filter_priority", category: "user_action", component: "BacklogPage", labels: { priority: String(p), active: String(!selected.includes(p)) } });
+    onChange(next);
   };
 
   return (
@@ -130,7 +131,6 @@ function PriorityFilterChips({
       {[1, 2, 3, 4, 5].map((p) => {
         const active = selected.includes(p);
         return (
-          // analytics-exempt
           <button
             key={p}
             type="button"
@@ -152,6 +152,7 @@ function PriorityFilterChips({
 // ---------------------------------------------------------------------------
 
 function BacklogPageInner() {
+  const { track } = useAnalytics();
   const service = useBacklogService();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -248,17 +249,14 @@ function BacklogPageInner() {
       <div className={styles.pageHeader}>
         <h1 className={styles.pageTitle}>Backlog</h1>
         <div className={styles.headerActions}>
-          {(
-            // analytics-exempt
-            <button
-              className={styles.newItemButton}
-              onClick={() => setShowForm(true)}
-              aria-label="Create new backlog item"
-              data-testid="backlog-new-item-button"
-            >
-              + New Item
-            </button>
-          )}
+          <button
+            className={styles.newItemButton}
+            onClick={() => { track({ name: "backlog_new_item", category: "user_action", component: "BacklogPage" }); setShowForm(true); }}
+            aria-label="Create new backlog item"
+            data-testid="backlog-new-item-button"
+          >
+            + New Item
+          </button>
         </div>
       </div>
 
