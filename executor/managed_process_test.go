@@ -456,3 +456,31 @@ func TestManagedProcess_Wait_nonZeroExit(t *testing.T) {
 		t.Errorf("expected exit code 42, got %d", exitErr.ExitCode())
 	}
 }
+
+// T-GUARD-004: ManagedProcess_Stop_afterWait_doesNotDeadlock
+// Regression test: calling Stop() after Wait() must not deadlock.
+// Previously, Stop() did an unbounded <-waitErr after <-done, but Wait() had
+// already drained waitErr, causing Stop() to block forever.
+func TestManagedProcess_Stop_afterWait_doesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
+	p, err := StartProcess(context.Background(), helperBin, []string{"--exit-code", "0"})
+	if err != nil {
+		t.Fatalf("StartProcess failed: %v", err)
+	}
+
+	_ = p.Wait() // drains waitErr
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = p.Stop()
+	}()
+
+	select {
+	case <-done:
+		// pass
+	case <-time.After(15 * time.Second):
+		t.Fatal("Stop() deadlocked after Wait() was already called")
+	}
+}

@@ -345,7 +345,8 @@ func (p *ManagedProcess) reap(redactIndices []int) {
 // Stop initiates graceful shutdown: sends SIGTERM to the process group (via
 // p.cancel which triggers cmd.Cancel), then sends SIGKILL to the process group
 // after gracePeriod if the process has not exited. Blocks until the process has
-// exited. Idempotent: concurrent or repeated calls are safe.
+// exited. Idempotent: concurrent or repeated calls are safe. Only the first
+// caller observes the process exit error; subsequent callers always return nil.
 func (p *ManagedProcess) Stop() error {
 	// Guard against concurrent Stop() calls: only the first one proceeds.
 	if !p.stopped.CompareAndSwap(false, true) {
@@ -372,8 +373,14 @@ func (p *ManagedProcess) Stop() error {
 
 	select {
 	case <-p.done:
-		// Process exited within grace period.
-		err := <-p.waitErr
+		// Process exited within grace period. waitErr may already be drained if
+		// Wait() was called concurrently or before Stop() — use default to avoid
+		// deadlocking in that case.
+		var err error
+		select {
+		case err = <-p.waitErr:
+		default:
+		}
 		runtime.KeepAlive(p)
 		return err
 	case <-timer.C:
@@ -383,7 +390,11 @@ func (p *ManagedProcess) Stop() error {
 			_ = killProcessGroup(p.cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-p.done
-		err := <-p.waitErr
+		var err error
+		select {
+		case err = <-p.waitErr:
+		default:
+		}
 		runtime.KeepAlive(p)
 		return err
 	}

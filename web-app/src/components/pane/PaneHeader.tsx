@@ -20,6 +20,7 @@ const TAB_LABELS: Record<SessionDetailTab, string> = {
   logs: "Logs",
   info: "Info",
   files: "Files",
+  browser: "Browser",
 };
 
 const TAB_FULL_LABELS: Record<SessionDetailTab, string> = {
@@ -29,9 +30,10 @@ const TAB_FULL_LABELS: Record<SessionDetailTab, string> = {
   logs: "Logs",
   info: "Session Info",
   files: "Files",
+  browser: "Browser",
 };
 
-const ALL_TABS: SessionDetailTab[] = ["terminal", "diff", "vcs", "logs", "info", "files"];
+const ALL_TABS: SessionDetailTab[] = ["terminal", "diff", "vcs", "logs", "info", "files", "browser"];
 
 interface PaneHeaderProps {
   pane: LeafPane;

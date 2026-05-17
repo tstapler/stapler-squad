@@ -161,6 +161,35 @@ message Session {
 
   // Active-work state for review queue filtering. Populated from IdleDetector state.
   WorkingState working_state = 50;
+
+  // VNC/browser passthrough state. Populated when VNC is supported on the host.
+  VNCState vnc_state = 51;
+}
+
+// VNCStatus represents the operational state of the VNC subsystem for a session.
+enum VNCStatus {
+  VNC_STATUS_UNSPECIFIED = 0;
+  // Xvfb/x11vnc processes are starting.
+  VNC_STATUS_STARTING = 1;
+  // A browser window has been detected; x11vnc is in focused -id mode.
+  VNC_STATUS_READY = 2;
+  // VNC is running (full display mode) but no browser window detected yet.
+  VNC_STATUS_NO_BROWSER = 3;
+  // VNC is unavailable: missing binaries, unsupported platform, or startup failed.
+  VNC_STATUS_UNAVAILABLE = 4;
+}
+
+// VNCState holds the browser-passthrough state for a session.
+message VNCState {
+  // Current operational status.
+  VNCStatus status = 1;
+  // Allocated X11 display number (e.g. 100 means :100).
+  int32 display_number = 2;
+  // vnc_password is reserved for a future RFB auth implementation.
+  // Currently empty — x11vnc runs with -nopw and auth is handled by the Go proxy.
+  string vnc_password = 3;
+  // True when a browser window has been detected on the virtual display.
+  bool browser_window_detected = 4;
 }
 
 // SessionStatus represents the current state of a session.

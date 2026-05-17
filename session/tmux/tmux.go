@@ -139,6 +139,10 @@ type TmuxSession struct {
 	onExit          func(reason string)
 	onExitOnce      sync.Once
 	intentionalStop atomic.Bool
+
+	// ExtraEnv holds additional KEY=VALUE pairs to pass as -e flags to tmux new-session.
+	// Used to inject per-session environment variables such as DISPLAY for VNC support.
+	ExtraEnv []string
 }
 
 // windowSize represents terminal dimensions from external sources (like BubbleTea)
@@ -641,7 +645,12 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	// nested Claude Code sessions are not blocked by the "nested session" guard.
 	historyPath := fmt.Sprintf("%s/.stapler_squad_history", workDir)
 	programWithHistory := fmt.Sprintf("env HISTFILE=%s %s", historyPath, t.program)
-	cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=", "-c", workDir, programWithHistory)
+	newSessionArgs := []string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}
+	for _, kv := range t.ExtraEnv {
+		newSessionArgs = append(newSessionArgs, "-e", kv)
+	}
+	newSessionArgs = append(newSessionArgs, "-c", workDir, programWithHistory)
+	cmd := t.buildTmuxCommand(newSessionArgs...)
 
 	// Use cmdExec.Run() instead of pty.Start() for detached session creation
 	// since detached sessions don't need PTY attachment during creation
@@ -796,7 +805,12 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// Create a new detached tmux session directly (avoid recursive call to Start).
 			// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
 			// nested Claude Code sessions are not blocked by the "nested session" guard.
-			cmd := t.buildTmuxCommand("new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=", "-c", workDir, t.program)
+			restoreArgs := []string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}
+			for _, kv := range t.ExtraEnv {
+				restoreArgs = append(restoreArgs, "-e", kv)
+			}
+			restoreArgs = append(restoreArgs, "-c", workDir, t.program)
+			cmd := t.buildTmuxCommand(restoreArgs...)
 			err := t.cmdExec.Run(cmd)
 			if err != nil {
 				// Session creation failed - but it might be because the session already exists

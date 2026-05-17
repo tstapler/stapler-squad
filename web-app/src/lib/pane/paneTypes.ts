@@ -3,7 +3,7 @@ export type SplitDirection = "horizontal" | "vertical";
 export type PaneViewKind = "session-detail" | "session-list";
 
 // Mirrors SessionDetail's tab union
-export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files";
+export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser";
 
 export interface LeafPane {
   type: "leaf";

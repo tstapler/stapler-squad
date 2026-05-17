@@ -291,6 +291,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)
 	log.Info("Registered ConnectRPC WebSocket handler", "path", wsPath)
 
+	// Register VNC browser-passthrough WebSocket proxy.
+	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
+	vncProxy := services.NewVNCProxyHandler(deps.ReviewQueuePoller)
+	srv.mux.HandleFunc("/api/sessions/{id}/vnc", vncProxy.HandleWebSocket)
+	log.Info("Registered VNC WebSocket proxy at /api/sessions/{id}/vnc")
+
 	// Register general ConnectRPC handler (unary calls)
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, ConnectOptions(deps.ErrorRegistry)...)
 	apiPath := "/api" + path

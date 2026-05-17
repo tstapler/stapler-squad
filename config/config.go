@@ -260,6 +260,34 @@ type Config struct {
 	// Events older than this are deleted. 0 means no age limit.
 	// Default: 90.
 	AnalyticsMaxAgeDays int `json:"analytics_max_age_days,omitempty"`
+	// BrowserPassthrough configures the per-session Xvfb + x11vnc virtual display feature.
+	BrowserPassthrough BrowserPassthroughConfig `json:"browser_passthrough,omitempty"`
+}
+
+// BrowserPassthroughConfig controls the per-session virtual display (Xvfb + x11vnc) feature.
+type BrowserPassthroughConfig struct {
+	// Enabled controls whether VNC is started for new sessions.
+	// When nil (absent from config), VNC is enabled when required binaries are present.
+	// Set to false to unconditionally disable VNC for all sessions.
+	Enabled *bool `json:"enabled,omitempty"`
+	// DisplayBase is the first X11 display number to allocate (e.g. 100 for :100).
+	// Default: 100.
+	DisplayBase int `json:"display_base,omitempty"`
+	// DisplayRangeMax is the number of display numbers to search above DisplayBase.
+	// Default: 100 (searches :100–:199).
+	DisplayRangeMax int `json:"display_range_max,omitempty"`
+	// Resolution is the Xvfb screen resolution string (WxHxDepth).
+	// Default: "1280x800x24".
+	Resolution string `json:"resolution,omitempty"`
+}
+
+// IsEnabled returns true unless the user has explicitly set enabled=false.
+// When Enabled is nil (absent from config), VNC is enabled when deps are present.
+func (c *BrowserPassthroughConfig) IsEnabled() bool {
+	if c == nil || c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 // SessionDefaults is the top-level container for all session default configuration.

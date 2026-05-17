@@ -1,0 +1,13 @@
+{
+  "id": "browser:proxy",
+  "type": "backend",
+  "service": "",
+  "method": "",
+  "protoFile": "",
+  "httpEndpoint": "/api/sessions/{id}/vnc",
+  "description": "VNC WebSocket proxy endpoint for browser passthrough",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-16T00:00:00Z"
+}

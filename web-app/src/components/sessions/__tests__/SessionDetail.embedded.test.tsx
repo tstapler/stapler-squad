@@ -34,6 +34,16 @@ jest.mock("../FilesTab", () => ({ FilesTab: () => <div data-testid="files-tab" /
 jest.mock("../WorkspaceSwitchModal", () => ({ WorkspaceSwitchModal: () => null }));
 jest.mock("../TagEditor", () => ({ TagEditor: () => null }));
 jest.mock("../ResumeSessionModal", () => ({ ResumeSessionModal: () => null }));
+jest.mock("../BrowserTab", () => ({
+  BrowserTab: ({ sessionId }: { sessionId: string }) => (
+    <div data-testid={`browser-tab-stub-${sessionId}`} />
+  ),
+  VNCStatus: { UNSPECIFIED: 0, STARTING: 1, READY: 2, NO_BROWSER: 3, UNAVAILABLE: 4 },
+}));
+jest.mock("../NoVNCViewer", () => ({
+  __esModule: true,
+  default: () => <div data-testid="novnc-viewer-stub" />,
+}));
 jest.mock("@/components/ui/ActionBar", () => ({
   ActionBar: ({ children, className }: { children: React.ReactNode; className?: string }) => (
     <div className={className}>{children}</div>
@@ -125,7 +135,9 @@ describe("SessionDetail — embedded mode (Bug 4)", () => {
       />
     );
     // Content area must still exist even without the chrome
-    expect(screen.getByRole("tabpanel", { hidden: true })).toBeInTheDocument();
+    // Multiple tabpanels are always mounted (terminal + browser use keep-alive pattern)
+    const panels = screen.getAllByRole("tabpanel", { hidden: true });
+    expect(panels.length).toBeGreaterThan(0);
   });
 });
 

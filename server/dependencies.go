@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
 	"github.com/tstapler/stapler-squad/session/unfinished"
+	"github.com/tstapler/stapler-squad/session/vnc"
 )
 
 // ServerDependencies holds all wired service components for the HTTP server.
@@ -48,6 +49,10 @@ type ServerDependencies struct {
 	// Analytics storage. Nil when the analytics DB failed to open (LogAnalyticsProvider
 	// is used as a fallback in that case).
 	AnalyticsEntClient *ent.Client
+
+	// VNCDeps holds the result of the startup VNC dependency check.
+	// Available=false means the Browser tab will be hidden on all sessions.
+	VNCDeps vnc.DepsResult
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -73,6 +78,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
+		VNCDeps:                 rt.VNCDeps,
 	}
 }
 
@@ -324,6 +330,9 @@ type RuntimeDeps struct {
 
 	// Analytics storage.
 	AnalyticsEntClient *ent.Client
+
+	// VNCDeps holds the result of the startup VNC dependency check.
+	VNCDeps vnc.DepsResult
 }
 
 // BuildRuntimeDeps constructs Phase 3 dependencies using Phase 2 outputs.
@@ -597,6 +606,15 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		log.Warn("could not determine config dir for analytics DB", "err", configErr)
 	}
 
+	// Check VNC dependencies once at startup so the server knows whether browser
+	// passthrough is available on this host. Non-fatal: Missing deps log a warning.
+	vncDeps := vnc.CheckDependencies()
+	if !vncDeps.Available {
+		log.Warn("VNC browser passthrough unavailable", "reason", vncDeps.Reason, "missing", vncDeps.Missing)
+	} else {
+		log.Info("VNC browser passthrough available")
+	}
+
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
 		Instances:               instances,
@@ -612,5 +630,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,
 		AnalyticsEntClient:      analyticsClient,
+		VNCDeps:                 vncDeps,
 	}, nil
 }

@@ -1,0 +1,10 @@
+{
+  "id": "browser-passthrough",
+  "type": "frontend",
+  "component": "BrowserTab",
+  "path": "web-app/src/components/sessions/BrowserTab.tsx",
+  "description": "Browser tab with live noVNC viewer for interactive browser passthrough",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-16T00:00:00Z"
+}

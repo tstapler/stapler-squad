@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/user"
@@ -12,6 +13,7 @@ import (
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -243,6 +245,10 @@ type Instance struct {
 	tmuxManager TmuxProcessManager
 	// gitManager owns the git worktree and diff stats.
 	gitManager GitWorktreeManager
+	// vncManager owns the Xvfb + x11vnc lifecycle for this session.
+	// Always non-nil after NewInstance() — on unsupported platforms or missing deps,
+	// a no-op manager is returned. VNCManager() returns it for external access.
+	vncManager VNCProcessManager
 
 	// tagManager provides CRUD operations for session tags.
 	// Backed by a pointer to Instance.Tags for zero-sync compatibility with
@@ -471,6 +477,10 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		log.Info("instance configured to resume claude conversation", "session", opts.Title, "resume_id", opts.ResumeId)
 	}
 
+	// Initialize the VNC manager (noop when deps are absent or platform is not Linux).
+	cfg := config.LoadConfig()
+	instance.initVNCManager(&cfg.BrowserPassthrough)
+
 	return instance, nil
 }
 
@@ -583,6 +593,16 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 				// Dead tmux, no UUID — start a fresh session without --resume.
 				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
 			}
+			// Phase 1: Allocate X display before creating the tmux session so DISPLAY
+			// can be injected via ExtraEnv at new-session time.
+			// context.Background() is safe here: the VNC manager creates its own internal
+			// cancellable context; goroutines are stopped via vncManager.Stop() in Destroy().
+			i.startVNCDisplay(context.Background())
+			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+				if sess := i.tmuxManager.Session(); sess != nil {
+					sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+				}
+			}
 			if err := i.tmuxManager.Start(startPath); err != nil {
 				setupErr = fmt.Errorf("cold restore Start failed for '%s': %w", i.Title, err)
 				return setupErr
@@ -604,6 +624,11 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			}
 		} else {
 			// Hot restore: tmux session is alive — attach to it.
+			// Phase 1 (display) runs here too so VNC is available for the browser tab.
+			// DISPLAY injection via ExtraEnv is not possible for an already-running
+			// session, but x11vnc still needs to start so the browser passthrough works.
+			// context.Background() is safe: VNC goroutines are cancelled via vncManager.Stop().
+			i.startVNCDisplay(context.Background())
 			workDir := i.Path
 			if i.gitManager.HasWorktree() {
 				workDir = i.gitManager.GetWorktreePath()
@@ -627,6 +652,17 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			basePath = i.gitManager.GetWorktreePath()
 		}
 		startPath := i.resolveStartPath(basePath)
+		// Phase 1: Allocate X display before creating the tmux session so DISPLAY
+		// can be injected via ExtraEnv at new-session time. This ensures the agent
+		// process inherits the correct DISPLAY from the start rather than relying on
+		// a post-hoc `tmux setenv` call that would miss the already-running process.
+		// context.Background() is safe: VNC goroutines are cancelled via vncManager.Stop().
+		i.startVNCDisplay(context.Background())
+		if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+			if sess := i.tmuxManager.Session(); sess != nil {
+				sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+			}
+		}
 		if err := i.tmuxManager.Start(startPath); err != nil {
 			if i.gitManager.HasWorktree() {
 				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
@@ -660,6 +696,11 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.stateMutex.Unlock()
 	i.started = true
 	i.fireLifecycleEvent(EventStarted, "")
+
+	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.
+	// Run unconditionally (not gated on firstTimeSetup) so hot-restores also get VNC.
+	// context.Background() is safe: VNC goroutines are cancelled via vncManager.Stop().
+	i.startVNCServer(context.Background())
 	log.ForSession(i.Title).Info("session started", "first_time_setup", firstTimeSetup)
 
 	// Start controller for new sessions only; loaded sessions are wired later by server.go.
@@ -699,6 +740,9 @@ func (i *Instance) Destroy() error {
 
 	// Stop the controller first
 	i.StopController()
+
+	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
+	i.stopVNC()
 
 	var errs []error
 

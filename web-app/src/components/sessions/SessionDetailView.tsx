@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info } from "lucide-react";
+import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe } from "lucide-react";
 import dynamic from "next/dynamic";
 import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
@@ -10,6 +10,8 @@ import { VcsPanel } from "./VcsPanel";
 import { WorkspaceSwitchModal } from "./WorkspaceSwitchModal";
 import { SessionLogsTab } from "./SessionLogsTab";
 import { FilesTab } from "./FilesTab";
+import { BrowserTab, VNCStatus } from "./BrowserTab";
+import type { VNCState } from "./BrowserTab";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { getApiBaseUrl } from "@/lib/config";
@@ -173,13 +175,19 @@ export function SessionDetailView({
     onFullscreenChange?.(isFullscreen);
   }, [isFullscreen, onFullscreenChange]);
 
-  const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon }[] = [
+  // VNCState is not yet in the generated proto types — access via cast until Epic 3 lands.
+  const vncState = (session as unknown as { vncState?: VNCState }).vncState;
+  const vncStatus = vncState?.status ?? VNCStatus.UNSPECIFIED;
+  const isBrowserAvailable = vncStatus !== VNCStatus.UNAVAILABLE && vncStatus !== VNCStatus.UNSPECIFIED;
+
+  const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon; disabled?: boolean }[] = [
     { id: "terminal", label: "Terminal", icon: Terminal },
     { id: "diff", label: "Diff", icon: GitCompare },
     { id: "vcs", label: "VCS", icon: GitBranch },
     { id: "files", label: "Files", icon: FolderOpen },
     { id: "logs", label: "Logs", icon: ScrollText },
     { id: "info", label: "Info", icon: Info },
+    { id: "browser", label: "Browser", icon: Globe, disabled: !isBrowserAvailable },
   ];
 
   const handleTabChange = (tabId: SessionDetailTab) => {
@@ -428,8 +436,11 @@ export function SessionDetailView({
               id={`tab-${tab.id}`}
               role="tab"
               aria-selected={activeTab === tab.id}
+              aria-disabled={tab.disabled}
               className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""}`}
-              onClick={() => handleTabChange(tab.id)}
+              onClick={() => { if (!tab.disabled) handleTabChange(tab.id); }}
+              title={tab.disabled && tab.id === "browser" ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool" : undefined}
+              style={tab.disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
             >
               <span className={styles.tabIcon}><Icon size={16} /></span>
               <span className={styles.tabLabel}>{tab.label}</span>
@@ -498,6 +509,24 @@ export function SessionDetailView({
             </div>
           )}
         </div>
+        {/* Browser tab: always mounted (not conditionally rendered) so the noVNC RFB
+            connection persists across tab switches. Visibility controlled via CSS,
+            matching the TerminalOutput keep-alive pattern exactly. */}
+        <div
+          className={styles.tabContent}
+          role="tabpanel"
+          aria-labelledby="tab-browser"
+          aria-hidden={activeTab !== "browser"}
+          style={{ display: activeTab === "browser" ? undefined : 'none' }}
+        >
+          <BrowserTab
+            sessionId={session.id}
+            baseUrl={getApiBaseUrl()}
+            isVisible={activeTab === "browser"}
+            vncState={vncState}
+          />
+        </div>
+
         {activeTab === "diff" && (
           <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-diff">
             <DiffViewer />

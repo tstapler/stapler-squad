@@ -24,7 +24,7 @@ interface PaneTilingContainerProps {
    */
   externalSessionAssign?: {
     sessionId: string;
-    tab?: "terminal" | "diff" | "vcs" | "logs" | "info" | "files";
+    tab?: "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser";
     forceNewPane?: boolean;
     version: number;
   } | null;
