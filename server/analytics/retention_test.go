@@ -56,7 +56,7 @@ func TestRetention_AgeEviction(t *testing.T) {
 	assert.Equal(t, 8, total)
 
 	// Run retention with 90-day age limit and no row cap.
-	runRetention(ctx, client, 0, 90)
+	runRetention(ctx, client, 0, 90, 0)
 
 	// Only the 3 recent rows should remain.
 	remaining, err := client.AnalyticsEvent.Query().Count(ctx)
@@ -95,7 +95,7 @@ func TestRetention_CountEviction(t *testing.T) {
 	}
 
 	// Run retention with maxRows=6 and no age limit.
-	runRetention(ctx, client, 6, 0)
+	runRetention(ctx, client, 6, 0, 0)
 
 	remaining, err := client.AnalyticsEvent.Query().Count(ctx)
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestRetention_Noop(t *testing.T) {
 	}
 
 	// Limits well above current count — nothing should be deleted.
-	runRetention(ctx, client, 100_000, 90)
+	runRetention(ctx, client, 100_000, 90, 0)
 
 	count, err := client.AnalyticsEvent.Query().Count(ctx)
 	require.NoError(t, err)

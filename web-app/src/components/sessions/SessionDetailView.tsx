@@ -18,6 +18,7 @@ import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Mo
 import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import * as styles from "./SessionDetail.css";
+import { diffAdded } from "./SessionDetailView.css";
 import type { SessionDetailTab } from "./SessionDetail";
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
@@ -827,7 +828,7 @@ export function SessionDetailView({
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>Diff Stats:</span>
                   <span className={styles.infoValue}>
-                    <span style={{ color: 'var(--color-success, #22c55e)' }}>+{session.diffStats.added}</span>
+                    <span className={diffAdded}>+{session.diffStats.added}</span>
                     {" / "}
                     <span style={{ color: 'var(--color-error, #ef4444)' }}>-{session.diffStats.removed}</span>
                   </span>
@@ -861,7 +862,7 @@ export function SessionDetailView({
                 <div className={styles.infoItem}>
                   <span className={styles.infoLabel}>Reviews:</span>
                   <span className={styles.infoValue}>
-                    {session.githubApprovedCount > 0 && <span style={{ color: 'var(--color-success, #22c55e)' }}>{session.githubApprovedCount} approved</span>}
+                    {session.githubApprovedCount > 0 && <span className={diffAdded}>{session.githubApprovedCount} approved</span>}
                     {session.githubApprovedCount > 0 && session.githubChangesReqCount > 0 && " · "}
                     {session.githubChangesReqCount > 0 && <span style={{ color: 'var(--color-error, #ef4444)' }}>{session.githubChangesReqCount} changes requested</span>}
                   </span>

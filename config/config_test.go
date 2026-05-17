@@ -601,3 +601,144 @@ func TestOneOffBaseDir_JSONRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, string(emptyRaw), `"one_off_base_dir"`)
 }
+
+// ─── Escape analytics config tests ───────────────────────────────────────────
+
+// TestEscapeAnalyticsDefaults verifies that zero-value configs get the correct defaults
+// applied by LoadConfigFromPath.
+func TestEscapeAnalyticsDefaults(t *testing.T) {
+	writeAndLoad := func(t *testing.T, jsonContent string) *Config {
+		t.Helper()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		require.NoError(t, os.WriteFile(path, []byte(jsonContent), 0600))
+		cfg, err := LoadConfigFromPath(path)
+		require.NoError(t, err)
+		return cfg
+	}
+
+	t.Run("default CaptureLevel is summary when unset", func(t *testing.T) {
+		cfg := writeAndLoad(t, `{}`)
+		assert.Equal(t, "summary", cfg.EscapeAnalyticsCaptureLevel)
+	})
+
+	t.Run("default SamplingRate is 1.0 when zero", func(t *testing.T) {
+		cfg := writeAndLoad(t, `{}`)
+		require.NotNil(t, cfg.EscapeAnalyticsSamplingRate)
+		assert.Equal(t, 1.0, *cfg.EscapeAnalyticsSamplingRate)
+	})
+
+	t.Run("default MaxRowsPerSession is 10000 when zero", func(t *testing.T) {
+		cfg := writeAndLoad(t, `{}`)
+		assert.Equal(t, 10000, cfg.EscapeAnalyticsMaxRowsPerSession)
+	})
+
+	t.Run("default RetentionDays is 7 when zero", func(t *testing.T) {
+		cfg := writeAndLoad(t, `{}`)
+		assert.Equal(t, 7, cfg.EscapeAnalyticsRetentionDays)
+	})
+
+	t.Run("explicit values are preserved", func(t *testing.T) {
+		cfg := writeAndLoad(t, `{
+			"escapeAnalyticsCaptureLevel": "full",
+			"escapeAnalyticsSamplingRate": 0.5,
+			"escapeAnalyticsMaxRowsPerSession": 5000,
+			"escapeAnalyticsRetentionDays": 14
+		}`)
+		assert.Equal(t, "full", cfg.EscapeAnalyticsCaptureLevel)
+		require.NotNil(t, cfg.EscapeAnalyticsSamplingRate)
+		assert.Equal(t, 0.5, *cfg.EscapeAnalyticsSamplingRate)
+		assert.Equal(t, 5000, cfg.EscapeAnalyticsMaxRowsPerSession)
+		assert.Equal(t, 14, cfg.EscapeAnalyticsRetentionDays)
+	})
+}
+
+// TestEscapeAnalyticsCaptureLevel_Validation verifies that invalid capture level values
+// are reset to "summary".
+func TestEscapeAnalyticsCaptureLevel_Validation(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"full is valid", "full", "full"},
+		{"summary is valid", "summary", "summary"},
+		{"off is valid", "off", "off"},
+		{"invalid value resets to summary", "verbose", "summary"},
+		{"empty resets to summary", "", "summary"},
+		{"unknown resets to summary", "ALL", "summary"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.json")
+			content := `{"escapeAnalyticsCaptureLevel": "` + tc.input + `"}`
+			if tc.input == "" {
+				content = `{}`
+			}
+			require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+			cfg, err := LoadConfigFromPath(path)
+			require.NoError(t, err)
+			assert.Equal(t, tc.expected, cfg.EscapeAnalyticsCaptureLevel)
+		})
+	}
+}
+
+// TestEscapeAnalyticsSamplingRate_Clamping verifies that sampling rate values outside
+// [0.0, 1.0] are clamped.
+func TestEscapeAnalyticsSamplingRate_Clamping(t *testing.T) {
+	cases := []struct {
+		name     string
+		json     string
+		expected float64
+	}{
+		{"zero becomes 1.0 (default)", `{}`, 1.0},
+		{"0.5 is valid", `{"escapeAnalyticsSamplingRate": 0.5}`, 0.5},
+		{"1.0 is valid", `{"escapeAnalyticsSamplingRate": 1.0}`, 1.0},
+		{"negative clamped to 0", `{"escapeAnalyticsSamplingRate": -0.1}`, 0},
+		{"above 1.0 clamped to 1.0", `{"escapeAnalyticsSamplingRate": 1.5}`, 1.0},
+		{"explicit 0.0 captures nothing", `{"escapeAnalyticsSamplingRate": 0.0}`, 0.0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.json")
+			require.NoError(t, os.WriteFile(path, []byte(tc.json), 0600))
+			cfg, err := LoadConfigFromPath(path)
+			require.NoError(t, err)
+			require.NotNil(t, cfg.EscapeAnalyticsSamplingRate)
+			assert.Equal(t, tc.expected, *cfg.EscapeAnalyticsSamplingRate)
+		})
+	}
+}
+
+// TestOSCPayloadsAreRedacted verifies that OSCPayloadsAreRedacted returns correct values
+// based on the EscapeAnalyticsDisableOSCRedaction field.
+func TestOSCPayloadsAreRedacted(t *testing.T) {
+	t.Run("returns true by default (redaction on)", func(t *testing.T) {
+		cfg := &Config{}
+		assert.True(t, cfg.OSCPayloadsAreRedacted())
+	})
+
+	t.Run("returns true when DisableOSCRedaction is false", func(t *testing.T) {
+		cfg := &Config{EscapeAnalyticsDisableOSCRedaction: false}
+		assert.True(t, cfg.OSCPayloadsAreRedacted())
+	})
+
+	t.Run("returns false when DisableOSCRedaction is true", func(t *testing.T) {
+		cfg := &Config{EscapeAnalyticsDisableOSCRedaction: true}
+		assert.False(t, cfg.OSCPayloadsAreRedacted())
+	})
+
+	t.Run("loaded config with disableOSCRedaction=true returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "config.json")
+		content := `{"escapeAnalyticsDisableOSCRedaction": true}`
+		require.NoError(t, os.WriteFile(path, []byte(content), 0600))
+		cfg, err := LoadConfigFromPath(path)
+		require.NoError(t, err)
+		assert.False(t, cfg.OSCPayloadsAreRedacted())
+	})
+}

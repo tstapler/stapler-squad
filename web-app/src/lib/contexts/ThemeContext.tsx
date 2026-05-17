@@ -52,11 +52,11 @@ export function useTheme(): ThemeContextValue {
 
 interface ThemeProviderProps {
   children: ReactNode;
-  /** Initial theme applied during SSR (defaults to "matrix"). Must match the FOUC script. */
+  /** Initial theme applied during SSR (defaults to "clean"). Must match the FOUC script. */
   initialTheme?: ThemeName;
 }
 
-export function ThemeProvider({ children, initialTheme = "matrix" }: ThemeProviderProps) {
+export function ThemeProvider({ children, initialTheme = "clean" }: ThemeProviderProps) {
   const [theme, setThemeState] = useState<ThemeName>(initialTheme);
   const initialized = useRef(false);
 

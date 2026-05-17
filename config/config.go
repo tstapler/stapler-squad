@@ -260,6 +260,29 @@ type Config struct {
 	// Events older than this are deleted. 0 means no age limit.
 	// Default: 90.
 	AnalyticsMaxAgeDays int `json:"analytics_max_age_days,omitempty"`
+
+	// Escape analytics configuration
+
+	// EscapeAnalyticsCaptureLevel controls the verbosity of escape sequence capture.
+	// Valid values: "full" (store raw bytes + hash), "summary" (type/length only), "off" (disabled).
+	// Default: "summary".
+	EscapeAnalyticsCaptureLevel string `json:"escapeAnalyticsCaptureLevel,omitempty"`
+	// EscapeAnalyticsSamplingRate is the fraction of sessions to capture, in [0.0, 1.0].
+	// 1.0 captures all sessions; 0.0 captures none.
+	// A nil pointer means "unset" and defaults to 1.0 at load time.
+	// Using a pointer allows 0.0 (capture nothing) to be distinguished from the zero value.
+	// Default: 1.0.
+	EscapeAnalyticsSamplingRate *float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
+	// EscapeAnalyticsMaxRowsPerSession is the maximum number of escape event rows stored per session.
+	// Default: 10000.
+	EscapeAnalyticsMaxRowsPerSession int `json:"escapeAnalyticsMaxRowsPerSession,omitempty"`
+	// EscapeAnalyticsDisableOSCRedaction disables OSC payload redaction when true.
+	// By default (false), OSC payloads (clipboard, window title, CWD) are redacted for security.
+	// Set to true only if you explicitly need to capture raw OSC payload content.
+	EscapeAnalyticsDisableOSCRedaction bool `json:"escapeAnalyticsDisableOSCRedaction,omitempty"`
+	// EscapeAnalyticsRetentionDays is the number of days to retain escape event rows.
+	// Default: 7.
+	EscapeAnalyticsRetentionDays int `json:"escapeAnalyticsRetentionDays,omitempty"`
 }
 
 // SessionDefaults is the top-level container for all session default configuration.
@@ -416,6 +439,13 @@ func (c *Config) AnalyticsMaxAgeDaysOrDefault() int {
 		return 90
 	}
 	return c.AnalyticsMaxAgeDays
+}
+
+// OSCPayloadsAreRedacted returns true when OSC payload redaction is enabled (the default).
+// Redaction prevents PII (clipboard contents, window titles, CWD paths) from being stored
+// in escape event records. Set EscapeAnalyticsDisableOSCRedaction=true in config to opt out.
+func (c *Config) OSCPayloadsAreRedacted() bool {
+	return !c.EscapeAnalyticsDisableOSCRedaction
 }
 
 // GetClaudeCommand attempts to find the "claude" command in the user's shell
@@ -640,6 +670,38 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
 	}
+
+	// Apply defaults for escape analytics fields.
+	if cfg.EscapeAnalyticsCaptureLevel == "" {
+		cfg.EscapeAnalyticsCaptureLevel = "summary"
+	}
+	if cfg.EscapeAnalyticsSamplingRate == nil {
+		defaultRate := 1.0
+		cfg.EscapeAnalyticsSamplingRate = &defaultRate
+	}
+	if cfg.EscapeAnalyticsMaxRowsPerSession == 0 {
+		cfg.EscapeAnalyticsMaxRowsPerSession = 10000
+	}
+	if cfg.EscapeAnalyticsRetentionDays == 0 {
+		cfg.EscapeAnalyticsRetentionDays = 7
+	}
+
+	// Validate escape analytics fields.
+	switch cfg.EscapeAnalyticsCaptureLevel {
+	case "full", "summary", "off":
+		// valid
+	default:
+		cfg.EscapeAnalyticsCaptureLevel = "summary"
+	}
+	if *cfg.EscapeAnalyticsSamplingRate < 0 {
+		zero := 0.0
+		cfg.EscapeAnalyticsSamplingRate = &zero
+	}
+	if *cfg.EscapeAnalyticsSamplingRate > 1.0 {
+		one := 1.0
+		cfg.EscapeAnalyticsSamplingRate = &one
+	}
+
 	// Unmarshaling produces a zero Config with no executor; initialize it now
 	// so GetClaudeCommand / GetAvailablePrograms don't panic on nil executor.
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)

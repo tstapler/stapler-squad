@@ -42,12 +42,12 @@ export default function RootLayout({
   // Remove only theme classes (those that match one of our known theme hashes) so
   // font variable classes added by next/font are preserved during theme switching.
   const allThemeClasses = Object.values(JSON.parse(themeMapJson) as Record<string, string>).join(' ');
-  const foucScript = `(function(){try{var m=${themeMapJson};var t=localStorage.getItem('stapler-theme');var cls=t&&m[t]?m[t]:m['matrix'];var themeClasses=${JSON.stringify(allThemeClasses)}.split(' ');themeClasses.forEach(function(c){if(c)document.documentElement.classList.remove(c);});document.documentElement.classList.add(cls);}catch(e){}})();`;
+  const foucScript = `(function(){try{var m=${themeMapJson};var t=localStorage.getItem('stapler-theme');var cls=t&&m[t]?m[t]:m['clean'];var themeClasses=${JSON.stringify(allThemeClasses)}.split(' ');themeClasses.forEach(function(c){if(c)document.documentElement.classList.remove(c);});document.documentElement.classList.add(cls);}catch(e){}})();`;
 
   return (
     <html
       lang="en"
-      className={`${matrixTheme} ${jetbrainsMono.variable} ${rajdhani.variable} ${cinzel.variable} ${inter.variable}`}
+      className={`${cleanTheme} ${jetbrainsMono.variable} ${rajdhani.variable} ${cinzel.variable} ${inter.variable}`}
       suppressHydrationWarning
     >
       <head>

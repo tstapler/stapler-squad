@@ -92,8 +92,8 @@ func TestStartupScanner_Scan_AddsSessionWithApprovalPrompt(t *testing.T) {
 func TestStartupScanner_Scan_SkipsSessionWithNoApproval(t *testing.T) {
 	inst := makeStartedInstance("active-session-no-approval")
 	now := time.Now()
-	inst.UpdatedAt = now             // prevents idle threshold (5s)
-	inst.LastMeaningfulOutput = now  // prevents staleness threshold (2min)
+	inst.UpdatedAt = now            // prevents idle threshold (5s)
+	inst.LastMeaningfulOutput = now // prevents staleness threshold (2min)
 
 	statusProvider := newFakeStatusProvider(map[string]InstanceStatusInfo{
 		inst.Title: {IsControllerActive: false},

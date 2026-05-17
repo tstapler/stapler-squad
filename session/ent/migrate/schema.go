@@ -254,6 +254,59 @@ var (
 			},
 		},
 	}
+	// EscapeEventsColumns holds the columns for the "escape_events" table.
+	EscapeEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString, Unique: true},
+		{Name: "session_id", Type: field.TypeString},
+		{Name: "stage", Type: field.TypeString},
+		{Name: "sequence_type", Type: field.TypeString},
+		{Name: "sequence_subtype", Type: field.TypeString, Nullable: true},
+		{Name: "byte_length", Type: field.TypeInt},
+		{Name: "payload_hash", Type: field.TypeString, Nullable: true},
+		{Name: "raw_bytes", Type: field.TypeBytes, Nullable: true},
+		{Name: "mangled", Type: field.TypeBool, Default: false},
+		{Name: "mangle_type", Type: field.TypeString, Nullable: true},
+		{Name: "wall_time", Type: field.TypeTime},
+		{Name: "session_seq", Type: field.TypeInt64},
+	}
+	// EscapeEventsTable holds the schema information for the "escape_events" table.
+	EscapeEventsTable = &schema.Table{
+		Name:       "escape_events",
+		Columns:    EscapeEventsColumns,
+		PrimaryKey: []*schema.Column{EscapeEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "escapeevent_session_id",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[1]},
+			},
+			{
+				Name:    "escapeevent_session_id_stage",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[1], EscapeEventsColumns[2]},
+			},
+			{
+				Name:    "escapeevent_session_id_session_seq",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[1], EscapeEventsColumns[11]},
+			},
+			{
+				Name:    "escapeevent_wall_time",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[10]},
+			},
+			{
+				Name:    "escapeevent_mangled",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[8]},
+			},
+			{
+				Name:    "escapeevent_sequence_type",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[3]},
+			},
+		},
+	}
 	// ProjectsColumns holds the columns for the "projects" table.
 	ProjectsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -433,6 +486,7 @@ var (
 		ClaudeSessionsTable,
 		DiffStatsTable,
 		ErrorEventsTable,
+		EscapeEventsTable,
 		ProjectsTable,
 		SessionsTable,
 		TagsTable,

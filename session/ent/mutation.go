@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/errorevent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
@@ -41,6 +42,7 @@ const (
 	TypeClaudeSession           = "ClaudeSession"
 	TypeDiffStats               = "DiffStats"
 	TypeErrorEvent              = "ErrorEvent"
+	TypeEscapeEvent             = "EscapeEvent"
 	TypeProject                 = "Project"
 	TypeSession                 = "Session"
 	TypeTag                     = "Tag"
@@ -6745,6 +6747,1026 @@ func (m *ErrorEventMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *ErrorEventMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown ErrorEvent edge %s", name)
+}
+
+// EscapeEventMutation represents an operation that mutates the EscapeEvent nodes in the graph.
+type EscapeEventMutation struct {
+	config
+	op               Op
+	typ              string
+	id               *string
+	session_id       *string
+	stage            *string
+	sequence_type    *string
+	sequence_subtype *string
+	byte_length      *int
+	addbyte_length   *int
+	payload_hash     *string
+	raw_bytes        *[]byte
+	mangled          *bool
+	mangle_type      *string
+	wall_time        *time.Time
+	session_seq      *int64
+	addsession_seq   *int64
+	clearedFields    map[string]struct{}
+	done             bool
+	oldValue         func(context.Context) (*EscapeEvent, error)
+	predicates       []predicate.EscapeEvent
+}
+
+var _ ent.Mutation = (*EscapeEventMutation)(nil)
+
+// escapeeventOption allows management of the mutation configuration using functional options.
+type escapeeventOption func(*EscapeEventMutation)
+
+// newEscapeEventMutation creates new mutation for the EscapeEvent entity.
+func newEscapeEventMutation(c config, op Op, opts ...escapeeventOption) *EscapeEventMutation {
+	m := &EscapeEventMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeEscapeEvent,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withEscapeEventID sets the ID field of the mutation.
+func withEscapeEventID(id string) escapeeventOption {
+	return func(m *EscapeEventMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *EscapeEvent
+		)
+		m.oldValue = func(ctx context.Context) (*EscapeEvent, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().EscapeEvent.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withEscapeEvent sets the old EscapeEvent of the mutation.
+func withEscapeEvent(node *EscapeEvent) escapeeventOption {
+	return func(m *EscapeEventMutation) {
+		m.oldValue = func(context.Context) (*EscapeEvent, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m EscapeEventMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m EscapeEventMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// SetID sets the value of the id field. Note that this
+// operation is only accepted on creation of EscapeEvent entities.
+func (m *EscapeEventMutation) SetID(id string) {
+	m.id = &id
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *EscapeEventMutation) ID() (id string, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *EscapeEventMutation) IDs(ctx context.Context) ([]string, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []string{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().EscapeEvent.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetSessionID sets the "session_id" field.
+func (m *EscapeEventMutation) SetSessionID(s string) {
+	m.session_id = &s
+}
+
+// SessionID returns the value of the "session_id" field in the mutation.
+func (m *EscapeEventMutation) SessionID() (r string, exists bool) {
+	v := m.session_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionID returns the old "session_id" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldSessionID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionID: %w", err)
+	}
+	return oldValue.SessionID, nil
+}
+
+// ResetSessionID resets all changes to the "session_id" field.
+func (m *EscapeEventMutation) ResetSessionID() {
+	m.session_id = nil
+}
+
+// SetStage sets the "stage" field.
+func (m *EscapeEventMutation) SetStage(s string) {
+	m.stage = &s
+}
+
+// Stage returns the value of the "stage" field in the mutation.
+func (m *EscapeEventMutation) Stage() (r string, exists bool) {
+	v := m.stage
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStage returns the old "stage" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldStage(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStage is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStage requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStage: %w", err)
+	}
+	return oldValue.Stage, nil
+}
+
+// ResetStage resets all changes to the "stage" field.
+func (m *EscapeEventMutation) ResetStage() {
+	m.stage = nil
+}
+
+// SetSequenceType sets the "sequence_type" field.
+func (m *EscapeEventMutation) SetSequenceType(s string) {
+	m.sequence_type = &s
+}
+
+// SequenceType returns the value of the "sequence_type" field in the mutation.
+func (m *EscapeEventMutation) SequenceType() (r string, exists bool) {
+	v := m.sequence_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSequenceType returns the old "sequence_type" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldSequenceType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSequenceType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSequenceType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSequenceType: %w", err)
+	}
+	return oldValue.SequenceType, nil
+}
+
+// ResetSequenceType resets all changes to the "sequence_type" field.
+func (m *EscapeEventMutation) ResetSequenceType() {
+	m.sequence_type = nil
+}
+
+// SetSequenceSubtype sets the "sequence_subtype" field.
+func (m *EscapeEventMutation) SetSequenceSubtype(s string) {
+	m.sequence_subtype = &s
+}
+
+// SequenceSubtype returns the value of the "sequence_subtype" field in the mutation.
+func (m *EscapeEventMutation) SequenceSubtype() (r string, exists bool) {
+	v := m.sequence_subtype
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSequenceSubtype returns the old "sequence_subtype" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldSequenceSubtype(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSequenceSubtype is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSequenceSubtype requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSequenceSubtype: %w", err)
+	}
+	return oldValue.SequenceSubtype, nil
+}
+
+// ClearSequenceSubtype clears the value of the "sequence_subtype" field.
+func (m *EscapeEventMutation) ClearSequenceSubtype() {
+	m.sequence_subtype = nil
+	m.clearedFields[escapeevent.FieldSequenceSubtype] = struct{}{}
+}
+
+// SequenceSubtypeCleared returns if the "sequence_subtype" field was cleared in this mutation.
+func (m *EscapeEventMutation) SequenceSubtypeCleared() bool {
+	_, ok := m.clearedFields[escapeevent.FieldSequenceSubtype]
+	return ok
+}
+
+// ResetSequenceSubtype resets all changes to the "sequence_subtype" field.
+func (m *EscapeEventMutation) ResetSequenceSubtype() {
+	m.sequence_subtype = nil
+	delete(m.clearedFields, escapeevent.FieldSequenceSubtype)
+}
+
+// SetByteLength sets the "byte_length" field.
+func (m *EscapeEventMutation) SetByteLength(i int) {
+	m.byte_length = &i
+	m.addbyte_length = nil
+}
+
+// ByteLength returns the value of the "byte_length" field in the mutation.
+func (m *EscapeEventMutation) ByteLength() (r int, exists bool) {
+	v := m.byte_length
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldByteLength returns the old "byte_length" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldByteLength(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldByteLength is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldByteLength requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldByteLength: %w", err)
+	}
+	return oldValue.ByteLength, nil
+}
+
+// AddByteLength adds i to the "byte_length" field.
+func (m *EscapeEventMutation) AddByteLength(i int) {
+	if m.addbyte_length != nil {
+		*m.addbyte_length += i
+	} else {
+		m.addbyte_length = &i
+	}
+}
+
+// AddedByteLength returns the value that was added to the "byte_length" field in this mutation.
+func (m *EscapeEventMutation) AddedByteLength() (r int, exists bool) {
+	v := m.addbyte_length
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetByteLength resets all changes to the "byte_length" field.
+func (m *EscapeEventMutation) ResetByteLength() {
+	m.byte_length = nil
+	m.addbyte_length = nil
+}
+
+// SetPayloadHash sets the "payload_hash" field.
+func (m *EscapeEventMutation) SetPayloadHash(s string) {
+	m.payload_hash = &s
+}
+
+// PayloadHash returns the value of the "payload_hash" field in the mutation.
+func (m *EscapeEventMutation) PayloadHash() (r string, exists bool) {
+	v := m.payload_hash
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPayloadHash returns the old "payload_hash" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldPayloadHash(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPayloadHash is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPayloadHash requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPayloadHash: %w", err)
+	}
+	return oldValue.PayloadHash, nil
+}
+
+// ClearPayloadHash clears the value of the "payload_hash" field.
+func (m *EscapeEventMutation) ClearPayloadHash() {
+	m.payload_hash = nil
+	m.clearedFields[escapeevent.FieldPayloadHash] = struct{}{}
+}
+
+// PayloadHashCleared returns if the "payload_hash" field was cleared in this mutation.
+func (m *EscapeEventMutation) PayloadHashCleared() bool {
+	_, ok := m.clearedFields[escapeevent.FieldPayloadHash]
+	return ok
+}
+
+// ResetPayloadHash resets all changes to the "payload_hash" field.
+func (m *EscapeEventMutation) ResetPayloadHash() {
+	m.payload_hash = nil
+	delete(m.clearedFields, escapeevent.FieldPayloadHash)
+}
+
+// SetRawBytes sets the "raw_bytes" field.
+func (m *EscapeEventMutation) SetRawBytes(b []byte) {
+	m.raw_bytes = &b
+}
+
+// RawBytes returns the value of the "raw_bytes" field in the mutation.
+func (m *EscapeEventMutation) RawBytes() (r []byte, exists bool) {
+	v := m.raw_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRawBytes returns the old "raw_bytes" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldRawBytes(ctx context.Context) (v []byte, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRawBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRawBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRawBytes: %w", err)
+	}
+	return oldValue.RawBytes, nil
+}
+
+// ClearRawBytes clears the value of the "raw_bytes" field.
+func (m *EscapeEventMutation) ClearRawBytes() {
+	m.raw_bytes = nil
+	m.clearedFields[escapeevent.FieldRawBytes] = struct{}{}
+}
+
+// RawBytesCleared returns if the "raw_bytes" field was cleared in this mutation.
+func (m *EscapeEventMutation) RawBytesCleared() bool {
+	_, ok := m.clearedFields[escapeevent.FieldRawBytes]
+	return ok
+}
+
+// ResetRawBytes resets all changes to the "raw_bytes" field.
+func (m *EscapeEventMutation) ResetRawBytes() {
+	m.raw_bytes = nil
+	delete(m.clearedFields, escapeevent.FieldRawBytes)
+}
+
+// SetMangled sets the "mangled" field.
+func (m *EscapeEventMutation) SetMangled(b bool) {
+	m.mangled = &b
+}
+
+// Mangled returns the value of the "mangled" field in the mutation.
+func (m *EscapeEventMutation) Mangled() (r bool, exists bool) {
+	v := m.mangled
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMangled returns the old "mangled" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldMangled(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMangled is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMangled requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMangled: %w", err)
+	}
+	return oldValue.Mangled, nil
+}
+
+// ResetMangled resets all changes to the "mangled" field.
+func (m *EscapeEventMutation) ResetMangled() {
+	m.mangled = nil
+}
+
+// SetMangleType sets the "mangle_type" field.
+func (m *EscapeEventMutation) SetMangleType(s string) {
+	m.mangle_type = &s
+}
+
+// MangleType returns the value of the "mangle_type" field in the mutation.
+func (m *EscapeEventMutation) MangleType() (r string, exists bool) {
+	v := m.mangle_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMangleType returns the old "mangle_type" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldMangleType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMangleType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMangleType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMangleType: %w", err)
+	}
+	return oldValue.MangleType, nil
+}
+
+// ClearMangleType clears the value of the "mangle_type" field.
+func (m *EscapeEventMutation) ClearMangleType() {
+	m.mangle_type = nil
+	m.clearedFields[escapeevent.FieldMangleType] = struct{}{}
+}
+
+// MangleTypeCleared returns if the "mangle_type" field was cleared in this mutation.
+func (m *EscapeEventMutation) MangleTypeCleared() bool {
+	_, ok := m.clearedFields[escapeevent.FieldMangleType]
+	return ok
+}
+
+// ResetMangleType resets all changes to the "mangle_type" field.
+func (m *EscapeEventMutation) ResetMangleType() {
+	m.mangle_type = nil
+	delete(m.clearedFields, escapeevent.FieldMangleType)
+}
+
+// SetWallTime sets the "wall_time" field.
+func (m *EscapeEventMutation) SetWallTime(t time.Time) {
+	m.wall_time = &t
+}
+
+// WallTime returns the value of the "wall_time" field in the mutation.
+func (m *EscapeEventMutation) WallTime() (r time.Time, exists bool) {
+	v := m.wall_time
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldWallTime returns the old "wall_time" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldWallTime(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldWallTime is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldWallTime requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldWallTime: %w", err)
+	}
+	return oldValue.WallTime, nil
+}
+
+// ResetWallTime resets all changes to the "wall_time" field.
+func (m *EscapeEventMutation) ResetWallTime() {
+	m.wall_time = nil
+}
+
+// SetSessionSeq sets the "session_seq" field.
+func (m *EscapeEventMutation) SetSessionSeq(i int64) {
+	m.session_seq = &i
+	m.addsession_seq = nil
+}
+
+// SessionSeq returns the value of the "session_seq" field in the mutation.
+func (m *EscapeEventMutation) SessionSeq() (r int64, exists bool) {
+	v := m.session_seq
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSessionSeq returns the old "session_seq" field's value of the EscapeEvent entity.
+// If the EscapeEvent object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *EscapeEventMutation) OldSessionSeq(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSessionSeq is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSessionSeq requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSessionSeq: %w", err)
+	}
+	return oldValue.SessionSeq, nil
+}
+
+// AddSessionSeq adds i to the "session_seq" field.
+func (m *EscapeEventMutation) AddSessionSeq(i int64) {
+	if m.addsession_seq != nil {
+		*m.addsession_seq += i
+	} else {
+		m.addsession_seq = &i
+	}
+}
+
+// AddedSessionSeq returns the value that was added to the "session_seq" field in this mutation.
+func (m *EscapeEventMutation) AddedSessionSeq() (r int64, exists bool) {
+	v := m.addsession_seq
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetSessionSeq resets all changes to the "session_seq" field.
+func (m *EscapeEventMutation) ResetSessionSeq() {
+	m.session_seq = nil
+	m.addsession_seq = nil
+}
+
+// Where appends a list predicates to the EscapeEventMutation builder.
+func (m *EscapeEventMutation) Where(ps ...predicate.EscapeEvent) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the EscapeEventMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *EscapeEventMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.EscapeEvent, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *EscapeEventMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *EscapeEventMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (EscapeEvent).
+func (m *EscapeEventMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *EscapeEventMutation) Fields() []string {
+	fields := make([]string, 0, 11)
+	if m.session_id != nil {
+		fields = append(fields, escapeevent.FieldSessionID)
+	}
+	if m.stage != nil {
+		fields = append(fields, escapeevent.FieldStage)
+	}
+	if m.sequence_type != nil {
+		fields = append(fields, escapeevent.FieldSequenceType)
+	}
+	if m.sequence_subtype != nil {
+		fields = append(fields, escapeevent.FieldSequenceSubtype)
+	}
+	if m.byte_length != nil {
+		fields = append(fields, escapeevent.FieldByteLength)
+	}
+	if m.payload_hash != nil {
+		fields = append(fields, escapeevent.FieldPayloadHash)
+	}
+	if m.raw_bytes != nil {
+		fields = append(fields, escapeevent.FieldRawBytes)
+	}
+	if m.mangled != nil {
+		fields = append(fields, escapeevent.FieldMangled)
+	}
+	if m.mangle_type != nil {
+		fields = append(fields, escapeevent.FieldMangleType)
+	}
+	if m.wall_time != nil {
+		fields = append(fields, escapeevent.FieldWallTime)
+	}
+	if m.session_seq != nil {
+		fields = append(fields, escapeevent.FieldSessionSeq)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *EscapeEventMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case escapeevent.FieldSessionID:
+		return m.SessionID()
+	case escapeevent.FieldStage:
+		return m.Stage()
+	case escapeevent.FieldSequenceType:
+		return m.SequenceType()
+	case escapeevent.FieldSequenceSubtype:
+		return m.SequenceSubtype()
+	case escapeevent.FieldByteLength:
+		return m.ByteLength()
+	case escapeevent.FieldPayloadHash:
+		return m.PayloadHash()
+	case escapeevent.FieldRawBytes:
+		return m.RawBytes()
+	case escapeevent.FieldMangled:
+		return m.Mangled()
+	case escapeevent.FieldMangleType:
+		return m.MangleType()
+	case escapeevent.FieldWallTime:
+		return m.WallTime()
+	case escapeevent.FieldSessionSeq:
+		return m.SessionSeq()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *EscapeEventMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case escapeevent.FieldSessionID:
+		return m.OldSessionID(ctx)
+	case escapeevent.FieldStage:
+		return m.OldStage(ctx)
+	case escapeevent.FieldSequenceType:
+		return m.OldSequenceType(ctx)
+	case escapeevent.FieldSequenceSubtype:
+		return m.OldSequenceSubtype(ctx)
+	case escapeevent.FieldByteLength:
+		return m.OldByteLength(ctx)
+	case escapeevent.FieldPayloadHash:
+		return m.OldPayloadHash(ctx)
+	case escapeevent.FieldRawBytes:
+		return m.OldRawBytes(ctx)
+	case escapeevent.FieldMangled:
+		return m.OldMangled(ctx)
+	case escapeevent.FieldMangleType:
+		return m.OldMangleType(ctx)
+	case escapeevent.FieldWallTime:
+		return m.OldWallTime(ctx)
+	case escapeevent.FieldSessionSeq:
+		return m.OldSessionSeq(ctx)
+	}
+	return nil, fmt.Errorf("unknown EscapeEvent field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EscapeEventMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case escapeevent.FieldSessionID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionID(v)
+		return nil
+	case escapeevent.FieldStage:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStage(v)
+		return nil
+	case escapeevent.FieldSequenceType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSequenceType(v)
+		return nil
+	case escapeevent.FieldSequenceSubtype:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSequenceSubtype(v)
+		return nil
+	case escapeevent.FieldByteLength:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetByteLength(v)
+		return nil
+	case escapeevent.FieldPayloadHash:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPayloadHash(v)
+		return nil
+	case escapeevent.FieldRawBytes:
+		v, ok := value.([]byte)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRawBytes(v)
+		return nil
+	case escapeevent.FieldMangled:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMangled(v)
+		return nil
+	case escapeevent.FieldMangleType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMangleType(v)
+		return nil
+	case escapeevent.FieldWallTime:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetWallTime(v)
+		return nil
+	case escapeevent.FieldSessionSeq:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSessionSeq(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EscapeEvent field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *EscapeEventMutation) AddedFields() []string {
+	var fields []string
+	if m.addbyte_length != nil {
+		fields = append(fields, escapeevent.FieldByteLength)
+	}
+	if m.addsession_seq != nil {
+		fields = append(fields, escapeevent.FieldSessionSeq)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *EscapeEventMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case escapeevent.FieldByteLength:
+		return m.AddedByteLength()
+	case escapeevent.FieldSessionSeq:
+		return m.AddedSessionSeq()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *EscapeEventMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case escapeevent.FieldByteLength:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddByteLength(v)
+		return nil
+	case escapeevent.FieldSessionSeq:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddSessionSeq(v)
+		return nil
+	}
+	return fmt.Errorf("unknown EscapeEvent numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *EscapeEventMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(escapeevent.FieldSequenceSubtype) {
+		fields = append(fields, escapeevent.FieldSequenceSubtype)
+	}
+	if m.FieldCleared(escapeevent.FieldPayloadHash) {
+		fields = append(fields, escapeevent.FieldPayloadHash)
+	}
+	if m.FieldCleared(escapeevent.FieldRawBytes) {
+		fields = append(fields, escapeevent.FieldRawBytes)
+	}
+	if m.FieldCleared(escapeevent.FieldMangleType) {
+		fields = append(fields, escapeevent.FieldMangleType)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *EscapeEventMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *EscapeEventMutation) ClearField(name string) error {
+	switch name {
+	case escapeevent.FieldSequenceSubtype:
+		m.ClearSequenceSubtype()
+		return nil
+	case escapeevent.FieldPayloadHash:
+		m.ClearPayloadHash()
+		return nil
+	case escapeevent.FieldRawBytes:
+		m.ClearRawBytes()
+		return nil
+	case escapeevent.FieldMangleType:
+		m.ClearMangleType()
+		return nil
+	}
+	return fmt.Errorf("unknown EscapeEvent nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *EscapeEventMutation) ResetField(name string) error {
+	switch name {
+	case escapeevent.FieldSessionID:
+		m.ResetSessionID()
+		return nil
+	case escapeevent.FieldStage:
+		m.ResetStage()
+		return nil
+	case escapeevent.FieldSequenceType:
+		m.ResetSequenceType()
+		return nil
+	case escapeevent.FieldSequenceSubtype:
+		m.ResetSequenceSubtype()
+		return nil
+	case escapeevent.FieldByteLength:
+		m.ResetByteLength()
+		return nil
+	case escapeevent.FieldPayloadHash:
+		m.ResetPayloadHash()
+		return nil
+	case escapeevent.FieldRawBytes:
+		m.ResetRawBytes()
+		return nil
+	case escapeevent.FieldMangled:
+		m.ResetMangled()
+		return nil
+	case escapeevent.FieldMangleType:
+		m.ResetMangleType()
+		return nil
+	case escapeevent.FieldWallTime:
+		m.ResetWallTime()
+		return nil
+	case escapeevent.FieldSessionSeq:
+		m.ResetSessionSeq()
+		return nil
+	}
+	return fmt.Errorf("unknown EscapeEvent field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *EscapeEventMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *EscapeEventMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *EscapeEventMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *EscapeEventMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *EscapeEventMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *EscapeEventMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *EscapeEventMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown EscapeEvent unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *EscapeEventMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown EscapeEvent edge %s", name)
 }
 
 // ProjectMutation represents an operation that mutates the Project nodes in the graph.

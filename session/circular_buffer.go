@@ -11,14 +11,15 @@ import (
 // when the in-memory buffer fills up. This prevents memory overflow while maintaining
 // a history of PTY output for status detection and debugging.
 type CircularBuffer struct {
-	data     []byte
-	size     int
-	head     int // Write position
-	tail     int // Read position
-	count    int // Number of bytes in buffer
-	diskFile *os.File
-	mu       sync.RWMutex
-	wrapped  bool // True if head has wrapped around past tail
+	data              []byte
+	size              int
+	head              int // Write position
+	tail              int // Read position
+	count             int // Number of bytes in buffer
+	diskFile          *os.File
+	mu                sync.RWMutex
+	wrapped           bool  // True if head has wrapped around past tail
+	totalBytesWritten int64 // Monotonically increasing total bytes ever written
 }
 
 const (
@@ -54,6 +55,7 @@ func (cb *CircularBuffer) Write(data []byte) (int, error) {
 	}
 
 	originalLen := len(data)
+	cb.totalBytesWritten += int64(originalLen)
 
 	// If data is larger than buffer, only keep the last `size` bytes
 	// and completely replace buffer contents
@@ -235,6 +237,13 @@ func (cb *CircularBuffer) Close() error {
 	}
 
 	return nil
+}
+
+// TotalBytesWritten returns the total bytes ever written to this buffer (monotonically increasing).
+func (cb *CircularBuffer) TotalBytesWritten() int64 {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+	return cb.totalBytesWritten
 }
 
 // WriteTo implements io.WriterTo interface for efficient streaming.

@@ -282,6 +282,12 @@ service SessionService {
   // AcknowledgeError marks an error event as acknowledged so it no longer appears
   // in the default (unacknowledged) listing.
   rpc AcknowledgeError(AcknowledgeErrorRequest) returns (AcknowledgeErrorResponse) {}
+
+  // QueryEscapeAnalytics returns paginated escape event records for a session.
+  rpc QueryEscapeAnalytics(QueryEscapeAnalyticsRequest) returns (QueryEscapeAnalyticsResponse) {}
+
+  // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
+  rpc GetEscapeAnalyticsSummary(GetEscapeAnalyticsSummaryRequest) returns (GetEscapeAnalyticsSummaryResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -1804,4 +1810,59 @@ message ClearConversationStateRequest {
 message ClearConversationStateResponse {
   bool success = 1;
   string message = 2;
+}
+
+// ============================================================================
+// Escape Analytics Messages (Epic 6)
+// ============================================================================
+
+message EscapeEventProto {
+  string id = 1;
+  string session_id = 2;
+  string stage = 3;
+  string sequence_type = 4;
+  string sequence_subtype = 5;
+  int32 byte_length = 6;
+  string payload_hash = 7;
+  bytes raw_bytes = 8;
+  bool mangled = 9;
+  string mangle_type = 10;
+  google.protobuf.Timestamp wall_time = 11;
+  int64 session_seq = 12;
+}
+
+message QueryEscapeAnalyticsRequest {
+  string session_id = 1;
+  string stage = 2;
+  string sequence_type = 3;
+  bool mangled_only = 4;
+  google.protobuf.Timestamp start_time = 5;
+  google.protobuf.Timestamp end_time = 6;
+  int32 page_size = 7;
+  string page_token = 8;
+}
+
+message QueryEscapeAnalyticsResponse {
+  repeated EscapeEventProto events = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+message EscapeSequenceCount {
+  string sequence_type = 1;
+  int64 count = 2;
+  int64 mangled_count = 3;
+}
+
+message GetEscapeAnalyticsSummaryRequest {
+  string session_id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp end_time = 3;
+}
+
+message GetEscapeAnalyticsSummaryResponse {
+  repeated EscapeSequenceCount histogram = 1;
+  int64 total_sequences = 2;
+  int64 total_mangled = 3;
+  double mangle_rate = 4;
 }

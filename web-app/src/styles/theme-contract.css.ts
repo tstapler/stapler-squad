@@ -72,6 +72,13 @@ export const vars = createThemeContract({
     glowSecondary: null,
     scanlineColor: null,
     terminalCursor: null,
+
+    // Status dot indicators
+    statusDot: {
+      running: null,
+      paused: null,
+      idle: null,
+    },
   },
   statusBadge: {
     approvalBg: null,
@@ -134,6 +141,11 @@ export const vars = createThemeContract({
     sm: null,
     md: null,
     lg: null,
+  },
+  transition: {
+    fast: null,
+    base: null,
+    slow: null,
   },
 });
 

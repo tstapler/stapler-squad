@@ -15,6 +15,7 @@ import { HttpAnalyticsProvider } from "@/lib/analytics/HttpAnalyticsProvider";
 import { ConsoleAnalyticsProvider } from "@/lib/analytics/ConsoleAnalyticsProvider";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";
 import { WebVitalsReporter } from "@/components/telemetry/WebVitalsReporter";
+import { OnboardingProvider } from "@/lib/contexts/OnboardingContext";
 
 export function Providers({ children }: { children: React.ReactNode }) {
   // Create provider once per mount using a ref so the instance is stable.
@@ -36,11 +37,13 @@ export function Providers({ children }: { children: React.ReactNode }) {
             <NotificationProvider>
               <GlobalSessionServiceProvider>
                 <OmnibarProvider>
-                  <ReviewQueueProvider>
-                    <ApprovalsProvider>
-                      {children}
-                    </ApprovalsProvider>
-                  </ReviewQueueProvider>
+                  <OnboardingProvider>
+                    <ReviewQueueProvider>
+                      <ApprovalsProvider>
+                        {children}
+                      </ApprovalsProvider>
+                    </ReviewQueueProvider>
+                  </OnboardingProvider>
                 </OmnibarProvider>
               </GlobalSessionServiceProvider>
             </NotificationProvider>
