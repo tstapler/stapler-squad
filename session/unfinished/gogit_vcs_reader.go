@@ -89,7 +89,7 @@ func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) 
 }
 
 func (g *GoGitVCSReader) ResolveDefaultBranch(repoPath string) string {
-	repo, err := git.PlainOpen(repoPath)
+	repo, err := openWorktree(repoPath)
 	if err != nil {
 		return ""
 	}

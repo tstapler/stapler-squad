@@ -241,7 +241,7 @@ export function FilesTab({
         </div>
       </div>
 
-      <TreeResizeHandle {...panel.handleProps} />
+      {!panel.collapsed && <TreeResizeHandle {...panel.handleProps} />}
 
       {/* Right pane: file content */}
       <div className={contentPaneClasses}>
