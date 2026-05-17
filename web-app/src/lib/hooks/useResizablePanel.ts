@@ -87,6 +87,17 @@ export function useResizablePanel({
     }
   }, [collapsedKey, collapsed]);
 
+  // Clamp width against the actual container size after mount — guards against
+  // a stored value that exceeds maxWidthFraction on a narrower viewport.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const maxWidth = container.clientWidth * maxWidthFraction;
+    if (maxWidth > 0 && width > maxWidth) {
+      setWidth(maxWidth);
+    }
+  }, [maxWidthFraction]); // intentionally omits width — runs once on mount per fraction change
+
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
