@@ -14,7 +14,6 @@ package session
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
@@ -55,18 +54,14 @@ func (i *Instance) VNCManager() VNCProcessManager {
 	return i.vncManager
 }
 
-// VNCDisplayEnv returns the DISPLAY environment variable string for this
-// session's virtual display, e.g. "DISPLAY=:101". Returns "" if VNC is
-// unavailable or if StartDisplay has not yet been called successfully.
+// VNCDisplayEnv returns the DISPLAY environment variable assignment for this
+// session's display, e.g. "DISPLAY=:101" or "DISPLAY=:0". Returns "" if no
+// display is available (VNC unavailable or StartDisplay not yet called).
 func (i *Instance) VNCDisplayEnv() string {
 	if i.vncManager == nil {
 		return ""
 	}
-	n := i.vncManager.DisplayNumber()
-	if n <= 0 {
-		return ""
-	}
-	return fmt.Sprintf("DISPLAY=:%d", n)
+	return i.vncManager.DisplayEnv()
 }
 
 // startVNCDisplay allocates the X display and starts Xvfb.

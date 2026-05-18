@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -37,6 +38,10 @@ type VNCProcessManager interface {
 	// DisplayNumber returns the allocated X11 display number (e.g. 100 for :100).
 	// Returns 0 if no display has been allocated.
 	DisplayNumber() int
+	// DisplayEnv returns the DISPLAY environment variable assignment for this
+	// session's display, e.g. "DISPLAY=:101" or "DISPLAY=:0". Returns "" if no
+	// display is available. Prefer this over DisplayNumber for env injection.
+	DisplayEnv() string
 	// Port returns the localhost TCP port on which x11vnc is listening.
 	// Returns 0 if x11vnc is not running.
 	Port() int
@@ -81,6 +86,9 @@ type vncProcessManager struct {
 	mu            sync.RWMutex
 	state         VNCState
 	stateChangeCb func(VNCState)
+	// passthroughDisplay holds the raw DISPLAY value (e.g. ":0") when we
+	// detected a pre-existing display and skipped Xvfb allocation.
+	passthroughDisplay string
 
 	xvfb      *executor.ManagedProcess
 	x11vnc    *executor.ManagedProcess
@@ -129,6 +137,22 @@ func (m *vncProcessManager) DisplayNumber() int {
 	return m.state.DisplayNumber
 }
 
+// DisplayEnv returns "DISPLAY=<value>" for env injection. Handles both
+// Xvfb-allocated displays and pre-existing passthrough displays.
+func (m *vncProcessManager) DisplayEnv() string {
+	m.mu.RLock()
+	pt := m.passthroughDisplay
+	n := m.state.DisplayNumber
+	m.mu.RUnlock()
+	if pt != "" {
+		return "DISPLAY=" + pt
+	}
+	if n > 0 {
+		return fmt.Sprintf("DISPLAY=:%d", n)
+	}
+	return ""
+}
+
 // Port returns the localhost x11vnc TCP port, or 0 if x11vnc is not running.
 func (m *vncProcessManager) Port() int {
 	m.mu.RLock()
@@ -154,6 +178,21 @@ func (m *vncProcessManager) StartDisplay(ctx context.Context) error {
 
 // doStartDisplay is the actual implementation of StartDisplay, called exactly once.
 func (m *vncProcessManager) doStartDisplay(ctx context.Context) error {
+	// If a display is already present in the environment (e.g. the host is running
+	// a desktop session, or another tool such as xvfb-run already started Xvfb),
+	// reuse it instead of allocating a new virtual display.
+	if existing := os.Getenv("DISPLAY"); existing != "" {
+		managerCtx, cancel := context.WithCancel(ctx)
+		m.mu.Lock()
+		m.managerCtx = managerCtx
+		m.cancelCtx = cancel
+		m.passthroughDisplay = existing
+		m.setState(VNCState{Status: VNCStatusNoBrowser})
+		m.mu.Unlock()
+		log.Info("vnc: reusing existing display", "display", existing, "session", m.cfg.SessionID)
+		return nil
+	}
+
 	m.mu.Lock()
 	m.setState(VNCState{Status: VNCStatusStarting})
 	m.mu.Unlock()
@@ -591,12 +630,13 @@ func pickFreePort() (int, error) {
 // on non-Linux hosts or when required binaries are absent.
 type noopVNCManager struct{}
 
-func (n *noopVNCManager) StartDisplay(_ context.Context) error  { return nil }
-func (n *noopVNCManager) StartServer(_ context.Context) error   { return nil }
-func (n *noopVNCManager) Start(_ context.Context) error         { return nil }
-func (n *noopVNCManager) Stop()                                 {}
-func (n *noopVNCManager) State() VNCState                       { return VNCState{Status: VNCStatusUnavailable} }
-func (n *noopVNCManager) DisplayNumber() int                    { return 0 }
-func (n *noopVNCManager) Port() int                             { return 0 }
+func (n *noopVNCManager) StartDisplay(_ context.Context) error    { return nil }
+func (n *noopVNCManager) StartServer(_ context.Context) error     { return nil }
+func (n *noopVNCManager) Start(_ context.Context) error           { return nil }
+func (n *noopVNCManager) Stop()                                   {}
+func (n *noopVNCManager) State() VNCState                         { return VNCState{Status: VNCStatusUnavailable} }
+func (n *noopVNCManager) DisplayNumber() int                      { return 0 }
+func (n *noopVNCManager) DisplayEnv() string                      { return "" }
+func (n *noopVNCManager) Port() int                               { return 0 }
 func (n *noopVNCManager) SetStateChangeCallback(_ func(VNCState)) {}
-func (n *noopVNCManager) ReconcileOrphans()                     {}
+func (n *noopVNCManager) ReconcileOrphans()                       {}
