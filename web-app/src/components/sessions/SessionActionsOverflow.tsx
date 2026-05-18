@@ -77,7 +77,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 }: SessionActionsOverflowProps, ref) {
   const isPaused = session.status === SessionStatus.PAUSED;
   const isReady = session.status === SessionStatus.NEEDS_APPROVAL;
-  const isRunning = session.status === SessionStatus.RUNNING;
+  const isRunning = session.status === SessionStatus.ACTIVE;  // ACTIVE covers legacy RUNNING (same wire value)
+  const isCreating = session.status === SessionStatus.CREATING;
 
   const [showOverflow, setShowOverflow] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, right: 0 });
@@ -333,7 +334,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
             <span aria-hidden="true">▶️</span> Resume
           </button>
         )}
-        {showPrimaryAction && isRunning && (
+        {showPrimaryAction && isRunning && !isCreating && (
           <button
             className={actionButton}
             onClick={(e) => { e.stopPropagation(); onPause?.(); }}
@@ -376,7 +377,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">▶️</span> Resume
                 </button>
               )}
-              {!isRunning && onPause && (
+              {!isRunning && !isCreating && onPause && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onPause(); }}
                   aria-label={`Pause session ${session.title}`}
@@ -392,7 +393,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">✏️</span> Rename
                 </button>
               )}
-              {onRestart && (
+              {onRestart && !isCreating && (
                 <button
                   ref={restartTriggerRef}
                   role="menuitem"

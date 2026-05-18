@@ -435,8 +435,9 @@ export function SessionCard({
               <StatusBadge detectedStatus={detectedStatus} context={detectedContext} />
             )}
             {/* Sub-status chip from the proto sub_status field.
-                ACTIVE covers legacy RUNNING (same wire value via allow_alias). */}
-            {session.status === SessionStatus.ACTIVE &&
+                ACTIVE covers legacy RUNNING (same wire value via allow_alias).
+                Cast to number to bypass TS's duplicate-value narrowing for allow_alias enums. */}
+            {(session.status as number) === (SessionStatus.ACTIVE as number) &&
               session.subStatus !== SubStatus.UNSPECIFIED &&
               session.subStatus !== SubStatus.IDLE && (
                 <SubStatusChip subStatus={session.subStatus} />
