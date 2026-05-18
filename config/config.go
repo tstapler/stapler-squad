@@ -355,11 +355,11 @@ type BrowserPassthroughConfig struct {
 	CDP BrowserPassthroughCDPConfig `json:"cdp,omitempty"`
 }
 
-// IsEnabled returns true unless the user has explicitly set enabled=false.
-// When Enabled is nil (absent from config), VNC is enabled when deps are present.
+// IsEnabled returns false unless the user has explicitly set enabled=true.
+// When Enabled is nil (absent from config), browser passthrough is disabled.
 func (c *BrowserPassthroughConfig) IsEnabled() bool {
 	if c == nil || c.Enabled == nil {
-		return true
+		return false
 	}
 	return *c.Enabled
 }
