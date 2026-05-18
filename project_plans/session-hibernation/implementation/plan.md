@@ -404,11 +404,132 @@ func (i *Instance) recoverFromStaleResume() {
 
 ---
 
-### Story 1.3 — Replace Running/Ready Guards in Go Code
+### Story 1.3 — Instance Interface Redesign — Make the State Machine Hard to Misuse
+
+**Goal:** Eliminate the two-path status mutation problem (`setStatus` bypass +
+`transitionTo` validated path), add typed predicate methods, remove the fallback pattern,
+and update the `InstanceReader` interface.
+
+**Prerequisite for:** All other epics. This story establishes the public API contract
+that all other stories code against. Must be completed before any other epic begins.
+
+---
+
+#### Task 1.3.1 — Add state predicate methods to Instance
+
+**File:** `session/instance_state.go`
+
+**What to change:**
+- Add: `IsCreating() bool`, `IsActive() bool`, `IsPaused() bool`, `IsStopped() bool`,
+  `IsHibernated() bool` — each returns `i.Status == X`
+- Add: `GetLifecycleStatus() Status` returning the typed `Status` (not int)
+- Keep `GetStatus() int` for backward compat with the `SessionAccessor` interface but
+  mark it as deprecated in a comment pointing to `GetLifecycleStatus()`
+
+**Acceptance criteria:**
+- No call site outside `session/` needs to write `i.Status == X` directly.
+
+---
+
+#### Task 1.3.2 — Rename setStatus to loadStatus and restrict its use
+
+**File:** `session/instance_state.go`
+
+**What to change:**
+- Rename `setStatus` → `loadStatus`
+- Update godoc: "loadStatus sets Status directly without state machine validation. Call
+  ONLY from `FromInstanceData()` deserialization or test setup. Never call from
+  operational code paths."
+- Update all 6 current callsites to use `loadStatus`
+
+**Acceptance criteria:**
+- `loadStatus` is only called from `instance_serialization.go` and test files.
+
+---
+
+#### Task 1.3.3 — Eliminate the transitionTo fallback pattern
+
+**Files:** `session/instance_serialization.go`, `session/review_queue_poller.go`,
+`session/instance.go`
+
+**What to change:**
+- Remove all `if err := transitionTo(X); err != nil { setStatus(X) }` patterns
+- For serialization callers: use `loadStatus` directly (it's a restore, not a transition)
+- For operational callers (`review_queue_poller`, `instance.go`): fix the state machine
+  table so the transition is valid, then call `transitionTo` without fallback
+
+**Acceptance criteria:**
+- Zero occurrences of `setStatus`/`loadStatus` outside `instance_serialization.go` and
+  test files.
+
+---
+
+#### Task 1.3.4 — Add context to transitionTo
+
+**File:** `session/instance_state.go`
+
+**What to change:**
+- Change signature: `transitionTo(s Status)` → `transitionTo(ctx context.Context, to Status)`
+- Pass `ctx` through to `TransitionDef.Guard(ctx, i)` (needed by guard functions like
+  `guardIsIdle` for timeout/cancellation)
+- Update all internal callers (within the `session` package only — `transitionTo` is
+  unexported)
+
+**Acceptance criteria:**
+- `transitionTo` accepts context; all guard functions receive context.
+
+---
+
+#### Task 1.3.5 — Update InstanceReader interface
+
+**File:** `session/interfaces.go`
+
+**What to change:**
+- Replace `GetStatus() int` with `IsActive() bool`, `IsPaused() bool`,
+  `IsHibernated() bool`, `IsStopped() bool`, `GetLifecycleStatus() Status`
+- Add `IsHibernated() bool` to the interface (needed by health checker and serialization)
+- Verify `*Instance` still satisfies the interface (compiler check)
+
+**Acceptance criteria:**
+- No consumer of `InstanceReader` needs a raw int cast to check session state.
+
+---
+
+#### Task 1.3.6 — Remove NeedsApproval lifecycle methods
+
+**File:** `session/instance_state.go`
+
+**What to change:**
+- Remove `MarkNeedsApproval() error` method (`NeedsApproval` is no longer a lifecycle state)
+- Update `Approve()` to call `Resume(ctx)` instead of `transitionTo(Running)`
+- Update `Deny()` to call `Pause(ctx)` instead of `transitionTo(Paused)`
+- Update callers in `session/approval_automation.go` and `server/services/`
+
+**Acceptance criteria:**
+- `NeedsApproval` Status constant no longer exists; approval flow uses sub-status only.
+
+---
+
+#### Task 1.3.7 — Replace RecoverFromStopped with normal Resume
+
+**File:** `session/instance_state.go`
+
+**What to change:**
+- Remove `RecoverFromStopped()` method
+- The `Stopped → Active` transition in the `TransitionDef` table (with
+  `guardWorktreePresent` + `afterColdStart` after-hook) replaces this
+- Update the one caller in `instance_serialization.go` to use the normal `Resume(ctx)` path
+
+**Acceptance criteria:**
+- `RecoverFromStopped` is deleted; no bypass of the state machine for cold restore.
+
+---
+
+### Story 1.4 — Replace Running/Ready Guards in Go Code
 
 **Goal:** Remove all `Running || Ready` (and `NeedsApproval`) guards from non-test code.
 
-#### Task 1.3.1 — Audit and replace all guards
+#### Task 1.4.1 — Audit and replace all guards
 
 **Files to audit** (search for `Running`, `Ready`, `NeedsApproval` in `session/` and
 `server/`):
@@ -433,7 +554,7 @@ func (i *Instance) recoverFromStaleResume() {
 
 ---
 
-#### Task 1.3.2 — Add `Active()` helper method
+#### Task 1.4.2 — Add `Active()` helper method
 
 **File:** `session/instance.go`
 
@@ -450,12 +571,12 @@ Mirror the existing `Paused()` and `Stopped()` pattern.
 
 ---
 
-### Story 1.4 — Proto and Adapter Updates
+### Story 1.5 — Proto and Adapter Updates
 
 **Goal:** Update the proto enum and the Go↔proto adapter to match the new model.
 Preserve existing integer wire values.
 
-#### Task 1.4.1 — Update `types.proto` SessionStatus enum
+#### Task 1.5.1 — Update `types.proto` SessionStatus enum
 
 **File:** `proto/session/v1/types.proto` (lines 168–184)
 
@@ -492,7 +613,7 @@ Run `make generate-proto` to regenerate Go and TypeScript bindings.
 
 ---
 
-#### Task 1.4.2 — Update `instance_adapter.go`
+#### Task 1.5.2 — Update `instance_adapter.go`
 
 **File:** `server/adapters/instance_adapter.go`
 
@@ -536,11 +657,11 @@ case sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED:
 
 ---
 
-### Story 1.5 — Frontend Status Updates
+### Story 1.6 — Frontend Status Updates
 
 **Goal:** Update all frontend status handling to use the new model.
 
-#### Task 1.5.1 — Update `getStatusColor` and `getStatusText`
+#### Task 1.6.1 — Update `getStatusColor` and `getStatusText`
 
 **File:** `web-app/src/components/sessions/SessionCard.tsx`
 
@@ -570,7 +691,7 @@ case SessionStatus.HIBERNATED:
 
 ---
 
-#### Task 1.5.2 — Add CSS for `statusHibernated`
+#### Task 1.6.2 — Add CSS for `statusHibernated`
 
 **Files:**
 - `web-app/src/components/sessions/SessionCard.css.ts`
@@ -598,7 +719,7 @@ Add `statusHibernated` token to `web-app/src/styles/theme.css.ts` if it does not
 
 ---
 
-#### Task 1.5.3 — Update all frontend status switches
+#### Task 1.6.3 — Update all frontend status switches
 
 **Files to audit:**
 - Any TypeScript file with a `switch (status)` or `status ===` comparing against
@@ -619,9 +740,9 @@ For each hit:
 
 ---
 
-### Story 1.6 — State Machine Migration Tests
+### Story 1.7 — State Machine Migration Tests
 
-#### Task 1.6.1 — Update existing state machine tests
+#### Task 1.7.1 — Update existing state machine tests
 
 **File:** `session/state_machine_test.go` (create if not exists)
 
@@ -630,7 +751,7 @@ For each hit:
 - Verify removed transitions (`Running → Ready`, `Running → NeedsApproval`) fail.
 - Verify new transitions (`Active → Hibernated`, `Hibernated → Active`) succeed.
 
-#### Task 1.6.2 — Update deserialization tests
+#### Task 1.7.2 — Update deserialization tests
 
 **File:** `session/instance_serialization_test.go` (or nearest test file)
 
