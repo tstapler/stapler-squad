@@ -5,7 +5,7 @@ import { createClient } from "@connectrpc/connect";
 import { SessionService, Project } from "@/gen/session/v1/session_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 import { AppLink } from "@/components/ui/AppLink";
-import { Session, SessionStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, SubStatus, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionCard } from "./SessionCard";
 import { SessionRow } from "./SessionRow";
 import { SessionListEmptyState } from "./SessionListEmptyState";
@@ -87,6 +87,7 @@ const BASE_STORAGE_KEYS = {
   SELECTED_CATEGORY: 'stapler-squad-selected-category',
   SELECTED_TAG: 'stapler-squad-selected-tag',
   HIDE_PAUSED: 'stapler-squad-hide-paused',
+  FILTER_NEEDS_APPROVAL: 'stapler-squad-filter-needs-approval',
   GROUPING_STRATEGY: 'stapler-squad-grouping-strategy',
   SORT_FIELD: 'stapler-squad-sort-field',
   SORT_DIR: 'stapler-squad-sort-dir',
@@ -175,6 +176,11 @@ export function SessionList({
   );
   const [hidePaused, setHidePaused] = useState(() =>
     loadFromStorage(STORAGE_KEYS.HIDE_PAUSED, false)
+  );
+  // filterNeedsApproval: when true, show only Active sessions with subStatus === NEEDS_APPROVAL.
+  // Replaces the old lifecycle-status NEEDS_APPROVAL filter (which was status===5).
+  const [filterNeedsApproval, setFilterNeedsApproval] = useState(() =>
+    loadFromStorage(STORAGE_KEYS.FILTER_NEEDS_APPROVAL, false)
   );
   const [groupingStrategy, setGroupingStrategy] = useState<GroupingStrategy>(() =>
     loadFromStorage(STORAGE_KEYS.GROUPING_STRATEGY, GroupingStrategy.Category)
@@ -279,6 +285,10 @@ export function SessionList({
   }, [STORAGE_KEYS, hidePaused]);
 
   useEffect(() => {
+    saveToStorage(STORAGE_KEYS.FILTER_NEEDS_APPROVAL, filterNeedsApproval);
+  }, [STORAGE_KEYS, filterNeedsApproval]);
+
+  useEffect(() => {
     saveToStorage(STORAGE_KEYS.GROUPING_STRATEGY, groupingStrategy);
   }, [STORAGE_KEYS, groupingStrategy]);
 
@@ -351,9 +361,14 @@ export function SessionList({
         return false;
       }
 
+      // Needs-approval quick filter — show only Active sessions with subStatus === NEEDS_APPROVAL
+      if (filterNeedsApproval && session.subStatus !== SubStatus.NEEDS_APPROVAL) {
+        return false;
+      }
+
       return true;
     });
-  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused]);
+  }, [sessions, searchQuery, selectedStatus, selectedCategory, selectedTag, hidePaused, filterNeedsApproval]);
 
   // Sort filtered sessions
   const sortedSessions = useMemo(() => {
@@ -548,7 +563,7 @@ export function SessionList({
             {/* Filter toggle — only shown on mobile via CSS */}
             <button
               className={`${filterToggle} ${
-                selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused
+                selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused || filterNeedsApproval
                   ? filterToggleActive
                   : ""
               }`}
@@ -557,7 +572,7 @@ export function SessionList({
               onClick={() => setFiltersOpen((prev) => !prev)}
             >
               Filters
-              {(selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused) && (
+              {(selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused || filterNeedsApproval) && (
                 <span className={filterActiveDot} aria-hidden="true" />
               )}
             </button>
@@ -583,13 +598,10 @@ export function SessionList({
               aria-label="Filter by status"
             >
               <option value="all">All Statuses</option>
-              <option value={SessionStatus.RUNNING}>Running</option>
-              <option value={SessionStatus.READY}>Ready</option>
+              <option value={SessionStatus.ACTIVE}>Active</option>
               <option value={SessionStatus.PAUSED}>Paused</option>
-              <option value={SessionStatus.LOADING}>Loading</option>
-              <option value={SessionStatus.NEEDS_APPROVAL}>
-                Needs Approval
-              </option>
+              <option value={SessionStatus.STOPPED}>Stopped</option>
+              <option value={SessionStatus.CREATING}>Creating</option>
             </select>
 
             {/* Category filter */}
@@ -631,6 +643,17 @@ export function SessionList({
                 aria-label="Hide paused sessions"
               />
               <span>Hide Paused</span>
+            </label>
+
+            {/* Needs-approval quick filter */}
+            <label className={checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={filterNeedsApproval}
+                onChange={(e) => setFilterNeedsApproval(e.target.checked)}
+                aria-label="Show only sessions needing approval"
+              />
+              <span>Needs Approval</span>
             </label>
 
             {/* Grouping strategy selector */}
@@ -706,7 +729,7 @@ export function SessionList({
         <SessionListSkeleton />
       ) : filteredSessions.length === 0 ? (
         (() => {
-          const hasActiveFilters = !!(searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused);
+          const hasActiveFilters = !!(searchQuery || selectedStatus !== "all" || selectedCategory !== "all" || selectedTag !== "all" || hidePaused || filterNeedsApproval);
           return hasActiveFilters ? (
             <div className={empty}>
               <p>No sessions found</p>
@@ -718,6 +741,7 @@ export function SessionList({
                   setSelectedCategory("all");
                   setSelectedTag("all");
                   setHidePaused(false);
+                  setFilterNeedsApproval(false);
                 }}
               >
                 Clear filters
