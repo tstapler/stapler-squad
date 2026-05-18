@@ -12,18 +12,17 @@ func TestNewStatusDetector(t *testing.T) {
 		t.Fatal("NewStatusDetector() returned nil")
 	}
 
-	// Verify default patterns are loaded (check via the fallback "" set)
-	fb := sd.programs[""]
-	if len(fb.readyRegexes) == 0 {
+	// Verify default patterns are loaded
+	if len(sd.readyRegexes) == 0 {
 		t.Error("No ready patterns loaded")
 	}
-	if len(fb.processingRegexes) == 0 {
+	if len(sd.processingRegexes) == 0 {
 		t.Error("No processing patterns loaded")
 	}
-	if len(fb.needsApprovalRegexes) == 0 {
+	if len(sd.needsApprovalRegexes) == 0 {
 		t.Error("No needs_approval patterns loaded")
 	}
-	if len(fb.errorRegexes) == 0 {
+	if len(sd.errorRegexes) == 0 {
 		t.Error("No error patterns loaded")
 	}
 }
@@ -201,8 +200,8 @@ func TestStatusDetector_DetectWithContext(t *testing.T) {
 func TestStatusDetector_DetectUnknown(t *testing.T) {
 	sd := NewStatusDetector()
 
-	// Remove the catch-all ready pattern from the fallback set for this test.
-	sd.programs[""].readyRegexes = nil
+	// Remove the catch-all ready pattern for this test.
+	sd.readyRegexes = nil
 
 	output := []byte("Some random output that doesn't match any pattern xyz123")
 	status := sd.Detect(output)
