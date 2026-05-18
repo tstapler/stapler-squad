@@ -5,6 +5,7 @@ package session
 // InstanceData, GitWorktreeData, and DiffStatsData are defined in storage.go.
 
 import (
+	"context"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -269,18 +270,17 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	// Initialize session-specific logging
 	_ = log.GetSessionLoggers
 
-	// Check if the worktree still exists on disk if the instance is not paused.
+	// Check if the worktree still exists on disk if the instance is not paused or hibernated.
 	// No mutex is needed here because the instance is not yet shared.
-	if !instance.Paused() && instance.gitManager.HasWorktree() {
+	if !instance.Paused() && !instance.Hibernated() && instance.gitManager.HasWorktree() {
 		worktreePath := instance.gitManager.GetWorktreePath()
 		if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 			// Worktree has been deleted — use transitionTo so the state machine is respected.
-			// Ready → Paused and Loading → Paused are explicitly allowed for this case.
 			log.ForSession(instance.Title).Warn("worktree directory missing, marking as paused", "path", worktreePath)
-			if err := instance.transitionTo(Paused); err != nil {
-				// If the transition is somehow invalid (e.g. already Stopped), fall back to setStatus.
-				log.ForSession(instance.Title).Warn("could not transition to paused via state machine, using setStatus", "err", err)
-				instance.setStatus(Paused)
+			if err := instance.transitionTo(context.Background(), Paused); err != nil {
+				// If the transition is somehow invalid (e.g. already Stopped), fall back to loadStatus.
+				log.ForSession(instance.Title).Warn("could not transition to paused via state machine, using loadStatus", "err", err)
+				instance.loadStatus(Paused)
 			}
 		}
 	}
@@ -315,16 +315,32 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		// If the underlying tmux session is still alive (e.g. server crashed mid-write
 		// or exit callback fired falsely), recover it rather than leave it stuck as Stopped.
 		if instance.tmuxManager.DoesSessionExist() {
-			log.Warn("session stored as stopped but tmux is alive, recovering to running", "session", instance.Title)
-			instance.setStatus(Running)
+			log.Warn("session stored as stopped but tmux is alive, recovering to active", "session", instance.Title)
+			instance.loadStatus(Active)
 			if err := instance.Start(false); err != nil {
 				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
-				instance.setStatus(Stopped)
+				instance.loadStatus(Stopped)
 				instance.started = true
 			}
 		} else {
 			instance.started = true
 		}
+	} else if instance.Status == Hibernated {
+		// Wire the tmux session object (for DoesSessionExist checks at resume time)
+		// but do NOT call Start — hibernated sessions resume only on explicit request.
+		tmuxPrefix := instance.TmuxPrefix
+		if tmuxPrefix == "" {
+			tmuxPrefix = "staplersquad_"
+		}
+		if instance.TmuxServerSocket != "" {
+			instance.tmuxManager.SetSession(tmux.NewTmuxSessionWithServerSocket(
+				instance.Title, instance.Program, tmuxPrefix,
+				instance.TmuxServerSocket, tmux.WithRegistry(nil)))
+		} else {
+			instance.tmuxManager.SetSession(tmux.NewTmuxSessionWithPrefix(
+				instance.Title, instance.Program, tmuxPrefix))
+		}
+		instance.started = true
 	} else {
 		if err := instance.Start(false); err != nil {
 			return nil, err

@@ -104,6 +104,12 @@ func (h *SessionHealthChecker) checkSingleSession(instance *Instance) HealthChec
 		return result
 	}
 
+	// Skip hibernated instances - they have no tmux by design
+	if instance.Hibernated() {
+		result.Actions = append(result.Actions, "Skipped (session is hibernated)")
+		return result
+	}
+
 	// Check if instance thinks it's started but tmux session doesn't exist
 	if instance.Started() {
 		if !instance.TmuxAlive() {
