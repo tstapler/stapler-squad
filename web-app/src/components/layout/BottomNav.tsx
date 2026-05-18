@@ -2,17 +2,7 @@
 // +feature: ui:bottom-nav
 
 import { useState, useEffect, useRef } from "react";
-import type { LucideIcon } from "lucide-react";
 import {
-  LayoutGrid,
-  LayoutList,
-  Clock4,
-  ClipboardCheck,
-  History,
-  ScrollText,
-  BookOpen,
-  SlidersHorizontal,
-  Settings,
   Bell,
   Plus,
   MoreHorizontal,
@@ -26,30 +16,10 @@ import { useOmnibar } from "@/lib/contexts/OmnibarContext";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { routes } from "@/lib/routes";
+import { BOTTOM_NAV_PRIMARY, BOTTOM_NAV_MORE, type NavPage } from "@/lib/nav-pages";
 import * as styles from "./BottomNav.css";
 
 const HANDEDNESS_KEY = "stapler-squad:left-handed";
-
-type BottomNavItem = { href: string; label: string; icon: LucideIcon };
-
-const primaryItems: BottomNavItem[] = [
-  { href: routes.home, label: "Sessions", icon: LayoutGrid },
-  { href: routes.backlog, label: "Backlog", icon: LayoutList },
-  { href: routes.unfinished, label: "Unfinished", icon: Clock4 },
-  { href: routes.reviewQueue, label: "Review", icon: ClipboardCheck },
-];
-
-const moreItems: BottomNavItem[] = [
-  { href: routes.history, label: "History", icon: History },
-  { href: routes.settingsFeatures, label: "Features", icon: Settings },
-  { href: routes.logs, label: "Logs", icon: ScrollText },
-  { href: routes.rules, label: "Rules", icon: BookOpen },
-  { href: routes.config, label: "Config", icon: SlidersHorizontal },
-  { href: routes.settings, label: "Settings", icon: Settings },
-];
-
-type PrimaryItem = BottomNavItem;
-type MoreItem = BottomNavItem;
 
 export function BottomNav() {
   const pathname = usePathname();
@@ -105,14 +75,15 @@ export function BottomNav() {
     return () => ro.disconnect();
   }, []);
 
-  const isMoreActive = moreItems.some((item) => pathname?.startsWith(item.href));
+  const isMoreActive = BOTTOM_NAV_MORE.some((item) => pathname?.startsWith(item.href));
 
-  const renderPrimaryItem = (item: PrimaryItem) => {
+  const renderPrimaryItem = (item: NavPage) => {
     const isActive =
       item.href === routes.home
         ? pathname === routes.home
         : pathname?.startsWith(item.href);
     const Icon = item.icon;
+    const label = item.shortLabel ?? item.label;
 
     return (
       <AppLink
@@ -122,7 +93,7 @@ export function BottomNav() {
         aria-current={isActive ? "page" : undefined}
       >
         <span className={styles.navItemIcon} aria-hidden="true">
-          {item.label === "Review" ? (
+          {item.href === routes.reviewQueue ? (
             <>
               <Icon size={20} />
               <ReviewQueueNavBadge inline={true} />
@@ -131,7 +102,7 @@ export function BottomNav() {
             <Icon size={20} />
           )}
         </span>
-        <span className={styles.navItemLabel}>{item.label}</span>
+        <span className={styles.navItemLabel}>{label}</span>
       </AppLink>
     );
   };
@@ -153,7 +124,7 @@ export function BottomNav() {
         aria-label="More navigation"
         role="navigation"
       >
-        {moreItems.map((item: MoreItem) => {
+        {BOTTOM_NAV_MORE.map((item) => {
           const isActive = pathname?.startsWith(item.href);
           const Icon = item.icon;
           return (
@@ -196,7 +167,7 @@ export function BottomNav() {
         aria-label="Bottom navigation"
         data-left-handed={leftHanded || undefined}
       >
-        {primaryItems.map(renderPrimaryItem)}
+        {BOTTOM_NAV_PRIMARY.map(renderPrimaryItem)}
         <AppLink
           href={routes.notifications}
           className={`${styles.navItem} ${styles.notificationButton} ${pathname === routes.notifications ? styles.navItemActive : ""}`}
