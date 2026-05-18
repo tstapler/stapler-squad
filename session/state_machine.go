@@ -1,48 +1,65 @@
 package session
 
-// allowedTransitions defines the valid state machine transitions.
-// Any transition not explicitly listed here is considered invalid.
+import "context"
+
+// State machine diagram (5-state model):
 //
-// State machine diagram:
-//
-//	Creating      --> Running, Stopped
-//	Ready         --> Running, Paused, Stopped
-//	Running       --> Ready, Paused, NeedsApproval, Stopped
-//	Paused        --> Running, Stopped
-//	NeedsApproval --> Running, Paused, Stopped
-//	Loading       --> Running, Paused, Stopped
-//	Stopped       --> (terminal state, no outgoing transitions)
+//	Creating      --> Active, Stopped
+//	Active        --> Paused, Stopped, Hibernated
+//	Paused        --> Active, Stopped
+//	Stopped       --> Active
+//	Hibernated    --> Active, Stopped
 //
 // Design notes:
-//   - Creating is reserved for future use; new instances currently start at Ready.
-//   - Ready represents both the initial state (before first Start) and the activity
-//     state when Claude is idle / waiting for input.
-//   - Running <-> Ready allows the detection layer to reflect Claude's activity level
-//     without a separate status field.
-//   - Ready → Paused and Loading → Paused are needed so the worktree-deletion recovery
-//     path in FromInstanceData can use transitionTo instead of bypassing the state machine.
-var allowedTransitions = map[Status][]Status{
-	Creating:      {Running, Stopped},
-	Ready:         {Running, Paused, Stopped},
-	Running:       {Ready, Paused, NeedsApproval, Stopped},
-	Paused:        {Running, Stopped},
-	NeedsApproval: {Running, Paused, Stopped},
-	Loading:       {Running, Paused, Stopped},
-	// Stopped → Running allows recovery when a stopped session's tmux process is
-	// found alive again (e.g. external restart or reconciler false-positive).
-	Stopped: {Running},
+//   - Creating is the initial state for newly constructed instances.
+//   - Active replaces the old Running/Ready/Loading/NeedsApproval states.
+//   - Hibernated sessions have their tmux session killed and a checkpoint written.
+//   - Guard and After hooks are stubs (nil) until Epic 4 fills them in.
+
+// transitionKey identifies a (from, to) state machine edge.
+type transitionKey struct{ from, to Status }
+
+// TransitionDef describes a single valid state machine transition with optional
+// guard (pre-condition) and after (post-transition side-effect) hooks.
+type TransitionDef struct {
+	From Status
+	To   Status
+	// Guard is called before the status is updated. Return non-nil to abort.
+	// nil means unconditionally allowed.
+	Guard func(ctx context.Context, i *Instance) error
+	// After is called once the status has been updated (side-effects: process
+	// management, worktree ops, scrollback restore, etc.).
+	// nil means no post-transition side-effect.
+	After func(ctx context.Context, i *Instance)
+}
+
+// transitionDefs is the canonical list of valid state machine transitions.
+// Guard and After functions are nil stubs — they will be populated in Epic 4.
+var transitionDefs = []TransitionDef{
+	{From: Creating, To: Active},
+	{From: Creating, To: Stopped},
+	{From: Active, To: Paused},
+	{From: Active, To: Stopped},
+	{From: Active, To: Hibernated},
+	{From: Paused, To: Active},
+	{From: Paused, To: Stopped},
+	{From: Stopped, To: Active},
+	{From: Hibernated, To: Active},
+	{From: Hibernated, To: Stopped},
+}
+
+// transitionIndex is an O(1) lookup index built from transitionDefs at init time.
+var transitionIndex map[transitionKey]TransitionDef
+
+func init() {
+	transitionIndex = make(map[transitionKey]TransitionDef, len(transitionDefs))
+	for _, def := range transitionDefs {
+		transitionIndex[transitionKey{def.From, def.To}] = def
+	}
 }
 
 // CanTransition returns true if transitioning from -> to is a valid state transition.
 func CanTransition(from, to Status) bool {
-	allowed, ok := allowedTransitions[from]
-	if !ok {
-		return false
-	}
-	for _, s := range allowed {
-		if s == to {
-			return true
-		}
-	}
-	return false
+	_, ok := transitionIndex[transitionKey{from, to}]
+	return ok
 }
