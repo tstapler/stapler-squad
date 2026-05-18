@@ -25,9 +25,18 @@ type InstanceReader interface {
 	// Descriptive metadata
 	GetWorkingDirectory() string
 
-	// GetStatus returns the current lifecycle status as int; matches the
-	// SessionAccessor interface contract on *Instance.
+	// GetStatus returns the current lifecycle status as int.
+	// Deprecated: use GetLifecycleStatus() or the typed predicates below.
 	GetStatus() int
+
+	// GetLifecycleStatus returns the current lifecycle status as a typed Status value.
+	GetLifecycleStatus() Status
+
+	// Typed state predicates — prefer these over comparing GetStatus() against constants.
+	IsActive() bool
+	IsPaused() bool
+	IsHibernated() bool
+	IsStopped() bool
 
 	// Git / diff
 	GetDiffStats() *git.DiffStats

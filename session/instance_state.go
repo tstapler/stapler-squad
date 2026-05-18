@@ -5,26 +5,62 @@ package session
 // This file contains the instance-level status transitions and related methods.
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 )
 
-// setStatus sets the instance status without locking.
-// Must be called with i.stateMutex held.
-func (i *Instance) setStatus(status Status) {
+// loadStatus sets Status directly without state machine validation.
+// Call ONLY from FromInstanceData() deserialization or test setup.
+// Never call from operational code paths.
+// Must be called with i.stateMutex held (or before the instance is shared).
+func (i *Instance) loadStatus(status Status) {
 	i.Status = status
 }
 
-// transitionTo validates and executes a state transition using the state machine.
+// setStatus is a backward-compatibility alias for loadStatus.
+// Deprecated: use loadStatus for deserialization; use transitionTo for operational transitions.
+func (i *Instance) setStatus(status Status) {
+	i.loadStatus(status)
+}
+
+// transitionTo validates and executes a state transition using the TransitionDef table.
 // Must be called with i.stateMutex held.
-func (i *Instance) transitionTo(s Status) error {
-	if !CanTransition(i.Status, s) {
-		return ErrInvalidTransition{From: i.Status, To: s}
+func (i *Instance) transitionTo(ctx context.Context, to Status) error {
+	def, ok := transitionIndex[transitionKey{i.Status, to}]
+	if !ok {
+		return ErrInvalidTransition{From: i.Status, To: to}
 	}
-	i.setStatus(s)
+	if def.Guard != nil {
+		if err := def.Guard(ctx, i); err != nil {
+			return fmt.Errorf("transition %s → %s blocked: %w", i.Status, to, err)
+		}
+	}
+	i.Status = to
+	if def.After != nil {
+		def.After(ctx, i)
+	}
 	return nil
 }
+
+// IsCreating returns true if the instance is in the Creating state.
+func (i *Instance) IsCreating() bool { return i.Status == Creating }
+
+// IsActive returns true if the instance has a live AI process.
+func (i *Instance) IsActive() bool { return i.Status == Active }
+
+// IsPaused returns true if the instance is paused (worktree removed, branch preserved).
+func (i *Instance) IsPaused() bool { return i.Status == Paused }
+
+// IsStopped returns true if the instance is in the terminal Stopped state.
+func (i *Instance) IsStopped() bool { return i.Status == Stopped }
+
+// IsHibernated returns true if the instance has been hibernated (checkpoint written, tmux killed).
+func (i *Instance) IsHibernated() bool { return i.Status == Hibernated }
+
+// GetLifecycleStatus returns the current lifecycle status as a typed Status value.
+func (i *Instance) GetLifecycleStatus() Status { return i.Status }
 
 // GetCategoryPath returns the category path as a slice of strings for nested category support
 // Supports "Work/Frontend" syntax by splitting on "/" delimiter
@@ -65,12 +101,11 @@ func (i *Instance) MarkAcknowledged() {
 	i.LastAcknowledged = time.Now()
 }
 
-// MarkNeedsApproval transitions a Running instance to NeedsApproval.
-// Called by the review queue poller when terminal output indicates the session is awaiting approval.
+// MarkNeedsApproval is a no-op: NeedsApproval is no longer a lifecycle state.
+// Approval state is now tracked as sub-status via the detection layer.
+// Deprecated: do not call from new code.
 func (i *Instance) MarkNeedsApproval() error {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
-	return i.transitionTo(NeedsApproval)
+	return nil
 }
 
 // LastMeaningfulOutputTime returns the time of the last meaningful terminal output.
@@ -109,23 +144,23 @@ func (i *Instance) GetStatus() int {
 	return int(i.Status)
 }
 
-// Approve transitions the instance from NeedsApproval to Running.
+// Approve transitions the instance to Active (approval granted).
 // Returns an error if the current state does not allow this transition.
 func (i *Instance) Approve() error {
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
-	if err := i.transitionTo(Running); err != nil {
+	if err := i.transitionTo(context.Background(), Active); err != nil {
 		return fmt.Errorf("approve: %w", err)
 	}
 	return nil
 }
 
-// Deny transitions the instance from NeedsApproval to Paused.
+// Deny transitions the instance to Paused (approval denied).
 // Returns an error if the current state does not allow this transition.
 func (i *Instance) Deny() error {
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
-	if err := i.transitionTo(Paused); err != nil {
+	if err := i.transitionTo(context.Background(), Paused); err != nil {
 		return fmt.Errorf("deny: %w", err)
 	}
 	return nil
@@ -136,19 +171,25 @@ func (i *Instance) Paused() bool {
 	return i.Status == Paused
 }
 
+// Hibernated returns true if the instance is hibernated.
+func (i *Instance) Hibernated() bool {
+	return i.Status == Hibernated
+}
+
 // Started returns true if the instance has been started.
 func (i *Instance) Started() bool {
 	return i.started
 }
 
-// RecoverFromStopped resets a stale Stopped status to Ready so the instance can be
+// RecoverFromStopped resets a stale Stopped status to Creating so the instance can be
 // hot-restored via Start(false). Only call this during startup reconciliation when
 // the tmux session is confirmed alive; it bypasses the state machine intentionally.
+// Deprecated: prefer transitionTo(ctx, Active) on the Stopped→Active path.
 func (i *Instance) RecoverFromStopped() {
 	i.stateMutex.Lock()
 	defer i.stateMutex.Unlock()
 	if i.Status == Stopped {
-		i.setStatus(Ready)
+		i.loadStatus(Creating)
 		i.started = false
 	}
 }
