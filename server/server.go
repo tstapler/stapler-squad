@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/web"
+	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/google/uuid"
@@ -475,6 +476,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	fileSvc := deps.SessionService.GetFileService()
 	srv.mux.HandleFunc("/api/files/raw", fileSvc.ServeFileRaw)
 	log.Info("Registered raw file download handler at /api/files/raw")
+
+	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
+	if cfg.Hibernation.Enabled {
+		sweeper := session.NewHibernationSweeper(deps.Storage, cfg)
+		go sweeper.Start(serverCtx)
+		log.Info("Hibernation sweeper started",
+			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
+	}
 }
 
 // registerStaticRoutes mounts routes that are always registered regardless of
