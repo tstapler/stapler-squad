@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   LayoutGrid,
+  LayoutList,
   Clock4,
   ClipboardCheck,
   History,
@@ -33,12 +34,14 @@ type BottomNavItem = { href: string; label: string; icon: LucideIcon };
 
 const primaryItems: BottomNavItem[] = [
   { href: routes.home, label: "Sessions", icon: LayoutGrid },
+  { href: routes.backlog, label: "Backlog", icon: LayoutList },
   { href: routes.unfinished, label: "Unfinished", icon: Clock4 },
   { href: routes.reviewQueue, label: "Review", icon: ClipboardCheck },
 ];
 
 const moreItems: BottomNavItem[] = [
   { href: routes.history, label: "History", icon: History },
+  { href: routes.settingsFeatures, label: "Features", icon: Settings },
   { href: routes.logs, label: "Logs", icon: ScrollText },
   { href: routes.rules, label: "Rules", icon: BookOpen },
   { href: routes.config, label: "Config", icon: SlidersHorizontal },
