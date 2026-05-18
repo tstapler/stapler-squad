@@ -605,3 +605,8 @@ export const fullscreenMobileTabs = style({
     },
   },
 });
+
+export const tabDisabled = style({
+  opacity: 0.4,
+  cursor: "not-allowed",
+});

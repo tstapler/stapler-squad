@@ -15,11 +15,28 @@ interface BrowserTabProps {
   vncState: VNCState | undefined;
 }
 
-function buildWsUrl(baseUrl: string, sessionId: string): string {
+export function buildWsUrl(baseUrl: string, sessionId: string): string {
+  // Resolve protocol-relative (//host/path) and relative (/path) URLs to absolute
+  // before doing scheme substitution, so we never produce a broken WebSocket URL.
+  let absolute = baseUrl;
+  if (absolute.startsWith('//')) {
+    // Protocol-relative: prepend the current page protocol.
+    absolute = `${window.location.protocol}${absolute}`;
+  } else if (absolute.startsWith('/') || (!absolute.startsWith('http://') && !absolute.startsWith('https://') && !absolute.startsWith('ws://') && !absolute.startsWith('wss://'))) {
+    // Relative path or no scheme: make it absolute using the current origin.
+    absolute = `${window.location.protocol}//${window.location.host}${absolute.startsWith('/') ? '' : '/'}${absolute}`;
+  }
+
+  // If already a WebSocket URL, use as-is (no double-substitution).
+  if (absolute.startsWith('ws://') || absolute.startsWith('wss://')) {
+    const origin = absolute.replace(/\/+$/, '').replace(/\/api$/, '');
+    return `${origin}/api/sessions/${sessionId}/cdp-stream`;
+  }
+
   // Normalize: strip trailing slashes, then strip /api suffix if present.
   // Handles cases where baseUrl ends with '/' or lacks the /api suffix,
   // which would otherwise produce a doubled path like wss://host/api/api/sessions/...
-  const origin = baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+  const origin = absolute.replace(/\/+$/, '').replace(/\/api$/, '');
   const wsScheme = origin.startsWith('https') ? 'wss' : 'ws';
   const host = origin.replace(/^https?:\/\//, '');
   return `${wsScheme}://${host}/api/sessions/${sessionId}/cdp-stream`;

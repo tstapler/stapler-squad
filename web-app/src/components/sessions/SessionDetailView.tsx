@@ -22,6 +22,7 @@ import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import * as styles from "./SessionDetail.css";
 import { diffAdded } from "./SessionDetailView.css";
+import { tabDisabled } from "./SessionDetail.css";
 import type { SessionDetailTab } from "./SessionDetail";
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
@@ -441,10 +442,9 @@ export function SessionDetailView({
               role="tab"
               aria-selected={activeTab === tab.id}
               aria-disabled={tab.disabled}
-              className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""}`}
+              className={`${styles.tab} ${activeTab === tab.id ? styles.active : ""} ${tab.disabled ? tabDisabled : ""}`}
               onClick={() => { if (!tab.disabled) handleTabChange(tab.id); }}
               title={tab.disabled && tab.id === "browser" ? "Browser passthrough requires Linux with Xvfb, x11vnc, and xdotool" : undefined}
-              style={tab.disabled ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
             >
               <span className={styles.tabIcon}><Icon size={16} /></span>
               <span className={styles.tabLabel}>{tab.label}</span>

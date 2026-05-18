@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { BrowserTab, VNCStatus } from '../BrowserTab';
+import { BrowserTab, VNCStatus, buildWsUrl } from '../BrowserTab';
 import type { VNCState } from '../BrowserTab';
 
 // Helper to construct minimal VNCState objects for tests without requiring
@@ -162,4 +162,58 @@ describe('BrowserTab', () => {
     expect(screen.queryByText(/reconnecting/i)).not.toBeInTheDocument();
   });
 
+});
+
+// ---------------------------------------------------------------------------
+// buildWsUrl unit tests — covers the URL-hardening added in the Copilot review
+// ---------------------------------------------------------------------------
+describe('buildWsUrl', () => {
+  const SESSION_ID = 'sess-42';
+
+  // jsdom sets window.location to http://localhost by default.
+
+  it('buildWsUrl_should_returnWss_When_httpsBaseUrl', () => {
+    expect(buildWsUrl('https://example.com/api', SESSION_ID)).toBe(
+      `wss://example.com/api/sessions/${SESSION_ID}/cdp-stream`
+    );
+  });
+
+  it('buildWsUrl_should_returnWs_When_httpBaseUrl', () => {
+    expect(buildWsUrl('http://example.com/api', SESSION_ID)).toBe(
+      `ws://example.com/api/sessions/${SESSION_ID}/cdp-stream`
+    );
+  });
+
+  it('buildWsUrl_should_stripTrailingSlash_When_baseUrlHasTrailingSlash', () => {
+    const url = buildWsUrl('https://example.com/api/', SESSION_ID);
+    expect(url).not.toContain('/api/api/');
+    expect(url).toBe(`wss://example.com/api/sessions/${SESSION_ID}/cdp-stream`);
+  });
+
+  it('buildWsUrl_should_useWindowProtocol_When_protocolRelativeUrl', () => {
+    // jsdom default protocol is http:
+    const url = buildWsUrl('//example.com/api', SESSION_ID);
+    // Should use ws:// because window.location.protocol is http: in jsdom
+    expect(url).toMatch(/^ws:\/\//);
+    expect(url).toBe(`ws://example.com/api/sessions/${SESSION_ID}/cdp-stream`);
+  });
+
+  it('buildWsUrl_should_useWindowOrigin_When_relativePathUrl', () => {
+    // jsdom: window.location = http://localhost
+    const url = buildWsUrl('/api', SESSION_ID);
+    expect(url).toBe(`ws://localhost/api/sessions/${SESSION_ID}/cdp-stream`);
+  });
+
+  it('buildWsUrl_should_notDoubleSubstitute_When_wsUrlPassed', () => {
+    const url = buildWsUrl('ws://example.com/api', SESSION_ID);
+    expect(url).toMatch(/^ws:\/\//);
+    expect(url).not.toMatch(/^wss:\/\//);
+    expect(url).toBe(`ws://example.com/api/sessions/${SESSION_ID}/cdp-stream`);
+  });
+
+  it('buildWsUrl_should_notDoubleSubstitute_When_wssUrlPassed', () => {
+    const url = buildWsUrl('wss://example.com/api', SESSION_ID);
+    expect(url).toMatch(/^wss:\/\//);
+    expect(url).toBe(`wss://example.com/api/sessions/${SESSION_ID}/cdp-stream`);
+  });
 });
