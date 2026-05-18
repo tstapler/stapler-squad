@@ -658,6 +658,9 @@ func (t *TmuxSession) start(workDir string, setupCleanup bool, cleanup *CleanupF
 	for _, kv := range t.ExtraEnv {
 		newSessionArgs = append(newSessionArgs, "-e", kv)
 	}
+	for _, kv := range t.extraEnv {
+		newSessionArgs = append(newSessionArgs, "-e", kv)
+	}
 	newSessionArgs = append(newSessionArgs, "-c", workDir, programWithHistory)
 	cmd := t.buildTmuxCommand(newSessionArgs...)
 
@@ -816,6 +819,9 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// nested Claude Code sessions are not blocked by the "nested session" guard.
 			restoreArgs := []string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}
 			for _, kv := range t.ExtraEnv {
+				restoreArgs = append(restoreArgs, "-e", kv)
+			}
+			for _, kv := range t.extraEnv {
 				restoreArgs = append(restoreArgs, "-e", kv)
 			}
 			restoreArgs = append(restoreArgs, "-c", workDir, t.program)
