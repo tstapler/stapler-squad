@@ -40,6 +40,10 @@ export interface SessionActionsOverflowProps {
   buttonClassName?: string;
   onResume?: () => void;
   onPause?: () => void;
+  /** Hibernate an Active session (writes checkpoint, kills process). */
+  onHibernate?: () => void;
+  /** Resume a Hibernated session (re-launches process). */
+  onResumeFromHibernation?: () => void;
   onDelete?: () => Promise<void> | void;
   onRestart?: (sessionId: string) => Promise<boolean | void>;
   onClone?: () => void;
@@ -62,6 +66,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   buttonClassName,
   onResume,
   onPause,
+  onHibernate,
+  onResumeFromHibernation,
   onDelete,
   onRestart,
   onClone,
@@ -77,7 +83,8 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 }: SessionActionsOverflowProps, ref) {
   const isPaused = session.status === SessionStatus.PAUSED;
   const isReady = session.status === SessionStatus.NEEDS_APPROVAL;
-  const isRunning = session.status === SessionStatus.ACTIVE;  // ACTIVE covers legacy RUNNING (same wire value)
+  const isRunning = session.status === SessionStatus.ACTIVE;  // ACTIVE covers legacy RUNNING (same wire value via allow_alias)
+  const isHibernated = session.status === SessionStatus.HIBERNATED;
   const isCreating = session.status === SessionStatus.CREATING;
 
   const [showOverflow, setShowOverflow] = useState(false);
@@ -383,6 +390,22 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   aria-label={`Pause session ${session.title}`}
                 >
                   <span aria-hidden="true">⏸️</span> Pause
+                </button>
+              )}
+              {isRunning && onHibernate && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); onHibernate(); }}
+                  aria-label={`Hibernate session ${session.title}`}
+                >
+                  <span aria-hidden="true">❄️</span> Hibernate
+                </button>
+              )}
+              {isHibernated && onResumeFromHibernation && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); onResumeFromHibernation(); }}
+                  aria-label={`Resume hibernated session ${session.title}`}
+                >
+                  <span aria-hidden="true">▶️</span> Resume
                 </button>
               )}
               {onRenameRequest && (

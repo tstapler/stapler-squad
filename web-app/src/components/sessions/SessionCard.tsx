@@ -143,6 +143,8 @@ export function SessionCard({
         return statusNeedsApproval;
       case SessionStatus.STOPPED:
         return statusPaused;
+      case SessionStatus.HIBERNATED:
+        return statusPaused;  // no distinct style yet; reuses paused (session is idle/stopped)
       default:
         return statusUnknown;
     }
@@ -164,6 +166,8 @@ export function SessionCard({
         return "Starting…";
       case SessionStatus.STOPPED:
         return "Stopped";
+      case SessionStatus.HIBERNATED:
+        return "Hibernated";
       default:
         return "Unknown";
     }
