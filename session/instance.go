@@ -249,6 +249,10 @@ type Instance struct {
 	// Always non-nil after NewInstance() — on unsupported platforms or missing deps,
 	// a no-op manager is returned. VNCManager() returns it for external access.
 	vncManager VNCProcessManager
+	// cdpManager owns the Chrome DevTools Protocol screencast lifecycle for this
+	// session. Always non-nil after NewInstance() — when Chrome is absent, a
+	// no-op manager is returned. CDPManager() returns it for external access.
+	cdpManager CDPStreamManager
 
 	// tagManager provides CRUD operations for session tags.
 	// Backed by a pointer to Instance.Tags for zero-sync compatibility with
@@ -480,6 +484,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	// Initialize the VNC manager (noop when deps are absent or platform is not Linux).
 	cfg := config.LoadConfig()
 	instance.initVNCManager(&cfg.BrowserPassthrough)
+	// Initialize the CDP manager (noop when Chrome is absent on any platform).
+	instance.initCDPManager(&cfg.BrowserPassthrough)
 
 	return instance, nil
 }
@@ -598,9 +604,17 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// context.Background() is safe here: the VNC manager creates its own internal
 			// cancellable context; goroutines are stopped via vncManager.Stop() in Destroy().
 			i.startVNCDisplay(context.Background())
+			// Allocate CDP port before creating the tmux session so CDP_PORT and the
+			// updated PATH (wrapper dir) can be injected via ExtraEnv at new-session time.
+			i.allocateCDPPort()
 			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
 				if sess := i.tmuxManager.Session(); sess != nil {
 					sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+				}
+			}
+			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+				if sess := i.tmuxManager.Session(); sess != nil {
+					sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
 				}
 			}
 			if err := i.tmuxManager.Start(startPath); err != nil {
@@ -629,6 +643,10 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			// session, but x11vnc still needs to start so the browser passthrough works.
 			// context.Background() is safe: VNC goroutines are cancelled via vncManager.Stop().
 			i.startVNCDisplay(context.Background())
+			// Allocate CDP port for hot-restore too. ExtraEnv injection is not possible
+			// for an already-running session, but we still allocate so the screencast
+			// goroutine can connect to Chrome if it is already running.
+			i.allocateCDPPort()
 			workDir := i.Path
 			if i.gitManager.HasWorktree() {
 				workDir = i.gitManager.GetWorktreePath()
@@ -658,9 +676,17 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		// a post-hoc `tmux setenv` call that would miss the already-running process.
 		// context.Background() is safe: VNC goroutines are cancelled via vncManager.Stop().
 		i.startVNCDisplay(context.Background())
+		// Allocate CDP port before creating the tmux session so CDP_PORT and the
+		// updated PATH (wrapper dir) can be injected via ExtraEnv at new-session time.
+		i.allocateCDPPort()
 		if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
 			if sess := i.tmuxManager.Session(); sess != nil {
 				sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+			}
+		}
+		if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+			if sess := i.tmuxManager.Session(); sess != nil {
+				sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
 			}
 		}
 		if err := i.tmuxManager.Start(startPath); err != nil {
@@ -701,6 +727,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// Run unconditionally (not gated on firstTimeSetup) so hot-restores also get VNC.
 	// context.Background() is safe: VNC goroutines are cancelled via vncManager.Stop().
 	i.startVNCServer(context.Background())
+	// Phase 2b: Start CDP screencast goroutine now that the tmux session is live.
+	// context.Background() is safe: CDP goroutines are cancelled via cdpManager.Stop().
+	i.startCDP(context.Background())
 	log.ForSession(i.Title).Info("session started", "first_time_setup", firstTimeSetup)
 
 	// Start controller for new sessions only; loaded sessions are wired later by server.go.
@@ -743,6 +772,8 @@ func (i *Instance) Destroy() error {
 
 	// Stop VNC before killing tmux (x11vnc must stop before Xvfb).
 	i.stopVNC()
+	// Stop CDP screencast goroutines and clean up wrapper scripts.
+	i.stopCDP()
 
 	var errs []error
 

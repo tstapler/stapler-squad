@@ -2,20 +2,11 @@ import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { BrowserTab, VNCStatus } from '../BrowserTab';
 
-// Mock next/dynamic to return a synchronous stub that renders the mock NoVNCViewer
-jest.mock('next/dynamic', () => (_fn: () => Promise<unknown>) => {
-  const MockNoVNC = ({ wsUrl }: { wsUrl: string }) => (
-    <div data-testid="novnc-viewer" data-ws-url={wsUrl} />
-  );
-  MockNoVNC.displayName = 'MockNoVNC';
-  return MockNoVNC;
-});
-
-// Mock NoVNCViewer directly for any direct imports
-jest.mock('../NoVNCViewer', () => ({
+// Mock CDPViewer — pure canvas component, no DOM APIs needed in tests
+jest.mock('../CDPViewer', () => ({
   __esModule: true,
   default: jest.fn(({ wsUrl }: { wsUrl: string }) => (
-    <div data-testid="novnc-viewer" data-ws-url={wsUrl} />
+    <canvas data-testid="cdp-viewer" data-ws-url={wsUrl} />
   )),
 }));
 
@@ -59,14 +50,14 @@ describe('BrowserTab', () => {
     expect(screen.getByText(/no browser open yet/i)).toBeInTheDocument();
   });
 
-  it('does not mount NoVNCViewer until status is READY', () => {
+  it('does not mount CDPViewer until status is READY', () => {
     render(<BrowserTab {...defaultProps} vncState={{ status: VNCStatus.NO_BROWSER }} />);
-    expect(screen.queryByTestId('novnc-viewer')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('cdp-viewer')).not.toBeInTheDocument();
   });
 
-  it('mounts NoVNCViewer when status becomes READY', () => {
+  it('mounts CDPViewer when status becomes READY', () => {
     render(<BrowserTab {...defaultProps} vncState={{ status: VNCStatus.READY, browserWindowDetected: true }} />);
-    expect(screen.getByTestId('novnc-viewer')).toBeInTheDocument();
+    expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
   });
 
   it('builds correct ws:// URL from http:// baseUrl', () => {
@@ -74,8 +65,8 @@ describe('BrowserTab', () => {
       baseUrl="http://localhost:8543/api"
       vncState={{ status: VNCStatus.READY, browserWindowDetected: true }}
     />);
-    const viewer = screen.getByTestId('novnc-viewer');
-    expect(viewer.getAttribute('data-ws-url')).toBe('ws://localhost:8543/api/sessions/test-session-id/vnc');
+    const viewer = screen.getByTestId('cdp-viewer');
+    expect(viewer.getAttribute('data-ws-url')).toBe('ws://localhost:8543/api/sessions/test-session-id/cdp-stream');
   });
 
   it('builds correct wss:// URL from https:// baseUrl', () => {
@@ -84,8 +75,8 @@ describe('BrowserTab', () => {
       baseUrl="https://myhost.example.com/api"
       vncState={{ status: VNCStatus.READY, browserWindowDetected: true }}
     />);
-    const viewer = screen.getByTestId('novnc-viewer');
-    expect(viewer.getAttribute('data-ws-url')).toBe('wss://myhost.example.com/api/sessions/test-session-id/vnc');
+    const viewer = screen.getByTestId('cdp-viewer');
+    expect(viewer.getAttribute('data-ws-url')).toBe('wss://myhost.example.com/api/sessions/test-session-id/cdp-stream');
   });
 
   it('handles trailing slash in baseUrl without doubling /api', () => {
@@ -93,7 +84,7 @@ describe('BrowserTab', () => {
       baseUrl="http://localhost:8543/api/"
       vncState={{ status: VNCStatus.READY, browserWindowDetected: true }}
     />);
-    const viewer = screen.getByTestId('novnc-viewer');
+    const viewer = screen.getByTestId('cdp-viewer');
     expect(viewer.getAttribute('data-ws-url')).not.toContain('/api/api/');
   });
 

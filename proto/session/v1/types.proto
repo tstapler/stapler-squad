@@ -164,6 +164,9 @@ message Session {
 
   // VNC/browser passthrough state. Populated when VNC is supported on the host.
   VNCState vnc_state = 51;
+
+  // CDP browser streaming state. Populated when Chrome is available on the host.
+  CDPState cdp_state = 52;
 }
 
 // VNCStatus represents the operational state of the VNC subsystem for a session.
@@ -190,6 +193,27 @@ message VNCState {
   string vnc_password = 3;
   // True when a browser window has been detected on the virtual display.
   bool browser_window_detected = 4;
+}
+
+// CDPStatus represents the operational state of the CDP subsystem for a session.
+enum CDPStatus {
+  CDP_STATUS_UNSPECIFIED = 0;
+  // Polling for Chrome on the allocated CDP port.
+  CDP_STATUS_WAITING = 1;
+  // Connected to Chrome and receiving screencast frames.
+  CDP_STATUS_STREAMING = 2;
+  // CDP port allocated but Chrome not yet detected.
+  CDP_STATUS_NO_BROWSER = 3;
+  // CDP unavailable: Chrome not found or startup failed.
+  CDP_STATUS_UNAVAILABLE = 4;
+}
+
+// CDPState holds the Chrome DevTools Protocol streaming state for a session.
+message CDPState {
+  // Current operational status.
+  CDPStatus status = 1;
+  // Allocated CDP TCP port on localhost (e.g. 9222). Zero if unavailable.
+  int32 port = 2;
 }
 
 // SessionStatus represents the current state of a session.

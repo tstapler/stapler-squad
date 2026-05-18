@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef } from 'react';
-import dynamic from 'next/dynamic';
 import * as styles from './BrowserTab.css';
+import CDPViewer from './CDPViewer';
 
 // VNCState mirrors proto VNCState (session/v1/types.proto).
 // TODO: replace with the proto-generated type from @/gen/session/v1/types_pb.ts
@@ -20,27 +20,18 @@ export const VNCStatus = {
   UNAVAILABLE: 4,
 } as const;
 
-// NoVNCViewer is dynamically imported with ssr: false — it uses DOM APIs
-// not available during server-side rendering, matching the TerminalOutput pattern.
-const NoVNCViewer = dynamic(() => import('./NoVNCViewer'), {
-  ssr: false,
-  loading: () => (
-    <div className={styles.placeholderOverlay}>
-      <span>Connecting to display...</span>
-    </div>
-  ),
-});
-
 interface BrowserTabProps {
   sessionId: string;
   /** The application base URL, e.g. window.location.origin + '/api'. Used to derive the WebSocket URL. */
   baseUrl: string;
   isVisible: boolean;
+  // TODO: replace vncState with cdpState once CDPState proto types are generated.
+  // For now, reuse vncState to drive availability checks (VNC_STATUS_UNAVAILABLE
+  // maps 1:1 to CDP unavailability until the CDP proto is wired up).
   vncState: VNCState | undefined;
 }
 
 type QualityLevel = 'low' | 'medium' | 'high';
-const QUALITY_MAP: Record<QualityLevel, number> = { low: 3, medium: 6, high: 9 };
 const QUALITY_LEVELS: QualityLevel[] = ['low', 'medium', 'high'];
 
 function buildWsUrl(baseUrl: string, sessionId: string): string {
@@ -50,7 +41,7 @@ function buildWsUrl(baseUrl: string, sessionId: string): string {
   const origin = baseUrl.replace(/\/+$/, '').replace(/\/api$/, '');
   const wsScheme = origin.startsWith('https') ? 'wss' : 'ws';
   const host = origin.replace(/^https?:\/\//, '');
-  return `${wsScheme}://${host}/api/sessions/${sessionId}/vnc`;
+  return `${wsScheme}://${host}/api/sessions/${sessionId}/cdp-stream`;
 }
 
 export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserTabProps) {
@@ -65,9 +56,9 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
   );
   const isReady = status === VNCStatus.READY && vncState?.browserWindowDetected === true;
 
-  // Track if we've ever been ready — keeps NoVNCViewer mounted once connected
-  // so the RFB connection survives tab switches even if isReady temporarily flickers.
-  // This avoids the premature WebSocket handshake during STARTING/NO_BROWSER states.
+  // Track if we've ever been ready — keeps CDPViewer mounted once connected
+  // so the WebSocket connection survives tab switches even if isReady temporarily flickers.
+  // This avoids a premature WebSocket handshake during STARTING/NO_BROWSER states.
   const hasBeenReadyRef = useRef(false);
   if (isReady) hasBeenReadyRef.current = true;
   const shouldMountViewer = hasBeenReadyRef.current;
@@ -99,7 +90,7 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
           <div className={styles.placeholderOverlay}>
             <span>Browser passthrough unavailable on this host</span>
             <span style={{ fontSize: '0.85em', opacity: 0.7 }}>
-              Requires Linux with Xvfb, x11vnc, and xdotool installed
+              Requires a running Chrome/Chromium instance with CDP enabled
             </span>
           </div>
         )}
@@ -119,10 +110,10 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
           </div>
         )}
 
-        {/* Mount NoVNCViewer only once isReady has been true — prevents premature
-            WebSocket handshake during STARTING/NO_BROWSER states when x11vnc hasn't
-            opened its socket yet. Once mounted, keep it mounted (hasBeenReadyRef) so
-            the RFB connection survives tab switches. */}
+        {/* Mount CDPViewer only once isReady has been true — prevents premature
+            WebSocket handshake during STARTING/NO_BROWSER states before the CDP
+            endpoint is available. Once mounted, keep it mounted (hasBeenReadyRef)
+            so the connection survives tab switches. */}
         {shouldMountViewer && (
           <div
             className={styles.canvasWrapper}
@@ -131,10 +122,9 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
               pointerEvents: isReady ? 'auto' : 'none',
             }}
           >
-            <NoVNCViewer
+            <CDPViewer
               wsUrl={wsUrl}
               isVisible={isVisible && isReady}
-              qualityLevel={QUALITY_MAP[quality]}
             />
           </div>
         )}

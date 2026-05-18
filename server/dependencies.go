@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -53,6 +54,10 @@ type ServerDependencies struct {
 	// VNCDeps holds the result of the startup VNC dependency check.
 	// Available=false means the Browser tab will be hidden on all sessions.
 	VNCDeps vnc.DepsResult
+
+	// CDPDeps holds the result of the startup CDP (Chrome) dependency check.
+	// Available=false means CDP browser streaming is unavailable on this host.
+	CDPDeps cdp.DepsResult
 }
 
 // ToServerDeps converts RuntimeDeps to the flat ServerDependencies struct consumed
@@ -79,6 +84,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
 		VNCDeps:                 rt.VNCDeps,
+		CDPDeps:                 rt.CDPDeps,
 	}
 }
 
@@ -333,6 +339,9 @@ type RuntimeDeps struct {
 
 	// VNCDeps holds the result of the startup VNC dependency check.
 	VNCDeps vnc.DepsResult
+
+	// CDPDeps holds the result of the startup CDP (Chrome) dependency check.
+	CDPDeps cdp.DepsResult
 }
 
 // BuildRuntimeDeps constructs Phase 3 dependencies using Phase 2 outputs.
@@ -615,6 +624,14 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		log.Info("VNC browser passthrough available")
 	}
 
+	// Check CDP (Chrome) dependencies once at startup. Non-fatal.
+	cdpDeps := cdp.CheckDependencies()
+	if !cdpDeps.Available {
+		log.Warn("CDP browser streaming unavailable", "reason", cdpDeps.Reason)
+	} else {
+		log.Info("CDP browser streaming available", "chrome", cdpDeps.ChromePath)
+	}
+
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
 		Instances:               instances,
@@ -631,5 +648,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 		UnfinishedWorkService:   unfinishedWorkSvc,
 		AnalyticsEntClient:      analyticsClient,
 		VNCDeps:                 vncDeps,
+		CDPDeps:                 cdpDeps,
 	}, nil
 }

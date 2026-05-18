@@ -297,6 +297,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/sessions/{id}/vnc", vncProxy.HandleWebSocket)
 	log.Info("Registered VNC WebSocket proxy at /api/sessions/{id}/vnc")
 
+	// Register CDP browser-streaming WebSocket handler.
+	// Use ReviewQueuePoller (in-memory) rather than Storage (SQLite) for session lookup.
+	cdpStream := services.NewCDPStreamHandler(deps.ReviewQueuePoller)
+	srv.mux.HandleFunc("/api/sessions/{id}/cdp-stream", cdpStream.HandleWebSocket)
+	log.Info("Registered CDP stream WebSocket handler at /api/sessions/{id}/cdp-stream")
+
 	// Register general ConnectRPC handler (unary calls)
 	path, handler := sessionv1connect.NewSessionServiceHandler(deps.SessionService, ConnectOptions(deps.ErrorRegistry)...)
 	apiPath := "/api" + path

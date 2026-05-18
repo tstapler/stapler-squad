@@ -82,6 +82,66 @@ func (VNCStatus) EnumDescriptor() ([]byte, []int) {
 	return file_session_v1_types_proto_rawDescGZIP(), []int{0}
 }
 
+// CDPStatus represents the operational state of the CDP subsystem for a session.
+type CDPStatus int32
+
+const (
+	CDPStatus_CDP_STATUS_UNSPECIFIED CDPStatus = 0
+	// Polling for Chrome on the allocated CDP port.
+	CDPStatus_CDP_STATUS_WAITING CDPStatus = 1
+	// Connected to Chrome and receiving screencast frames.
+	CDPStatus_CDP_STATUS_STREAMING CDPStatus = 2
+	// CDP port allocated but Chrome not yet detected.
+	CDPStatus_CDP_STATUS_NO_BROWSER CDPStatus = 3
+	// CDP unavailable: Chrome not found or startup failed.
+	CDPStatus_CDP_STATUS_UNAVAILABLE CDPStatus = 4
+)
+
+// Enum value maps for CDPStatus.
+var (
+	CDPStatus_name = map[int32]string{
+		0: "CDP_STATUS_UNSPECIFIED",
+		1: "CDP_STATUS_WAITING",
+		2: "CDP_STATUS_STREAMING",
+		3: "CDP_STATUS_NO_BROWSER",
+		4: "CDP_STATUS_UNAVAILABLE",
+	}
+	CDPStatus_value = map[string]int32{
+		"CDP_STATUS_UNSPECIFIED": 0,
+		"CDP_STATUS_WAITING":     1,
+		"CDP_STATUS_STREAMING":   2,
+		"CDP_STATUS_NO_BROWSER":  3,
+		"CDP_STATUS_UNAVAILABLE": 4,
+	}
+)
+
+func (x CDPStatus) Enum() *CDPStatus {
+	p := new(CDPStatus)
+	*p = x
+	return p
+}
+
+func (x CDPStatus) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (CDPStatus) Descriptor() protoreflect.EnumDescriptor {
+	return file_session_v1_types_proto_enumTypes[1].Descriptor()
+}
+
+func (CDPStatus) Type() protoreflect.EnumType {
+	return &file_session_v1_types_proto_enumTypes[1]
+}
+
+func (x CDPStatus) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use CDPStatus.Descriptor instead.
+func (CDPStatus) EnumDescriptor() ([]byte, []int) {
+	return file_session_v1_types_proto_rawDescGZIP(), []int{1}
+}
+
 // SessionStatus represents the current state of a session.
 // Maps to session.Status enum in Go.
 type SessionStatus int32
@@ -139,11 +199,11 @@ func (x SessionStatus) String() string {
 }
 
 func (SessionStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[1].Descriptor()
+	return file_session_v1_types_proto_enumTypes[2].Descriptor()
 }
 
 func (SessionStatus) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[1]
+	return &file_session_v1_types_proto_enumTypes[2]
 }
 
 func (x SessionStatus) Number() protoreflect.EnumNumber {
@@ -152,7 +212,7 @@ func (x SessionStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SessionStatus.Descriptor instead.
 func (SessionStatus) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{1}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{2}
 }
 
 // SessionType determines the session workflow.
@@ -199,11 +259,11 @@ func (x SessionType) String() string {
 }
 
 func (SessionType) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[2].Descriptor()
+	return file_session_v1_types_proto_enumTypes[3].Descriptor()
 }
 
 func (SessionType) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[2]
+	return &file_session_v1_types_proto_enumTypes[3]
 }
 
 func (x SessionType) Number() protoreflect.EnumNumber {
@@ -212,7 +272,7 @@ func (x SessionType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SessionType.Descriptor instead.
 func (SessionType) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{2}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{3}
 }
 
 // InstanceType indicates whether a session is managed by claude-squad or external.
@@ -251,11 +311,11 @@ func (x InstanceType) String() string {
 }
 
 func (InstanceType) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[3].Descriptor()
+	return file_session_v1_types_proto_enumTypes[4].Descriptor()
 }
 
 func (InstanceType) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[3]
+	return &file_session_v1_types_proto_enumTypes[4]
 }
 
 func (x InstanceType) Number() protoreflect.EnumNumber {
@@ -264,7 +324,7 @@ func (x InstanceType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use InstanceType.Descriptor instead.
 func (InstanceType) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{3}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{4}
 }
 
 // WorkingState represents the active-work status of a session for review queue filtering.
@@ -313,11 +373,11 @@ func (x WorkingState) String() string {
 }
 
 func (WorkingState) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[4].Descriptor()
+	return file_session_v1_types_proto_enumTypes[5].Descriptor()
 }
 
 func (WorkingState) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[4]
+	return &file_session_v1_types_proto_enumTypes[5]
 }
 
 func (x WorkingState) Number() protoreflect.EnumNumber {
@@ -326,7 +386,7 @@ func (x WorkingState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WorkingState.Descriptor instead.
 func (WorkingState) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{4}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{5}
 }
 
 // RateLimitState indicates whether the session is experiencing rate limiting.
@@ -377,11 +437,11 @@ func (x RateLimitState) String() string {
 }
 
 func (RateLimitState) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[5].Descriptor()
+	return file_session_v1_types_proto_enumTypes[6].Descriptor()
 }
 
 func (RateLimitState) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[5]
+	return &file_session_v1_types_proto_enumTypes[6]
 }
 
 func (x RateLimitState) Number() protoreflect.EnumNumber {
@@ -390,7 +450,7 @@ func (x RateLimitState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RateLimitState.Descriptor instead.
 func (RateLimitState) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{5}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{6}
 }
 
 // Priority levels for review queue items (highest to lowest urgency).
@@ -437,11 +497,11 @@ func (x Priority) String() string {
 }
 
 func (Priority) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[6].Descriptor()
+	return file_session_v1_types_proto_enumTypes[7].Descriptor()
 }
 
 func (Priority) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[6]
+	return &file_session_v1_types_proto_enumTypes[7]
 }
 
 func (x Priority) Number() protoreflect.EnumNumber {
@@ -450,7 +510,7 @@ func (x Priority) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Priority.Descriptor instead.
 func (Priority) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{6}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{7}
 }
 
 // AttentionReason indicates why a session needs user attention.
@@ -521,11 +581,11 @@ func (x AttentionReason) String() string {
 }
 
 func (AttentionReason) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[7].Descriptor()
+	return file_session_v1_types_proto_enumTypes[8].Descriptor()
 }
 
 func (AttentionReason) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[7]
+	return &file_session_v1_types_proto_enumTypes[8]
 }
 
 func (x AttentionReason) Number() protoreflect.EnumNumber {
@@ -534,7 +594,7 @@ func (x AttentionReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AttentionReason.Descriptor instead.
 func (AttentionReason) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{7}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{8}
 }
 
 // NotificationType categorizes the type of notification being sent.
@@ -613,11 +673,11 @@ func (x NotificationType) String() string {
 }
 
 func (NotificationType) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[8].Descriptor()
+	return file_session_v1_types_proto_enumTypes[9].Descriptor()
 }
 
 func (NotificationType) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[8]
+	return &file_session_v1_types_proto_enumTypes[9]
 }
 
 func (x NotificationType) Number() protoreflect.EnumNumber {
@@ -626,7 +686,7 @@ func (x NotificationType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NotificationType.Descriptor instead.
 func (NotificationType) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{8}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{9}
 }
 
 // NotificationPriority determines UI treatment for notifications.
@@ -670,11 +730,11 @@ func (x NotificationPriority) String() string {
 }
 
 func (NotificationPriority) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[9].Descriptor()
+	return file_session_v1_types_proto_enumTypes[10].Descriptor()
 }
 
 func (NotificationPriority) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[9]
+	return &file_session_v1_types_proto_enumTypes[10]
 }
 
 func (x NotificationPriority) Number() protoreflect.EnumNumber {
@@ -683,7 +743,7 @@ func (x NotificationPriority) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NotificationPriority.Descriptor instead.
 func (NotificationPriority) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{9}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{10}
 }
 
 // VCSType represents the type of version control system
@@ -720,11 +780,11 @@ func (x VCSType) String() string {
 }
 
 func (VCSType) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[10].Descriptor()
+	return file_session_v1_types_proto_enumTypes[11].Descriptor()
 }
 
 func (VCSType) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[10]
+	return &file_session_v1_types_proto_enumTypes[11]
 }
 
 func (x VCSType) Number() protoreflect.EnumNumber {
@@ -733,7 +793,7 @@ func (x VCSType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VCSType.Descriptor instead.
 func (VCSType) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{10}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{11}
 }
 
 // FileStatus represents the status of a file in version control
@@ -788,11 +848,11 @@ func (x FileStatus) String() string {
 }
 
 func (FileStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[11].Descriptor()
+	return file_session_v1_types_proto_enumTypes[12].Descriptor()
 }
 
 func (FileStatus) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[11]
+	return &file_session_v1_types_proto_enumTypes[12]
 }
 
 func (x FileStatus) Number() protoreflect.EnumNumber {
@@ -801,7 +861,7 @@ func (x FileStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use FileStatus.Descriptor instead.
 func (FileStatus) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{11}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{12}
 }
 
 // WorkspaceSwitchType defines the type of workspace switch operation
@@ -844,11 +904,11 @@ func (x WorkspaceSwitchType) String() string {
 }
 
 func (WorkspaceSwitchType) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[12].Descriptor()
+	return file_session_v1_types_proto_enumTypes[13].Descriptor()
 }
 
 func (WorkspaceSwitchType) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[12]
+	return &file_session_v1_types_proto_enumTypes[13]
 }
 
 func (x WorkspaceSwitchType) Number() protoreflect.EnumNumber {
@@ -857,7 +917,7 @@ func (x WorkspaceSwitchType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WorkspaceSwitchType.Descriptor instead.
 func (WorkspaceSwitchType) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{12}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{13}
 }
 
 // ChangeStrategy defines how to handle uncommitted changes during workspace switches
@@ -900,11 +960,11 @@ func (x ChangeStrategy) String() string {
 }
 
 func (ChangeStrategy) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[13].Descriptor()
+	return file_session_v1_types_proto_enumTypes[14].Descriptor()
 }
 
 func (ChangeStrategy) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[13]
+	return &file_session_v1_types_proto_enumTypes[14]
 }
 
 func (x ChangeStrategy) Number() protoreflect.EnumNumber {
@@ -913,7 +973,7 @@ func (x ChangeStrategy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ChangeStrategy.Descriptor instead.
 func (ChangeStrategy) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{13}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{14}
 }
 
 // AutoDecision is the action the classifier takes for a matching rule.
@@ -953,11 +1013,11 @@ func (x AutoDecision) String() string {
 }
 
 func (AutoDecision) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[14].Descriptor()
+	return file_session_v1_types_proto_enumTypes[15].Descriptor()
 }
 
 func (AutoDecision) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[14]
+	return &file_session_v1_types_proto_enumTypes[15]
 }
 
 func (x AutoDecision) Number() protoreflect.EnumNumber {
@@ -966,7 +1026,7 @@ func (x AutoDecision) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AutoDecision.Descriptor instead.
 func (AutoDecision) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{14}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{15}
 }
 
 // ScanStatus indicates the result quality of the last unfinished-work scan.
@@ -1009,11 +1069,11 @@ func (x ScanStatus) String() string {
 }
 
 func (ScanStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[15].Descriptor()
+	return file_session_v1_types_proto_enumTypes[16].Descriptor()
 }
 
 func (ScanStatus) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[15]
+	return &file_session_v1_types_proto_enumTypes[16]
 }
 
 func (x ScanStatus) Number() protoreflect.EnumNumber {
@@ -1022,7 +1082,7 @@ func (x ScanStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ScanStatus.Descriptor instead.
 func (ScanStatus) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{15}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{16}
 }
 
 // Session represents a running AI agent instance with its associated state.
@@ -1135,7 +1195,9 @@ type Session struct {
 	// Active-work state for review queue filtering. Populated from IdleDetector state.
 	WorkingState WorkingState `protobuf:"varint,50,opt,name=working_state,json=workingState,proto3,enum=session.v1.WorkingState" json:"working_state,omitempty"`
 	// VNC/browser passthrough state. Populated when VNC is supported on the host.
-	VncState      *VNCState `protobuf:"bytes,51,opt,name=vnc_state,json=vncState,proto3" json:"vnc_state,omitempty"`
+	VncState *VNCState `protobuf:"bytes,51,opt,name=vnc_state,json=vncState,proto3" json:"vnc_state,omitempty"`
+	// CDP browser streaming state. Populated when Chrome is available on the host.
+	CdpState      *CDPState `protobuf:"bytes,52,opt,name=cdp_state,json=cdpState,proto3" json:"cdp_state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1513,6 +1575,13 @@ func (x *Session) GetVncState() *VNCState {
 	return nil
 }
 
+func (x *Session) GetCdpState() *CDPState {
+	if x != nil {
+		return x.CdpState
+	}
+	return nil
+}
+
 // VNCState holds the browser-passthrough state for a session.
 type VNCState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1587,6 +1656,61 @@ func (x *VNCState) GetBrowserWindowDetected() bool {
 	return false
 }
 
+// CDPState holds the Chrome DevTools Protocol streaming state for a session.
+type CDPState struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Current operational status.
+	Status CDPStatus `protobuf:"varint,1,opt,name=status,proto3,enum=session.v1.CDPStatus" json:"status,omitempty"`
+	// Allocated CDP TCP port on localhost (e.g. 9222). Zero if unavailable.
+	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CDPState) Reset() {
+	*x = CDPState{}
+	mi := &file_session_v1_types_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CDPState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CDPState) ProtoMessage() {}
+
+func (x *CDPState) ProtoReflect() protoreflect.Message {
+	mi := &file_session_v1_types_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CDPState.ProtoReflect.Descriptor instead.
+func (*CDPState) Descriptor() ([]byte, []int) {
+	return file_session_v1_types_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *CDPState) GetStatus() CDPStatus {
+	if x != nil {
+		return x.Status
+	}
+	return CDPStatus_CDP_STATUS_UNSPECIFIED
+}
+
+func (x *CDPState) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
 // ExternalInstanceMetadata contains metadata for externally discovered sessions.
 type ExternalInstanceMetadata struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1612,7 +1736,7 @@ type ExternalInstanceMetadata struct {
 
 func (x *ExternalInstanceMetadata) Reset() {
 	*x = ExternalInstanceMetadata{}
-	mi := &file_session_v1_types_proto_msgTypes[2]
+	mi := &file_session_v1_types_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1624,7 +1748,7 @@ func (x *ExternalInstanceMetadata) String() string {
 func (*ExternalInstanceMetadata) ProtoMessage() {}
 
 func (x *ExternalInstanceMetadata) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[2]
+	mi := &file_session_v1_types_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1637,7 +1761,7 @@ func (x *ExternalInstanceMetadata) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExternalInstanceMetadata.ProtoReflect.Descriptor instead.
 func (*ExternalInstanceMetadata) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{2}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ExternalInstanceMetadata) GetTmuxSocket() string {
@@ -1712,7 +1836,7 @@ type DiffStats struct {
 
 func (x *DiffStats) Reset() {
 	*x = DiffStats{}
-	mi := &file_session_v1_types_proto_msgTypes[3]
+	mi := &file_session_v1_types_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1724,7 +1848,7 @@ func (x *DiffStats) String() string {
 func (*DiffStats) ProtoMessage() {}
 
 func (x *DiffStats) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[3]
+	mi := &file_session_v1_types_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1737,7 +1861,7 @@ func (x *DiffStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DiffStats.ProtoReflect.Descriptor instead.
 func (*DiffStats) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{3}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DiffStats) GetAdded() int32 {
@@ -1781,7 +1905,7 @@ type GitWorktree struct {
 
 func (x *GitWorktree) Reset() {
 	*x = GitWorktree{}
-	mi := &file_session_v1_types_proto_msgTypes[4]
+	mi := &file_session_v1_types_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1793,7 +1917,7 @@ func (x *GitWorktree) String() string {
 func (*GitWorktree) ProtoMessage() {}
 
 func (x *GitWorktree) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[4]
+	mi := &file_session_v1_types_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1806,7 +1930,7 @@ func (x *GitWorktree) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GitWorktree.ProtoReflect.Descriptor instead.
 func (*GitWorktree) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{4}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GitWorktree) GetRepoPath() string {
@@ -1866,7 +1990,7 @@ type ClaudeSession struct {
 
 func (x *ClaudeSession) Reset() {
 	*x = ClaudeSession{}
-	mi := &file_session_v1_types_proto_msgTypes[5]
+	mi := &file_session_v1_types_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1878,7 +2002,7 @@ func (x *ClaudeSession) String() string {
 func (*ClaudeSession) ProtoMessage() {}
 
 func (x *ClaudeSession) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[5]
+	mi := &file_session_v1_types_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1891,7 +2015,7 @@ func (x *ClaudeSession) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaudeSession.ProtoReflect.Descriptor instead.
 func (*ClaudeSession) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{5}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ClaudeSession) GetSessionId() string {
@@ -1955,7 +2079,7 @@ type ClaudeSettings struct {
 
 func (x *ClaudeSettings) Reset() {
 	*x = ClaudeSettings{}
-	mi := &file_session_v1_types_proto_msgTypes[6]
+	mi := &file_session_v1_types_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1967,7 +2091,7 @@ func (x *ClaudeSettings) String() string {
 func (*ClaudeSettings) ProtoMessage() {}
 
 func (x *ClaudeSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[6]
+	mi := &file_session_v1_types_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1980,7 +2104,7 @@ func (x *ClaudeSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClaudeSettings.ProtoReflect.Descriptor instead.
 func (*ClaudeSettings) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{6}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ClaudeSettings) GetAutoReattach() bool {
@@ -2072,7 +2196,7 @@ type ReviewItem struct {
 
 func (x *ReviewItem) Reset() {
 	*x = ReviewItem{}
-	mi := &file_session_v1_types_proto_msgTypes[7]
+	mi := &file_session_v1_types_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2084,7 +2208,7 @@ func (x *ReviewItem) String() string {
 func (*ReviewItem) ProtoMessage() {}
 
 func (x *ReviewItem) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[7]
+	mi := &file_session_v1_types_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2097,7 +2221,7 @@ func (x *ReviewItem) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReviewItem.ProtoReflect.Descriptor instead.
 func (*ReviewItem) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{7}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ReviewItem) GetSessionId() string {
@@ -2282,7 +2406,7 @@ type PRInfo struct {
 
 func (x *PRInfo) Reset() {
 	*x = PRInfo{}
-	mi := &file_session_v1_types_proto_msgTypes[8]
+	mi := &file_session_v1_types_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2294,7 +2418,7 @@ func (x *PRInfo) String() string {
 func (*PRInfo) ProtoMessage() {}
 
 func (x *PRInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[8]
+	mi := &file_session_v1_types_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2307,7 +2431,7 @@ func (x *PRInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PRInfo.ProtoReflect.Descriptor instead.
 func (*PRInfo) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{8}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *PRInfo) GetNumber() int32 {
@@ -2445,7 +2569,7 @@ type PRComment struct {
 
 func (x *PRComment) Reset() {
 	*x = PRComment{}
-	mi := &file_session_v1_types_proto_msgTypes[9]
+	mi := &file_session_v1_types_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2457,7 +2581,7 @@ func (x *PRComment) String() string {
 func (*PRComment) ProtoMessage() {}
 
 func (x *PRComment) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[9]
+	mi := &file_session_v1_types_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2470,7 +2594,7 @@ func (x *PRComment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PRComment.ProtoReflect.Descriptor instead.
 func (*PRComment) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{9}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PRComment) GetId() int32 {
@@ -2545,7 +2669,7 @@ type ReviewQueue struct {
 
 func (x *ReviewQueue) Reset() {
 	*x = ReviewQueue{}
-	mi := &file_session_v1_types_proto_msgTypes[10]
+	mi := &file_session_v1_types_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2557,7 +2681,7 @@ func (x *ReviewQueue) String() string {
 func (*ReviewQueue) ProtoMessage() {}
 
 func (x *ReviewQueue) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[10]
+	mi := &file_session_v1_types_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2570,7 +2694,7 @@ func (x *ReviewQueue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReviewQueue.ProtoReflect.Descriptor instead.
 func (*ReviewQueue) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{10}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ReviewQueue) GetTotalItems() int32 {
@@ -2649,7 +2773,7 @@ type Notification struct {
 
 func (x *Notification) Reset() {
 	*x = Notification{}
-	mi := &file_session_v1_types_proto_msgTypes[11]
+	mi := &file_session_v1_types_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2661,7 +2785,7 @@ func (x *Notification) String() string {
 func (*Notification) ProtoMessage() {}
 
 func (x *Notification) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[11]
+	mi := &file_session_v1_types_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2674,7 +2798,7 @@ func (x *Notification) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Notification.ProtoReflect.Descriptor instead.
 func (*Notification) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{11}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *Notification) GetId() string {
@@ -2757,7 +2881,7 @@ type FileChange struct {
 
 func (x *FileChange) Reset() {
 	*x = FileChange{}
-	mi := &file_session_v1_types_proto_msgTypes[12]
+	mi := &file_session_v1_types_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2769,7 +2893,7 @@ func (x *FileChange) String() string {
 func (*FileChange) ProtoMessage() {}
 
 func (x *FileChange) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[12]
+	mi := &file_session_v1_types_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2782,7 +2906,7 @@ func (x *FileChange) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileChange.ProtoReflect.Descriptor instead.
 func (*FileChange) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{12}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *FileChange) GetPath() string {
@@ -2854,7 +2978,7 @@ type VCSStatus struct {
 
 func (x *VCSStatus) Reset() {
 	*x = VCSStatus{}
-	mi := &file_session_v1_types_proto_msgTypes[13]
+	mi := &file_session_v1_types_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2866,7 +2990,7 @@ func (x *VCSStatus) String() string {
 func (*VCSStatus) ProtoMessage() {}
 
 func (x *VCSStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[13]
+	mi := &file_session_v1_types_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2879,7 +3003,7 @@ func (x *VCSStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VCSStatus.ProtoReflect.Descriptor instead.
 func (*VCSStatus) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{13}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *VCSStatus) GetType() VCSType {
@@ -3011,7 +3135,7 @@ type BookmarkTarget struct {
 
 func (x *BookmarkTarget) Reset() {
 	*x = BookmarkTarget{}
-	mi := &file_session_v1_types_proto_msgTypes[14]
+	mi := &file_session_v1_types_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3023,7 +3147,7 @@ func (x *BookmarkTarget) String() string {
 func (*BookmarkTarget) ProtoMessage() {}
 
 func (x *BookmarkTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[14]
+	mi := &file_session_v1_types_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3036,7 +3160,7 @@ func (x *BookmarkTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BookmarkTarget.ProtoReflect.Descriptor instead.
 func (*BookmarkTarget) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{14}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *BookmarkTarget) GetName() string {
@@ -3090,7 +3214,7 @@ type RevisionTarget struct {
 
 func (x *RevisionTarget) Reset() {
 	*x = RevisionTarget{}
-	mi := &file_session_v1_types_proto_msgTypes[15]
+	mi := &file_session_v1_types_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3102,7 +3226,7 @@ func (x *RevisionTarget) String() string {
 func (*RevisionTarget) ProtoMessage() {}
 
 func (x *RevisionTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[15]
+	mi := &file_session_v1_types_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3115,7 +3239,7 @@ func (x *RevisionTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RevisionTarget.ProtoReflect.Descriptor instead.
 func (*RevisionTarget) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{15}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RevisionTarget) GetId() string {
@@ -3186,7 +3310,7 @@ type WorktreeTarget struct {
 
 func (x *WorktreeTarget) Reset() {
 	*x = WorktreeTarget{}
-	mi := &file_session_v1_types_proto_msgTypes[16]
+	mi := &file_session_v1_types_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3198,7 +3322,7 @@ func (x *WorktreeTarget) String() string {
 func (*WorktreeTarget) ProtoMessage() {}
 
 func (x *WorktreeTarget) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[16]
+	mi := &file_session_v1_types_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3211,7 +3335,7 @@ func (x *WorktreeTarget) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorktreeTarget.ProtoReflect.Descriptor instead.
 func (*WorktreeTarget) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{16}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *WorktreeTarget) GetName() string {
@@ -3266,7 +3390,7 @@ type AvailableWorkspaceTargets struct {
 
 func (x *AvailableWorkspaceTargets) Reset() {
 	*x = AvailableWorkspaceTargets{}
-	mi := &file_session_v1_types_proto_msgTypes[17]
+	mi := &file_session_v1_types_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3278,7 +3402,7 @@ func (x *AvailableWorkspaceTargets) String() string {
 func (*AvailableWorkspaceTargets) ProtoMessage() {}
 
 func (x *AvailableWorkspaceTargets) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[17]
+	mi := &file_session_v1_types_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3291,7 +3415,7 @@ func (x *AvailableWorkspaceTargets) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AvailableWorkspaceTargets.ProtoReflect.Descriptor instead.
 func (*AvailableWorkspaceTargets) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{17}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *AvailableWorkspaceTargets) GetVcsType() VCSType {
@@ -3349,7 +3473,7 @@ type VCSInfo struct {
 
 func (x *VCSInfo) Reset() {
 	*x = VCSInfo{}
-	mi := &file_session_v1_types_proto_msgTypes[18]
+	mi := &file_session_v1_types_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3361,7 +3485,7 @@ func (x *VCSInfo) String() string {
 func (*VCSInfo) ProtoMessage() {}
 
 func (x *VCSInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[18]
+	mi := &file_session_v1_types_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3374,7 +3498,7 @@ func (x *VCSInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VCSInfo.ProtoReflect.Descriptor instead.
 func (*VCSInfo) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{18}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *VCSInfo) GetVcsType() VCSType {
@@ -3468,7 +3592,7 @@ type PendingApprovalProto struct {
 
 func (x *PendingApprovalProto) Reset() {
 	*x = PendingApprovalProto{}
-	mi := &file_session_v1_types_proto_msgTypes[19]
+	mi := &file_session_v1_types_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3480,7 +3604,7 @@ func (x *PendingApprovalProto) String() string {
 func (*PendingApprovalProto) ProtoMessage() {}
 
 func (x *PendingApprovalProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[19]
+	mi := &file_session_v1_types_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3493,7 +3617,7 @@ func (x *PendingApprovalProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PendingApprovalProto.ProtoReflect.Descriptor instead.
 func (*PendingApprovalProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{19}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *PendingApprovalProto) GetId() string {
@@ -3582,7 +3706,7 @@ type ApprovalRuleProto struct {
 
 func (x *ApprovalRuleProto) Reset() {
 	*x = ApprovalRuleProto{}
-	mi := &file_session_v1_types_proto_msgTypes[20]
+	mi := &file_session_v1_types_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3594,7 +3718,7 @@ func (x *ApprovalRuleProto) String() string {
 func (*ApprovalRuleProto) ProtoMessage() {}
 
 func (x *ApprovalRuleProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[20]
+	mi := &file_session_v1_types_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3607,7 +3731,7 @@ func (x *ApprovalRuleProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ApprovalRuleProto.ProtoReflect.Descriptor instead.
 func (*ApprovalRuleProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{20}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *ApprovalRuleProto) GetId() string {
@@ -3742,7 +3866,7 @@ type AnalyticsSummaryProto struct {
 
 func (x *AnalyticsSummaryProto) Reset() {
 	*x = AnalyticsSummaryProto{}
-	mi := &file_session_v1_types_proto_msgTypes[21]
+	mi := &file_session_v1_types_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3754,7 +3878,7 @@ func (x *AnalyticsSummaryProto) String() string {
 func (*AnalyticsSummaryProto) ProtoMessage() {}
 
 func (x *AnalyticsSummaryProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[21]
+	mi := &file_session_v1_types_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3767,7 +3891,7 @@ func (x *AnalyticsSummaryProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AnalyticsSummaryProto.ProtoReflect.Descriptor instead.
 func (*AnalyticsSummaryProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{21}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *AnalyticsSummaryProto) GetTotalDecisions() int32 {
@@ -3892,7 +4016,7 @@ type ToolStatProto struct {
 
 func (x *ToolStatProto) Reset() {
 	*x = ToolStatProto{}
-	mi := &file_session_v1_types_proto_msgTypes[22]
+	mi := &file_session_v1_types_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3904,7 +4028,7 @@ func (x *ToolStatProto) String() string {
 func (*ToolStatProto) ProtoMessage() {}
 
 func (x *ToolStatProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[22]
+	mi := &file_session_v1_types_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3917,7 +4041,7 @@ func (x *ToolStatProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolStatProto.ProtoReflect.Descriptor instead.
 func (*ToolStatProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{22}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ToolStatProto) GetToolName() string {
@@ -3945,7 +4069,7 @@ type CommandStatProto struct {
 
 func (x *CommandStatProto) Reset() {
 	*x = CommandStatProto{}
-	mi := &file_session_v1_types_proto_msgTypes[23]
+	mi := &file_session_v1_types_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3957,7 +4081,7 @@ func (x *CommandStatProto) String() string {
 func (*CommandStatProto) ProtoMessage() {}
 
 func (x *CommandStatProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[23]
+	mi := &file_session_v1_types_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3970,7 +4094,7 @@ func (x *CommandStatProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommandStatProto.ProtoReflect.Descriptor instead.
 func (*CommandStatProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{23}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CommandStatProto) GetPreview() string {
@@ -4005,7 +4129,7 @@ type RuleStatProto struct {
 
 func (x *RuleStatProto) Reset() {
 	*x = RuleStatProto{}
-	mi := &file_session_v1_types_proto_msgTypes[24]
+	mi := &file_session_v1_types_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4017,7 +4141,7 @@ func (x *RuleStatProto) String() string {
 func (*RuleStatProto) ProtoMessage() {}
 
 func (x *RuleStatProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[24]
+	mi := &file_session_v1_types_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4030,7 +4154,7 @@ func (x *RuleStatProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuleStatProto.ProtoReflect.Descriptor instead.
 func (*RuleStatProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{24}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *RuleStatProto) GetRuleId() string {
@@ -4068,7 +4192,7 @@ type ProgramStatProto struct {
 
 func (x *ProgramStatProto) Reset() {
 	*x = ProgramStatProto{}
-	mi := &file_session_v1_types_proto_msgTypes[25]
+	mi := &file_session_v1_types_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4080,7 +4204,7 @@ func (x *ProgramStatProto) String() string {
 func (*ProgramStatProto) ProtoMessage() {}
 
 func (x *ProgramStatProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[25]
+	mi := &file_session_v1_types_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4093,7 +4217,7 @@ func (x *ProgramStatProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProgramStatProto.ProtoReflect.Descriptor instead.
 func (*ProgramStatProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{25}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ProgramStatProto) GetProgramName() string {
@@ -4129,7 +4253,7 @@ type ImportStatProto struct {
 
 func (x *ImportStatProto) Reset() {
 	*x = ImportStatProto{}
-	mi := &file_session_v1_types_proto_msgTypes[26]
+	mi := &file_session_v1_types_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4141,7 +4265,7 @@ func (x *ImportStatProto) String() string {
 func (*ImportStatProto) ProtoMessage() {}
 
 func (x *ImportStatProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[26]
+	mi := &file_session_v1_types_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4154,7 +4278,7 @@ func (x *ImportStatProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ImportStatProto.ProtoReflect.Descriptor instead.
 func (*ImportStatProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{26}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ImportStatProto) GetModule() string {
@@ -4185,7 +4309,7 @@ type SubcommandStatProto struct {
 
 func (x *SubcommandStatProto) Reset() {
 	*x = SubcommandStatProto{}
-	mi := &file_session_v1_types_proto_msgTypes[27]
+	mi := &file_session_v1_types_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4197,7 +4321,7 @@ func (x *SubcommandStatProto) String() string {
 func (*SubcommandStatProto) ProtoMessage() {}
 
 func (x *SubcommandStatProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[27]
+	mi := &file_session_v1_types_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4210,7 +4334,7 @@ func (x *SubcommandStatProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubcommandStatProto.ProtoReflect.Descriptor instead.
 func (*SubcommandStatProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{27}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SubcommandStatProto) GetProgramName() string {
@@ -4258,7 +4382,7 @@ type DailyBucketProto struct {
 
 func (x *DailyBucketProto) Reset() {
 	*x = DailyBucketProto{}
-	mi := &file_session_v1_types_proto_msgTypes[28]
+	mi := &file_session_v1_types_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4270,7 +4394,7 @@ func (x *DailyBucketProto) String() string {
 func (*DailyBucketProto) ProtoMessage() {}
 
 func (x *DailyBucketProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[28]
+	mi := &file_session_v1_types_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4283,7 +4407,7 @@ func (x *DailyBucketProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DailyBucketProto.ProtoReflect.Descriptor instead.
 func (*DailyBucketProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{28}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *DailyBucketProto) GetDate() string {
@@ -4361,7 +4485,7 @@ type DatabaseInfo struct {
 
 func (x *DatabaseInfo) Reset() {
 	*x = DatabaseInfo{}
-	mi := &file_session_v1_types_proto_msgTypes[29]
+	mi := &file_session_v1_types_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4373,7 +4497,7 @@ func (x *DatabaseInfo) String() string {
 func (*DatabaseInfo) ProtoMessage() {}
 
 func (x *DatabaseInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[29]
+	mi := &file_session_v1_types_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4386,7 +4510,7 @@ func (x *DatabaseInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DatabaseInfo.ProtoReflect.Descriptor instead.
 func (*DatabaseInfo) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{29}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *DatabaseInfo) GetWorkspaceId() string {
@@ -4470,7 +4594,7 @@ type FileNode struct {
 
 func (x *FileNode) Reset() {
 	*x = FileNode{}
-	mi := &file_session_v1_types_proto_msgTypes[30]
+	mi := &file_session_v1_types_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4482,7 +4606,7 @@ func (x *FileNode) String() string {
 func (*FileNode) ProtoMessage() {}
 
 func (x *FileNode) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[30]
+	mi := &file_session_v1_types_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4495,7 +4619,7 @@ func (x *FileNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FileNode.ProtoReflect.Descriptor instead.
 func (*FileNode) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{30}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *FileNode) GetName() string {
@@ -4582,7 +4706,7 @@ type CheckpointProto struct {
 
 func (x *CheckpointProto) Reset() {
 	*x = CheckpointProto{}
-	mi := &file_session_v1_types_proto_msgTypes[31]
+	mi := &file_session_v1_types_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4594,7 +4718,7 @@ func (x *CheckpointProto) String() string {
 func (*CheckpointProto) ProtoMessage() {}
 
 func (x *CheckpointProto) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[31]
+	mi := &file_session_v1_types_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4607,7 +4731,7 @@ func (x *CheckpointProto) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckpointProto.ProtoReflect.Descriptor instead.
 func (*CheckpointProto) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{31}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CheckpointProto) GetId() string {
@@ -4709,7 +4833,7 @@ type UnfinishedWorktree struct {
 
 func (x *UnfinishedWorktree) Reset() {
 	*x = UnfinishedWorktree{}
-	mi := &file_session_v1_types_proto_msgTypes[32]
+	mi := &file_session_v1_types_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4721,7 +4845,7 @@ func (x *UnfinishedWorktree) String() string {
 func (*UnfinishedWorktree) ProtoMessage() {}
 
 func (x *UnfinishedWorktree) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[32]
+	mi := &file_session_v1_types_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4734,7 +4858,7 @@ func (x *UnfinishedWorktree) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnfinishedWorktree.ProtoReflect.Descriptor instead.
 func (*UnfinishedWorktree) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{32}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *UnfinishedWorktree) GetRepoPath() string {
@@ -4889,7 +5013,7 @@ type UnfinishedWorkConfig struct {
 
 func (x *UnfinishedWorkConfig) Reset() {
 	*x = UnfinishedWorkConfig{}
-	mi := &file_session_v1_types_proto_msgTypes[33]
+	mi := &file_session_v1_types_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4901,7 +5025,7 @@ func (x *UnfinishedWorkConfig) String() string {
 func (*UnfinishedWorkConfig) ProtoMessage() {}
 
 func (x *UnfinishedWorkConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_session_v1_types_proto_msgTypes[33]
+	mi := &file_session_v1_types_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4914,7 +5038,7 @@ func (x *UnfinishedWorkConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnfinishedWorkConfig.ProtoReflect.Descriptor instead.
 func (*UnfinishedWorkConfig) Descriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{33}
+	return file_session_v1_types_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *UnfinishedWorkConfig) GetAutoSpiderSessions() bool {
@@ -4943,7 +5067,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc6\x11\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf9\x11\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -5002,12 +5126,16 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x0einitial_prompt\x18, \x01(\tR\rinitialPrompt\x12%\n" +
 	"\x0elaunch_command\x18- \x01(\tR\rlaunchCommand\x12=\n" +
 	"\rworking_state\x182 \x01(\x0e2\x18.session.v1.WorkingStateR\fworkingState\x121\n" +
-	"\tvnc_state\x183 \x01(\v2\x14.session.v1.VNCStateR\bvncState\"\xbb\x01\n" +
+	"\tvnc_state\x183 \x01(\v2\x14.session.v1.VNCStateR\bvncState\x121\n" +
+	"\tcdp_state\x184 \x01(\v2\x14.session.v1.CDPStateR\bcdpState\"\xbb\x01\n" +
 	"\bVNCState\x12-\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x15.session.v1.VNCStatusR\x06status\x12%\n" +
 	"\x0edisplay_number\x18\x02 \x01(\x05R\rdisplayNumber\x12!\n" +
 	"\fvnc_password\x18\x03 \x01(\tR\vvncPassword\x126\n" +
-	"\x17browser_window_detected\x18\x04 \x01(\bR\x15browserWindowDetected\"\xf6\x02\n" +
+	"\x17browser_window_detected\x18\x04 \x01(\bR\x15browserWindowDetected\"M\n" +
+	"\bCDPState\x12-\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x15.session.v1.CDPStatusR\x06status\x12\x12\n" +
+	"\x04port\x18\x02 \x01(\x05R\x04port\"\xf6\x02\n" +
 	"\x18ExternalInstanceMetadata\x12\x1f\n" +
 	"\vtmux_socket\x18\x01 \x01(\tR\n" +
 	"tmuxSocket\x12*\n" +
@@ -5364,7 +5492,13 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x13VNC_STATUS_STARTING\x10\x01\x12\x14\n" +
 	"\x10VNC_STATUS_READY\x10\x02\x12\x19\n" +
 	"\x15VNC_STATUS_NO_BROWSER\x10\x03\x12\x1a\n" +
-	"\x16VNC_STATUS_UNAVAILABLE\x10\x04*\xf8\x01\n" +
+	"\x16VNC_STATUS_UNAVAILABLE\x10\x04*\x90\x01\n" +
+	"\tCDPStatus\x12\x1a\n" +
+	"\x16CDP_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
+	"\x12CDP_STATUS_WAITING\x10\x01\x12\x18\n" +
+	"\x14CDP_STATUS_STREAMING\x10\x02\x12\x19\n" +
+	"\x15CDP_STATUS_NO_BROWSER\x10\x03\x12\x1a\n" +
+	"\x16CDP_STATUS_UNAVAILABLE\x10\x04*\xf8\x01\n" +
 	"\rSessionStatus\x12\x1e\n" +
 	"\x1aSESSION_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SESSION_STATUS_RUNNING\x10\x01\x12\x18\n" +
@@ -5493,147 +5627,151 @@ func file_session_v1_types_proto_rawDescGZIP() []byte {
 	return file_session_v1_types_proto_rawDescData
 }
 
-var file_session_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 16)
-var file_session_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
+var file_session_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 17)
+var file_session_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
 var file_session_v1_types_proto_goTypes = []any{
 	(VNCStatus)(0),                    // 0: session.v1.VNCStatus
-	(SessionStatus)(0),                // 1: session.v1.SessionStatus
-	(SessionType)(0),                  // 2: session.v1.SessionType
-	(InstanceType)(0),                 // 3: session.v1.InstanceType
-	(WorkingState)(0),                 // 4: session.v1.WorkingState
-	(RateLimitState)(0),               // 5: session.v1.RateLimitState
-	(Priority)(0),                     // 6: session.v1.Priority
-	(AttentionReason)(0),              // 7: session.v1.AttentionReason
-	(NotificationType)(0),             // 8: session.v1.NotificationType
-	(NotificationPriority)(0),         // 9: session.v1.NotificationPriority
-	(VCSType)(0),                      // 10: session.v1.VCSType
-	(FileStatus)(0),                   // 11: session.v1.FileStatus
-	(WorkspaceSwitchType)(0),          // 12: session.v1.WorkspaceSwitchType
-	(ChangeStrategy)(0),               // 13: session.v1.ChangeStrategy
-	(AutoDecision)(0),                 // 14: session.v1.AutoDecision
-	(ScanStatus)(0),                   // 15: session.v1.ScanStatus
-	(*Session)(nil),                   // 16: session.v1.Session
-	(*VNCState)(nil),                  // 17: session.v1.VNCState
-	(*ExternalInstanceMetadata)(nil),  // 18: session.v1.ExternalInstanceMetadata
-	(*DiffStats)(nil),                 // 19: session.v1.DiffStats
-	(*GitWorktree)(nil),               // 20: session.v1.GitWorktree
-	(*ClaudeSession)(nil),             // 21: session.v1.ClaudeSession
-	(*ClaudeSettings)(nil),            // 22: session.v1.ClaudeSettings
-	(*ReviewItem)(nil),                // 23: session.v1.ReviewItem
-	(*PRInfo)(nil),                    // 24: session.v1.PRInfo
-	(*PRComment)(nil),                 // 25: session.v1.PRComment
-	(*ReviewQueue)(nil),               // 26: session.v1.ReviewQueue
-	(*Notification)(nil),              // 27: session.v1.Notification
-	(*FileChange)(nil),                // 28: session.v1.FileChange
-	(*VCSStatus)(nil),                 // 29: session.v1.VCSStatus
-	(*BookmarkTarget)(nil),            // 30: session.v1.BookmarkTarget
-	(*RevisionTarget)(nil),            // 31: session.v1.RevisionTarget
-	(*WorktreeTarget)(nil),            // 32: session.v1.WorktreeTarget
-	(*AvailableWorkspaceTargets)(nil), // 33: session.v1.AvailableWorkspaceTargets
-	(*VCSInfo)(nil),                   // 34: session.v1.VCSInfo
-	(*PendingApprovalProto)(nil),      // 35: session.v1.PendingApprovalProto
-	(*ApprovalRuleProto)(nil),         // 36: session.v1.ApprovalRuleProto
-	(*AnalyticsSummaryProto)(nil),     // 37: session.v1.AnalyticsSummaryProto
-	(*ToolStatProto)(nil),             // 38: session.v1.ToolStatProto
-	(*CommandStatProto)(nil),          // 39: session.v1.CommandStatProto
-	(*RuleStatProto)(nil),             // 40: session.v1.RuleStatProto
-	(*ProgramStatProto)(nil),          // 41: session.v1.ProgramStatProto
-	(*ImportStatProto)(nil),           // 42: session.v1.ImportStatProto
-	(*SubcommandStatProto)(nil),       // 43: session.v1.SubcommandStatProto
-	(*DailyBucketProto)(nil),          // 44: session.v1.DailyBucketProto
-	(*DatabaseInfo)(nil),              // 45: session.v1.DatabaseInfo
-	(*FileNode)(nil),                  // 46: session.v1.FileNode
-	(*CheckpointProto)(nil),           // 47: session.v1.CheckpointProto
-	(*UnfinishedWorktree)(nil),        // 48: session.v1.UnfinishedWorktree
-	(*UnfinishedWorkConfig)(nil),      // 49: session.v1.UnfinishedWorkConfig
-	nil,                               // 50: session.v1.ClaudeSession.MetadataEntry
-	nil,                               // 51: session.v1.ReviewItem.MetadataEntry
-	nil,                               // 52: session.v1.ReviewQueue.ByPriorityEntry
-	nil,                               // 53: session.v1.ReviewQueue.ByReasonEntry
-	nil,                               // 54: session.v1.Notification.MetadataEntry
-	nil,                               // 55: session.v1.PendingApprovalProto.ToolInputEntry
-	nil,                               // 56: session.v1.AnalyticsSummaryProto.DecisionCountsEntry
-	(*timestamppb.Timestamp)(nil),     // 57: google.protobuf.Timestamp
+	(CDPStatus)(0),                    // 1: session.v1.CDPStatus
+	(SessionStatus)(0),                // 2: session.v1.SessionStatus
+	(SessionType)(0),                  // 3: session.v1.SessionType
+	(InstanceType)(0),                 // 4: session.v1.InstanceType
+	(WorkingState)(0),                 // 5: session.v1.WorkingState
+	(RateLimitState)(0),               // 6: session.v1.RateLimitState
+	(Priority)(0),                     // 7: session.v1.Priority
+	(AttentionReason)(0),              // 8: session.v1.AttentionReason
+	(NotificationType)(0),             // 9: session.v1.NotificationType
+	(NotificationPriority)(0),         // 10: session.v1.NotificationPriority
+	(VCSType)(0),                      // 11: session.v1.VCSType
+	(FileStatus)(0),                   // 12: session.v1.FileStatus
+	(WorkspaceSwitchType)(0),          // 13: session.v1.WorkspaceSwitchType
+	(ChangeStrategy)(0),               // 14: session.v1.ChangeStrategy
+	(AutoDecision)(0),                 // 15: session.v1.AutoDecision
+	(ScanStatus)(0),                   // 16: session.v1.ScanStatus
+	(*Session)(nil),                   // 17: session.v1.Session
+	(*VNCState)(nil),                  // 18: session.v1.VNCState
+	(*CDPState)(nil),                  // 19: session.v1.CDPState
+	(*ExternalInstanceMetadata)(nil),  // 20: session.v1.ExternalInstanceMetadata
+	(*DiffStats)(nil),                 // 21: session.v1.DiffStats
+	(*GitWorktree)(nil),               // 22: session.v1.GitWorktree
+	(*ClaudeSession)(nil),             // 23: session.v1.ClaudeSession
+	(*ClaudeSettings)(nil),            // 24: session.v1.ClaudeSettings
+	(*ReviewItem)(nil),                // 25: session.v1.ReviewItem
+	(*PRInfo)(nil),                    // 26: session.v1.PRInfo
+	(*PRComment)(nil),                 // 27: session.v1.PRComment
+	(*ReviewQueue)(nil),               // 28: session.v1.ReviewQueue
+	(*Notification)(nil),              // 29: session.v1.Notification
+	(*FileChange)(nil),                // 30: session.v1.FileChange
+	(*VCSStatus)(nil),                 // 31: session.v1.VCSStatus
+	(*BookmarkTarget)(nil),            // 32: session.v1.BookmarkTarget
+	(*RevisionTarget)(nil),            // 33: session.v1.RevisionTarget
+	(*WorktreeTarget)(nil),            // 34: session.v1.WorktreeTarget
+	(*AvailableWorkspaceTargets)(nil), // 35: session.v1.AvailableWorkspaceTargets
+	(*VCSInfo)(nil),                   // 36: session.v1.VCSInfo
+	(*PendingApprovalProto)(nil),      // 37: session.v1.PendingApprovalProto
+	(*ApprovalRuleProto)(nil),         // 38: session.v1.ApprovalRuleProto
+	(*AnalyticsSummaryProto)(nil),     // 39: session.v1.AnalyticsSummaryProto
+	(*ToolStatProto)(nil),             // 40: session.v1.ToolStatProto
+	(*CommandStatProto)(nil),          // 41: session.v1.CommandStatProto
+	(*RuleStatProto)(nil),             // 42: session.v1.RuleStatProto
+	(*ProgramStatProto)(nil),          // 43: session.v1.ProgramStatProto
+	(*ImportStatProto)(nil),           // 44: session.v1.ImportStatProto
+	(*SubcommandStatProto)(nil),       // 45: session.v1.SubcommandStatProto
+	(*DailyBucketProto)(nil),          // 46: session.v1.DailyBucketProto
+	(*DatabaseInfo)(nil),              // 47: session.v1.DatabaseInfo
+	(*FileNode)(nil),                  // 48: session.v1.FileNode
+	(*CheckpointProto)(nil),           // 49: session.v1.CheckpointProto
+	(*UnfinishedWorktree)(nil),        // 50: session.v1.UnfinishedWorktree
+	(*UnfinishedWorkConfig)(nil),      // 51: session.v1.UnfinishedWorkConfig
+	nil,                               // 52: session.v1.ClaudeSession.MetadataEntry
+	nil,                               // 53: session.v1.ReviewItem.MetadataEntry
+	nil,                               // 54: session.v1.ReviewQueue.ByPriorityEntry
+	nil,                               // 55: session.v1.ReviewQueue.ByReasonEntry
+	nil,                               // 56: session.v1.Notification.MetadataEntry
+	nil,                               // 57: session.v1.PendingApprovalProto.ToolInputEntry
+	nil,                               // 58: session.v1.AnalyticsSummaryProto.DecisionCountsEntry
+	(*timestamppb.Timestamp)(nil),     // 59: google.protobuf.Timestamp
 }
 var file_session_v1_types_proto_depIdxs = []int32{
-	1,  // 0: session.v1.Session.status:type_name -> session.v1.SessionStatus
-	57, // 1: session.v1.Session.created_at:type_name -> google.protobuf.Timestamp
-	57, // 2: session.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
-	57, // 3: session.v1.Session.last_terminal_update:type_name -> google.protobuf.Timestamp
-	57, // 4: session.v1.Session.last_meaningful_output:type_name -> google.protobuf.Timestamp
-	2,  // 5: session.v1.Session.session_type:type_name -> session.v1.SessionType
-	19, // 6: session.v1.Session.diff_stats:type_name -> session.v1.DiffStats
-	20, // 7: session.v1.Session.git_worktree:type_name -> session.v1.GitWorktree
-	21, // 8: session.v1.Session.claude_session:type_name -> session.v1.ClaudeSession
-	3,  // 9: session.v1.Session.instance_type:type_name -> session.v1.InstanceType
-	18, // 10: session.v1.Session.external_metadata:type_name -> session.v1.ExternalInstanceMetadata
-	57, // 11: session.v1.Session.last_pr_status_check:type_name -> google.protobuf.Timestamp
-	5,  // 12: session.v1.Session.rate_limit_state:type_name -> session.v1.RateLimitState
-	57, // 13: session.v1.Session.rate_limit_reset_time:type_name -> google.protobuf.Timestamp
-	4,  // 14: session.v1.Session.working_state:type_name -> session.v1.WorkingState
-	17, // 15: session.v1.Session.vnc_state:type_name -> session.v1.VNCState
-	0,  // 16: session.v1.VNCState.status:type_name -> session.v1.VNCStatus
-	57, // 17: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
-	57, // 18: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
-	57, // 19: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
-	22, // 20: session.v1.ClaudeSession.settings:type_name -> session.v1.ClaudeSettings
-	50, // 21: session.v1.ClaudeSession.metadata:type_name -> session.v1.ClaudeSession.MetadataEntry
-	7,  // 22: session.v1.ReviewItem.reason:type_name -> session.v1.AttentionReason
-	6,  // 23: session.v1.ReviewItem.priority:type_name -> session.v1.Priority
-	57, // 24: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
-	51, // 25: session.v1.ReviewItem.metadata:type_name -> session.v1.ReviewItem.MetadataEntry
-	1,  // 26: session.v1.ReviewItem.status:type_name -> session.v1.SessionStatus
-	19, // 27: session.v1.ReviewItem.diff_stats:type_name -> session.v1.DiffStats
-	57, // 28: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
-	4,  // 29: session.v1.ReviewItem.working_state:type_name -> session.v1.WorkingState
-	57, // 30: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
-	57, // 31: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	57, // 32: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
-	23, // 33: session.v1.ReviewQueue.items:type_name -> session.v1.ReviewItem
-	52, // 34: session.v1.ReviewQueue.by_priority:type_name -> session.v1.ReviewQueue.ByPriorityEntry
-	53, // 35: session.v1.ReviewQueue.by_reason:type_name -> session.v1.ReviewQueue.ByReasonEntry
-	8,  // 36: session.v1.Notification.notification_type:type_name -> session.v1.NotificationType
-	9,  // 37: session.v1.Notification.priority:type_name -> session.v1.NotificationPriority
-	57, // 38: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
-	54, // 39: session.v1.Notification.metadata:type_name -> session.v1.Notification.MetadataEntry
-	11, // 40: session.v1.FileChange.status:type_name -> session.v1.FileStatus
-	10, // 41: session.v1.VCSStatus.type:type_name -> session.v1.VCSType
-	28, // 42: session.v1.VCSStatus.staged_files:type_name -> session.v1.FileChange
-	28, // 43: session.v1.VCSStatus.unstaged_files:type_name -> session.v1.FileChange
-	28, // 44: session.v1.VCSStatus.untracked_files:type_name -> session.v1.FileChange
-	28, // 45: session.v1.VCSStatus.conflict_files:type_name -> session.v1.FileChange
-	57, // 46: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
-	10, // 47: session.v1.AvailableWorkspaceTargets.vcs_type:type_name -> session.v1.VCSType
-	30, // 48: session.v1.AvailableWorkspaceTargets.bookmarks:type_name -> session.v1.BookmarkTarget
-	31, // 49: session.v1.AvailableWorkspaceTargets.recent_revisions:type_name -> session.v1.RevisionTarget
-	32, // 50: session.v1.AvailableWorkspaceTargets.worktrees:type_name -> session.v1.WorktreeTarget
-	10, // 51: session.v1.VCSInfo.vcs_type:type_name -> session.v1.VCSType
-	55, // 52: session.v1.PendingApprovalProto.tool_input:type_name -> session.v1.PendingApprovalProto.ToolInputEntry
-	57, // 53: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
-	57, // 54: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
-	14, // 55: session.v1.ApprovalRuleProto.decision:type_name -> session.v1.AutoDecision
-	57, // 56: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
-	56, // 57: session.v1.AnalyticsSummaryProto.decision_counts:type_name -> session.v1.AnalyticsSummaryProto.DecisionCountsEntry
-	38, // 58: session.v1.AnalyticsSummaryProto.top_tools:type_name -> session.v1.ToolStatProto
-	39, // 59: session.v1.AnalyticsSummaryProto.top_denied_commands:type_name -> session.v1.CommandStatProto
-	40, // 60: session.v1.AnalyticsSummaryProto.top_triggered_rules:type_name -> session.v1.RuleStatProto
-	57, // 61: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
-	57, // 62: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
-	41, // 63: session.v1.AnalyticsSummaryProto.top_command_programs:type_name -> session.v1.ProgramStatProto
-	42, // 64: session.v1.AnalyticsSummaryProto.top_python_imports:type_name -> session.v1.ImportStatProto
-	38, // 65: session.v1.AnalyticsSummaryProto.top_uncovered_tools:type_name -> session.v1.ToolStatProto
-	41, // 66: session.v1.AnalyticsSummaryProto.top_uncovered_programs:type_name -> session.v1.ProgramStatProto
-	43, // 67: session.v1.AnalyticsSummaryProto.command_subcommand_stats:type_name -> session.v1.SubcommandStatProto
-	57, // 68: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
-	57, // 69: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
-	57, // 70: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
-	57, // 71: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
-	15, // 72: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
-	73, // [73:73] is the sub-list for method output_type
-	73, // [73:73] is the sub-list for method input_type
-	73, // [73:73] is the sub-list for extension type_name
-	73, // [73:73] is the sub-list for extension extendee
-	0,  // [0:73] is the sub-list for field type_name
+	2,  // 0: session.v1.Session.status:type_name -> session.v1.SessionStatus
+	59, // 1: session.v1.Session.created_at:type_name -> google.protobuf.Timestamp
+	59, // 2: session.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
+	59, // 3: session.v1.Session.last_terminal_update:type_name -> google.protobuf.Timestamp
+	59, // 4: session.v1.Session.last_meaningful_output:type_name -> google.protobuf.Timestamp
+	3,  // 5: session.v1.Session.session_type:type_name -> session.v1.SessionType
+	21, // 6: session.v1.Session.diff_stats:type_name -> session.v1.DiffStats
+	22, // 7: session.v1.Session.git_worktree:type_name -> session.v1.GitWorktree
+	23, // 8: session.v1.Session.claude_session:type_name -> session.v1.ClaudeSession
+	4,  // 9: session.v1.Session.instance_type:type_name -> session.v1.InstanceType
+	20, // 10: session.v1.Session.external_metadata:type_name -> session.v1.ExternalInstanceMetadata
+	59, // 11: session.v1.Session.last_pr_status_check:type_name -> google.protobuf.Timestamp
+	6,  // 12: session.v1.Session.rate_limit_state:type_name -> session.v1.RateLimitState
+	59, // 13: session.v1.Session.rate_limit_reset_time:type_name -> google.protobuf.Timestamp
+	5,  // 14: session.v1.Session.working_state:type_name -> session.v1.WorkingState
+	18, // 15: session.v1.Session.vnc_state:type_name -> session.v1.VNCState
+	19, // 16: session.v1.Session.cdp_state:type_name -> session.v1.CDPState
+	0,  // 17: session.v1.VNCState.status:type_name -> session.v1.VNCStatus
+	1,  // 18: session.v1.CDPState.status:type_name -> session.v1.CDPStatus
+	59, // 19: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
+	59, // 20: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
+	59, // 21: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
+	24, // 22: session.v1.ClaudeSession.settings:type_name -> session.v1.ClaudeSettings
+	52, // 23: session.v1.ClaudeSession.metadata:type_name -> session.v1.ClaudeSession.MetadataEntry
+	8,  // 24: session.v1.ReviewItem.reason:type_name -> session.v1.AttentionReason
+	7,  // 25: session.v1.ReviewItem.priority:type_name -> session.v1.Priority
+	59, // 26: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
+	53, // 27: session.v1.ReviewItem.metadata:type_name -> session.v1.ReviewItem.MetadataEntry
+	2,  // 28: session.v1.ReviewItem.status:type_name -> session.v1.SessionStatus
+	21, // 29: session.v1.ReviewItem.diff_stats:type_name -> session.v1.DiffStats
+	59, // 30: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
+	5,  // 31: session.v1.ReviewItem.working_state:type_name -> session.v1.WorkingState
+	59, // 32: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
+	59, // 33: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	59, // 34: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
+	25, // 35: session.v1.ReviewQueue.items:type_name -> session.v1.ReviewItem
+	54, // 36: session.v1.ReviewQueue.by_priority:type_name -> session.v1.ReviewQueue.ByPriorityEntry
+	55, // 37: session.v1.ReviewQueue.by_reason:type_name -> session.v1.ReviewQueue.ByReasonEntry
+	9,  // 38: session.v1.Notification.notification_type:type_name -> session.v1.NotificationType
+	10, // 39: session.v1.Notification.priority:type_name -> session.v1.NotificationPriority
+	59, // 40: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
+	56, // 41: session.v1.Notification.metadata:type_name -> session.v1.Notification.MetadataEntry
+	12, // 42: session.v1.FileChange.status:type_name -> session.v1.FileStatus
+	11, // 43: session.v1.VCSStatus.type:type_name -> session.v1.VCSType
+	30, // 44: session.v1.VCSStatus.staged_files:type_name -> session.v1.FileChange
+	30, // 45: session.v1.VCSStatus.unstaged_files:type_name -> session.v1.FileChange
+	30, // 46: session.v1.VCSStatus.untracked_files:type_name -> session.v1.FileChange
+	30, // 47: session.v1.VCSStatus.conflict_files:type_name -> session.v1.FileChange
+	59, // 48: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
+	11, // 49: session.v1.AvailableWorkspaceTargets.vcs_type:type_name -> session.v1.VCSType
+	32, // 50: session.v1.AvailableWorkspaceTargets.bookmarks:type_name -> session.v1.BookmarkTarget
+	33, // 51: session.v1.AvailableWorkspaceTargets.recent_revisions:type_name -> session.v1.RevisionTarget
+	34, // 52: session.v1.AvailableWorkspaceTargets.worktrees:type_name -> session.v1.WorktreeTarget
+	11, // 53: session.v1.VCSInfo.vcs_type:type_name -> session.v1.VCSType
+	57, // 54: session.v1.PendingApprovalProto.tool_input:type_name -> session.v1.PendingApprovalProto.ToolInputEntry
+	59, // 55: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
+	59, // 56: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
+	15, // 57: session.v1.ApprovalRuleProto.decision:type_name -> session.v1.AutoDecision
+	59, // 58: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
+	58, // 59: session.v1.AnalyticsSummaryProto.decision_counts:type_name -> session.v1.AnalyticsSummaryProto.DecisionCountsEntry
+	40, // 60: session.v1.AnalyticsSummaryProto.top_tools:type_name -> session.v1.ToolStatProto
+	41, // 61: session.v1.AnalyticsSummaryProto.top_denied_commands:type_name -> session.v1.CommandStatProto
+	42, // 62: session.v1.AnalyticsSummaryProto.top_triggered_rules:type_name -> session.v1.RuleStatProto
+	59, // 63: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
+	59, // 64: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
+	43, // 65: session.v1.AnalyticsSummaryProto.top_command_programs:type_name -> session.v1.ProgramStatProto
+	44, // 66: session.v1.AnalyticsSummaryProto.top_python_imports:type_name -> session.v1.ImportStatProto
+	40, // 67: session.v1.AnalyticsSummaryProto.top_uncovered_tools:type_name -> session.v1.ToolStatProto
+	43, // 68: session.v1.AnalyticsSummaryProto.top_uncovered_programs:type_name -> session.v1.ProgramStatProto
+	45, // 69: session.v1.AnalyticsSummaryProto.command_subcommand_stats:type_name -> session.v1.SubcommandStatProto
+	59, // 70: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
+	59, // 71: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
+	59, // 72: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
+	59, // 73: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
+	16, // 74: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
+	75, // [75:75] is the sub-list for method output_type
+	75, // [75:75] is the sub-list for method input_type
+	75, // [75:75] is the sub-list for extension type_name
+	75, // [75:75] is the sub-list for extension extendee
+	0,  // [0:75] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_types_proto_init() }
@@ -5641,14 +5779,14 @@ func file_session_v1_types_proto_init() {
 	if File_session_v1_types_proto != nil {
 		return
 	}
-	file_session_v1_types_proto_msgTypes[9].OneofWrappers = []any{}
+	file_session_v1_types_proto_msgTypes[10].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_types_proto_rawDesc), len(file_session_v1_types_proto_rawDesc)),
-			NumEnums:      16,
-			NumMessages:   41,
+			NumEnums:      17,
+			NumMessages:   42,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
