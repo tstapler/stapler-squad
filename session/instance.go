@@ -224,6 +224,10 @@ type Instance struct {
 	// production inspector is used. Set in tests to inject a fake home dir.
 	historyDetector *HistoryFileDetector
 
+	// hibernateReason records why this session was hibernated.
+	// Values: "manual", "idle", "resource_pressure". Read by hibernateProcess.
+	hibernateReason string
+
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
