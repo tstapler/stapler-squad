@@ -48,7 +48,7 @@ func NewSession(title, program string) *Session {
 		Title:     title,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Status:    Loading,
+		Status:    Creating,
 		Program:   program,
 		AutoYes:   false,
 		Prompt:    "",

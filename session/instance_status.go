@@ -10,7 +10,7 @@ import (
 
 // InstanceStatusInfo provides extended status information for an instance.
 type InstanceStatusInfo struct {
-	BasicStatus        Status                   // Running, Paused, Ready
+	BasicStatus        Status                   // Creating, Active, Paused, Stopped, Hibernated
 	ClaudeStatus       detection.DetectedStatus // If ClaudeController is active
 	StatusContext      string                   // Context/details about current status (e.g., error message)
 	PendingApprovals   int                      // Number of pending approvals
@@ -107,12 +107,12 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 func (info InstanceStatusInfo) GetStatusIcon() string {
 	if !info.IsControllerActive {
 		switch info.BasicStatus {
-		case Running:
-			return "●" // Running but no controller
+		case Active:
+			return "●" // Active but no controller
 		case Paused:
 			return "⏸"
-		case Ready:
-			return "●"
+		case Hibernated:
+			return "❄"
 		default:
 			return "?"
 		}
@@ -137,16 +137,16 @@ func (info InstanceStatusInfo) GetStatusIcon() string {
 func (info InstanceStatusInfo) GetStatusDescription() string {
 	if !info.IsControllerActive {
 		switch info.BasicStatus {
-		case Running:
-			return "Running"
-		case Ready:
-			return "Ready"
+		case Active:
+			return "Active"
+		case Creating:
+			return "Creating"
 		case Paused:
 			return "Paused"
-		case Loading:
-			return "Loading"
-		case NeedsApproval:
-			return "Needs Approval"
+		case Stopped:
+			return "Stopped"
+		case Hibernated:
+			return "Hibernated"
 		default:
 			return "Unknown"
 		}
@@ -209,11 +209,11 @@ func (info InstanceStatusInfo) GetColorCode() string {
 		return "39" // Blue
 	}
 
-	if info.BasicStatus == Running && info.IsControllerActive {
+	if info.BasicStatus == Active && info.IsControllerActive {
 		return "82" // Green
 	}
 
-	if info.BasicStatus == Paused {
+	if info.BasicStatus == Paused || info.BasicStatus == Hibernated {
 		return "240" // Gray
 	}
 

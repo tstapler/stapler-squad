@@ -36,23 +36,25 @@ func TestAttentionReasonFromDetected(t *testing.T) {
 	}
 }
 
-// TestStatusFromDetected verifies every DetectedStatus maps to the expected lifecycle Status.
+// TestStatusFromDetected verifies every DetectedStatus maps to Active.
+// In the 5-state model, all detected states indicate an active process —
+// NeedsApproval, InputRequired, Error, etc. are sub-status signals that do
+// not change the lifecycle state.
 func TestStatusFromDetected(t *testing.T) {
 	tests := []struct {
 		detected detection.DetectedStatus
 		want     Status
 	}{
-		{detection.StatusReady, Ready},
-		{detection.StatusIdle, Ready},
-		{detection.StatusSuccess, Ready},
-		{detection.StatusProcessing, Running},
-		{detection.StatusActive, Running},
-		{detection.StatusNeedsApproval, NeedsApproval},
-		{detection.StatusInputRequired, NeedsApproval},
-		// Error states keep Running at lifecycle level
-		{detection.StatusError, Running},
-		{detection.StatusTestsFailing, Running},
-		{detection.StatusUnknown, Running},
+		{detection.StatusReady, Active},
+		{detection.StatusIdle, Active},
+		{detection.StatusSuccess, Active},
+		{detection.StatusProcessing, Active},
+		{detection.StatusActive, Active},
+		{detection.StatusNeedsApproval, Active},
+		{detection.StatusInputRequired, Active},
+		{detection.StatusError, Active},
+		{detection.StatusTestsFailing, Active},
+		{detection.StatusUnknown, Active},
 	}
 
 	for _, tt := range tests {

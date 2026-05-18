@@ -4,7 +4,7 @@ import "github.com/tstapler/stapler-squad/session/detection"
 
 // status_mapping.go documents the relationship between the three status types:
 //
-//   - Status:         lifecycle state of an Instance (Running, Ready, Paused, NeedsApproval, Loading)
+//   - Status:         lifecycle state of an Instance (Creating, Active, Paused, Stopped, Hibernated)
 //   - DetectedStatus: what the status-detector observed in terminal output (StatusReady, StatusError, ...)
 //   - AttentionReason: why a session appears in the review queue (ReasonErrorState, ReasonApprovalPending, ...)
 //
@@ -37,27 +37,10 @@ func AttentionReasonFromDetected(detected detection.DetectedStatus) AttentionRea
 }
 
 // StatusFromDetected maps a DetectedStatus to the corresponding lifecycle Status.
-// This documents the intended transition table even though the review queue poller
-// currently does not update Instance.Status directly on every detection cycle.
-//
-// Key design decisions captured here:
-//   - Error and TestsFailing keep the lifecycle as Running because the instance process
-//     is still executing; only the output signals a problem.
-//   - NeedsApproval and InputRequired both map to NeedsApproval because both mean
-//     "the instance is blocked, waiting for the user".
+// All detected states map to Active because the instance process is still executing.
+// NeedsApproval, InputRequired, Error, and TestsFailing are sub-status signals
+// surfaced via GetEffectiveStatus() — they do not change the lifecycle state.
 func StatusFromDetected(detected detection.DetectedStatus) Status {
-	switch detected {
-	case detection.StatusReady, detection.StatusIdle, detection.StatusSuccess:
-		return Ready
-	case detection.StatusProcessing, detection.StatusActive:
-		return Running
-	case detection.StatusNeedsApproval, detection.StatusInputRequired:
-		return NeedsApproval
-	case detection.StatusError, detection.StatusTestsFailing:
-		// Error/test-failure at the lifecycle level is still Running —
-		// the instance process has not exited.
-		return Running
-	default:
-		return Running
-	}
+	// All detected states indicate an active process.
+	return Active
 }

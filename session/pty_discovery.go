@@ -458,7 +458,7 @@ func (pd *PTYDiscovery) discoverSquadPTYsWithCache(paneInfoMap map[string]paneEn
 
 	var pending []pendingEntry
 	for sessionName, instance := range pd.sessionMap {
-		if instance.Status != Running && instance.Status != Ready {
+		if instance.Status != Active {
 			continue
 		}
 		tmuxName := tmux.ToStaplerSquadTmuxName(instance.Title)

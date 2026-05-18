@@ -85,7 +85,7 @@ func shouldNotify(
 ) bool {
 	switch eventType {
 	case events.EventSessionStatusChanged:
-		return newStatus == session.Stopped || newStatus == session.NeedsApproval
+		return newStatus == session.Stopped
 	case events.EventNotification:
 		if priority >= priorityHigh {
 			return true
@@ -131,15 +131,8 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 			tag = "session-completed-" + stableID(sess)
 			data = buildDataMap(sess, "SESSION_COMPLETE", false)
 		}
-	case session.NeedsApproval:
-		title = "Approval Required"
-		requireInteraction = true
-		renotify = true
-		if sess != nil {
-			body = fmt.Sprintf("Session '%s' requires approval", sess.Title)
-			tag = "approval-required-" + stableID(sess)
-			data = buildDataMap(sess, "APPROVAL_NEEDED", true)
-		}
+	// NeedsApproval is no longer a lifecycle status — approval notifications
+	// are driven by the sub-status layer (Epic 3). No case needed here.
 	}
 
 	if title == "" || body == "" {

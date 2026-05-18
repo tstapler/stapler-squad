@@ -104,23 +104,35 @@ func checkInstanceStatus(t *testing.T, instance *Instance, worktreePath string, 
 }
 
 func TestStatusEnumValues(t *testing.T) {
-	// Test that all status values are defined correctly
+	// Test that all status values match the new 5-state model:
+	// Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
 	tests := []struct {
 		status Status
+		value  int
 		name   string
 	}{
-		{Running, "Running"},
-		{Ready, "Ready"},
-		{Loading, "Loading"},
-		{Paused, "Paused"},
-		{NeedsApproval, "NeedsApproval"},
+		{Creating, 0, "Creating"},
+		{Active, 1, "Active"},
+		{Paused, 2, "Paused"},
+		{Stopped, 3, "Stopped"},
+		{Hibernated, 4, "Hibernated"},
 	}
 
-	// Verify that status values are sequential starting from 0
-	for i, test := range tests {
-		if int(test.status) != i {
-			t.Errorf("Expected %s status to have value %d, got %d", test.name, i, test.status)
+	for _, test := range tests {
+		if int(test.status) != test.value {
+			t.Errorf("Expected %s status to have value %d, got %d", test.name, test.value, int(test.status))
 		}
+	}
+
+	// Verify deprecated aliases point to their canonical equivalents.
+	if Running != Active {
+		t.Errorf("Running alias should equal Active (1), got %d", int(Running))
+	}
+	if Ready != Active {
+		t.Errorf("Ready alias should equal Active (1), got %d", int(Ready))
+	}
+	if Loading != Creating {
+		t.Errorf("Loading alias should equal Creating (0), got %d", int(Loading))
 	}
 }
 

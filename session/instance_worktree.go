@@ -5,6 +5,7 @@ package session
 // This file covers git worktree lifecycle, diff stats, and path resolution.
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -188,7 +189,7 @@ func (i *Instance) UpdateDiffStats() error {
 	if needsPause {
 		if i.Status != Paused {
 			didTransitionToPaused = true
-			transitionErr = i.transitionTo(Paused)
+			transitionErr = i.transitionTo(context.Background(), Paused)
 		}
 		i.gitManager.ClearDiffStats()
 		i.stateMutex.Unlock()

@@ -148,8 +148,8 @@ func SeedDirectory(dir string, count int) error {
 
 // mockSessions returns 6 realistic InstanceData records spanning Backend,
 // Frontend, and Infrastructure categories. No tmux processes required —
-// statuses are Paused, Ready, and NeedsApproval only (no Running) so the
-// review-queue poller does not reclassify them when no tmux process exists.
+// statuses are Paused and Active only so the review-queue poller does not
+// reclassify them when no tmux process exists.
 //
 // Two sessions include "payment" in their title/tags so the search demo
 // filters from 6 → 2 results, which is visually more compelling than 3 → 1.
@@ -171,12 +171,12 @@ func mockSessions() []session.InstanceData {
 			LastMeaningfulOutput: now.Add(-20 * time.Second),
 			DiffStats:            session.DiffStatsData{Added: 287, Removed: 43},
 		},
-		// Needs attention: agent hit a permission gate.
+		// Needs attention: agent hit a permission gate (sub-status; lifecycle is Active).
 		{
 			Title:                "fix-api-timeout",
 			Path:                 "/Users/dev/services/api-gateway",
 			Branch:               "fix/connection-pool-exhaustion",
-			Status:               session.NeedsApproval,
+			Status:               session.Active,
 			Program:              "claude",
 			Category:             "Backend",
 			Tags:                 []string{"Bug", "API", "Urgent"},

@@ -34,8 +34,9 @@ func TestShouldNotifyTable(t *testing.T) {
 		{"high priority APPROVAL → push", events.EventNotification, priorityHigh, typeApproval, 0, true},       // UT-2.3
 		// EventSessionStatusChanged cases
 		{"session stopped → push", events.EventSessionStatusChanged, 0, 0, session.Stopped, true},
-		{"session needs approval → push", events.EventSessionStatusChanged, 0, 0, session.NeedsApproval, true},
-		{"session running → no push", events.EventSessionStatusChanged, 0, 0, session.Running, false},
+		// NeedsApproval is no longer a lifecycle status (it is a sub-status in Epic 3).
+		// Approval notifications are delivered via EventNotification, not EventSessionStatusChanged.
+		{"session active → no push", events.EventSessionStatusChanged, 0, 0, session.Active, false},
 		// Other event types
 		{"unrelated event → no push", events.EventSessionCreated, 0, 0, 0, false},
 	}

@@ -190,16 +190,14 @@ func (i *Instance) GetStatusIconForType() string {
 
 	// Managed instance - use standard status icons
 	switch i.Status {
-	case Running:
+	case Active:
 		return "●"
-	case Ready:
-		return "○"
+	case Creating:
+		return "⏳"
 	case Paused:
 		return "⏸"
-	case Loading:
-		return "⏳"
-	case NeedsApproval:
-		return "❓"
+	case Hibernated:
+		return "❄"
 	default:
 		return "?"
 	}

@@ -384,15 +384,15 @@ func (rqp *ReviewQueuePoller) backoffDuration(consecutiveErrors int) time.Durati
 
 // ForceReconcile immediately runs session reconciliation outside the normal 30s cadence.
 // Safe to call concurrently; typically used by the fork pressure monitor to rapidly clean
-// up dead sessions when subprocess failures indicate stale Running/Ready states.
+// up dead sessions when subprocess failures indicate stale Active states.
 func (rqp *ReviewQueuePoller) ForceReconcile() {
 	log.Info("ReviewQueuePoller ForceReconcile triggered")
 	rqp.reconcileSessions()
 }
 
 // reconcileSessions compares in-memory instances against live tmux sessions.
-// - Running/Ready instances not found in tmux are transitioned to Stopped.
-// - Stopped instances whose tmux session is found alive are revived to Running.
+// - Active instances not found in tmux are transitioned to Stopped.
+// - Stopped instances whose tmux session is found alive are revived to Active.
 func (rqp *ReviewQueuePoller) reconcileSessions() {
 	rqp.mu.RLock()
 	instances := make([]*Instance, len(rqp.instances))
@@ -432,29 +432,28 @@ func (rqp *ReviewQueuePoller) reconcileSessions() {
 		}
 
 		switch inst.Status {
-		case Running, Ready:
-			// Running/Ready but tmux session gone — mark Stopped.
+		case Active:
+			// Active but tmux session gone — mark Stopped.
 			if !liveSessions[sessionName] {
 				log.Warn("reconcileSessions: managed session not found in live sessions, transitioning to Stopped", "session", inst.Title, "tmux", sessionName)
 				inst.stateMutex.Lock()
-				switch inst.Status {
-				case Running, Ready:
-					if err := inst.transitionTo(Stopped); err != nil {
-						log.Warn("reconcileSessions: transition to Stopped failed, using setStatus", "session", inst.Title, "err", err)
-						inst.setStatus(Stopped)
+				if inst.Status == Active {
+					if err := inst.transitionTo(context.Background(), Stopped); err != nil {
+						log.Warn("reconcileSessions: transition to Stopped failed, using loadStatus", "session", inst.Title, "err", err)
+						inst.loadStatus(Stopped)
 					}
 				}
 				inst.stateMutex.Unlock()
 				inst.fireLifecycleEvent(EventExited, "reconcile-session-missing")
 			}
 		case Stopped:
-			// Stopped but tmux session is alive — revive to Running.
+			// Stopped but tmux session is alive — revive to Active.
 			if liveSessions[sessionName] {
-				log.Info("reconcileSessions: stopped session found alive, reviving to Running", "session", inst.Title, "tmux", sessionName)
+				log.Info("reconcileSessions: stopped session found alive, reviving to Active", "session", inst.Title, "tmux", sessionName)
 				inst.stateMutex.Lock()
 				if inst.Status == Stopped {
-					if err := inst.transitionTo(Running); err != nil {
-						log.Warn("reconcileSessions: revival to Running failed", "session", inst.Title, "err", err)
+					if err := inst.transitionTo(context.Background(), Active); err != nil {
+						log.Warn("reconcileSessions: revival to Active failed", "session", inst.Title, "err", err)
 					}
 				}
 				inst.stateMutex.Unlock()

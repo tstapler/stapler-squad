@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -71,14 +72,13 @@ func TestTransitionToErrorInCallback(t *testing.T) {
 	// Stopped is a terminal state — Stopped→Stopped must return an error.
 	inst := &Instance{Title: "transition-test", Status: Stopped}
 
-	err := inst.transitionTo(Stopped)
+	err := inst.transitionTo(context.Background(), Stopped)
 	if err == nil {
 		t.Error("expected ErrInvalidTransition for Stopped→Stopped, got nil")
 	}
 
-	// Confirm the exit callback guard (Status == Running || Status == Ready) prevents
-	// calling transitionTo when the instance is already stopped.
-	if inst.Status == Running || inst.Status == Ready {
-		t.Error("test setup: instance should be Stopped, not Running/Ready")
+	// Confirm the instance is still in Stopped status after the failed self-transition.
+	if inst.Status != Stopped {
+		t.Errorf("test setup: instance should be Stopped, got %s", inst.Status)
 	}
 }

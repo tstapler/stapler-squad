@@ -1,20 +1,21 @@
 package session
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
 )
 
 func TestTransitionTo_ConcurrentPause(t *testing.T) {
-	// Create an instance in Running status.
+	// Create an instance in Active status.
 	// Launch 10 goroutines all trying to transition to Paused simultaneously.
 	// Exactly one should succeed; the rest should get ErrInvalidTransition
 	// (because after the first successful transition, the status is Paused
 	// and Paused->Paused is not a valid transition).
 	inst := &Instance{
 		Title:   "test-concurrent",
-		Status:  Running,
+		Status:  Active,
 		started: true,
 	}
 
@@ -29,7 +30,7 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 			defer wg.Done()
 			// Use the public-facing mutex pattern matching Approve/Deny
 			inst.stateMutex.Lock()
-			err := inst.transitionTo(Paused)
+			err := inst.transitionTo(context.Background(), Paused)
 			inst.stateMutex.Unlock()
 
 			if err == nil {
@@ -53,10 +54,12 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 }
 
 func TestTransitionTo_ConcurrentApprove(t *testing.T) {
-	// Same pattern as ConcurrentPause but for Approve (NeedsApproval->Running).
+	// Start from Paused — Paused→Active is valid.
+	// Launch goroutines all calling Approve() simultaneously.
+	// Exactly one should succeed; after that, Active→Active is invalid.
 	inst := &Instance{
 		Title:   "test-concurrent-approve",
-		Status:  NeedsApproval,
+		Status:  Paused,
 		started: true,
 	}
 
@@ -76,26 +79,30 @@ func TestTransitionTo_ConcurrentApprove(t *testing.T) {
 	}
 	wg.Wait()
 
-	// NeedsApproval->Running should succeed exactly once.
-	// After that, Running->Running is invalid, so subsequent Approve calls fail.
+	// Paused→Active should succeed exactly once.
+	// After that, Active→Active is invalid, so subsequent Approve calls fail.
 	if successCount != 1 {
 		t.Errorf("expected exactly 1 successful Approve, got %d", successCount)
 	}
-	if inst.Status != Running {
-		t.Errorf("expected final status Running, got %s", inst.Status)
+	if inst.Status != Active {
+		t.Errorf("expected final status Active, got %s", inst.Status)
 	}
 }
 
 func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 	// Multiple goroutines concurrently calling Approve and Deny.
-	// Because Running->Paused and Paused->Running are both valid,
+	// Starting from Paused:
+	//   Approve = Paused→Active (valid once, then Active→Active invalid)
+	//   Deny    = Paused→Paused (invalid self-transition while in Paused;
+	//             Active→Paused valid while in Active)
+	// Because Active→Paused and Paused→Active are both valid,
 	// the state can bounce between them. The key guarantees are:
 	//   1. No data race (validated by -race flag)
-	//   2. Final state is consistent (Running or Paused)
-	//   3. At least one operation succeeds (the first transition from NeedsApproval)
+	//   2. Final state is consistent (Active or Paused)
+	//   3. At least one operation succeeds
 	inst := &Instance{
 		Title:   "test-concurrent-mixed",
-		Status:  NeedsApproval,
+		Status:  Paused,
 		started: true,
 	}
 
@@ -127,9 +134,9 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 			totalSuccess, approveSuccess, denySuccess)
 	}
 
-	// The final status must be either Running or Paused (the only reachable
-	// states from NeedsApproval via Approve/Deny cycles).
-	if inst.Status != Running && inst.Status != Paused {
-		t.Errorf("expected final status Running or Paused, got %s", inst.Status)
+	// The final status must be either Active or Paused (the only reachable
+	// states via Approve/Deny cycles).
+	if inst.Status != Active && inst.Status != Paused {
+		t.Errorf("expected final status Active or Paused, got %s", inst.Status)
 	}
 }

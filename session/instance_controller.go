@@ -59,8 +59,8 @@ func (i *Instance) StartController() error {
 		log.Info("pty eof received from response stream", "session", i.Title)
 		exitContent := controller.GetExitContent()
 		i.stateMutex.Lock()
-		if i.Status == Running || i.Status == Ready {
-			if err := i.transitionTo(Stopped); err != nil {
+		if i.Status == Active {
+			if err := i.transitionTo(context.Background(), Stopped); err != nil {
 				log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 			}
 		}
