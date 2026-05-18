@@ -1048,6 +1048,103 @@ func (s *SessionService) UpdateSession(
 	}), nil
 }
 
+// HibernateSession checkpoints the session state, kills the AI process, and
+// transitions the session to Hibernated status.
+// +api: session:hibernate
+func (s *SessionService) HibernateSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.HibernateSessionRequest],
+) (*connect.Response[sessionv1.HibernateSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.MatchesID(req.Msg.Id) {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	// Set reason before transitioning so the After hook can read it
+	reason := req.Msg.Reason
+	if reason == "" {
+		reason = "manual"
+	}
+	instance.SetHibernateReason(reason)
+
+	if err := instance.Hibernate(ctx); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
+
+	return connect.NewResponse(&sessionv1.HibernateSessionResponse{
+		Session: adapters.InstanceToProto(instance),
+	}), nil
+}
+
+// ResumeHibernatedSession re-launches the AI process for a Hibernated session,
+// transitioning it back to Active status.
+// +api: session:resume_hibernated
+func (s *SessionService) ResumeHibernatedSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ResumeHibernatedSessionRequest],
+) (*connect.Response[sessionv1.ResumeHibernatedSessionResponse], error) {
+	if req.Msg.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
+	}
+
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
+	}
+
+	var instance *session.Instance
+	var instanceIndex int
+	for i, inst := range instances {
+		if inst.MatchesID(req.Msg.Id) {
+			instance = inst
+			instanceIndex = i
+			break
+		}
+	}
+	if instance == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
+	}
+
+	if err := instance.ResumeFromHibernation(ctx); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
+	instances[instanceIndex] = instance
+	if err := s.storage.SaveInstances(instances); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
+
+	return connect.NewResponse(&sessionv1.ResumeHibernatedSessionResponse{
+		Session: adapters.InstanceToProto(instance),
+	}), nil
+}
+
 // DeleteSession stops and removes a session, cleaning up resources.
 // +api: session:delete
 func (s *SessionService) DeleteSession(

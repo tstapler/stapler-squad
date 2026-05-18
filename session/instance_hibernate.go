@@ -9,6 +9,12 @@ import (
 	"github.com/tstapler/stapler-squad/session/hibernation"
 )
 
+// SetHibernateReason sets the reason string that will be recorded in the checkpoint.
+// Must be called before Hibernate(). Values: "manual", "idle", "resource_pressure".
+func (i *Instance) SetHibernateReason(reason string) {
+	i.hibernateReason = reason
+}
+
 // Hibernate transitions an Active session to Hibernated.
 // It sets the reason, transitions state, and returns.
 // The actual checkpoint write and process kill happen asynchronously via the

@@ -480,75 +480,6 @@ func (SubStatus) EnumDescriptor() ([]byte, []int) {
 	return file_session_v1_types_proto_rawDescGZIP(), []int{6}
 }
 
-// SubStatus provides fine-grained activity state for Active sessions.
-// Derived at read time from the detection layer; never stored in the database.
-type SubStatus int32
-
-const (
-	SubStatus_SUB_STATUS_UNSPECIFIED SubStatus = 0
-	// Session is at the idle prompt, waiting for user input.
-	SubStatus_SUB_STATUS_IDLE SubStatus = 1
-	// Session is actively processing (Claude generating tokens or running a tool).
-	SubStatus_SUB_STATUS_PROCESSING SubStatus = 2
-	// Session is waiting for user approval on a tool-use request.
-	SubStatus_SUB_STATUS_NEEDS_APPROVAL SubStatus = 3
-	// Session encountered an error state.
-	SubStatus_SUB_STATUS_ERROR SubStatus = 4
-	// Tests are currently failing.
-	SubStatus_SUB_STATUS_TESTS_FAILING SubStatus = 5
-	// Session is experiencing API rate limiting.
-	SubStatus_SUB_STATUS_RATE_LIMITED SubStatus = 6
-)
-
-// Enum value maps for SubStatus.
-var (
-	SubStatus_name = map[int32]string{
-		0: "SUB_STATUS_UNSPECIFIED",
-		1: "SUB_STATUS_IDLE",
-		2: "SUB_STATUS_PROCESSING",
-		3: "SUB_STATUS_NEEDS_APPROVAL",
-		4: "SUB_STATUS_ERROR",
-		5: "SUB_STATUS_TESTS_FAILING",
-		6: "SUB_STATUS_RATE_LIMITED",
-	}
-	SubStatus_value = map[string]int32{
-		"SUB_STATUS_UNSPECIFIED":    0,
-		"SUB_STATUS_IDLE":           1,
-		"SUB_STATUS_PROCESSING":     2,
-		"SUB_STATUS_NEEDS_APPROVAL": 3,
-		"SUB_STATUS_ERROR":          4,
-		"SUB_STATUS_TESTS_FAILING":  5,
-		"SUB_STATUS_RATE_LIMITED":   6,
-	}
-)
-
-func (x SubStatus) Enum() *SubStatus {
-	p := new(SubStatus)
-	*p = x
-	return p
-}
-
-func (x SubStatus) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (SubStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_session_v1_types_proto_enumTypes[4].Descriptor()
-}
-
-func (SubStatus) Type() protoreflect.EnumType {
-	return &file_session_v1_types_proto_enumTypes[4]
-}
-
-func (x SubStatus) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use SubStatus.Descriptor instead.
-func (SubStatus) EnumDescriptor() ([]byte, []int) {
-	return file_session_v1_types_proto_rawDescGZIP(), []int{4}
-}
-
 // RateLimitState indicates whether the session is experiencing rate limiting.
 type RateLimitState int32
 
@@ -597,23 +528,11 @@ func (x RateLimitState) String() string {
 }
 
 func (RateLimitState) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[7].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[4].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[5].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (RateLimitState) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[7]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[4]
-=======
-	return &file_session_v1_types_proto_enumTypes[5]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x RateLimitState) Number() protoreflect.EnumNumber {
@@ -622,13 +541,7 @@ func (x RateLimitState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use RateLimitState.Descriptor instead.
 func (RateLimitState) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{7}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{4}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{5}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // Priority levels for review queue items (highest to lowest urgency).
@@ -675,23 +588,11 @@ func (x Priority) String() string {
 }
 
 func (Priority) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[8].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[5].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[6].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (Priority) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[8]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[5]
-=======
-	return &file_session_v1_types_proto_enumTypes[6]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x Priority) Number() protoreflect.EnumNumber {
@@ -700,13 +601,7 @@ func (x Priority) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Priority.Descriptor instead.
 func (Priority) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{8}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{5}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{6}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // AttentionReason indicates why a session needs user attention.
@@ -777,23 +672,11 @@ func (x AttentionReason) String() string {
 }
 
 func (AttentionReason) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[9].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[6].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[7].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (AttentionReason) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[9]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[6]
-=======
-	return &file_session_v1_types_proto_enumTypes[7]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x AttentionReason) Number() protoreflect.EnumNumber {
@@ -802,13 +685,7 @@ func (x AttentionReason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AttentionReason.Descriptor instead.
 func (AttentionReason) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{9}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{6}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{7}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // NotificationType categorizes the type of notification being sent.
@@ -887,23 +764,11 @@ func (x NotificationType) String() string {
 }
 
 func (NotificationType) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[10].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[7].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[8].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (NotificationType) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[10]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[7]
-=======
-	return &file_session_v1_types_proto_enumTypes[8]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x NotificationType) Number() protoreflect.EnumNumber {
@@ -912,13 +777,7 @@ func (x NotificationType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NotificationType.Descriptor instead.
 func (NotificationType) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{10}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{7}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{8}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // NotificationPriority determines UI treatment for notifications.
@@ -962,23 +821,11 @@ func (x NotificationPriority) String() string {
 }
 
 func (NotificationPriority) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[11].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[8].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[9].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (NotificationPriority) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[11]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[8]
-=======
-	return &file_session_v1_types_proto_enumTypes[9]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x NotificationPriority) Number() protoreflect.EnumNumber {
@@ -987,13 +834,7 @@ func (x NotificationPriority) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use NotificationPriority.Descriptor instead.
 func (NotificationPriority) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{11}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{8}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{9}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // VCSType represents the type of version control system
@@ -1030,23 +871,11 @@ func (x VCSType) String() string {
 }
 
 func (VCSType) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[12].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[9].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[10].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (VCSType) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[12]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[9]
-=======
-	return &file_session_v1_types_proto_enumTypes[10]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x VCSType) Number() protoreflect.EnumNumber {
@@ -1055,13 +884,7 @@ func (x VCSType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VCSType.Descriptor instead.
 func (VCSType) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{12}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{9}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{10}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // FileStatus represents the status of a file in version control
@@ -1116,23 +939,11 @@ func (x FileStatus) String() string {
 }
 
 func (FileStatus) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[13].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[10].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[11].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (FileStatus) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[13]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[10]
-=======
-	return &file_session_v1_types_proto_enumTypes[11]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x FileStatus) Number() protoreflect.EnumNumber {
@@ -1141,13 +952,7 @@ func (x FileStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use FileStatus.Descriptor instead.
 func (FileStatus) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{13}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{10}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{11}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // WorkspaceSwitchType defines the type of workspace switch operation
@@ -1190,23 +995,11 @@ func (x WorkspaceSwitchType) String() string {
 }
 
 func (WorkspaceSwitchType) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[14].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[11].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[12].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (WorkspaceSwitchType) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[14]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[11]
-=======
-	return &file_session_v1_types_proto_enumTypes[12]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x WorkspaceSwitchType) Number() protoreflect.EnumNumber {
@@ -1215,13 +1008,7 @@ func (x WorkspaceSwitchType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WorkspaceSwitchType.Descriptor instead.
 func (WorkspaceSwitchType) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{14}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{11}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{12}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // ChangeStrategy defines how to handle uncommitted changes during workspace switches
@@ -1264,23 +1051,11 @@ func (x ChangeStrategy) String() string {
 }
 
 func (ChangeStrategy) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[15].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[12].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[13].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (ChangeStrategy) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[15]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[12]
-=======
-	return &file_session_v1_types_proto_enumTypes[13]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x ChangeStrategy) Number() protoreflect.EnumNumber {
@@ -1289,13 +1064,7 @@ func (x ChangeStrategy) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ChangeStrategy.Descriptor instead.
 func (ChangeStrategy) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{15}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{12}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{13}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // AutoDecision is the action the classifier takes for a matching rule.
@@ -1335,23 +1104,11 @@ func (x AutoDecision) String() string {
 }
 
 func (AutoDecision) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[16].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[13].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[14].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (AutoDecision) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[16]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[13]
-=======
-	return &file_session_v1_types_proto_enumTypes[14]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x AutoDecision) Number() protoreflect.EnumNumber {
@@ -1360,13 +1117,7 @@ func (x AutoDecision) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use AutoDecision.Descriptor instead.
 func (AutoDecision) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{16}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{13}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{14}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // ScanStatus indicates the result quality of the last unfinished-work scan.
@@ -1409,23 +1160,11 @@ func (x ScanStatus) String() string {
 }
 
 func (ScanStatus) Descriptor() protoreflect.EnumDescriptor {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_enumTypes[17].Descriptor()
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_enumTypes[14].Descriptor()
-=======
-	return file_session_v1_types_proto_enumTypes[15].Descriptor()
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (ScanStatus) Type() protoreflect.EnumType {
-<<<<<<< HEAD
 	return &file_session_v1_types_proto_enumTypes[17]
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return &file_session_v1_types_proto_enumTypes[14]
-=======
-	return &file_session_v1_types_proto_enumTypes[15]
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func (x ScanStatus) Number() protoreflect.EnumNumber {
@@ -1434,7 +1173,6 @@ func (x ScanStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ScanStatus.Descriptor instead.
 func (ScanStatus) EnumDescriptor() ([]byte, []int) {
-<<<<<<< HEAD
 	return file_session_v1_types_proto_rawDescGZIP(), []int{17}
 }
 
@@ -1489,11 +1227,6 @@ func (x SuggestionSource) Number() protoreflect.EnumNumber {
 // Deprecated: Use SuggestionSource.Descriptor instead.
 func (SuggestionSource) EnumDescriptor() ([]byte, []int) {
 	return file_session_v1_types_proto_rawDescGZIP(), []int{18}
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	return file_session_v1_types_proto_rawDescGZIP(), []int{14}
-=======
-	return file_session_v1_types_proto_rawDescGZIP(), []int{15}
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 // Session represents a running AI agent instance with its associated state.
@@ -1604,7 +1337,6 @@ type Session struct {
 	// (e.g. --resume <id>, --mcp-server ..., -y, initial prompt). Empty for external sessions.
 	LaunchCommand string `protobuf:"bytes,45,opt,name=launch_command,json=launchCommand,proto3" json:"launch_command,omitempty"`
 	// Active-work state for review queue filtering. Populated from IdleDetector state.
-<<<<<<< HEAD
 	WorkingState WorkingState `protobuf:"varint,50,opt,name=working_state,json=workingState,proto3,enum=session.v1.WorkingState" json:"working_state,omitempty"`
 	// VNC/browser passthrough state. Populated when VNC is supported on the host.
 	VncState *VNCState `protobuf:"bytes,51,opt,name=vnc_state,json=vncState,proto3" json:"vnc_state,omitempty"`
@@ -1617,18 +1349,6 @@ type Session struct {
 	// layer at read time; never stored in the database.
 	// Only meaningful when lifecycle_status == SESSION_STATUS_ACTIVE.
 	SubStatus     SubStatus `protobuf:"varint,54,opt,name=sub_status,json=subStatus,proto3,enum=session.v1.SubStatus" json:"sub_status,omitempty"`
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	WorkingState  WorkingState `protobuf:"varint,50,opt,name=working_state,json=workingState,proto3,enum=session.v1.WorkingState" json:"working_state,omitempty"`
-=======
-	WorkingState WorkingState `protobuf:"varint,50,opt,name=working_state,json=workingState,proto3,enum=session.v1.WorkingState" json:"working_state,omitempty"`
-	// Human-readable progress message during Creating state (empty otherwise).
-	// Set by the async creation goroutine; cleared once session becomes Active.
-	CreationProgress string `protobuf:"bytes,51,opt,name=creation_progress,json=creationProgress,proto3" json:"creation_progress,omitempty"`
-	// Fine-grained activity state for Active sessions. Derived from terminal detection
-	// layer at read time; never stored in the database.
-	// Only meaningful when lifecycle_status == SESSION_STATUS_ACTIVE.
-	SubStatus     SubStatus `protobuf:"varint,52,opt,name=sub_status,json=subStatus,proto3,enum=session.v1.SubStatus" json:"sub_status,omitempty"`
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1999,7 +1719,6 @@ func (x *Session) GetWorkingState() WorkingState {
 	return WorkingState_WORKING_STATE_UNSPECIFIED
 }
 
-<<<<<<< HEAD
 func (x *Session) GetVncState() *VNCState {
 	if x != nil {
 		return x.VncState
@@ -2148,23 +1867,6 @@ func (x *CDPState) GetStatus() CDPStatus {
 	return CDPStatus_CDP_STATUS_UNSPECIFIED
 }
 
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-=======
-func (x *Session) GetCreationProgress() string {
-	if x != nil {
-		return x.CreationProgress
-	}
-	return ""
-}
-
-func (x *Session) GetSubStatus() SubStatus {
-	if x != nil {
-		return x.SubStatus
-	}
-	return SubStatus_SUB_STATUS_UNSPECIFIED
-}
-
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 // ExternalInstanceMetadata contains metadata for externally discovered sessions.
 type ExternalInstanceMetadata struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -5682,13 +5384,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-<<<<<<< HEAD
 	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xdc\x12\n" +
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\x93\x11\n" +
-=======
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xf6\x11\n" +
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -5746,7 +5442,6 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"project_id\x18+ \x01(\tR\tprojectId\x12%\n" +
 	"\x0einitial_prompt\x18, \x01(\tR\rinitialPrompt\x12%\n" +
 	"\x0elaunch_command\x18- \x01(\tR\rlaunchCommand\x12=\n" +
-<<<<<<< HEAD
 	"\rworking_state\x182 \x01(\x0e2\x18.session.v1.WorkingStateR\fworkingState\x121\n" +
 	"\tvnc_state\x183 \x01(\v2\x14.session.v1.VNCStateR\bvncState\x121\n" +
 	"\tcdp_state\x184 \x01(\v2\x14.session.v1.CDPStateR\bcdpState\x12+\n" +
@@ -5760,14 +5455,6 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x17browser_window_detected\x18\x04 \x01(\bR\x15browserWindowDetected\"9\n" +
 	"\bCDPState\x12-\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x15.session.v1.CDPStatusR\x06status\"\xf6\x02\n" +
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	"\rworking_state\x182 \x01(\x0e2\x18.session.v1.WorkingStateR\fworkingState\"\xf6\x02\n" +
-=======
-	"\rworking_state\x182 \x01(\x0e2\x18.session.v1.WorkingStateR\fworkingState\x12+\n" +
-	"\x11creation_progress\x183 \x01(\tR\x10creationProgress\x124\n" +
-	"\n" +
-	"sub_status\x184 \x01(\x0e2\x15.session.v1.SubStatusR\tsubStatus\"\xf6\x02\n" +
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 	"\x18ExternalInstanceMetadata\x12\x1f\n" +
 	"\vtmux_socket\x18\x01 \x01(\tR\n" +
 	"tmuxSocket\x12*\n" +
@@ -6295,18 +5982,9 @@ func file_session_v1_types_proto_rawDescGZIP() []byte {
 	return file_session_v1_types_proto_rawDescData
 }
 
-<<<<<<< HEAD
 var file_session_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 19)
 var file_session_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-var file_session_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 15)
-var file_session_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
-=======
-var file_session_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 16)
-var file_session_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 var file_session_v1_types_proto_goTypes = []any{
-<<<<<<< HEAD
 	(VNCStatus)(0),                    // 0: session.v1.VNCStatus
 	(CDPStatus)(0),                    // 1: session.v1.CDPStatus
 	(SessionStatus)(0),                // 2: session.v1.SessionStatus
@@ -6370,125 +6048,8 @@ var file_session_v1_types_proto_goTypes = []any{
 	nil,                               // 60: session.v1.PendingApprovalProto.ToolInputEntry
 	nil,                               // 61: session.v1.AnalyticsSummaryProto.DecisionCountsEntry
 	(*timestamppb.Timestamp)(nil),     // 62: google.protobuf.Timestamp
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	(SessionStatus)(0),                // 0: session.v1.SessionStatus
-	(SessionType)(0),                  // 1: session.v1.SessionType
-	(InstanceType)(0),                 // 2: session.v1.InstanceType
-	(WorkingState)(0),                 // 3: session.v1.WorkingState
-	(RateLimitState)(0),               // 4: session.v1.RateLimitState
-	(Priority)(0),                     // 5: session.v1.Priority
-	(AttentionReason)(0),              // 6: session.v1.AttentionReason
-	(NotificationType)(0),             // 7: session.v1.NotificationType
-	(NotificationPriority)(0),         // 8: session.v1.NotificationPriority
-	(VCSType)(0),                      // 9: session.v1.VCSType
-	(FileStatus)(0),                   // 10: session.v1.FileStatus
-	(WorkspaceSwitchType)(0),          // 11: session.v1.WorkspaceSwitchType
-	(ChangeStrategy)(0),               // 12: session.v1.ChangeStrategy
-	(AutoDecision)(0),                 // 13: session.v1.AutoDecision
-	(ScanStatus)(0),                   // 14: session.v1.ScanStatus
-	(*Session)(nil),                   // 15: session.v1.Session
-	(*ExternalInstanceMetadata)(nil),  // 16: session.v1.ExternalInstanceMetadata
-	(*DiffStats)(nil),                 // 17: session.v1.DiffStats
-	(*GitWorktree)(nil),               // 18: session.v1.GitWorktree
-	(*ClaudeSession)(nil),             // 19: session.v1.ClaudeSession
-	(*ClaudeSettings)(nil),            // 20: session.v1.ClaudeSettings
-	(*ReviewItem)(nil),                // 21: session.v1.ReviewItem
-	(*PRInfo)(nil),                    // 22: session.v1.PRInfo
-	(*PRComment)(nil),                 // 23: session.v1.PRComment
-	(*ReviewQueue)(nil),               // 24: session.v1.ReviewQueue
-	(*Notification)(nil),              // 25: session.v1.Notification
-	(*FileChange)(nil),                // 26: session.v1.FileChange
-	(*VCSStatus)(nil),                 // 27: session.v1.VCSStatus
-	(*BookmarkTarget)(nil),            // 28: session.v1.BookmarkTarget
-	(*RevisionTarget)(nil),            // 29: session.v1.RevisionTarget
-	(*WorktreeTarget)(nil),            // 30: session.v1.WorktreeTarget
-	(*AvailableWorkspaceTargets)(nil), // 31: session.v1.AvailableWorkspaceTargets
-	(*VCSInfo)(nil),                   // 32: session.v1.VCSInfo
-	(*PendingApprovalProto)(nil),      // 33: session.v1.PendingApprovalProto
-	(*ApprovalRuleProto)(nil),         // 34: session.v1.ApprovalRuleProto
-	(*AnalyticsSummaryProto)(nil),     // 35: session.v1.AnalyticsSummaryProto
-	(*ToolStatProto)(nil),             // 36: session.v1.ToolStatProto
-	(*CommandStatProto)(nil),          // 37: session.v1.CommandStatProto
-	(*RuleStatProto)(nil),             // 38: session.v1.RuleStatProto
-	(*ProgramStatProto)(nil),          // 39: session.v1.ProgramStatProto
-	(*ImportStatProto)(nil),           // 40: session.v1.ImportStatProto
-	(*SubcommandStatProto)(nil),       // 41: session.v1.SubcommandStatProto
-	(*DailyBucketProto)(nil),          // 42: session.v1.DailyBucketProto
-	(*DatabaseInfo)(nil),              // 43: session.v1.DatabaseInfo
-	(*FileNode)(nil),                  // 44: session.v1.FileNode
-	(*CheckpointProto)(nil),           // 45: session.v1.CheckpointProto
-	(*UnfinishedWorktree)(nil),        // 46: session.v1.UnfinishedWorktree
-	(*UnfinishedWorkConfig)(nil),      // 47: session.v1.UnfinishedWorkConfig
-	nil,                               // 48: session.v1.ClaudeSession.MetadataEntry
-	nil,                               // 49: session.v1.ReviewItem.MetadataEntry
-	nil,                               // 50: session.v1.ReviewQueue.ByPriorityEntry
-	nil,                               // 51: session.v1.ReviewQueue.ByReasonEntry
-	nil,                               // 52: session.v1.Notification.MetadataEntry
-	nil,                               // 53: session.v1.PendingApprovalProto.ToolInputEntry
-	nil,                               // 54: session.v1.AnalyticsSummaryProto.DecisionCountsEntry
-	(*timestamppb.Timestamp)(nil),     // 55: google.protobuf.Timestamp
-=======
-	(SessionStatus)(0),                // 0: session.v1.SessionStatus
-	(SessionType)(0),                  // 1: session.v1.SessionType
-	(InstanceType)(0),                 // 2: session.v1.InstanceType
-	(WorkingState)(0),                 // 3: session.v1.WorkingState
-	(SubStatus)(0),                    // 4: session.v1.SubStatus
-	(RateLimitState)(0),               // 5: session.v1.RateLimitState
-	(Priority)(0),                     // 6: session.v1.Priority
-	(AttentionReason)(0),              // 7: session.v1.AttentionReason
-	(NotificationType)(0),             // 8: session.v1.NotificationType
-	(NotificationPriority)(0),         // 9: session.v1.NotificationPriority
-	(VCSType)(0),                      // 10: session.v1.VCSType
-	(FileStatus)(0),                   // 11: session.v1.FileStatus
-	(WorkspaceSwitchType)(0),          // 12: session.v1.WorkspaceSwitchType
-	(ChangeStrategy)(0),               // 13: session.v1.ChangeStrategy
-	(AutoDecision)(0),                 // 14: session.v1.AutoDecision
-	(ScanStatus)(0),                   // 15: session.v1.ScanStatus
-	(*Session)(nil),                   // 16: session.v1.Session
-	(*ExternalInstanceMetadata)(nil),  // 17: session.v1.ExternalInstanceMetadata
-	(*DiffStats)(nil),                 // 18: session.v1.DiffStats
-	(*GitWorktree)(nil),               // 19: session.v1.GitWorktree
-	(*ClaudeSession)(nil),             // 20: session.v1.ClaudeSession
-	(*ClaudeSettings)(nil),            // 21: session.v1.ClaudeSettings
-	(*ReviewItem)(nil),                // 22: session.v1.ReviewItem
-	(*PRInfo)(nil),                    // 23: session.v1.PRInfo
-	(*PRComment)(nil),                 // 24: session.v1.PRComment
-	(*ReviewQueue)(nil),               // 25: session.v1.ReviewQueue
-	(*Notification)(nil),              // 26: session.v1.Notification
-	(*FileChange)(nil),                // 27: session.v1.FileChange
-	(*VCSStatus)(nil),                 // 28: session.v1.VCSStatus
-	(*BookmarkTarget)(nil),            // 29: session.v1.BookmarkTarget
-	(*RevisionTarget)(nil),            // 30: session.v1.RevisionTarget
-	(*WorktreeTarget)(nil),            // 31: session.v1.WorktreeTarget
-	(*AvailableWorkspaceTargets)(nil), // 32: session.v1.AvailableWorkspaceTargets
-	(*VCSInfo)(nil),                   // 33: session.v1.VCSInfo
-	(*PendingApprovalProto)(nil),      // 34: session.v1.PendingApprovalProto
-	(*ApprovalRuleProto)(nil),         // 35: session.v1.ApprovalRuleProto
-	(*AnalyticsSummaryProto)(nil),     // 36: session.v1.AnalyticsSummaryProto
-	(*ToolStatProto)(nil),             // 37: session.v1.ToolStatProto
-	(*CommandStatProto)(nil),          // 38: session.v1.CommandStatProto
-	(*RuleStatProto)(nil),             // 39: session.v1.RuleStatProto
-	(*ProgramStatProto)(nil),          // 40: session.v1.ProgramStatProto
-	(*ImportStatProto)(nil),           // 41: session.v1.ImportStatProto
-	(*SubcommandStatProto)(nil),       // 42: session.v1.SubcommandStatProto
-	(*DailyBucketProto)(nil),          // 43: session.v1.DailyBucketProto
-	(*DatabaseInfo)(nil),              // 44: session.v1.DatabaseInfo
-	(*FileNode)(nil),                  // 45: session.v1.FileNode
-	(*CheckpointProto)(nil),           // 46: session.v1.CheckpointProto
-	(*UnfinishedWorktree)(nil),        // 47: session.v1.UnfinishedWorktree
-	(*UnfinishedWorkConfig)(nil),      // 48: session.v1.UnfinishedWorkConfig
-	nil,                               // 49: session.v1.ClaudeSession.MetadataEntry
-	nil,                               // 50: session.v1.ReviewItem.MetadataEntry
-	nil,                               // 51: session.v1.ReviewQueue.ByPriorityEntry
-	nil,                               // 52: session.v1.ReviewQueue.ByReasonEntry
-	nil,                               // 53: session.v1.Notification.MetadataEntry
-	nil,                               // 54: session.v1.PendingApprovalProto.ToolInputEntry
-	nil,                               // 55: session.v1.AnalyticsSummaryProto.DecisionCountsEntry
-	(*timestamppb.Timestamp)(nil),     // 56: google.protobuf.Timestamp
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 var file_session_v1_types_proto_depIdxs = []int32{
-<<<<<<< HEAD
 	2,  // 0: session.v1.Session.status:type_name -> session.v1.SessionStatus
 	62, // 1: session.v1.Session.created_at:type_name -> google.protobuf.Timestamp
 	62, // 2: session.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
@@ -6571,162 +6132,6 @@ var file_session_v1_types_proto_depIdxs = []int32{
 	77, // [77:77] is the sub-list for extension type_name
 	77, // [77:77] is the sub-list for extension extendee
 	0,  // [0:77] is the sub-list for field type_name
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-	0,  // 0: session.v1.Session.status:type_name -> session.v1.SessionStatus
-	55, // 1: session.v1.Session.created_at:type_name -> google.protobuf.Timestamp
-	55, // 2: session.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
-	55, // 3: session.v1.Session.last_terminal_update:type_name -> google.protobuf.Timestamp
-	55, // 4: session.v1.Session.last_meaningful_output:type_name -> google.protobuf.Timestamp
-	1,  // 5: session.v1.Session.session_type:type_name -> session.v1.SessionType
-	17, // 6: session.v1.Session.diff_stats:type_name -> session.v1.DiffStats
-	18, // 7: session.v1.Session.git_worktree:type_name -> session.v1.GitWorktree
-	19, // 8: session.v1.Session.claude_session:type_name -> session.v1.ClaudeSession
-	2,  // 9: session.v1.Session.instance_type:type_name -> session.v1.InstanceType
-	16, // 10: session.v1.Session.external_metadata:type_name -> session.v1.ExternalInstanceMetadata
-	55, // 11: session.v1.Session.last_pr_status_check:type_name -> google.protobuf.Timestamp
-	4,  // 12: session.v1.Session.rate_limit_state:type_name -> session.v1.RateLimitState
-	55, // 13: session.v1.Session.rate_limit_reset_time:type_name -> google.protobuf.Timestamp
-	3,  // 14: session.v1.Session.working_state:type_name -> session.v1.WorkingState
-	55, // 15: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
-	55, // 16: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
-	55, // 17: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
-	20, // 18: session.v1.ClaudeSession.settings:type_name -> session.v1.ClaudeSettings
-	48, // 19: session.v1.ClaudeSession.metadata:type_name -> session.v1.ClaudeSession.MetadataEntry
-	6,  // 20: session.v1.ReviewItem.reason:type_name -> session.v1.AttentionReason
-	5,  // 21: session.v1.ReviewItem.priority:type_name -> session.v1.Priority
-	55, // 22: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
-	49, // 23: session.v1.ReviewItem.metadata:type_name -> session.v1.ReviewItem.MetadataEntry
-	0,  // 24: session.v1.ReviewItem.status:type_name -> session.v1.SessionStatus
-	17, // 25: session.v1.ReviewItem.diff_stats:type_name -> session.v1.DiffStats
-	55, // 26: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
-	3,  // 27: session.v1.ReviewItem.working_state:type_name -> session.v1.WorkingState
-	55, // 28: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
-	55, // 29: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	55, // 30: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
-	21, // 31: session.v1.ReviewQueue.items:type_name -> session.v1.ReviewItem
-	50, // 32: session.v1.ReviewQueue.by_priority:type_name -> session.v1.ReviewQueue.ByPriorityEntry
-	51, // 33: session.v1.ReviewQueue.by_reason:type_name -> session.v1.ReviewQueue.ByReasonEntry
-	7,  // 34: session.v1.Notification.notification_type:type_name -> session.v1.NotificationType
-	8,  // 35: session.v1.Notification.priority:type_name -> session.v1.NotificationPriority
-	55, // 36: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
-	52, // 37: session.v1.Notification.metadata:type_name -> session.v1.Notification.MetadataEntry
-	10, // 38: session.v1.FileChange.status:type_name -> session.v1.FileStatus
-	9,  // 39: session.v1.VCSStatus.type:type_name -> session.v1.VCSType
-	26, // 40: session.v1.VCSStatus.staged_files:type_name -> session.v1.FileChange
-	26, // 41: session.v1.VCSStatus.unstaged_files:type_name -> session.v1.FileChange
-	26, // 42: session.v1.VCSStatus.untracked_files:type_name -> session.v1.FileChange
-	26, // 43: session.v1.VCSStatus.conflict_files:type_name -> session.v1.FileChange
-	55, // 44: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
-	9,  // 45: session.v1.AvailableWorkspaceTargets.vcs_type:type_name -> session.v1.VCSType
-	28, // 46: session.v1.AvailableWorkspaceTargets.bookmarks:type_name -> session.v1.BookmarkTarget
-	29, // 47: session.v1.AvailableWorkspaceTargets.recent_revisions:type_name -> session.v1.RevisionTarget
-	30, // 48: session.v1.AvailableWorkspaceTargets.worktrees:type_name -> session.v1.WorktreeTarget
-	9,  // 49: session.v1.VCSInfo.vcs_type:type_name -> session.v1.VCSType
-	53, // 50: session.v1.PendingApprovalProto.tool_input:type_name -> session.v1.PendingApprovalProto.ToolInputEntry
-	55, // 51: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
-	55, // 52: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
-	13, // 53: session.v1.ApprovalRuleProto.decision:type_name -> session.v1.AutoDecision
-	55, // 54: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
-	54, // 55: session.v1.AnalyticsSummaryProto.decision_counts:type_name -> session.v1.AnalyticsSummaryProto.DecisionCountsEntry
-	36, // 56: session.v1.AnalyticsSummaryProto.top_tools:type_name -> session.v1.ToolStatProto
-	37, // 57: session.v1.AnalyticsSummaryProto.top_denied_commands:type_name -> session.v1.CommandStatProto
-	38, // 58: session.v1.AnalyticsSummaryProto.top_triggered_rules:type_name -> session.v1.RuleStatProto
-	55, // 59: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
-	55, // 60: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
-	39, // 61: session.v1.AnalyticsSummaryProto.top_command_programs:type_name -> session.v1.ProgramStatProto
-	40, // 62: session.v1.AnalyticsSummaryProto.top_python_imports:type_name -> session.v1.ImportStatProto
-	36, // 63: session.v1.AnalyticsSummaryProto.top_uncovered_tools:type_name -> session.v1.ToolStatProto
-	39, // 64: session.v1.AnalyticsSummaryProto.top_uncovered_programs:type_name -> session.v1.ProgramStatProto
-	41, // 65: session.v1.AnalyticsSummaryProto.command_subcommand_stats:type_name -> session.v1.SubcommandStatProto
-	55, // 66: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
-	55, // 67: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
-	55, // 68: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
-	55, // 69: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
-	14, // 70: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
-	71, // [71:71] is the sub-list for method output_type
-	71, // [71:71] is the sub-list for method input_type
-	71, // [71:71] is the sub-list for extension type_name
-	71, // [71:71] is the sub-list for extension extendee
-	0,  // [0:71] is the sub-list for field type_name
-=======
-	0,  // 0: session.v1.Session.status:type_name -> session.v1.SessionStatus
-	56, // 1: session.v1.Session.created_at:type_name -> google.protobuf.Timestamp
-	56, // 2: session.v1.Session.updated_at:type_name -> google.protobuf.Timestamp
-	56, // 3: session.v1.Session.last_terminal_update:type_name -> google.protobuf.Timestamp
-	56, // 4: session.v1.Session.last_meaningful_output:type_name -> google.protobuf.Timestamp
-	1,  // 5: session.v1.Session.session_type:type_name -> session.v1.SessionType
-	18, // 6: session.v1.Session.diff_stats:type_name -> session.v1.DiffStats
-	19, // 7: session.v1.Session.git_worktree:type_name -> session.v1.GitWorktree
-	20, // 8: session.v1.Session.claude_session:type_name -> session.v1.ClaudeSession
-	2,  // 9: session.v1.Session.instance_type:type_name -> session.v1.InstanceType
-	17, // 10: session.v1.Session.external_metadata:type_name -> session.v1.ExternalInstanceMetadata
-	56, // 11: session.v1.Session.last_pr_status_check:type_name -> google.protobuf.Timestamp
-	5,  // 12: session.v1.Session.rate_limit_state:type_name -> session.v1.RateLimitState
-	56, // 13: session.v1.Session.rate_limit_reset_time:type_name -> google.protobuf.Timestamp
-	3,  // 14: session.v1.Session.working_state:type_name -> session.v1.WorkingState
-	4,  // 15: session.v1.Session.sub_status:type_name -> session.v1.SubStatus
-	56, // 16: session.v1.ExternalInstanceMetadata.discovered_at:type_name -> google.protobuf.Timestamp
-	56, // 17: session.v1.ExternalInstanceMetadata.last_seen:type_name -> google.protobuf.Timestamp
-	56, // 18: session.v1.ClaudeSession.last_attached:type_name -> google.protobuf.Timestamp
-	21, // 19: session.v1.ClaudeSession.settings:type_name -> session.v1.ClaudeSettings
-	49, // 20: session.v1.ClaudeSession.metadata:type_name -> session.v1.ClaudeSession.MetadataEntry
-	7,  // 21: session.v1.ReviewItem.reason:type_name -> session.v1.AttentionReason
-	6,  // 22: session.v1.ReviewItem.priority:type_name -> session.v1.Priority
-	56, // 23: session.v1.ReviewItem.detected_at:type_name -> google.protobuf.Timestamp
-	50, // 24: session.v1.ReviewItem.metadata:type_name -> session.v1.ReviewItem.MetadataEntry
-	0,  // 25: session.v1.ReviewItem.status:type_name -> session.v1.SessionStatus
-	18, // 26: session.v1.ReviewItem.diff_stats:type_name -> session.v1.DiffStats
-	56, // 27: session.v1.ReviewItem.last_activity:type_name -> google.protobuf.Timestamp
-	3,  // 28: session.v1.ReviewItem.working_state:type_name -> session.v1.WorkingState
-	56, // 29: session.v1.PRInfo.created_at:type_name -> google.protobuf.Timestamp
-	56, // 30: session.v1.PRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	56, // 31: session.v1.PRComment.created_at:type_name -> google.protobuf.Timestamp
-	22, // 32: session.v1.ReviewQueue.items:type_name -> session.v1.ReviewItem
-	51, // 33: session.v1.ReviewQueue.by_priority:type_name -> session.v1.ReviewQueue.ByPriorityEntry
-	52, // 34: session.v1.ReviewQueue.by_reason:type_name -> session.v1.ReviewQueue.ByReasonEntry
-	8,  // 35: session.v1.Notification.notification_type:type_name -> session.v1.NotificationType
-	9,  // 36: session.v1.Notification.priority:type_name -> session.v1.NotificationPriority
-	56, // 37: session.v1.Notification.timestamp:type_name -> google.protobuf.Timestamp
-	53, // 38: session.v1.Notification.metadata:type_name -> session.v1.Notification.MetadataEntry
-	11, // 39: session.v1.FileChange.status:type_name -> session.v1.FileStatus
-	10, // 40: session.v1.VCSStatus.type:type_name -> session.v1.VCSType
-	27, // 41: session.v1.VCSStatus.staged_files:type_name -> session.v1.FileChange
-	27, // 42: session.v1.VCSStatus.unstaged_files:type_name -> session.v1.FileChange
-	27, // 43: session.v1.VCSStatus.untracked_files:type_name -> session.v1.FileChange
-	27, // 44: session.v1.VCSStatus.conflict_files:type_name -> session.v1.FileChange
-	56, // 45: session.v1.RevisionTarget.timestamp:type_name -> google.protobuf.Timestamp
-	10, // 46: session.v1.AvailableWorkspaceTargets.vcs_type:type_name -> session.v1.VCSType
-	29, // 47: session.v1.AvailableWorkspaceTargets.bookmarks:type_name -> session.v1.BookmarkTarget
-	30, // 48: session.v1.AvailableWorkspaceTargets.recent_revisions:type_name -> session.v1.RevisionTarget
-	31, // 49: session.v1.AvailableWorkspaceTargets.worktrees:type_name -> session.v1.WorktreeTarget
-	10, // 50: session.v1.VCSInfo.vcs_type:type_name -> session.v1.VCSType
-	54, // 51: session.v1.PendingApprovalProto.tool_input:type_name -> session.v1.PendingApprovalProto.ToolInputEntry
-	56, // 52: session.v1.PendingApprovalProto.created_at:type_name -> google.protobuf.Timestamp
-	56, // 53: session.v1.PendingApprovalProto.expires_at:type_name -> google.protobuf.Timestamp
-	14, // 54: session.v1.ApprovalRuleProto.decision:type_name -> session.v1.AutoDecision
-	56, // 55: session.v1.ApprovalRuleProto.created_at:type_name -> google.protobuf.Timestamp
-	55, // 56: session.v1.AnalyticsSummaryProto.decision_counts:type_name -> session.v1.AnalyticsSummaryProto.DecisionCountsEntry
-	37, // 57: session.v1.AnalyticsSummaryProto.top_tools:type_name -> session.v1.ToolStatProto
-	38, // 58: session.v1.AnalyticsSummaryProto.top_denied_commands:type_name -> session.v1.CommandStatProto
-	39, // 59: session.v1.AnalyticsSummaryProto.top_triggered_rules:type_name -> session.v1.RuleStatProto
-	56, // 60: session.v1.AnalyticsSummaryProto.window_start:type_name -> google.protobuf.Timestamp
-	56, // 61: session.v1.AnalyticsSummaryProto.window_end:type_name -> google.protobuf.Timestamp
-	40, // 62: session.v1.AnalyticsSummaryProto.top_command_programs:type_name -> session.v1.ProgramStatProto
-	41, // 63: session.v1.AnalyticsSummaryProto.top_python_imports:type_name -> session.v1.ImportStatProto
-	37, // 64: session.v1.AnalyticsSummaryProto.top_uncovered_tools:type_name -> session.v1.ToolStatProto
-	40, // 65: session.v1.AnalyticsSummaryProto.top_uncovered_programs:type_name -> session.v1.ProgramStatProto
-	42, // 66: session.v1.AnalyticsSummaryProto.command_subcommand_stats:type_name -> session.v1.SubcommandStatProto
-	56, // 67: session.v1.DatabaseInfo.last_used:type_name -> google.protobuf.Timestamp
-	56, // 68: session.v1.CheckpointProto.timestamp:type_name -> google.protobuf.Timestamp
-	56, // 69: session.v1.UnfinishedWorktree.last_modified:type_name -> google.protobuf.Timestamp
-	56, // 70: session.v1.UnfinishedWorktree.scan_time:type_name -> google.protobuf.Timestamp
-	15, // 71: session.v1.UnfinishedWorktree.scan_status:type_name -> session.v1.ScanStatus
-	72, // [72:72] is the sub-list for method output_type
-	72, // [72:72] is the sub-list for method input_type
-	72, // [72:72] is the sub-list for extension type_name
-	72, // [72:72] is the sub-list for extension extendee
-	0,  // [0:72] is the sub-list for field type_name
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 }
 
 func init() { file_session_v1_types_proto_init() }
@@ -6740,16 +6145,8 @@ func file_session_v1_types_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_session_v1_types_proto_rawDesc), len(file_session_v1_types_proto_rawDesc)),
-<<<<<<< HEAD
 			NumEnums:      19,
 			NumMessages:   43,
-||||||| parent of 4b2843ce (feat(proto): add creation_progress field to Session message)
-			NumEnums:      15,
-			NumMessages:   40,
-=======
-			NumEnums:      16,
-			NumMessages:   40,
->>>>>>> 4b2843ce (feat(proto): add creation_progress field to Session message)
 			NumExtensions: 0,
 			NumServices:   0,
 		},

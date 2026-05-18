@@ -300,6 +300,14 @@ service SessionService {
 
   // GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
   rpc GetEscapeAnalyticsSummary(GetEscapeAnalyticsSummaryRequest) returns (GetEscapeAnalyticsSummaryResponse) {}
+
+  // HibernateSession checkpoints the session state, kills the AI process, and
+  // transitions the session to Hibernated status.
+  rpc HibernateSession(HibernateSessionRequest) returns (HibernateSessionResponse) {}
+
+  // ResumeHibernatedSession re-launches the AI process for a Hibernated session,
+  // transitioning it back to Active status.
+  rpc ResumeHibernatedSession(ResumeHibernatedSessionRequest) returns (ResumeHibernatedSessionResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -1928,4 +1936,25 @@ message GenerateSuggestedRuleResponse {
   // Analytics-gaps calls return up to 5 suggestions (one per top gap cluster).
   // Command-sample and review-queue-item calls return exactly 1.
   repeated SuggestedRuleProto suggestions = 1;
+}
+
+// HibernateSession messages
+message HibernateSessionRequest {
+  string id = 1;
+  // reason identifies why the session is being hibernated.
+  // Values: "manual", "idle", "resource_pressure". Defaults to "manual".
+  string reason = 2;
+}
+
+message HibernateSessionResponse {
+  Session session = 1;
+}
+
+// ResumeHibernatedSession messages
+message ResumeHibernatedSessionRequest {
+  string id = 1;
+}
+
+message ResumeHibernatedSessionResponse {
+  Session session = 1;
 }

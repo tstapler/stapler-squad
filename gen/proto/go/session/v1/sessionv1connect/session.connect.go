@@ -276,6 +276,12 @@ const (
 	// SessionServiceGetEscapeAnalyticsSummaryProcedure is the fully-qualified name of the
 	// SessionService's GetEscapeAnalyticsSummary RPC.
 	SessionServiceGetEscapeAnalyticsSummaryProcedure = "/session.v1.SessionService/GetEscapeAnalyticsSummary"
+	// SessionServiceHibernateSessionProcedure is the fully-qualified name of the SessionService's
+	// HibernateSession RPC.
+	SessionServiceHibernateSessionProcedure = "/session.v1.SessionService/HibernateSession"
+	// SessionServiceResumeHibernatedSessionProcedure is the fully-qualified name of the
+	// SessionService's ResumeHibernatedSession RPC.
+	SessionServiceResumeHibernatedSessionProcedure = "/session.v1.SessionService/ResumeHibernatedSession"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -489,6 +495,12 @@ type SessionServiceClient interface {
 	QueryEscapeAnalytics(context.Context, *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error)
 	// GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
 	GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error)
+	// HibernateSession checkpoints the session state, kills the AI process, and
+	// transitions the session to Hibernated status.
+	HibernateSession(context.Context, *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error)
+	// ResumeHibernatedSession re-launches the AI process for a Hibernated session,
+	// transitioning it back to Active status.
+	ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -994,6 +1006,18 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsSummary")),
 			connect.WithClientOptions(opts...),
 		),
+		hibernateSession: connect.NewClient[v1.HibernateSessionRequest, v1.HibernateSessionResponse](
+			httpClient,
+			baseURL+SessionServiceHibernateSessionProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("HibernateSession")),
+			connect.WithClientOptions(opts...),
+		),
+		resumeHibernatedSession: connect.NewClient[v1.ResumeHibernatedSessionRequest, v1.ResumeHibernatedSessionResponse](
+			httpClient,
+			baseURL+SessionServiceResumeHibernatedSessionProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ResumeHibernatedSession")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -1081,6 +1105,8 @@ type sessionServiceClient struct {
 	updateFeatureFlag         *connect.Client[v1.UpdateFeatureFlagRequest, v1.UpdateFeatureFlagResponse]
 	queryEscapeAnalytics      *connect.Client[v1.QueryEscapeAnalyticsRequest, v1.QueryEscapeAnalyticsResponse]
 	getEscapeAnalyticsSummary *connect.Client[v1.GetEscapeAnalyticsSummaryRequest, v1.GetEscapeAnalyticsSummaryResponse]
+	hibernateSession          *connect.Client[v1.HibernateSessionRequest, v1.HibernateSessionResponse]
+	resumeHibernatedSession   *connect.Client[v1.ResumeHibernatedSessionRequest, v1.ResumeHibernatedSessionResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1493,6 +1519,16 @@ func (c *sessionServiceClient) GetEscapeAnalyticsSummary(ctx context.Context, re
 	return c.getEscapeAnalyticsSummary.CallUnary(ctx, req)
 }
 
+// HibernateSession calls session.v1.SessionService.HibernateSession.
+func (c *sessionServiceClient) HibernateSession(ctx context.Context, req *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error) {
+	return c.hibernateSession.CallUnary(ctx, req)
+}
+
+// ResumeHibernatedSession calls session.v1.SessionService.ResumeHibernatedSession.
+func (c *sessionServiceClient) ResumeHibernatedSession(ctx context.Context, req *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error) {
+	return c.resumeHibernatedSession.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -1704,6 +1740,12 @@ type SessionServiceHandler interface {
 	QueryEscapeAnalytics(context.Context, *connect.Request[v1.QueryEscapeAnalyticsRequest]) (*connect.Response[v1.QueryEscapeAnalyticsResponse], error)
 	// GetEscapeAnalyticsSummary returns aggregate escape sequence statistics for a session.
 	GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error)
+	// HibernateSession checkpoints the session state, kills the AI process, and
+	// transitions the session to Hibernated status.
+	HibernateSession(context.Context, *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error)
+	// ResumeHibernatedSession re-launches the AI process for a Hibernated session,
+	// transitioning it back to Active status.
+	ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2205,6 +2247,18 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("GetEscapeAnalyticsSummary")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceHibernateSessionHandler := connect.NewUnaryHandler(
+		SessionServiceHibernateSessionProcedure,
+		svc.HibernateSession,
+		connect.WithSchema(sessionServiceMethods.ByName("HibernateSession")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceResumeHibernatedSessionHandler := connect.NewUnaryHandler(
+		SessionServiceResumeHibernatedSessionProcedure,
+		svc.ResumeHibernatedSession,
+		connect.WithSchema(sessionServiceMethods.ByName("ResumeHibernatedSession")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -2371,6 +2425,10 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceQueryEscapeAnalyticsHandler.ServeHTTP(w, r)
 		case SessionServiceGetEscapeAnalyticsSummaryProcedure:
 			sessionServiceGetEscapeAnalyticsSummaryHandler.ServeHTTP(w, r)
+		case SessionServiceHibernateSessionProcedure:
+			sessionServiceHibernateSessionHandler.ServeHTTP(w, r)
+		case SessionServiceResumeHibernatedSessionProcedure:
+			sessionServiceResumeHibernatedSessionHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -2706,4 +2764,12 @@ func (UnimplementedSessionServiceHandler) QueryEscapeAnalytics(context.Context, 
 
 func (UnimplementedSessionServiceHandler) GetEscapeAnalyticsSummary(context.Context, *connect.Request[v1.GetEscapeAnalyticsSummaryRequest]) (*connect.Response[v1.GetEscapeAnalyticsSummaryResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetEscapeAnalyticsSummary is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) HibernateSession(context.Context, *connect.Request[v1.HibernateSessionRequest]) (*connect.Response[v1.HibernateSessionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.HibernateSession is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ResumeHibernatedSession(context.Context, *connect.Request[v1.ResumeHibernatedSessionRequest]) (*connect.Response[v1.ResumeHibernatedSessionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ResumeHibernatedSession is not implemented"))
 }
