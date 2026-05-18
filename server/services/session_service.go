@@ -818,6 +818,10 @@ func (s *SessionService) CreateSession(
 	instanceTitle := instance.Title
 	instanceRootDir := instance.GetEffectiveRootDir()
 
+	// Snapshot the proto before spawning the goroutine to avoid a data race between
+	// the goroutine writing CreationProgress and the return statement reading instance.
+	creatingProto := adapters.InstanceToProto(instance)
+
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
 	go func() {
 		// Wire callbacks before starting so rate-limit and status-change events fire.
@@ -857,7 +861,7 @@ func (s *SessionService) CreateSession(
 	}()
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
-		Session: adapters.InstanceToProto(instance),
+		Session: creatingProto,
 	}), nil
 }
 
