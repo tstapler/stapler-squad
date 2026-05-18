@@ -1,0 +1,10 @@
+{
+  "id": "backlog-board",
+  "type": "frontend",
+  "component": "BacklogBoard",
+  "path": "web-app/src/components/backlog/BacklogBoard.tsx",
+  "markerLine": 0,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-12T00:00:00Z"
+}

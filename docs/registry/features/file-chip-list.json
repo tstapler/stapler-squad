@@ -1,0 +1,18 @@
+{
+  "id": "file-chip-list",
+  "type": "frontend",
+  "description": "Horizontal chip row for displaying attached files with type icons and remove buttons",
+  "component": "FileChipList",
+  "filePath": "web-app/src/components/sessions/FileChipList.tsx",
+  "tested": true,
+  "testIds": [
+    "FileChipList renders nothing when files array is empty",
+    "FileChipList renders a chip for each file",
+    "FileChipList shows thumbnail img for image files with previewUrl",
+    "FileChipList does not show img element for non-image files",
+    "FileChipList calls onRemove with correct index when × is clicked",
+    "FileChipList remove buttons have accessible aria-label",
+    "FileChipList chip list has accessible role and label"
+  ],
+  "lastModified": "2026-05-16T00:00:00Z"
+}

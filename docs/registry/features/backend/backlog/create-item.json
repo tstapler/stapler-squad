@@ -1,0 +1,16 @@
+{
+  "id": "backlog:create-item",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "CreateBacklogItem",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service.go",
+  "tested": true,
+  "testIds": [
+    "TestCreateBacklogItem_Success",
+    "TestCreateBacklogItem_EmptyTitle",
+    "TestCreateBacklogItem_NilStorage"
+  ],
+  "lastModified": "2026-05-18T10:09:59.931586135-07:00"
+}

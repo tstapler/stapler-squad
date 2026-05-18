@@ -1,0 +1,12 @@
+{
+  "id": "backlog:trigger-triage",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "TriggerTriage",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-18T10:09:59.931586135-07:00"
+}

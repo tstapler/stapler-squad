@@ -1,0 +1,341 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// AcCriterion represents a single acceptance criterion for a backlog item.
+message AcCriterion {
+  int32 index = 1;
+  string text = 2;
+  string status = 3; // "pending", "in_progress", "done"
+}
+
+// CriterionVerdict holds the review outcome for a single acceptance criterion.
+message CriterionVerdict {
+  int32 criterion_index = 1;
+  string outcome = 2;
+  string evidence = 3;
+}
+
+// ReviewVerdict captures the overall and per-criterion review outcome for an
+// item session.
+message ReviewVerdict {
+  string id = 1;
+  string overall_outcome = 2;
+  repeated CriterionVerdict per_criterion = 3;
+  string summary = 4;
+  string diff_hash = 5;
+  int32 diff_token_count = 6;
+  bool diff_truncated = 7;
+  string override_by = 8;
+  string override_reason = 9;
+  google.protobuf.Timestamp override_at = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+// ItemSession records a session that was spawned or attached to a backlog item.
+message ItemSession {
+  string id = 1;
+  string session_uuid = 2;
+  string session_role = 3;
+  google.protobuf.Timestamp started_at = 4;
+  google.protobuf.Timestamp ended_at = 5;
+  string last_commit_message = 6;
+  google.protobuf.Timestamp last_commit_at = 7;
+  int32 commit_count_since_spawn = 8;
+  google.protobuf.Timestamp last_file_touch_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+  ReviewVerdict review_verdict = 11;
+}
+
+// BacklogItem represents a unit of work in the backlog.
+message BacklogItem {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  repeated AcCriterion acceptance_criteria = 4;
+  int32 priority = 5;
+  string status = 6;
+  string repo_path = 7;
+  bool skip_review_gate = 8;
+  bool skip_planning = 9;
+  bool plan_approved = 10;
+  google.protobuf.Timestamp plan_approved_at = 11;
+  string plan_artifacts_path = 12;
+  string notes = 13;
+  string external_id = 14;
+  google.protobuf.Timestamp archived_at = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+  repeated ItemSession item_sessions = 18;
+  string source_id = 19;
+}
+
+// ItemSource represents an external plugin source that syncs items into the
+// backlog.
+message ItemSource {
+  string id = 1;
+  string plugin_id = 2;
+  string display_name = 3;
+  bool enabled = 4;
+  google.protobuf.Timestamp last_synced_at = 5;
+  bool token_configured = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// SourceSyncEvent records the result of a single sync run for an ItemSource.
+message SourceSyncEvent {
+  string id = 1;
+  google.protobuf.Timestamp started_at = 2;
+  google.protobuf.Timestamp finished_at = 3;
+  int32 items_created = 4;
+  int32 items_updated = 5;
+  int32 items_skipped = 6;
+  int32 items_errored = 7;
+  string error_message = 8;
+}
+
+// --- Request / Response messages ---
+
+message CreateBacklogItemRequest {
+  string title = 1;
+  string description = 2;
+  repeated AcCriterion acceptance_criteria = 3;
+  int32 priority = 4;
+  bool skip_review_gate = 5;
+  bool skip_planning = 6;
+  string repo_path = 7;
+  string notes = 8;
+}
+
+message CreateBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
+message GetBacklogItemRequest {
+  string item_id = 1;
+}
+
+message GetBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
+message ListBacklogItemsRequest {
+  repeated string status = 1;
+  repeated int32 priority = 2;
+  string sort_by = 3;
+  bool include_terminal = 4;
+}
+
+message ListBacklogItemsResponse {
+  repeated BacklogItem items = 1;
+}
+
+message UpdateBacklogItemRequest {
+  string item_id = 1;
+  string title = 2;
+  string description = 3;
+  repeated AcCriterion acceptance_criteria = 4;
+  int32 priority = 5;
+  bool skip_review_gate = 6;
+  bool skip_planning = 7;
+  string repo_path = 8;
+  string notes = 9;
+  string expected_status = 10;
+  google.protobuf.Timestamp expected_updated_at = 11;
+}
+
+message UpdateBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
+message ArchiveBacklogItemRequest {
+  string item_id = 1;
+}
+
+message ArchiveBacklogItemResponse {
+  BacklogItem item = 1;
+}
+
+message TransitionBacklogItemStatusRequest {
+  string item_id = 1;
+  string target_status = 2;
+  string expected_status = 3;
+  google.protobuf.Timestamp expected_updated_at = 4;
+  string override_reason = 5;
+}
+
+message TransitionBacklogItemStatusResponse {
+  BacklogItem item = 1;
+}
+
+message SpawnSessionFromItemRequest {
+  string item_id = 1;
+}
+
+message SpawnSessionFromItemResponse {
+  string session_uuid = 1;
+  ItemSession item_session = 2;
+}
+
+message AttachSessionToItemRequest {
+  string item_id = 1;
+  string session_uuid = 2;
+}
+
+message AttachSessionToItemResponse {
+  ItemSession item_session = 1;
+}
+
+message TriggerTriageRequest {
+  string item_id = 1;
+}
+
+message TriggerTriageResponse {
+  ItemSession item_session = 1;
+}
+
+message ApprovePlanRequest {
+  string item_id = 1;
+}
+
+message ApprovePlanResponse {
+  BacklogItem item = 1;
+}
+
+message SuggestNextItemRequest {}
+
+message SuggestNextItemResponse {
+  // Deprecated: use item instead. Left for wire compatibility.
+  ItemSession item_session = 1;
+  BacklogItem item = 2;
+}
+
+message OverrideVerdictRequest {
+  string item_session_id = 1;
+  string to_status = 2;
+  string override_reason = 3;
+}
+
+message OverrideVerdictResponse {
+  BacklogItem item = 1;
+}
+
+message TriggerReReviewRequest {
+  string item_id = 1;
+}
+
+message TriggerReReviewResponse {
+  ItemSession item_session = 1;
+}
+
+message TriggerSyncRequest {
+  string source_id = 1;
+}
+
+message TriggerSyncResponse {}
+
+message CreateItemSourceRequest {
+  string plugin_id = 1;
+  string display_name = 2;
+  string config_json = 3;
+  string token = 4;
+}
+
+message CreateItemSourceResponse {
+  ItemSource source = 1;
+}
+
+message ListItemSourcesRequest {}
+
+message ListItemSourcesResponse {
+  repeated ItemSource sources = 1;
+}
+
+message UpdateItemSourceRequest {
+  string source_id = 1;
+  string display_name = 2;
+  bool enabled = 3;
+  string token = 4;
+}
+
+message UpdateItemSourceResponse {
+  ItemSource source = 1;
+}
+
+message DeleteItemSourceRequest {
+  string source_id = 1;
+}
+
+message DeleteItemSourceResponse {}
+
+message GetSyncHistoryRequest {
+  string source_id = 1;
+}
+
+message GetSyncHistoryResponse {
+  repeated SourceSyncEvent events = 1;
+}
+
+// BacklogService manages backlog items and their lifecycle through AI-assisted
+// planning, implementation, and review workflows.
+service BacklogService {
+  // CreateBacklogItem adds a new item to the backlog.
+  rpc CreateBacklogItem(CreateBacklogItemRequest) returns (CreateBacklogItemResponse) {}
+
+  // GetBacklogItem retrieves a single backlog item by ID.
+  rpc GetBacklogItem(GetBacklogItemRequest) returns (GetBacklogItemResponse) {}
+
+  // ListBacklogItems returns backlog items with optional filtering and sorting.
+  rpc ListBacklogItems(ListBacklogItemsRequest) returns (ListBacklogItemsResponse) {}
+
+  // UpdateBacklogItem modifies the properties of an existing backlog item.
+  rpc UpdateBacklogItem(UpdateBacklogItemRequest) returns (UpdateBacklogItemResponse) {}
+
+  // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
+  rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // TransitionBacklogItemStatus moves an item through the status state machine.
+  rpc TransitionBacklogItemStatus(TransitionBacklogItemStatusRequest) returns (TransitionBacklogItemStatusResponse) {}
+
+  // SpawnSessionFromItem creates a new AI agent session for a backlog item.
+  rpc SpawnSessionFromItem(SpawnSessionFromItemRequest) returns (SpawnSessionFromItemResponse) {}
+
+  // AttachSessionToItem links an existing session to a backlog item.
+  rpc AttachSessionToItem(AttachSessionToItemRequest) returns (AttachSessionToItemResponse) {}
+
+  // TriggerTriage kicks off a triage session for a backlog item.
+  rpc TriggerTriage(TriggerTriageRequest) returns (TriggerTriageResponse) {}
+
+  // ApprovePlan marks the planning artifacts for an item as approved.
+  rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse) {}
+
+  // SuggestNextItem recommends the highest-priority actionable backlog item.
+  rpc SuggestNextItem(SuggestNextItemRequest) returns (SuggestNextItemResponse) {}
+
+  // OverrideVerdict manually overrides a review verdict for an item session.
+  rpc OverrideVerdict(OverrideVerdictRequest) returns (OverrideVerdictResponse) {}
+
+  // TriggerReReview re-runs the review gate for a backlog item.
+  rpc TriggerReReview(TriggerReReviewRequest) returns (TriggerReReviewResponse) {}
+
+  // TriggerSync initiates a sync run for an external item source.
+  rpc TriggerSync(TriggerSyncRequest) returns (TriggerSyncResponse) {}
+
+  // CreateItemSource registers a new external plugin source.
+  rpc CreateItemSource(CreateItemSourceRequest) returns (CreateItemSourceResponse) {}
+
+  // ListItemSources returns all registered external item sources.
+  rpc ListItemSources(ListItemSourcesRequest) returns (ListItemSourcesResponse) {}
+
+  // UpdateItemSource modifies configuration for an existing item source.
+  rpc UpdateItemSource(UpdateItemSourceRequest) returns (UpdateItemSourceResponse) {}
+
+  // DeleteItemSource removes an external item source registration.
+  rpc DeleteItemSource(DeleteItemSourceRequest) returns (DeleteItemSourceResponse) {}
+
+  // GetSyncHistory returns the sync event history for an item source.
+  rpc GetSyncHistory(GetSyncHistoryRequest) returns (GetSyncHistoryResponse) {}
+}

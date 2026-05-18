@@ -1,0 +1,10 @@
+{
+  "id": "backlog-list-page",
+  "type": "frontend",
+  "component": "BacklogPage",
+  "path": "web-app/src/app/backlog/page.tsx",
+  "markerLine": 0,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-12T00:00:00Z"
+}
