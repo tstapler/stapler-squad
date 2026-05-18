@@ -91,6 +91,15 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 	// History file linkage — path to the Claude JSONL conversation file.
 	protoSession.HistoryFilePath = inst.HistoryFilePath
 
+	// Creation progress message — only meaningful during Creating state.
+	if inst.IsCreating() {
+		if inst.CreationProgress != "" {
+			protoSession.CreationProgress = inst.CreationProgress
+		} else {
+			protoSession.CreationProgress = "Starting session..."
+		}
+	}
+
 	// Rate limit state propagation.
 	protoSession.RateLimitState = rateLimitStateToProto(ratelimit.RateLimitState(inst.GetRateLimitState()))
 	if t := inst.GetRateLimitResetTime(); !t.IsZero() {
@@ -116,6 +125,10 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 			Status: mapCDPStatus(cdpState.Status),
 		}
 	}
+
+	// SubStatus: fine-grained activity state derived from terminal detection.
+	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
+	protoSession.SubStatus = toProtoSubStatus(inst)
 
 	return protoSession
 }
@@ -154,6 +167,35 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 	}
 }
 
+// toProtoSubStatus derives the SubStatus proto enum from an Instance's terminal detection state.
+// Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
+// Rate limit state takes precedence over ClaudeController-detected sub-status.
+func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
+	if inst.Status != session.Active {
+		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
+	}
+	// Rate limit state takes precedence.
+	if ratelimit.RateLimitState(inst.GetRateLimitState()) == ratelimit.StateWaiting {
+		return sessionv1.SubStatus_SUB_STATUS_RATE_LIMITED
+	}
+	switch inst.GetDetectedStatus() {
+	case detection.StatusProcessing, detection.StatusActive:
+		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
+	case detection.StatusNeedsApproval, detection.StatusInputRequired:
+		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL
+	case detection.StatusError:
+		return sessionv1.SubStatus_SUB_STATUS_ERROR
+	case detection.StatusTestsFailing:
+		return sessionv1.SubStatus_SUB_STATUS_TESTS_FAILING
+	case detection.StatusReady, detection.StatusIdle:
+		return sessionv1.SubStatus_SUB_STATUS_IDLE
+	default:
+		// Unknown / undetected — don't show a chip
+		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
+	}
+}
+
+
 // rateLimitStateToProto converts a ratelimit.RateLimitState to proto RateLimitState enum.
 func rateLimitStateToProto(state ratelimit.RateLimitState) sessionv1.RateLimitState {
 	switch state {
@@ -179,12 +221,12 @@ func StatusToProto(status session.Status) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE // wire value 1 (same as legacy RUNNING)
 	case session.Paused:
 		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED
-	case session.NeedsApproval:
-		return sessionv1.SessionStatus_SESSION_STATUS_NEEDS_APPROVAL
 	case session.Creating:
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
 	case session.Stopped:
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
+	case session.Hibernated:
+		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -238,7 +280,7 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.Active
 	case 2: // SESSION_STATUS_READY — deprecated legacy wire value → Active
 		return session.Active
-	case 5: // SESSION_STATUS_NEEDS_APPROVAL — deprecated legacy wire value → Active
+	case 5: // SESSION_STATUS_NEEDS_APPROVAL — deprecated legacy wire value → Active (sub-status only now)
 		return session.Active
 	case 3: // SESSION_STATUS_LOADING — deprecated legacy wire value → Creating
 		return session.Creating
@@ -246,14 +288,12 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.Creating
 	case sessionv1.SessionStatus_SESSION_STATUS_PAUSED:
 		return session.Paused
-	case sessionv1.SessionStatus_SESSION_STATUS_NEEDS_APPROVAL:
-		return session.NeedsApproval
-	case sessionv1.SessionStatus_SESSION_STATUS_CREATING:
-		return session.Creating
 	case sessionv1.SessionStatus_SESSION_STATUS_STOPPED:
 		return session.Stopped
+	case sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED:
+		return session.Hibernated
 	default:
-		return session.Loading // Default to Loading for unknown statuses
+		return session.Creating // Default to Creating for unknown statuses
 	}
 }
 

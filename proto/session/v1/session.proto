@@ -154,6 +154,12 @@ service SessionService {
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
+  // GenerateSuggestedRule asks an AI agent to propose a new auto-approval rule.
+  // Analyzes existing rules, seed examples, and analytics data to produce a
+  // pre-filled SuggestedRuleProto. May take 5–30 seconds; callers must set a
+  // 60-second deadline via AbortController.
+  rpc GenerateSuggestedRule(GenerateSuggestedRuleRequest) returns (GenerateSuggestedRuleResponse) {}
+
   // ListDatabases returns all discovered workspace databases with metadata.
   // Used by the workspace switcher UI to show available workspaces.
   rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse) {}
@@ -1902,4 +1908,24 @@ message GetEscapeAnalyticsSummaryResponse {
   int64 total_sequences = 2;
   int64 total_mangled = 3;
   double mangle_rate = 4;
+}
+
+message GenerateSuggestedRuleRequest {
+  SuggestionSource source = 1;
+  // For ANALYTICS_GAPS: number of days of history to analyze (1–90, default 7).
+  optional int32 window_days = 2;
+  // For COMMAND_SAMPLE: the raw command string the user pasted.
+  string command_sample = 3;
+  // For REVIEW_QUEUE_ITEM: the analytics entry ID of the review item.
+  string analytics_item_id = 4;
+  // For ANALYTICS_GAPS scoped to a single tool/program: optional filter.
+  string tool_name_filter = 5;
+  string program_name_filter = 6;
+}
+
+message GenerateSuggestedRuleResponse {
+  // Multiple suggestions are returned so the user can review a batch at once.
+  // Analytics-gaps calls return up to 5 suggestions (one per top gap cluster).
+  // Command-sample and review-queue-item calls return exactly 1.
+  repeated SuggestedRuleProto suggestions = 1;
 }

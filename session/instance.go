@@ -205,6 +205,11 @@ type Instance struct {
 	// without modifying any file on disk. Survives context compaction.
 	AppendSystemPrompt string `json:"append_system_prompt,omitempty"`
 
+	// CreationProgress holds a human-readable progress message during Creating state.
+	// Set by the async creation goroutine; cleared once the session becomes Active.
+	// Not persisted to the database — only meaningful in-memory during startup.
+	CreationProgress string `json:"-"`
+
 	// LaunchCommand is the full command passed to tmux on session start, including
 	// any injected flags (--resume, --mcp-config, -y, initial prompt). Set once on
 	// first start and updated on restart. Empty for external (mux-discovered) sessions.

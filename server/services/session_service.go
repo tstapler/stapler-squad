@@ -194,7 +194,14 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	if userRules := rulesStore.ToRules(); len(userRules) > 0 {
 		classifierObj.AddRules(userRules)
 	}
-	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj)
+	// Optionally wire an AI client for GenerateSuggestedRule (requires ANTHROPIC_API_KEY).
+	var aiClient AIClient
+	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+		if c, err := NewAnthropicAIClient(apiKey); err == nil {
+			aiClient = c
+		}
+	}
+	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj, &DefaultRulePromptBuilder{}, aiClient)
 
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
@@ -787,38 +794,13 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to create instance: %w", err))
 	}
 
-	// Start the session (initializes tmux + git worktree)
-	// Use Start(true) to indicate this is a first-time setup
-	if err := instance.Start(true); err != nil {
-		log.Error("[CreateSession] failed to start session", "session", instance.Title, "err", err)
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to start session: %w", err))
-	}
-
-	// Wire rate limit event callbacks so detection/recovery fire server-level notifications.
-	s.wireRateLimitCallbacks(instance)
-	s.wireStatusChangeCallback(instance)
-
-	// Inject Claude Code HTTP hook config for remote approval from the web UI.
-	// Non-fatal: session is fully functional even without this config.
-	if err := InjectHookConfig(instance.GetEffectiveRootDir(), instance.Title); err != nil {
-		log.Warn("[CreateSession] failed to inject hook config", "session", instance.Title, "err", err)
-	}
-
-	// Save only the new instance to storage.
-	// Using AddInstance avoids loading and re-writing all instances (which would call
-	// FromInstanceData/Start on every session and replace live poller instances with
-	// cold storage copies).
+	// Save the instance to storage with Creating status immediately so the client
+	// can receive the session and show a spinner while initialization proceeds.
 	if err := s.storage.AddInstance(instance); err != nil {
-		// Cleanup on save failure
-		if destroyErr := instance.Destroy(); destroyErr != nil {
-			// Log cleanup error but return original save error
-			log.Error("failed to cleanup after save error", "err", destroyErr)
-		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
-	// Add only the new session to the poller, preserving all existing live instances.
-	// Using AddInstance (not SetInstances) avoids replacing live instances with cold copies.
+	// Add the session to the poller so WatchSessions picks it up immediately.
 	if s.reviewQueuePoller != nil {
 		s.reviewQueuePoller.AddInstance(instance)
 		log.Info("[ReviewQueue] added new session to poller", "session", instance.Title)
@@ -829,8 +811,50 @@ func (s *SessionService) CreateSession(
 		s.promptStore.RecordUsage(req.Msg.InitialPrompt)
 	}
 
-	// Publish SessionCreated event to all watchers
+	// Publish SessionCreated event so watchers see the Creating-status session immediately.
 	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
+
+	// Capture refs needed inside the goroutine (avoid capturing req.Msg which may be GC'd).
+	instanceTitle := instance.Title
+	instanceRootDir := instance.GetEffectiveRootDir()
+
+	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
+	go func() {
+		// Wire callbacks before starting so rate-limit and status-change events fire.
+		s.wireRateLimitCallbacks(instance)
+		s.wireStatusChangeCallback(instance)
+
+		instance.CreationProgress = "Starting session..."
+		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"creation_progress"}))
+
+		// Start the session (initializes tmux + git worktree).
+		if startErr := instance.Start(true); startErr != nil {
+			log.Error("[CreateSession] async start failed", "session", instanceTitle, "err", startErr)
+			// Transition to Stopped on failure.
+			instance.CreationProgress = fmt.Sprintf("Startup failed: %s", startErr.Error())
+			instance.ForceStatus(session.Stopped)
+			_ = s.storage.SaveInstances([]*session.Instance{instance})
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
+			return
+		}
+
+		// Clear progress message now that we are Active.
+		instance.CreationProgress = ""
+
+		// Inject Claude Code HTTP hook config for remote approval from the web UI.
+		// Non-fatal: session is fully functional even without this config.
+		if err := InjectHookConfig(instanceRootDir, instanceTitle); err != nil {
+			log.Warn("[CreateSession] failed to inject hook config", "session", instanceTitle, "err", err)
+		}
+
+		if s.backlogLifecycleListener != nil {
+			s.backlogLifecycleListener.WireToInstance(instance)
+		}
+
+		_ = s.storage.SaveInstances([]*session.Instance{instance})
+		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
+		log.Info("[CreateSession] async start complete", "session", instanceTitle)
+	}()
 
 	return connect.NewResponse(&sessionv1.CreateSessionResponse{
 		Session: adapters.InstanceToProto(instance),
@@ -3044,4 +3068,13 @@ func (s *SessionService) UpdateFeatureFlag(
 			Description: description,
 		},
 	}), nil
+}
+
+// GenerateSuggestedRule asks an AI agent to propose a new auto-approval rule.
+// Delegates to RulesService which holds all rule + analytics domain logic.
+func (s *SessionService) GenerateSuggestedRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GenerateSuggestedRuleRequest],
+) (*connect.Response[sessionv1.GenerateSuggestedRuleResponse], error) {
+	return s.rulesSvc.GenerateSuggestedRule(ctx, req)
 }

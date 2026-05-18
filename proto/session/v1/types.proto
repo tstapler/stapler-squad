@@ -167,6 +167,15 @@ message Session {
 
   // CDP browser streaming state. Populated when Chrome is available on the host.
   CDPState cdp_state = 52;
+
+  // Human-readable progress message during Creating state (empty otherwise).
+  // Set by the async creation goroutine; cleared once session becomes Active.
+  string creation_progress = 53;
+
+  // Fine-grained activity state for Active sessions. Derived from terminal detection
+  // layer at read time; never stored in the database.
+  // Only meaningful when lifecycle_status == SESSION_STATUS_ACTIVE.
+  SubStatus sub_status = 54;
 }
 
 // VNCStatus represents the operational state of the VNC subsystem for a session.
@@ -218,22 +227,31 @@ message CDPState {
 
 // SessionStatus represents the current state of a session.
 // Maps to session.Status enum in Go.
+// Wire values for RUNNING(1), READY(2), LOADING(3), NEEDS_APPROVAL(5), CREATING(6), STOPPED(7)
+// are preserved for backward compatibility with existing clients.
 enum SessionStatus {
+  option allow_alias = true;
+
   SESSION_STATUS_UNSPECIFIED = 0;
-  // Session is running and agent is working.
-  SESSION_STATUS_RUNNING = 1;
-  // Agent is ready for user input (waiting).
-  SESSION_STATUS_READY = 2;
-  // Session is loading/starting up.
-  SESSION_STATUS_LOADING = 3;
+
+  // Session has an active AI process (replaces legacy RUNNING and READY).
+  SESSION_STATUS_ACTIVE = 1;
+  // Deprecated: use SESSION_STATUS_ACTIVE. Integer wire value 1 preserved.
+  SESSION_STATUS_RUNNING = 1 [deprecated = true];
+  // Deprecated: use SESSION_STATUS_ACTIVE. Integer wire value 2 (legacy ready state).
+  SESSION_STATUS_READY = 2 [deprecated = true];
+  // Deprecated: use SESSION_STATUS_CREATING. Integer wire value 3 (legacy loading state).
+  SESSION_STATUS_LOADING = 3 [deprecated = true];
   // Session is paused (worktree removed but branch preserved).
   SESSION_STATUS_PAUSED = 4;
-  // Session needs user approval on a prompt.
-  SESSION_STATUS_NEEDS_APPROVAL = 5;
+  // Deprecated: NeedsApproval is now a sub-status. Integer wire value 5 preserved.
+  SESSION_STATUS_NEEDS_APPROVAL = 5 [deprecated = true];
   // Session is being initialized (transient state before first start).
   SESSION_STATUS_CREATING = 6;
   // Session has been stopped (terminal state, cannot transition further).
   SESSION_STATUS_STOPPED = 7;
+  // Session has been hibernated (checkpoint written, tmux session killed).
+  SESSION_STATUS_HIBERNATED = 8;
 }
 
 // SessionType determines the session workflow.
@@ -271,6 +289,24 @@ enum WorkingState {
   WORKING_STATE_IDLE = 3;
   // Session has been silent beyond the idle threshold (may be stuck or waiting).
   WORKING_STATE_WAITING = 4;
+}
+
+// SubStatus provides fine-grained activity state for Active sessions.
+// Derived at read time from the detection layer; never stored in the database.
+enum SubStatus {
+  SUB_STATUS_UNSPECIFIED = 0;
+  // Session is at the idle prompt, waiting for user input.
+  SUB_STATUS_IDLE = 1;
+  // Session is actively processing (Claude generating tokens or running a tool).
+  SUB_STATUS_PROCESSING = 2;
+  // Session is waiting for user approval on a tool-use request.
+  SUB_STATUS_NEEDS_APPROVAL = 3;
+  // Session encountered an error state.
+  SUB_STATUS_ERROR = 4;
+  // Tests are currently failing.
+  SUB_STATUS_TESTS_FAILING = 5;
+  // Session is experiencing API rate limiting.
+  SUB_STATUS_RATE_LIMITED = 6;
 }
 
 // RateLimitState indicates whether the session is experiencing rate limiting.
@@ -1150,4 +1186,35 @@ message UnfinishedWorkConfig {
   bool   auto_spider_sessions = 1; // default: true
   repeated string watch_dirs  = 2;
   repeated string pinned_repos = 3;
+}
+
+// SuggestionSource identifies what data was used to generate a rule suggestion.
+enum SuggestionSource {
+  SUGGESTION_SOURCE_UNSPECIFIED = 0;
+  SUGGESTION_SOURCE_ANALYTICS_GAPS = 1;
+  SUGGESTION_SOURCE_REVIEW_QUEUE_ITEM = 2;
+  SUGGESTION_SOURCE_COMMAND_SAMPLE = 3;
+}
+
+// SuggestedRuleProto carries a pre-filled rule proposal plus AI metadata.
+// It mirrors ApprovalRuleProto fields 1–11 (same field numbers) so the UI
+// can reuse ApprovalRuleProto rendering helpers with a simple copy.
+message SuggestedRuleProto {
+  string name           = 1;
+  string tool_name      = 2;
+  string tool_pattern   = 3;
+  string command_pattern = 4;
+  string file_pattern   = 5;
+  AutoDecision decision = 6;
+  string risk_level     = 7;
+  string reason         = 8;
+  string alternative    = 9;
+  int32  priority       = 10;
+  // AI metadata.
+  float  confidence        = 11;  // 0.0–1.0; agent's certainty in the pattern
+  string explanation       = 12;  // why these fields were chosen
+  repeated string source_commands = 13; // up to 20 commands that informed the pattern
+  // Conflict detection results (computed server-side, heuristic — may overlap).
+  repeated string shadowed_by_rule_ids  = 14; // IDs of higher-priority rules that may fire first
+  repeated string shadows_rule_ids      = 15; // IDs of lower-priority rules this may suppress
 }

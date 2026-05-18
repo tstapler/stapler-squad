@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 // loadStatus sets Status directly without state machine validation.
@@ -144,6 +146,21 @@ func (i *Instance) GetStatus() int {
 	return int(i.Status)
 }
 
+// GetDetectedStatus returns the raw DetectedStatus from the terminal detection layer.
+// Returns detection.StatusUnknown when no controller is active or no status has been detected.
+// Use this for sub-status display; do not use for lifecycle decisions.
+func (i *Instance) GetDetectedStatus() detection.DetectedStatus {
+	mgr := i.GetStatusManager()
+	if mgr == nil {
+		return detection.StatusUnknown
+	}
+	statusInfo := mgr.GetStatus(i)
+	if !statusInfo.IsControllerActive {
+		return detection.StatusUnknown
+	}
+	return statusInfo.ClaudeStatus
+}
+
 // Approve transitions the instance to Active (approval granted).
 // Returns an error if the current state does not allow this transition.
 func (i *Instance) Approve() error {
@@ -192,4 +209,14 @@ func (i *Instance) RecoverFromStopped() {
 		i.loadStatus(Creating)
 		i.started = false
 	}
+}
+
+// ForceStatus sets the instance status directly without state machine validation.
+// Only call from error recovery paths where the normal transition would itself fail
+// (e.g. the async-creation goroutine cannot cleanly call Stop() because the session
+// was never fully started). Callers must hold no locks.
+func (i *Instance) ForceStatus(s Status) {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+	i.loadStatus(s)
 }
