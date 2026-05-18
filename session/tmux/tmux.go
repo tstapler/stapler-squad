@@ -92,6 +92,9 @@ type TmuxSession struct {
 	// would always start a reconnect loop even when the caller intends to use nil.
 	registryExplicit bool
 
+	// extraEnv holds KEY=VALUE pairs injected via -e flags in the new-session command.
+	extraEnv []string
+
 	// registryKey is the key used to register this session's circuit breaker executor
 	// in the global registry. Stored here so Close() can unregister it on teardown.
 	registryKey string
@@ -573,6 +576,12 @@ func (t *TmuxSession) AttachToExisting() error {
 	t.monitor = newStatusMonitor()
 
 	return nil
+}
+
+// SetExtraEnv sets additional KEY=VALUE environment variable pairs to inject via
+// tmux new-session -e flags. Must be called before Start().
+func (t *TmuxSession) SetExtraEnv(env []string) {
+	t.extraEnv = env
 }
 
 // buildTmuxCommand creates a tmux command with proper server isolation.

@@ -426,3 +426,169 @@ func (s *Storage) DeleteProject(ctx context.Context, name string) error {
 func (s *Storage) AssignSessionsToProject(ctx context.Context, projectName string, sessionTitles []string) error {
 	return s.repo.AssignSessionsToProject(ctx, projectName, sessionTitles)
 }
+
+// --- Backlog ---
+
+// CreateBacklogItem inserts a new backlog item.
+func (s *Storage) CreateBacklogItem(ctx context.Context, data BacklogItemData) (*BacklogItemData, error) {
+	return s.repo.CreateBacklogItem(ctx, data)
+}
+
+// GetBacklogItem retrieves a backlog item by UUID string.
+func (s *Storage) GetBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	return s.repo.GetBacklogItem(ctx, id)
+}
+
+// ListBacklogItems returns backlog items with optional filtering.
+func (s *Storage) ListBacklogItems(ctx context.Context, filter BacklogItemFilter) ([]BacklogItemData, error) {
+	return s.repo.ListBacklogItems(ctx, filter)
+}
+
+// UpdateBacklogItem modifies an existing backlog item.
+func (s *Storage) UpdateBacklogItem(ctx context.Context, id string, update BacklogItemUpdate, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
+	return s.repo.UpdateBacklogItem(ctx, id, update, precondition)
+}
+
+// ArchiveBacklogItem sets the archived_at timestamp.
+func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogItemData, error) {
+	return s.repo.ArchiveBacklogItem(ctx, id)
+}
+
+// TransitionBacklogItemStatus changes the status of a backlog item.
+func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
+	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition)
+}
+
+// --- ItemSource ---
+
+// CreateItemSource registers a new external item source.
+func (s *Storage) CreateItemSource(ctx context.Context, data ItemSourceData) (*ItemSourceData, error) {
+	return s.repo.CreateItemSource(ctx, data)
+}
+
+// ListItemSources returns all registered item sources.
+func (s *Storage) ListItemSources(ctx context.Context) ([]ItemSourceData, error) {
+	return s.repo.ListItemSources(ctx)
+}
+
+// UpdateItemSource modifies an existing item source.
+func (s *Storage) UpdateItemSource(ctx context.Context, id string, update ItemSourceUpdate) (*ItemSourceData, error) {
+	return s.repo.UpdateItemSource(ctx, id, update)
+}
+
+// DeleteItemSource removes an item source by UUID string.
+func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
+	return s.repo.DeleteItemSource(ctx, id)
+}
+
+// --- ItemSession (direct EntRepository delegation) ---
+
+// GetItemSession looks up an ItemSession by entity UUID (loads BacklogItem edge).
+func (s *Storage) GetItemSession(ctx context.Context, id string) (*ent.ItemSession, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.GetItemSession(ctx, id)
+}
+
+// GetItemSessionBySessionUUID looks up the ItemSession for a given session UUID (loads BacklogItem edge).
+func (s *Storage) GetItemSessionBySessionUUID(ctx context.Context, sessionUUID string) (*ent.ItemSession, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.GetItemSessionBySessionUUID(ctx, sessionUUID)
+}
+
+// UpdateItemSessionTriageResult stores the triage result JSON payload on an ItemSession.
+func (s *Storage) UpdateItemSessionTriageResult(ctx context.Context, id string, triageResult string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionTriageResult(ctx, id, triageResult)
+}
+
+// UpdateItemSessionStarted records the start time for an ItemSession.
+func (s *Storage) UpdateItemSessionStarted(ctx context.Context, id string, startedAt time.Time) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionStarted(ctx, id, startedAt)
+}
+
+// UpdateItemSessionEnded records the end time for an ItemSession.
+func (s *Storage) UpdateItemSessionEnded(ctx context.Context, id string, endedAt time.Time) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionEnded(ctx, id, endedAt)
+}
+
+// GetItemSessionBySessionAndItem looks up an ItemSession by both sessionUUID and backlog item ID.
+// Returns ErrNotFound if no matching record exists.
+func (s *Storage) GetItemSessionBySessionAndItem(ctx context.Context, sessionUUID string, itemID string) (*ent.ItemSession, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.GetItemSessionBySessionAndItem(ctx, sessionUUID, itemID)
+}
+
+// GetMostRecentReviewVerdictForItem returns the OverallOutcome of the most recent
+// ReviewVerdict linked to any ItemSession for itemID. Returns "" when none exists.
+func (s *Storage) GetMostRecentReviewVerdictForItem(ctx context.Context, itemID string) (string, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return "", nil
+	}
+	return er.GetMostRecentReviewVerdictForItem(ctx, itemID)
+}
+
+// SaveReviewVerdict upserts a ReviewVerdict for a given ItemSession UUID.
+func (s *Storage) SaveReviewVerdict(ctx context.Context, itemSessionID string, verdict ReviewVerdictData) (*ent.ReviewVerdict, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, fmt.Errorf("review verdicts not supported by this storage backend")
+	}
+	return er.SaveReviewVerdict(ctx, itemSessionID, verdict)
+}
+
+// UpdateAcCriterionStatus updates a single acceptance criterion's status by index.
+func (s *Storage) UpdateAcCriterionStatus(ctx context.Context, itemID string, criterionIndex int, status string, note string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("AC criterion updates not supported by this storage backend")
+	}
+	return er.UpdateAcCriterionStatus(ctx, itemID, criterionIndex, status, note)
+}
+
+// CreateItemSession creates a new ItemSession linked to a BacklogItem.
+func (s *Storage) CreateItemSession(ctx context.Context, data ItemSessionData) (*ent.ItemSession, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, fmt.Errorf("item sessions not supported by this storage backend")
+	}
+	return er.CreateItemSession(ctx, data)
+}
+
+// ListItemSessions returns all ItemSessions for a given BacklogItem UUID string.
+func (s *Storage) ListItemSessions(ctx context.Context, itemID string) ([]*ent.ItemSession, error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	return er.ListItemSessions(ctx, itemID)
+}
+
+// UpdateItemSessionSessionUUID updates the session_uuid on an existing ItemSession record.
+func (s *Storage) UpdateItemSessionSessionUUID(ctx context.Context, id string, sessionUUID string) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("item session updates not supported by this storage backend")
+	}
+	return er.UpdateItemSessionSessionUUID(ctx, id, sessionUUID)
+}

@@ -20,7 +20,10 @@ test.beforeEach(async ({ page }) => {
 
 test("session list empty state", async ({ page }) => {
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  // Use "load" instead of "networkidle" — live seeded sessions create persistent
+  // WebSocket connections that prevent networkidle from ever resolving.
+  await page.waitForLoadState("load");
+  await page.waitForTimeout(500);
   await expect(page).toHaveScreenshot("session-list-empty.png", {
     maxDiffPixelRatio: 0.01,
     animations: "disabled",
@@ -29,9 +32,10 @@ test("session list empty state", async ({ page }) => {
 
 test("omnibar open", async ({ page }) => {
   await page.goto("/");
-  await page.waitForLoadState("networkidle");
+  await page.waitForLoadState("load");
+  await page.waitForTimeout(500);
   await page.keyboard.press("Meta+k");
-  await page.waitForSelector('[data-testid="omnibar-input"]', { timeout: 2000 }).catch(() => {});
+  await page.waitForSelector('[data-testid="omnibar-input"]', { timeout: 3000 }).catch(() => {});
   await expect(page).toHaveScreenshot("omnibar-open.png", {
     maxDiffPixelRatio: 0.01,
     animations: "disabled",

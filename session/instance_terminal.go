@@ -114,13 +114,11 @@ func (i *Instance) Preview() (string, error) {
 	}
 
 	// Fallback for external/attached sessions: use capture-pane subprocess.
-	if !i.TmuxAlive() {
-		return "", nil
-	}
-
+	// Skip the TmuxAlive() pre-check (which spawns a subprocess); let CapturePaneContent
+	// handle the "session doesn't exist" case via its own error path.
 	content, err := i.tmuxManager.CapturePaneContent()
 	if err != nil {
-		return "", err
+		return "", nil
 	}
 
 	return content, nil

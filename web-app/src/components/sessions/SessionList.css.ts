@@ -23,10 +23,11 @@ export const header = style({
 
 export const headerTop = style({
   display: "flex",
+  flexWrap: "wrap",
   justifyContent: "space-between",
   alignItems: "center",
   marginBottom: vars.space["4"],
-  gap: vars.space["4"],
+  gap: vars.space["2"],
 });
 
 export const title = style({
@@ -34,6 +35,7 @@ export const title = style({
   fontSize: "1.5rem",
   fontWeight: 700,
   color: vars.color.textPrimary,
+  flexShrink: 0,
 });
 
 export const headerActions = style({

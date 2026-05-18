@@ -57,6 +57,10 @@
         "message": "Use vars.color.* tokens from theme.css.ts instead of hardcoded hex values in style props."
       },
       {
+        "selector": "JSXAttribute[name.name='style'] > JSXExpressionContainer > ObjectExpression > Property[key.name=/^(flexDirection|flexWrap|display|alignItems|alignSelf|justifyContent|justifySelf|order|flex|float|clear|gridColumn|gridRow|gridArea)$/]",
+        "message": "Avoid inline style for layout-managed properties. Use a data-* attribute + selectors in the matching .css.ts file so CSS cascade and theme overrides can win. See .claude/rules/css-architecture.md."
+      },
+      {
         "selector": "ImportDeclaration[source.value='@/lib/telemetry']",
         "message": "Use useAnalytics().track() instead of the legacy track() from lib/telemetry."
       }
@@ -116,6 +120,10 @@
           {
             "selector": "Property > Literal[value=/^#[0-9a-fA-F]{3,8}$/]",
             "message": "Hardcoded hex colors are not allowed in .css.ts files. Use vars.color.* tokens from theme-contract.css.ts."
+          },
+          {
+            "selector": "Property[key.name='zIndex'] > Literal[raw=/^[0-9]/]",
+            "message": "Hardcoded z-index numbers are not allowed. Add a named slot to zIndex in web-app/src/styles/theme-contract.css.ts and reference zIndex.yourSlot. This prevents invisible ordering collisions."
           }
         ]
       }

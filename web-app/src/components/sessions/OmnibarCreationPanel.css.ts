@@ -85,62 +85,9 @@ export const attachButton = style({
   },
 });
 
-export const attachLimit = style({
-  fontSize: vars.fontSize.xs,
-  color: vars.color.textMuted,
-});
-
 export const attachError = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.error,
-});
-
-export const thumbnailRow = style({
-  display: "flex",
-  gap: vars.space[2],
-  flexWrap: "wrap",
-  marginTop: vars.space[2],
-});
-
-export const thumbnail = style({
-  position: "relative",
-  width: "64px",
-  height: "64px",
-  borderRadius: vars.radii.sm,
-  overflow: "hidden",
-  border: `1px solid ${vars.color.borderSubtle}`,
-});
-
-export const thumbnailImg = style({
-  width: "100%",
-  height: "100%",
-  objectFit: "cover",
-  display: "block",
-});
-
-export const thumbnailRemove = style({
-  position: "absolute",
-  top: "2px",
-  right: "2px",
-  width: "18px",
-  height: "18px",
-  borderRadius: vars.radii.full,
-  background: vars.color.overlayBackground,
-  color: vars.color.primaryText,
-  border: "none",
-  cursor: "pointer",
-  fontSize: "12px",
-  lineHeight: "18px",
-  textAlign: "center",
-  padding: "0",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  selectors: {
-    "&:hover": {
-      background: vars.color.error,
-    },
-  },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

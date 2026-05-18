@@ -32,6 +32,9 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		mcpFlag := fmt.Sprintf(`--mcp-config '{"mcpServers":{"stapler-squad":{"type":"http","url":%q}}}'`, i.MCPServerURL)
 		program = program + " " + mcpFlag
 	}
+	if i.AppendSystemPrompt != "" && strings.Contains(program, "claude") {
+		program = fmt.Sprintf("%s --append-system-prompt %q", program, i.AppendSystemPrompt)
+	}
 	if i.AutoYes && strings.Contains(program, "claude") {
 		program = program + " -y"
 	}
@@ -65,6 +68,9 @@ func (i *Instance) initTmuxSession() {
 		session = tmux.NewTmuxSessionWithServerSocket(i.Title, enrichedProgram, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil))
 	} else {
 		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
+	}
+	if i.UUID != "" {
+		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
 	}
 	i.tmuxManager.SetSession(session)
 }

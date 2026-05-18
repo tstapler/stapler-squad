@@ -24,12 +24,13 @@ export const toast = style({
   opacity: 0,
   transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
   "@media": {
-    // On mobile the bottom nav is 64px tall; clear it + 12px breathing room
+    // On mobile the bottom nav + optional pane tab strip must be cleared.
+    // --bottom-nav-height is published by BottomNav; --mobile-pane-tab-strip-height by PaneSplitRenderer.
     "screen and (max-width: 899px)": {
       left: "16px",
       right: "16px",
       width: "auto",
-      bottom: "calc(64px + 12px + max(env(safe-area-inset-bottom, 0px), 0px))",
+      bottom: "calc(var(--bottom-nav-height, 64px) + var(--mobile-pane-tab-strip-height, 0px) + 12px + max(env(safe-area-inset-bottom, 0px), 0px))",
     },
   },
   selectors: {

@@ -9,6 +9,7 @@ import {
   paneHeader,
   paneTitle,
   paneHeaderButton,
+  paneHeaderActions,
   paneCloseButton,
   paneTabButton,
 } from "@/styles/pane/paneHeader.css";
@@ -79,117 +80,119 @@ export function PaneHeader({
         {titleText}
       </span>
 
-      {/* Tab switcher buttons (only for session-detail panes with a session) */}
-      {!isListPane && session &&
-        ALL_TABS.map((tab) => (
-          <button
-            key={tab}
-            className={paneTabButton({ active: pane.activeTab === tab })}
-            onClick={(e) => {
-              e.stopPropagation();
-              onTabChange(tab);
-            }}
-            title={TAB_FULL_LABELS[tab]}
-            aria-label={`Switch to ${TAB_FULL_LABELS[tab]} tab`}
-          >
-            {TAB_LABELS[tab]}
-          </button>
-        ))}
+      <div className={paneHeaderActions}>
+        {/* Tab switcher buttons (only for session-detail panes with a session) */}
+        {!isListPane && session &&
+          ALL_TABS.map((tab) => (
+            <button
+              key={tab}
+              className={paneTabButton({ active: pane.activeTab === tab })}
+              onClick={(e) => {
+                e.stopPropagation();
+                onTabChange(tab);
+              }}
+              title={TAB_FULL_LABELS[tab]}
+              aria-label={`Switch to ${TAB_FULL_LABELS[tab]} tab`}
+            >
+              {TAB_LABELS[tab]}
+            </button>
+          ))}
 
-      {/* Session actions overflow menu */}
-      {!isListPane && session && (
-        <div onClick={(e) => e.stopPropagation()}>
-          <SessionActionsOverflow
-            session={session}
-            buttonClassName={paneHeaderButton}
-            onPause={() => cockpit.onPauseSession(session.id)}
-            onResume={() => cockpit.onResumeSession(session)}
-            onDelete={() => cockpit.onDeleteSession(session.id)}
-            onRestart={(id) => cockpit.onRestartSession(id)}
-            onClone={() => cockpit.onCloneSession(session.id)}
-            onNewWorkspace={() => cockpit.onNewWorkspaceSession(session.id)}
-            onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
-            onRunOneShot={(id) => cockpit.onRunOneShot(id)}
-            onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
-            onClearConversationState={(id) => cockpit.onClearConversationState(id)}
-            onUpdateTags={(id, tags) => cockpit.onUpdateTags(id, tags)}
-          />
-        </div>
-      )}
+        {/* Session actions overflow menu */}
+        {!isListPane && session && (
+          <div onClick={(e) => e.stopPropagation()}>
+            <SessionActionsOverflow
+              session={session}
+              buttonClassName={paneHeaderButton}
+              onPause={() => cockpit.onPauseSession(session.id)}
+              onResume={() => cockpit.onResumeSession(session)}
+              onDelete={() => cockpit.onDeleteSession(session.id)}
+              onRestart={(id) => cockpit.onRestartSession(id)}
+              onClone={() => cockpit.onCloneSession(session.id)}
+              onNewWorkspace={() => cockpit.onNewWorkspaceSession(session.id)}
+              onCreateCheckpoint={(id, label) => cockpit.onCreateCheckpoint(id, label)}
+              onRunOneShot={(id) => cockpit.onRunOneShot(id)}
+              onSetRateLimitEnabled={(id, enabled) => cockpit.onSetRateLimitEnabled(id, enabled)}
+              onClearConversationState={(id) => cockpit.onClearConversationState(id)}
+              onUpdateTags={(id, tags) => cockpit.onUpdateTags(id, tags)}
+            />
+          </div>
+        )}
 
-      {/* View-kind toggle: cycle between session-list and session-detail */}
-      {onSetView && (
-        <button
-          className={paneHeaderButton}
-          data-testid="pane-view-toggle-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSetView(isListPane ? "session-detail" : "session-list");
-          }}
-          title={isListPane ? "Switch to session detail" : "Switch to session list"}
-          aria-label={isListPane ? "Switch to session detail" : "Switch to session list"}
-        >
-          {isListPane ? <LayoutDashboard size={14} /> : <LayoutList size={14} />}
-        </button>
-      )}
-
-      {/* Split buttons */}
-      {splitButtonVisible && (
-        <>
+        {/* View-kind toggle: cycle between session-list and session-detail */}
+        {onSetView && (
           <button
             className={paneHeaderButton}
-            data-testid="pane-split-vertical-btn"
+            data-testid="pane-view-toggle-btn"
             onClick={(e) => {
               e.stopPropagation();
-              onSplitVertical?.();
+              onSetView(isListPane ? "session-detail" : "session-list");
             }}
-            title="Split pane side by side (vertical)"
-            aria-label="Split pane side by side"
+            title={isListPane ? "Switch to session detail" : "Switch to session list"}
+            aria-label={isListPane ? "Switch to session detail" : "Switch to session list"}
           >
-            <Columns2 size={14} />
+            {isListPane ? <LayoutDashboard size={14} /> : <LayoutList size={14} />}
           </button>
+        )}
+
+        {/* Split buttons */}
+        {splitButtonVisible && (
+          <>
+            <button
+              className={paneHeaderButton}
+              data-testid="pane-split-vertical-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSplitVertical?.();
+              }}
+              title="Split pane side by side (vertical)"
+              aria-label="Split pane side by side"
+            >
+              <Columns2 size={14} />
+            </button>
+            <button
+              className={paneHeaderButton}
+              data-testid="pane-split-horizontal-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                onSplitHorizontal?.();
+              }}
+              title="Split pane top and bottom (horizontal)"
+              aria-label="Split pane top and bottom"
+            >
+              <Rows2 size={14} />
+            </button>
+          </>
+        )}
+
+        {/* Zoom button (only for session-detail) */}
+        {!isListPane && (
           <button
             className={paneHeaderButton}
-            data-testid="pane-split-horizontal-btn"
             onClick={(e) => {
               e.stopPropagation();
-              onSplitHorizontal?.();
+              onZoom();
             }}
-            title="Split pane top and bottom (horizontal)"
-            aria-label="Split pane top and bottom"
+            title="Fullscreen pane"
+            aria-label="Fullscreen pane"
           >
-            <Rows2 size={14} />
+            <Maximize2 size={14} />
           </button>
-        </>
-      )}
+        )}
 
-      {/* Zoom button (only for session-detail) */}
-      {!isListPane && (
+        {/* Close button */}
         <button
-          className={paneHeaderButton}
+          className={paneCloseButton}
           onClick={(e) => {
             e.stopPropagation();
-            onZoom();
+            onClose();
           }}
-          title="Fullscreen pane"
-          aria-label="Fullscreen pane"
+          title="Close pane"
+          aria-label="Close pane"
         >
-          <Maximize2 size={14} />
+          <X size={14} />
         </button>
-      )}
-
-      {/* Close button */}
-      <button
-        className={paneCloseButton}
-        onClick={(e) => {
-          e.stopPropagation();
-          onClose();
-        }}
-        title="Close pane"
-        aria-label="Close pane"
-      >
-        <X size={14} />
-      </button>
+      </div>
     </div>
   );
 }

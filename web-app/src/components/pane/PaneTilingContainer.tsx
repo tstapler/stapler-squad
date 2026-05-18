@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { Columns2, Rows2, LayoutList, X } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { usePaneReducer } from "@/lib/pane/usePaneReducer";
@@ -9,10 +10,17 @@ import { getAllLeaves } from "@/lib/pane/paneReducer";
 import type { SplitDirection } from "@/lib/pane/paneTypes";
 import { PaneSplitRenderer } from "./PaneSplitRenderer";
 import { PaneContext } from "./PaneContext";
+import { useViewport } from "@/components/providers/ViewportProvider";
 import {
   pickerActionBar,
   pickerActionButton,
   pickerActionKbd,
+  mobilePickerBackdrop,
+  mobilePickerSheet,
+  mobilePickerSheetTitle,
+  mobilePickerPaneItem,
+  mobilePickerPaneLabel,
+  mobilePickerCancelButton,
 } from "@/styles/pane/panePickerOverlay.css";
 
 interface PaneTilingContainerProps {
@@ -45,9 +53,17 @@ export function PaneTilingContainer({
   const prevVersionRef = useRef<number | null>(null);
 
   const [pickerPendingSession, setPickerPendingSession] = useState<Session | null>(null);
+  // Mobile-only: bottom sheet picker state (replaces overlay when on narrow screens)
+  const [mobilePickerSession, setMobilePickerSession] = useState<Session | null>(null);
+  const [mobilePickerPanes, setMobilePickerPanes] = useState<{ id: string; label: string; letter: string }[]>([]);
+  const mobilePickerSheetRef = useRef<HTMLDivElement>(null);
+  const { isMobile, isFoldable } = useViewport();
+  const isNarrow = isMobile || isFoldable;
 
   const cancelPicker = useCallback(() => {
     setPickerPendingSession(null);
+    setMobilePickerSession(null);
+    setMobilePickerPanes([]);
   }, []);
 
   const triggerPickerForceNew = useCallback(
@@ -90,13 +106,29 @@ export function PaneTilingContainer({
         // On mobile, vertical splits show only the focused pane. Move focus to the detail
         // pane so the user sees the session they just opened instead of the session list.
         dispatch({ type: "FOCUS_PANE", paneId: eligiblePanes[0].id });
+      } else if (isNarrow) {
+        // On mobile, only one pane is visible at a time — the desktop overlay (which
+        // expects the user to click on a visible pane) doesn't work. Use a bottom sheet
+        // that lists all eligible panes by name instead.
+        const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        setMobilePickerSession(session);
+        setMobilePickerPanes(
+          eligiblePanes.map((p, i) => {
+            const sess = sessions.find((s) => s.id === p.sessionId);
+            return {
+              id: p.id,
+              label: sess ? sess.title : (p.viewKind === "session-list" ? "Sessions" : "Empty pane"),
+              letter: letters[i] ?? String(i + 1),
+            };
+          })
+        );
       } else {
-        // 2+ eligible panes: always show the picker overlay, even if a detail pane
-        // is focused. The user must choose which pane receives the session.
+        // 2+ eligible panes on desktop: show the picker overlay so the user can click
+        // on the pane they want.
         setPickerPendingSession(session);
       }
     },
-    [state.root, state.focusedPaneId, dispatch],
+    [state.root, state.focusedPaneId, dispatch, isNarrow, sessions],
   );
 
   // Register keyboard shortcuts
@@ -142,6 +174,13 @@ export function PaneTilingContainer({
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
   }, [pickerPendingSession, state.root, dispatch, cancelPicker]);
+
+  // Focus the mobile sheet when it opens so keyboard and screen reader users can interact.
+  useEffect(() => {
+    if (mobilePickerSession) {
+      mobilePickerSheetRef.current?.focus();
+    }
+  }, [mobilePickerSession]);
 
   // When externalSessionAssign fires (omnibar, URL nav, keyboard), route through
   // triggerPicker so the user gets the same pane-picker UX as session-list clicks.
@@ -226,6 +265,48 @@ export function PaneTilingContainer({
           </div>
         )}
       </div>
+
+      {/* Mobile bottom sheet — rendered into document.body via portal to escape any
+          ancestor transform/filter that would break fixed positioning */}
+      {mobilePickerSession && createPortal(
+        <>
+          <div
+            className={mobilePickerBackdrop}
+            onClick={cancelPicker}
+            aria-hidden="true"
+          />
+          <div
+            ref={mobilePickerSheetRef}
+            className={mobilePickerSheet}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="mobile-pane-picker-title"
+            tabIndex={-1}
+            onKeyDown={(e) => { if (e.key === "Escape") cancelPicker(); }}
+          >
+            <div id="mobile-pane-picker-title" className={mobilePickerSheetTitle}>Open session in…</div>
+            {mobilePickerPanes.map((p) => (
+              <button
+                key={p.id}
+                className={mobilePickerPaneItem}
+                onClick={() => {
+                  dispatch({ type: "ASSIGN_SESSION", paneId: p.id, sessionId: mobilePickerSession.id });
+                  dispatch({ type: "ASSIGN_TAB", paneId: p.id, tab: "terminal" });
+                  dispatch({ type: "FOCUS_PANE", paneId: p.id });
+                  cancelPicker();
+                }}
+              >
+                <span className={mobilePickerPaneLabel}>{p.letter}</span>
+                {p.label}
+              </button>
+            ))}
+            <button className={mobilePickerCancelButton} onClick={cancelPicker}>
+              Cancel
+            </button>
+          </div>
+        </>,
+        document.body
+      )}
     </PaneContext.Provider>
   );
 }

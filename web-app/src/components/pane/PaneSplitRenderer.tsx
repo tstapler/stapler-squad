@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useEffect } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { SessionDetail } from "@/components/sessions/SessionDetail";
 import { SessionList } from "@/components/sessions/SessionList";
@@ -309,6 +309,28 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
   // visible but still benefit from the strip's "+" add-pane button.
   const showMobileTabStrip = isNarrow && hasMultiplePanes;
 
+  // Publish the actual strip height via ResizeObserver so fixed-position elements
+  // (e.g. notification toasts) can clear it without hard-coding the pixel value.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!showMobileTabStrip) {
+      document.documentElement.style.setProperty("--mobile-pane-tab-strip-height", "0px");
+      return;
+    }
+    const el = stripRef.current;
+    if (!el) return;
+    const update = () => {
+      document.documentElement.style.setProperty(
+        "--mobile-pane-tab-strip-height",
+        `${el.offsetHeight}px`
+      );
+    };
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    update();
+    return () => ro.disconnect();
+  }, [showMobileTabStrip]);
+
   return (
     <div
       className={rendererRoot}
@@ -341,6 +363,7 @@ export function PaneSplitRenderer({ state, dispatch, sessions }: PaneSplitRender
 
       {showMobileTabStrip && (
         <MobilePaneTabStrip
+          ref={stripRef}
           leaves={allLeaves}
           focusedPaneId={state.focusedPaneId}
           sessions={sessions}

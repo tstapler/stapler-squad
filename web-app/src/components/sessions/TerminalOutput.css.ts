@@ -389,19 +389,17 @@ export const resizingSpinner = style({
 });
 
 export const mobileKeyboard = style({
-  display: "none",
+  // React gates rendering via isKeyboardVisible — CSS provides layout only.
+  // No media-query hiding here so foldable/tablet widths (>768px) still work
+  // when the user explicitly enables the keyboard via the toggle button.
+  display: "flex",
   flexDirection: "column",
   gap: "0.25rem",
   padding: "0.4rem 0.5rem",
+  paddingBottom: "max(var(--safe-area-bottom, 0px), 0.4rem)",
   background: vars.color.terminalTabsBg,
   borderTop: `1px solid ${vars.color.terminalBorder}`,
   flexShrink: 0,
-  "@media": {
-    "screen and (max-width: 768px)": {
-      display: "flex",
-      paddingBottom: "max(var(--safe-area-bottom, 0px), 0.4rem)",
-    },
-  },
 });
 
 export const mobileKeyRow = style({

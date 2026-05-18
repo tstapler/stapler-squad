@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os/exec"
 	"sort"
 	"strconv"
@@ -308,40 +311,51 @@ func getCheckConclusion(checks []ghStatusCheckItem) (conclusion, status string) 
 }
 
 // GetPRForBranch finds the GitHub PR associated with a branch.
-// Returns nil (with nil error) if no PR exists for the branch.
+// Uses the GitHub REST API directly (no gh subprocess) to avoid forkExec lock contention.
+// Returns ErrNoPR when no pull request exists for the branch.
 func GetPRForBranch(ctx context.Context, owner, repo, branch string) (*PRInfo, error) {
-	if err := CheckGHAuth(); err != nil {
-		return nil, err
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls?head=%s&state=all&per_page=10",
+		url.PathEscape(owner), url.PathEscape(repo),
+		url.QueryEscape(owner+":"+branch))
+
+	req, err := newGHRequest(ctx, apiPath)
+	if err != nil {
+		return nil, fmt.Errorf("build PR list request: %w", err)
 	}
 
-	repoRef := fmt.Sprintf("%s/%s", owner, repo)
-	cmd := safeexec.CommandContext(ctx, "gh", "pr", "list",
-		"--repo", repoRef,
-		"--head", branch,
-		"--json", "number,updatedAt",
-		"--state", "all",
-		"--limit", "10",
-	)
-	output, err := cmd.Output()
+	resp, err := ghHTTPClient.Do(req)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("failed to list PRs for branch: %s", string(exitErr.Stderr))
-		}
-		return nil, fmt.Errorf("failed to list PRs for branch: %w", err)
+		return nil, fmt.Errorf("PR list request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("GitHub API: unauthorized (401) – run 'gh auth login'")
+	}
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, fmt.Errorf("GitHub API: forbidden (403) – check token permissions")
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned status %d for PR list", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read PR list response: %w", err)
 	}
 
 	var prs []struct {
 		Number    int    `json:"number"`
-		UpdatedAt string `json:"updatedAt"`
+		UpdatedAt string `json:"updated_at"`
 	}
-	if err := json.Unmarshal(output, &prs); err != nil {
-		return nil, fmt.Errorf("failed to parse PR list: %w", err)
+	if err := json.Unmarshal(body, &prs); err != nil {
+		return nil, fmt.Errorf("parse PR list: %w", err)
 	}
 	if len(prs) == 0 {
 		return nil, ErrNoPR
 	}
 
-	// Use most recently updated PR if multiple exist for the branch
+	// Use most recently updated PR when multiple PRs target the same branch.
 	sort.Slice(prs, func(i, j int) bool {
 		ti, _ := time.Parse(time.RFC3339, prs[i].UpdatedAt)
 		tj, _ := time.Parse(time.RFC3339, prs[j].UpdatedAt)

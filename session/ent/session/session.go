@@ -86,6 +86,8 @@ const (
 	EdgeClaudeSession = "claude_session"
 	// EdgeProject holds the string denoting the project edge name in mutations.
 	EdgeProject = "project"
+	// EdgeBacklogItems holds the string denoting the backlog_items edge name in mutations.
+	EdgeBacklogItems = "backlog_items"
 	// Table holds the table name of the session in the database.
 	Table = "sessions"
 	// WorktreeTable is the table that holds the worktree relation/edge.
@@ -121,6 +123,11 @@ const (
 	ProjectInverseTable = "projects"
 	// ProjectColumn is the table column denoting the project relation/edge.
 	ProjectColumn = "project_sessions"
+	// BacklogItemsTable is the table that holds the backlog_items relation/edge. The primary key declared below.
+	BacklogItemsTable = "backlog_item_sessions"
+	// BacklogItemsInverseTable is the table name for the BacklogItem entity.
+	// It exists in this package in order to avoid circular dependency with the "backlogitem" package.
+	BacklogItemsInverseTable = "backlog_items"
 )
 
 // Columns holds all SQL columns for session fields.
@@ -169,6 +176,9 @@ var (
 	// TagsPrimaryKey and TagsColumn2 are the table columns denoting the
 	// primary key for the tags relation (M2M).
 	TagsPrimaryKey = []string{"session_id", "tag_id"}
+	// BacklogItemsPrimaryKey and BacklogItemsColumn2 are the table columns denoting the
+	// primary key for the backlog_items relation (M2M).
+	BacklogItemsPrimaryKey = []string{"backlog_item_id", "session_id"}
 )
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -413,6 +423,20 @@ func ByProjectField(field string, opts ...sql.OrderTermOption) OrderOption {
 		sqlgraph.OrderByNeighborTerms(s, newProjectStep(), sql.OrderByField(field, opts...))
 	}
 }
+
+// ByBacklogItemsCount orders the results by backlog_items count.
+func ByBacklogItemsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newBacklogItemsStep(), opts...)
+	}
+}
+
+// ByBacklogItems orders the results by backlog_items terms.
+func ByBacklogItems(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newBacklogItemsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
 func newWorktreeStep() *sqlgraph.Step {
 	return sqlgraph.NewStep(
 		sqlgraph.From(Table, FieldID),
@@ -446,5 +470,12 @@ func newProjectStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(ProjectInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, ProjectTable, ProjectColumn),
+	)
+}
+func newBacklogItemsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(BacklogItemsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2M, true, BacklogItemsTable, BacklogItemsPrimaryKey...),
 	)
 }

@@ -9,17 +9,17 @@
  */
 
 :root {
-  /* Light mode colors (default) */
-  --background: #ffffff;
-  --foreground: #0a0a0a;
-  --card-background: #f9f9f9;
-  --border-color: #e0e0e0;
-  --hover-background: #f0f0f0;
+  /* Default colors (matches cleanTheme — Linear/Vercel dark slate palette) */
+  --background: #0f1117;
+  --foreground: #e2e8f0;
+  --card-background: #161b22;
+  --border-color: #1e293b;
+  --hover-background: #1e2530;
 
   /* Text colors with proper contrast */
-  --text-primary: #0a0a0a;
-  --text-secondary: #4a4a4a;
-  --text-muted: #6b6b6b;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted: #7d8ea8;
   --text-disabled: #9a9a9a;
 
   /* File viewer / code panel tokens (always dark, VS Code-style) */
@@ -43,13 +43,13 @@
   --terminal-hover-background: #3e3e42;
 
   /* Interactive elements */
-  --primary: #0070f3;
-  --primary-hover: #0051cc;
-  --primary-active: #003d99;
+  --primary: #6366f1;
+  --primary-hover: #818cf8;
+  --primary-active: #4f46e5;
   --primary-text: #ffffff;
 
   /* Status colors */
-  --success: #10b981;
+  --success: #22c55e;
   --success-bg: #d1fae5;
   --warning: #f59e0b;
   --warning-bg: #fef3c7;
@@ -181,10 +181,43 @@
  * Theme switching is controlled by ThemeContext — see web-app/src/lib/contexts/ThemeContext.tsx.
  */
 
+/* Focus ring — visible on dark bg */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Remove outline for mouse users — only show for keyboard nav */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Scrollbar styling — matches dark slate theme */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);  /* #1e293b — subtle */
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);  /* #7d8ea8 — more visible on hover */
+}
+
 * {
   box-sizing: border-box;
   padding: 0;
   margin: 0;
+  /* Firefox scrollbar */
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
 }
 
 html,

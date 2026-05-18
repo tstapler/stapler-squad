@@ -12,6 +12,9 @@ type AnalyticsEvent func(*sql.Selector)
 // ApprovalRule is the predicate function for approvalrule builders.
 type ApprovalRule func(*sql.Selector)
 
+// BacklogItem is the predicate function for backlogitem builders.
+type BacklogItem func(*sql.Selector)
+
 // ClassificationAnalytics is the predicate function for classificationanalytics builders.
 type ClassificationAnalytics func(*sql.Selector)
 
@@ -27,11 +30,26 @@ type DiffStats func(*sql.Selector)
 // ErrorEvent is the predicate function for errorevent builders.
 type ErrorEvent func(*sql.Selector)
 
+// EscapeEvent is the predicate function for escapeevent builders.
+type EscapeEvent func(*sql.Selector)
+
+// ItemSession is the predicate function for itemsession builders.
+type ItemSession func(*sql.Selector)
+
+// ItemSource is the predicate function for itemsource builders.
+type ItemSource func(*sql.Selector)
+
 // Project is the predicate function for project builders.
 type Project func(*sql.Selector)
 
+// ReviewVerdict is the predicate function for reviewverdict builders.
+type ReviewVerdict func(*sql.Selector)
+
 // Session is the predicate function for session builders.
 type Session func(*sql.Selector)
+
+// SourceSyncEvent is the predicate function for sourcesyncevent builders.
+type SourceSyncEvent func(*sql.Selector)
 
 // Tag is the predicate function for tag builders.
 type Tag func(*sql.Selector)

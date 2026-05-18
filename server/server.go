@@ -10,6 +10,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
 	"github.com/tstapler/stapler-squad/log"
+	pkganalytics "github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/handlers"
@@ -327,6 +328,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered UnfinishedWorkService handler", "path", uwAPIPath)
 	}
 
+	// Register BacklogService handler.
+	if deps.BacklogService != nil {
+		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, ConnectOptions(deps.ErrorRegistry)...)
+		blAPIPath := "/api" + blPath
+		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
+		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)
+	}
+
 	// Wire external session support into the unified WebSocket handler
 	wsHandler.SetExternalSessionSupport(deps.ExternalDiscovery)
 	log.Info("Unified WebSocket handler configured for external session support")
@@ -376,9 +385,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	// Register MCP HTTP transport at /mcp so Claude sessions can connect
 	// without spawning a subprocess. The URL is passed via --mcp-server to
 	// claude when creating new sessions (no settings-file injection needed).
-	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager)
-	srv.mux.Handle("/mcp", mcpHTTPHandler)
-	srv.mux.Handle("/mcp/", mcpHTTPHandler)
+	mcpHTTPHandler := servermcp.NewHTTPHandler(deps.Storage, deps.SessionService, deps.ScrollbackManager, deps.Storage)
+	// Wrap with middleware that injects session UUID from X-Stapler-Session-UUID header.
+	mcpWithUUID := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if uuid := r.Header.Get("X-Stapler-Session-UUID"); uuid != "" {
+			r = r.WithContext(servermcp.WithSessionUUID(r.Context(), uuid))
+		}
+		mcpHTTPHandler.ServeHTTP(w, r)
+	})
+	srv.mux.Handle("/mcp", mcpWithUUID)
+	srv.mux.Handle("/mcp/", mcpWithUUID)
 	mcpURL := "http://" + srv.addr + "/mcp"
 	deps.SessionService.SetMCPServerURL(mcpURL)
 	log.Info("Registered MCP HTTP handler at /mcp", "url", mcpURL)
@@ -415,8 +431,28 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	cfg := config.LoadConfig()
 	if deps.AnalyticsEntClient != nil {
 		analytics.StartRetentionEnforcer(serverCtx, deps.AnalyticsEntClient,
-			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault())
+			cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(), cfg.EscapeAnalyticsRetentionDays)
 		log.Info("Analytics retention enforcer started", "maxRows", cfg.AnalyticsMaxRowsOrDefault(), "maxAgeDays", cfg.AnalyticsMaxAgeDaysOrDefault())
+	}
+
+	// Start escape analytics batch writer and register it as the global writer.
+	// New ResponseStream instances (created per session) will pick it up via GetGlobalEscapeWriter().
+	if deps.AnalyticsEntClient != nil && cfg.EscapeAnalyticsCaptureLevel != "off" {
+		escapeWriter := analytics.NewEscapeEventBatchWriter(deps.AnalyticsEntClient, cfg.EscapeAnalyticsMaxRowsPerSession)
+		go escapeWriter.Start(serverCtx)
+		pkganalytics.SetGlobalEscapeWriter(escapeWriter)
+		log.Info("Escape analytics batch writer started",
+			"captureLevel", cfg.EscapeAnalyticsCaptureLevel,
+			"maxRowsPerSession", cfg.EscapeAnalyticsMaxRowsPerSession,
+		)
+	} else {
+		log.Info("Escape analytics disabled (no DB client or captureLevel=off)")
+	}
+
+	// Wire analytics ent client into SessionService for escape analytics RPC handlers.
+	if deps.AnalyticsEntClient != nil {
+		deps.SessionService.SetAnalyticsClient(deps.AnalyticsEntClient)
+		log.Info("Wired analytics ent client into SessionService for escape analytics RPCs")
 	}
 
 	// Start EventBus analytics subscriber (maps session lifecycle events to analytics records).
@@ -444,12 +480,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 // registerStaticRoutes mounts routes that are always registered regardless of
 // whether dependencies were successfully built (image upload, server-info, web UI).
 func registerStaticRoutes(srv *Server) {
-	// Register image upload endpoint — saves clipboard images to a temp directory
+	// Register file upload endpoint — saves clipboard files to a temp directory
 	// so the terminal process can reference them by path (e.g. for Claude Code image paste).
 	pasteDir := filepath.Join(os.TempDir(), "stapler-paste")
-	imageHandler := services.NewImageUploadHandler(pasteDir)
-	srv.mux.HandleFunc("/api/upload/image", imageHandler.HandleUpload)
-	log.Info("Registered image upload handler at /api/upload/image", "dir", pasteDir)
+	fileHandler := services.NewFileUploadHandler(pasteDir)
+	srv.mux.HandleFunc("/api/upload/file", fileHandler.HandleUpload)
+	log.Info("Registered file upload handler at /api/upload/file", "dir", pasteDir)
 
 	// Register server-info endpoint for settings UI
 	srv.registerServerInfoHandler()

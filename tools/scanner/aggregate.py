@@ -25,7 +25,7 @@ def aggregate_backend(features_dir: str) -> list[dict]:
             "backend": {
                 "service": doc["service"],
                 "method": doc["method"],
-                "protoFile": doc["protoFile"],
+                "protoFile": doc.get("protoFile", ""),
                 "markerFound": doc.get("markerFound", False),
             },
             "tested": doc.get("tested", False),

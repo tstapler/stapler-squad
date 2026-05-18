@@ -11,6 +11,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
@@ -689,6 +691,21 @@ func (_u *SessionUpdate) SetProject(v *Project) *SessionUpdate {
 	return _u.SetProjectID(v.ID)
 }
 
+// AddBacklogItemIDs adds the "backlog_items" edge to the BacklogItem entity by IDs.
+func (_u *SessionUpdate) AddBacklogItemIDs(ids ...uuid.UUID) *SessionUpdate {
+	_u.mutation.AddBacklogItemIDs(ids...)
+	return _u
+}
+
+// AddBacklogItems adds the "backlog_items" edges to the BacklogItem entity.
+func (_u *SessionUpdate) AddBacklogItems(v ...*BacklogItem) *SessionUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBacklogItemIDs(ids...)
+}
+
 // Mutation returns the SessionMutation object of the builder.
 func (_u *SessionUpdate) Mutation() *SessionMutation {
 	return _u.mutation
@@ -737,6 +754,27 @@ func (_u *SessionUpdate) ClearClaudeSession() *SessionUpdate {
 func (_u *SessionUpdate) ClearProject() *SessionUpdate {
 	_u.mutation.ClearProject()
 	return _u
+}
+
+// ClearBacklogItems clears all "backlog_items" edges to the BacklogItem entity.
+func (_u *SessionUpdate) ClearBacklogItems() *SessionUpdate {
+	_u.mutation.ClearBacklogItems()
+	return _u
+}
+
+// RemoveBacklogItemIDs removes the "backlog_items" edge to BacklogItem entities by IDs.
+func (_u *SessionUpdate) RemoveBacklogItemIDs(ids ...uuid.UUID) *SessionUpdate {
+	_u.mutation.RemoveBacklogItemIDs(ids...)
+	return _u
+}
+
+// RemoveBacklogItems removes "backlog_items" edges to BacklogItem entities.
+func (_u *SessionUpdate) RemoveBacklogItems(v ...*BacklogItem) *SessionUpdate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBacklogItemIDs(ids...)
 }
 
 // Save executes the query and returns the number of nodes affected by the update operation.
@@ -1126,6 +1164,51 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(project.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BacklogItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2M,
+			Inverse: true,
+			Table:   session.BacklogItemsTable,
+			Columns: session.BacklogItemsPrimaryKey,
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitem.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBacklogItemsIDs(); len(nodes) > 0 && !_u.mutation.BacklogItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2M,
+			Inverse: true,
+			Table:   session.BacklogItemsTable,
+			Columns: session.BacklogItemsPrimaryKey,
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitem.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BacklogItemsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2M,
+			Inverse: true,
+			Table:   session.BacklogItemsTable,
+			Columns: session.BacklogItemsPrimaryKey,
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitem.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {
@@ -1809,6 +1892,21 @@ func (_u *SessionUpdateOne) SetProject(v *Project) *SessionUpdateOne {
 	return _u.SetProjectID(v.ID)
 }
 
+// AddBacklogItemIDs adds the "backlog_items" edge to the BacklogItem entity by IDs.
+func (_u *SessionUpdateOne) AddBacklogItemIDs(ids ...uuid.UUID) *SessionUpdateOne {
+	_u.mutation.AddBacklogItemIDs(ids...)
+	return _u
+}
+
+// AddBacklogItems adds the "backlog_items" edges to the BacklogItem entity.
+func (_u *SessionUpdateOne) AddBacklogItems(v ...*BacklogItem) *SessionUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddBacklogItemIDs(ids...)
+}
+
 // Mutation returns the SessionMutation object of the builder.
 func (_u *SessionUpdateOne) Mutation() *SessionMutation {
 	return _u.mutation
@@ -1857,6 +1955,27 @@ func (_u *SessionUpdateOne) ClearClaudeSession() *SessionUpdateOne {
 func (_u *SessionUpdateOne) ClearProject() *SessionUpdateOne {
 	_u.mutation.ClearProject()
 	return _u
+}
+
+// ClearBacklogItems clears all "backlog_items" edges to the BacklogItem entity.
+func (_u *SessionUpdateOne) ClearBacklogItems() *SessionUpdateOne {
+	_u.mutation.ClearBacklogItems()
+	return _u
+}
+
+// RemoveBacklogItemIDs removes the "backlog_items" edge to BacklogItem entities by IDs.
+func (_u *SessionUpdateOne) RemoveBacklogItemIDs(ids ...uuid.UUID) *SessionUpdateOne {
+	_u.mutation.RemoveBacklogItemIDs(ids...)
+	return _u
+}
+
+// RemoveBacklogItems removes "backlog_items" edges to BacklogItem entities.
+func (_u *SessionUpdateOne) RemoveBacklogItems(v ...*BacklogItem) *SessionUpdateOne {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveBacklogItemIDs(ids...)
 }
 
 // Where appends a list predicates to the SessionUpdate builder.
@@ -2276,6 +2395,51 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(project.FieldID, field.TypeInt),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.BacklogItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2M,
+			Inverse: true,
+			Table:   session.BacklogItemsTable,
+			Columns: session.BacklogItemsPrimaryKey,
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitem.FieldID, field.TypeUUID),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedBacklogItemsIDs(); len(nodes) > 0 && !_u.mutation.BacklogItemsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2M,
+			Inverse: true,
+			Table:   session.BacklogItemsTable,
+			Columns: session.BacklogItemsPrimaryKey,
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitem.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.BacklogItemsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2M,
+			Inverse: true,
+			Table:   session.BacklogItemsTable,
+			Columns: session.BacklogItemsPrimaryKey,
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitem.FieldID, field.TypeUUID),
 			},
 		}
 		for _, k := range nodes {

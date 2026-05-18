@@ -8,9 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mattn/go-runewidth"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
-	"github.com/mattn/go-runewidth"
 )
 
 // StateGenerator generates MOSH-style complete terminal state snapshots.

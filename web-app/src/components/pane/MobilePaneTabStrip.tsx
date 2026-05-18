@@ -1,5 +1,6 @@
 "use client";
 
+import { forwardRef } from "react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import type { LeafPane, PaneId } from "@/lib/pane/paneTypes";
 import { mobileTabStrip, mobileTabButton, mobileAddPaneButton } from "@/styles/pane/mobilePaneTabStrip.css";
@@ -12,17 +13,18 @@ interface MobilePaneTabStripProps {
   onAddPane?: () => void;
 }
 
-export function MobilePaneTabStrip({
-  leaves,
-  focusedPaneId,
-  sessions,
-  onFocus,
-  onAddPane,
-}: MobilePaneTabStripProps) {
+export const MobilePaneTabStrip = forwardRef<HTMLDivElement, MobilePaneTabStripProps>(
+  function MobilePaneTabStrip({
+    leaves,
+    focusedPaneId,
+    sessions,
+    onFocus,
+    onAddPane,
+  }, ref) {
   if (leaves.length <= 1) return null;
 
   return (
-    <div className={mobileTabStrip} role="tablist" aria-label="Pane switcher">
+    <div ref={ref} className={mobileTabStrip} role="tablist" aria-label="Pane switcher">
       {leaves.map((l) => {
         const session = l.sessionId
           ? sessions.find((s) => s.id === l.sessionId) ?? null
@@ -55,4 +57,5 @@ export function MobilePaneTabStrip({
       )}
     </div>
   );
-}
+});
+

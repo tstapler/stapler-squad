@@ -66,11 +66,11 @@ var (
 				mcpserver.InitMCPLogging()
 				cfg := config.LoadConfig()
 				_ = cfg // config loaded for side effects (e.g. workspace detection)
-				store, svc, sbMgr, mcpErr := buildMCPDeps()
+				store, svc, sbMgr, storage, mcpErr := buildMCPDeps()
 				if mcpErr != nil {
 					return fmt.Errorf("mcp: init deps: %w", mcpErr)
 				}
-				return mcpserver.RunServer(ctx, store, svc, sbMgr)
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage)
 			}
 
 			// Enable test mode if flag is set
@@ -262,7 +262,7 @@ var (
 					}
 				}
 
-				rt, err := server.BuildRuntimeDeps(tmuxReady, svcDeps)
+				rt, err := server.BuildRuntimeDeps(tmuxReady, svcDeps, cfg)
 				if err != nil {
 					return err
 				}
@@ -929,19 +929,19 @@ func buildLogConfig(daemon bool, cfg *config.Config, consoleEnabled bool) *log.L
 // Uses Phase 1+2 only (no tmux startup, no HTTP listener, no background pollers).
 // The ScrollbackManager is read-only in MCP mode — it reads from the same storage
 // path written by the HTTP server process.
-func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollback.ScrollbackManager, error) {
+func buildMCPDeps() (session.InstanceStore, *services.SessionService, *scrollback.ScrollbackManager, *session.Storage, error) {
 	core, err := server.BuildCoreDeps()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("cannot determine home directory for scrollback storage: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("cannot determine home directory for scrollback storage: %w", err)
 	}
 	sbConfig := scrollback.DefaultScrollbackConfig()
 	sbConfig.StoragePath = filepath.Join(homeDir, ".stapler-squad", "sessions")
 	sbMgr := scrollback.NewScrollbackManager(sbConfig)
 
-	return core.Storage, core.SessionService, sbMgr, nil
+	return core.Storage, core.SessionService, sbMgr, core.Storage, nil
 }

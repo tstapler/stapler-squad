@@ -1,11 +1,11 @@
 {
-  "id": "ClearConversationState",
+  "id": "QueryEscapeAnalytics",
   "type": "backend",
   "service": "SessionService",
-  "method": "ClearConversationState",
+  "method": "QueryEscapeAnalytics",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-05-15T21:43:54.950964881-07:00"
+  "lastModified": "2026-05-18T10:09:59.931586135-07:00"
 }

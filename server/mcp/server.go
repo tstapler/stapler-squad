@@ -14,9 +14,10 @@ import (
 	"github.com/tstapler/stapler-squad/session/scrollback"
 )
 
-// NewCore creates an MCPServer with all 15 tools registered.
+// NewCore creates an MCPServer with all tools registered.
 // Shared by the stdio path (RunServer) and the HTTP path (NewHTTPHandler).
-func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager) *mcpserver.MCPServer {
+// storage is optional — when nil, backlog tools are not registered.
+func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"stapler-squad",
 		"1.0.0",
@@ -31,6 +32,9 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 		writeLim:   newTokenBucket(writeRateLimitPerSec, writeRateLimitPerSec),
 	})
 	registerVCSTools(s, &vcsHandlers{store: store})
+	if storage != nil {
+		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store})
+	}
 	return s
 }
 
@@ -38,17 +42,26 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 // Streamable HTTP (the MCP 2025-03-26 transport). Mount it at /mcp on the
 // existing HTTP server so Claude sessions can connect without spawning a
 // subprocess.
-func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager) *mcpserver.StreamableHTTPServer {
-	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr))
+func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage) *mcpserver.StreamableHTTPServer {
+	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage))
 }
 
 // RunServer initializes and starts the MCP stdio server.
 // It blocks until the context is cancelled or stdin is closed.
 // store is used for read-only discovery tools. svc provides lifecycle operations.
 // sbMgr provides read access to terminal scrollback data persisted on disk.
-func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager) error {
+// storage is used for backlog tools (optional; pass nil to disable).
+func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage) error {
 	log.Info("mcp server starting on stdio transport")
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr))
+
+	// Inject session UUID from environment into the root context so that
+	// backlog tools can identify the calling session.
+	if uuid := os.Getenv("STAPLER_SESSION_UUID"); uuid != "" {
+		ctx = WithSessionUUID(ctx, uuid)
+		log.InfoLog.Printf("[mcp] session UUID injected from environment: %s", uuid)
+	}
+
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

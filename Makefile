@@ -45,7 +45,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service uninstall-service coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux vet-architecture vet-rpc-markers coverage-integration
+.PHONY: help build test benchmark install-tools lint lint-custom analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service uninstall-service preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux vet-architecture vet-rpc-markers coverage-integration
 
 # Default target
 help: ## Show this help message
@@ -68,6 +68,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@echo "Scanning backend features..."
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/session.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/unfinished.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@./$(BACKEND_SCANNER_BIN) proto/session/v1/backlog.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@echo "✅ Backend per-feature files written to $(BACKEND_FEATURES_DIR)/"
 
 registry-generate-frontend: ## Generate frontend feature registry from React component markers
@@ -241,6 +242,27 @@ install-service: build ## Install stapler-squad as a system service (systemd on 
 
 uninstall-service: ## Remove the system service and disable auto-start on login
 	@./scripts/install-service.sh --uninstall
+
+# Isolated preview instance — does NOT touch the running global service.
+# Auto-picks a free port and uses a branch-scoped STAPLER_SQUAD_INSTANCE so
+# state never bleeds into your real sessions.
+#
+# Usage:
+#   make preview          # build + start; press Ctrl-C to stop
+#   make preview PORT=8599
+#
+# The instance name is derived from the current git branch, so switching
+# branches and running `make preview` again starts a completely separate
+# workspace.  All data lives under ~/.stapler-squad/<instance>/.
+preview: build ## Build and run an isolated preview instance (auto-picks port, branch-scoped instance)
+	$(eval PREVIEW_PORT := $(or $(PORT),$(shell python3 -c "import socket,random; s=socket.socket(); s.bind(('',0)); p=s.getsockname()[1]; s.close(); print(p)")))
+	$(eval PREVIEW_INSTANCE := preview-$(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-'))
+	@echo "▶  Starting isolated preview: STAPLER_SQUAD_INSTANCE=$(PREVIEW_INSTANCE)"
+	@echo "▶  URL: http://localhost:$(PREVIEW_PORT)"
+	@echo "▶  Press Ctrl-C to stop."
+	STAPLER_SQUAD_INSTANCE=$(PREVIEW_INSTANCE) \
+	STAPLER_SQUAD_USE_CONTROL_MODE=false \
+	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
 
 # Protocol Buffer code generation
 proto-gen: ensure-tools web-app/node_modules/.package-lock.json ## Generate Go and TypeScript code from proto files

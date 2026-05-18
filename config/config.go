@@ -2,12 +2,15 @@ package config
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -252,6 +255,9 @@ type Config struct {
 	// Default: "~/Projects". Tilde is expanded at runtime. Created on first use.
 	// Zero-value (empty string) is backwards-compatible — existing configs load without change.
 	NewProjectBaseDir string `json:"new_project_base_dir,omitempty"`
+	// MachineEncryptionKey is a base64-encoded 32-byte AES-256-GCM key for local data encryption.
+	// Generated on first run and persisted here. Used to encrypt sensitive token data in ItemSource configs.
+	MachineEncryptionKey string `json:"machine_encryption_key,omitempty"`
 	// AnalyticsMaxRows is the maximum number of analytics events to retain in the database.
 	// When exceeded, the oldest rows are deleted. 0 means no row-count limit.
 	// Default: 100_000.
@@ -262,6 +268,33 @@ type Config struct {
 	AnalyticsMaxAgeDays int `json:"analytics_max_age_days,omitempty"`
 	// BrowserPassthrough configures the per-session Xvfb + x11vnc virtual display feature.
 	BrowserPassthrough BrowserPassthroughConfig `json:"browser_passthrough,omitempty"`
+	// FeatureFlags stores the enabled/disabled state of named runtime feature flags.
+	// Keys are machine names (e.g. "backlog"); values are booleans.
+	// Absent key == disabled (false is the safe default for all flags).
+	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
+
+	// Escape analytics configuration
+
+	// EscapeAnalyticsCaptureLevel controls the verbosity of escape sequence capture.
+	// Valid values: "full" (store raw bytes + hash), "summary" (type/length only), "off" (disabled).
+	// Default: "summary".
+	EscapeAnalyticsCaptureLevel string `json:"escapeAnalyticsCaptureLevel,omitempty"`
+	// EscapeAnalyticsSamplingRate is the fraction of sessions to capture, in [0.0, 1.0].
+	// 1.0 captures all sessions; 0.0 captures none.
+	// A nil pointer means "unset" and defaults to 1.0 at load time.
+	// Using a pointer allows 0.0 (capture nothing) to be distinguished from the zero value.
+	// Default: 1.0.
+	EscapeAnalyticsSamplingRate *float64 `json:"escapeAnalyticsSamplingRate,omitempty"`
+	// EscapeAnalyticsMaxRowsPerSession is the maximum number of escape event rows stored per session.
+	// Default: 10000.
+	EscapeAnalyticsMaxRowsPerSession int `json:"escapeAnalyticsMaxRowsPerSession,omitempty"`
+	// EscapeAnalyticsDisableOSCRedaction disables OSC payload redaction when true.
+	// By default (false), OSC payloads (clipboard, window title, CWD) are redacted for security.
+	// Set to true only if you explicitly need to capture raw OSC payload content.
+	EscapeAnalyticsDisableOSCRedaction bool `json:"escapeAnalyticsDisableOSCRedaction,omitempty"`
+	// EscapeAnalyticsRetentionDays is the number of days to retain escape event rows.
+	// Default: 7.
+	EscapeAnalyticsRetentionDays int `json:"escapeAnalyticsRetentionDays,omitempty"`
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
@@ -487,6 +520,13 @@ func (c *Config) AnalyticsMaxAgeDaysOrDefault() int {
 	return c.AnalyticsMaxAgeDays
 }
 
+// OSCPayloadsAreRedacted returns true when OSC payload redaction is enabled (the default).
+// Redaction prevents PII (clipboard contents, window titles, CWD paths) from being stored
+// in escape event records. Set EscapeAnalyticsDisableOSCRedaction=true in config to opt out.
+func (c *Config) OSCPayloadsAreRedacted() bool {
+	return !c.EscapeAnalyticsDisableOSCRedaction
+}
+
 // GetClaudeCommand attempts to find the "claude" command in the user's shell
 // It checks in the following order:
 // 1. Shell alias resolution (proxy-claude, then claude)
@@ -709,6 +749,38 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1
 	}
+
+	// Apply defaults for escape analytics fields.
+	if cfg.EscapeAnalyticsCaptureLevel == "" {
+		cfg.EscapeAnalyticsCaptureLevel = "summary"
+	}
+	if cfg.EscapeAnalyticsSamplingRate == nil {
+		defaultRate := 1.0
+		cfg.EscapeAnalyticsSamplingRate = &defaultRate
+	}
+	if cfg.EscapeAnalyticsMaxRowsPerSession == 0 {
+		cfg.EscapeAnalyticsMaxRowsPerSession = 10000
+	}
+	if cfg.EscapeAnalyticsRetentionDays == 0 {
+		cfg.EscapeAnalyticsRetentionDays = 7
+	}
+
+	// Validate escape analytics fields.
+	switch cfg.EscapeAnalyticsCaptureLevel {
+	case "full", "summary", "off":
+		// valid
+	default:
+		cfg.EscapeAnalyticsCaptureLevel = "summary"
+	}
+	if *cfg.EscapeAnalyticsSamplingRate < 0 {
+		zero := 0.0
+		cfg.EscapeAnalyticsSamplingRate = &zero
+	}
+	if *cfg.EscapeAnalyticsSamplingRate > 1.0 {
+		one := 1.0
+		cfg.EscapeAnalyticsSamplingRate = &one
+	}
+
 	// Unmarshaling produces a zero Config with no executor; initialize it now
 	// so GetClaudeCommand / GetAvailablePrograms don't panic on nil executor.
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
@@ -776,4 +848,50 @@ func (c *Config) RemoveKeyCategory(key string) {
 	if c.KeyCategories != nil {
 		delete(c.KeyCategories, key)
 	}
+}
+
+// GetOrCreateEncryptionKey returns the 32-byte AES-256-GCM key for local data encryption.
+// Generates and persists a new key on first call. Non-fatal errors during save are logged.
+func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
+	if c.MachineEncryptionKey != "" {
+		data, err := base64.StdEncoding.DecodeString(c.MachineEncryptionKey)
+		if err == nil && len(data) == 32 {
+			return data, nil
+		}
+		// If existing key is invalid, regenerate
+		log.WarningLog.Printf("[Config] existing encryption key is invalid, regenerating")
+	}
+
+	// Generate new 32-byte key
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, fmt.Errorf("generate encryption key: %w", err)
+	}
+
+	c.MachineEncryptionKey = base64.StdEncoding.EncodeToString(key)
+
+	// Persist to disk; non-fatal if it fails
+	if err := SaveConfig(c); err != nil {
+		log.WarningLog.Printf("[Config] failed to persist encryption key: %v", err)
+	}
+
+	return key, nil
+}
+
+// GetFeatureFlag returns the persisted enabled state of the named feature flag.
+// Absent key == false (disabled by default).
+func (c *Config) GetFeatureFlag(name string) bool {
+	if c == nil || c.FeatureFlags == nil {
+		return false
+	}
+	return c.FeatureFlags[name]
+}
+
+// SetFeatureFlag sets the named feature flag and persists the config to disk.
+func (c *Config) SetFeatureFlag(name string, value bool) error {
+	if c.FeatureFlags == nil {
+		c.FeatureFlags = make(map[string]bool)
+	}
+	c.FeatureFlags[name] = value
+	return SaveConfig(c)
 }

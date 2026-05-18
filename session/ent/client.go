@@ -9,6 +9,7 @@ import (
 	"log"
 	"reflect"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent/migrate"
 
 	"entgo.io/ent"
@@ -17,13 +18,19 @@ import (
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/errorevent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
+	"github.com/tstapler/stapler-squad/session/ent/itemsession"
+	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -37,6 +44,8 @@ type Client struct {
 	AnalyticsEvent *AnalyticsEventClient
 	// ApprovalRule is the client for interacting with the ApprovalRule builders.
 	ApprovalRule *ApprovalRuleClient
+	// BacklogItem is the client for interacting with the BacklogItem builders.
+	BacklogItem *BacklogItemClient
 	// ClassificationAnalytics is the client for interacting with the ClassificationAnalytics builders.
 	ClassificationAnalytics *ClassificationAnalyticsClient
 	// ClaudeMetadata is the client for interacting with the ClaudeMetadata builders.
@@ -47,10 +56,20 @@ type Client struct {
 	DiffStats *DiffStatsClient
 	// ErrorEvent is the client for interacting with the ErrorEvent builders.
 	ErrorEvent *ErrorEventClient
+	// EscapeEvent is the client for interacting with the EscapeEvent builders.
+	EscapeEvent *EscapeEventClient
+	// ItemSession is the client for interacting with the ItemSession builders.
+	ItemSession *ItemSessionClient
+	// ItemSource is the client for interacting with the ItemSource builders.
+	ItemSource *ItemSourceClient
 	// Project is the client for interacting with the Project builders.
 	Project *ProjectClient
+	// ReviewVerdict is the client for interacting with the ReviewVerdict builders.
+	ReviewVerdict *ReviewVerdictClient
 	// Session is the client for interacting with the Session builders.
 	Session *SessionClient
+	// SourceSyncEvent is the client for interacting with the SourceSyncEvent builders.
+	SourceSyncEvent *SourceSyncEventClient
 	// Tag is the client for interacting with the Tag builders.
 	Tag *TagClient
 	// Worktree is the client for interacting with the Worktree builders.
@@ -68,13 +87,19 @@ func (c *Client) init() {
 	c.Schema = migrate.NewSchema(c.driver)
 	c.AnalyticsEvent = NewAnalyticsEventClient(c.config)
 	c.ApprovalRule = NewApprovalRuleClient(c.config)
+	c.BacklogItem = NewBacklogItemClient(c.config)
 	c.ClassificationAnalytics = NewClassificationAnalyticsClient(c.config)
 	c.ClaudeMetadata = NewClaudeMetadataClient(c.config)
 	c.ClaudeSession = NewClaudeSessionClient(c.config)
 	c.DiffStats = NewDiffStatsClient(c.config)
 	c.ErrorEvent = NewErrorEventClient(c.config)
+	c.EscapeEvent = NewEscapeEventClient(c.config)
+	c.ItemSession = NewItemSessionClient(c.config)
+	c.ItemSource = NewItemSourceClient(c.config)
 	c.Project = NewProjectClient(c.config)
+	c.ReviewVerdict = NewReviewVerdictClient(c.config)
 	c.Session = NewSessionClient(c.config)
+	c.SourceSyncEvent = NewSourceSyncEventClient(c.config)
 	c.Tag = NewTagClient(c.config)
 	c.Worktree = NewWorktreeClient(c.config)
 }
@@ -171,13 +196,19 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		config:                  cfg,
 		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
+		BacklogItem:             NewBacklogItemClient(cfg),
 		ClassificationAnalytics: NewClassificationAnalyticsClient(cfg),
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
 		ClaudeSession:           NewClaudeSessionClient(cfg),
 		DiffStats:               NewDiffStatsClient(cfg),
 		ErrorEvent:              NewErrorEventClient(cfg),
+		EscapeEvent:             NewEscapeEventClient(cfg),
+		ItemSession:             NewItemSessionClient(cfg),
+		ItemSource:              NewItemSourceClient(cfg),
 		Project:                 NewProjectClient(cfg),
+		ReviewVerdict:           NewReviewVerdictClient(cfg),
 		Session:                 NewSessionClient(cfg),
+		SourceSyncEvent:         NewSourceSyncEventClient(cfg),
 		Tag:                     NewTagClient(cfg),
 		Worktree:                NewWorktreeClient(cfg),
 	}, nil
@@ -201,13 +232,19 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		config:                  cfg,
 		AnalyticsEvent:          NewAnalyticsEventClient(cfg),
 		ApprovalRule:            NewApprovalRuleClient(cfg),
+		BacklogItem:             NewBacklogItemClient(cfg),
 		ClassificationAnalytics: NewClassificationAnalyticsClient(cfg),
 		ClaudeMetadata:          NewClaudeMetadataClient(cfg),
 		ClaudeSession:           NewClaudeSessionClient(cfg),
 		DiffStats:               NewDiffStatsClient(cfg),
 		ErrorEvent:              NewErrorEventClient(cfg),
+		EscapeEvent:             NewEscapeEventClient(cfg),
+		ItemSession:             NewItemSessionClient(cfg),
+		ItemSource:              NewItemSourceClient(cfg),
 		Project:                 NewProjectClient(cfg),
+		ReviewVerdict:           NewReviewVerdictClient(cfg),
 		Session:                 NewSessionClient(cfg),
+		SourceSyncEvent:         NewSourceSyncEventClient(cfg),
 		Tag:                     NewTagClient(cfg),
 		Worktree:                NewWorktreeClient(cfg),
 	}, nil
@@ -239,9 +276,10 @@ func (c *Client) Close() error {
 // In order to add hooks to a specific client, call: `client.Node.Use(...)`.
 func (c *Client) Use(hooks ...Hook) {
 	for _, n := range []interface{ Use(...Hook) }{
-		c.AnalyticsEvent, c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata,
-		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag,
-		c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.ClassificationAnalytics,
+		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
+		c.ItemSession, c.ItemSource, c.Project, c.ReviewVerdict, c.Session,
+		c.SourceSyncEvent, c.Tag, c.Worktree,
 	} {
 		n.Use(hooks...)
 	}
@@ -251,9 +289,10 @@ func (c *Client) Use(hooks ...Hook) {
 // In order to add interceptors to a specific client, call: `client.Node.Intercept(...)`.
 func (c *Client) Intercept(interceptors ...Interceptor) {
 	for _, n := range []interface{ Intercept(...Interceptor) }{
-		c.AnalyticsEvent, c.ApprovalRule, c.ClassificationAnalytics, c.ClaudeMetadata,
-		c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.Project, c.Session, c.Tag,
-		c.Worktree,
+		c.AnalyticsEvent, c.ApprovalRule, c.BacklogItem, c.ClassificationAnalytics,
+		c.ClaudeMetadata, c.ClaudeSession, c.DiffStats, c.ErrorEvent, c.EscapeEvent,
+		c.ItemSession, c.ItemSource, c.Project, c.ReviewVerdict, c.Session,
+		c.SourceSyncEvent, c.Tag, c.Worktree,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -266,6 +305,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.AnalyticsEvent.mutate(ctx, m)
 	case *ApprovalRuleMutation:
 		return c.ApprovalRule.mutate(ctx, m)
+	case *BacklogItemMutation:
+		return c.BacklogItem.mutate(ctx, m)
 	case *ClassificationAnalyticsMutation:
 		return c.ClassificationAnalytics.mutate(ctx, m)
 	case *ClaudeMetadataMutation:
@@ -276,10 +317,20 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.DiffStats.mutate(ctx, m)
 	case *ErrorEventMutation:
 		return c.ErrorEvent.mutate(ctx, m)
+	case *EscapeEventMutation:
+		return c.EscapeEvent.mutate(ctx, m)
+	case *ItemSessionMutation:
+		return c.ItemSession.mutate(ctx, m)
+	case *ItemSourceMutation:
+		return c.ItemSource.mutate(ctx, m)
 	case *ProjectMutation:
 		return c.Project.mutate(ctx, m)
+	case *ReviewVerdictMutation:
+		return c.ReviewVerdict.mutate(ctx, m)
 	case *SessionMutation:
 		return c.Session.mutate(ctx, m)
+	case *SourceSyncEventMutation:
+		return c.SourceSyncEvent.mutate(ctx, m)
 	case *TagMutation:
 		return c.Tag.mutate(ctx, m)
 	case *WorktreeMutation:
@@ -552,6 +603,187 @@ func (c *ApprovalRuleClient) mutate(ctx context.Context, m *ApprovalRuleMutation
 		return (&ApprovalRuleDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown ApprovalRule mutation op: %q", m.Op())
+	}
+}
+
+// BacklogItemClient is a client for the BacklogItem schema.
+type BacklogItemClient struct {
+	config
+}
+
+// NewBacklogItemClient returns a client for the BacklogItem from the given config.
+func NewBacklogItemClient(c config) *BacklogItemClient {
+	return &BacklogItemClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `backlogitem.Hooks(f(g(h())))`.
+func (c *BacklogItemClient) Use(hooks ...Hook) {
+	c.hooks.BacklogItem = append(c.hooks.BacklogItem, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `backlogitem.Intercept(f(g(h())))`.
+func (c *BacklogItemClient) Intercept(interceptors ...Interceptor) {
+	c.inters.BacklogItem = append(c.inters.BacklogItem, interceptors...)
+}
+
+// Create returns a builder for creating a BacklogItem entity.
+func (c *BacklogItemClient) Create() *BacklogItemCreate {
+	mutation := newBacklogItemMutation(c.config, OpCreate)
+	return &BacklogItemCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of BacklogItem entities.
+func (c *BacklogItemClient) CreateBulk(builders ...*BacklogItemCreate) *BacklogItemCreateBulk {
+	return &BacklogItemCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *BacklogItemClient) MapCreateBulk(slice any, setFunc func(*BacklogItemCreate, int)) *BacklogItemCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &BacklogItemCreateBulk{err: fmt.Errorf("calling to BacklogItemClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*BacklogItemCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &BacklogItemCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for BacklogItem.
+func (c *BacklogItemClient) Update() *BacklogItemUpdate {
+	mutation := newBacklogItemMutation(c.config, OpUpdate)
+	return &BacklogItemUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *BacklogItemClient) UpdateOne(_m *BacklogItem) *BacklogItemUpdateOne {
+	mutation := newBacklogItemMutation(c.config, OpUpdateOne, withBacklogItem(_m))
+	return &BacklogItemUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *BacklogItemClient) UpdateOneID(id uuid.UUID) *BacklogItemUpdateOne {
+	mutation := newBacklogItemMutation(c.config, OpUpdateOne, withBacklogItemID(id))
+	return &BacklogItemUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for BacklogItem.
+func (c *BacklogItemClient) Delete() *BacklogItemDelete {
+	mutation := newBacklogItemMutation(c.config, OpDelete)
+	return &BacklogItemDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *BacklogItemClient) DeleteOne(_m *BacklogItem) *BacklogItemDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *BacklogItemClient) DeleteOneID(id uuid.UUID) *BacklogItemDeleteOne {
+	builder := c.Delete().Where(backlogitem.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &BacklogItemDeleteOne{builder}
+}
+
+// Query returns a query builder for BacklogItem.
+func (c *BacklogItemClient) Query() *BacklogItemQuery {
+	return &BacklogItemQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeBacklogItem},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a BacklogItem entity by its id.
+func (c *BacklogItemClient) Get(ctx context.Context, id uuid.UUID) (*BacklogItem, error) {
+	return c.Query().Where(backlogitem.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *BacklogItemClient) GetX(ctx context.Context, id uuid.UUID) *BacklogItem {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryItemSessions queries the item_sessions edge of a BacklogItem.
+func (c *BacklogItemClient) QueryItemSessions(_m *BacklogItem) *ItemSessionQuery {
+	query := (&ItemSessionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
+			sqlgraph.To(itemsession.Table, itemsession.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, backlogitem.ItemSessionsTable, backlogitem.ItemSessionsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySessions queries the sessions edge of a BacklogItem.
+func (c *BacklogItemClient) QuerySessions(_m *BacklogItem) *SessionQuery {
+	query := (&SessionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
+			sqlgraph.To(session.Table, session.FieldID),
+			sqlgraph.Edge(sqlgraph.M2M, false, backlogitem.SessionsTable, backlogitem.SessionsPrimaryKey...),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySource queries the source edge of a BacklogItem.
+func (c *BacklogItemClient) QuerySource(_m *BacklogItem) *ItemSourceQuery {
+	query := (&ItemSourceClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(backlogitem.Table, backlogitem.FieldID, id),
+			sqlgraph.To(itemsource.Table, itemsource.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, backlogitem.SourceTable, backlogitem.SourceColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *BacklogItemClient) Hooks() []Hook {
+	return c.hooks.BacklogItem
+}
+
+// Interceptors returns the client interceptors.
+func (c *BacklogItemClient) Interceptors() []Interceptor {
+	return c.inters.BacklogItem
+}
+
+func (c *BacklogItemClient) mutate(ctx context.Context, m *BacklogItemMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&BacklogItemCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&BacklogItemUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&BacklogItemUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&BacklogItemDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown BacklogItem mutation op: %q", m.Op())
 	}
 }
 
@@ -1284,6 +1516,469 @@ func (c *ErrorEventClient) mutate(ctx context.Context, m *ErrorEventMutation) (V
 	}
 }
 
+// EscapeEventClient is a client for the EscapeEvent schema.
+type EscapeEventClient struct {
+	config
+}
+
+// NewEscapeEventClient returns a client for the EscapeEvent from the given config.
+func NewEscapeEventClient(c config) *EscapeEventClient {
+	return &EscapeEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `escapeevent.Hooks(f(g(h())))`.
+func (c *EscapeEventClient) Use(hooks ...Hook) {
+	c.hooks.EscapeEvent = append(c.hooks.EscapeEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `escapeevent.Intercept(f(g(h())))`.
+func (c *EscapeEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.EscapeEvent = append(c.inters.EscapeEvent, interceptors...)
+}
+
+// Create returns a builder for creating a EscapeEvent entity.
+func (c *EscapeEventClient) Create() *EscapeEventCreate {
+	mutation := newEscapeEventMutation(c.config, OpCreate)
+	return &EscapeEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of EscapeEvent entities.
+func (c *EscapeEventClient) CreateBulk(builders ...*EscapeEventCreate) *EscapeEventCreateBulk {
+	return &EscapeEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *EscapeEventClient) MapCreateBulk(slice any, setFunc func(*EscapeEventCreate, int)) *EscapeEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &EscapeEventCreateBulk{err: fmt.Errorf("calling to EscapeEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*EscapeEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &EscapeEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for EscapeEvent.
+func (c *EscapeEventClient) Update() *EscapeEventUpdate {
+	mutation := newEscapeEventMutation(c.config, OpUpdate)
+	return &EscapeEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *EscapeEventClient) UpdateOne(_m *EscapeEvent) *EscapeEventUpdateOne {
+	mutation := newEscapeEventMutation(c.config, OpUpdateOne, withEscapeEvent(_m))
+	return &EscapeEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *EscapeEventClient) UpdateOneID(id string) *EscapeEventUpdateOne {
+	mutation := newEscapeEventMutation(c.config, OpUpdateOne, withEscapeEventID(id))
+	return &EscapeEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for EscapeEvent.
+func (c *EscapeEventClient) Delete() *EscapeEventDelete {
+	mutation := newEscapeEventMutation(c.config, OpDelete)
+	return &EscapeEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *EscapeEventClient) DeleteOne(_m *EscapeEvent) *EscapeEventDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *EscapeEventClient) DeleteOneID(id string) *EscapeEventDeleteOne {
+	builder := c.Delete().Where(escapeevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &EscapeEventDeleteOne{builder}
+}
+
+// Query returns a query builder for EscapeEvent.
+func (c *EscapeEventClient) Query() *EscapeEventQuery {
+	return &EscapeEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeEscapeEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a EscapeEvent entity by its id.
+func (c *EscapeEventClient) Get(ctx context.Context, id string) (*EscapeEvent, error) {
+	return c.Query().Where(escapeevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *EscapeEventClient) GetX(ctx context.Context, id string) *EscapeEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *EscapeEventClient) Hooks() []Hook {
+	return c.hooks.EscapeEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *EscapeEventClient) Interceptors() []Interceptor {
+	return c.inters.EscapeEvent
+}
+
+func (c *EscapeEventClient) mutate(ctx context.Context, m *EscapeEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&EscapeEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&EscapeEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&EscapeEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&EscapeEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown EscapeEvent mutation op: %q", m.Op())
+	}
+}
+
+// ItemSessionClient is a client for the ItemSession schema.
+type ItemSessionClient struct {
+	config
+}
+
+// NewItemSessionClient returns a client for the ItemSession from the given config.
+func NewItemSessionClient(c config) *ItemSessionClient {
+	return &ItemSessionClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `itemsession.Hooks(f(g(h())))`.
+func (c *ItemSessionClient) Use(hooks ...Hook) {
+	c.hooks.ItemSession = append(c.hooks.ItemSession, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `itemsession.Intercept(f(g(h())))`.
+func (c *ItemSessionClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ItemSession = append(c.inters.ItemSession, interceptors...)
+}
+
+// Create returns a builder for creating a ItemSession entity.
+func (c *ItemSessionClient) Create() *ItemSessionCreate {
+	mutation := newItemSessionMutation(c.config, OpCreate)
+	return &ItemSessionCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ItemSession entities.
+func (c *ItemSessionClient) CreateBulk(builders ...*ItemSessionCreate) *ItemSessionCreateBulk {
+	return &ItemSessionCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ItemSessionClient) MapCreateBulk(slice any, setFunc func(*ItemSessionCreate, int)) *ItemSessionCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ItemSessionCreateBulk{err: fmt.Errorf("calling to ItemSessionClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ItemSessionCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ItemSessionCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ItemSession.
+func (c *ItemSessionClient) Update() *ItemSessionUpdate {
+	mutation := newItemSessionMutation(c.config, OpUpdate)
+	return &ItemSessionUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ItemSessionClient) UpdateOne(_m *ItemSession) *ItemSessionUpdateOne {
+	mutation := newItemSessionMutation(c.config, OpUpdateOne, withItemSession(_m))
+	return &ItemSessionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ItemSessionClient) UpdateOneID(id uuid.UUID) *ItemSessionUpdateOne {
+	mutation := newItemSessionMutation(c.config, OpUpdateOne, withItemSessionID(id))
+	return &ItemSessionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ItemSession.
+func (c *ItemSessionClient) Delete() *ItemSessionDelete {
+	mutation := newItemSessionMutation(c.config, OpDelete)
+	return &ItemSessionDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ItemSessionClient) DeleteOne(_m *ItemSession) *ItemSessionDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ItemSessionClient) DeleteOneID(id uuid.UUID) *ItemSessionDeleteOne {
+	builder := c.Delete().Where(itemsession.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ItemSessionDeleteOne{builder}
+}
+
+// Query returns a query builder for ItemSession.
+func (c *ItemSessionClient) Query() *ItemSessionQuery {
+	return &ItemSessionQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeItemSession},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ItemSession entity by its id.
+func (c *ItemSessionClient) Get(ctx context.Context, id uuid.UUID) (*ItemSession, error) {
+	return c.Query().Where(itemsession.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ItemSessionClient) GetX(ctx context.Context, id uuid.UUID) *ItemSession {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryBacklogItem queries the backlog_item edge of a ItemSession.
+func (c *ItemSessionClient) QueryBacklogItem(_m *ItemSession) *BacklogItemQuery {
+	query := (&BacklogItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(itemsession.Table, itemsession.FieldID, id),
+			sqlgraph.To(backlogitem.Table, backlogitem.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, itemsession.BacklogItemTable, itemsession.BacklogItemColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QueryReviewVerdict queries the review_verdict edge of a ItemSession.
+func (c *ItemSessionClient) QueryReviewVerdict(_m *ItemSession) *ReviewVerdictQuery {
+	query := (&ReviewVerdictClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(itemsession.Table, itemsession.FieldID, id),
+			sqlgraph.To(reviewverdict.Table, reviewverdict.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, false, itemsession.ReviewVerdictTable, itemsession.ReviewVerdictColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ItemSessionClient) Hooks() []Hook {
+	return c.hooks.ItemSession
+}
+
+// Interceptors returns the client interceptors.
+func (c *ItemSessionClient) Interceptors() []Interceptor {
+	return c.inters.ItemSession
+}
+
+func (c *ItemSessionClient) mutate(ctx context.Context, m *ItemSessionMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ItemSessionCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ItemSessionUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ItemSessionUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ItemSessionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ItemSession mutation op: %q", m.Op())
+	}
+}
+
+// ItemSourceClient is a client for the ItemSource schema.
+type ItemSourceClient struct {
+	config
+}
+
+// NewItemSourceClient returns a client for the ItemSource from the given config.
+func NewItemSourceClient(c config) *ItemSourceClient {
+	return &ItemSourceClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `itemsource.Hooks(f(g(h())))`.
+func (c *ItemSourceClient) Use(hooks ...Hook) {
+	c.hooks.ItemSource = append(c.hooks.ItemSource, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `itemsource.Intercept(f(g(h())))`.
+func (c *ItemSourceClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ItemSource = append(c.inters.ItemSource, interceptors...)
+}
+
+// Create returns a builder for creating a ItemSource entity.
+func (c *ItemSourceClient) Create() *ItemSourceCreate {
+	mutation := newItemSourceMutation(c.config, OpCreate)
+	return &ItemSourceCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ItemSource entities.
+func (c *ItemSourceClient) CreateBulk(builders ...*ItemSourceCreate) *ItemSourceCreateBulk {
+	return &ItemSourceCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ItemSourceClient) MapCreateBulk(slice any, setFunc func(*ItemSourceCreate, int)) *ItemSourceCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ItemSourceCreateBulk{err: fmt.Errorf("calling to ItemSourceClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ItemSourceCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ItemSourceCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ItemSource.
+func (c *ItemSourceClient) Update() *ItemSourceUpdate {
+	mutation := newItemSourceMutation(c.config, OpUpdate)
+	return &ItemSourceUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ItemSourceClient) UpdateOne(_m *ItemSource) *ItemSourceUpdateOne {
+	mutation := newItemSourceMutation(c.config, OpUpdateOne, withItemSource(_m))
+	return &ItemSourceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ItemSourceClient) UpdateOneID(id uuid.UUID) *ItemSourceUpdateOne {
+	mutation := newItemSourceMutation(c.config, OpUpdateOne, withItemSourceID(id))
+	return &ItemSourceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ItemSource.
+func (c *ItemSourceClient) Delete() *ItemSourceDelete {
+	mutation := newItemSourceMutation(c.config, OpDelete)
+	return &ItemSourceDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ItemSourceClient) DeleteOne(_m *ItemSource) *ItemSourceDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ItemSourceClient) DeleteOneID(id uuid.UUID) *ItemSourceDeleteOne {
+	builder := c.Delete().Where(itemsource.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ItemSourceDeleteOne{builder}
+}
+
+// Query returns a query builder for ItemSource.
+func (c *ItemSourceClient) Query() *ItemSourceQuery {
+	return &ItemSourceQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeItemSource},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ItemSource entity by its id.
+func (c *ItemSourceClient) Get(ctx context.Context, id uuid.UUID) (*ItemSource, error) {
+	return c.Query().Where(itemsource.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ItemSourceClient) GetX(ctx context.Context, id uuid.UUID) *ItemSource {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryBacklogItems queries the backlog_items edge of a ItemSource.
+func (c *ItemSourceClient) QueryBacklogItems(_m *ItemSource) *BacklogItemQuery {
+	query := (&BacklogItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(itemsource.Table, itemsource.FieldID, id),
+			sqlgraph.To(backlogitem.Table, backlogitem.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, itemsource.BacklogItemsTable, itemsource.BacklogItemsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// QuerySyncEvents queries the sync_events edge of a ItemSource.
+func (c *ItemSourceClient) QuerySyncEvents(_m *ItemSource) *SourceSyncEventQuery {
+	query := (&SourceSyncEventClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(itemsource.Table, itemsource.FieldID, id),
+			sqlgraph.To(sourcesyncevent.Table, sourcesyncevent.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, itemsource.SyncEventsTable, itemsource.SyncEventsColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ItemSourceClient) Hooks() []Hook {
+	return c.hooks.ItemSource
+}
+
+// Interceptors returns the client interceptors.
+func (c *ItemSourceClient) Interceptors() []Interceptor {
+	return c.inters.ItemSource
+}
+
+func (c *ItemSourceClient) mutate(ctx context.Context, m *ItemSourceMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ItemSourceCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ItemSourceUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ItemSourceUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ItemSourceDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ItemSource mutation op: %q", m.Op())
+	}
+}
+
 // ProjectClient is a client for the Project schema.
 type ProjectClient struct {
 	config
@@ -1430,6 +2125,155 @@ func (c *ProjectClient) mutate(ctx context.Context, m *ProjectMutation) (Value, 
 		return (&ProjectDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown Project mutation op: %q", m.Op())
+	}
+}
+
+// ReviewVerdictClient is a client for the ReviewVerdict schema.
+type ReviewVerdictClient struct {
+	config
+}
+
+// NewReviewVerdictClient returns a client for the ReviewVerdict from the given config.
+func NewReviewVerdictClient(c config) *ReviewVerdictClient {
+	return &ReviewVerdictClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `reviewverdict.Hooks(f(g(h())))`.
+func (c *ReviewVerdictClient) Use(hooks ...Hook) {
+	c.hooks.ReviewVerdict = append(c.hooks.ReviewVerdict, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `reviewverdict.Intercept(f(g(h())))`.
+func (c *ReviewVerdictClient) Intercept(interceptors ...Interceptor) {
+	c.inters.ReviewVerdict = append(c.inters.ReviewVerdict, interceptors...)
+}
+
+// Create returns a builder for creating a ReviewVerdict entity.
+func (c *ReviewVerdictClient) Create() *ReviewVerdictCreate {
+	mutation := newReviewVerdictMutation(c.config, OpCreate)
+	return &ReviewVerdictCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of ReviewVerdict entities.
+func (c *ReviewVerdictClient) CreateBulk(builders ...*ReviewVerdictCreate) *ReviewVerdictCreateBulk {
+	return &ReviewVerdictCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *ReviewVerdictClient) MapCreateBulk(slice any, setFunc func(*ReviewVerdictCreate, int)) *ReviewVerdictCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &ReviewVerdictCreateBulk{err: fmt.Errorf("calling to ReviewVerdictClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*ReviewVerdictCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &ReviewVerdictCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for ReviewVerdict.
+func (c *ReviewVerdictClient) Update() *ReviewVerdictUpdate {
+	mutation := newReviewVerdictMutation(c.config, OpUpdate)
+	return &ReviewVerdictUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *ReviewVerdictClient) UpdateOne(_m *ReviewVerdict) *ReviewVerdictUpdateOne {
+	mutation := newReviewVerdictMutation(c.config, OpUpdateOne, withReviewVerdict(_m))
+	return &ReviewVerdictUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *ReviewVerdictClient) UpdateOneID(id uuid.UUID) *ReviewVerdictUpdateOne {
+	mutation := newReviewVerdictMutation(c.config, OpUpdateOne, withReviewVerdictID(id))
+	return &ReviewVerdictUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for ReviewVerdict.
+func (c *ReviewVerdictClient) Delete() *ReviewVerdictDelete {
+	mutation := newReviewVerdictMutation(c.config, OpDelete)
+	return &ReviewVerdictDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *ReviewVerdictClient) DeleteOne(_m *ReviewVerdict) *ReviewVerdictDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *ReviewVerdictClient) DeleteOneID(id uuid.UUID) *ReviewVerdictDeleteOne {
+	builder := c.Delete().Where(reviewverdict.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &ReviewVerdictDeleteOne{builder}
+}
+
+// Query returns a query builder for ReviewVerdict.
+func (c *ReviewVerdictClient) Query() *ReviewVerdictQuery {
+	return &ReviewVerdictQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeReviewVerdict},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a ReviewVerdict entity by its id.
+func (c *ReviewVerdictClient) Get(ctx context.Context, id uuid.UUID) (*ReviewVerdict, error) {
+	return c.Query().Where(reviewverdict.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *ReviewVerdictClient) GetX(ctx context.Context, id uuid.UUID) *ReviewVerdict {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QueryItemSession queries the item_session edge of a ReviewVerdict.
+func (c *ReviewVerdictClient) QueryItemSession(_m *ReviewVerdict) *ItemSessionQuery {
+	query := (&ItemSessionClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(reviewverdict.Table, reviewverdict.FieldID, id),
+			sqlgraph.To(itemsession.Table, itemsession.FieldID),
+			sqlgraph.Edge(sqlgraph.O2O, true, reviewverdict.ItemSessionTable, reviewverdict.ItemSessionColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *ReviewVerdictClient) Hooks() []Hook {
+	return c.hooks.ReviewVerdict
+}
+
+// Interceptors returns the client interceptors.
+func (c *ReviewVerdictClient) Interceptors() []Interceptor {
+	return c.inters.ReviewVerdict
+}
+
+func (c *ReviewVerdictClient) mutate(ctx context.Context, m *ReviewVerdictMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&ReviewVerdictCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&ReviewVerdictUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&ReviewVerdictUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&ReviewVerdictDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown ReviewVerdict mutation op: %q", m.Op())
 	}
 }
 
@@ -1621,6 +2465,22 @@ func (c *SessionClient) QueryProject(_m *Session) *ProjectQuery {
 	return query
 }
 
+// QueryBacklogItems queries the backlog_items edge of a Session.
+func (c *SessionClient) QueryBacklogItems(_m *Session) *BacklogItemQuery {
+	query := (&BacklogItemClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(session.Table, session.FieldID, id),
+			sqlgraph.To(backlogitem.Table, backlogitem.FieldID),
+			sqlgraph.Edge(sqlgraph.M2M, true, session.BacklogItemsTable, session.BacklogItemsPrimaryKey...),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
 // Hooks returns the client hooks.
 func (c *SessionClient) Hooks() []Hook {
 	return c.hooks.Session
@@ -1643,6 +2503,155 @@ func (c *SessionClient) mutate(ctx context.Context, m *SessionMutation) (Value, 
 		return (&SessionDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
 	default:
 		return nil, fmt.Errorf("ent: unknown Session mutation op: %q", m.Op())
+	}
+}
+
+// SourceSyncEventClient is a client for the SourceSyncEvent schema.
+type SourceSyncEventClient struct {
+	config
+}
+
+// NewSourceSyncEventClient returns a client for the SourceSyncEvent from the given config.
+func NewSourceSyncEventClient(c config) *SourceSyncEventClient {
+	return &SourceSyncEventClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `sourcesyncevent.Hooks(f(g(h())))`.
+func (c *SourceSyncEventClient) Use(hooks ...Hook) {
+	c.hooks.SourceSyncEvent = append(c.hooks.SourceSyncEvent, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `sourcesyncevent.Intercept(f(g(h())))`.
+func (c *SourceSyncEventClient) Intercept(interceptors ...Interceptor) {
+	c.inters.SourceSyncEvent = append(c.inters.SourceSyncEvent, interceptors...)
+}
+
+// Create returns a builder for creating a SourceSyncEvent entity.
+func (c *SourceSyncEventClient) Create() *SourceSyncEventCreate {
+	mutation := newSourceSyncEventMutation(c.config, OpCreate)
+	return &SourceSyncEventCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of SourceSyncEvent entities.
+func (c *SourceSyncEventClient) CreateBulk(builders ...*SourceSyncEventCreate) *SourceSyncEventCreateBulk {
+	return &SourceSyncEventCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *SourceSyncEventClient) MapCreateBulk(slice any, setFunc func(*SourceSyncEventCreate, int)) *SourceSyncEventCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &SourceSyncEventCreateBulk{err: fmt.Errorf("calling to SourceSyncEventClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*SourceSyncEventCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &SourceSyncEventCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for SourceSyncEvent.
+func (c *SourceSyncEventClient) Update() *SourceSyncEventUpdate {
+	mutation := newSourceSyncEventMutation(c.config, OpUpdate)
+	return &SourceSyncEventUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *SourceSyncEventClient) UpdateOne(_m *SourceSyncEvent) *SourceSyncEventUpdateOne {
+	mutation := newSourceSyncEventMutation(c.config, OpUpdateOne, withSourceSyncEvent(_m))
+	return &SourceSyncEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *SourceSyncEventClient) UpdateOneID(id uuid.UUID) *SourceSyncEventUpdateOne {
+	mutation := newSourceSyncEventMutation(c.config, OpUpdateOne, withSourceSyncEventID(id))
+	return &SourceSyncEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for SourceSyncEvent.
+func (c *SourceSyncEventClient) Delete() *SourceSyncEventDelete {
+	mutation := newSourceSyncEventMutation(c.config, OpDelete)
+	return &SourceSyncEventDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *SourceSyncEventClient) DeleteOne(_m *SourceSyncEvent) *SourceSyncEventDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *SourceSyncEventClient) DeleteOneID(id uuid.UUID) *SourceSyncEventDeleteOne {
+	builder := c.Delete().Where(sourcesyncevent.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &SourceSyncEventDeleteOne{builder}
+}
+
+// Query returns a query builder for SourceSyncEvent.
+func (c *SourceSyncEventClient) Query() *SourceSyncEventQuery {
+	return &SourceSyncEventQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeSourceSyncEvent},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a SourceSyncEvent entity by its id.
+func (c *SourceSyncEventClient) Get(ctx context.Context, id uuid.UUID) (*SourceSyncEvent, error) {
+	return c.Query().Where(sourcesyncevent.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *SourceSyncEventClient) GetX(ctx context.Context, id uuid.UUID) *SourceSyncEvent {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// QuerySource queries the source edge of a SourceSyncEvent.
+func (c *SourceSyncEventClient) QuerySource(_m *SourceSyncEvent) *ItemSourceQuery {
+	query := (&ItemSourceClient{config: c.config}).Query()
+	query.path = func(context.Context) (fromV *sql.Selector, _ error) {
+		id := _m.ID
+		step := sqlgraph.NewStep(
+			sqlgraph.From(sourcesyncevent.Table, sourcesyncevent.FieldID, id),
+			sqlgraph.To(itemsource.Table, itemsource.FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, sourcesyncevent.SourceTable, sourcesyncevent.SourceColumn),
+		)
+		fromV = sqlgraph.Neighbors(_m.driver.Dialect(), step)
+		return fromV, nil
+	}
+	return query
+}
+
+// Hooks returns the client hooks.
+func (c *SourceSyncEventClient) Hooks() []Hook {
+	return c.hooks.SourceSyncEvent
+}
+
+// Interceptors returns the client interceptors.
+func (c *SourceSyncEventClient) Interceptors() []Interceptor {
+	return c.inters.SourceSyncEvent
+}
+
+func (c *SourceSyncEventClient) mutate(ctx context.Context, m *SourceSyncEventMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&SourceSyncEventCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&SourceSyncEventUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&SourceSyncEventUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&SourceSyncEventDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown SourceSyncEvent mutation op: %q", m.Op())
 	}
 }
 
@@ -1947,13 +2956,15 @@ func (c *WorktreeClient) mutate(ctx context.Context, m *WorktreeMutation) (Value
 // hooks and interceptors per client, for fast access.
 type (
 	hooks struct {
-		AnalyticsEvent, ApprovalRule, ClassificationAnalytics, ClaudeMetadata,
-		ClaudeSession, DiffStats, ErrorEvent, Project, Session, Tag,
+		AnalyticsEvent, ApprovalRule, BacklogItem, ClassificationAnalytics,
+		ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession,
+		ItemSource, Project, ReviewVerdict, Session, SourceSyncEvent, Tag,
 		Worktree []ent.Hook
 	}
 	inters struct {
-		AnalyticsEvent, ApprovalRule, ClassificationAnalytics, ClaudeMetadata,
-		ClaudeSession, DiffStats, ErrorEvent, Project, Session, Tag,
+		AnalyticsEvent, ApprovalRule, BacklogItem, ClassificationAnalytics,
+		ClaudeMetadata, ClaudeSession, DiffStats, ErrorEvent, EscapeEvent, ItemSession,
+		ItemSource, Project, ReviewVerdict, Session, SourceSyncEvent, Tag,
 		Worktree []ent.Interceptor
 	}
 )

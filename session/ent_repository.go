@@ -430,39 +430,23 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		}
 	}
 
-	// Update diff stats
-	existingDiff, err := tx.DiffStats.Query().Where(diffstats.HasSessionWith(session.ID(sess.ID))).Only(ctx)
-	if err != nil {
-		if ent.IsNotFound(err) {
-			// Create new diff stats
-			diffCreate := tx.DiffStats.Create().
-				SetSessionID(sess.ID).
-				SetAdded(data.DiffStats.Added).
-				SetRemoved(data.DiffStats.Removed)
-
-			if data.DiffStats.Content != "" {
-				diffCreate.SetContent(data.DiffStats.Content)
-			}
-
-			if _, err := diffCreate.Save(ctx); err != nil {
-				return fmt.Errorf("failed to create diff stats: %w", err)
-			}
-		} else {
-			return fmt.Errorf("failed to query diff stats: %w", err)
-		}
-	} else {
-		// Update existing diff stats
-		diffUpdate := tx.DiffStats.UpdateOne(existingDiff).
-			SetAdded(data.DiffStats.Added).
-			SetRemoved(data.DiffStats.Removed)
-
-		if data.DiffStats.Content != "" {
-			diffUpdate.SetContent(data.DiffStats.Content)
-		}
-
-		if err := diffUpdate.Exec(ctx); err != nil {
-			return fmt.Errorf("failed to update diff stats: %w", err)
-		}
+	// Upsert diff stats — single INSERT … ON CONFLICT DO UPDATE, no prior SELECT needed.
+	diffCreate := tx.DiffStats.Create().
+		SetSessionID(sess.ID).
+		SetAdded(data.DiffStats.Added).
+		SetRemoved(data.DiffStats.Removed)
+	if data.DiffStats.Content != "" {
+		diffCreate = diffCreate.SetContent(data.DiffStats.Content)
+	}
+	upsertDiff := diffCreate.
+		OnConflictColumns(diffstats.SessionColumn).
+		UpdateAdded().
+		UpdateRemoved()
+	if data.DiffStats.Content != "" {
+		upsertDiff = upsertDiff.UpdateContent()
+	}
+	if err := upsertDiff.Exec(ctx); err != nil {
+		return fmt.Errorf("failed to upsert diff stats: %w", err)
 	}
 
 	// Update tags - clear existing and add new ones

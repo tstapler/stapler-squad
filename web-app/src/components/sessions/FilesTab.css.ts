@@ -11,11 +11,53 @@ export const container = style({
 export const treePane = style({
   display: "flex",
   flexDirection: "column",
-  width: "30%",
-  minWidth: 200,
-  maxWidth: 480,
+  flexShrink: 0,
   borderRight: `1px solid ${vars.color.borderColor}`,
   overflow: "hidden",
+});
+
+export const treePaneCollapsed = style({
+  width: "0 !important",
+  overflow: "hidden",
+  borderRight: "none",
+  minWidth: "0 !important",
+});
+
+export const mobilePaneHidden = style({
+  "@media": {
+    "(max-width: 767px)": {
+      display: "none !important",
+    },
+  },
+});
+
+export const mobilePaneVisible = style({
+  "@media": {
+    "(max-width: 767px)": {
+      display: "flex !important",
+      flex: 1,
+      width: "100%",
+      maxWidth: "none",
+    },
+  },
+});
+
+export const mobileBackButton = style({
+  display: "none",
+  "@media": {
+    "(max-width: 767px)": {
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      padding: "8px 12px",
+      background: "transparent",
+      border: "none",
+      cursor: "pointer",
+      color: vars.color.primary,
+      fontSize: 13,
+      borderBottom: `1px solid ${vars.color.borderColor}`,
+    },
+  },
 });
 
 export const contentPane = style({

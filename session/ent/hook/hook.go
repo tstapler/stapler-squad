@@ -33,6 +33,18 @@ func (f ApprovalRuleFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ApprovalRuleMutation", m)
 }
 
+// The BacklogItemFunc type is an adapter to allow the use of ordinary
+// function as BacklogItem mutator.
+type BacklogItemFunc func(context.Context, *ent.BacklogItemMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f BacklogItemFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.BacklogItemMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.BacklogItemMutation", m)
+}
+
 // The ClassificationAnalyticsFunc type is an adapter to allow the use of ordinary
 // function as ClassificationAnalytics mutator.
 type ClassificationAnalyticsFunc func(context.Context, *ent.ClassificationAnalyticsMutation) (ent.Value, error)
@@ -93,6 +105,42 @@ func (f ErrorEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, 
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ErrorEventMutation", m)
 }
 
+// The EscapeEventFunc type is an adapter to allow the use of ordinary
+// function as EscapeEvent mutator.
+type EscapeEventFunc func(context.Context, *ent.EscapeEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f EscapeEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.EscapeEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.EscapeEventMutation", m)
+}
+
+// The ItemSessionFunc type is an adapter to allow the use of ordinary
+// function as ItemSession mutator.
+type ItemSessionFunc func(context.Context, *ent.ItemSessionMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ItemSessionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ItemSessionMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ItemSessionMutation", m)
+}
+
+// The ItemSourceFunc type is an adapter to allow the use of ordinary
+// function as ItemSource mutator.
+type ItemSourceFunc func(context.Context, *ent.ItemSourceMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ItemSourceFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ItemSourceMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ItemSourceMutation", m)
+}
+
 // The ProjectFunc type is an adapter to allow the use of ordinary
 // function as Project mutator.
 type ProjectFunc func(context.Context, *ent.ProjectMutation) (ent.Value, error)
@@ -105,6 +153,18 @@ func (f ProjectFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ProjectMutation", m)
 }
 
+// The ReviewVerdictFunc type is an adapter to allow the use of ordinary
+// function as ReviewVerdict mutator.
+type ReviewVerdictFunc func(context.Context, *ent.ReviewVerdictMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f ReviewVerdictFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.ReviewVerdictMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.ReviewVerdictMutation", m)
+}
+
 // The SessionFunc type is an adapter to allow the use of ordinary
 // function as Session mutator.
 type SessionFunc func(context.Context, *ent.SessionMutation) (ent.Value, error)
@@ -115,6 +175,18 @@ func (f SessionFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, err
 		return f(ctx, mv)
 	}
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SessionMutation", m)
+}
+
+// The SourceSyncEventFunc type is an adapter to allow the use of ordinary
+// function as SourceSyncEvent mutator.
+type SourceSyncEventFunc func(context.Context, *ent.SourceSyncEventMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f SourceSyncEventFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.SourceSyncEventMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.SourceSyncEventMutation", m)
 }
 
 // The TagFunc type is an adapter to allow the use of ordinary

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { createPortal } from "react-dom";
 import { MoreHorizontal } from "lucide-react";
 import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
@@ -27,6 +27,11 @@ import {
   errorMessage,
 } from "./SessionActionsOverflow.css";
 
+export interface SessionActionsOverflowHandle {
+  /** Open the overflow menu anchored at the given viewport coordinates. */
+  openAt(x: number, y: number): void;
+}
+
 export interface SessionActionsOverflowProps {
   session: Session;
   /** Show Resume/Pause as a shortcut button before the ··· */
@@ -51,7 +56,7 @@ export interface SessionActionsOverflowProps {
   onWorkspaceSwitchRequest?: () => void;
 }
 
-export function SessionActionsOverflow({
+export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, SessionActionsOverflowProps>(function SessionActionsOverflow({
   session,
   showPrimaryAction = false,
   buttonClassName,
@@ -69,7 +74,7 @@ export function SessionActionsOverflow({
   onUpdateTags,
   onRenameRequest,
   onWorkspaceSwitchRequest,
-}: SessionActionsOverflowProps) {
+}: SessionActionsOverflowProps, ref) {
   const isPaused = session.status === SessionStatus.PAUSED;
   const isReady = session.status === SessionStatus.NEEDS_APPROVAL;
   const isRunning = session.status === SessionStatus.RUNNING;
@@ -124,6 +129,13 @@ export function SessionActionsOverflow({
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [showOverflow]);
+
+  useImperativeHandle(ref, () => ({
+    openAt(x: number, y: number) {
+      setMenuPos({ top: y, right: window.innerWidth - x });
+      setShowOverflow(true);
+    },
+  }), []);
 
   const openMenu = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
@@ -485,4 +497,4 @@ export function SessionActionsOverflow({
       </div>
     </>
   );
-}
+});

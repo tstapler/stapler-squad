@@ -3,6 +3,7 @@
 import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
 import { routes } from "@/lib/routes";
+import { useFeatureFlag } from "@/lib/contexts/FeatureFlagsContext";
 import {
   nav,
   container,
@@ -17,10 +18,12 @@ import {
 
 export function Navigation() {
   const pathname = usePathname();
+  const backlogEnabled = useFeatureFlag("backlog");
 
   const navItems = [
     { href: routes.home, label: "Sessions" },
     { href: routes.reviewQueue, label: "Review Queue" },
+    ...(backlogEnabled ? [{ href: routes.backlog, label: "Backlog" }] : []),
   ];
 
   return (

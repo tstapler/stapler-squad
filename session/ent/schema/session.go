@@ -121,6 +121,10 @@ func (Session) Edges() []ent.Edge {
 		edge.From("project", Project.Type).
 			Ref("sessions").
 			Unique(),
+
+		// Back-reference from BacklogItem many-to-many
+		edge.From("backlog_items", BacklogItem.Type).
+			Ref("sessions"),
 	}
 }
 

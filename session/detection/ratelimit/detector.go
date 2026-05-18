@@ -423,8 +423,9 @@ func (d *Detector) GetResetTime() time.Time {
 	return d.currentResetTime
 }
 
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
 func stripANSI(input string) string {
-	ansiRegex := regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 	return ansiRegex.ReplaceAllString(input, "")
 }
 

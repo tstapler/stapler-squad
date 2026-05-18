@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, zIndex } from "@/styles/theme.css";
 
 export const nav = style({
   position: "fixed",
@@ -9,13 +9,20 @@ export const nav = style({
   display: "flex",
   background: vars.color.background,
   borderTop: `1px solid ${vars.color.borderColor}`,
-  zIndex: 1050,
+  zIndex: zIndex.bottomNav,
   paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)",
 
   // Only show below 900px (mobile + foldable range)
   "@media": {
     "(min-width: 900px)": {
       display: "none",
+    },
+  },
+
+  // Left-handed mode: reverse item order so primary actions (New, More) move to left thumb zone.
+  selectors: {
+    "&[data-left-handed]": {
+      flexDirection: "row-reverse",
     },
   },
 });
@@ -138,7 +145,7 @@ export const notificationBadge = style({
 export const moreBackdrop = style({
   position: "fixed",
   inset: 0,
-  zIndex: 1040,
+  zIndex: zIndex.bottomNavMoreBackdrop,
   background: "transparent",
 
   "@media": {
@@ -153,7 +160,7 @@ export const moreSheet = style({
   left: 0,
   right: 0,
   bottom: "var(--bottom-nav-height, 72px)" as string,
-  zIndex: 1045,
+  zIndex: zIndex.bottomNavMoreSheet,
   background: vars.color.background,
   borderTop: `1px solid ${vars.color.borderColor}`,
   borderRadius: `${vars.radii.lg} ${vars.radii.lg} 0 0`,

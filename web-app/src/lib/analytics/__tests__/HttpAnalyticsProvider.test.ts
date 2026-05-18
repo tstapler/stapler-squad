@@ -93,4 +93,41 @@ describe("HttpAnalyticsProvider", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("should_serialize_durationMs_as_integer_duration_ms", async () => {
+    // Go backend decodes duration_ms into *int64 — a float JSON value is silently
+    // dropped, leaving the column null. Regression test: ensure float durationMs
+    // is rounded to an integer and serialized as the snake_case key the backend expects.
+    const provider = new HttpAnalyticsProvider();
+
+    provider.track({
+      name: "session_attach",
+      category: "performance",
+      durationMs: 234.56, // performance.now() arithmetic produces floats
+      sessionId: "test-session",
+      labels: { phase: "attach" },
+    });
+
+    await provider.flush();
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { events: Record<string, unknown>[] };
+    const event = body.events[0];
+    expect(event.duration_ms).toBe(235);        // rounded integer
+    expect(event).not.toHaveProperty("durationMs"); // camelCase must not appear
+    expect(event.session_id).toBe("test-session");  // snake_case
+    expect(event).not.toHaveProperty("sessionId");  // camelCase must not appear
+  });
+
+  it("should_omit_duration_ms_when_durationMs_is_undefined", async () => {
+    const provider = new HttpAnalyticsProvider();
+
+    provider.track({ name: "page_view", category: "navigation", page: "/sessions" });
+
+    await provider.flush();
+
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string) as { events: Record<string, unknown>[] };
+    const event = body.events[0];
+    expect(event).not.toHaveProperty("duration_ms");
+    expect(event.page).toBe("/sessions");
+  });
 });

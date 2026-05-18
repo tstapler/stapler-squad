@@ -44,6 +44,14 @@ type ReactiveQueueManager interface {
 	OnControllerStatusChange(inst *session.Instance, newStatus detection.DetectedStatus)
 }
 
+// FeatureController is implemented by components that can be enabled/disabled at runtime.
+// Used by GetFeatureFlags/UpdateFeatureFlag to toggle named subsystems.
+type FeatureController interface {
+	Enable(ctx context.Context) error
+	Disable() error
+	IsEnabled() bool
+}
+
 // SessionService implements the SessionServiceHandler interface for ConnectRPC.
 type SessionService struct {
 	storage           session.InstanceStore
@@ -105,6 +113,19 @@ type SessionService struct {
 	// errorRegistry persists deduplicated RPC errors to SQLite.
 	// May be nil when wired without an ent-backed storage (e.g. in tests).
 	errorRegistry *ErrorRegistry
+
+	// backlogLifecycleListener is wired to each newly created session so that
+	// backlog item state transitions fire when the session exits.
+	backlogLifecycleListener *session.BacklogLifecycleListener
+
+	// featureControllers maps feature flag names to their runtime controllers.
+	// Wired via SetFeatureController. May be nil for features that only need
+	// config-file persistence (no in-process component to toggle).
+	featureControllers map[string]FeatureController
+
+	// analyticsClient is the ent client for the analytics database (escape events, etc.).
+	// May be nil when escape analytics is disabled or in tests that don't need it.
+	analyticsClient *ent.Client
 }
 
 // ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -329,6 +350,12 @@ func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
 	s.errorRegistry = r
 }
 
+// SetAnalyticsClient wires the ent client used for escape analytics queries.
+// Must be called before the first QueryEscapeAnalytics or GetEscapeAnalyticsSummary RPC.
+func (s *SessionService) SetAnalyticsClient(c *ent.Client) {
+	s.analyticsClient = c
+}
+
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the
 // Ent repository is empty. If both conditions hold, it migrates all sessions from state.json
 // to Ent automatically. This is a one-shot migration: once data is in Ent the check is a no-op.
@@ -405,6 +432,57 @@ func (s *SessionService) SetMCPServerURL(url string) {
 	s.mcpServerURL = url
 }
 
+// SetBacklogLifecycleListener wires the listener to all sessions created via
+// CreateDirectorySession so that backlog state transitions fire on session exit.
+func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
+	s.backlogLifecycleListener = l
+}
+
+// SpawnReviewSession satisfies the session.ReviewGateSpawner interface so that
+// BacklogLifecycleListener can spawn one-shot review sessions automatically when
+// a work session exits. The session is tagged "backlog:review" and runs one-shot.
+func (s *SessionService) SpawnReviewSession(ctx context.Context, item *ent.BacklogItem, itemSessionID string, prompt string) (*session.Instance, error) {
+	return s.CreateDirectorySession(ctx, "review:"+item.ID.String()[:8], item.RepoPath, prompt, []string{"backlog:review"}, true)
+}
+
+// CreateDirectorySession satisfies the services.SessionCreator interface so that
+// BacklogService can spawn sessions without importing SessionService directly.
+// It creates a directory-type session with the given title, path, system prompt,
+// tags, and oneShot flag, wires it into the live poller, and returns the Instance.
+func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path, appendSystemPrompt string, tags []string, oneShot bool) (*session.Instance, error) {
+	opts := session.InstanceOptions{
+		Title:              title,
+		Path:               path,
+		SessionType:        session.SessionTypeDirectory,
+		AppendSystemPrompt: appendSystemPrompt,
+		Tags:               tags,
+		OneShot:            oneShot,
+		MCPServerURL:       s.mcpServerURL,
+		CreateIfMissing:    true,
+	}
+	instance, err := session.NewInstance(opts)
+	if err != nil {
+		return nil, fmt.Errorf("CreateDirectorySession: %w", err)
+	}
+	if err := instance.Start(true); err != nil {
+		return nil, fmt.Errorf("CreateDirectorySession start: %w", err)
+	}
+	s.wireRateLimitCallbacks(instance)
+	s.wireStatusChangeCallback(instance)
+	if err := s.storage.AddInstance(instance); err != nil {
+		_ = instance.Destroy()
+		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
+	}
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.AddInstance(instance)
+	}
+	s.eventBus.Publish(events.NewSessionCreatedEvent(instance))
+	if s.backlogLifecycleListener != nil {
+		s.backlogLifecycleListener.WireToInstance(instance)
+	}
+	return instance, nil
+}
+
 // SetHistoryLinker wires the HistoryLinker so deleted sessions are also removed
 // from it and cannot be re-persisted by the shutdown hook.
 func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
@@ -448,6 +526,16 @@ func (s *SessionService) GetNotificationStore() *notifications.NotificationHisto
 // SetConfigService wires the ConfigService for delegating config RPCs.
 func (s *SessionService) SetConfigService(svc *ConfigService) {
 	s.configSvc = svc
+}
+
+// SetFeatureController wires a runtime controller for the named feature flag.
+// When UpdateFeatureFlag is called for this name, the controller's Enable/Disable
+// methods are invoked in addition to persisting the flag to config.
+func (s *SessionService) SetFeatureController(name string, c FeatureController) {
+	if s.featureControllers == nil {
+		s.featureControllers = make(map[string]FeatureController)
+	}
+	s.featureControllers[name] = c
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -2851,4 +2939,105 @@ func (s *SessionService) AcknowledgeError(
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&sessionv1.AcknowledgeErrorResponse{}), nil
+}
+
+// knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
+var knownFeatureFlags = []struct {
+	name        string
+	description string
+}{
+	{
+		name:        "backlog",
+		description: "Backlog management with external sync sources and AI-driven triage",
+	},
+}
+
+// +api: feature-flags:list
+// GetFeatureFlags returns all known feature flags and their current state.
+func (s *SessionService) GetFeatureFlags(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetFeatureFlagsRequest],
+) (*connect.Response[sessionv1.GetFeatureFlagsResponse], error) {
+	cfg := config.LoadConfig()
+
+	flags := make([]*sessionv1.FeatureFlag, 0, len(knownFeatureFlags))
+	for _, kf := range knownFeatureFlags {
+		enabled := false
+		if cfg.FeatureFlags != nil {
+			enabled = cfg.FeatureFlags[kf.name]
+		}
+		// If a controller is wired, its live state is the source of truth.
+		if ctrl, ok := s.featureControllers[kf.name]; ok {
+			enabled = ctrl.IsEnabled()
+		}
+		flags = append(flags, &sessionv1.FeatureFlag{
+			Name:        kf.name,
+			Enabled:     enabled,
+			Description: kf.description,
+		})
+	}
+
+	return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Flags: flags}), nil
+}
+
+// +api: feature-flags:update
+// UpdateFeatureFlag enables or disables a named feature flag and persists the change.
+func (s *SessionService) UpdateFeatureFlag(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpdateFeatureFlagRequest],
+) (*connect.Response[sessionv1.UpdateFeatureFlagResponse], error) {
+	name := req.Msg.GetName()
+	enabled := req.Msg.GetEnabled()
+
+	// Validate that the flag name is known.
+	known := false
+	var description string
+	for _, kf := range knownFeatureFlags {
+		if kf.name == name {
+			known = true
+			description = kf.description
+			break
+		}
+	}
+	if !known {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, func() []string {
+				names := make([]string, 0, len(knownFeatureFlags))
+				for _, kf := range knownFeatureFlags {
+					names = append(names, kf.name)
+				}
+				return names
+			}()))
+	}
+
+	// Persist to config. SetFeatureFlag handles its own map initialisation and
+	// calls SaveConfig atomically, avoiding a separate LoadConfig→modify→SaveConfig
+	// sequence that would race under concurrent UpdateFeatureFlag calls.
+	cfg := config.LoadConfig()
+	if err := cfg.SetFeatureFlag(name, enabled); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
+	}
+
+	// Toggle the in-process controller if one is wired.
+	if ctrl, ok := s.featureControllers[name]; ok {
+		if enabled {
+			if err := ctrl.Enable(ctx); err != nil {
+				log.Warn("feature controller Enable failed", "feature", name, "err", err)
+			}
+		} else {
+			if err := ctrl.Disable(); err != nil {
+				log.Warn("feature controller Disable failed", "feature", name, "err", err)
+			}
+		}
+	}
+
+	log.Info("feature flag updated", "feature", name, "enabled", enabled)
+
+	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
+		Flag: &sessionv1.FeatureFlag{
+			Name:        name,
+			Enabled:     enabled,
+			Description: description,
+		},
+	}), nil
 }

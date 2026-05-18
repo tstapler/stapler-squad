@@ -16,6 +16,7 @@ import {
   error as errorClass,
 } from "./Omnibar.css";
 import * as styles from "./OmnibarCreationPanel.css";
+import { FileChipList, type AttachedFile } from "./FileChipList";
 
 // ─── Session Type Radio Group ────────────────────────────────────────────────
 
@@ -120,11 +121,6 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
-interface AttachedImage {
-  file: File;
-  path: string;       // absolute server path returned from upload
-  previewUrl: string; // object URL for thumbnail preview
-}
 
 export function OmnibarCreationPanel({
   formState,
@@ -177,25 +173,27 @@ export function OmnibarCreationPanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionType]);
 
-  // ─── Image attachment state ───────────────────────────────────────────────
-  const [attachedImages, setAttachedImages] = useState<AttachedImage[]>([]);
-  // Mirror of attachedImages kept in a ref so the unmount cleanup can revoke
+  // ─── File attachment state ────────────────────────────────────────────────
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  // Mirror of attachedFiles kept in a ref so the unmount cleanup can revoke
   // object URLs without capturing stale closure values.
-  const attachedImagesRef = useRef<AttachedImage[]>([]);
+  const attachedFilesRef = useRef<AttachedFile[]>([]);
   const [attachError, setAttachError] = useState<string | null>(null);
   const [isAttaching, setIsAttaching] = useState(false);
   const attachInputRef = useRef<HTMLInputElement>(null);
 
-  // Keep ref in sync with state so the unmount cleanup always sees current images.
+  // Keep ref in sync with state so the unmount cleanup always sees current files.
   useEffect(() => {
-    attachedImagesRef.current = attachedImages;
-    onAttachedImagesChange?.(attachedImages.map((img) => img.path));
-  }, [attachedImages, onAttachedImagesChange]);
+    attachedFilesRef.current = attachedFiles;
+    onAttachedImagesChange?.(attachedFiles.map((f) => f.path));
+  }, [attachedFiles, onAttachedImagesChange]);
 
   // Revoke object URLs on unmount via ref — avoids stale closure over empty array.
   useEffect(() => {
     return () => {
-      attachedImagesRef.current.forEach((img) => URL.revokeObjectURL(img.previewUrl));
+      attachedFilesRef.current.forEach((f) => {
+        if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
+      });
     };
   }, []);
 
@@ -204,43 +202,72 @@ export function OmnibarCreationPanel({
     e.target.value = "";
     if (!files.length) return;
 
-    const available = 3 - attachedImages.length;
-    const toUpload = files.slice(0, available);
+    const toUpload = files; // no cap; deduplication applied below
 
     setIsAttaching(true);
     setAttachError(null);
 
-    const results: AttachedImage[] = [];
-    for (const file of toUpload) {
-      const previewUrl = URL.createObjectURL(file);
+    const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB — must match backend maxUploadBytes
+
+    // Size check — reject oversized files before FileReader allocation
+    const oversized = toUpload.filter(f => f.size > MAX_FILE_BYTES);
+    if (oversized.length > 0) {
+      setAttachError(`${oversized.map(f => f.name).join(", ")}: exceeds 20 MB limit`);
+      // Continue with remaining files (don't abort the whole batch)
+    }
+    const sizedOk = toUpload.filter(f => f.size <= MAX_FILE_BYTES);
+
+    // Deduplication — skip files already attached (by name+size+lastModified)
+    const existingKeys = new Set(
+      attachedFiles.map(f => `${f.file.name}|${f.file.size}|${f.file.lastModified}`)
+    );
+    const deduplicated = sizedOk.filter(
+      f => !existingKeys.has(`${f.name}|${f.size}|${f.lastModified}`)
+    );
+
+    const results: AttachedFile[] = [];
+    for (const file of deduplicated) {
+      const isImage = file.type.startsWith("image/");
+      const previewUrl = isImage ? URL.createObjectURL(file) : undefined;
       try {
         const base64 = await fileToBase64(file);
-        const resp = await fetch(`${uploadBaseUrl}/upload/image`, {
+        const resp = await fetch(`${uploadBaseUrl}/upload/file`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data: base64, contentType: file.type }),
+          body: JSON.stringify({
+            data: base64,
+            contentType: file.type,
+            originalFilename: file.name,
+          }),
         });
         if (!resp.ok) {
-          URL.revokeObjectURL(previewUrl);
+          if (previewUrl) URL.revokeObjectURL(previewUrl);
           setAttachError("Upload failed");
           break;
         }
         const data = await resp.json() as { path: string };
-        results.push({ file, path: data.path, previewUrl });
+        results.push({
+          file,
+          path: data.path,
+          previewUrl,      // undefined for non-images
+          name: file.name,
+          size: file.size,
+        });
       } catch {
-        URL.revokeObjectURL(previewUrl);
+        if (previewUrl) URL.revokeObjectURL(previewUrl);
         setAttachError("Upload failed");
         break;
       }
     }
 
-    setAttachedImages((prev) => [...prev, ...results]);
+    setAttachedFiles((prev) => [...prev, ...results]);
     setIsAttaching(false);
-  }, [attachedImages.length, uploadBaseUrl]);
+  }, [attachedFiles, uploadBaseUrl]);
 
-  const removeImage = useCallback((index: number) => {
-    setAttachedImages((prev) => {
-      URL.revokeObjectURL(prev[index].previewUrl);
+  const removeFile = useCallback((index: number) => {
+    setAttachedFiles((prev) => {
+      const f = prev[index];
+      if (f.previewUrl) URL.revokeObjectURL(f.previewUrl);
       return prev.filter((_, i) => i !== index);
     });
   }, []);
@@ -573,13 +600,13 @@ export function OmnibarCreationPanel({
           </div>
         )}
 
-        {/* Image Attachment */}
+        {/* File Attachment */}
         <div className={styles.attachArea}>
           {/* Hidden file input — no capture attribute so iOS shows camera+library+browse */}
           <input
             ref={attachInputRef}
             type="file"
-            accept="image/*"
+            accept="*/*"
             multiple
             style={{ display: "none" }}
             onChange={handleAttachFiles}
@@ -589,42 +616,21 @@ export function OmnibarCreationPanel({
             type="button"
             className={styles.attachButton}
             onClick={() => attachInputRef.current?.click()}
-            disabled={isAttaching || attachedImages.length >= 3}
-            aria-label="Attach image (up to 3)"
+            disabled={isAttaching}
+            aria-label="Attach files"
           >
-            {isAttaching ? "⏳ Uploading..." : "📎 Attach image"}
+            {isAttaching ? "⏳ Uploading..." : "📎 Attach files"}
           </button>
-          {attachedImages.length >= 3 && (
-            <span className={styles.attachLimit}>Max 3 images</span>
-          )}
           {attachError && (
             <span className={styles.attachError}>{attachError}</span>
           )}
         </div>
 
-        {/* Thumbnail previews */}
-        {attachedImages.length > 0 && (
-          <div className={styles.thumbnailRow}>
-            {attachedImages.map((img, i) => (
-              <div key={img.path} className={styles.thumbnail}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={img.previewUrl}
-                  alt={img.file.name}
-                  className={styles.thumbnailImg}
-                />
-                <button
-                  type="button"
-                  className={styles.thumbnailRemove}
-                  onClick={() => removeImage(i)}
-                  aria-label={`Remove ${img.file.name}`}
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
+        {/* File chip list */}
+        <FileChipList
+          files={attachedFiles}
+          onRemove={removeFile}
+        />
 
         {/* First Prompt (optional) */}
         <div className={field}>

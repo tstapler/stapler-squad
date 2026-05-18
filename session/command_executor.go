@@ -211,10 +211,16 @@ func (ce *CommandExecutor) waitForCommandOrDrain(responseCh <-chan ResponseChunk
 			return true
 		case _, ok := <-responseCh:
 			// Drain response chunks while idle - we don't need the data,
-			// just preventing channel overflow
+			// just preventing channel overflow. Consume all buffered chunks
+			// in a tight loop so we re-enter the scheduler only once per burst
+			// rather than once per chunk.
 			if !ok {
-				// Response channel closed - session is stopping
 				return false
+			}
+			for len(responseCh) > 0 {
+				if _, ok := <-responseCh; !ok {
+					return false
+				}
 			}
 			// Continue draining
 		case <-timer.C:

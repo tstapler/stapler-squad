@@ -153,23 +153,24 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 	}
 	g.isDirtyCacheMu.RUnlock()
 
-	// Slow path: acquire write lock, double-check, then run subprocess.
-	g.isDirtyCacheMu.Lock()
-	defer g.isDirtyCacheMu.Unlock()
-
-	// Re-check inside the write lock (another goroutine may have refreshed while we waited).
-	if !g.isDirtyCacheTime.IsZero() && time.Since(g.isDirtyCacheTime) < isDirtyCacheTTL {
-		return g.isDirtyCache, nil
-	}
-
+	// Slow path: run the subprocess outside any lock so concurrent readers are not
+	// blocked for the full git-status wall time (~50–200 ms per worktree).
 	output, err := g.runGitCommand(g.worktreePath, "status", "--porcelain")
 	if err != nil {
 		return false, fmt.Errorf("failed to check worktree status: %w", err)
 	}
+	dirty := len(output) > 0
 
-	g.isDirtyCache = len(output) > 0
-	g.isDirtyCacheTime = time.Now()
-	return g.isDirtyCache, nil
+	// Write lock only to store the result.  Return our own observation (`dirty`),
+	// not the cache slot: re-reading the slot after a lost write race could return
+	// a different goroutine's observation, which may be stale relative to ours.
+	g.isDirtyCacheMu.Lock()
+	if g.isDirtyCacheTime.IsZero() || time.Since(g.isDirtyCacheTime) >= isDirtyCacheTTL {
+		g.isDirtyCache = dirty
+		g.isDirtyCacheTime = time.Now()
+	}
+	g.isDirtyCacheMu.Unlock()
+	return dirty, nil
 }
 
 // IsBranchCheckedOut checks if the instance branch is currently checked out

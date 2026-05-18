@@ -91,7 +91,7 @@ afterEach(() => {
 describe("FT3-01: renders 'Attach image' button in creation panel", () => {
   it("attach button is present in the document", () => {
     render(<OmnibarCreationPanel {...buildProps()} />);
-    expect(screen.getByText(/Attach image/i)).toBeInTheDocument();
+    expect(screen.getByText(/Attach files/i)).toBeInTheDocument();
   });
 });
 
@@ -102,7 +102,7 @@ describe("FT3-02: attach button click triggers hidden file input", () => {
     const clickSpy = jest.spyOn(HTMLInputElement.prototype, "click");
     render(<OmnibarCreationPanel {...buildProps()} />);
 
-    const btn = screen.getByText(/Attach image/i);
+    const btn = screen.getByText(/Attach files/i);
     fireEvent.click(btn);
 
     expect(clickSpy).toHaveBeenCalledTimes(1);
@@ -121,7 +121,7 @@ describe("FT3-03: selecting 1 file uploads and shows thumbnail", () => {
 
     render(<OmnibarCreationPanel {...buildProps()} />);
 
-    const fileInputs = document.querySelectorAll('input[type="file"][accept="image/*"]');
+    const fileInputs = document.querySelectorAll('input[type="file"][accept="*/*"]');
     const input = fileInputs[0] as HTMLInputElement;
     expect(input).toBeTruthy();
 
@@ -133,17 +133,17 @@ describe("FT3-03: selecting 1 file uploads and shows thumbnail", () => {
     });
 
     await waitFor(() => {
-      const imgs = screen.getAllByRole("img");
+      const imgs = screen.getAllByRole("img", { hidden: true });
       const thumb = imgs.find((img) => img.getAttribute("src")?.includes("blob:"));
       expect(thumb).toBeTruthy();
     });
   });
 });
 
-// ── FT3-04: Selecting 3 files uploads all and disables button ────────────────
+// ── FT3-04: Selecting 3 files uploads all (no cap) ────────────────────────────
 
-describe("FT3-04: selecting 3 files uploads all and disables attach button", () => {
-  it("attach button is disabled after 3 images are attached", async () => {
+describe("FT3-04: selecting 3 files uploads all three", () => {
+  it("all 3 files are uploaded and shown as chips", async () => {
     for (let i = 0; i < 3; i++) {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
@@ -153,7 +153,7 @@ describe("FT3-04: selecting 3 files uploads all and disables attach button", () 
 
     render(<OmnibarCreationPanel {...buildProps()} />);
 
-    const input = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept="*/*"]') as HTMLInputElement;
 
     const files = [
       new File(["a"], "a.jpg", { type: "image/jpeg" }),
@@ -167,22 +167,19 @@ describe("FT3-04: selecting 3 files uploads all and disables attach button", () 
     });
 
     await waitFor(() => {
-      const imgs = screen.getAllByRole("img").filter((img) =>
-        img.getAttribute("src")?.startsWith("blob:")
-      );
-      expect(imgs).toHaveLength(3);
+      expect(global.fetch).toHaveBeenCalledTimes(3);
     });
 
-    // Attach button should now be disabled
-    const attachBtn = screen.getByText(/Attach image/i);
-    expect(attachBtn).toBeDisabled();
+    // Attach button should NOT be disabled (no file cap)
+    const attachBtn = screen.getByText(/Attach files/i);
+    expect(attachBtn).not.toBeDisabled();
   });
 });
 
-// ── FT3-05: Selecting 4 files only uploads first 3 ───────────────────────────
+// ── FT3-05: Selecting 4 files uploads all 4 (no cap) ─────────────────────────
 
-describe("FT3-05: selecting 4 files only uploads first 3", () => {
-  it("fetch is called only 3 times when 4 files are selected", async () => {
+describe("FT3-05: selecting 4 files uploads all 4", () => {
+  it("fetch is called 4 times when 4 files are selected", async () => {
     for (let i = 0; i < 4; i++) {
       (global.fetch as jest.Mock).mockResolvedValueOnce({
         ok: true,
@@ -192,7 +189,7 @@ describe("FT3-05: selecting 4 files only uploads first 3", () => {
 
     render(<OmnibarCreationPanel {...buildProps()} />);
 
-    const input = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept="*/*"]') as HTMLInputElement;
 
     const files = [
       new File(["a"], "a.jpg", { type: "image/jpeg" }),
@@ -207,14 +204,8 @@ describe("FT3-05: selecting 4 files only uploads first 3", () => {
     });
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledTimes(3);
+      expect(global.fetch).toHaveBeenCalledTimes(4);
     });
-
-    // Only 3 thumbnails
-    const imgs = screen.getAllByRole("img").filter((img) =>
-      img.getAttribute("src")?.startsWith("blob:")
-    );
-    expect(imgs).toHaveLength(3);
   });
 });
 
@@ -229,7 +220,7 @@ describe("FT3-06: removing thumbnail revokes object URL and removes from list", 
 
     render(<OmnibarCreationPanel {...buildProps()} />);
 
-    const input = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept="*/*"]') as HTMLInputElement;
     const file = new File(["fake"], "img1.jpg", { type: "image/jpeg" });
     Object.defineProperty(input, "files", { value: [file], configurable: true });
 
@@ -269,7 +260,7 @@ describe("FT3-07: upload failure shows error message", () => {
 
     render(<OmnibarCreationPanel {...buildProps()} />);
 
-    const input = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept="*/*"]') as HTMLInputElement;
     const file = new File(["x"], "photo.jpg", { type: "image/jpeg" });
     Object.defineProperty(input, "files", { value: [file], configurable: true });
 
@@ -301,7 +292,7 @@ describe("FT3-08: onAttachedImagesChange called with correct paths when images a
 
     render(<OmnibarCreationPanel {...buildProps({ onAttachedImagesChange })} />);
 
-    const input = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept="*/*"]') as HTMLInputElement;
     const files = [
       new File(["a"], "img1.jpg", { type: "image/jpeg" }),
       new File(["b"], "img2.jpg", { type: "image/jpeg" }),
@@ -334,7 +325,7 @@ describe("FT3-09: onAttachedImagesChange called with empty array when all remove
 
     render(<OmnibarCreationPanel {...buildProps({ onAttachedImagesChange })} />);
 
-    const input = document.querySelector('input[type="file"][accept="image/*"]') as HTMLInputElement;
+    const input = document.querySelector('input[type="file"][accept="*/*"]') as HTMLInputElement;
     const file = new File(["a"], "img1.jpg", { type: "image/jpeg" });
     Object.defineProperty(input, "files", { value: [file], configurable: true });
 

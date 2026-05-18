@@ -38,14 +38,14 @@ func TestBuildServiceDeps_ErrorMentionsPhase(t *testing.T) {
 func TestBuildRuntimeDeps_RejectsNilService(t *testing.T) {
 	// The zero-value token is acceptable here — this test is only checking the
 	// nil-ServiceDeps guard, not that tmux is actually running.
-	_, err := BuildRuntimeDeps(tmux.TmuxServerReady{}, nil)
+	_, err := BuildRuntimeDeps(tmux.TmuxServerReady{}, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for nil ServiceDeps")
 	}
 }
 
 func TestBuildRuntimeDeps_ErrorMentionsPhase(t *testing.T) {
-	_, err := BuildRuntimeDeps(tmux.TmuxServerReady{}, nil)
+	_, err := BuildRuntimeDeps(tmux.TmuxServerReady{}, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for nil ServiceDeps")
 	}
@@ -81,4 +81,3 @@ func TestBuildServiceDeps_OnlyCoreNil_DifferentFromPartialCore(t *testing.T) {
 		t.Logf("note: nil and zero-value CoreDeps produce the same error: %v", nilErr)
 	}
 }
-

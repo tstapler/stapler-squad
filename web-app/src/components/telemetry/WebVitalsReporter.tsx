@@ -30,11 +30,19 @@ export function WebVitalsReporter() {
       );
     }
 
+    // CLS is a unitless 0–1 score, not milliseconds. Store it scaled to
+    // micro-units (×10000) so it fits in duration_ms as a meaningful integer.
+    // All other web vitals (INP, LCP, FCP, FID, TTFB) are in milliseconds.
+    const isCLS = metric.name === "CLS";
     analytics.track({
       name: `web_vital.${metric.name.toLowerCase()}`,
       category: "performance",
-      durationMs: Math.round(metric.value),
-      labels: { rating: metric.rating, id: metric.id },
+      durationMs: isCLS ? Math.round(metric.value * 10000) : Math.round(metric.value),
+      labels: {
+        rating: metric.rating,
+        id: metric.id,
+        ...(isCLS && { cls_unit: "x10000" }),
+      },
     });
   });
 

@@ -11,6 +11,8 @@ import (
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
+	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
 	"github.com/tstapler/stapler-squad/session/ent/project"
@@ -520,6 +522,21 @@ func (_c *SessionCreate) SetProject(v *Project) *SessionCreate {
 	return _c.SetProjectID(v.ID)
 }
 
+// AddBacklogItemIDs adds the "backlog_items" edge to the BacklogItem entity by IDs.
+func (_c *SessionCreate) AddBacklogItemIDs(ids ...uuid.UUID) *SessionCreate {
+	_c.mutation.AddBacklogItemIDs(ids...)
+	return _c
+}
+
+// AddBacklogItems adds the "backlog_items" edges to the BacklogItem entity.
+func (_c *SessionCreate) AddBacklogItems(v ...*BacklogItem) *SessionCreate {
+	ids := make([]uuid.UUID, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddBacklogItemIDs(ids...)
+}
+
 // Mutation returns the SessionMutation object of the builder.
 func (_c *SessionCreate) Mutation() *SessionMutation {
 	return _c.mutation
@@ -855,6 +872,22 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.project_sessions = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.BacklogItemsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2M,
+			Inverse: true,
+			Table:   session.BacklogItemsTable,
+			Columns: session.BacklogItemsPrimaryKey,
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(backlogitem.FieldID, field.TypeUUID),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	return _node, _spec

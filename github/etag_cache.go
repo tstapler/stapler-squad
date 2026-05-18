@@ -1,15 +1,12 @@
 package github
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os/exec"
-	"strconv"
-	"strings"
+	"io"
+	"net/http"
+	"net/url"
 	"sync"
-
-	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 // ETagCache stores ETags and cached PRInfo responses per (owner, repo, prNumber).
@@ -37,6 +34,7 @@ func (c *ETagCache) cacheKey(owner, repo string, prNumber int) string {
 }
 
 // GetPRInfoConditional fetches PR info using ETag conditional requests.
+// Uses native net/http instead of a gh subprocess to avoid forkExec lock contention.
 // Returns (info, changed, error).
 //   - changed=false means 304 Not Modified; info contains the cached value.
 //   - changed=true means 200 OK; info contains freshly fetched data.
@@ -48,101 +46,60 @@ func GetPRInfoConditional(ctx context.Context, owner, repo string, prNumber int,
 	entry, hasCached := cache.store[key]
 	cache.mu.RUnlock()
 
-	// Lightweight REST request to check if PR has changed via ETag
-	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d", owner, repo, prNumber)
-	args := []string{"api", apiPath, "--include"}
-	if hasCached && entry.etag != "" {
-		args = append(args, "--header", fmt.Sprintf("If-None-Match: %s", entry.etag))
-	}
-
-	cmd := safeexec.CommandContext(ctx, "gh", args...)
-	output, err := cmd.Output()
+	apiPath := fmt.Sprintf("repos/%s/%s/pulls/%d",
+		url.PathEscape(owner), url.PathEscape(repo), prNumber)
+	req, err := newGHRequest(ctx, apiPath)
 	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr := string(exitErr.Stderr)
-			// gh may exit non-zero for 304; treat as not-modified when we have cache
-			if strings.Contains(stderr, "304") && hasCached {
-				return entry.prInfo, false, nil
-			}
-			return nil, false, fmt.Errorf("gh api failed: %s", stderr)
-		}
-		return nil, false, fmt.Errorf("gh api failed: %w", err)
+		return nil, false, fmt.Errorf("build conditional PR request: %w", err)
+	}
+	if hasCached && entry.etag != "" {
+		req.Header.Set("If-None-Match", entry.etag)
 	}
 
-	statusCode, newEtag, _, parseErr := parseGHAPIIncludeOutput(string(output))
-	if parseErr != nil {
-		// Parsing headers failed; fall through to a full fetch
-		info, fetchErr := GetPRInfoCtx(ctx, owner, repo, prNumber)
-		if fetchErr != nil {
-			return nil, false, fetchErr
-		}
-		// Update cache so future polls can attempt conditional requests.
-		cache.mu.Lock()
-		cache.store[key] = etagEntry{prInfo: info}
-		cache.mu.Unlock()
-		return info, true, nil
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return nil, false, fmt.Errorf("conditional PR request failed: %w", err)
 	}
+	defer resp.Body.Close()
 
-	// 304 Not Modified - return cached entry
-	if statusCode == 304 {
+	if resp.StatusCode == http.StatusNotModified {
 		if hasCached {
 			return entry.prInfo, false, nil
 		}
 		return nil, false, nil
 	}
 
-	// 200 OK - PR changed; fetch full review/CI data via GetPRInfoCtx
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return nil, false, fmt.Errorf("GitHub API: auth error (%d)", resp.StatusCode)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		// Drain body so the connection can be reused.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		// Fall back to a full fetch.
+		info, fetchErr := GetPRInfoCtx(ctx, owner, repo, prNumber)
+		if fetchErr != nil {
+			return nil, false, fetchErr
+		}
+		cache.mu.Lock()
+		cache.store[key] = etagEntry{prInfo: info}
+		cache.mu.Unlock()
+		return info, true, nil
+	}
+
+	// Drain body (we only need the ETag header for the conditional check).
+	_, _ = io.Copy(io.Discard, resp.Body)
+	newEtag := resp.Header.Get("ETag")
+
+	// PR changed — fetch full review/CI data (requires gh CLI for reviews+statusCheckRollup).
 	newInfo, err := GetPRInfoCtx(ctx, owner, repo, prNumber)
 	if err != nil {
 		return nil, false, err
 	}
 
-	// Update cache with new ETag and freshly fetched data
 	cache.mu.Lock()
 	cache.store[key] = etagEntry{etag: newEtag, prInfo: newInfo}
 	cache.mu.Unlock()
 
 	return newInfo, true, nil
-}
-
-// parseGHAPIIncludeOutput parses the output of `gh api --include`.
-// gh --include outputs: "HTTP/x.x <code> <reason>\r\n<headers>\r\n\r\n<body>"
-// Returns (statusCode, etag, body, error).
-func parseGHAPIIncludeOutput(rawOutput string) (statusCode int, etag, body string, err error) {
-	scanner := bufio.NewScanner(strings.NewReader(rawOutput))
-
-	if !scanner.Scan() {
-		return 0, "", "", fmt.Errorf("empty response from gh api")
-	}
-	statusLine := strings.TrimRight(scanner.Text(), "\r")
-	parts := strings.Fields(statusLine)
-	if len(parts) < 2 {
-		return 0, "", "", fmt.Errorf("invalid status line: %q", statusLine)
-	}
-	code, convErr := strconv.Atoi(parts[1])
-	if convErr != nil {
-		return 0, "", "", fmt.Errorf("failed to parse status code from %q", statusLine)
-	}
-	statusCode = code
-
-	// Parse headers until blank line
-	var bodyLines []string
-	inBody := false
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r")
-		if inBody {
-			bodyLines = append(bodyLines, line)
-			continue
-		}
-		if line == "" {
-			inBody = true
-			continue
-		}
-		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "etag:") {
-			etag = strings.TrimSpace(line[5:])
-		}
-	}
-	body = strings.Join(bodyLines, "\n")
-	return statusCode, etag, body, nil
 }

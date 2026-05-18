@@ -3,11 +3,12 @@ import { recipe } from "@vanilla-extract/recipes";
 import { vars } from "@/styles/theme.css";
 
 export const paneHeader = style({
-  height: "32px",
+  minHeight: "32px",
   display: "flex",
+  flexWrap: "wrap",
   alignItems: "center",
   gap: vars.space["2"],
-  padding: `0 ${vars.space["2"]}`,
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
   background: vars.color.cardBackground,
   borderBottom: `1px solid ${vars.color.borderColor}`,
   flexShrink: 0,
@@ -28,11 +29,21 @@ export const paneHeader = style({
 
 export const paneTitle = style({
   flex: 1,
+  minWidth: 0,
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
   color: vars.color.textSecondary,
   fontSize: vars.fontSize.xs,
+});
+
+// Groups all action buttons so they wrap together as a unit when the pane is too narrow
+// to show both the session name and the buttons on one line.
+export const paneHeaderActions = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["2"],
+  flexShrink: 0,
 });
 
 export const paneHeaderButton = style({

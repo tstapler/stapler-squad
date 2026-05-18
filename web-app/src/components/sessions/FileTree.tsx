@@ -1,10 +1,12 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef, useMemo } from "react";
+import { useState, useCallback, useEffect, useRef, useMemo, forwardRef, useImperativeHandle } from "react";
 import { Tree } from "react-arborist";
 import type { NodeApi, TreeApi } from "react-arborist";
 import type { FileNode } from "@/gen/session/v1/types_pb";
 import { fetchDirectoryFiles, searchFiles } from "@/lib/hooks/useFileService";
+import { getFileIcon } from "@/lib/utils/fileIcons";
+import { truncateMiddle } from "@/lib/utils/truncateMiddle";
 import {
   container, loading as loadingClass, error as errorClass, retryButton, empty,
   node as nodeClass, selected, keyboardFocused, nodeInner, icon as iconClass, name as nameClass, ignored,
@@ -52,8 +54,6 @@ interface FileTreeProps {
   includeIgnored?: boolean;
   /** Search/filter term — filters tree by name/path substring. */
   searchTerm?: string;
-  /** Called with a collapseAll function so parents can trigger collapse. */
-  onCollapseAllRef?: (fn: () => void) => void;
   /** Called when search results change (count, truncated). null = browse mode. */
   onSearchResults?: (count: number | null, truncated: boolean) => void;
 }
@@ -201,6 +201,7 @@ interface NodeRendererProps {
   selectedPath: string | null | undefined;
   includeIgnored: boolean;
   searchTerm: string;
+  maxChars: number;
 }
 
 function highlightMatch(name: string, term: string): React.ReactNode {
@@ -225,6 +226,7 @@ function NodeRenderer({
   errorPaths,
   selectedPath,
   searchTerm,
+  maxChars,
 }: NodeRendererProps) {
   const data = node.data;
   const isSelected = selectedPath === data.id;
@@ -248,6 +250,7 @@ function NodeRenderer({
   return (
     <div
       style={style}
+      title={data.id}
       className={`${nodeClass} ${isSelected ? selected : ""} ${node.isFocused ? keyboardFocused : ""} ${data.isIgnored ? ignored : ""}`}
       onClick={() => {
         // Directories toggle open/close (fires onToggle → handleToggle → loadDirectory).
@@ -261,7 +264,11 @@ function NodeRenderer({
         style={{ paddingLeft: `${node.level * 16 + 8}px` }}
       >
         <span className={iconClass}>{icon}</span>
-        <span className={nameClass}>{highlightMatch(data.name, searchTerm)}</span>
+        <span className={nameClass}>
+          {searchTerm
+            ? highlightMatch(data.name, searchTerm)
+            : truncateMiddle(data.name, maxChars)}
+        </span>
         {data.isSymlink && (
           <span className={symlinkBadge} title={`→ ${data.symlinkTarget}`}>
             symlink
@@ -287,26 +294,11 @@ function NodeRenderer({
   );
 }
 
-function getFileIcon(name: string): string {
-  const ext = name.split(".").pop()?.toLowerCase() || "";
-  const icons: Record<string, string> = {
-    go: "🐹",
-    ts: "𝐓",
-    tsx: "⚛",
-    js: "𝐉",
-    jsx: "⚛",
-    py: "🐍",
-    rs: "🦀",
-    md: "📄",
-    json: "{}",
-    yaml: "⚙",
-    yml: "⚙",
-    toml: "⚙",
-    sh: "💲",
-    css: "🎨",
-    html: "🌐",
-  };
-  return icons[ext] || "📄";
+// ---- Imperative handle ----
+
+export interface FileTreeHandle {
+  revealPath: (path: string) => void;
+  collapseAll: () => void;
 }
 
 // ---- Main component ----
@@ -315,7 +307,7 @@ function getFileIcon(name: string): string {
 // gitStatusMap is not provided, which would break useMemo dependency checks.
 const EMPTY_GIT_STATUS_MAP = new Map<string, string>();
 
-export function FileTree({
+export const FileTree = forwardRef<FileTreeHandle, FileTreeProps>(function FileTree({
   sessionId,
   baseUrl,
   onFileSelect,
@@ -323,12 +315,13 @@ export function FileTree({
   selectedPath,
   includeIgnored = false,
   searchTerm = "",
-  onCollapseAllRef,
   onSearchResults,
-}: FileTreeProps) {
+}: FileTreeProps, ref) {
   // Map of directory path → loaded TreeNode children.
   const [dirContents, setDirContents] = useState<Map<string, TreeNode[]>>(new Map());
   // Tracks which paths are currently loading.
+  // loadingPathsRef is the source of truth; loadingPaths state is kept in sync for renders.
+  const loadingPathsRef = useRef<Set<string>>(new Set());
   const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());
   // Tracks which paths have load errors.
   const [errorPaths, setErrorPaths] = useState<Map<string, string>>(new Map());
@@ -373,21 +366,13 @@ export function FileTree({
     return () => ro.disconnect();
   }, []);
 
-  // Register collapseAll callback with parent when treeRef or onCollapseAllRef changes.
-  useEffect(() => {
-    if (onCollapseAllRef) {
-      onCollapseAllRef(() => {
-        treeRef.current?.closeAll();
-      });
-    }
-  }, [onCollapseAllRef]);
-
   // Load a directory's children.
   const loadDirectory = useCallback(
     async (dirPath: string) => {
-      if (loadingPaths.has(dirPath)) return;
+      if (loadingPathsRef.current.has(dirPath)) return;
 
-      setLoadingPaths((prev) => new Set(prev).add(dirPath));
+      loadingPathsRef.current.add(dirPath);
+      setLoadingPaths(new Set(loadingPathsRef.current));
       setErrorPaths((prev) => {
         const next = new Map(prev);
         next.delete(dirPath);
@@ -412,15 +397,19 @@ export function FileTree({
         const msg = err instanceof Error ? err.message : "Failed to load directory";
         setErrorPaths((prev) => new Map(prev).set(dirPath, msg));
       } finally {
-        setLoadingPaths((prev) => {
-          const next = new Set(prev);
-          next.delete(dirPath);
-          return next;
-        });
+        loadingPathsRef.current.delete(dirPath);
+        setLoadingPaths(new Set(loadingPathsRef.current));
       }
     },
-    [sessionId, baseUrl, includeIgnored, loadingPaths]
+    [sessionId, baseUrl, includeIgnored]
   );
+
+  // Stable ref to latest loadDirectory — allows revealPathImpl to always call the
+  // latest version without closing over a stale function instance.
+  const loadDirectoryRef = useRef(loadDirectory);
+  useEffect(() => {
+    loadDirectoryRef.current = loadDirectory;
+  }, [loadDirectory]);
 
   // Load root on mount / when session changes.
   useEffect(() => {
@@ -553,6 +542,60 @@ export function FileTree({
     }
     return s;
   }, [dirContents]);
+
+  // Computed max character budget for middle-truncating file names in the tree.
+  // 48px accounts for indent + icon + badge; 7.5px is approximate char width in mono 13px.
+  const maxChars = useMemo(() => Math.floor((dims.w - 48) / 7.5), [dims.w]);
+
+  // AbortController for in-flight revealPath operations — ensures only one runs at a time.
+  const revealAbortRef = useRef<AbortController | null>(null);
+
+  // Expand ancestor directories and scroll to targetPath.
+  const revealPathImpl = useCallback(async (targetPath: string) => {
+    revealAbortRef.current?.abort();
+    const controller = new AbortController();
+    revealAbortRef.current = controller;
+    const signal = controller.signal;
+
+    // Build ancestor paths: e.g. 'a/b/c.tsx' → ['a', 'a/b']
+    const segments = targetPath.split("/");
+    const ancestors: string[] = [];
+    for (let i = 1; i < segments.length; i++) {
+      ancestors.push(segments.slice(0, i).join("/"));
+    }
+
+    for (const ancestorPath of ancestors) {
+      if (signal.aborted) return;
+      // Load if not already loaded.
+      if (!dirContents.has(ancestorPath)) {
+        try {
+          await loadDirectoryRef.current(ancestorPath);
+          await new Promise<void>((r) => setTimeout(r, 0));
+        } catch {
+          // Directory load failed; stop reveal at this ancestor
+          return;
+        }
+      }
+      // Open the directory in the tree.
+      treeRef.current?.open(ancestorPath);
+    }
+
+    if (signal.aborted) return;
+    // Scroll the target node into view.
+    requestAnimationFrame(() => {
+      treeRef.current?.scrollTo(targetPath);
+    });
+  }, [dirContents]);
+
+  // Expose imperative handle to parent refs.
+  useImperativeHandle(ref, () => ({
+    collapseAll: () => {
+      treeRef.current?.closeAll();
+    },
+    revealPath: (path: string) => {
+      void revealPathImpl(path);
+    },
+  }), [revealPathImpl]);
 
   const handleActivate = useCallback(
     (node: NodeApi<TreeNode>) => {
@@ -779,9 +822,10 @@ export function FileTree({
             selectedPath={selectedPath}
             includeIgnored={includeIgnored}
             searchTerm={searchTerm}
+            maxChars={maxChars}
           />
         )}
       </Tree>
     </div>
   );
-}
+});

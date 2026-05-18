@@ -72,6 +72,13 @@ export const vars = createThemeContract({
     glowSecondary: null,
     scanlineColor: null,
     terminalCursor: null,
+
+    // Status dots (session running/paused/idle indicators)
+    statusDot: {
+      running: null,
+      paused: null,
+      idle: null,
+    },
   },
   statusBadge: {
     approvalBg: null,
@@ -135,6 +142,11 @@ export const vars = createThemeContract({
     md: null,
     lg: null,
   },
+  transition: {
+    fast: null,
+    base: null,
+    slow: null,
+  },
 });
 
 // Plain constants — CSS custom properties cannot be used inside @media queries,
@@ -150,12 +162,20 @@ export const breakpoints = {
   inner: "900px",
 } as const;
 
+// Named z-index ladder — every fixed/absolute element must reference a slot here.
+// Adding a new layer requires updating this map, which makes ordering conflicts visible.
 export const zIndex = {
   base: 0,
   raised: 10,
   header: 100,
-  bottomNav: 200,
   dropdown: 500,
   modal: 1000,
   tooltip: 1100,
+  // Navigation overlay stack (1040–1065).  Values chosen so the bottom nav and its
+  // sub-menus sit above all other page content, and the mobile pane picker sits above the nav.
+  bottomNavMoreBackdrop: 1040,
+  bottomNavMoreSheet: 1045,
+  bottomNav: 1050,
+  mobilePickerBackdrop: 1060,
+  mobilePickerSheet: 1065,
 } as const;

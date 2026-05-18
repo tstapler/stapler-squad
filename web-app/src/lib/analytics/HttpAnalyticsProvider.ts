@@ -1,5 +1,21 @@
 import type { AnalyticsEvent, AnalyticsProvider, AnalyticsProviderMetadata } from "./types";
 
+// Serialize a camelCase AnalyticsEvent into the snake_case shape the Go backend
+// expects. durationMs must be an integer — performance.now() arithmetic produces
+// floats which Go silently drops when decoding into *int64.
+function serializeEvent(e: AnalyticsEvent): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    name: e.name,
+    category: e.category,
+  };
+  if (e.durationMs !== undefined) out.duration_ms = Math.round(e.durationMs);
+  if (e.sessionId !== undefined) out.session_id = e.sessionId;
+  if (e.page !== undefined) out.page = e.page;
+  if (e.component !== undefined) out.component = e.component;
+  if (e.labels !== undefined) out.labels = e.labels;
+  return out;
+}
+
 const BATCH_SIZE = 25;
 const FLUSH_INTERVAL_MS = 2000;
 const MAX_QUEUE_SIZE = 200;
@@ -41,7 +57,7 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
       return;
     }
 
-    const body = JSON.stringify({ events: batch });
+    const body = JSON.stringify({ events: batch.map(serializeEvent) });
     await fetch("/api/analytics", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -55,7 +71,7 @@ export class HttpAnalyticsProvider implements AnalyticsProvider {
       window.addEventListener("pagehide", () => {
         const batch = this.queue.splice(0, this.queue.length);
         if (batch.length === 0) return;
-        const body = JSON.stringify({ events: batch });
+        const body = JSON.stringify({ events: batch.map(serializeEvent) });
         navigator.sendBeacon("/api/analytics", body);
       });
     }

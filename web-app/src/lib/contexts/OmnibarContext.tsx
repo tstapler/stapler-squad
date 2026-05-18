@@ -146,9 +146,8 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
       });
 
       if (session) {
-        // Navigate to the sessions list (home)
-        router.push("/");
-        router.refresh();
+        // Navigate to the new session so it auto-opens in the detail pane on mobile.
+        router.push(`/?session=${session.id}`);
       }
     },
     [createSession, router]

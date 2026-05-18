@@ -16,6 +16,7 @@ import {
   Plus,
   MoreHorizontal,
   User,
+  Hand,
 } from "lucide-react";
 import { AppLink } from "@/components/ui/AppLink";
 import { usePathname } from "next/navigation";
@@ -25,6 +26,8 @@ import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { routes } from "@/lib/routes";
 import * as styles from "./BottomNav.css";
+
+const HANDEDNESS_KEY = "stapler-squad:left-handed";
 
 type BottomNavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -52,6 +55,20 @@ export function BottomNav() {
   const { getUnreadCount } = useNotifications();
   const unreadCount = getUnreadCount();
   const [moreOpen, setMoreOpen] = useState(false);
+  const [leftHanded, setLeftHanded] = useState(false);
+
+  // Load handedness preference from localStorage (client-side only)
+  useEffect(() => {
+    try {
+      setLeftHanded(localStorage.getItem(HANDEDNESS_KEY) === "true");
+    } catch { /* ignore */ }
+  }, []);
+
+  const toggleHandedness = () => {
+    const next = !leftHanded;
+    setLeftHanded(next);
+    try { localStorage.setItem(HANDEDNESS_KEY, String(next)); } catch { /* ignore */ }
+  };
 
   // Close the more menu on route change
   useEffect(() => {
@@ -148,6 +165,15 @@ export function BottomNav() {
             </AppLink>
           );
         })}
+        <button
+          className={styles.moreSheetItem}
+          onClick={toggleHandedness}
+          style={{ width: "100%", textAlign: "left", cursor: "pointer", border: "none", background: "transparent" }}
+          aria-pressed={leftHanded}
+        >
+          <span className={styles.moreSheetItemIcon} aria-hidden="true"><Hand size={20} /></span>
+          <span>{leftHanded ? "Switch to right-handed" : "Switch to left-handed"}</span>
+        </button>
         {authEnabled && authenticated && (
           <AppLink
             href={routes.account}
@@ -161,7 +187,12 @@ export function BottomNav() {
       </div>
 
       {/* Bottom nav bar */}
-      <nav ref={navRef} className={styles.nav} aria-label="Bottom navigation">
+      <nav
+        ref={navRef}
+        className={styles.nav}
+        aria-label="Bottom navigation"
+        data-left-handed={leftHanded || undefined}
+      >
         {primaryItems.map(renderPrimaryItem)}
         <AppLink
           href={routes.notifications}

@@ -12,7 +12,7 @@ import (
 )
 
 // TestMCPHandshakeSubprocess builds the binary and verifies that a full
-// MCP handshake (initialize + tools/list) over stdio returns exactly 15
+// MCP handshake (initialize + tools/list) over stdio returns exactly 20
 // registered tools (I-1.1, I-1.4).
 func TestMCPHandshakeSubprocess(t *testing.T) {
 	binaryPath := t.TempDir() + "/stapler-squad-test"
@@ -78,11 +78,11 @@ func TestMCPHandshakeSubprocess(t *testing.T) {
 	if !ok {
 		t.Fatal("tools field is not an array")
 	}
-	if len(tools) != 15 {
+	if len(tools) != 20 {
 		names := make([]string, len(tools))
 		for i, tool := range tools {
 			names[i] = tool.(map[string]interface{})["name"].(string)
 		}
-		t.Errorf("expected 15 tools, got %d: %v", len(tools), names)
+		t.Errorf("expected 20 tools, got %d: %v", len(tools), names)
 	}
 }

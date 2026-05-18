@@ -23,6 +23,9 @@ type PRStatusPollerConfig struct {
 	CallTimeout time.Duration
 	// AuthCacheDuration controls how long a successful auth check is cached.
 	AuthCacheDuration time.Duration
+	// NoPRBackoff is how long to wait before re-checking a session after ErrNoPR.
+	// Zero disables the backoff (always re-check).
+	NoPRBackoff time.Duration
 }
 
 // DefaultPRStatusPollerConfig returns sensible defaults.
@@ -32,6 +35,7 @@ func DefaultPRStatusPollerConfig() PRStatusPollerConfig {
 		ConcurrentFetches: 5,
 		CallTimeout:       10 * time.Second,
 		AuthCacheDuration: 5 * time.Minute,
+		NoPRBackoff:       5 * time.Minute,
 	}
 }
 
@@ -55,6 +59,11 @@ type PRStatusPoller struct {
 	// Pause polling when rate limited.
 	rateLimitedUntil time.Time
 
+	// noPRPollAfter tracks the earliest time at which we should re-check a
+	// session that had no PR on the previous poll. Keyed by session title.
+	// Guarded by mu.
+	noPRPollAfter map[string]time.Time
+
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -69,10 +78,11 @@ func NewPRStatusPoller(storage *Storage) *PRStatusPoller {
 // NewPRStatusPollerWithConfig creates a poller with custom configuration.
 func NewPRStatusPollerWithConfig(storage *Storage, config PRStatusPollerConfig) *PRStatusPoller {
 	return &PRStatusPoller{
-		instances: make([]*Instance, 0),
-		storage:   storage,
-		config:    config,
-		etagCache: github.NewETagCache(),
+		instances:     make([]*Instance, 0),
+		storage:       storage,
+		config:        config,
+		etagCache:     github.NewETagCache(),
+		noPRPollAfter: make(map[string]time.Time),
 	}
 }
 
@@ -101,6 +111,7 @@ func (p *PRStatusPoller) RemoveInstance(title string) {
 		}
 	}
 	p.instances = filtered
+	delete(p.noPRPollAfter, title)
 }
 
 // SetOnUpdated registers a callback called when a session's PR priority changes.
@@ -177,6 +188,14 @@ func (p *PRStatusPoller) checkAllSessions() {
 	sem := make(chan struct{}, p.config.ConcurrentFetches)
 	var wg sync.WaitGroup
 
+	now := time.Now()
+	p.mu.RLock()
+	noPRPollAfter := make(map[string]time.Time, len(p.noPRPollAfter))
+	for k, v := range p.noPRPollAfter {
+		noPRPollAfter[k] = v
+	}
+	p.mu.RUnlock()
+
 	for _, inst := range instances {
 		if inst.GitHubOwner == "" || inst.GitHubRepo == "" {
 			continue // no GitHub info for this session
@@ -193,6 +212,10 @@ func (p *PRStatusPoller) checkAllSessions() {
 		if isFork {
 			log.Info("PR status poller: skipping fork session (upstream PR lookup Phase 2)", "session", inst.Title)
 			continue
+		}
+
+		if pollAfter, ok := noPRPollAfter[inst.Title]; ok && now.Before(pollAfter) {
+			continue // no-PR backoff still in effect
 		}
 
 		captured := inst
@@ -263,10 +286,13 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 			log.Warn("PR status poller: PR discovery failed", "session", inst.Title, "owner", owner, "repo", repo, "branch", branch, "err", err)
 			return
 		}
-		// Persist discovered PR number
+		// Persist discovered PR number and clear no-PR backoff.
 		inst.stateMutex.Lock()
 		inst.GitHubPRNumber = prInfo.Number
 		inst.stateMutex.Unlock()
+		p.mu.Lock()
+		delete(p.noPRPollAfter, inst.Title)
+		p.mu.Unlock()
 		if p.storage != nil {
 			if err := p.storage.UpdateInstancePRNumber(inst.Title, prInfo.Number); err != nil {
 				log.Warn("PR status poller: failed to persist PR number", "session", inst.Title, "err", err)
@@ -319,8 +345,14 @@ func (p *PRStatusPoller) handleFetchError(err error) bool {
 	return false
 }
 
-// applyNoPR sets the session to no_pr state (branch has no PR yet).
+// applyNoPR sets the session to no_pr state (branch has no PR yet) and
+// schedules a backoff so the branch is not re-queried every poll tick.
 func (p *PRStatusPoller) applyNoPR(inst *Instance) {
+	if p.config.NoPRBackoff > 0 {
+		p.mu.Lock()
+		p.noPRPollAfter[inst.Title] = time.Now().Add(p.config.NoPRBackoff)
+		p.mu.Unlock()
+	}
 	p.applyPRUpdate(inst, nil)
 }
 

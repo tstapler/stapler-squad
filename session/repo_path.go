@@ -7,11 +7,25 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
+
+const detectWorktreeCacheTTL = 5 * time.Minute
+
+type detectWorktreeCacheEntry struct {
+	info   *WorktreeInfo
+	err    error
+	expiry time.Time
+}
+
+var detectWorktreeCache = struct {
+	sync.RWMutex
+	m map[string]detectWorktreeCacheEntry
+}{m: make(map[string]detectWorktreeCacheEntry)}
 
 // RepoPathManager handles GOPATH-style repository path management.
 // Repositories are stored in a consistent location based on their URL:
@@ -223,8 +237,28 @@ type WorktreeInfo struct {
 }
 
 // DetectWorktree checks if the given path is a git worktree and extracts relevant info.
+// Results are cached per-path for 5 minutes to avoid repeated git subprocess calls on
+// every LoadInstances invocation for sessions whose GitHubOwner was never resolved.
 // Returns WorktreeInfo with IsWorktree=false if it's not a worktree or not a git repo.
 func DetectWorktree(path string) (*WorktreeInfo, error) {
+	now := time.Now()
+	detectWorktreeCache.RLock()
+	if entry, ok := detectWorktreeCache.m[path]; ok && now.Before(entry.expiry) {
+		detectWorktreeCache.RUnlock()
+		return entry.info, entry.err
+	}
+	detectWorktreeCache.RUnlock()
+
+	info, err := detectWorktreeUncached(path)
+
+	detectWorktreeCache.Lock()
+	detectWorktreeCache.m[path] = detectWorktreeCacheEntry{info: info, err: err, expiry: now.Add(detectWorktreeCacheTTL)}
+	detectWorktreeCache.Unlock()
+
+	return info, err
+}
+
+func detectWorktreeUncached(path string) (*WorktreeInfo, error) {
 	info := &WorktreeInfo{}
 
 	// Check if .git exists

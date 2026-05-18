@@ -1,4 +1,4 @@
-export type ShortcutContext = "global" | "session-list" | "approval" | "terminal" | "cockpit";
+export type ShortcutContext = "global" | "session-list" | "approval" | "terminal" | "cockpit" | "omnibar";
 
 export interface Shortcut {
   /** Key string as reported by KeyboardEvent.key (e.g. "k", "Enter", "[", "?") */
@@ -62,6 +62,7 @@ export class ShortcutRegistry {
       approval: [],
       terminal: [],
       cockpit: [],
+      omnibar: [],
     };
     for (const shortcut of this.shortcuts.values()) {
       result[shortcut.context].push(shortcut);
