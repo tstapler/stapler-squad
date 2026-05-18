@@ -306,7 +306,7 @@ func TestEventBusEventTypes(t *testing.T) {
 		},
 		{
 			name:      "SessionStatusChanged",
-			event:     NewSessionStatusChangedEvent(testSession, session.Running, session.Paused),
+			event:     NewSessionStatusChangedEvent(testSession, session.Active, session.Paused),
 			eventType: EventSessionStatusChanged,
 		},
 	}

@@ -221,7 +221,7 @@ func mockSessions() []session.InstanceData {
 			Title:                "k8s-autoscaling",
 			Path:                 "/Users/dev/infra/terraform-modules",
 			Branch:               "feature/hpa-config",
-			Status:               session.Ready,
+			Status:               session.Active,
 			Program:              "claude",
 			Category:             "Infrastructure",
 			Tags:                 []string{"DevOps", "Kubernetes"},

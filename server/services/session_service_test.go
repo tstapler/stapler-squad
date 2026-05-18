@@ -582,7 +582,7 @@ func TestGetSession_FoundByTitle(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "title-session",
 		UUID:    "aaaaaaaa-0000-0000-0000-000000000001",
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	}
@@ -606,7 +606,7 @@ func TestGetSession_FoundByUUID(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "uuid-session",
 		UUID:    testUUID,
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	}
@@ -650,7 +650,7 @@ func TestListSessions_ReturnsAllSessions(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:   "session-one",
 		UUID:    "cccccccc-0000-0000-0000-000000000001",
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	})
@@ -676,7 +676,7 @@ func TestListSessions_WithStatusFilter(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:   "running-session",
 		UUID:    "dddddddd-0000-0000-0000-000000000001",
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 		Path:    "/tmp/test",
 	})
@@ -706,7 +706,7 @@ func TestListSessions_WithCategoryFilter(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:    "backend-session",
 		UUID:     "eeeeeeee-0000-0000-0000-000000000001",
-		Status:   session.Running,
+		Status:   session.Active,
 		Program:  "claude",
 		Path:     "/tmp/test",
 		Category: "backend",
@@ -714,7 +714,7 @@ func TestListSessions_WithCategoryFilter(t *testing.T) {
 	fix.poller.AddInstance(&session.Instance{
 		Title:    "frontend-session",
 		UUID:     "eeeeeeee-0000-0000-0000-000000000002",
-		Status:   session.Running,
+		Status:   session.Active,
 		Program:  "claude",
 		Path:     "/tmp/test",
 		Category: "frontend",

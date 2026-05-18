@@ -65,7 +65,7 @@ func seedInstance(t *testing.T, storage *session.Storage, title string) {
 	inst := &session.Instance{
 		Title:   title,
 		Path:    "/tmp/test-workspace",
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 	}
 	require.NoError(t, storage.AddInstance(inst))

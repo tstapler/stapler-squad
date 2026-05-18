@@ -583,7 +583,7 @@ func (s *SessionService) ListSessions(
 			// Apply optional status filter (external sessions are always "running")
 			if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 				// External sessions are running
-				if *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_RUNNING {
+				if *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_ACTIVE {
 					continue
 				}
 			}
@@ -940,7 +940,7 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "program")
 
 		// If the session is running, restart it with the new program
-		if instance.Status == session.Running {
+		if instance.Status == session.Active {
 			if err := instance.Restart(true); err != nil {
 				log.Error("[UpdateSession] failed to restart session after program change", "session", instance.Title, "err", err)
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after program change: %w", err))

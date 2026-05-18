@@ -92,7 +92,7 @@ func TestGetLogs_WithUUID_MatchingInstance(t *testing.T) {
 			UUID:    testUUID,
 			Title:   "my-resolved-session",
 			Path:    "/tmp/test",
-			Status:  session.Running,
+			Status:  session.Active,
 			Program: "claude",
 		},
 	})
@@ -133,7 +133,7 @@ func TestGetLogs_WithTitle_FindsLogByTitle(t *testing.T) {
 		{
 			Title:   "title-session",
 			Path:    "/tmp/test",
-			Status:  session.Running,
+			Status:  session.Active,
 			Program: "claude",
 		},
 	})

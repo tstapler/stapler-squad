@@ -111,7 +111,7 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 	StartAnalyticsSubscriber(ctx, bus, provider)
 
 	inst := &session.Instance{Title: "status-session"}
-	bus.Publish(events.NewSessionStatusChangedEvent(inst, session.Running, session.Stopped))
+	bus.Publish(events.NewSessionStatusChangedEvent(inst, session.Active, session.Stopped))
 
 	if !provider.waitForCount(1, 500*time.Millisecond) {
 		t.Fatal("timed out waiting for Record call")
@@ -121,8 +121,8 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 	if ev.EventName != "session.status_changed" {
 		t.Errorf("want EventName=session.status_changed, got %q", ev.EventName)
 	}
-	if ev.Labels["old_status"] != session.Running.String() {
-		t.Errorf("want old_status=%q, got %q", session.Running.String(), ev.Labels["old_status"])
+	if ev.Labels["old_status"] != session.Active.String() {
+		t.Errorf("want old_status=%q, got %q", session.Active.String(), ev.Labels["old_status"])
 	}
 	if ev.Labels["new_status"] != session.Stopped.String() {
 		t.Errorf("want new_status=%q, got %q", session.Stopped.String(), ev.Labels["new_status"])

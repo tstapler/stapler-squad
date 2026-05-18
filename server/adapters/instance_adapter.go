@@ -175,12 +175,8 @@ func rateLimitStateToProto(state ratelimit.RateLimitState) sessionv1.RateLimitSt
 // StatusToProto converts session.Status to proto SessionStatus enum.
 func StatusToProto(status session.Status) sessionv1.SessionStatus {
 	switch status {
-	case session.Running:
-		return sessionv1.SessionStatus_SESSION_STATUS_RUNNING
-	case session.Ready:
-		return sessionv1.SessionStatus_SESSION_STATUS_READY
-	case session.Loading:
-		return sessionv1.SessionStatus_SESSION_STATUS_LOADING
+	case session.Active:
+		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE // wire value 1 (same as legacy RUNNING)
 	case session.Paused:
 		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED
 	case session.NeedsApproval:
@@ -203,12 +199,8 @@ func statusToProto(status session.Status) sessionv1.SessionStatus {
 // Used when the status is stored as a string in ReviewItem rather than session.Status.
 func StatusStringToProto(status string) sessionv1.SessionStatus {
 	switch status {
-	case "Running":
-		return sessionv1.SessionStatus_SESSION_STATUS_RUNNING
-	case "Ready":
-		return sessionv1.SessionStatus_SESSION_STATUS_READY
-	case "Loading":
-		return sessionv1.SessionStatus_SESSION_STATUS_LOADING
+	case "Active", "Running", "Ready": // Running/Ready are deprecated aliases
+		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE
 	case "Paused":
 		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED
 	case "NeedsApproval":
@@ -237,14 +229,21 @@ func sessionTypeToProto(sessionType session.SessionType) sessionv1.SessionType {
 }
 
 // ProtoToStatus converts proto SessionStatus enum to session.Status.
+// Legacy wire values from older clients (READY=2, NEEDS_APPROVAL=5, LOADING=3) are
+// mapped to the appropriate new lifecycle states.
 func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 	switch status {
-	case sessionv1.SessionStatus_SESSION_STATUS_RUNNING:
-		return session.Running
-	case sessionv1.SessionStatus_SESSION_STATUS_READY:
-		return session.Ready
-	case sessionv1.SessionStatus_SESSION_STATUS_LOADING:
-		return session.Loading
+	case sessionv1.SessionStatus_SESSION_STATUS_ACTIVE:
+		// Also handles RUNNING(1) which shares the same integer wire value.
+		return session.Active
+	case 2: // SESSION_STATUS_READY — deprecated legacy wire value → Active
+		return session.Active
+	case 5: // SESSION_STATUS_NEEDS_APPROVAL — deprecated legacy wire value → Active
+		return session.Active
+	case 3: // SESSION_STATUS_LOADING — deprecated legacy wire value → Creating
+		return session.Creating
+	case sessionv1.SessionStatus_SESSION_STATUS_CREATING:
+		return session.Creating
 	case sessionv1.SessionStatus_SESSION_STATUS_PAUSED:
 		return session.Paused
 	case sessionv1.SessionStatus_SESSION_STATUS_NEEDS_APPROVAL:

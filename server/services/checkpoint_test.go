@@ -134,7 +134,7 @@ func TestListCheckpoints_EmptyWhenNoCheckpoints(t *testing.T) {
 	inst := &session.Instance{
 		Title:   "no-checkpoints-session",
 		Path:    "/tmp/test",
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 	}
 	addInstanceToPoller(fix.poller, inst)

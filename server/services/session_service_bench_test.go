@@ -102,7 +102,7 @@ func preloadSessions(b *testing.B, repo *session.EntRepository, n int) {
 			Title:   fmt.Sprintf("bench-session-%04d", i),
 			Path:    "/tmp/bench",
 			Branch:  "main",
-			Status:  session.Running,
+			Status:  session.Active,
 			Program: "claude",
 		}
 		if err := repo.Create(ctx, data); err != nil {
@@ -181,7 +181,7 @@ func BenchmarkSessionService_GetSession(b *testing.B) {
 		Title:   targetTitle,
 		Path:    "/tmp/bench",
 		Branch:  "main",
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 	}); err != nil {
 		b.Fatalf("failed to create target session: %v", err)
@@ -255,7 +255,7 @@ func BenchmarkSessionService_StreamTerminal_NotStarted(b *testing.B) {
 		Title:   targetTitle,
 		Path:    "/tmp/bench",
 		Branch:  "main",
-		Status:  session.Running,
+		Status:  session.Active,
 		Program: "claude",
 	}); err != nil {
 		b.Fatalf("failed to create target session: %v", err)
