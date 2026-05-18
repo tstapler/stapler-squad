@@ -1,5 +1,5 @@
 'use client';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import * as styles from './BrowserTab.css';
 import CDPViewer from './CDPViewer';
 import { VNCState, VNCStatus } from '@/gen/session/v1/types_pb';
@@ -44,6 +44,16 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
 
   const wsUrl = buildWsUrl(baseUrl, sessionId);
 
+  // Connection state for reconnecting banner and manual reconnect
+  const [connectionState, setConnectionState] = useState<'connected' | 'reconnecting' | 'disconnected'>('disconnected');
+  // Incrementing key forces CDPViewer to re-mount on manual reconnect
+  const [viewerKey, setViewerKey] = useState(0);
+
+  function handleReconnect() {
+    setConnectionState('disconnected');
+    setViewerKey((k) => k + 1);
+  }
+
   return (
     <div className={styles.browserTabContainer}>
       {/* Viewer area */}
@@ -84,9 +94,20 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
               pointerEvents: isReady ? 'auto' : 'none',
             }}
           >
+            {connectionState === 'reconnecting' && (
+              <div className={styles.reconnectingBanner}>
+                <span>Reconnecting…</span>
+                <button className={styles.reconnectButton} onClick={handleReconnect}>
+                  Reconnect
+                </button>
+              </div>
+            )}
             <CDPViewer
+              key={viewerKey}
               wsUrl={wsUrl}
               isVisible={isVisible && isReady}
+              onConnected={() => setConnectionState('connected')}
+              onDisconnected={() => setConnectionState('reconnecting')}
             />
           </div>
         )}

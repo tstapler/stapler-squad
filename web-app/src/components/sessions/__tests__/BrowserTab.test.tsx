@@ -1,5 +1,6 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { BrowserTab, VNCStatus } from '../BrowserTab';
 import type { VNCState } from '../BrowserTab';
 
@@ -9,12 +10,18 @@ function makeVncState(partial: Partial<VNCState>): VNCState {
   return partial as VNCState;
 }
 
+// Capture the latest onDisconnected callback so tests can simulate disconnects
+let capturedOnDisconnected: (() => void) | undefined;
+let capturedOnConnected: (() => void) | undefined;
+
 // Mock CDPViewer — pure canvas component, no DOM APIs needed in tests
 jest.mock('../CDPViewer', () => ({
   __esModule: true,
-  default: jest.fn(({ wsUrl }: { wsUrl: string }) => (
-    <canvas data-testid="cdp-viewer" data-ws-url={wsUrl} />
-  )),
+  default: jest.fn(({ wsUrl, onConnected, onDisconnected }: { wsUrl: string; onConnected?: () => void; onDisconnected?: () => void }) => {
+    capturedOnConnected = onConnected;
+    capturedOnDisconnected = onDisconnected;
+    return <canvas data-testid="cdp-viewer" data-ws-url={wsUrl} />;
+  }),
 }));
 
 // BrowserTab.css.ts uses vanilla-extract — mock the style module
@@ -23,6 +30,8 @@ jest.mock('../BrowserTab.css', () => ({
   viewerArea: 'viewerArea',
   placeholderOverlay: 'placeholderOverlay',
   canvasWrapper: 'canvasWrapper',
+  reconnectingBanner: 'reconnectingBanner',
+  reconnectButton: 'reconnectButton',
 }));
 
 describe('BrowserTab', () => {
@@ -114,6 +123,43 @@ describe('BrowserTab', () => {
     rerender(<BrowserTab {...defaultProps} vncState={makeVncState({ status: VNCStatus.VNC_STATUS_NO_BROWSER })} />);
 
     expect(screen.getByTestId('cdp-viewer')).toBeInTheDocument();
+  });
+
+  it('BrowserTab_should_showReconnectingBanner_When_connectionDrops', () => {
+    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
+    render(<BrowserTab {...defaultProps} vncState={readyState} />);
+
+    // Simulate the CDPViewer calling onDisconnected
+    act(() => {
+      capturedOnDisconnected?.();
+    });
+
+    expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
+  });
+
+  it('BrowserTab_should_hideReconnectingBanner_When_connectionRestored', () => {
+    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
+    render(<BrowserTab {...defaultProps} vncState={readyState} />);
+
+    act(() => { capturedOnDisconnected?.(); });
+    expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
+
+    act(() => { capturedOnConnected?.(); });
+    expect(screen.queryByText(/reconnecting/i)).not.toBeInTheDocument();
+  });
+
+  it('BrowserTab_should_remountViewer_When_reconnectButtonClicked', async () => {
+    const user = userEvent.setup();
+    const readyState = makeVncState({ status: VNCStatus.VNC_STATUS_READY, browserWindowDetected: true });
+    render(<BrowserTab {...defaultProps} vncState={readyState} />);
+
+    act(() => { capturedOnDisconnected?.(); });
+    expect(screen.getByText(/reconnecting/i)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /reconnect/i }));
+
+    // Banner should be gone after manual reconnect
+    expect(screen.queryByText(/reconnecting/i)).not.toBeInTheDocument();
   });
 
 });

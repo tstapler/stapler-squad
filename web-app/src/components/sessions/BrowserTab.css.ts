@@ -71,3 +71,34 @@ export const qualityLabel = style({
   marginRight: vars.space['1'],
   flexShrink: 0,
 });
+
+export const reconnectingBanner = style({
+  position: 'absolute',
+  top: vars.space['2'],
+  left: '50%',
+  transform: 'translateX(-50%)',
+  zIndex: 10,
+  display: 'flex',
+  alignItems: 'center',
+  gap: vars.space['2'],
+  padding: `${vars.space['1']} ${vars.space['3']}`,
+  borderRadius: vars.radii.full,
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  fontSize: vars.fontSize.sm,
+  boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+  pointerEvents: 'auto',
+});
+
+export const reconnectButton = style({
+  padding: `2px ${vars.space['2']}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderColor}`,
+  background: 'transparent',
+  color: 'inherit',
+  fontSize: vars.fontSize.sm,
+  cursor: 'pointer',
+  ':hover': {
+    background: vars.color.hoverBackground,
+  },
+});

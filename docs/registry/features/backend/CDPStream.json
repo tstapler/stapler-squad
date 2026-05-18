@@ -6,8 +6,12 @@
   "protoFile": "",
   "httpEndpoint": "/api/sessions/{id}/cdp-stream",
   "description": "CDP WebSocket streaming endpoint — proxies JPEG frames from Chrome DevTools Protocol to the browser client",
-  "markerFound": false,
-  "tested": false,
-  "testIds": [],
+  "markerFound": true,
+  "tested": true,
+  "testIds": [
+    "TestCDPStreamHandler_MissingSessionID_Returns400",
+    "TestCDPStreamHandler_UnknownSessionID_Returns404",
+    "TestCDPStreamHandler_CDPPortZero_Returns503"
+  ],
   "lastModified": "2026-05-18T00:00:00Z"
 }

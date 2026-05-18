@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export interface CDPViewerProps {
   wsUrl: string;
@@ -20,6 +20,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   const onConnectedRef = useRef(onConnected);
   const onDisconnectedRef = useRef(onDisconnected);
   const isVisibleRef = useRef(isVisible);
+  const [connectionStatusText, setConnectionStatusText] = useState<string>('Browser disconnected');
 
   useEffect(() => { onConnectedRef.current = onConnected; }, [onConnected]);
   useEffect(() => { onDisconnectedRef.current = onDisconnected; }, [onDisconnected]);
@@ -77,6 +78,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
 
       ws.addEventListener('open', () => {
         if (unmountedRef.current) { ws.close(); return; }
+        setConnectionStatusText('Browser connected');
         onConnectedRef.current?.();
       });
 
@@ -89,6 +91,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
 
       ws.addEventListener('close', () => {
         wsRef.current = null;
+        setConnectionStatusText('Reconnecting to browser…');
         onDisconnectedRef.current?.();
         if (!unmountedRef.current) {
           // Reconnect with 2 s backoff
@@ -140,7 +143,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
     };
   }
 
-  function getModifiers(e: React.MouseEvent | React.KeyboardEvent): number {
+  function getModifiers(e: React.MouseEvent | React.KeyboardEvent | React.WheelEvent): number {
     // CDP modifier bitmask: Alt=1, Ctrl=2, Meta/Cmd=4, Shift=8
     let m = 0;
     if (e.altKey) m |= 1;
@@ -242,18 +245,117 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
     });
   }
 
+  // ------------------------------------------------------------------
+  // Wheel handler
+  // ------------------------------------------------------------------
+
+  function handleWheel(e: React.WheelEvent<HTMLCanvasElement>) {
+    if (!isVisibleRef.current) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+    sendJson({
+      method: 'Input.dispatchMouseEvent',
+      params: {
+        type: 'mouseWheel',
+        x,
+        y,
+        deltaX: e.deltaX,
+        deltaY: e.deltaY,
+        modifiers: getModifiers(e),
+      },
+    });
+  }
+
+  // ------------------------------------------------------------------
+  // Touch handlers
+  // ------------------------------------------------------------------
+
+  function handleTouchStart(e: React.TouchEvent<HTMLCanvasElement>) {
+    if (!isVisibleRef.current) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((touch.clientX - rect.left) * scaleX);
+    const y = Math.round((touch.clientY - rect.top) * scaleY);
+    sendJson({
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mousePressed', x, y, button: 'left', clickCount: 1 },
+    });
+  }
+
+  function handleTouchMove(e: React.TouchEvent<HTMLCanvasElement>) {
+    if (!isVisibleRef.current) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    if (!touch) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((touch.clientX - rect.left) * scaleX);
+    const y = Math.round((touch.clientY - rect.top) * scaleY);
+    sendJson({
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseMoved', x, y },
+    });
+  }
+
+  function handleTouchEnd(e: React.TouchEvent<HTMLCanvasElement>) {
+    if (!isVisibleRef.current) return;
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    // changedTouches has the touch point that was lifted
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = Math.round((touch.clientX - rect.left) * scaleX);
+    const y = Math.round((touch.clientY - rect.top) * scaleY);
+    sendJson({
+      method: 'Input.dispatchMouseEvent',
+      params: { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 },
+    });
+  }
+
   return (
-    <canvas
-      ref={canvasRef}
-      role="img"
-      aria-label="Remote browser display"
-      tabIndex={0}
-      style={{ width: '100%', height: '100%', display: 'block' }}
-      onMouseDown={handleMouseDown}
-      onMouseUp={handleMouseUp}
-      onMouseMove={handleMouseMove}
-      onKeyDown={handleKeyDown}
-      onKeyUp={handleKeyUp}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <canvas
+        ref={canvasRef}
+        role="img"
+        aria-label="Remote browser display"
+        tabIndex={0}
+        style={{ width: '100%', height: '100%', display: 'block' }}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onMouseMove={handleMouseMove}
+        onKeyDown={handleKeyDown}
+        onKeyUp={handleKeyUp}
+        onWheel={handleWheel}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      />
+      <div
+        role="status"
+        aria-live="polite"
+        style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clip: 'rect(0,0,0,0)' }}
+      >
+        {connectionStatusText}
+      </div>
+    </div>
   );
 }

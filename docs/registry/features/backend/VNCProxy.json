@@ -6,8 +6,12 @@
   "protoFile": "",
   "httpEndpoint": "/api/sessions/{id}/vnc",
   "description": "VNC WebSocket proxy endpoint for browser passthrough",
-  "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-16T00:00:00Z"
+  "markerFound": true,
+  "tested": true,
+  "testIds": [
+    "TestVNCProxyHandler_MissingSessionID_Returns400",
+    "TestVNCProxyHandler_UnknownSessionID_Returns404",
+    "TestVNCProxyHandler_VNCPortZero_Returns503"
+  ],
+  "lastModified": "2026-05-18T00:00:00Z"
 }

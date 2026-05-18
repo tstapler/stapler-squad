@@ -278,6 +278,38 @@ describe('CDPViewer — getModifiers bitmask', () => {
 });
 
 // ---------------------------------------------------------------------------
+// T-4: CDPViewer — wheel event
+// ---------------------------------------------------------------------------
+
+describe('CDPViewer — wheel event', () => {
+  it('CDPViewer_should_sendMouseWheelEvent_When_wheelEventFired', () => {
+    const { getByRole } = render(
+      <CDPViewer wsUrl="ws://localhost:8543/api/sessions/abc/cdp-stream" isVisible={true} />,
+    );
+    const ws = latestSocket();
+    act(() => ws.simulateOpen());
+    const canvas = getByRole('img');
+
+    const wheelEvent = new WheelEvent('wheel', {
+      bubbles: true,
+      deltaX: 0,
+      deltaY: 120,
+    });
+    act(() => canvas.dispatchEvent(wheelEvent));
+
+    expect(ws.send).toHaveBeenCalled();
+    const lastCall = ws.send.mock.calls[ws.send.mock.calls.length - 1];
+    const payload = JSON.parse(lastCall[0] as string) as {
+      method: string;
+      params: { type: string; deltaY: number };
+    };
+    expect(payload.method).toBe('Input.dispatchMouseEvent');
+    expect(payload.params.type).toBe('mouseWheel');
+    expect(payload.params.deltaY).toBe(120);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // T-7: buildWsUrl boundary tests
 // (buildWsUrl is a module-level function inside BrowserTab.tsx — these boundary
 //  cases are verified through CDPViewer's wsUrl prop which it receives verbatim)
