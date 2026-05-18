@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef } from "react";
-import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
+import { SubStatusChip } from "./SubStatusChip";
 import {
   row,
   statusDot,
@@ -34,7 +35,7 @@ interface SessionRowProps {
 
 function getStatusDotValue(status: SessionStatus): string {
   switch (status) {
-    case SessionStatus.RUNNING:
+    case SessionStatus.ACTIVE:  // includes legacy RUNNING (same wire value = 1)
       return "running";
     case SessionStatus.READY:
       return "idle";
@@ -129,8 +130,16 @@ export function SessionRow({
 
       {/* Name + path stacked — name always visible, path wraps below */}
       <span className={nameCellStyle}>
-        <span className={nameStyle} aria-label={displayName} title={displayName}>
-          {displayName}
+        <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+          <span className={nameStyle} aria-label={displayName} title={displayName}>
+            {displayName}
+          </span>
+          {/* Sub-status chip — only for Active sessions (ACTIVE covers legacy RUNNING) */}
+          {session.status === SessionStatus.ACTIVE &&
+            session.subStatus !== SubStatus.UNSPECIFIED &&
+            session.subStatus !== SubStatus.IDLE && (
+              <SubStatusChip subStatus={session.subStatus} />
+            )}
         </span>
         {session.path && (
           <Tooltip label={session.path} side="bottom">
