@@ -86,6 +86,16 @@ func NewEntRepository(opts ...RepositoryOption) (*EntRepository, error) {
 		return nil, fmt.Errorf("failed to create schema: %w", err)
 	}
 
+	// Run status integer remap migration (idempotent).
+	// Old iota: Running=0, Ready=1, Loading=2, Paused=3, NeedsApproval=4, Creating=5, Stopped=6
+	// New iota: Creating=0, Active=1, Paused=2, Stopped=3, Hibernated=4
+	// Values 0–6 on disk (old) must be remapped to the new scheme.
+	// Only run if the database has any legacy-range status values (>4 indicates old Stopped=6).
+	if err := runStatusRemap(db); err != nil {
+		client.Close()
+		return nil, fmt.Errorf("failed to remap status values: %w", err)
+	}
+
 	repo.client = client
 
 	return repo, nil
