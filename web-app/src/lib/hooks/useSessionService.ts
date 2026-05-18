@@ -67,6 +67,8 @@ interface UseSessionServiceReturn {
   listPromptHistory: (limit?: number) => Promise<PromptHistoryEntry[]>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
+  hibernateSession: (id: string) => Promise<Session | null>;
+  resumeHibernatedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;
@@ -288,6 +290,40 @@ export function useSessionService(
       });
     },
     [updateSession]
+  );
+
+  // Hibernate session (Active → Hibernated)
+  const hibernateSession = useCallback(
+    async (id: string): Promise<Session | null> => {
+      if (!clientRef.current) return null;
+      dispatch(setError(null));
+      try {
+        const response = await clientRef.current.hibernateSession({ id, reason: "manual" });
+        if (response.session) dispatch(upsertSession(response.session));
+        return response.session ?? null;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to hibernate session"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
+  // Resume a hibernated session (Hibernated → Active)
+  const resumeHibernatedSession = useCallback(
+    async (id: string): Promise<Session | null> => {
+      if (!clientRef.current) return null;
+      dispatch(setError(null));
+      try {
+        const response = await clientRef.current.resumeHibernatedSession({ id });
+        if (response.session) dispatch(upsertSession(response.session));
+        return response.session ?? null;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to resume hibernated session"));
+        return null;
+      }
+    },
+    [dispatch]
   );
 
   // Rename session
@@ -661,6 +697,8 @@ export function useSessionService(
     deleteSession,
     pauseSession,
     resumeSession,
+    hibernateSession,
+    resumeHibernatedSession,
     renameSession,
     restartSession,
     clearConversationState,

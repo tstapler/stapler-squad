@@ -31,6 +31,8 @@ interface SessionRowProps {
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
+  onHibernate?: () => void;
+  onResumeFromHibernation?: () => void;
 }
 
 function getStatusDotValue(status: SessionStatus): string {
@@ -47,6 +49,8 @@ function getStatusDotValue(status: SessionStatus): string {
       return "loading";
     case SessionStatus.NEEDS_APPROVAL:
       return "needs-approval";
+    case SessionStatus.HIBERNATED:
+      return "hibernated";
     default:
       return "idle";
   }
@@ -88,6 +92,7 @@ export function SessionRow({
   onClone, onOpenInNewPane, onNewWorkspace,
   onRestart, onCreateCheckpoint, onRunOneShot,
   onSetRateLimitEnabled, onClearConversationState, onUpdateTags,
+  onHibernate, onResumeFromHibernation,
 }: SessionRowProps) {
   const overflowRef = useRef<SessionActionsOverflowHandle>(null);
 
@@ -176,6 +181,8 @@ export function SessionRow({
           showPrimaryAction
           onPause={onPause}
           onResume={onResume}
+          onHibernate={onHibernate}
+          onResumeFromHibernation={onResumeFromHibernation}
           onDelete={onDelete}
           onClone={onClone}
           onOpenInNewPane={onOpenInNewPane}

@@ -68,6 +68,8 @@ interface SessionListProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
+  onHibernateSession?: (sessionId: string) => void;
+  onResumeHibernatedSession?: (sessionId: string) => void;
   /** When true, renders the loading skeleton instead of the session list. */
   isLoading?: boolean;
   /** Prefix for localStorage keys, used when multiple instances are rendered (e.g. split view). */
@@ -146,6 +148,8 @@ export function SessionList({
   onRunOneShot,
   onSetRateLimitEnabled,
   onClearConversationState,
+  onHibernateSession,
+  onResumeHibernatedSession,
   isLoading = false,
   storageKeyPrefix,
   extraHeaderActions,
@@ -877,6 +881,8 @@ export function SessionList({
                       onSetRateLimitEnabled={onSetRateLimitEnabled}
                       onClearConversationState={onClearConversationState}
                       onUpdateTags={onUpdateTags}
+                      onHibernate={onHibernateSession ? () => onHibernateSession(session.id) : undefined}
+                      onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(session.id) : undefined}
                     />
                   ))}
                 </ul>
@@ -902,6 +908,8 @@ export function SessionList({
                         onRunOneShot={onRunOneShot}
                         onSetRateLimitEnabled={onSetRateLimitEnabled}
                         onClearConversationState={onClearConversationState}
+                        onHibernate={onHibernateSession ? () => onHibernateSession(session.id) : undefined}
+                        onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(session.id) : undefined}
                         selectMode={selectMode}
                         isSelected={selectedSessions.has(session.id)}
                         onToggleSelect={() => handleToggleSession(session.id)}

@@ -149,7 +149,7 @@ interface PaneLeafProps {
 
 function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: React.Dispatch<PaneAction> }) {
   const actions = useCockpitActions();
-  const { sessions, loading, error, listSessions } = useSessionServiceContext();
+  const { sessions, loading, error, listSessions, hibernateSession, resumeHibernatedSession } = useSessionServiceContext();
   const { triggerPicker, triggerPickerForceNew } = usePaneContext();
   if (loading) return <SessionListSkeleton count={4} />;
   if (error) {
@@ -184,6 +184,8 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
         onRunOneShot={actions.onRunOneShot}
         onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
         onClearConversationState={actions.onClearConversationState}
+        onHibernateSession={hibernateSession ? (id) => void hibernateSession(id) : undefined}
+        onResumeHibernatedSession={resumeHibernatedSession ? (id) => void resumeHibernatedSession(id) : undefined}
         storageKeyPrefix={`pane-${pane.id}.`}
       />
     </div>

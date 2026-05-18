@@ -29,6 +29,8 @@ interface SessionServiceContextValue {
   deleteSession: (id: string, force?: boolean) => Promise<boolean>;
   pauseSession: (id: string) => Promise<Session | null>;
   resumeSession: (id: string, updates?: { title?: string; tags?: string[] }) => Promise<Session | null>;
+  hibernateSession: (id: string) => Promise<Session | null>;
+  resumeHibernatedSession: (id: string) => Promise<Session | null>;
   renameSession: (id: string, newTitle: string) => Promise<boolean>;
   restartSession: (id: string) => Promise<boolean>;
   clearConversationState: (id: string) => Promise<boolean>;

@@ -79,6 +79,8 @@ interface SessionCardProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
+  onHibernate?: () => void;
+  onResumeFromHibernation?: () => void;
   selectMode?: boolean;
   isSelected?: boolean;
   onToggleSelect?: () => void;
@@ -105,6 +107,8 @@ export function SessionCard({
   onRunOneShot,
   onSetRateLimitEnabled,
   onClearConversationState,
+  onHibernate,
+  onResumeFromHibernation,
   selectMode = false,
   isSelected = false,
   onToggleSelect,
@@ -642,6 +646,8 @@ export function SessionCard({
           showPrimaryAction
           onResume={onResume}
           onPause={onPause}
+          onHibernate={onHibernate}
+          onResumeFromHibernation={onResumeFromHibernation}
           onDelete={async () => {
             setIsDeleting(true);
             try { await onDelete?.(); } finally { setIsDeleting(false); }

@@ -59,6 +59,9 @@ export const statusDot = style({
     '&[data-status="needs-approval"]': {
       background: vars.color.statusDot.paused,
     },
+    '&[data-status="hibernated"]': {
+      background: vars.color.statusDot.idle,
+    },
   },
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
