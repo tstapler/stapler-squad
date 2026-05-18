@@ -18,6 +18,9 @@ const (
 	// VNCStatusNoBrowser means VNC is running (full display mode) but no browser
 	// window has been detected yet on the virtual display.
 	VNCStatusNoBrowser
+	// VNCStatusPassthrough means a pre-existing X display was detected and reused;
+	// x11vnc is not running in this mode.
+	VNCStatusPassthrough
 	// VNCStatusUnavailable means VNC is not available for this session — either
 	// required binaries are missing, the platform is not Linux, or startup failed
 	// after all retry attempts.
@@ -35,6 +38,8 @@ func (s VNCStatus) String() string {
 		return "Ready"
 	case VNCStatusNoBrowser:
 		return "NoBrowser"
+	case VNCStatusPassthrough:
+		return "Passthrough"
 	case VNCStatusUnavailable:
 		return "Unavailable"
 	default:

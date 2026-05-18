@@ -3,6 +3,7 @@ package cdp
 import (
 	"fmt"
 	"os/exec"
+	"sync"
 )
 
 // DepsResult holds the outcome of a CDP dependency check.
@@ -25,10 +26,22 @@ var chromeBinaries = []string{
 	"chromium-browser",
 }
 
+var (
+	depsOnce   sync.Once
+	cachedDeps DepsResult
+)
+
 // CheckDependencies checks whether a Chrome or Chromium binary is present on
-// the current host. It is safe to call multiple times; each call re-runs the
-// LookPath checks (results are not cached).
+// the current host. The result is cached after the first call so subsequent
+// calls are free.
 func CheckDependencies() DepsResult {
+	depsOnce.Do(func() {
+		cachedDeps = checkDependencies()
+	})
+	return cachedDeps
+}
+
+func checkDependencies() DepsResult {
 	for _, bin := range chromeBinaries {
 		path, err := exec.LookPath(bin)
 		if err == nil && path != "" {

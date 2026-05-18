@@ -17,16 +17,23 @@ export default function NoVNCViewer({ wsUrl, isVisible, qualityLevel }: NoVNCVie
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const rfb = new RFB(containerRef.current, wsUrl);
-    rfb.scaleViewport = true;
-    rfb.resizeSession = false;
-    rfb.clipViewport = false;
-    rfb.qualityLevel = qualityLevel;
-    rfb.compressionLevel = 6;
-    rfbRef.current = rfb;
+    let rfb: InstanceType<typeof RFB> | null = null;
+    try {
+      rfb = new RFB(containerRef.current, wsUrl);
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.clipViewport = false;
+      rfb.qualityLevel = qualityLevel;
+      rfb.compressionLevel = 6;
+      rfbRef.current = rfb;
+    } catch (err) {
+      console.warn('NoVNCViewer: RFB constructor failed', err);
+    }
     return () => {
-      rfb.disconnect();
-      rfbRef.current = null;
+      if (rfbRef.current) {
+        rfbRef.current.disconnect();
+        rfbRef.current = null;
+      }
     };
     // Reconnect only when wsUrl changes; qualityLevel is updated via its own effect
     // eslint-disable-next-line react-hooks/exhaustive-deps

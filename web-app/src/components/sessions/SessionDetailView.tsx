@@ -10,8 +10,8 @@ import { VcsPanel } from "./VcsPanel";
 import { WorkspaceSwitchModal } from "./WorkspaceSwitchModal";
 import { SessionLogsTab } from "./SessionLogsTab";
 import { FilesTab } from "./FilesTab";
-import { BrowserTab, VNCStatus } from "./BrowserTab";
-import type { VNCState } from "./BrowserTab";
+import { BrowserTab } from "./BrowserTab";
+import { VNCStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { getApiBaseUrl } from "@/lib/config";
@@ -175,10 +175,9 @@ export function SessionDetailView({
     onFullscreenChange?.(isFullscreen);
   }, [isFullscreen, onFullscreenChange]);
 
-  // VNCState is not yet in the generated proto types — access via cast until Epic 3 lands.
-  const vncState = (session as unknown as { vncState?: VNCState }).vncState;
-  const vncStatus = vncState?.status ?? VNCStatus.UNSPECIFIED;
-  const isBrowserAvailable = vncStatus !== VNCStatus.UNAVAILABLE && vncStatus !== VNCStatus.UNSPECIFIED;
+  const vncState = session.vncState;
+  const vncStatus = vncState?.status ?? VNCStatus.VNC_STATUS_UNSPECIFIED;
+  const isBrowserAvailable = vncStatus !== VNCStatus.VNC_STATUS_UNAVAILABLE && vncStatus !== VNCStatus.VNC_STATUS_UNSPECIFIED;
 
   const tabs: { id: SessionDetailTab; label: string; icon: LucideIcon; disabled?: boolean }[] = [
     { id: "terminal", label: "Terminal", icon: Terminal },

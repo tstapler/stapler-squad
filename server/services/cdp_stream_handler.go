@@ -12,8 +12,9 @@ package services
 // tears down the pair cleanly.
 
 import (
-	"context"
 	"bytes"
+	"context"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -166,15 +167,25 @@ func (h *CDPStreamHandler) runInputReceiver(
 	},
 	sessionID string,
 ) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
+	// When the context is cancelled (e.g. runFrameSender exited), unblock the
+	// ReadMessage call by setting an immediate read deadline. Without this the
+	// goroutine would block indefinitely because ReadMessage has no ctx parameter.
+	go func() {
+		<-ctx.Done()
+		_ = wsConn.SetReadDeadline(time.Now())
+	}()
 
+	for {
 		msgType, msg, err := wsConn.ReadMessage()
 		if err != nil {
+			// If the context was cancelled and this is a timeout error, it is a
+			// clean shutdown triggered by the deadline we just set — don't log.
+			if ctx.Err() != nil {
+				var netErr net.Error
+				if ok := isNetError(err, &netErr); ok && netErr.Timeout() {
+					return
+				}
+			}
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				log.Debug("cdp stream: input read error", "session", sessionID, "err", err)
 			}
@@ -188,4 +199,16 @@ func (h *CDPStreamHandler) runInputReceiver(
 			log.Debug("cdp stream: dispatch input error", "session", sessionID, "err", err)
 		}
 	}
+}
+
+// isNetError tries to unwrap err into a net.Error. Returns true on success.
+func isNetError(err error, target *net.Error) bool {
+	if err == nil {
+		return false
+	}
+	if ne, ok := err.(net.Error); ok {
+		*target = ne
+		return true
+	}
+	return false
 }

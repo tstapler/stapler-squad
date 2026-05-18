@@ -26,10 +26,6 @@ type VNCProcessManager interface {
 	// Call this AFTER the tmux session is live.
 	StartServer(ctx context.Context) error
 
-	// Start is a convenience wrapper that calls StartDisplay then StartServer.
-	// Use only when the two-phase split is not needed (e.g. tests).
-	Start(ctx context.Context) error
-
 	// Stop tears down x11vnc and Xvfb and releases the display number.
 	// Safe to call if Start was never called or already stopped.
 	Stop()
@@ -96,6 +92,14 @@ type vncProcessManager struct {
 	// It is created in doStartDisplay and cancelled by Stop().
 	managerCtx context.Context
 	cancelCtx  context.CancelFunc
+
+	// restartMu serialises x11vnc stop+start sequences so that
+	// x11vncCrashRecovery and restartX11vncWithWindow cannot race each other.
+	restartMu sync.Mutex
+
+	// goroutineWg tracks goroutines launched by this manager.
+	// Stop() waits on it to ensure crash-recovery goroutines have exited.
+	goroutineWg sync.WaitGroup
 
 	// displayStartOnce guards StartDisplay so concurrent callers are safe.
 	displayStartOnce sync.Once
@@ -187,7 +191,7 @@ func (m *vncProcessManager) doStartDisplay(ctx context.Context) error {
 		m.managerCtx = managerCtx
 		m.cancelCtx = cancel
 		m.passthroughDisplay = existing
-		m.setState(VNCState{Status: VNCStatusNoBrowser})
+		m.setState(VNCState{Status: VNCStatusPassthrough})
 		m.mu.Unlock()
 		log.Info("vnc: reusing existing display", "display", existing, "session", m.cfg.SessionID)
 		return nil
@@ -226,7 +230,11 @@ func (m *vncProcessManager) doStartDisplay(ctx context.Context) error {
 	}
 
 	// Give Xvfb a moment to initialise the display socket before x11vnc tries to connect.
-	time.Sleep(150 * time.Millisecond)
+	select {
+	case <-managerCtx.Done():
+		return managerCtx.Err()
+	case <-time.After(150 * time.Millisecond):
+	}
 
 	// Find an OS-assigned port for x11vnc.
 	port, err := pickFreePort()
@@ -276,15 +284,22 @@ func (m *vncProcessManager) doStartServer(_ context.Context) error {
 	m.mu.RLock()
 	managerCtx := m.managerCtx
 	displayN := m.state.DisplayNumber
+	pt := m.passthroughDisplay
 	port := m.state.Port
 	m.mu.RUnlock()
 
-	if displayN <= 0 || managerCtx == nil {
+	if managerCtx == nil {
 		return fmt.Errorf("vnc: StartDisplay must be called successfully before StartServer")
 	}
 
+	// Build the display string: prefer passthrough value when displayN is 0.
+	displayStr := fmt.Sprintf(":%d", displayN)
+	if displayN == 0 && pt != "" {
+		displayStr = pt
+	}
+
 	// Start x11vnc in full-display mode (no -id yet; browser not yet detected).
-	if err := m.startX11vnc(managerCtx, displayN, port, ""); err != nil {
+	if err := m.startX11vncWithDisplay(managerCtx, displayStr, port, ""); err != nil {
 		m.mu.Lock()
 		m.setState(VNCState{Status: VNCStatusUnavailable})
 		m.mu.Unlock()
@@ -300,12 +315,13 @@ func (m *vncProcessManager) doStartServer(_ context.Context) error {
 	m.mu.Unlock()
 
 	log.Info("vnc: x11vnc started",
-		"display", displayN,
+		"display", displayStr,
 		"port", port,
 		"session", m.cfg.SessionID,
 	)
 
 	// Launch crash-recovery goroutine for x11vnc.
+	m.goroutineWg.Add(1)
 	go m.x11vncCrashRecovery(managerCtx, displayN)
 
 	// Launch window tracker.
@@ -356,6 +372,9 @@ func (m *vncProcessManager) Stop() {
 	// Stop x11vnc first, then Xvfb (order specified in plan).
 	_ = m.stopX11vnc()
 	_ = m.stopXvfb()
+
+	// Wait for all tracked goroutines (e.g. crash-recovery) to finish.
+	m.goroutineWg.Wait()
 
 	if displayN > 0 {
 		m.alloc.Release(displayN)
@@ -409,11 +428,19 @@ func (m *vncProcessManager) stopXvfb() error {
 	return proc.Stop()
 }
 
-// startX11vnc launches x11vnc on the given display and port.
+// startX11vnc launches x11vnc on the given display number and port.
 // If windowID is non-empty, -id <windowID> is appended for focused mode.
+// This is a thin wrapper around startX11vncWithDisplay for callers that
+// already have an integer display number.
 func (m *vncProcessManager) startX11vnc(ctx context.Context, displayN, port int, windowID string) error {
+	return m.startX11vncWithDisplay(ctx, fmt.Sprintf(":%d", displayN), port, windowID)
+}
+
+// startX11vncWithDisplay launches x11vnc using a raw display string (e.g. ":0", ":100").
+// This is the canonical implementation; startX11vnc delegates here.
+func (m *vncProcessManager) startX11vncWithDisplay(ctx context.Context, displayStr string, port int, windowID string) error {
 	args := []string{
-		"-display", fmt.Sprintf(":%d", displayN),
+		"-display", displayStr,
 		"-rfbport", fmt.Sprintf("%d", port),
 		"-localhost",
 		"-nopw",
@@ -437,7 +464,7 @@ func (m *vncProcessManager) startX11vnc(ctx context.Context, displayN, port int,
 	m.mu.Unlock()
 
 	log.Info("vnc: x11vnc started",
-		"display", displayN,
+		"display", displayStr,
 		"port", port,
 		"window_id", windowID,
 		"pid", proc.PID(),
@@ -466,9 +493,12 @@ func (m *vncProcessManager) restartX11vncWithWindow(ctx context.Context, display
 		"session", m.cfg.SessionID,
 	)
 
-	m.mu.Lock()
+	m.restartMu.Lock()
+	defer m.restartMu.Unlock()
+
+	m.mu.RLock()
 	port := m.state.Port
-	m.mu.Unlock()
+	m.mu.RUnlock()
 
 	if err := m.stopX11vnc(); err != nil {
 		log.Warn("vnc: error stopping x11vnc before restart", "err", err)
@@ -505,6 +535,8 @@ func (m *vncProcessManager) restartX11vncWithWindow(ctx context.Context, display
 // (in full-display mode) with exponential backoff, up to cfg.MaxRestarts times.
 // After exhausting retries it marks the VNC state as VNCStatusUnavailable.
 func (m *vncProcessManager) x11vncCrashRecovery(ctx context.Context, displayN int) {
+	defer m.goroutineWg.Done()
+
 	maxRestarts := m.cfg.MaxRestarts
 	if maxRestarts <= 0 {
 		maxRestarts = 3
@@ -590,8 +622,12 @@ func (m *vncProcessManager) x11vncCrashRecovery(ctx context.Context, displayN in
 			"session", m.cfg.SessionID,
 		)
 
-		if err := m.startX11vnc(ctx, displayN, port, ""); err != nil {
-			log.Error("vnc: failed to restart x11vnc", "err", err)
+		m.restartMu.Lock()
+		startErr := m.startX11vnc(ctx, displayN, port, "")
+		m.restartMu.Unlock()
+
+		if startErr != nil {
+			log.Error("vnc: failed to restart x11vnc", "err", startErr)
 			continue
 		}
 

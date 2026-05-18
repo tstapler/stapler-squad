@@ -451,6 +451,20 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps) (*RuntimeDeps, e
 			}
 		}
 
+		// Step 6.6: Reconcile CDP orphan wrapper directories.
+		// Collect active session IDs, then remove any cdp-bins subdirectory that
+		// does not belong to a known session (left behind by crashed or deleted sessions).
+		// Both the real manager and the noop manager implement ReconcileOrphans with
+		// filesystem-only cleanup (no Chrome binary required).
+		activeSessionIDs := make([]string, 0, len(instances))
+		for _, inst := range instances {
+			activeSessionIDs = append(activeSessionIDs, inst.GetStableID())
+		}
+		cdpCleanupMgr := cdp.New(cdp.CDPConfig{}) // noop when Chrome is absent; still cleans up dirs
+		if err := cdpCleanupMgr.ReconcileOrphans(activeSessionIDs); err != nil {
+			log.Warn("cdp: orphan cleanup failed (non-fatal)", "err", err)
+		}
+
 		// Step 7: start controllers (requires started instances + StatusManager)
 		log.Info("attempting controller startup", "instances", len(instances))
 		for _, inst := range instances {

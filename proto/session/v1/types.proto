@@ -180,6 +180,8 @@ enum VNCStatus {
   VNC_STATUS_NO_BROWSER = 3;
   // VNC is unavailable: missing binaries, unsupported platform, or startup failed.
   VNC_STATUS_UNAVAILABLE = 4;
+  // A pre-existing X display was detected and reused; x11vnc is not running.
+  VNC_STATUS_PASSTHROUGH = 5;
 }
 
 // VNCState holds the browser-passthrough state for a session.
@@ -212,8 +214,6 @@ enum CDPStatus {
 message CDPState {
   // Current operational status.
   CDPStatus status = 1;
-  // Allocated CDP TCP port on localhost (e.g. 9222). Zero if unavailable.
-  int32 port = 2;
 }
 
 // SessionStatus represents the current state of a session.

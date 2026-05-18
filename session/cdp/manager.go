@@ -61,6 +61,11 @@ type CDPStreamManager interface {
 	// SetStateChangeCallback registers a callback that is invoked (in a goroutine)
 	// each time the CDP state changes. Replaces any previously registered callback.
 	SetStateChangeCallback(func(CDPState))
+
+	// ReconcileOrphans removes wrapper-script directories under the cdp-bins path
+	// whose session ID does not appear in activeSessionIDs. This cleans up
+	// directories left behind by sessions that were deleted without calling Stop().
+	ReconcileOrphans(activeSessionIDs []string) error
 }
 
 // New returns a CDPStreamManager appropriate for the current session. If
@@ -111,6 +116,10 @@ type cdpStreamManager struct {
 	// cdpConn is the active CDP WebSocket connection to Chrome.
 	cdpConn   *websocket.Conn
 	cdpConnMu sync.Mutex
+
+	// writeMu serialises all WriteMessage calls on cdpConn.
+	// gorilla/websocket does not allow concurrent writers.
+	writeMu sync.Mutex
 
 	// cmdID is an atomically-incremented counter for CDP command IDs.
 	cmdID atomic.Int64
@@ -321,7 +330,10 @@ func (m *cdpStreamManager) DispatchInput(msg []byte) error {
 	if conn == nil {
 		return fmt.Errorf("cdp: no active CDP connection")
 	}
-	return conn.WriteMessage(websocket.TextMessage, data)
+	m.writeMu.Lock()
+	err = conn.WriteMessage(websocket.TextMessage, data)
+	m.writeMu.Unlock()
+	return err
 }
 
 // runLoop polls for Chrome, connects via CDP WebSocket, subscribes to screencast
@@ -329,6 +341,7 @@ func (m *cdpStreamManager) DispatchInput(msg []byte) error {
 func (m *cdpStreamManager) runLoop(ctx context.Context, port int) {
 	const pollTimeout = 15 * time.Second
 	const pollInterval = 500 * time.Millisecond
+	const chromeRetryDelay = 5 * time.Second
 
 	for {
 		// Poll until Chrome appears or context is cancelled.
@@ -352,7 +365,7 @@ func (m *cdpStreamManager) runLoop(ctx context.Context, port int) {
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(chromeRetryDelay):
 				// Retry polling.
 			}
 			continue
@@ -452,12 +465,17 @@ func (m *cdpStreamManager) runScreencast(ctx context.Context, wsURL string, port
 		return fmt.Errorf("cdp: Page.enable: %w", err)
 	}
 
-	// Start screencast.
+	// Start screencast using operator-tunable parameters from CDPConfig.
+	// everyNthFrame is derived from ScreencastMaxFPS: Chrome's screencast delivers
+	// at most one frame per rendered frame; everyNthFrame=1 means every frame.
+	// We keep everyNthFrame=1 and rely on the client to throttle, because the
+	// Chrome rendering rate already caps throughput. ScreencastMaxFPS is reserved
+	// for future server-side rate limiting.
 	screencastParams := map[string]interface{}{
 		"format":        "jpeg",
-		"quality":       70,
-		"maxWidth":      1280,
-		"maxHeight":     800,
+		"quality":       m.cfg.ScreencastQuality,
+		"maxWidth":      m.cfg.ScreencastMaxWidth,
+		"maxHeight":     m.cfg.ScreencastMaxHeight,
 		"everyNthFrame": 1,
 	}
 	if err := m.sendCommand(conn, "Page.startScreencast", screencastParams); err != nil {
@@ -476,7 +494,7 @@ func (m *cdpStreamManager) runScreencast(ctx context.Context, wsURL string, port
 	// Read loop: handle CDP events from Chrome.
 	readErrCh := make(chan error, 1)
 	go func() {
-		readErrCh <- m.readLoop(ctx, conn, port)
+		readErrCh <- m.readLoop(ctx, conn)
 	}()
 
 	select {
@@ -489,7 +507,7 @@ func (m *cdpStreamManager) runScreencast(ctx context.Context, wsURL string, port
 
 // readLoop processes incoming CDP messages from Chrome until the connection
 // is closed or ctx is cancelled.
-func (m *cdpStreamManager) readLoop(ctx context.Context, conn *websocket.Conn, port int) error {
+func (m *cdpStreamManager) readLoop(ctx context.Context, conn *websocket.Conn) error {
 	for {
 		select {
 		case <-ctx.Done():
@@ -523,8 +541,6 @@ func (m *cdpStreamManager) readLoop(ctx context.Context, conn *websocket.Conn, p
 		default:
 			// Ignore other events.
 		}
-
-		_ = port // referenced for state transitions above
 	}
 }
 
@@ -560,6 +576,58 @@ func (m *cdpStreamManager) handleScreencastFrame(conn *websocket.Conn, params js
 	}
 }
 
+// ReconcileOrphans removes wrapper-script directories under ~/.stapler-squad/cdp-bins/
+// that do not belong to any session in activeSessionIDs. Each subdirectory name
+// is expected to be a session ID written by doAllocate().
+func (m *cdpStreamManager) ReconcileOrphans(activeSessionIDs []string) error {
+	return reconcileOrphanDirs(activeSessionIDs)
+}
+
+// reconcileOrphanDirs is the shared implementation of orphan cleanup used by
+// both cdpStreamManager and noopCDPManager. It does not depend on any Chrome
+// binary — filesystem access only.
+func reconcileOrphanDirs(activeSessionIDs []string) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("cdp: ReconcileOrphans: cannot determine home dir: %w", err)
+	}
+	cdpBinsDir := filepath.Join(homeDir, ".stapler-squad", "cdp-bins")
+
+	entries, err := os.ReadDir(cdpBinsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Nothing to clean up.
+			return nil
+		}
+		return fmt.Errorf("cdp: ReconcileOrphans: cannot read cdp-bins dir: %w", err)
+	}
+
+	active := make(map[string]struct{}, len(activeSessionIDs))
+	for _, id := range activeSessionIDs {
+		active[id] = struct{}{}
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sessionID := entry.Name()
+		if _, ok := active[sessionID]; ok {
+			continue
+		}
+		// This directory belongs to a session that no longer exists — remove it.
+		orphanDir := filepath.Join(cdpBinsDir, sessionID)
+		if err := os.RemoveAll(orphanDir); err != nil {
+			log.Warn("cdp: ReconcileOrphans: failed to remove orphan dir",
+				"dir", orphanDir, "session", sessionID, "err", err)
+		} else {
+			log.Info("cdp: ReconcileOrphans: removed orphan wrapper dir",
+				"session", sessionID, "dir", orphanDir)
+		}
+	}
+	return nil
+}
+
 // sendCommand sends a CDP command over the given WebSocket connection.
 func (m *cdpStreamManager) sendCommand(conn *websocket.Conn, method string, params interface{}) error {
 	var rawParams json.RawMessage
@@ -581,7 +649,10 @@ func (m *cdpStreamManager) sendCommand(conn *websocket.Conn, method string, para
 	if err != nil {
 		return fmt.Errorf("cdp: marshal command %s: %w", method, err)
 	}
-	return conn.WriteMessage(websocket.TextMessage, data)
+	m.writeMu.Lock()
+	err = conn.WriteMessage(websocket.TextMessage, data)
+	m.writeMu.Unlock()
+	return err
 }
 
 // ---- No-op implementation -------------------------------------------------------
@@ -590,12 +661,18 @@ func (m *cdpStreamManager) sendCommand(conn *websocket.Conn, method string, para
 // when Chrome is not available on the host.
 type noopCDPManager struct{}
 
-func (n *noopCDPManager) Allocate() error                       { return nil }
-func (n *noopCDPManager) Start(_ context.Context) error         { return nil }
-func (n *noopCDPManager) Stop()                                 {}
-func (n *noopCDPManager) State() CDPState                       { return CDPState{Status: CDPStatusUnavailable} }
-func (n *noopCDPManager) Port() int                             { return 0 }
-func (n *noopCDPManager) WrapperDir() string                    { return "" }
-func (n *noopCDPManager) LatestFrame() []byte                   { return nil }
-func (n *noopCDPManager) DispatchInput(_ []byte) error          { return nil }
+func (n *noopCDPManager) Allocate() error                         { return nil }
+func (n *noopCDPManager) Start(_ context.Context) error           { return nil }
+func (n *noopCDPManager) Stop()                                   {}
+func (n *noopCDPManager) State() CDPState                         { return CDPState{Status: CDPStatusUnavailable} }
+func (n *noopCDPManager) Port() int                               { return 0 }
+func (n *noopCDPManager) WrapperDir() string                      { return "" }
+func (n *noopCDPManager) LatestFrame() []byte                     { return nil }
+func (n *noopCDPManager) DispatchInput(_ []byte) error            { return nil }
 func (n *noopCDPManager) SetStateChangeCallback(_ func(CDPState)) {}
+
+// ReconcileOrphans on the noop manager still performs filesystem cleanup so
+// orphan directories are removed even when Chrome is not installed on the host.
+func (n *noopCDPManager) ReconcileOrphans(activeSessionIDs []string) error {
+	return reconcileOrphanDirs(activeSessionIDs)
+}

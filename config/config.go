@@ -264,6 +264,44 @@ type Config struct {
 	BrowserPassthrough BrowserPassthroughConfig `json:"browser_passthrough,omitempty"`
 }
 
+// BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
+// Protocol screencast stream. All fields default to zero (use CDPConfigOrDefault
+// to apply canonical defaults).
+type BrowserPassthroughCDPConfig struct {
+	// ScreencastQuality is the JPEG compression quality (1–100).
+	// Default: 70.
+	ScreencastQuality int `json:"screencast_quality,omitempty"`
+	// ScreencastMaxWidth is the maximum frame width in pixels.
+	// Default: 1280.
+	ScreencastMaxWidth int `json:"screencast_max_width,omitempty"`
+	// ScreencastMaxHeight is the maximum frame height in pixels.
+	// Default: 800.
+	ScreencastMaxHeight int `json:"screencast_max_height,omitempty"`
+	// ScreencastMaxFPS is the target frame-rate cap (frames per second).
+	// Default: 15 (one frame delivered every ~67 ms via everyNthFrame heuristic).
+	ScreencastMaxFPS int `json:"screencast_max_fps,omitempty"`
+}
+
+// CDPConfigOrDefault returns a BrowserPassthroughCDPConfig with any zero-value
+// fields replaced by the canonical defaults. This allows a partial JSON config
+// (e.g. only ScreencastQuality set) to inherit the remaining defaults.
+func (c *BrowserPassthroughCDPConfig) CDPConfigOrDefault() BrowserPassthroughCDPConfig {
+	out := *c
+	if out.ScreencastQuality <= 0 {
+		out.ScreencastQuality = 70
+	}
+	if out.ScreencastMaxWidth <= 0 {
+		out.ScreencastMaxWidth = 1280
+	}
+	if out.ScreencastMaxHeight <= 0 {
+		out.ScreencastMaxHeight = 800
+	}
+	if out.ScreencastMaxFPS <= 0 {
+		out.ScreencastMaxFPS = 15
+	}
+	return out
+}
+
 // BrowserPassthroughConfig controls the per-session virtual display (Xvfb + x11vnc) feature.
 type BrowserPassthroughConfig struct {
 	// Enabled controls whether VNC is started for new sessions.
@@ -279,6 +317,9 @@ type BrowserPassthroughConfig struct {
 	// Resolution is the Xvfb screen resolution string (WxHxDepth).
 	// Default: "1280x800x24".
 	Resolution string `json:"resolution,omitempty"`
+	// CDP holds tunable parameters for the CDP screencast stream.
+	// Absent (zero) values are filled in by CDPConfigOrDefault().
+	CDP BrowserPassthroughCDPConfig `json:"cdp,omitempty"`
 }
 
 // IsEnabled returns true unless the user has explicitly set enabled=false.

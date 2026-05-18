@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 
 export interface CDPViewerProps {
   wsUrl: string;
@@ -26,49 +26,47 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
   useEffect(() => { isVisibleRef.current = isVisible; }, [isVisible]);
 
   // ------------------------------------------------------------------
-  // Frame rendering
-  // ------------------------------------------------------------------
-
-  const renderFrame = useCallback(async (data: ArrayBuffer) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    if (typeof createImageBitmap !== 'undefined') {
-      // Fast path: use createImageBitmap (supported in modern browsers)
-      const blob = new Blob([data], { type: 'image/jpeg' });
-      try {
-        const bitmap = await createImageBitmap(blob);
-        canvas.width = bitmap.width;
-        canvas.height = bitmap.height;
-        ctx.drawImage(bitmap, 0, 0);
-        bitmap.close();
-      } catch {
-        // Ignore decode errors on individual frames
-      }
-    } else {
-      // Fallback: use an Image element
-      const blob = new Blob([data], { type: 'image/jpeg' });
-      const url = URL.createObjectURL(blob);
-      const img = new Image();
-      img.onload = () => {
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        ctx.drawImage(img, 0, 0);
-        URL.revokeObjectURL(url);
-      };
-      img.onerror = () => URL.revokeObjectURL(url);
-      img.src = url;
-    }
-  }, []);
-
-  // ------------------------------------------------------------------
   // WebSocket lifecycle
   // ------------------------------------------------------------------
 
   useEffect(() => {
     unmountedRef.current = false;
+
+    // renderFrame only accesses canvasRef (a stable ref) so it does not need
+    // to be listed in the effect's dependency array.
+    async function renderFrame(data: ArrayBuffer) {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      if (typeof createImageBitmap !== 'undefined') {
+        // Fast path: use createImageBitmap (supported in modern browsers)
+        const blob = new Blob([data], { type: 'image/jpeg' });
+        try {
+          const bitmap = await createImageBitmap(blob);
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          ctx.drawImage(bitmap, 0, 0);
+          bitmap.close();
+        } catch {
+          // Ignore decode errors on individual frames
+        }
+      } else {
+        // Fallback: use an Image element
+        const blob = new Blob([data], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.onload = () => {
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+        };
+        img.onerror = () => URL.revokeObjectURL(url);
+        img.src = url;
+      }
+    }
 
     function connect() {
       if (unmountedRef.current) return;
@@ -116,7 +114,7 @@ export default function CDPViewer({ wsUrl, isVisible, onConnected, onDisconnecte
         wsRef.current = null;
       }
     };
-  }, [wsUrl, renderFrame]);
+  }, [wsUrl]);
 
   // ------------------------------------------------------------------
   // Input event helpers

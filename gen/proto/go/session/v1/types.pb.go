@@ -35,6 +35,8 @@ const (
 	VNCStatus_VNC_STATUS_NO_BROWSER VNCStatus = 3
 	// VNC is unavailable: missing binaries, unsupported platform, or startup failed.
 	VNCStatus_VNC_STATUS_UNAVAILABLE VNCStatus = 4
+	// A pre-existing X display was detected and reused; x11vnc is not running.
+	VNCStatus_VNC_STATUS_PASSTHROUGH VNCStatus = 5
 )
 
 // Enum value maps for VNCStatus.
@@ -45,6 +47,7 @@ var (
 		2: "VNC_STATUS_READY",
 		3: "VNC_STATUS_NO_BROWSER",
 		4: "VNC_STATUS_UNAVAILABLE",
+		5: "VNC_STATUS_PASSTHROUGH",
 	}
 	VNCStatus_value = map[string]int32{
 		"VNC_STATUS_UNSPECIFIED": 0,
@@ -52,6 +55,7 @@ var (
 		"VNC_STATUS_READY":       2,
 		"VNC_STATUS_NO_BROWSER":  3,
 		"VNC_STATUS_UNAVAILABLE": 4,
+		"VNC_STATUS_PASSTHROUGH": 5,
 	}
 )
 
@@ -1660,9 +1664,7 @@ func (x *VNCState) GetBrowserWindowDetected() bool {
 type CDPState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Current operational status.
-	Status CDPStatus `protobuf:"varint,1,opt,name=status,proto3,enum=session.v1.CDPStatus" json:"status,omitempty"`
-	// Allocated CDP TCP port on localhost (e.g. 9222). Zero if unavailable.
-	Port          int32 `protobuf:"varint,2,opt,name=port,proto3" json:"port,omitempty"`
+	Status        CDPStatus `protobuf:"varint,1,opt,name=status,proto3,enum=session.v1.CDPStatus" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1702,13 +1704,6 @@ func (x *CDPState) GetStatus() CDPStatus {
 		return x.Status
 	}
 	return CDPStatus_CDP_STATUS_UNSPECIFIED
-}
-
-func (x *CDPState) GetPort() int32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
 }
 
 // ExternalInstanceMetadata contains metadata for externally discovered sessions.
@@ -5132,10 +5127,9 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x06status\x18\x01 \x01(\x0e2\x15.session.v1.VNCStatusR\x06status\x12%\n" +
 	"\x0edisplay_number\x18\x02 \x01(\x05R\rdisplayNumber\x12!\n" +
 	"\fvnc_password\x18\x03 \x01(\tR\vvncPassword\x126\n" +
-	"\x17browser_window_detected\x18\x04 \x01(\bR\x15browserWindowDetected\"M\n" +
+	"\x17browser_window_detected\x18\x04 \x01(\bR\x15browserWindowDetected\"9\n" +
 	"\bCDPState\x12-\n" +
-	"\x06status\x18\x01 \x01(\x0e2\x15.session.v1.CDPStatusR\x06status\x12\x12\n" +
-	"\x04port\x18\x02 \x01(\x05R\x04port\"\xf6\x02\n" +
+	"\x06status\x18\x01 \x01(\x0e2\x15.session.v1.CDPStatusR\x06status\"\xf6\x02\n" +
 	"\x18ExternalInstanceMetadata\x12\x1f\n" +
 	"\vtmux_socket\x18\x01 \x01(\tR\n" +
 	"tmuxSocket\x12*\n" +
@@ -5486,13 +5480,14 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x14auto_spider_sessions\x18\x01 \x01(\bR\x12autoSpiderSessions\x12\x1d\n" +
 	"\n" +
 	"watch_dirs\x18\x02 \x03(\tR\twatchDirs\x12!\n" +
-	"\fpinned_repos\x18\x03 \x03(\tR\vpinnedRepos*\x8d\x01\n" +
+	"\fpinned_repos\x18\x03 \x03(\tR\vpinnedRepos*\xa9\x01\n" +
 	"\tVNCStatus\x12\x1a\n" +
 	"\x16VNC_STATUS_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13VNC_STATUS_STARTING\x10\x01\x12\x14\n" +
 	"\x10VNC_STATUS_READY\x10\x02\x12\x19\n" +
 	"\x15VNC_STATUS_NO_BROWSER\x10\x03\x12\x1a\n" +
-	"\x16VNC_STATUS_UNAVAILABLE\x10\x04*\x90\x01\n" +
+	"\x16VNC_STATUS_UNAVAILABLE\x10\x04\x12\x1a\n" +
+	"\x16VNC_STATUS_PASSTHROUGH\x10\x05*\x90\x01\n" +
 	"\tCDPStatus\x12\x1a\n" +
 	"\x16CDP_STATUS_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CDP_STATUS_WAITING\x10\x01\x12\x18\n" +

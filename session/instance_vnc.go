@@ -34,16 +34,14 @@ func (i *Instance) initVNCManager(cfg *config.BrowserPassthroughConfig) {
 	}
 	vncCfg := vnc.DefaultVNCConfig()
 	vncCfg.SessionID = i.GetStableID()
-	if cfg != nil {
-		if cfg.DisplayBase > 0 {
-			vncCfg.DisplayBase = cfg.DisplayBase
-		}
-		if cfg.DisplayRangeMax > 0 {
-			vncCfg.DisplayRangeMax = cfg.DisplayRangeMax
-		}
-		if cfg.Resolution != "" {
-			vncCfg.Resolution = cfg.Resolution
-		}
+	if cfg.DisplayBase > 0 {
+		vncCfg.DisplayBase = cfg.DisplayBase
+	}
+	if cfg.DisplayRangeMax > 0 {
+		vncCfg.DisplayRangeMax = cfg.DisplayRangeMax
+	}
+	if cfg.Resolution != "" {
+		vncCfg.Resolution = cfg.Resolution
 	}
 	i.vncManager = vnc.New(vncCfg)
 }

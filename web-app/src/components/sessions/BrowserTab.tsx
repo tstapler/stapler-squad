@@ -1,38 +1,19 @@
 'use client';
-import { useState, useRef } from 'react';
+import { useRef } from 'react';
 import * as styles from './BrowserTab.css';
 import CDPViewer from './CDPViewer';
+import { VNCState, VNCStatus } from '@/gen/session/v1/types_pb';
 
-// VNCState mirrors proto VNCState (session/v1/types.proto).
-// TODO: replace with the proto-generated type from @/gen/session/v1/types_pb.ts
-// once SessionDetailView passes the generated type through vncState prop.
-export interface VNCState {
-  status?: number; // 0=UNSPECIFIED, 1=STARTING, 2=READY, 3=NO_BROWSER, 4=UNAVAILABLE
-  displayNumber?: number;
-  browserWindowDetected?: boolean;
-}
-
-export const VNCStatus = {
-  UNSPECIFIED: 0,
-  STARTING: 1,
-  READY: 2,
-  NO_BROWSER: 3,
-  UNAVAILABLE: 4,
-} as const;
+export type { VNCState };
+export { VNCStatus };
 
 interface BrowserTabProps {
   sessionId: string;
   /** The application base URL, e.g. window.location.origin + '/api'. Used to derive the WebSocket URL. */
   baseUrl: string;
   isVisible: boolean;
-  // TODO: replace vncState with cdpState once CDPState proto types are generated.
-  // For now, reuse vncState to drive availability checks (VNC_STATUS_UNAVAILABLE
-  // maps 1:1 to CDP unavailability until the CDP proto is wired up).
   vncState: VNCState | undefined;
 }
-
-type QualityLevel = 'low' | 'medium' | 'high';
-const QUALITY_LEVELS: QualityLevel[] = ['low', 'medium', 'high'];
 
 function buildWsUrl(baseUrl: string, sessionId: string): string {
   // Normalize: strip trailing slashes, then strip /api suffix if present.
@@ -45,16 +26,14 @@ function buildWsUrl(baseUrl: string, sessionId: string): string {
 }
 
 export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserTabProps) {
-  const [quality, setQuality] = useState<QualityLevel>('medium');
-
-  const status = vncState?.status ?? VNCStatus.UNSPECIFIED;
-  const isUnavailable = status === VNCStatus.UNAVAILABLE || status === VNCStatus.UNSPECIFIED;
+  const status = vncState?.status ?? VNCStatus.VNC_STATUS_UNSPECIFIED;
+  const isUnavailable = status === VNCStatus.VNC_STATUS_UNAVAILABLE || status === VNCStatus.VNC_STATUS_UNSPECIFIED;
   const isWaiting = !isUnavailable && (
-    status === VNCStatus.STARTING ||
-    status === VNCStatus.NO_BROWSER ||
+    status === VNCStatus.VNC_STATUS_STARTING ||
+    status === VNCStatus.VNC_STATUS_NO_BROWSER ||
     !vncState?.browserWindowDetected
   );
-  const isReady = status === VNCStatus.READY && vncState?.browserWindowDetected === true;
+  const isReady = status === VNCStatus.VNC_STATUS_READY && vncState?.browserWindowDetected === true;
 
   // Track if we've ever been ready — keeps CDPViewer mounted once connected
   // so the WebSocket connection survives tab switches even if isReady temporarily flickers.
@@ -67,23 +46,6 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
 
   return (
     <div className={styles.browserTabContainer}>
-      {/* Quality control strip — hidden when unavailable */}
-      {!isUnavailable && (
-        <div className={styles.qualityControls}>
-          <span className={styles.qualityLabel}>Quality:</span>
-          {QUALITY_LEVELS.map((q) => (
-            <button
-              key={q}
-              className={`${styles.qualityButton}${quality === q ? ` ${styles.qualityButtonActive}` : ''}`}
-              onClick={() => setQuality(q)}
-              aria-pressed={quality === q}
-            >
-              {q.charAt(0).toUpperCase() + q.slice(1)}
-            </button>
-          ))}
-        </div>
-      )}
-
       {/* Viewer area */}
       <div className={styles.viewerArea}>
         {isUnavailable && (
@@ -97,7 +59,7 @@ export function BrowserTab({ sessionId, baseUrl, isVisible, vncState }: BrowserT
 
         {isWaiting && !isUnavailable && (
           <div className={styles.placeholderOverlay}>
-            {status === VNCStatus.STARTING ? (
+            {status === VNCStatus.VNC_STATUS_STARTING ? (
               <span>Starting virtual display...</span>
             ) : (
               <>

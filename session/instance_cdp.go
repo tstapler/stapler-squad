@@ -46,9 +46,14 @@ func (i *Instance) initCDPManager(cfg *config.BrowserPassthroughConfig) {
 		i.cdpManager = cdp.New(cdp.CDPConfig{})
 		return
 	}
+	cdpCfg := cfg.CDP.CDPConfigOrDefault()
 	i.cdpManager = cdp.New(cdp.CDPConfig{
-		SessionID:  i.GetStableID(),
-		ChromePath: deps.ChromePath,
+		SessionID:           i.GetStableID(),
+		ChromePath:          deps.ChromePath,
+		ScreencastQuality:   cdpCfg.ScreencastQuality,
+		ScreencastMaxWidth:  cdpCfg.ScreencastMaxWidth,
+		ScreencastMaxHeight: cdpCfg.ScreencastMaxHeight,
+		ScreencastMaxFPS:    cdpCfg.ScreencastMaxFPS,
 	})
 }
 

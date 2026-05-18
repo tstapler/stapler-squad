@@ -1,0 +1,13 @@
+{
+  "id": "browser:cdp-stream",
+  "type": "backend",
+  "service": "",
+  "method": "",
+  "protoFile": "",
+  "httpEndpoint": "/api/sessions/{id}/cdp-stream",
+  "description": "CDP WebSocket streaming endpoint — proxies JPEG frames from Chrome DevTools Protocol to the browser client",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-18T00:00:00Z"
+}

@@ -53,6 +53,16 @@ type CDPConfig struct {
 	// ChromePath is the resolved real Chrome binary path (not the wrapper script).
 	// When empty, New() returns a noopCDPManager.
 	ChromePath string
+
+	// ScreencastQuality is the JPEG compression quality (1–100). Default: 70.
+	ScreencastQuality int
+	// ScreencastMaxWidth is the maximum frame width in pixels. Default: 1280.
+	ScreencastMaxWidth int
+	// ScreencastMaxHeight is the maximum frame height in pixels. Default: 800.
+	ScreencastMaxHeight int
+	// ScreencastMaxFPS is a hint for the frame-rate cap. Default: 15.
+	// Currently influences the everyNthFrame parameter sent to Chrome.
+	ScreencastMaxFPS int
 }
 
 // CDPState is the Go-native (non-proto) runtime state of the CDP subsystem.

@@ -114,7 +114,6 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 		cdpState := cdpMgr.State()
 		protoSession.CdpState = &sessionv1.CDPState{
 			Status: mapCDPStatus(cdpState.Status),
-			Port:   int32(cdpState.Port),
 		}
 	}
 
@@ -130,6 +129,8 @@ func mapVNCStatus(status vnc.VNCStatus) sessionv1.VNCStatus {
 		return sessionv1.VNCStatus_VNC_STATUS_READY
 	case vnc.VNCStatusNoBrowser:
 		return sessionv1.VNCStatus_VNC_STATUS_NO_BROWSER
+	case vnc.VNCStatusPassthrough:
+		return sessionv1.VNCStatus_VNC_STATUS_PASSTHROUGH
 	case vnc.VNCStatusUnavailable:
 		return sessionv1.VNCStatus_VNC_STATUS_UNAVAILABLE
 	default:
