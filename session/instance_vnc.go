@@ -26,9 +26,11 @@ import (
 type VNCProcessManager = vnc.VNCProcessManager
 
 // initVNCManager creates the VNCProcessManager for this instance using the application config.
-// If VNC is explicitly disabled via config, or deps are unavailable, a no-op manager is returned.
-func (i *Instance) initVNCManager(cfg *config.BrowserPassthroughConfig) {
-	if !cfg.IsEnabled() {
+// Browser passthrough is enabled when either the feature flag or the explicit config field is set.
+// If disabled or deps are unavailable, a no-op manager is returned.
+func (i *Instance) initVNCManager(appCfg *config.Config) {
+	cfg := &appCfg.BrowserPassthrough
+	if !cfg.IsEnabled() && !appCfg.GetFeatureFlag("browser-passthrough") {
 		i.vncManager = vnc.New(vnc.VNCConfig{})
 		return
 	}

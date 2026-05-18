@@ -2950,6 +2950,10 @@ var knownFeatureFlags = []struct {
 		name:        "backlog",
 		description: "Backlog management with external sync sources and AI-driven triage",
 	},
+	{
+		name:        "browser-passthrough",
+		description: "Browser passthrough: stream Chrome/Chromium via CDP in the Browser tab",
+	},
 }
 
 // +api: feature-flags:list

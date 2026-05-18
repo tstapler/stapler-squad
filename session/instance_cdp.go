@@ -30,10 +30,12 @@ import (
 type CDPStreamManager = cdp.CDPStreamManager
 
 // initCDPManager creates the CDPStreamManager for this instance using the
-// application config. If CDP is disabled or Chrome is not found, a no-op
-// manager is returned.
-func (i *Instance) initCDPManager(cfg *config.BrowserPassthroughConfig) {
-	if !cfg.IsEnabled() {
+// application config. Browser passthrough is enabled when either the feature
+// flag or the explicit config field is set. If disabled or Chrome is not found,
+// a no-op manager is returned.
+func (i *Instance) initCDPManager(appCfg *config.Config) {
+	cfg := &appCfg.BrowserPassthrough
+	if !cfg.IsEnabled() && !appCfg.GetFeatureFlag("browser-passthrough") {
 		i.cdpManager = cdp.New(cdp.CDPConfig{})
 		return
 	}

@@ -494,9 +494,9 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 
 	// Initialize the VNC manager (noop when deps are absent or platform is not Linux).
 	cfg := config.LoadConfig()
-	instance.initVNCManager(&cfg.BrowserPassthrough)
+	instance.initVNCManager(cfg)
 	// Initialize the CDP manager (noop when Chrome is absent on any platform).
-	instance.initCDPManager(&cfg.BrowserPassthrough)
+	instance.initCDPManager(cfg)
 
 	return instance, nil
 }
