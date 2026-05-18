@@ -22,39 +22,41 @@ import (
 type Status int
 
 const (
-	// Running is the status when the instance is running and claude is working.
-	Running Status = iota
-	// Ready is if the claude instance is ready to be interacted with (waiting for user input).
-	Ready
-	// Loading is if the instance is loading (if we are starting it up or something).
-	Loading
-	// Paused is if the instance is paused (worktree removed but branch preserved).
-	Paused
-	// NeedsApproval is if the instance is waiting for user approval on a prompt.
-	NeedsApproval
 	// Creating is the status when the instance is being initialized.
-	Creating
+	Creating Status = 0
+	// Active is the status when the instance has a live AI process (running or ready).
+	Active Status = 1
+	// Paused is if the instance is paused (worktree removed but branch preserved).
+	Paused Status = 2
 	// Stopped is a terminal state: the instance has been shut down and cannot transition further.
-	Stopped
+	Stopped Status = 3
+	// Hibernated is the status when the instance has been checkpointed and the tmux session killed.
+	Hibernated Status = 4
+
+	// Deprecated: use Active.
+	Running = Active
+	// Deprecated: use Active.
+	Ready = Active
+	// Deprecated: use Creating.
+	Loading = Creating
+
+	// _statusSentinel is a compile-time marker: if new states are added, update this.
+	_statusSentinel = Hibernated
 )
 
 // String returns a human-readable name for the status.
 func (s Status) String() string {
 	switch s {
-	case Running:
-		return "Running"
-	case Ready:
-		return "Ready"
-	case Loading:
-		return "Loading"
-	case Paused:
-		return "Paused"
-	case NeedsApproval:
-		return "NeedsApproval"
 	case Creating:
 		return "Creating"
+	case Active:
+		return "Active"
+	case Paused:
+		return "Paused"
 	case Stopped:
 		return "Stopped"
+	case Hibernated:
+		return "Hibernated"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}
@@ -425,7 +427,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	instance := &Instance{
 		Title:            opts.Title,
 		UUID:             uuid.New().String(),
-		Status:           Ready,
+		Status:           Creating,
 		Path:             absPath,
 		Branch:           opts.Branch,
 		Program:          opts.Program,
@@ -569,8 +571,8 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
 		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
 		i.stateMutex.Lock()
-		if i.Status == Running || i.Status == Ready {
-			if err := i.transitionTo(Stopped); err != nil {
+		if i.Status == Active {
+			if err := i.transitionTo(context.Background(), Stopped); err != nil {
 				log.Warn("exit callback transition failed", "session", i.Title, "err", err)
 			}
 		}
@@ -721,12 +723,12 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	}
 
 	i.stateMutex.Lock()
-	// Only transition if not already Running (e.g., recovery/restart after KillSession
-	// preserves the Running status).
-	if i.Status != Running {
-		if err := i.transitionTo(Running); err != nil {
+	// Only transition if not already Active (e.g., recovery/restart after KillSession
+	// preserves the Active status).
+	if i.Status != Active {
+		if err := i.transitionTo(context.Background(), Active); err != nil {
 			i.stateMutex.Unlock()
-			setupErr = fmt.Errorf("failed to transition to Running: %w", err)
+			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
 			return setupErr
 		}
 	}
@@ -861,7 +863,7 @@ func (i *Instance) Pause() error {
 	}
 
 	i.stateMutex.Lock()
-	if err := i.transitionTo(Paused); err != nil {
+	if err := i.transitionTo(context.Background(), Paused); err != nil {
 		i.stateMutex.Unlock()
 		return fmt.Errorf("failed to transition to Paused: %w", err)
 	}
@@ -944,9 +946,9 @@ func (i *Instance) Resume() error {
 	}
 
 	i.stateMutex.Lock()
-	if err := i.transitionTo(Running); err != nil {
+	if err := i.transitionTo(context.Background(), Active); err != nil {
 		i.stateMutex.Unlock()
-		return fmt.Errorf("failed to transition to Running on resume: %w", err)
+		return fmt.Errorf("failed to transition to Active on resume: %w", err)
 	}
 	i.stateMutex.Unlock()
 	log.ForSession(i.Title).Info("session resumed")
@@ -1073,13 +1075,13 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		// Continue - controller is optional functionality
 	}
 
-	// For paused sessions, transition to Running now that the new tmux session is live.
-	// For already-running sessions, preserve the existing status.
+	// For paused sessions, transition to Active now that the new tmux session is live.
+	// For already-active sessions, preserve the existing status.
 	i.stateMutex.Lock()
 	if waspaused {
-		if err := i.transitionTo(Running); err != nil {
-			log.Warn("restart: failed to transition from paused to running", "session", i.Title, "err", err)
-			i.setStatus(Running)
+		if err := i.transitionTo(context.Background(), Active); err != nil {
+			log.Warn("restart: failed to transition from paused to active", "session", i.Title, "err", err)
+			i.setStatus(Active)
 		}
 		i.started = true
 	}
