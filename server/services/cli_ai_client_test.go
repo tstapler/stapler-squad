@@ -98,12 +98,16 @@ func TestNewBestAvailableAIClient_ReturnsNilWhenNothingAvailable(t *testing.T) {
 	}
 }
 
-// TestNewBestAvailableAIClient_PrefersAnthropicAPIWhenKeySet verifies that a
-// non-empty API key produces an AnthropicAIClient regardless of CLI availability.
-func TestNewBestAvailableAIClient_PrefersAnthropicAPIWhenKeySet(t *testing.T) {
+// TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI verifies that when
+// no CLI agent is in PATH, a non-empty API key produces an AnthropicAIClient.
+func TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI(t *testing.T) {
+	orig := knownCLIAgents
+	knownCLIAgents = nil // no CLI agents available
+	t.Cleanup(func() { knownCLIAgents = orig })
+
 	c, backend := NewBestAvailableAIClient("sk-ant-test-key")
 	if c == nil {
-		t.Fatal("expected non-nil client when API key is set")
+		t.Fatal("expected non-nil client when API key is set and no CLI available")
 	}
 	if _, ok := c.(*AnthropicAIClient); !ok {
 		t.Errorf("expected *AnthropicAIClient, got %T", c)

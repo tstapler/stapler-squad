@@ -99,22 +99,22 @@ func (c *CLIAIClient) Complete(ctx context.Context, systemPrompt, userPrompt str
 // backend is available.
 //
 // Priority order:
-//  1. Anthropic HTTP API — if anthropicAPIKey is non-empty and valid
-//  2. claude CLI         — if the claude binary is in PATH
-//  3. gemini CLI         — if the gemini binary is in PATH
-//  4. opencode CLI       — if the opencode binary is in PATH
+//  1. claude CLI         — if the claude binary is in PATH (handles its own auth)
+//  2. gemini CLI         — if the gemini binary is in PATH
+//  3. opencode CLI       — if the opencode binary is in PATH
+//  4. Anthropic HTTP API — fallback if anthropicAPIKey is non-empty
 //
-// This lets the feature work out-of-the-box for anyone who has any supported
-// AI tool installed, without requiring a separate API key configuration step.
+// CLI agents are preferred because they manage their own authentication and
+// model selection, requiring no extra configuration in stapler-squad.
 func NewBestAvailableAIClient(anthropicAPIKey string) (AIClient, string) {
-	if anthropicAPIKey != "" {
-		if c, err := NewAnthropicAIClient(anthropicAPIKey); err == nil {
-			return c, "anthropic-api"
-		}
-	}
 	for _, spec := range knownCLIAgents {
 		if c, err := NewCLIAIClient(spec); err == nil {
 			return c, "cli:" + spec.Name
+		}
+	}
+	if anthropicAPIKey != "" {
+		if c, err := NewAnthropicAIClient(anthropicAPIKey); err == nil {
+			return c, "anthropic-api"
 		}
 	}
 	return nil, ""
