@@ -194,14 +194,22 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	if userRules := rulesStore.ToRules(); len(userRules) > 0 {
 		classifierObj.AddRules(userRules)
 	}
-	// Optionally wire an AI client for GenerateSuggestedRule (requires ANTHROPIC_API_KEY).
-	var aiClient AIClient
-	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		if c, err := NewAnthropicAIClient(apiKey); err == nil {
-			aiClient = c
+	// Wire AI rule generation. NewBestAvailableAIClient selects the highest-priority
+	// available backend: Anthropic HTTP API (if ANTHROPIC_API_KEY is set) → claude CLI
+	// → gemini CLI → opencode CLI. Returns nil when no backend is available.
+	var promptBuilder RulePromptBuilder
+	var aiClientImpl AIClient
+	{
+		apiKey := os.Getenv("ANTHROPIC_API_KEY")
+		if c, backend := NewBestAvailableAIClient(apiKey); c != nil {
+			promptBuilder = &DefaultRulePromptBuilder{}
+			aiClientImpl = c
+			log.Info("[SessionService] AI rule generation enabled", "backend", backend)
+		} else {
+			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj, &DefaultRulePromptBuilder{}, aiClient)
+	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
 
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
@@ -2070,6 +2078,14 @@ func (s *SessionService) GetApprovalAnalytics(
 	return s.rulesSvc.GetApprovalAnalytics(ctx, req)
 }
 
+// GenerateSuggestedRule asks an AI to propose new auto-approval rules.
+func (s *SessionService) GenerateSuggestedRule(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GenerateSuggestedRuleRequest],
+) (*connect.Response[sessionv1.GenerateSuggestedRuleResponse], error) {
+	return s.rulesSvc.GenerateSuggestedRule(ctx, req)
+}
+
 // ListDatabases returns all discovered workspace databases with metadata.
 func (s *SessionService) ListDatabases(
 	ctx context.Context,
@@ -3171,11 +3187,3 @@ func (s *SessionService) UpdateFeatureFlag(
 	}), nil
 }
 
-// GenerateSuggestedRule asks an AI agent to propose a new auto-approval rule.
-// Delegates to RulesService which holds all rule + analytics domain logic.
-func (s *SessionService) GenerateSuggestedRule(
-	ctx context.Context,
-	req *connect.Request[sessionv1.GenerateSuggestedRuleRequest],
-) (*connect.Response[sessionv1.GenerateSuggestedRuleResponse], error) {
-	return s.rulesSvc.GenerateSuggestedRule(ctx, req)
-}
