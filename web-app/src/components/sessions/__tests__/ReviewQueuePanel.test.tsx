@@ -1,5 +1,6 @@
 /**
  * Tests for ReviewQueuePanel — feature: review-queue-pr-creation (S3-3)
+ *                            + feature: rules:create-from-review-queue (Epic 4)
  *
  * Covers:
  *  - "Create PR" button visible for TASK_COMPLETE items without a PR URL
@@ -9,12 +10,14 @@
  *  - Cancel button closes the modal without calling onRunOneShot
  *  - Confirm button calls onRunOneShot with the session ID and default prompt
  *  - Empty queue renders "all caught up" empty state
+ *  - "Create Rule" button visible for APPROVAL_PENDING items with a command
+ *  - Clicking "Create Rule" opens the rule modal with loading state
  */
 
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ReviewQueuePanel } from "../ReviewQueuePanel";
-import { AttentionReason, Priority } from "@/gen/session/v1/types_pb";
+import { AttentionReason, Priority, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
 // ---------------------------------------------------------------------------
@@ -29,7 +32,12 @@ jest.mock("@/lib/contexts/ReviewQueueContext", () => ({
 }));
 
 jest.mock("@/lib/contexts/ApprovalsContext", () => ({
-  useApprovalsContext: () => ({ pendingApprovals: [], resolveApproval: jest.fn() }),
+  useApprovalsContext: () => ({
+    pendingApprovals: [],
+    resolveApproval: jest.fn(),
+    approve: jest.fn().mockResolvedValue(undefined),
+    deny: jest.fn().mockResolvedValue(undefined),
+  }),
 }));
 
 jest.mock("@/lib/hooks/useReviewQueueNavigation", () => ({
@@ -37,7 +45,46 @@ jest.mock("@/lib/hooks/useReviewQueueNavigation", () => ({
     currentIndex: 0,
     navigatePrev: jest.fn(),
     navigateNext: jest.fn(),
+    goToNext: jest.fn(),
+    goToPrevious: jest.fn(),
   }),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock useGenerateRule — for Epic 4 "Create Rule" tests
+// ---------------------------------------------------------------------------
+
+const mockGenerate = jest.fn().mockResolvedValue(undefined);
+const mockClear = jest.fn();
+
+const mockGenerateRuleState = {
+  suggestions: [] as import("@/gen/session/v1/types_pb").SuggestedRuleProto[],
+  loading: false,
+  error: null as Error | null,
+  generate: mockGenerate,
+  cancel: jest.fn(),
+  clear: mockClear,
+};
+
+jest.mock("@/lib/hooks/useGenerateRule", () => ({
+  useGenerateRule: jest.fn(() => mockGenerateRuleState),
+}));
+
+// ---------------------------------------------------------------------------
+// Mock SuggestedRuleCard — avoids rendering its full form / hooks
+// ---------------------------------------------------------------------------
+
+jest.mock("../SuggestedRuleCard", () => ({
+  SuggestedRuleCard: ({ onAccept, onDiscard, loading }: {
+    onAccept: (rule: unknown) => void;
+    onDiscard: () => void;
+    loading?: boolean;
+  }) => (
+    <div data-testid="suggested-rule-card" data-loading={loading}>
+      <button onClick={() => onAccept({})}>Accept</button>
+      <button onClick={onDiscard}>Discard</button>
+    </div>
+  ),
 }));
 
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
@@ -203,5 +250,227 @@ describe("ReviewQueuePanel — Create PR modal", () => {
         expect.stringContaining("pull request")
       );
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Epic 4: Create Rule button
+// ---------------------------------------------------------------------------
+
+import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
+const mockUseGenerateRule = useGenerateRule as jest.Mock;
+
+function makeApprovalItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
+  return {
+    sessionId: "session-approval",
+    sessionName: "Approval Session",
+    reason: AttentionReason.APPROVAL_PENDING,
+    priority: Priority.HIGH,
+    tags: [],
+    branchDivergedFromBase: false,
+    githubPrUrl: "",
+    metadata: {
+      pending_approval_id: "approval-123",
+      tool_input_command: "git push origin main",
+      tool_name: "Bash",
+    },
+    workingState: 0,
+    ...overrides,
+  } as unknown as ReviewItem;
+}
+
+describe("ReviewQueuePanel — Create Rule button", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Reset generate rule state to defaults
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [],
+      loading: false,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+  });
+
+  it("ReviewQueue_should_showCreateRuleButton_On_PendingItem", () => {
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.getByTestId("create-rule-session-approval")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /create rule/i })
+    ).toBeInTheDocument();
+  });
+
+  it("hides Create Rule button when item has no tool_input_command", () => {
+    const item = makeApprovalItem({
+      metadata: {
+        pending_approval_id: "approval-123",
+        // no tool_input_command
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.queryByRole("button", { name: /create rule/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides Create Rule button for non-approval items", () => {
+    const item = makeReviewItem({
+      reason: AttentionReason.TASK_COMPLETE,
+      githubPrUrl: "",
+      metadata: {
+        tool_input_command: "npm build",
+      },
+    });
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    expect(
+      screen.queryByRole("button", { name: /create rule/i })
+    ).not.toBeInTheDocument();
+  });
+});
+
+describe("ReviewQueuePanel — Create Rule modal", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [],
+      loading: false,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+  });
+
+  it("ReviewQueue_should_openModal_When_CreateRuleClicked", () => {
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /create rule/i }));
+
+    expect(screen.getByTestId("create-rule-modal")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: /create auto-approval rule/i })).toBeInTheDocument();
+  });
+
+  it("calls generate with correct source and command when Create Rule clicked", () => {
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /create rule/i }));
+
+    expect(mockGenerate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: SuggestionSource.COMMAND_SAMPLE,
+        commandSample: "git push origin main",
+        toolNameFilter: "Bash",
+      })
+    );
+  });
+
+  it("shows loading indicator while generating", () => {
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [],
+      loading: true,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    // Open modal (activeRuleItemId is set, loading=true from hook)
+    fireEvent.click(screen.getByRole("button", { name: /create rule/i }));
+
+    expect(screen.getByTestId("create-rule-loading")).toBeInTheDocument();
+  });
+
+  it("shows SuggestedRuleCard when suggestion is available", () => {
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [fakeSuggestion],
+      loading: false,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /create rule/i }));
+
+    expect(screen.getByTestId("suggested-rule-card")).toBeInTheDocument();
+  });
+
+  it("closes modal and calls clear when Discard is clicked", () => {
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [fakeSuggestion],
+      loading: false,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /create rule/i }));
+    expect(screen.getByTestId("create-rule-modal")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /discard/i }));
+
+    expect(screen.queryByTestId("create-rule-modal")).not.toBeInTheDocument();
+    expect(mockClear).toHaveBeenCalled();
+  });
+
+  it("shows rule-saved indicator and closes modal when rule accepted", () => {
+    const fakeSuggestion = { name: "Allow git push", confidence: 0.9 } as unknown as import("@/gen/session/v1/types_pb").SuggestedRuleProto;
+    mockUseGenerateRule.mockReturnValue({
+      suggestions: [fakeSuggestion],
+      loading: false,
+      error: null,
+      generate: mockGenerate,
+      cancel: jest.fn(),
+      clear: mockClear,
+    });
+
+    const item = makeApprovalItem();
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item]));
+
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: /create rule/i }));
+    fireEvent.click(screen.getByRole("button", { name: /accept/i }));
+
+    // Modal should close
+    expect(screen.queryByTestId("create-rule-modal")).not.toBeInTheDocument();
+    expect(mockClear).toHaveBeenCalled();
   });
 });

@@ -485,3 +485,150 @@ export const cancelButton = style({
     },
   },
 });
+
+// ── Generate suggestions button row ───────────────────────────────────────────
+
+export const generateButtonRow = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+});
+
+export const generateButton = style({
+  background: vars.color.panelBgSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 8,
+  padding: "6px 14px",
+  fontSize: 13,
+  fontWeight: 500,
+  color: vars.color.textPrimary,
+  cursor: "pointer",
+  transition: "all 0.15s ease",
+  selectors: {
+    "&:hover:not(:disabled)": {
+      background: vars.color.accentHover,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+
+export const cancelGenerateButton = style({
+  background: "none",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 8,
+  padding: "6px 14px",
+  fontSize: 13,
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  transition: "all 0.15s ease",
+  selectors: {
+    "&:hover": {
+      background: vars.color.hoverBackground,
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+export const generateErrorBanner = style({
+  padding: "8px 12px",
+  background: vars.color.errorBg,
+  border: `1px solid ${vars.color.error}`,
+  borderRadius: 8,
+  color: vars.color.errorText,
+  fontSize: 13,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+});
+
+export const dismissErrorButton = style({
+  background: "none",
+  border: "none",
+  cursor: "pointer",
+  color: vars.color.error,
+  fontSize: 16,
+  padding: "0 4px",
+  lineHeight: 1,
+  selectors: {
+    "&:hover": {
+      opacity: 0.7,
+    },
+  },
+});
+
+export const suggestionsContainer = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+});
+
+// ── Command-sample generate section ───────────────────────────────────────────
+
+export const commandSampleDetails = style({
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 8,
+  padding: "10px 14px",
+  background: vars.color.panelBgSecondary,
+  fontSize: 13,
+});
+
+export const commandSampleSummary = style({
+  cursor: "pointer",
+  fontWeight: 500,
+  color: vars.color.textSecondary,
+  userSelect: "none",
+  selectors: {
+    "&:hover": {
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+export const commandSampleBody = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  marginTop: 10,
+});
+
+export const commandSampleTextarea = style({
+  background: vars.color.inputBackground,
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: 6,
+  padding: "8px 10px",
+  fontSize: 13,
+  color: vars.color.textPrimary,
+  fontFamily: vars.font.mono,
+  resize: "vertical",
+  minHeight: 60,
+  width: "100%",
+  boxSizing: "border-box",
+  selectors: {
+    "&:focus": {
+      outline: "none",
+      borderColor: vars.color.primary,
+    },
+  },
+});
+
+export const commandSampleActions = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+});
+
+export const aiGeneratedBadge = style({
+  display: "inline-block",
+  padding: "2px 10px",
+  borderRadius: 4,
+  fontSize: 11,
+  fontWeight: 600,
+  background: vars.color.warningBg,
+  color: vars.color.warning,
+  border: `1px solid ${vars.color.warning}`,
+});

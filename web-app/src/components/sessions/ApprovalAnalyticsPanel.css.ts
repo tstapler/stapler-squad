@@ -435,3 +435,68 @@ export const coverageGapDesc = style({
   color: vars.color.textSecondary,
   lineHeight: 1.5,
 });
+
+// ── Suggest Rule button + inline suggestion ───────────────────────────────────
+
+export const suggestRuleButton = style({
+  fontSize: 12,
+  fontWeight: 500,
+  color: vars.color.primaryText,
+  background: vars.color.primary,
+  border: `1px solid ${vars.color.primary}`,
+  borderRadius: 5,
+  padding: "3px 10px",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  transition: "all 0.15s ease",
+  selectors: {
+    "&:hover:not(:disabled)": {
+      background: vars.color.primaryHover,
+      borderColor: vars.color.primaryHover,
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+
+export const addRuleManualLink = style({
+  fontSize: 11,
+  color: vars.color.textSecondary,
+  textDecoration: "none",
+  whiteSpace: "nowrap",
+  selectors: {
+    "&:hover": {
+      textDecoration: "underline",
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+export const rowActions = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+});
+
+export const rowGeneratingText = style({
+  fontSize: 12,
+  color: vars.color.textSecondary,
+  fontStyle: "italic",
+});
+
+export const inlineSuggestionRow = style({
+  background: vars.color.panelBgSecondary,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+});
+
+export const inlineSuggestionCell = style({
+  padding: "12px 16px",
+});
+
+export const inlineErrorText = style({
+  fontSize: 12,
+  color: vars.color.errorText,
+  padding: "6px 12px",
+});

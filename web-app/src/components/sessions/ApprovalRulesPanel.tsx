@@ -1,9 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
-import { ApprovalRuleProto, AutoDecision } from "@/gen/session/v1/types_pb";
+import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
+import { ApprovalRuleProto, AutoDecision, SuggestionSource } from "@/gen/session/v1/types_pb";
+import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   analyticsBar, analyticsTotal, analyticsRate, rateAllow, rateManual, analyticsTopTool,
@@ -16,6 +18,10 @@ import {
   sourceBadge, toggle, toggleOn, toggleOff, deleteButton,
   formSection, addButton, form as formClass, formTitle, formError as formErrorClass, formGrid, label, input, select,
   formActions, saveButton, cancelButton,
+  generateButtonRow, generateButton, cancelGenerateButton,
+  generateErrorBanner, dismissErrorButton, suggestionsContainer,
+  commandSampleDetails, commandSampleSummary, commandSampleBody,
+  commandSampleTextarea, commandSampleActions, aiGeneratedBadge,
 } from "./ApprovalRulesPanel.css";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -85,11 +91,34 @@ export function ApprovalRulesPanel() {
   const { rules, loading, error, upsertRule, deleteRule, refresh } = useApprovalRules();
   const { summary, loading: analyticsLoading } = useApprovalAnalytics({ windowDays: 7 });
 
+  // ── Epic 3: panel-level "Generate Suggestions" hook ─────────────────────
+  const {
+    suggestions,
+    loading: genLoading,
+    error: genError,
+    generate,
+    cancel,
+    clear,
+  } = useGenerateRule();
+
+  // ── Epic 6: command-sample generate hook (separate instance) ─────────────
+  const {
+    suggestions: cmdSuggestions,
+    loading: cmdGenLoading,
+    generate: cmdGenerate,
+    clear: cmdGenClear,
+  } = useGenerateRule();
+
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<RuleFormState>(emptyForm);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [aiPrefilled, setAiPrefilled] = useState(false);
+  const [cmdSampleValue, setCmdSampleValue] = useState("");
+
+  // Track which form fields the user has manually edited (not overwritten by AI pre-fill).
+  const touchedFieldsRef = useRef<Set<keyof RuleFormState>>(new Set());
 
   // ── filter ────────────────────────────────────────────────────────────────
 
@@ -146,6 +175,75 @@ export function ApprovalRulesPanel() {
     }
   };
 
+  // ── open/close form ───────────────────────────────────────────────────────
+
+  const openForm = () => {
+    setShowForm(true);
+    setForm(emptyForm);
+    setFormError(null);
+    setAiPrefilled(false);
+    setCmdSampleValue("");
+    touchedFieldsRef.current = new Set();
+    cmdGenClear();
+  };
+
+  const closeForm = () => {
+    setShowForm(false);
+    setForm(emptyForm);
+    setFormError(null);
+    setAiPrefilled(false);
+    setCmdSampleValue("");
+    touchedFieldsRef.current = new Set();
+    cmdGenClear();
+  };
+
+  // ── Epic 6: pre-fill form from command-sample suggestion ──────────────────
+  // useEffect ensures prefill runs after the form is open (showForm=true) and
+  // only when cmdSuggestions actually changes.
+  useEffect(() => {
+    if (!showForm) return;
+    if (cmdSuggestions.length === 0) return;
+    const suggestion = cmdSuggestions[0];
+    const touched = touchedFieldsRef.current;
+    setForm((prev) => ({
+      name:           touched.has("name")           ? prev.name           : suggestion.name || prev.name,
+      toolName:       touched.has("toolName")       ? prev.toolName       : suggestion.toolName || prev.toolName,
+      toolPattern:    touched.has("toolPattern")    ? prev.toolPattern    : suggestion.toolPattern || prev.toolPattern,
+      commandPattern: touched.has("commandPattern") ? prev.commandPattern : suggestion.commandPattern || prev.commandPattern,
+      filePattern:    touched.has("filePattern")    ? prev.filePattern    : suggestion.filePattern || prev.filePattern,
+      decision:       touched.has("decision")       ? prev.decision       : (suggestion.decision !== AutoDecision.UNSPECIFIED ? suggestion.decision : prev.decision),
+      reason:         touched.has("reason")         ? prev.reason         : suggestion.reason || prev.reason,
+      alternative:    touched.has("alternative")    ? prev.alternative    : suggestion.alternative || prev.alternative,
+      priority:       touched.has("priority")       ? prev.priority       : (suggestion.priority > 0 ? suggestion.priority : prev.priority),
+      enabled:        prev.enabled,
+    }));
+    setAiPrefilled(true);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cmdSuggestions, showForm]);
+
+  // ── Epic 6: handle manual field changes (mark touched) ───────────────────
+
+  const setFormField = <K extends keyof RuleFormState>(key: K, value: RuleFormState[K]) => {
+    touchedFieldsRef.current.add(key);
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
+
+  // ── Epic 3: handle suggestion cards ──────────────────────────────────────
+
+  const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
+
+  const handleSuggestionAccept = (_savedRule: ApprovalRuleProto) => {
+    clear();
+    refresh();
+    setDismissedIndices(new Set());
+  };
+
+  const handleSuggestionDiscard = (idx: number) => {
+    setDismissedIndices((prev) => new Set([...prev, idx]));
+  };
+
+  const visibleSuggestions = suggestions.filter((_, idx) => !dismissedIndices.has(idx));
+
   // ── analytics summary bar ─────────────────────────────────────────────────
 
   const autoAllowRate = summary ? Math.round(summary.autoApproveRate * 100) : null;
@@ -160,19 +258,57 @@ export function ApprovalRulesPanel() {
       <div className={header}>
         <div className={titleRow}>
           <h2 className={title}>Approval Rules</h2>
-          <button
-            onClick={refresh}
-            className={refreshButton}
-            disabled={loading}
-            aria-label="Refresh rules"
-          >
-            {loading ? "⟳" : "↻"}
-          </button>
+          <div className={generateButtonRow}>
+            {/* Epic 3: Generate Suggestions button */}
+            <button
+              onClick={() => {
+                setDismissedIndices(new Set());
+                void generate({ source: SuggestionSource.ANALYTICS_GAPS });
+              }}
+              className={generateButton}
+              disabled={genLoading}
+              data-testid="generate-suggestions-button"
+            >
+              {genLoading ? "Generating…" : "Generate Suggestions"}
+            </button>
+            {genLoading && (
+              <button
+                onClick={cancel}
+                className={cancelGenerateButton}
+                data-testid="cancel-generate-button"
+              >
+                Cancel
+              </button>
+            )}
+            <button
+              onClick={refresh}
+              className={refreshButton}
+              disabled={loading}
+              aria-label="Refresh rules"
+            >
+              {loading ? "⟳" : "↻"}
+            </button>
+          </div>
         </div>
         <p className={subtitle}>
           Rules are evaluated in priority order before requests reach the manual review queue.
         </p>
       </div>
+
+      {/* ── Generate error banner ── */}
+      {genError && (
+        <div className={generateErrorBanner} role="alert" data-testid="generate-error-banner">
+          <span>Failed to generate suggestions: {genError.message}</span>
+          <button
+            className={dismissErrorButton}
+            onClick={clear}
+            aria-label="Dismiss error"
+            data-testid="dismiss-error-button"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* ── 7-day analytics summary ── */}
       {!analyticsLoading && summary && total !== null && total > 0 && (
@@ -189,6 +325,20 @@ export function ApprovalRulesPanel() {
               Top tool: {summary.topTools[0].toolName}
             </span>
           )}
+        </div>
+      )}
+
+      {/* ── Suggested rule cards (Epic 3) ── */}
+      {visibleSuggestions.length > 0 && (
+        <div className={suggestionsContainer} data-testid="suggestions-container">
+          {visibleSuggestions.map((suggestion, i) => (
+            <SuggestedRuleCard
+              key={i}
+              suggestion={suggestion}
+              onAccept={handleSuggestionAccept}
+              onDiscard={() => handleSuggestionDiscard(suggestions.indexOf(suggestion))}
+            />
+          ))}
         </div>
       )}
 
@@ -303,12 +453,53 @@ export function ApprovalRulesPanel() {
       {/* ── Add rule form ── */}
       <div className={formSection}>
         {!showForm ? (
-          <button className={addButton} onClick={() => setShowForm(true)}>
+          <button className={addButton} onClick={openForm}>
             + Add Custom Rule
           </button>
         ) : (
           <div className={formClass}>
-            <h3 className={formTitle}>New Rule</h3>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <h3 className={formTitle}>New Rule</h3>
+              {aiPrefilled && (
+                <span className={aiGeneratedBadge} data-testid="ai-generated-badge">
+                  AI-generated — review before saving
+                </span>
+              )}
+            </div>
+
+            {/* ── Epic 6: Generate from command (collapsible) ── */}
+            <details className={commandSampleDetails} data-testid="generate-from-command-details">
+              <summary className={commandSampleSummary}>
+                Generate from command (optional)
+              </summary>
+              <div className={commandSampleBody}>
+                <textarea
+                  className={commandSampleTextarea}
+                  placeholder="Paste a raw command, e.g. git push origin main"
+                  value={cmdSampleValue}
+                  onChange={(e) => setCmdSampleValue(e.target.value)}
+                  aria-label="Command sample"
+                  data-testid="command-sample-textarea"
+                  rows={2}
+                />
+                <div className={commandSampleActions}>
+                  <button
+                    className={generateButton}
+                    type="button"
+                    disabled={cmdGenLoading || !cmdSampleValue.trim()}
+                    onClick={() => {
+                      void cmdGenerate({
+                        source: SuggestionSource.COMMAND_SAMPLE,
+                        commandSample: cmdSampleValue.trim(),
+                      });
+                    }}
+                    data-testid="command-sample-generate-button"
+                  >
+                    {cmdGenLoading ? "Generating…" : "Generate"}
+                  </button>
+                </div>
+              </div>
+            </details>
 
             {formError && <div className={formErrorClass}>{formError}</div>}
 
@@ -318,8 +509,9 @@ export function ApprovalRulesPanel() {
                 <input
                   className={input}
                   value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                  onChange={(e) => setFormField("name", e.target.value)}
                   placeholder="e.g. Allow git log"
+                  data-testid="form-name-input"
                 />
               </label>
 
@@ -328,7 +520,7 @@ export function ApprovalRulesPanel() {
                 <select
                   className={select}
                   value={form.decision}
-                  onChange={(e) => setForm((f) => ({ ...f, decision: Number(e.target.value) as AutoDecision }))}
+                  onChange={(e) => setFormField("decision", Number(e.target.value) as AutoDecision)}
                 >
                   <option value={AutoDecision.ALLOW}>Auto-Allow</option>
                   <option value={AutoDecision.DENY}>Auto-Deny</option>
@@ -341,7 +533,7 @@ export function ApprovalRulesPanel() {
                 <input
                   className={input}
                   value={form.toolName}
-                  onChange={(e) => setForm((f) => ({ ...f, toolName: e.target.value }))}
+                  onChange={(e) => setFormField("toolName", e.target.value)}
                   placeholder="e.g. Bash"
                 />
               </label>
@@ -351,8 +543,9 @@ export function ApprovalRulesPanel() {
                 <input
                   className={input}
                   value={form.commandPattern}
-                  onChange={(e) => setForm((f) => ({ ...f, commandPattern: e.target.value }))}
+                  onChange={(e) => setFormField("commandPattern", e.target.value)}
                   placeholder="e.g. ^git log"
+                  data-testid="form-command-pattern-input"
                 />
               </label>
 
@@ -361,7 +554,7 @@ export function ApprovalRulesPanel() {
                 <input
                   className={input}
                   value={form.toolPattern}
-                  onChange={(e) => setForm((f) => ({ ...f, toolPattern: e.target.value }))}
+                  onChange={(e) => setFormField("toolPattern", e.target.value)}
                   placeholder="e.g. Read|Glob"
                 />
               </label>
@@ -371,7 +564,7 @@ export function ApprovalRulesPanel() {
                 <input
                   className={input}
                   value={form.filePattern}
-                  onChange={(e) => setForm((f) => ({ ...f, filePattern: e.target.value }))}
+                  onChange={(e) => setFormField("filePattern", e.target.value)}
                   placeholder="e.g. \.md$"
                 />
               </label>
@@ -381,7 +574,7 @@ export function ApprovalRulesPanel() {
                 <input
                   className={input}
                   value={form.reason}
-                  onChange={(e) => setForm((f) => ({ ...f, reason: e.target.value }))}
+                  onChange={(e) => setFormField("reason", e.target.value)}
                   placeholder="Shown to Claude when denied"
                 />
               </label>
@@ -391,7 +584,7 @@ export function ApprovalRulesPanel() {
                 <input
                   className={input}
                   value={form.alternative}
-                  onChange={(e) => setForm((f) => ({ ...f, alternative: e.target.value }))}
+                  onChange={(e) => setFormField("alternative", e.target.value)}
                   placeholder="Safer command suggestion"
                 />
               </label>
@@ -404,7 +597,7 @@ export function ApprovalRulesPanel() {
                   min={1}
                   max={999}
                   value={form.priority}
-                  onChange={(e) => setForm((f) => ({ ...f, priority: Number(e.target.value) }))}
+                  onChange={(e) => setFormField("priority", Number(e.target.value))}
                 />
               </label>
             </div>
@@ -419,7 +612,7 @@ export function ApprovalRulesPanel() {
               </button>
               <button
                 className={cancelButton}
-                onClick={() => { setShowForm(false); setForm(emptyForm); setFormError(null); }}
+                onClick={closeForm}
               >
                 Cancel
               </button>
