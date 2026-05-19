@@ -105,6 +105,7 @@ var builtinAgentTools = map[string]bool{
 	"todowrite": true, "taskcreate": true, "taskupdate": true, "taskget": true,
 	"tasklist": true, "taskoutput": true, "taskstop": true,
 	"notebookedit": true, "skill": true,
+	"monitor": true,
 }
 
 // mcpReadOperations is the set of operation suffixes (the part after the second "__") that are
@@ -126,6 +127,12 @@ var mcpReadOperations = map[string]bool{
 	"browser_take_screenshot": true, "browser_snapshot": true,
 	"browser_network_requests": true, "browser_console_messages": true,
 	"browser_tabs": true,
+	// Gmail — read-only message and label inspection
+	"get_thread": true, "search_threads": true, "list_labels": true, "list_drafts": true,
+	// Google Calendar — read-only event and calendar inspection
+	"list_events": true, "get_event": true, "list_calendars": true, "suggest_time": true,
+	// stapler-squad MCP — read-only session output access
+	"read_session_output": true, "wait_for_output": true,
 }
 
 // CategorizeToolName returns the ToolCategory constant for a given tool name.
@@ -1226,7 +1233,7 @@ func SeedRules() []Rule {
 			Name:     "Allow ls, pwd, echo, and inspection commands",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"ls", "pwd", "echo", "printenv", "which", "type", "date", "whoami", "id", "hostname"},
+				Programs: []string{"ls", "pwd", "echo", "printenv", "which", "type", "date", "whoami", "id", "hostname", "["},
 			},
 			Decision:  AutoAllow,
 			RiskLevel: RiskLow,
@@ -1256,7 +1263,7 @@ func SeedRules() []Rule {
 			Name:     "Allow cat, head, tail, wc, file, stat",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
-				Programs: []string{"cat", "head", "tail", "wc", "file", "stat", "less", "more", "diff", "md5sum", "sha256sum"},
+				Programs: []string{"cat", "head", "tail", "wc", "file", "stat", "less", "more", "diff", "md5sum", "sha256sum", "strings", "xxd"},
 			},
 			Decision:    AutoAllow,
 			RiskLevel:   RiskLow,
@@ -2218,6 +2225,76 @@ func SeedRules() []Rule {
 			Source:    "seed",
 		},
 
+		{
+			// adb (Android Debug Bridge) read-only subcommands inspect device state and
+			// read logcat/dumpsys output without modifying the device or installing software.
+			// Write operations (install, push, shell rm, uninstall) are escalated at priority 50.
+			ID:       "seed-allow-bash-adb-read",
+			Name:     "Allow adb read-only subcommands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:           []string{"adb"},
+				Subcommands:        []string{"devices", "shell", "logcat", "version", "get-state", "get-serialno", "get-devpath"},
+				BlockedSubcommands: []string{"shell rm", "shell mv", "shell cp", "shell chmod", "shell chown", "shell mkdir", "shell rmdir", "shell dd", "shell am", "shell pm install", "shell pm uninstall"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "adb devices/shell/logcat are read-only device inspection operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// nix build/develop/eval/flake are standard Nix development workflow operations.
+			// Install/profile add are package mutations and must escalate.
+			ID:       "seed-allow-bash-nix-dev",
+			Name:     "Allow nix development subcommands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:           []string{"nix"},
+				Subcommands:        []string{"develop", "build", "eval", "flake", "run", "shell", "show", "search", "path-info", "store"},
+				BlockedSubcommands: []string{"profile install", "profile add", "profile remove", "profile upgrade", "profile wipe-history", "copy", "upgrade-nix"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "nix develop/build/eval/flake are standard Nix development workflow commands.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// r2 (radare2) is a reverse-engineering framework used in the RE skill for binary
+			// analysis. Analysis-only invocations (-A, -q, -c "?", -c "aa") do not modify files.
+			ID:       "seed-allow-bash-r2",
+			Name:     "Allow r2 (radare2) binary analysis",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"r2", "radare2", "r2pipe"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "radare2 is a read-only binary analysis tool used in reverse-engineering workflows.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// sleeper is the internal mock/test process used in this project's test suite.
+			// It is never a user-installed tool and poses no risk.
+			ID:       "seed-allow-bash-sleeper",
+			Name:     "Allow sleeper (internal test process)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"sleeper"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "sleeper is an internal test/mock process; it has no side effects.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+
 		// ══════════════════════════════════════════════════════════════════════════
 		// Escalate targeted (Priority 60) — more specific than catch-all; provides
 		// actionable alternatives for known patterns that benefit from guidance.
@@ -2506,6 +2583,42 @@ func SeedRules() []Rule {
 			RiskLevel:   RiskMedium,
 			Reason:      "docker operations that create, modify, execute in, or remove containers should be reviewed.",
 			Alternative: "Review the container configuration and command before proceeding.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// adb write operations install apps, push files, or run shell commands that mutate
+			// device state. These require review before proceeding.
+			ID:       "seed-escalate-adb-write",
+			Name:     "Escalate adb write and install operations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"adb"},
+				Subcommands: []string{"install", "install-multiple", "push", "pull", "sync", "forward", "reverse", "disconnect", "connect", "pair"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "adb install/push/connect operations modify device state and should be reviewed.",
+			Alternative: "Review the target device and operation before proceeding.",
+			Priority:    50,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// nix profile install and profile add persistently mutate the user's Nix profile.
+			// upgrade-nix and copy can also have broad effects.
+			ID:       "seed-escalate-nix-install",
+			Name:     "Escalate nix profile install and system mutations",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"nix"},
+				Subcommands: []string{"profile install", "profile add", "profile remove", "profile upgrade", "profile wipe-history", "upgrade-nix", "copy"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "nix profile install/add/remove persistently modifies the user's Nix profile.",
+			Alternative: "Review the package and profile before installing.",
 			Priority:    50,
 			Enabled:     true,
 			Source:      "seed",

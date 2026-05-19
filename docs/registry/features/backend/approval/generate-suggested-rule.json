@@ -1,0 +1,18 @@
+{
+  "id": "rules:generate-suggested",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GenerateSuggestedRule",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": true,
+  "tested": true,
+  "testIds": [
+    "TestGenerateSuggestedRule_AnalyticsGaps_ReturnsSuggestions",
+    "TestGenerateSuggestedRule_UnspecifiedSource_ReturnsError",
+    "TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented",
+    "TestGenerateSuggestedRule_NeverCallsUpsert",
+    "TestGenerateSuggestedRule_ReturnsOnCtxCancellation",
+    "TestGenerateSuggestedRule_Integration_MockAI"
+  ],
+  "lastModified": "2026-05-18T00:00:00Z"
+}

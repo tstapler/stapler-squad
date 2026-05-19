@@ -154,7 +154,17 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 			msg := FormatSecretDenyMessage(hit.PatternName)
 			log.ForSession(sessionID).Info("[ApprovalHandler] auto-denied — plaintext secret detected", "tool", payload.ToolName, "pattern", hit.PatternName)
 			if h.analyticsStore != nil {
-				h.analyticsStore.RecordFromResult(payload, classifier.ClassificationResult{
+				// Before recording to analytics, replace the command so the secret is not persisted.
+				// Shallow-copy the payload and replace ToolInput to avoid mutating the original
+				// (the original payload pointer may be used after this branch for the response).
+				sanitizedInput := make(map[string]interface{}, len(payload.ToolInput))
+				for k, v := range payload.ToolInput {
+					sanitizedInput[k] = v
+				}
+				sanitizedInput["command"] = "[REDACTED: secret detected]"
+				sanitizedPayload := payload
+				sanitizedPayload.ToolInput = sanitizedInput
+				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{
 					Decision:  classifier.AutoDeny,
 					RiskLevel: classifier.RiskCritical,
 					RuleID:    "secret-scan",

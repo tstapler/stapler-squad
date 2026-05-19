@@ -315,6 +315,11 @@ type Config struct {
 	// EscapeAnalyticsRetentionDays is the number of days to retain escape event rows.
 	// Default: 7.
 	EscapeAnalyticsRetentionDays int `json:"escapeAnalyticsRetentionDays,omitempty"`
+	// AnthropicAPIKey is the API key for the Anthropic AI API.
+	// Used by the AI rule generation feature (GenerateSuggestedRule RPC).
+	// Set via config.json or the ANTHROPIC_API_KEY environment variable.
+	// Do not log this value.
+	AnthropicAPIKey string `json:"anthropicApiKey,omitempty"`
 }
 
 // BrowserPassthroughCDPConfig holds tunable parameters for the Chrome DevTools
@@ -476,6 +481,10 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		IdleTimeoutMinutes:        120,
 		ResourcePressureThreshold: 85,
 		RetentionDays:             30,
+	}
+	// Apply environment variable overrides (never log the value).
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+		cfg.AnthropicAPIKey = v
 	}
 	return cfg
 }
@@ -834,6 +843,11 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	// Unmarshaling produces a zero Config with no executor; initialize it now
 	// so GetClaudeCommand / GetAvailablePrograms don't panic on nil executor.
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
+
+	// Apply environment variable overrides (never log the value).
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+		cfg.AnthropicAPIKey = v
+	}
 
 	return &cfg, nil
 }

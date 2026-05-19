@@ -245,8 +245,8 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE
 	case "Paused":
 		return sessionv1.SessionStatus_SESSION_STATUS_PAUSED
-	case "NeedsApproval":
-		return sessionv1.SessionStatus_SESSION_STATUS_NEEDS_APPROVAL
+	case "NeedsApproval": // deprecated — NeedsApproval is now a sub-status; sessions are Active
+		return sessionv1.SessionStatus_SESSION_STATUS_ACTIVE
 	case "Creating":
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
 	case "Stopped":

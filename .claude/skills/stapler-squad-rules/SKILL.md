@@ -16,13 +16,96 @@ Guides you through reading the approval analytics, identifying coverage gaps, an
 
 ## Accessing the Analytics
 
+### Option A: UI (quick overview)
+
 Navigate to **http://localhost:8543/rules** (run `make restart-web` if the server is not running).
 
 Two panels:
 1. **Approval Rules Panel** (top) — active rules with trigger counts
 2. **Approval Analytics Panel** (bottom) — time-series data, coverage gaps, program breakdowns
 
-Use the **7 / 14 / 30 / 90 day** window selector to change the time range.
+Use the **7 / 14 / 30 / 90 day** window selector. **Note:** if the panel shows "Loading analytics…" with 0 decisions but you know data exists, use Option B instead — the UI reads from the SQLite DB while the JSONL migration may still be in progress for recent data.
+
+### Option B: REST API (authoritative, 90-day window)
+
+```bash
+curl -s -X POST "http://localhost:8543/api/session.v1.SessionService/GetApprovalAnalytics" \
+  -H "Content-Type: application/json" \
+  -H "Connect-Protocol-Version: 1" \
+  -d '{"windowDays": 90}' -o /tmp/approval_analytics_api.json
+
+# Parse key metrics
+python3 - <<'EOF'
+import json, collections
+with open("/tmp/approval_analytics_api.json") as f:
+    s = json.load(f)["summary"]
+total = s["totalDecisions"]
+counts = s.get("decisionCounts", {})
+print(f"Total: {total}")
+for d, c in sorted(counts.items(), key=lambda x: -x[1]):
+    print(f"  {d}: {c} ({100*c/total:.1f}%)")
+print(f"\nGap count: {s.get('coverageGapCount')} ({s.get('coverageGapRate',0)*100:.1f}%)")
+print("\nTop uncovered programs:")
+for p in s.get("topUncoveredPrograms", []):
+    print(f"  {p['programName']} [{p['category']}]: {p['count']}")
+print("\nTop uncovered tools:")
+for t in s.get("topUncoveredTools", []):
+    print(f"  {t['toolName']}: {t['count']}")
+EOF
+```
+
+### Option C: Direct SQLite queries (deepest drill-down)
+
+All classification decisions are written to `~/.stapler-squad/sessions.db`:
+
+```bash
+DB=~/.stapler-squad/sessions.db
+
+# Decision breakdown (90 days)
+sqlite3 $DB "
+SELECT decision, COUNT(*) as c
+FROM classification_analytics
+WHERE created_at >= datetime('now', '-90 days')
+GROUP BY decision ORDER BY c DESC;"
+
+# Top programs with unmatched escalations (the coverage gap list)
+sqlite3 $DB "
+SELECT command_program, COUNT(*) as c
+FROM classification_analytics
+WHERE created_at >= datetime('now', '-90 days')
+  AND decision = 'escalate'
+  AND (rule_id IS NULL OR rule_id = '')
+GROUP BY command_program
+ORDER BY c DESC LIMIT 20;"
+
+# Sample commands for a specific unmatched program (replace 'strings' with target)
+sqlite3 $DB "
+SELECT command_subcategory, substr(command_preview,1,200)
+FROM classification_analytics
+WHERE created_at >= datetime('now', '-90 days')
+  AND decision = 'escalate' AND (rule_id IS NULL OR rule_id = '')
+  AND command_program = 'strings'
+ORDER BY created_at DESC LIMIT 10;"
+
+# Top triggered rules
+sqlite3 $DB "
+SELECT rule_name, COUNT(*) as c
+FROM classification_analytics
+WHERE created_at >= datetime('now', '-90 days')
+  AND rule_name IS NOT NULL
+GROUP BY rule_name ORDER BY c DESC LIMIT 15;"
+
+# Compound command failures: programs that have rules but still escalate in pipelines
+sqlite3 $DB "
+SELECT command_program, COUNT(*) as c
+FROM classification_analytics
+WHERE created_at >= datetime('now', '-90 days')
+  AND decision = 'escalate' AND (rule_id IS NULL OR rule_id = '')
+  AND command_program IN ('cat','ls','echo','cd','ps','grep','find','git','gh')
+GROUP BY command_program ORDER BY c DESC;"
+```
+
+**Key insight:** When a program has an AutoAllow rule but still shows up in the gap list, it is always the first program in a **compound command** (`cmd1 | cmd2 && cmd3`) where a later sub-command has no matching rule. The compound classifier requires ALL top-level sub-commands to have AutoAllow — if `python3 -c "..."` in a pipeline fails to classify (e.g., due to escaped quotes inside the inline script), the whole compound escalates attributed to the first program.
 
 ## Reading the Analytics
 
@@ -44,6 +127,48 @@ For each row → click "Add rule →" to open the rules editor.
 - **Top Tools** — if Bash is dominant with high gap rate, existing Bash rules are too narrow
 - **Top Bash Programs** — appears in both "top" and "uncovered" → needs a rule
 - **Top Python Imports** — `requests`/`urllib`/`httpx` = Claude making HTTP calls from Python
+
+## Known Gaps from 90-Day Analysis (as of 2026-05-18)
+
+Current state: **6.8% gap rate** (1,943 / 28,397 decisions), 89.8% auto-allow.
+
+### Tier 1 — Missing rules (program has no rule at all)
+
+| Program | Count | Recommended action |
+|---------|-------|--------------------|
+| `strings` | 234 | **Auto-allow** — read-only Unix binary inspector (`strings /path/to/bin`) |
+| `adb` | 230 | **Allow** read-only subcommands (`devices`, `shell`, `logcat`, `dumpsys`, `pm list`); escalate write ops (`install`, `push`, `shell rm`) |
+| `nix` | 139 | **Allow** `--version`, `develop`, `build`, `eval`, `flake`; escalate `install`, `profile add` |
+| `r2` / radare2 | 56 | **Auto-allow** — analysis-only invocations (`-A`, `-q`, `-c "?"`); used in RE skill |
+| `which` | 44 | **Auto-allow** — read-only shell utility, already conceptually covered by `ls/pwd/echo` |
+| `[` | 36 | **Auto-allow** — POSIX `test` builtin, appears in shell scripts, never dangerous alone |
+| `sleeper` | 45 | **Auto-allow** — internal test/mock process in this project |
+| `java` | 23 | Check against existing `java -jar` / `java -version` rule; add missing subcommands |
+| `proextract` | 87 | **Auto-allow** — this is the `proextract` Rust binary from `raystudio-linux`, read-only analysis tool |
+
+### Tier 2 — Compound command failures (program has a rule, but pipeline partner doesn't)
+
+Root cause: `classifyCompound` requires ALL top-level pipeline sub-commands to have AutoAllow. The most common failure is `X | python3 -c "import sys,json; ..."` where the inline python3 script has escaped quotes that confuse the bash tokenizer, preventing the stdlib-import rule from matching.
+
+| First program | Count | What fails |
+|--------------|-------|-----------|
+| `gh` | 276 | `gh run list ... \| python3 -c "import json,sys; ..."` — complex inline python |
+| `cd` | 206 | `cd /path && complex_loop_or_script` — shell loops/heredocs in the chain |
+| `cat` | 79 | `cat file \| python3 -c "import sys,json; ..."` — same pattern |
+| `ps` | 73 | `ps aux \| awk/python3/grep` — some awk patterns or inline python |
+| `ls` | 61 | Compound commands with unrecognized pipeline partners |
+| `python3` | 232 | Multi-line `-c` scripts with backslash escapes or heredoc-style quoting |
+
+**Best fix:** investigate `Allow python -c with stdlib-only imports` rule — it should handle `import json,sys` and `import sys, json` but may be failing on `import json,sys` (no space after comma) or on commands where the bash tokenizer sees unbalanced quotes.
+
+### Tier 3 — MCP tools (no rules)
+
+The following MCP tools are unmatched. Add to `Allow read-only MCP tools` or create targeted rules:
+
+- `Monitor` (35) — Claude Code built-in; should already be in "Allow Claude Code agent and planning tools"
+- `mcp__stapler-squad__*` (10–7 each) — stapler-squad MCP server tools
+- `mcp__claude_ai_Google_Calendar__list_events` (9) — read-only calendar
+- `mcp__claude_ai_Gmail__*` (7–4 each) — Gmail read operations
 
 ## Deciding What Rules to Add
 
