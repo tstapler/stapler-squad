@@ -67,8 +67,19 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "deny", resp.HookSpecificOutput.Decision.Behavior, "secret command must be denied")
 
-	// Allow the async analytics write to complete.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the async analytics write to complete.
+	require.Eventually(t, func() bool {
+		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.SessionID == "session-1" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "analytics entry for session-1 must be persisted within 2s")
 
 	// Load all analytics entries from the window.
 	entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
@@ -79,7 +90,7 @@ func TestApprovalHandler_SecretNotPersistedToAnalytics(t *testing.T) {
 	for _, e := range entries {
 		if e.SessionID == "session-1" {
 			found = true
-			assert.Equal(t, "[REDACTED: secret detected]", e.CommandPreview,
+			assert.Equal(t, redactedSecret, e.CommandPreview,
 				"analytics entry must have redacted command, not the secret")
 			assert.NotContains(t, e.CommandPreview, "ghp_",
 				"raw GitHub token must not appear in analytics")
@@ -96,8 +107,19 @@ func TestApprovalHandler_LoadWindow_ContainsNoSecret(t *testing.T) {
 
 	_ = postPermissionRequestWithCommand(t, h, "session-2", "Bash", secretCmd)
 
-	// Allow async write to complete.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for the async analytics write to complete.
+	require.Eventually(t, func() bool {
+		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		if err != nil {
+			return false
+		}
+		for _, e := range entries {
+			if e.SessionID == "session-2" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second, 10*time.Millisecond, "analytics entry for session-2 must be persisted within 2s")
 
 	entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
 	require.NoError(t, err)

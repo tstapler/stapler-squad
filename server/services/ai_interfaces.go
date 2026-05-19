@@ -2,15 +2,26 @@ package services
 
 import "context"
 
+// Redaction sentinel constants used when suppressing secrets before storage or
+// prompt injection. Use these instead of inline string literals so grep-based
+// audits can find every redaction site.
+const (
+	// redactedSecret is written to analytics storage when a secret is detected
+	// in a command and must not be persisted.
+	redactedSecret = "[REDACTED: secret detected]"
+	// redactedPrompt is inserted into AI prompts in place of a command that
+	// triggered the secret scanner (defense-in-depth, per FLAG-1).
+	redactedPrompt = "[REDACTED]"
+)
+
 // RulePromptContext carries all domain data needed to build a suggestion prompt.
 // Assembled by RulesService before passing to a RulePromptBuilder.
 type RulePromptContext struct {
-	ExistingRules []RuleSpec     // user + seed + claude-settings rules
-	SeedExamples  []RuleSpec     // hand-picked seed examples for style
-	AnalyticsGaps []AnalyticsGap // unmatched commands grouped by tool/program
-	CommandSample string         // for COMMAND_SAMPLE source
-	ToolNameFilter string        // optional single-tool scope
-	ProgramFilter  string        // optional single-program scope
+	ExistingRules  []RuleSpec     // user + seed + claude-settings rules
+	AnalyticsGaps  []AnalyticsGap // unmatched commands grouped by tool/program
+	CommandSample  string         // for COMMAND_SAMPLE source
+	ToolNameFilter string         // optional single-tool scope
+	ProgramFilter  string         // optional single-program scope
 	WindowDays     int
 }
 

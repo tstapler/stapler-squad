@@ -380,6 +380,7 @@ export function ApprovalAnalyticsPanel() {
                                   <button
                                     className={suggestRuleButton}
                                     data-testid={`suggest-rule-tool-${t.toolName}`}
+                                    disabled={generateLoading}
                                     onClick={() => {
                                       setActiveRowKey(`tool:${t.toolName}`);
                                       void generate({
@@ -469,6 +470,7 @@ export function ApprovalAnalyticsPanel() {
                                   <button
                                     className={suggestRuleButton}
                                     data-testid={`suggest-rule-program-${p.programName}`}
+                                    disabled={generateLoading}
                                     onClick={() => {
                                       setActiveRowKey(`program:${p.programName}`);
                                       void generate({
@@ -548,6 +550,7 @@ function CommandDistributionTable({ stats }: { stats: SubcommandStatProto[] }) {
         value={filter}
         onChange={(e) => setFilter(e.target.value)}
         className={filterInput}
+        aria-label="Filter command distribution entries"
       />
       <div className={tableWrapper}>
         <table className={table}>

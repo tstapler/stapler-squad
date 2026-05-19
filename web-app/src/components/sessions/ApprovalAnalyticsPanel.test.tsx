@@ -10,7 +10,7 @@ import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ApprovalAnalyticsPanel } from "./ApprovalAnalyticsPanel";
 import type { SuggestedRuleProto } from "@/gen/session/v1/types_pb";
-import { AutoDecision } from "@/gen/session/v1/types_pb";
+import { AutoDecision, SuggestionSource } from "@/gen/session/v1/types_pb";
 
 // ---------------------------------------------------------------------------
 // Mock: useApprovalAnalytics
@@ -176,6 +176,7 @@ describe("ApprovalAnalyticsPanel", () => {
       expect(mockGenerate).toHaveBeenCalledTimes(1);
       expect(mockGenerate).toHaveBeenCalledWith(
         expect.objectContaining({
+          source: SuggestionSource.ANALYTICS_GAPS,
           toolNameFilter: "Bash",
           windowDays: 7,
         })
@@ -190,6 +191,7 @@ describe("ApprovalAnalyticsPanel", () => {
       expect(mockGenerate).toHaveBeenCalledTimes(1);
       expect(mockGenerate).toHaveBeenCalledWith(
         expect.objectContaining({
+          source: SuggestionSource.ANALYTICS_GAPS,
           programNameFilter: "git",
           windowDays: 7,
         })
@@ -209,9 +211,11 @@ describe("ApprovalAnalyticsPanel", () => {
       render(<ApprovalAnalyticsPanel />);
 
       // When loading is true from the start, no "Generating..." text is shown
-      // until an activeRowKey is set (by clicking a row). The buttons should still render.
-      // Verify the button is still present (loading=true at panel level doesn't hide unrelated rows).
-      expect(screen.getByTestId("suggest-rule-tool-Bash")).toBeInTheDocument();
+      // until an activeRowKey is set (by clicking a row). The buttons should be present
+      // but disabled (F11: all Suggest Rule buttons disabled while any generation is in-flight).
+      const bashBtn = screen.getByTestId("suggest-rule-tool-Bash");
+      expect(bashBtn).toBeInTheDocument();
+      expect(bashBtn).toBeDisabled();
     });
   });
 
@@ -235,7 +239,10 @@ describe("ApprovalAnalyticsPanel", () => {
       // and the card would appear given the matching activeRowKey + suggestions.
       await waitFor(() => {
         expect(mockGenerate).toHaveBeenCalledWith(
-          expect.objectContaining({ toolNameFilter: "Bash" })
+          expect.objectContaining({
+            source: SuggestionSource.ANALYTICS_GAPS,
+            toolNameFilter: "Bash",
+          })
         );
       });
     });

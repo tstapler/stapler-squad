@@ -2,6 +2,7 @@
 // +feature: review-queue-pr-creation
 
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useReviewQueueNavigation } from "@/lib/hooks/useReviewQueueNavigation";
@@ -61,6 +62,10 @@ import {
   filterToggle,
   filterToggleActive,
   filterClear,
+  modalOverlay,
+  modalContent,
+  ruleModalContent,
+  divergedBadge,
 } from "./ReviewQueuePanel.css";
 import { Button } from "@/components/ui";
 
@@ -678,7 +683,7 @@ export function ReviewQueuePanel({
                             e.stopPropagation();
                             setRuleSaved(false);
                             setActiveRuleItemId(queueItem.sessionId);
-                            generateRule({
+                            void generateRule({
                               source: SuggestionSource.COMMAND_SAMPLE,
                               commandSample: queueItem.metadata!["tool_input_command"],
                               toolNameFilter: queueItem.metadata?.["tool_name"] ?? "",
@@ -721,16 +726,7 @@ export function ReviewQueuePanel({
                     onRunOneShot && (
                       <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                         {queueItem.branchDivergedFromBase && (
-                          <span
-                            style={{
-                              fontSize: "0.75rem",
-                              padding: "2px 6px",
-                              background: "var(--warning-bg)",
-                              color: "var(--warning)",
-                              borderRadius: "4px",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
+                          <span className={divergedBadge}>
                             ⚠ Diverged from main
                           </span>
                         )}
@@ -758,17 +754,9 @@ export function ReviewQueuePanel({
       </div>
 
       {/* S3-3: Create PR confirmation modal */}
-      {prModal && (
+      {prModal && createPortal(
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "var(--overlay-background)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
+          className={modalOverlay}
           onClick={() => {
             if (!prRunning) {
               setPrModal(null);
@@ -777,17 +765,7 @@ export function ReviewQueuePanel({
           }}
         >
           <div
-            style={{
-              background: "var(--modal-background)",
-              border: "1px solid var(--modal-border)",
-              borderRadius: "8px",
-              padding: "1.5rem",
-              maxWidth: "520px",
-              width: "90%",
-              display: "flex",
-              flexDirection: "column",
-              gap: "1rem",
-            }}
+            className={modalContent}
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -870,40 +848,21 @@ export function ReviewQueuePanel({
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Epic 4: Create Rule modal */}
-      {activeRuleItemId && (
+      {activeRuleItemId && createPortal(
         <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "var(--overlay-background)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-          }}
+          className={modalOverlay}
           onClick={() => {
             setActiveRuleItemId(null);
             clearRule();
           }}
         >
           <div
-            style={{
-              background: "var(--modal-background)",
-              border: "1px solid var(--modal-border)",
-              borderRadius: "8px",
-              padding: "1.5rem",
-              maxWidth: "600px",
-              width: "90%",
-              maxHeight: "90vh",
-              overflowY: "auto",
-              display: "flex",
-              flexDirection: "column",
-              gap: "1rem",
-            }}
+            className={ruleModalContent}
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -981,7 +940,8 @@ export function ReviewQueuePanel({
               </p>
             )}
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

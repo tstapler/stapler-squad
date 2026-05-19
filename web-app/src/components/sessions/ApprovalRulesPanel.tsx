@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
@@ -244,6 +244,14 @@ export function ApprovalRulesPanel() {
 
   const visibleSuggestions = suggestions.filter((_, idx) => !dismissedIndices.has(idx));
 
+  // ── aria-live announcement for generate state changes ─────────────────────
+
+  const genLiveMessage = useMemo(() => {
+    if (genLoading) return "Generating rule suggestions…";
+    if (suggestions.length > 0) return "Rule suggestions ready.";
+    return "";
+  }, [genLoading, suggestions.length]);
+
   // ── analytics summary bar ─────────────────────────────────────────────────
 
   const autoAllowRate = summary ? Math.round(summary.autoApproveRate * 100) : null;
@@ -267,7 +275,7 @@ export function ApprovalRulesPanel() {
               }}
               className={generateButton}
               disabled={genLoading}
-              data-testid="generate-suggestions-button"
+              data-testid="generate-suggestions"
             >
               {genLoading ? "Generating…" : "Generate Suggestions"}
             </button>
@@ -294,6 +302,15 @@ export function ApprovalRulesPanel() {
           Rules are evaluated in priority order before requests reach the manual review queue.
         </p>
       </div>
+
+      {/* ── Accessible live region for generation state ── */}
+      <span
+        aria-live="polite"
+        aria-atomic="true"
+        style={{ position: "absolute", width: 1, height: 1, padding: 0, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
+      >
+        {genLiveMessage}
+      </span>
 
       {/* ── Generate error banner ── */}
       {genError && (

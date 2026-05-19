@@ -157,6 +157,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	analyticsStore.Start(context.Background())
 
 	// Insert 3 escalated entries with no rule match.
+	// RiskLevel must be non-empty to pass the DB schema validator.
 	for i := 0; i < 3; i++ {
 		analyticsStore.Record(AnalyticsEntry{
 			Timestamp:      time.Now(),
@@ -164,11 +165,15 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 			ToolName:       "Bash",
 			CommandPreview: fmt.Sprintf("some-cmd-%d", i),
 			Decision:       "escalate",
+			RiskLevel:      "medium",
 			// RuleID empty = no rule matched
 		})
 	}
-	// Allow time for async write.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the async write to complete by polling LoadWindow until all 3 entries appear.
+	require.Eventually(t, func() bool {
+		entries, err := analyticsStore.LoadWindow(time.Now().Add(-1 * time.Hour))
+		return err == nil && len(entries) >= 3
+	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
 
 	c := classifier.NewRuleBasedClassifier()
 	svc := NewRulesService(rulesStore, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"})
@@ -181,10 +186,12 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	// existingRules should include the 2 user rules + seed rules.
 	assert.GreaterOrEqual(t, len(promptCtx.ExistingRules), 2, "existing rules must include user rules")
 
-	// AnalyticsGaps should reflect the 3 escalated entries.
-	// (May be 0 if ReclassifyGaps changes the decision; only check if entries persisted)
-	// We accept >= 0 since the exact gap depends on ReclassifyGaps classification.
-	assert.GreaterOrEqual(t, len(promptCtx.AnalyticsGaps), 0)
+	// AnalyticsGaps should reflect the 3 escalated entries grouped into 1 gap cluster
+	// (all 3 share the same ToolName="Bash" and CommandProgram="" so they collapse into 1).
+	// ReclassifyGaps may re-classify entries that now match a rule; since the test inserts
+	// entries with empty RuleID and the seed rules do not match "some-cmd-N", the gap
+	// cluster survives reclassification.
+	assert.Equal(t, 1, len(promptCtx.AnalyticsGaps), "3 escalated entries with same tool/program should produce exactly 1 gap cluster")
 }
 
 // ── T-UNIT-GO-007: FR-8 — GenerateSuggestedRule never calls Upsert ───────────
@@ -251,7 +258,7 @@ func TestParseSuggestions_InvalidCommandPattern_DropsItem(t *testing.T) {
 }
 
 func TestParseSuggestions_ConfidenceClamp(t *testing.T) {
-	json1 := `[{"name":"x","decision":"auto_allow","risk_level":"low","reason":"r","confidence":1.5}]`
+	json1 := `[{"name":"x","tool_name":"Bash","command_pattern":"git push","decision":"auto_allow","risk_level":"low","reason":"r","confidence":1.5}]`
 	svc := newRulesServiceWithAI(t, nil)
 	sugs, err := svc.parseSuggestions(json1)
 	require.NoError(t, err)
@@ -260,7 +267,7 @@ func TestParseSuggestions_ConfidenceClamp(t *testing.T) {
 }
 
 func TestParseSuggestions_PriorityZero_DefaultsTo100(t *testing.T) {
-	json1 := `[{"name":"x","decision":"auto_allow","risk_level":"low","reason":"r","priority":0,"confidence":0.5}]`
+	json1 := `[{"name":"x","tool_name":"Bash","command_pattern":"npm install","decision":"auto_allow","risk_level":"low","reason":"r","priority":0,"confidence":0.5}]`
 	svc := newRulesServiceWithAI(t, nil)
 	sugs, err := svc.parseSuggestions(json1)
 	require.NoError(t, err)
@@ -271,17 +278,33 @@ func TestParseSuggestions_PriorityZero_DefaultsTo100(t *testing.T) {
 func TestParseSuggestions_CapAt5(t *testing.T) {
 	// 6-element array should be capped to 5.
 	json6 := `[
-		{"name":"a","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
-		{"name":"b","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
-		{"name":"c","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
-		{"name":"d","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
-		{"name":"e","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
-		{"name":"f","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5}
+		{"name":"a","tool_name":"Bash","command_pattern":"cmd-a","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"b","tool_name":"Bash","command_pattern":"cmd-b","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"c","tool_name":"Bash","command_pattern":"cmd-c","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"d","tool_name":"Bash","command_pattern":"cmd-d","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"e","tool_name":"Bash","command_pattern":"cmd-e","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5},
+		{"name":"f","tool_name":"Bash","command_pattern":"cmd-f","decision":"auto_allow","risk_level":"low","reason":"r","priority":100,"confidence":0.5}
 	]`
 	svc := newRulesServiceWithAI(t, nil)
 	sugs, err := svc.parseSuggestions(json6)
 	require.NoError(t, err)
 	assert.Len(t, sugs, 5, "6-element JSON array should be capped to 5 suggestions")
+}
+
+func TestParseSuggestions_MarkdownFencedJSON_ParsesCorrectly(t *testing.T) {
+	// T1: Markdown-wrapped JSON (```json ... ```) must be stripped and parsed correctly.
+	fenced := "```json\n" + fixture2ElementJSON + "\n```"
+	svc := newRulesServiceWithAI(t, nil)
+	sugs, err := svc.parseSuggestions(fenced)
+	require.NoError(t, err, "parseSuggestions must strip markdown fences and parse correctly")
+	assert.Len(t, sugs, 2, "fenced JSON with 2 elements must return 2 suggestions")
+}
+
+func TestParseSuggestions_NonJSONInput_ReturnsError(t *testing.T) {
+	// T1: Non-JSON / malformed input must return an error, not panic.
+	svc := newRulesServiceWithAI(t, nil)
+	_, err := svc.parseSuggestions("this is not json at all")
+	require.Error(t, err, "parseSuggestions must return an error for malformed non-JSON input")
 }
 
 // ── T-INTEG-001: Full handler pipeline with mock AI ──────────────────────────

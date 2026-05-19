@@ -198,7 +198,7 @@ describe("SuggestedRuleCard", () => {
         />
       );
 
-      fireEvent.click(screen.getByTestId("accept-button"));
+      fireEvent.click(screen.getByTestId("accept-rule"));
 
       await waitFor(() => expect(mockUpsertRule).toHaveBeenCalledTimes(1));
 
@@ -223,7 +223,7 @@ describe("SuggestedRuleCard", () => {
         />
       );
 
-      const btn = screen.getByTestId("accept-button");
+      const btn = screen.getByTestId("accept-rule");
       expect(btn).toBeDisabled();
     });
 
@@ -243,18 +243,18 @@ describe("SuggestedRuleCard", () => {
         />
       );
 
-      fireEvent.click(screen.getByTestId("accept-button"));
+      fireEvent.click(screen.getByTestId("accept-rule"));
 
       await waitFor(() =>
-        expect(screen.getByTestId("accept-button")).toHaveTextContent("Saving…")
+        expect(screen.getByTestId("accept-rule")).toHaveTextContent("Saving…")
       );
 
-      expect(screen.getByTestId("accept-button")).toBeDisabled();
+      expect(screen.getByTestId("accept-rule")).toBeDisabled();
 
       // Settle.
       resolveUpsert();
       await waitFor(() =>
-        expect(screen.getByTestId("accept-button")).not.toHaveTextContent("Saving…")
+        expect(screen.getByTestId("accept-rule")).not.toHaveTextContent("Saving…")
       );
     });
   });
@@ -270,7 +270,7 @@ describe("SuggestedRuleCard", () => {
         />
       );
 
-      fireEvent.click(screen.getByTestId("discard-button"));
+      fireEvent.click(screen.getByTestId("discard-rule"));
 
       expect(onDiscard).toHaveBeenCalledTimes(1);
       expect(mockUpsertRule).not.toHaveBeenCalled();
@@ -294,7 +294,7 @@ describe("SuggestedRuleCard", () => {
       fireEvent.change(input, { target: { value: "^git (status|log)" } });
       expect(input.value).toBe("^git (status|log)");
 
-      fireEvent.click(screen.getByTestId("accept-button"));
+      fireEvent.click(screen.getByTestId("accept-rule"));
 
       await waitFor(() => expect(mockUpsertRule).toHaveBeenCalledTimes(1));
 

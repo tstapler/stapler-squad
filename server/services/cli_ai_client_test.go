@@ -84,12 +84,7 @@ func TestNewCLIAIClient_ReturnsErrorWhenBinaryMissing(t *testing.T) {
 // the factory returns (nil, "") when no API key is set and no known CLI is in PATH.
 // This test does NOT require any external tools.
 func TestNewBestAvailableAIClient_ReturnsNilWhenNothingAvailable(t *testing.T) {
-	// Override knownCLIAgents with an empty slice for this test.
-	orig := knownCLIAgents
-	knownCLIAgents = nil
-	t.Cleanup(func() { knownCLIAgents = orig })
-
-	c, backend := NewBestAvailableAIClient("")
+	c, backend := NewBestAvailableAIClient("", nil)
 	if c != nil {
 		t.Errorf("expected nil client, got %T (backend=%q)", c, backend)
 	}
@@ -101,11 +96,7 @@ func TestNewBestAvailableAIClient_ReturnsNilWhenNothingAvailable(t *testing.T) {
 // TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI verifies that when
 // no CLI agent is in PATH, a non-empty API key produces an AnthropicAIClient.
 func TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI(t *testing.T) {
-	orig := knownCLIAgents
-	knownCLIAgents = nil // no CLI agents available
-	t.Cleanup(func() { knownCLIAgents = orig })
-
-	c, backend := NewBestAvailableAIClient("sk-ant-test-key")
+	c, backend := NewBestAvailableAIClient("sk-ant-test-key", nil) // nil = no CLI agents
 	if c == nil {
 		t.Fatal("expected non-nil client when API key is set and no CLI available")
 	}
@@ -121,20 +112,16 @@ func TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI(t *testing.T)
 // the factory falls through to the first available CLI binary.
 // Only runs when the cat binary is available (used as a stand-in for a real AI CLI).
 func TestNewBestAvailableAIClient_FallsBackToCLIWhenNoKey(t *testing.T) {
-	catPath, err := exec.LookPath("cat")
+	_, err := exec.LookPath("cat")
 	if err != nil {
 		t.Skip("cat not in PATH")
 	}
-	_ = catPath
 
-	// Temporarily replace knownCLIAgents with a single cat-based spec.
-	orig := knownCLIAgents
-	knownCLIAgents = []CLIAgentSpec{
+	specs := []CLIAgentSpec{
 		{Name: "cat", Binary: "cat", Args: func() []string { return nil }},
 	}
-	t.Cleanup(func() { knownCLIAgents = orig })
 
-	c, backend := NewBestAvailableAIClient("") // no API key
+	c, backend := NewBestAvailableAIClient("", specs) // no API key
 	if c == nil {
 		t.Fatal("expected non-nil CLI client when binary is in PATH")
 	}

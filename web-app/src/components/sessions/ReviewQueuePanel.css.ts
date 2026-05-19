@@ -1,5 +1,5 @@
 import { style, keyframes, globalStyle } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, zIndex } from "@/styles/theme.css";
 
 const queueFadeIn = keyframes({
   from: { opacity: 0, transform: "translateY(4px)" },
@@ -485,4 +485,49 @@ export const filterClear = style({
       color: vars.color.textPrimary,
     },
   },
+});
+
+export const modalOverlay = style({
+  position: "fixed",
+  inset: 0,
+  background: vars.color.overlayBackground,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  zIndex: zIndex.modal,
+});
+
+export const modalContent = style({
+  background: vars.color.modalBackground,
+  border: `1px solid ${vars.color.modalBorder}`,
+  borderRadius: vars.radii.lg,
+  padding: "1.5rem",
+  maxWidth: "520px",
+  width: "90%",
+  display: "flex",
+  flexDirection: "column",
+  gap: "1rem",
+});
+
+export const ruleModalContent = style({
+  background: vars.color.modalBackground,
+  border: `1px solid ${vars.color.modalBorder}`,
+  borderRadius: vars.radii.lg,
+  padding: "1.5rem",
+  maxWidth: "600px",
+  width: "90%",
+  maxHeight: "90vh",
+  overflowY: "auto",
+  display: "flex",
+  flexDirection: "column",
+  gap: "1rem",
+});
+
+export const divergedBadge = style({
+  fontSize: vars.fontSize.xs,
+  padding: `2px 6px`,
+  background: vars.color.warningBg,
+  color: vars.color.warning,
+  borderRadius: vars.radii.sm,
+  whiteSpace: "nowrap",
 });

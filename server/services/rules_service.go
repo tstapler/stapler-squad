@@ -408,11 +408,6 @@ func (rs *RulesService) buildPromptContext(req *sessionv1.GenerateSuggestedRuleR
 		ProgramFilter:  req.ProgramNameFilter,
 	}
 
-	// Build seed examples for style reference.
-	for _, r := range classifier.SeedRules() {
-		ctx.SeedExamples = append(ctx.SeedExamples, ruleToSpec(r))
-	}
-
 	// Load analytics window and build gap clusters.
 	since := time.Now().AddDate(0, 0, -days)
 	entries, err := rs.analyticsStore.LoadWindow(since)
@@ -513,8 +508,29 @@ func (rs *RulesService) parseSuggestions(rawJSON string) ([]*sessionv1.Suggested
 	return result, nil
 }
 
+// overbreadCommandPatterns are commandPattern values that explicitly match every
+// command and are therefore unsafe to auto-allow. An empty commandPattern is NOT
+// included because it is valid when scoped by tool_name or tool_pattern.
+var overbreadCommandPatterns = map[string]bool{
+	".*": true,
+	".+": true,
+}
+
 // validateSuggestion converts a rawSuggestion to a SuggestedRuleProto, applying all validation.
 func (rs *RulesService) validateSuggestion(raw rawSuggestion, idx int) (*sessionv1.SuggestedRuleProto, error) {
+	// Guard: reject overbroad auto_allow/allow suggestions whose commandPattern explicitly
+	// matches everything (e.g., ".*" or ".+"). An empty commandPattern is allowed only
+	// when scoped by a non-empty tool_name or tool_pattern.
+	rawDecision := raw.Decision
+	if rawDecision == "auto_allow" || rawDecision == "allow" {
+		if overbreadCommandPatterns[raw.CommandPattern] {
+			return nil, fmt.Errorf("suggestion[%d]: dangerously overbroad commandPattern %q for %q decision — must be more specific", idx, raw.CommandPattern, rawDecision)
+		}
+		if raw.CommandPattern == "" && raw.ToolName == "" && raw.ToolPattern == "" {
+			return nil, fmt.Errorf("suggestion[%d]: %q suggestion has no commandPattern, tool_name, or tool_pattern — too broad to auto-allow", idx, rawDecision)
+		}
+	}
+
 	// Validate regex patterns.
 	if raw.CommandPattern != "" {
 		if _, err := regexp.Compile(raw.CommandPattern); err != nil {

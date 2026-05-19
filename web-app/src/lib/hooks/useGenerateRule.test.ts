@@ -172,7 +172,44 @@ describe("useGenerateRule", () => {
 
   describe("cancellation", () => {
     it("useGenerateRule_should_notSetError_When_Cancelled", async () => {
-      // Simulate an AbortError (what fetch/connectrpc throws on abort).
+      // Simulate the in-flight → cancel() → AbortError flow.
+      // The RPC is slow: we control when it rejects.
+      const abortError = new Error("The operation was aborted");
+      abortError.name = "AbortError";
+
+      let rejectRpc!: (err: Error) => void;
+      const rpcPromise = new Promise<{ suggestions: unknown[] }>((_, reject) => {
+        rejectRpc = reject;
+      });
+      mockGenerateSuggestedRule.mockReturnValue(rpcPromise);
+
+      const { result } = renderHook(() => useGenerateRule());
+
+      // Start generate (in-flight).
+      act(() => {
+        void result.current.generate({ source: SuggestionSource.ANALYTICS_GAPS });
+      });
+
+      await waitFor(() => expect(result.current.loading).toBe(true));
+
+      // User cancels — this sets userCancelledRef=true before the AbortError arrives.
+      act(() => {
+        result.current.cancel();
+      });
+
+      // Now the RPC rejects with AbortError.
+      act(() => {
+        rejectRpc(abortError);
+      });
+
+      await waitFor(() => expect(result.current.loading).toBe(false));
+
+      // Manual cancel must NOT set error state.
+      expect(result.current.error).toBeNull();
+    });
+
+    it("useGenerateRule_should_setTimeoutError_When_AbortErrorWithoutCancel", async () => {
+      // Simulate an AbortError thrown by timeout (not by user calling cancel()).
       const abortError = new Error("The operation was aborted");
       abortError.name = "AbortError";
       mockGenerateSuggestedRule.mockRejectedValue(abortError);
@@ -183,8 +220,9 @@ describe("useGenerateRule", () => {
         await result.current.generate({ source: SuggestionSource.ANALYTICS_GAPS });
       });
 
-      // AbortError must NOT set error state.
-      expect(result.current.error).toBeNull();
+      // Timeout-triggered AbortError should set a friendly timeout message.
+      expect(result.current.error).not.toBeNull();
+      expect(result.current.error?.message).toBe("Rule generation timed out. Please try again.");
     });
 
     it("useGenerateRule_should_resetLoading_After_Cancel", async () => {

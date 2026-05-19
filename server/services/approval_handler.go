@@ -161,7 +161,7 @@ func (h *ApprovalHandler) HandlePermissionRequest(w http.ResponseWriter, r *http
 				for k, v := range payload.ToolInput {
 					sanitizedInput[k] = v
 				}
-				sanitizedInput["command"] = "[REDACTED: secret detected]"
+				sanitizedInput["command"] = redactedSecret
 				sanitizedPayload := payload
 				sanitizedPayload.ToolInput = sanitizedInput
 				h.analyticsStore.RecordFromResult(sanitizedPayload, classifier.ClassificationResult{

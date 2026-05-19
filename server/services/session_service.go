@@ -201,7 +201,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	var aiClientImpl AIClient
 	{
 		apiKey := os.Getenv("ANTHROPIC_API_KEY")
-		if c, backend := NewBestAvailableAIClient(apiKey); c != nil {
+		if c, backend := NewBestAvailableAIClient(apiKey, knownCLIAgents); c != nil {
 			promptBuilder = &DefaultRulePromptBuilder{}
 			aiClientImpl = c
 			log.Info("[SessionService] AI rule generation enabled", "backend", backend)

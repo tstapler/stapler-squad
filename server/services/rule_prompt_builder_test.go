@@ -12,7 +12,6 @@ func TestDefaultRulePromptBuilder_BuildSystemPrompt_ContainsSchemaAndSeeds(t *te
 	builder := &DefaultRulePromptBuilder{}
 	ctx := RulePromptContext{
 		ExistingRules: []RuleSpec{},
-		SeedExamples:  []RuleSpec{},
 		WindowDays:    7,
 	}
 
@@ -58,7 +57,7 @@ func TestBuildUserPrompt_RedactsSecretCommandPreviews(t *testing.T) {
 
 	prompt := builder.BuildUserPrompt(ctx)
 
-	assert.Contains(t, prompt, "[REDACTED]", "user prompt must contain [REDACTED] for secret command")
+	assert.Contains(t, prompt, redactedPrompt, "user prompt must contain redactedPrompt for secret command")
 	assert.NotContains(t, prompt, "ghp_", "user prompt must not contain raw GitHub token")
 }
 
@@ -84,7 +83,7 @@ func TestDefaultRulePromptBuilder_BuildUserPrompt_RedactsSecretCommandSample(t *
 
 	prompt := builder.BuildUserPrompt(ctx)
 
-	assert.Contains(t, prompt, "[REDACTED]", "user prompt must contain [REDACTED] for secret command sample")
+	assert.Contains(t, prompt, redactedPrompt, "user prompt must contain redactedPrompt for secret command sample")
 	assert.NotContains(t, prompt, "ghp_", "user prompt must not contain raw GitHub token in command sample")
 }
 

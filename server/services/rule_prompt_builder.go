@@ -114,7 +114,7 @@ func (b *DefaultRulePromptBuilder) BuildUserPrompt(ctx RulePromptContext) string
 		// COMMAND_SAMPLE source: focus on a single raw command.
 		cmd := ctx.CommandSample
 		if hit := ScanForSecrets(cmd); hit.Found {
-			cmd = "[REDACTED]"
+			cmd = redactedPrompt
 		}
 		sb.WriteString("Analyze this specific command and propose 1 rule to auto-approve or auto-deny it appropriately:\n\n")
 		sb.WriteString("Command: ")
@@ -164,11 +164,10 @@ func (b *DefaultRulePromptBuilder) BuildUserPrompt(ctx RulePromptContext) string
 				for _, cmd := range gap.RepresentativeCmds {
 					// Second-pass secret redaction (defense-in-depth).
 					if hit := ScanForSecrets(cmd); hit.Found {
-						cmd = "[REDACTED]"
+						cmd = redactedPrompt
 					}
-					sb.WriteString("  - ")
-					sb.WriteString(cmd)
-					sb.WriteString("\n")
+					// Wrap in XML delimiters to prevent prompt injection from command content.
+					fmt.Fprintf(&sb, "  - <command>%s</command>\n", cmd)
 				}
 			}
 			sb.WriteString("\n")

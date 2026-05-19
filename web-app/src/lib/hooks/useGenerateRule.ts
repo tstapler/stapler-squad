@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createClient } from "@connectrpc/connect";
 import { SessionService, GenerateSuggestedRuleRequestSchema } from "@/gen/session/v1/session_pb";
 import { SuggestedRuleProto, SuggestionSource } from "@/gen/session/v1/types_pb";
@@ -44,6 +44,13 @@ export function useGenerateRule(): UseGenerateRuleResult {
   const abortRef = useRef<AbortController | null>(null);
   const clientRef = useRef<ReturnType<typeof createClient<typeof SessionService>> | null>(null);
 
+  // Abort any in-flight request on unmount to prevent state updates on unmounted components.
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
   // Lazily initialise the client (mirrors useApprovalRules pattern).
   const getClient = useCallback(() => {
     if (!clientRef.current) {
@@ -52,9 +59,13 @@ export function useGenerateRule(): UseGenerateRuleResult {
     return clientRef.current;
   }, []);
 
+  // Track whether the most recent abort was a user-initiated cancel (vs. timeout).
+  const userCancelledRef = useRef(false);
+
   const generate = useCallback(
     async (req: GenerateRuleRequest) => {
       // Cancel any previous in-flight request.
+      userCancelledRef.current = false;
       abortRef.current?.abort();
       abortRef.current = new AbortController();
 
@@ -73,8 +84,14 @@ export function useGenerateRule(): UseGenerateRuleResult {
         setSuggestions(resp.suggestions ?? []);
       } catch (err) {
         const e = err instanceof Error ? err : new Error("GenerateSuggestedRule failed");
-        // AbortError means the user explicitly cancelled — do not surface as error.
-        if (e.name !== "AbortError") {
+        if (e.name === "AbortError") {
+          if (userCancelledRef.current) {
+            // Manual cancel via cancel() — silently swallow. "Rule generation was cancelled."
+          } else {
+            // Timeout-triggered abort — surface a friendly message.
+            setError(new Error("Rule generation timed out. Please try again."));
+          }
+        } else {
           setError(e);
         }
       } finally {
@@ -85,6 +102,7 @@ export function useGenerateRule(): UseGenerateRuleResult {
   );
 
   const cancel = useCallback(() => {
+    userCancelledRef.current = true;
     abortRef.current?.abort();
     setLoading(false);
   }, []);

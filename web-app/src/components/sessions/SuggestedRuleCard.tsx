@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
 import { ApprovalRuleProto, AutoDecision, SuggestedRuleProto } from "@/gen/session/v1/types_pb";
 import {
@@ -63,6 +63,12 @@ function confidenceLevel(c: number): ConfidenceLevel {
   return "low";
 }
 
+const CONFIDENCE_LABELS: Record<ConfidenceLevel, string> = {
+  high: "High",
+  medium: "Medium",
+  low: "Low",
+};
+
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 export interface SuggestedRuleCardProps {
@@ -90,6 +96,12 @@ export function SuggestedRuleCard({
   loading = false,
 }: SuggestedRuleCardProps) {
   const { upsertRule, rules } = useApprovalRules();
+
+  // Keep a ref to the latest rules so handleAccept never uses a stale closure snapshot.
+  const rulesRef = useRef(rules);
+  useEffect(() => {
+    rulesRef.current = rules;
+  }, [rules]);
 
   const [form, setForm] = useState<RuleFormState>(() => stateFromSuggestion(suggestion));
   const [saving, setSaving] = useState(false);
@@ -123,8 +135,8 @@ export function SuggestedRuleCard({
         enabled: true,
         source: "user",
       });
-      // Find the just-upserted rule in the refreshed rules list.
-      const saved = rules.find((r) => r.name === form.name && r.source === "user");
+      // Find the just-upserted rule in the latest rules list (via ref to avoid stale closure).
+      const saved = rulesRef.current.find((r) => r.name === form.name && r.source === "user");
       if (saved) {
         onAccept(saved);
       } else {
@@ -150,7 +162,7 @@ export function SuggestedRuleCard({
     } finally {
       setSaving(false);
     }
-  }, [form, suggestion.riskLevel, upsertRule, rules, onAccept]);
+  }, [form, suggestion.riskLevel, upsertRule, onAccept]);
 
   const level = confidenceLevel(suggestion.confidence);
   const confidencePct = Math.round(suggestion.confidence * 100);
@@ -173,9 +185,9 @@ export function SuggestedRuleCard({
           className={confidenceBadge({ level })}
           data-testid="confidence-badge"
           data-level={level}
-          aria-label={`Confidence: ${confidencePct}%`}
+          aria-label={`Confidence: ${CONFIDENCE_LABELS[level]} (${confidencePct}%)`}
         >
-          {confidencePct}% confidence
+          {CONFIDENCE_LABELS[level]} — {confidencePct}% confidence
         </span>
       </div>
 
@@ -343,7 +355,7 @@ export function SuggestedRuleCard({
           type="button"
           onClick={onDiscard}
           disabled={saving}
-          data-testid="discard-button"
+          data-testid="discard-rule"
         >
           Discard
         </button>
@@ -352,7 +364,7 @@ export function SuggestedRuleCard({
           type="button"
           onClick={handleAccept}
           disabled={saving || !form.name.trim()}
-          data-testid="accept-button"
+          data-testid="accept-rule"
         >
           {saving ? "Saving…" : "Accept & Save"}
         </button>

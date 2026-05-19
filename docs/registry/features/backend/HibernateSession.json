@@ -1,14 +1,11 @@
 {
-  "id": "pr:get-info",
+  "id": "HibernateSession",
   "type": "backend",
   "service": "SessionService",
-  "method": "GetPRInfo",
+  "method": "HibernateSession",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestGetPRInfo_EmptySessionID",
-    "TestGetPRInfo_UnknownSessionID"
-  ],
+  "tested": false,
+  "testIds": [],
   "lastModified": "2026-05-18T19:18:16.428607422-07:00"
 }

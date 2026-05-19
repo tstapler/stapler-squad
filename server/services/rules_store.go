@@ -325,28 +325,12 @@ func riskLevelToInt(s string) int {
 	}
 }
 
+// decisionStringFromInt delegates to the canonical decisionString in analytics_store.go.
 func decisionStringFromInt(d int) string {
-	switch classifier.ClassificationDecision(d) {
-	case classifier.AutoAllow:
-		return "auto_allow"
-	case classifier.AutoDeny:
-		return "auto_deny"
-	default:
-		return "escalate"
-	}
+	return decisionString(classifier.ClassificationDecision(d))
 }
 
+// riskLevelStringFromInt delegates to the canonical riskLevelString in analytics_store.go.
 func riskLevelStringFromInt(r int) string {
-	switch classifier.RiskLevel(r) {
-	case classifier.RiskLow:
-		return "low"
-	case classifier.RiskMedium:
-		return "medium"
-	case classifier.RiskHigh:
-		return "high"
-	case classifier.RiskCritical:
-		return "critical"
-	default:
-		return "medium"
-	}
+	return riskLevelString(classifier.RiskLevel(r))
 }

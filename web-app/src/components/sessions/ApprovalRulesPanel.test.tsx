@@ -10,7 +10,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ApprovalRulesPanel } from "./ApprovalRulesPanel";
-import { AutoDecision } from "@/gen/session/v1/types_pb";
+import { AutoDecision, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { SuggestedRuleProto } from "@/gen/session/v1/types_pb";
 
 // ---------------------------------------------------------------------------
@@ -81,14 +81,18 @@ const hookConfig: HookConfig = {
   },
 };
 
-// Track which instance is being requested. The component calls useGenerateRule()
-// twice per render: the first call gets the panel instance, the second gets cmd.
-let _instanceIndex = 0;
+// The component calls useGenerateRule() twice per render:
+// first call → panel instance, second call → cmd instance.
+// We use an explicit call-count tracker that resets each test in resetHookConfig().
+// Using call count (not index modulo) keeps the assignment deterministic even if
+// React invokes extra renders in strict/concurrent mode — both renders see the
+// same panel/cmd split because we reset before each test.
+let _callCount = 0;
 
 jest.mock("@/lib/hooks/useGenerateRule", () => ({
   useGenerateRule: () => {
-    const idx = _instanceIndex++;
-    if (idx % 2 === 0) {
+    const callInRender = _callCount++ % 2;
+    if (callInRender === 0) {
       return { ...hookConfig.panel };
     }
     return { ...hookConfig.cmd };
@@ -143,7 +147,7 @@ function makeSuggestion(
 }
 
 function resetHookConfig() {
-  _instanceIndex = 0;
+  _callCount = 0;
 
   hookConfig.panel.suggestions = [];
   hookConfig.panel.loading = false;
@@ -179,7 +183,7 @@ describe("ApprovalRulesPanel", () => {
     it("ApprovalRulesPanel_should_showGenerateSuggestionsButton", () => {
       render(<ApprovalRulesPanel />);
 
-      const btn = screen.getByTestId("generate-suggestions-button");
+      const btn = screen.getByTestId("generate-suggestions");
       expect(btn).toBeInTheDocument();
       expect(btn).toHaveTextContent("Generate Suggestions");
       expect(btn).not.toBeDisabled();
@@ -189,7 +193,7 @@ describe("ApprovalRulesPanel", () => {
       hookConfig.panel.loading = true;
       render(<ApprovalRulesPanel />);
 
-      const btn = screen.getByTestId("generate-suggestions-button");
+      const btn = screen.getByTestId("generate-suggestions");
       expect(btn).toHaveTextContent("Generating…");
       expect(btn).toBeDisabled();
 
@@ -200,11 +204,11 @@ describe("ApprovalRulesPanel", () => {
     it("calls generate with ANALYTICS_GAPS source when button clicked", async () => {
       render(<ApprovalRulesPanel />);
 
-      fireEvent.click(screen.getByTestId("generate-suggestions-button"));
+      fireEvent.click(screen.getByTestId("generate-suggestions"));
 
       await waitFor(() => expect(hookConfig.panel.generate).toHaveBeenCalledTimes(1));
       expect(hookConfig.panel.generate).toHaveBeenCalledWith(
-        expect.objectContaining({ source: expect.anything() })
+        expect.objectContaining({ source: SuggestionSource.ANALYTICS_GAPS })
       );
     });
 
@@ -323,7 +327,10 @@ describe("ApprovalRulesPanel", () => {
 
       await waitFor(() => expect(hookConfig.cmd.generate).toHaveBeenCalledTimes(1));
       expect(hookConfig.cmd.generate).toHaveBeenCalledWith(
-        expect.objectContaining({ commandSample: "git push origin main" })
+        expect.objectContaining({
+          source: SuggestionSource.COMMAND_SAMPLE,
+          commandSample: "git push origin main",
+        })
       );
     });
 

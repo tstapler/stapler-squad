@@ -98,16 +98,17 @@ func (c *CLIAIClient) Complete(ctx context.Context, systemPrompt, userPrompt str
 // and a string identifying the backend selected. Returns (nil, "") when no
 // backend is available.
 //
+// specs is the ordered list of CLIAgentSpec entries to probe; pass knownCLIAgents
+// at production call sites. Tests may pass a custom slice to avoid PATH lookups.
+//
 // Priority order:
-//  1. claude CLI         — if the claude binary is in PATH (handles its own auth)
-//  2. gemini CLI         — if the gemini binary is in PATH
-//  3. opencode CLI       — if the opencode binary is in PATH
-//  4. Anthropic HTTP API — fallback if anthropicAPIKey is non-empty
+//  1. First matching CLI agent from specs (handles its own auth)
+//  2. Anthropic HTTP API — fallback if anthropicAPIKey is non-empty
 //
 // CLI agents are preferred because they manage their own authentication and
 // model selection, requiring no extra configuration in stapler-squad.
-func NewBestAvailableAIClient(anthropicAPIKey string) (AIClient, string) {
-	for _, spec := range knownCLIAgents {
+func NewBestAvailableAIClient(anthropicAPIKey string, specs []CLIAgentSpec) (AIClient, string) {
+	for _, spec := range specs {
 		if c, err := NewCLIAIClient(spec); err == nil {
 			return c, "cli:" + spec.Name
 		}
