@@ -461,10 +461,19 @@ export function ApprovalAnalyticsPanel() {
                           <tr
                             className={row}
                             style={{ cursor: "pointer" }}
+                            tabIndex={0}
+                            role="button"
                             aria-expanded={isDrillOpen}
+                            aria-label={`${p.programName} — click to ${isDrillOpen ? "collapse" : "expand"} details`}
                             onClick={() =>
                               setSelectedProgram(isDrillOpen ? null : p.programName)
                             }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedProgram(isDrillOpen ? null : p.programName);
+                              }
+                            }}
                           >
                             <td className={td}><code className={toolName}>{p.programName}</code></td>
                             <td className={td}><span className={categoryBadge}>{p.category}</span></td>
@@ -481,7 +490,8 @@ export function ApprovalAnalyticsPanel() {
                                     className={suggestRuleButton}
                                     data-testid={`suggest-rule-program-${p.programName}`}
                                     disabled={generateLoading}
-                                    onClick={() => {
+                                    onClick={(e) => {
+                                      e.stopPropagation();
                                       setActiveRowKey(`program:${p.programName}`);
                                       void generate({
                                         source: SuggestionSource.ANALYTICS_GAPS,
@@ -493,7 +503,12 @@ export function ApprovalAnalyticsPanel() {
                                     Suggest Rule
                                   </button>
                                 )}
-                                <a href="/rules" className={addRuleManualLink} title="Add a rule manually">
+                                <a
+                                  href="/rules"
+                                  className={addRuleManualLink}
+                                  title="Add a rule manually"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
                                   or add manually →
                                 </a>
                               </div>

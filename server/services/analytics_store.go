@@ -255,8 +255,8 @@ func (s *AnalyticsStore) LoadWindow(since time.Time) ([]AnalyticsEntry, error) {
 
 // LoadProgramWindow loads analytics entries for a specific program in the given window.
 // Used by GetProgramAnalytics RPC for trend computation.
-func (s *AnalyticsStore) LoadProgramWindow(program string, since time.Time) ([]AnalyticsEntry, error) {
-	data, err := s.storage.ListAnalyticsByProgramSince(context.Background(), program, since, 0)
+func (s *AnalyticsStore) LoadProgramWindow(ctx context.Context, program string, since time.Time) ([]AnalyticsEntry, error) {
+	data, err := s.storage.ListAnalyticsByProgramSince(ctx, program, since, 0)
 	if err != nil {
 		return nil, fmt.Errorf("list analytics by program %q since %s: %w", program, since.Format(time.RFC3339), err)
 	}
@@ -268,14 +268,14 @@ func (s *AnalyticsStore) LoadProgramWindow(program string, since time.Time) ([]A
 }
 
 // GetSubcommandBreakdown returns per-(subcommand, decision) aggregate counts.
-func (s *AnalyticsStore) GetSubcommandBreakdown(program string, since time.Time) ([]session.SubcommandDecisionCount, error) {
-	return s.storage.GetSubcommandBreakdown(context.Background(), program, since)
+func (s *AnalyticsStore) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]session.SubcommandDecisionCount, error) {
+	return s.storage.GetSubcommandBreakdown(ctx, program, since)
 }
 
 // ListRecentCommands returns up to n command_preview strings for (program, subcommand).
 // Pass subcommand="" to match all subcommands.
-func (s *AnalyticsStore) ListRecentCommands(program, subcommand string, since time.Time, n int) ([]string, error) {
-	return s.storage.ListRecentCommandsByProgram(context.Background(), program, subcommand, since, n)
+func (s *AnalyticsStore) ListRecentCommands(ctx context.Context, program, subcommand string, since time.Time, n int) ([]string, error) {
+	return s.storage.ListRecentCommandsByProgram(ctx, program, subcommand, since, n)
 }
 
 // ReclassifyGaps re-runs the current classifier against entries that were

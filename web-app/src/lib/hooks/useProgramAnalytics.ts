@@ -57,6 +57,7 @@ export function useProgramAnalytics(
       })
       .catch((err: unknown) => {
         if (err instanceof Error && err.name === "AbortError") return;
+        setData(null);
         setError(err instanceof Error ? err : new Error(String(err)));
         setIsLoading(false);
       });

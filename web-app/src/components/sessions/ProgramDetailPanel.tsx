@@ -3,7 +3,7 @@
 
 import React, { useMemo } from "react";
 import { useProgramAnalytics } from "@/lib/hooks/useProgramAnalytics";
-import type { SubcommandBreakdownProto } from "@/gen/session/v1/types_pb";
+import type { SubcommandBreakdownProto, DailyBucketProto } from "@/gen/session/v1/types_pb";
 import * as styles from "./ProgramDetailPanel.css";
 
 interface ProgramDetailPanelProps {
@@ -103,8 +103,47 @@ export function ProgramDetailPanel({
               </ul>
             </>
           )}
+
+          {/* Daily trend sparkline — AC-12. trend is per-program; per-subcommand data
+              is not available from the backend, so a single program-level trend bar
+              is rendered here. */}
+          {data.trend.length > 0 && (
+            <>
+              <div className={styles.sectionTitle}>Daily Activity (last {data.trend.length} days)</div>
+              <TrendSparkline buckets={data.trend} />
+            </>
+          )}
         </>
       )}
+    </div>
+  );
+}
+
+interface TrendSparklineProps {
+  buckets: DailyBucketProto[];
+}
+
+function TrendSparkline({ buckets }: TrendSparklineProps) {
+  const maxTotal = Math.max(...buckets.map((b) => b.total), 1);
+  return (
+    <div className={styles.trendSection}>
+      <div className={styles.trendRow} aria-label="Daily activity trend sparkline">
+        {buckets.map((b) => {
+          const heightPct = Math.round((b.total / maxTotal) * 100);
+          return (
+            <span
+              key={b.date}
+              className={styles.trendBar}
+              style={{ height: `${heightPct}%` }}
+              title={`${b.date}: ${b.total} commands`}
+              aria-hidden="true"
+            />
+          );
+        })}
+      </div>
+      <div className={styles.trendDate}>
+        {buckets[0]?.date} – {buckets[buckets.length - 1]?.date}
+      </div>
     </div>
   );
 }

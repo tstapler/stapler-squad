@@ -1202,10 +1202,13 @@ func (r *EntRepository) GetSubcommandBreakdown(ctx context.Context, program stri
 		Count              int    `json:"count"`
 	}
 	var rows []breakdownRow
+	// Exclude rows where command_subcategory IS NULL to avoid sql.ScanSlice
+	// errors when scanning nullable columns into a plain string field.
 	err := r.client.ClassificationAnalytics.Query().
 		Where(
 			classificationanalytics.CommandProgramEQ(program),
 			classificationanalytics.CreatedAtGTE(since),
+			classificationanalytics.CommandSubcategoryNotNil(),
 		).
 		GroupBy(
 			classificationanalytics.FieldCommandSubcategory,

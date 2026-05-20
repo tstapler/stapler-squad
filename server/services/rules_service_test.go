@@ -328,6 +328,29 @@ func TestGenerateSuggestedRule_Integration_MockAI(t *testing.T) {
 
 // ── attachConflictInfo tests ──────────────────────────────────────────────────
 
+// ── T-UNIT-GO-011: GetProgramAnalytics returns expected response fields ────────
+
+func TestGetProgramAnalytics_ReturnsExpectedFields(t *testing.T) {
+	// T-UNIT-GO-011
+	svc := newRulesService(t)
+
+	windowDays := int32(7)
+	resp, err := svc.GetProgramAnalytics(t.Context(), connect.NewRequest(&sessionv1.GetProgramAnalyticsRequest{
+		Program:    "git",
+		WindowDays: &windowDays,
+	}))
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg)
+
+	// All top-level repeated/slice fields must be non-nil (may be empty, not nil).
+	assert.NotNil(t, resp.Msg.Subcommands, "subcommands field must not be nil")
+	assert.NotNil(t, resp.Msg.RecentExamples, "recent_examples field must not be nil")
+	assert.NotNil(t, resp.Msg.Trend, "daily_trend field must not be nil")
+
+	// Program echo-back.
+	assert.Equal(t, "git", resp.Msg.Program)
+}
+
 func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testing.T) {
 	// T-UNIT-GO (attachConflictInfo): fixture rule at priority 500 overlaps suggestion at 100.
 	storage := createTestStorage(t)

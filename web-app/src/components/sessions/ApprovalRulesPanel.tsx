@@ -26,6 +26,11 @@ import {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/** Escape all regex metacharacters in a literal string for safe interpolation into patterns. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function decisionLabel(d: AutoDecision): string {
   switch (d) {
     case AutoDecision.ALLOW: return "Auto-Allow";
@@ -137,12 +142,17 @@ export function ApprovalRulesPanel() {
       prefill.toolName = tool;
       prefill.name = `Allow ${tool}`;
     } else if (program) {
+      // Escape regex metacharacters so values like "docker-compose" or "node.js"
+      // produce valid patterns. Use (?:^|\s) / (?:\s|$) word boundaries because
+      // \b does not match at hyphen boundaries.
+      const esc = escapeRegex(program);
       prefill.toolName = "Bash";
       if (subcommand) {
-        prefill.commandPattern = `\\b${program}\\b.*\\b${subcommand}\\b`;
+        const escSub = escapeRegex(subcommand);
+        prefill.commandPattern = `(?:^|\\s)${esc}(?:\\s|$).*(?:^|\\s)${escSub}(?:\\s|$)`;
         prefill.name = `Allow ${program} ${subcommand}`;
       } else {
-        prefill.commandPattern = `\\b${program}\\b`;
+        prefill.commandPattern = `(?:^|\\s)${esc}(?:\\s|$)`;
         prefill.name = `Allow ${program}`;
       }
     }

@@ -134,6 +134,32 @@ export const sparklineBar = style({
   opacity: 0.7,
 });
 
+export const trendRow = style({
+  display: "flex",
+  alignItems: "flex-end",
+  gap: "2px",
+  height: "32px",
+  padding: `${vars.space[2]} 0`,
+});
+
+export const trendBar = style({
+  display: "inline-block",
+  minWidth: "4px",
+  background: vars.color.primary,
+  borderRadius: "1px 1px 0 0",
+  opacity: 0.7,
+});
+
+export const trendDate = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  marginTop: vars.space[1],
+});
+
+export const trendSection = style({
+  overflowX: "auto",
+});
+
 export const loadingState = style({
   color: vars.color.textMuted,
   fontSize: vars.fontSize.sm,

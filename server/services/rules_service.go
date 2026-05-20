@@ -201,19 +201,19 @@ func (rs *RulesService) GetProgramAnalytics(
 	since := time.Now().AddDate(0, 0, -days)
 
 	// AC-4: subcommand breakdown (SQL GROUP BY)
-	breakdownRows, err := rs.analyticsStore.GetSubcommandBreakdown(program, since)
+	breakdownRows, err := rs.analyticsStore.GetSubcommandBreakdown(ctx, program, since)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("subcommand breakdown: %w", err))
 	}
 
 	// AC-5: recent examples (up to 20, all subcommands)
-	examples, err := rs.analyticsStore.ListRecentCommands(program, "", since, 20)
+	examples, err := rs.analyticsStore.ListRecentCommands(ctx, program, "", since, 20)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("recent examples: %w", err))
 	}
 
 	// AC-6: trend (all rows for program in window → Go-level daily bucketing)
-	entries, err := rs.analyticsStore.LoadProgramWindow(program, since)
+	entries, err := rs.analyticsStore.LoadProgramWindow(ctx, program, since)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("program window: %w", err))
 	}
@@ -228,8 +228,12 @@ func (rs *RulesService) GetProgramAnalytics(
 		}
 	}
 
-	// Rule coverage check (AC-10 / has_rule_coverage)
-	coveredSubcmds := rs.coveredSubcommands(program)
+	// Collect known subcommands for rule coverage check (AC-10 / has_rule_coverage).
+	knownSubcmds := make([]string, 0, len(breakdownRows))
+	for _, row := range breakdownRows {
+		knownSubcmds = append(knownSubcmds, row.Subcommand)
+	}
+	coveredSubcmds := rs.coveredSubcommands(program, knownSubcmds)
 
 	// Aggregate per-subcommand breakdown into proto messages
 	aggr := make(map[string]map[string]int32) // subcommand → decision → count
@@ -284,9 +288,11 @@ func (rs *RulesService) GetProgramAnalytics(
 	}), nil
 }
 
-// coveredSubcommands returns a map of subcommand → true for all subcommands
+// coveredSubcommands returns a map of subcommand → true for all known subcommands
 // of the given program that are covered by at least one existing rule.
-func (rs *RulesService) coveredSubcommands(program string) map[string]bool {
+// knownSubcmds is the list of subcommand strings observed in the analytics window;
+// it is used to test regex-based CommandPatterns against synthetic "<program> <subcommand>" strings.
+func (rs *RulesService) coveredSubcommands(program string, knownSubcmds []string) map[string]bool {
 	specs := rs.allRuleSpecs()
 	covered := make(map[string]bool)
 	for _, spec := range specs {
@@ -304,15 +310,25 @@ func (rs *RulesService) coveredSubcommands(program string) map[string]bool {
 			covered[""] = true
 			continue
 		}
-		// Heuristic: extract the first two tokens from the pattern as "program subcommand".
-		pat := strings.TrimLeft(spec.CommandPattern, "^")
-		tokens := strings.Fields(pat)
-		if len(tokens) >= 2 && strings.EqualFold(tokens[0], program) {
-			// second token is the subcommand (may have regex chars — strip them)
-			sub := strings.TrimRight(tokens[1], ".*+?$")
-			covered[sub] = true
-		} else if len(tokens) == 1 && strings.EqualFold(tokens[0], program) {
-			// Pattern matches just the program name — covers all subcommands
+		// Compile the pattern once; skip invalid patterns rather than panicking.
+		re, err := regexp.Compile(spec.CommandPattern)
+		if err != nil {
+			continue
+		}
+		// Test each known subcommand against a synthetic "<program> <subcommand>" string.
+		// This correctly handles regex-style patterns (e.g. \bgit\b.*\bpush\b) that the
+		// previous strings.Fields tokenizer could not parse.
+		for _, sub := range knownSubcmds {
+			synthetic := program
+			if sub != "" {
+				synthetic = program + " " + sub
+			}
+			if re.MatchString(synthetic) {
+				covered[sub] = true
+			}
+		}
+		// Also check whether the pattern matches the bare program name (covers all subcommands).
+		if re.MatchString(program) {
 			covered[""] = true
 		}
 	}
