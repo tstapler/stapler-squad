@@ -3856,8 +3856,11 @@ type ApprovalRuleProto struct {
 	Enabled        bool                   `protobuf:"varint,12,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	Source         string                 `protobuf:"bytes,13,opt,name=source,proto3" json:"source,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Structured criteria — preferred over command_pattern for program/subcommand matching.
+	CriteriaPrograms    []string `protobuf:"bytes,15,rep,name=criteria_programs,json=criteriaPrograms,proto3" json:"criteria_programs,omitempty"`
+	CriteriaSubcommands []string `protobuf:"bytes,16,rep,name=criteria_subcommands,json=criteriaSubcommands,proto3" json:"criteria_subcommands,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ApprovalRuleProto) Reset() {
@@ -3984,6 +3987,20 @@ func (x *ApprovalRuleProto) GetSource() string {
 func (x *ApprovalRuleProto) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *ApprovalRuleProto) GetCriteriaPrograms() []string {
+	if x != nil {
+		return x.CriteriaPrograms
+	}
+	return nil
+}
+
+func (x *ApprovalRuleProto) GetCriteriaSubcommands() []string {
+	if x != nil {
+		return x.CriteriaSubcommands
 	}
 	return nil
 }
@@ -5781,7 +5798,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x11seconds_remaining\x18\t \x01(\x05R\x10secondsRemaining\x1a<\n" +
 	"\x0eToolInputEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdb\x03\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbb\x04\n" +
 	"\x11ApprovalRuleProto\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
@@ -5799,7 +5816,9 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\aenabled\x18\f \x01(\bR\aenabled\x12\x16\n" +
 	"\x06source\x18\r \x01(\tR\x06source\x129\n" +
 	"\n" +
-	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"\xf7\b\n" +
+	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12+\n" +
+	"\x11criteria_programs\x18\x0f \x03(\tR\x10criteriaPrograms\x121\n" +
+	"\x14criteria_subcommands\x18\x10 \x03(\tR\x13criteriaSubcommands\"\xf7\b\n" +
 	"\x15AnalyticsSummaryProto\x12'\n" +
 	"\x0ftotal_decisions\x18\x01 \x01(\x05R\x0etotalDecisions\x12^\n" +
 	"\x0fdecision_counts\x18\x02 \x03(\v25.session.v1.AnalyticsSummaryProto.DecisionCountsEntryR\x0edecisionCounts\x126\n" +

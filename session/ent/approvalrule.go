@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -31,6 +32,10 @@ type ApprovalRule struct {
 	CommandPattern string `json:"command_pattern,omitempty"`
 	// FilePattern holds the value of the "file_pattern" field.
 	FilePattern string `json:"file_pattern,omitempty"`
+	// CriteriaPrograms holds the value of the "criteria_programs" field.
+	CriteriaPrograms []string `json:"criteria_programs,omitempty"`
+	// CriteriaSubcommands holds the value of the "criteria_subcommands" field.
+	CriteriaSubcommands []string `json:"criteria_subcommands,omitempty"`
 	// Decision holds the value of the "decision" field.
 	Decision int `json:"decision,omitempty"`
 	// RiskLevel holds the value of the "risk_level" field.
@@ -57,6 +62,8 @@ func (*ApprovalRule) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case approvalrule.FieldCriteriaPrograms, approvalrule.FieldCriteriaSubcommands:
+			values[i] = new([]byte)
 		case approvalrule.FieldEnabled:
 			values[i] = new(sql.NullBool)
 		case approvalrule.FieldID, approvalrule.FieldDecision, approvalrule.FieldRiskLevel, approvalrule.FieldPriority:
@@ -127,6 +134,22 @@ func (_m *ApprovalRule) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field file_pattern", values[i])
 			} else if value.Valid {
 				_m.FilePattern = value.String
+			}
+		case approvalrule.FieldCriteriaPrograms:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field criteria_programs", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.CriteriaPrograms); err != nil {
+					return fmt.Errorf("unmarshal field criteria_programs: %w", err)
+				}
+			}
+		case approvalrule.FieldCriteriaSubcommands:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field criteria_subcommands", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.CriteriaSubcommands); err != nil {
+					return fmt.Errorf("unmarshal field criteria_subcommands: %w", err)
+				}
 			}
 		case approvalrule.FieldDecision:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -238,6 +261,12 @@ func (_m *ApprovalRule) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("file_pattern=")
 	builder.WriteString(_m.FilePattern)
+	builder.WriteString(", ")
+	builder.WriteString("criteria_programs=")
+	builder.WriteString(fmt.Sprintf("%v", _m.CriteriaPrograms))
+	builder.WriteString(", ")
+	builder.WriteString("criteria_subcommands=")
+	builder.WriteString(fmt.Sprintf("%v", _m.CriteriaSubcommands))
 	builder.WriteString(", ")
 	builder.WriteString("decision=")
 	builder.WriteString(fmt.Sprintf("%v", _m.Decision))

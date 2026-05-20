@@ -952,6 +952,9 @@ message ApprovalRuleProto {
   bool enabled = 12;
   string source = 13;
   google.protobuf.Timestamp created_at = 14;
+  // Structured criteria — preferred over command_pattern for program/subcommand matching.
+  repeated string criteria_programs = 15;
+  repeated string criteria_subcommands = 16;
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.

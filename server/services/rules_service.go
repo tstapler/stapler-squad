@@ -83,19 +83,21 @@ func (rs *RulesService) UpsertApprovalRule(
 	}
 
 	spec := RuleSpec{
-		ID:             r.Id,
-		Name:           r.Name,
-		ToolName:       r.ToolName,
-		ToolPattern:    r.ToolPattern,
-		CommandPattern: r.CommandPattern,
-		FilePattern:    r.FilePattern,
-		Decision:       autoDecisionToString(r.Decision),
-		RiskLevel:      r.RiskLevel,
-		Reason:         r.Reason,
-		Alternative:    r.Alternative,
-		Priority:       int(r.Priority),
-		Enabled:        r.Enabled,
-		Source:         "user",
+		ID:                  r.Id,
+		Name:                r.Name,
+		ToolName:            r.ToolName,
+		ToolPattern:         r.ToolPattern,
+		CommandPattern:      r.CommandPattern,
+		FilePattern:         r.FilePattern,
+		CriteriaPrograms:    r.CriteriaPrograms,
+		CriteriaSubcommands: r.CriteriaSubcommands,
+		Decision:            autoDecisionToString(r.Decision),
+		RiskLevel:           r.RiskLevel,
+		Reason:              r.Reason,
+		Alternative:         r.Alternative,
+		Priority:            int(r.Priority),
+		Enabled:             r.Enabled,
+		Source:              "user",
 	}
 	if r.CreatedAt != nil {
 		spec.CreatedAt = r.CreatedAt.AsTime()
@@ -305,6 +307,31 @@ func (rs *RulesService) coveredSubcommands(program string, knownSubcmds []string
 		if !isBashTool && !isBashCat && spec.ToolName != "" {
 			continue
 		}
+		// Criteria-based matching: check Programs + Subcommands directly.
+		if len(spec.CriteriaPrograms) > 0 {
+			programMatched := false
+			for _, p := range spec.CriteriaPrograms {
+				if strings.EqualFold(p, program) {
+					programMatched = true
+					break
+				}
+			}
+			if programMatched {
+				if len(spec.CriteriaSubcommands) == 0 {
+					// No subcommand restriction — covers all subcommands.
+					covered[""] = true
+					for _, sub := range knownSubcmds {
+						covered[sub] = true
+					}
+				} else {
+					for _, sub := range spec.CriteriaSubcommands {
+						covered[sub] = true
+					}
+				}
+			}
+			continue
+		}
+
 		if spec.CommandPattern == "" {
 			// A rule with no CommandPattern matches all commands — every subcommand covered.
 			covered[""] = true
@@ -375,19 +402,21 @@ func (rs *RulesService) rebuildClassifier() {
 
 func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 	p := &sessionv1.ApprovalRuleProto{
-		Id:             spec.ID,
-		Name:           spec.Name,
-		ToolName:       spec.ToolName,
-		ToolPattern:    spec.ToolPattern,
-		CommandPattern: spec.CommandPattern,
-		FilePattern:    spec.FilePattern,
-		Decision:       stringToAutoDecision(spec.Decision),
-		RiskLevel:      spec.RiskLevel,
-		Reason:         spec.Reason,
-		Alternative:    spec.Alternative,
-		Priority:       int32(spec.Priority),
-		Enabled:        spec.Enabled,
-		Source:         spec.Source,
+		Id:                  spec.ID,
+		Name:                spec.Name,
+		ToolName:            spec.ToolName,
+		ToolPattern:         spec.ToolPattern,
+		CommandPattern:      spec.CommandPattern,
+		FilePattern:         spec.FilePattern,
+		CriteriaPrograms:    spec.CriteriaPrograms,
+		CriteriaSubcommands: spec.CriteriaSubcommands,
+		Decision:            stringToAutoDecision(spec.Decision),
+		RiskLevel:           spec.RiskLevel,
+		Reason:              spec.Reason,
+		Alternative:         spec.Alternative,
+		Priority:            int32(spec.Priority),
+		Enabled:             spec.Enabled,
+		Source:              spec.Source,
 	}
 	if !spec.CreatedAt.IsZero() {
 		p.CreatedAt = timestamppb.New(spec.CreatedAt)
@@ -416,6 +445,10 @@ func ruleToSpec(r classifier.Rule) RuleSpec {
 	}
 	if r.FilePattern != nil {
 		spec.FilePattern = r.FilePattern.String()
+	}
+	if r.Criteria != nil {
+		spec.CriteriaPrograms = r.Criteria.Programs
+		spec.CriteriaSubcommands = r.Criteria.Subcommands
 	}
 	return spec
 }

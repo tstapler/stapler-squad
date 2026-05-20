@@ -31,6 +31,10 @@ func (ApprovalRule) Fields() []ent.Field {
 			Optional(),
 		field.String("file_pattern").
 			Optional(),
+		field.JSON("criteria_programs", []string{}).
+			Optional(),
+		field.JSON("criteria_subcommands", []string{}).
+			Optional(),
 		field.Int("decision"),
 		field.Int("risk_level"),
 		field.String("reason").

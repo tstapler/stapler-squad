@@ -90,6 +90,8 @@ export function useApprovalRules(
         toolPattern: ruleData.toolPattern ?? "",
         commandPattern: ruleData.commandPattern ?? "",
         filePattern: ruleData.filePattern ?? "",
+        criteriaPrograms: ruleData.criteriaPrograms ?? [],
+        criteriaSubcommands: ruleData.criteriaSubcommands ?? [],
         decision: ruleData.decision ?? AutoDecision.ESCALATE,
         riskLevel: ruleData.riskLevel ?? "",
         reason: ruleData.reason ?? "",

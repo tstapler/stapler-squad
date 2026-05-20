@@ -104,6 +104,18 @@ func (_c *ApprovalRuleCreate) SetNillableFilePattern(v *string) *ApprovalRuleCre
 	return _c
 }
 
+// SetCriteriaPrograms sets the "criteria_programs" field.
+func (_c *ApprovalRuleCreate) SetCriteriaPrograms(v []string) *ApprovalRuleCreate {
+	_c.mutation.SetCriteriaPrograms(v)
+	return _c
+}
+
+// SetCriteriaSubcommands sets the "criteria_subcommands" field.
+func (_c *ApprovalRuleCreate) SetCriteriaSubcommands(v []string) *ApprovalRuleCreate {
+	_c.mutation.SetCriteriaSubcommands(v)
+	return _c
+}
+
 // SetDecision sets the "decision" field.
 func (_c *ApprovalRuleCreate) SetDecision(v int) *ApprovalRuleCreate {
 	_c.mutation.SetDecision(v)
@@ -365,6 +377,14 @@ func (_c *ApprovalRuleCreate) createSpec() (*ApprovalRule, *sqlgraph.CreateSpec)
 		_spec.SetField(approvalrule.FieldFilePattern, field.TypeString, value)
 		_node.FilePattern = value
 	}
+	if value, ok := _c.mutation.CriteriaPrograms(); ok {
+		_spec.SetField(approvalrule.FieldCriteriaPrograms, field.TypeJSON, value)
+		_node.CriteriaPrograms = value
+	}
+	if value, ok := _c.mutation.CriteriaSubcommands(); ok {
+		_spec.SetField(approvalrule.FieldCriteriaSubcommands, field.TypeJSON, value)
+		_node.CriteriaSubcommands = value
+	}
 	if value, ok := _c.mutation.Decision(); ok {
 		_spec.SetField(approvalrule.FieldDecision, field.TypeInt, value)
 		_node.Decision = value
@@ -564,6 +584,42 @@ func (u *ApprovalRuleUpsert) UpdateFilePattern() *ApprovalRuleUpsert {
 // ClearFilePattern clears the value of the "file_pattern" field.
 func (u *ApprovalRuleUpsert) ClearFilePattern() *ApprovalRuleUpsert {
 	u.SetNull(approvalrule.FieldFilePattern)
+	return u
+}
+
+// SetCriteriaPrograms sets the "criteria_programs" field.
+func (u *ApprovalRuleUpsert) SetCriteriaPrograms(v []string) *ApprovalRuleUpsert {
+	u.Set(approvalrule.FieldCriteriaPrograms, v)
+	return u
+}
+
+// UpdateCriteriaPrograms sets the "criteria_programs" field to the value that was provided on create.
+func (u *ApprovalRuleUpsert) UpdateCriteriaPrograms() *ApprovalRuleUpsert {
+	u.SetExcluded(approvalrule.FieldCriteriaPrograms)
+	return u
+}
+
+// ClearCriteriaPrograms clears the value of the "criteria_programs" field.
+func (u *ApprovalRuleUpsert) ClearCriteriaPrograms() *ApprovalRuleUpsert {
+	u.SetNull(approvalrule.FieldCriteriaPrograms)
+	return u
+}
+
+// SetCriteriaSubcommands sets the "criteria_subcommands" field.
+func (u *ApprovalRuleUpsert) SetCriteriaSubcommands(v []string) *ApprovalRuleUpsert {
+	u.Set(approvalrule.FieldCriteriaSubcommands, v)
+	return u
+}
+
+// UpdateCriteriaSubcommands sets the "criteria_subcommands" field to the value that was provided on create.
+func (u *ApprovalRuleUpsert) UpdateCriteriaSubcommands() *ApprovalRuleUpsert {
+	u.SetExcluded(approvalrule.FieldCriteriaSubcommands)
+	return u
+}
+
+// ClearCriteriaSubcommands clears the value of the "criteria_subcommands" field.
+func (u *ApprovalRuleUpsert) ClearCriteriaSubcommands() *ApprovalRuleUpsert {
+	u.SetNull(approvalrule.FieldCriteriaSubcommands)
 	return u
 }
 
@@ -868,6 +924,48 @@ func (u *ApprovalRuleUpsertOne) UpdateFilePattern() *ApprovalRuleUpsertOne {
 func (u *ApprovalRuleUpsertOne) ClearFilePattern() *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.ClearFilePattern()
+	})
+}
+
+// SetCriteriaPrograms sets the "criteria_programs" field.
+func (u *ApprovalRuleUpsertOne) SetCriteriaPrograms(v []string) *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetCriteriaPrograms(v)
+	})
+}
+
+// UpdateCriteriaPrograms sets the "criteria_programs" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertOne) UpdateCriteriaPrograms() *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateCriteriaPrograms()
+	})
+}
+
+// ClearCriteriaPrograms clears the value of the "criteria_programs" field.
+func (u *ApprovalRuleUpsertOne) ClearCriteriaPrograms() *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.ClearCriteriaPrograms()
+	})
+}
+
+// SetCriteriaSubcommands sets the "criteria_subcommands" field.
+func (u *ApprovalRuleUpsertOne) SetCriteriaSubcommands(v []string) *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetCriteriaSubcommands(v)
+	})
+}
+
+// UpdateCriteriaSubcommands sets the "criteria_subcommands" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertOne) UpdateCriteriaSubcommands() *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateCriteriaSubcommands()
+	})
+}
+
+// ClearCriteriaSubcommands clears the value of the "criteria_subcommands" field.
+func (u *ApprovalRuleUpsertOne) ClearCriteriaSubcommands() *ApprovalRuleUpsertOne {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.ClearCriteriaSubcommands()
 	})
 }
 
@@ -1359,6 +1457,48 @@ func (u *ApprovalRuleUpsertBulk) UpdateFilePattern() *ApprovalRuleUpsertBulk {
 func (u *ApprovalRuleUpsertBulk) ClearFilePattern() *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.ClearFilePattern()
+	})
+}
+
+// SetCriteriaPrograms sets the "criteria_programs" field.
+func (u *ApprovalRuleUpsertBulk) SetCriteriaPrograms(v []string) *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetCriteriaPrograms(v)
+	})
+}
+
+// UpdateCriteriaPrograms sets the "criteria_programs" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertBulk) UpdateCriteriaPrograms() *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateCriteriaPrograms()
+	})
+}
+
+// ClearCriteriaPrograms clears the value of the "criteria_programs" field.
+func (u *ApprovalRuleUpsertBulk) ClearCriteriaPrograms() *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.ClearCriteriaPrograms()
+	})
+}
+
+// SetCriteriaSubcommands sets the "criteria_subcommands" field.
+func (u *ApprovalRuleUpsertBulk) SetCriteriaSubcommands(v []string) *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.SetCriteriaSubcommands(v)
+	})
+}
+
+// UpdateCriteriaSubcommands sets the "criteria_subcommands" field to the value that was provided on create.
+func (u *ApprovalRuleUpsertBulk) UpdateCriteriaSubcommands() *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.UpdateCriteriaSubcommands()
+	})
+}
+
+// ClearCriteriaSubcommands clears the value of the "criteria_subcommands" field.
+func (u *ApprovalRuleUpsertBulk) ClearCriteriaSubcommands() *ApprovalRuleUpsertBulk {
+	return u.Update(func(s *ApprovalRuleUpsert) {
+		s.ClearCriteriaSubcommands()
 	})
 }
 

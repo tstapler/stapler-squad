@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
 	"github.com/tstapler/stapler-squad/session/ent/predicate"
@@ -153,6 +154,42 @@ func (_u *ApprovalRuleUpdate) SetNillableFilePattern(v *string) *ApprovalRuleUpd
 // ClearFilePattern clears the value of the "file_pattern" field.
 func (_u *ApprovalRuleUpdate) ClearFilePattern() *ApprovalRuleUpdate {
 	_u.mutation.ClearFilePattern()
+	return _u
+}
+
+// SetCriteriaPrograms sets the "criteria_programs" field.
+func (_u *ApprovalRuleUpdate) SetCriteriaPrograms(v []string) *ApprovalRuleUpdate {
+	_u.mutation.SetCriteriaPrograms(v)
+	return _u
+}
+
+// AppendCriteriaPrograms appends value to the "criteria_programs" field.
+func (_u *ApprovalRuleUpdate) AppendCriteriaPrograms(v []string) *ApprovalRuleUpdate {
+	_u.mutation.AppendCriteriaPrograms(v)
+	return _u
+}
+
+// ClearCriteriaPrograms clears the value of the "criteria_programs" field.
+func (_u *ApprovalRuleUpdate) ClearCriteriaPrograms() *ApprovalRuleUpdate {
+	_u.mutation.ClearCriteriaPrograms()
+	return _u
+}
+
+// SetCriteriaSubcommands sets the "criteria_subcommands" field.
+func (_u *ApprovalRuleUpdate) SetCriteriaSubcommands(v []string) *ApprovalRuleUpdate {
+	_u.mutation.SetCriteriaSubcommands(v)
+	return _u
+}
+
+// AppendCriteriaSubcommands appends value to the "criteria_subcommands" field.
+func (_u *ApprovalRuleUpdate) AppendCriteriaSubcommands(v []string) *ApprovalRuleUpdate {
+	_u.mutation.AppendCriteriaSubcommands(v)
+	return _u
+}
+
+// ClearCriteriaSubcommands clears the value of the "criteria_subcommands" field.
+func (_u *ApprovalRuleUpdate) ClearCriteriaSubcommands() *ApprovalRuleUpdate {
+	_u.mutation.ClearCriteriaSubcommands()
 	return _u
 }
 
@@ -397,6 +434,28 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 	if _u.mutation.FilePatternCleared() {
 		_spec.ClearField(approvalrule.FieldFilePattern, field.TypeString)
 	}
+	if value, ok := _u.mutation.CriteriaPrograms(); ok {
+		_spec.SetField(approvalrule.FieldCriteriaPrograms, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedCriteriaPrograms(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, approvalrule.FieldCriteriaPrograms, value)
+		})
+	}
+	if _u.mutation.CriteriaProgramsCleared() {
+		_spec.ClearField(approvalrule.FieldCriteriaPrograms, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.CriteriaSubcommands(); ok {
+		_spec.SetField(approvalrule.FieldCriteriaSubcommands, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedCriteriaSubcommands(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, approvalrule.FieldCriteriaSubcommands, value)
+		})
+	}
+	if _u.mutation.CriteriaSubcommandsCleared() {
+		_spec.ClearField(approvalrule.FieldCriteriaSubcommands, field.TypeJSON)
+	}
 	if value, ok := _u.mutation.Decision(); ok {
 		_spec.SetField(approvalrule.FieldDecision, field.TypeInt, value)
 	}
@@ -581,6 +640,42 @@ func (_u *ApprovalRuleUpdateOne) SetNillableFilePattern(v *string) *ApprovalRule
 // ClearFilePattern clears the value of the "file_pattern" field.
 func (_u *ApprovalRuleUpdateOne) ClearFilePattern() *ApprovalRuleUpdateOne {
 	_u.mutation.ClearFilePattern()
+	return _u
+}
+
+// SetCriteriaPrograms sets the "criteria_programs" field.
+func (_u *ApprovalRuleUpdateOne) SetCriteriaPrograms(v []string) *ApprovalRuleUpdateOne {
+	_u.mutation.SetCriteriaPrograms(v)
+	return _u
+}
+
+// AppendCriteriaPrograms appends value to the "criteria_programs" field.
+func (_u *ApprovalRuleUpdateOne) AppendCriteriaPrograms(v []string) *ApprovalRuleUpdateOne {
+	_u.mutation.AppendCriteriaPrograms(v)
+	return _u
+}
+
+// ClearCriteriaPrograms clears the value of the "criteria_programs" field.
+func (_u *ApprovalRuleUpdateOne) ClearCriteriaPrograms() *ApprovalRuleUpdateOne {
+	_u.mutation.ClearCriteriaPrograms()
+	return _u
+}
+
+// SetCriteriaSubcommands sets the "criteria_subcommands" field.
+func (_u *ApprovalRuleUpdateOne) SetCriteriaSubcommands(v []string) *ApprovalRuleUpdateOne {
+	_u.mutation.SetCriteriaSubcommands(v)
+	return _u
+}
+
+// AppendCriteriaSubcommands appends value to the "criteria_subcommands" field.
+func (_u *ApprovalRuleUpdateOne) AppendCriteriaSubcommands(v []string) *ApprovalRuleUpdateOne {
+	_u.mutation.AppendCriteriaSubcommands(v)
+	return _u
+}
+
+// ClearCriteriaSubcommands clears the value of the "criteria_subcommands" field.
+func (_u *ApprovalRuleUpdateOne) ClearCriteriaSubcommands() *ApprovalRuleUpdateOne {
+	_u.mutation.ClearCriteriaSubcommands()
 	return _u
 }
 
@@ -854,6 +949,28 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 	}
 	if _u.mutation.FilePatternCleared() {
 		_spec.ClearField(approvalrule.FieldFilePattern, field.TypeString)
+	}
+	if value, ok := _u.mutation.CriteriaPrograms(); ok {
+		_spec.SetField(approvalrule.FieldCriteriaPrograms, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedCriteriaPrograms(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, approvalrule.FieldCriteriaPrograms, value)
+		})
+	}
+	if _u.mutation.CriteriaProgramsCleared() {
+		_spec.ClearField(approvalrule.FieldCriteriaPrograms, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.CriteriaSubcommands(); ok {
+		_spec.SetField(approvalrule.FieldCriteriaSubcommands, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedCriteriaSubcommands(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, approvalrule.FieldCriteriaSubcommands, value)
+		})
+	}
+	if _u.mutation.CriteriaSubcommandsCleared() {
+		_spec.ClearField(approvalrule.FieldCriteriaSubcommands, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.Decision(); ok {
 		_spec.SetField(approvalrule.FieldDecision, field.TypeInt, value)

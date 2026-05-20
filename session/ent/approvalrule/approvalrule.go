@@ -27,6 +27,10 @@ const (
 	FieldCommandPattern = "command_pattern"
 	// FieldFilePattern holds the string denoting the file_pattern field in the database.
 	FieldFilePattern = "file_pattern"
+	// FieldCriteriaPrograms holds the string denoting the criteria_programs field in the database.
+	FieldCriteriaPrograms = "criteria_programs"
+	// FieldCriteriaSubcommands holds the string denoting the criteria_subcommands field in the database.
+	FieldCriteriaSubcommands = "criteria_subcommands"
 	// FieldDecision holds the string denoting the decision field in the database.
 	FieldDecision = "decision"
 	// FieldRiskLevel holds the string denoting the risk_level field in the database.
@@ -59,6 +63,8 @@ var Columns = []string{
 	FieldToolCategory,
 	FieldCommandPattern,
 	FieldFilePattern,
+	FieldCriteriaPrograms,
+	FieldCriteriaSubcommands,
 	FieldDecision,
 	FieldRiskLevel,
 	FieldReason,

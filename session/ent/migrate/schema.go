@@ -63,6 +63,8 @@ var (
 		{Name: "tool_category", Type: field.TypeString, Nullable: true},
 		{Name: "command_pattern", Type: field.TypeString, Nullable: true},
 		{Name: "file_pattern", Type: field.TypeString, Nullable: true},
+		{Name: "criteria_programs", Type: field.TypeJSON, Nullable: true},
+		{Name: "criteria_subcommands", Type: field.TypeJSON, Nullable: true},
 		{Name: "decision", Type: field.TypeInt},
 		{Name: "risk_level", Type: field.TypeInt},
 		{Name: "reason", Type: field.TypeString, Nullable: true},
@@ -87,12 +89,12 @@ var (
 			{
 				Name:    "approvalrule_priority",
 				Unique:  false,
-				Columns: []*schema.Column{ApprovalRulesColumns[12]},
+				Columns: []*schema.Column{ApprovalRulesColumns[14]},
 			},
 			{
 				Name:    "approvalrule_enabled",
 				Unique:  false,
-				Columns: []*schema.Column{ApprovalRulesColumns[13]},
+				Columns: []*schema.Column{ApprovalRulesColumns[15]},
 			},
 		},
 	}

@@ -59,23 +59,23 @@ func init() {
 	// approvalrule.NameValidator is a validator for the "name" field. It is called by the builders before save.
 	approvalrule.NameValidator = approvalruleDescName.Validators[0].(func(string) error)
 	// approvalruleDescPriority is the schema descriptor for priority field.
-	approvalruleDescPriority := approvalruleFields[11].Descriptor()
+	approvalruleDescPriority := approvalruleFields[13].Descriptor()
 	// approvalrule.DefaultPriority holds the default value on creation for the priority field.
 	approvalrule.DefaultPriority = approvalruleDescPriority.Default.(int)
 	// approvalruleDescEnabled is the schema descriptor for enabled field.
-	approvalruleDescEnabled := approvalruleFields[12].Descriptor()
+	approvalruleDescEnabled := approvalruleFields[14].Descriptor()
 	// approvalrule.DefaultEnabled holds the default value on creation for the enabled field.
 	approvalrule.DefaultEnabled = approvalruleDescEnabled.Default.(bool)
 	// approvalruleDescSource is the schema descriptor for source field.
-	approvalruleDescSource := approvalruleFields[13].Descriptor()
+	approvalruleDescSource := approvalruleFields[15].Descriptor()
 	// approvalrule.DefaultSource holds the default value on creation for the source field.
 	approvalrule.DefaultSource = approvalruleDescSource.Default.(string)
 	// approvalruleDescCreatedAt is the schema descriptor for created_at field.
-	approvalruleDescCreatedAt := approvalruleFields[14].Descriptor()
+	approvalruleDescCreatedAt := approvalruleFields[16].Descriptor()
 	// approvalrule.DefaultCreatedAt holds the default value on creation for the created_at field.
 	approvalrule.DefaultCreatedAt = approvalruleDescCreatedAt.Default.(func() time.Time)
 	// approvalruleDescUpdatedAt is the schema descriptor for updated_at field.
-	approvalruleDescUpdatedAt := approvalruleFields[15].Descriptor()
+	approvalruleDescUpdatedAt := approvalruleFields[17].Descriptor()
 	// approvalrule.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	approvalrule.DefaultUpdatedAt = approvalruleDescUpdatedAt.Default.(func() time.Time)
 	// approvalrule.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

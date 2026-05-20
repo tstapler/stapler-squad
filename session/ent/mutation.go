@@ -908,32 +908,36 @@ func (m *AnalyticsEventMutation) ResetEdge(name string) error {
 // ApprovalRuleMutation represents an operation that mutates the ApprovalRule nodes in the graph.
 type ApprovalRuleMutation struct {
 	config
-	op              Op
-	typ             string
-	id              *int
-	rule_id         *string
-	name            *string
-	tool_name       *string
-	tool_pattern    *string
-	tool_category   *string
-	command_pattern *string
-	file_pattern    *string
-	decision        *int
-	adddecision     *int
-	risk_level      *int
-	addrisk_level   *int
-	reason          *string
-	alternative     *string
-	priority        *int
-	addpriority     *int
-	enabled         *bool
-	source          *string
-	created_at      *time.Time
-	updated_at      *time.Time
-	clearedFields   map[string]struct{}
-	done            bool
-	oldValue        func(context.Context) (*ApprovalRule, error)
-	predicates      []predicate.ApprovalRule
+	op                         Op
+	typ                        string
+	id                         *int
+	rule_id                    *string
+	name                       *string
+	tool_name                  *string
+	tool_pattern               *string
+	tool_category              *string
+	command_pattern            *string
+	file_pattern               *string
+	criteria_programs          *[]string
+	appendcriteria_programs    []string
+	criteria_subcommands       *[]string
+	appendcriteria_subcommands []string
+	decision                   *int
+	adddecision                *int
+	risk_level                 *int
+	addrisk_level              *int
+	reason                     *string
+	alternative                *string
+	priority                   *int
+	addpriority                *int
+	enabled                    *bool
+	source                     *string
+	created_at                 *time.Time
+	updated_at                 *time.Time
+	clearedFields              map[string]struct{}
+	done                       bool
+	oldValue                   func(context.Context) (*ApprovalRule, error)
+	predicates                 []predicate.ApprovalRule
 }
 
 var _ ent.Mutation = (*ApprovalRuleMutation)(nil)
@@ -1349,6 +1353,136 @@ func (m *ApprovalRuleMutation) FilePatternCleared() bool {
 func (m *ApprovalRuleMutation) ResetFilePattern() {
 	m.file_pattern = nil
 	delete(m.clearedFields, approvalrule.FieldFilePattern)
+}
+
+// SetCriteriaPrograms sets the "criteria_programs" field.
+func (m *ApprovalRuleMutation) SetCriteriaPrograms(s []string) {
+	m.criteria_programs = &s
+	m.appendcriteria_programs = nil
+}
+
+// CriteriaPrograms returns the value of the "criteria_programs" field in the mutation.
+func (m *ApprovalRuleMutation) CriteriaPrograms() (r []string, exists bool) {
+	v := m.criteria_programs
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCriteriaPrograms returns the old "criteria_programs" field's value of the ApprovalRule entity.
+// If the ApprovalRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ApprovalRuleMutation) OldCriteriaPrograms(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCriteriaPrograms is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCriteriaPrograms requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCriteriaPrograms: %w", err)
+	}
+	return oldValue.CriteriaPrograms, nil
+}
+
+// AppendCriteriaPrograms adds s to the "criteria_programs" field.
+func (m *ApprovalRuleMutation) AppendCriteriaPrograms(s []string) {
+	m.appendcriteria_programs = append(m.appendcriteria_programs, s...)
+}
+
+// AppendedCriteriaPrograms returns the list of values that were appended to the "criteria_programs" field in this mutation.
+func (m *ApprovalRuleMutation) AppendedCriteriaPrograms() ([]string, bool) {
+	if len(m.appendcriteria_programs) == 0 {
+		return nil, false
+	}
+	return m.appendcriteria_programs, true
+}
+
+// ClearCriteriaPrograms clears the value of the "criteria_programs" field.
+func (m *ApprovalRuleMutation) ClearCriteriaPrograms() {
+	m.criteria_programs = nil
+	m.appendcriteria_programs = nil
+	m.clearedFields[approvalrule.FieldCriteriaPrograms] = struct{}{}
+}
+
+// CriteriaProgramsCleared returns if the "criteria_programs" field was cleared in this mutation.
+func (m *ApprovalRuleMutation) CriteriaProgramsCleared() bool {
+	_, ok := m.clearedFields[approvalrule.FieldCriteriaPrograms]
+	return ok
+}
+
+// ResetCriteriaPrograms resets all changes to the "criteria_programs" field.
+func (m *ApprovalRuleMutation) ResetCriteriaPrograms() {
+	m.criteria_programs = nil
+	m.appendcriteria_programs = nil
+	delete(m.clearedFields, approvalrule.FieldCriteriaPrograms)
+}
+
+// SetCriteriaSubcommands sets the "criteria_subcommands" field.
+func (m *ApprovalRuleMutation) SetCriteriaSubcommands(s []string) {
+	m.criteria_subcommands = &s
+	m.appendcriteria_subcommands = nil
+}
+
+// CriteriaSubcommands returns the value of the "criteria_subcommands" field in the mutation.
+func (m *ApprovalRuleMutation) CriteriaSubcommands() (r []string, exists bool) {
+	v := m.criteria_subcommands
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldCriteriaSubcommands returns the old "criteria_subcommands" field's value of the ApprovalRule entity.
+// If the ApprovalRule object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ApprovalRuleMutation) OldCriteriaSubcommands(ctx context.Context) (v []string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldCriteriaSubcommands is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldCriteriaSubcommands requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldCriteriaSubcommands: %w", err)
+	}
+	return oldValue.CriteriaSubcommands, nil
+}
+
+// AppendCriteriaSubcommands adds s to the "criteria_subcommands" field.
+func (m *ApprovalRuleMutation) AppendCriteriaSubcommands(s []string) {
+	m.appendcriteria_subcommands = append(m.appendcriteria_subcommands, s...)
+}
+
+// AppendedCriteriaSubcommands returns the list of values that were appended to the "criteria_subcommands" field in this mutation.
+func (m *ApprovalRuleMutation) AppendedCriteriaSubcommands() ([]string, bool) {
+	if len(m.appendcriteria_subcommands) == 0 {
+		return nil, false
+	}
+	return m.appendcriteria_subcommands, true
+}
+
+// ClearCriteriaSubcommands clears the value of the "criteria_subcommands" field.
+func (m *ApprovalRuleMutation) ClearCriteriaSubcommands() {
+	m.criteria_subcommands = nil
+	m.appendcriteria_subcommands = nil
+	m.clearedFields[approvalrule.FieldCriteriaSubcommands] = struct{}{}
+}
+
+// CriteriaSubcommandsCleared returns if the "criteria_subcommands" field was cleared in this mutation.
+func (m *ApprovalRuleMutation) CriteriaSubcommandsCleared() bool {
+	_, ok := m.clearedFields[approvalrule.FieldCriteriaSubcommands]
+	return ok
+}
+
+// ResetCriteriaSubcommands resets all changes to the "criteria_subcommands" field.
+func (m *ApprovalRuleMutation) ResetCriteriaSubcommands() {
+	m.criteria_subcommands = nil
+	m.appendcriteria_subcommands = nil
+	delete(m.clearedFields, approvalrule.FieldCriteriaSubcommands)
 }
 
 // SetDecision sets the "decision" field.
@@ -1795,7 +1929,7 @@ func (m *ApprovalRuleMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ApprovalRuleMutation) Fields() []string {
-	fields := make([]string, 0, 16)
+	fields := make([]string, 0, 18)
 	if m.rule_id != nil {
 		fields = append(fields, approvalrule.FieldRuleID)
 	}
@@ -1816,6 +1950,12 @@ func (m *ApprovalRuleMutation) Fields() []string {
 	}
 	if m.file_pattern != nil {
 		fields = append(fields, approvalrule.FieldFilePattern)
+	}
+	if m.criteria_programs != nil {
+		fields = append(fields, approvalrule.FieldCriteriaPrograms)
+	}
+	if m.criteria_subcommands != nil {
+		fields = append(fields, approvalrule.FieldCriteriaSubcommands)
 	}
 	if m.decision != nil {
 		fields = append(fields, approvalrule.FieldDecision)
@@ -1866,6 +2006,10 @@ func (m *ApprovalRuleMutation) Field(name string) (ent.Value, bool) {
 		return m.CommandPattern()
 	case approvalrule.FieldFilePattern:
 		return m.FilePattern()
+	case approvalrule.FieldCriteriaPrograms:
+		return m.CriteriaPrograms()
+	case approvalrule.FieldCriteriaSubcommands:
+		return m.CriteriaSubcommands()
 	case approvalrule.FieldDecision:
 		return m.Decision()
 	case approvalrule.FieldRiskLevel:
@@ -1907,6 +2051,10 @@ func (m *ApprovalRuleMutation) OldField(ctx context.Context, name string) (ent.V
 		return m.OldCommandPattern(ctx)
 	case approvalrule.FieldFilePattern:
 		return m.OldFilePattern(ctx)
+	case approvalrule.FieldCriteriaPrograms:
+		return m.OldCriteriaPrograms(ctx)
+	case approvalrule.FieldCriteriaSubcommands:
+		return m.OldCriteriaSubcommands(ctx)
 	case approvalrule.FieldDecision:
 		return m.OldDecision(ctx)
 	case approvalrule.FieldRiskLevel:
@@ -1982,6 +2130,20 @@ func (m *ApprovalRuleMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetFilePattern(v)
+		return nil
+	case approvalrule.FieldCriteriaPrograms:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCriteriaPrograms(v)
+		return nil
+	case approvalrule.FieldCriteriaSubcommands:
+		v, ok := value.([]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetCriteriaSubcommands(v)
 		return nil
 	case approvalrule.FieldDecision:
 		v, ok := value.(int)
@@ -2130,6 +2292,12 @@ func (m *ApprovalRuleMutation) ClearedFields() []string {
 	if m.FieldCleared(approvalrule.FieldFilePattern) {
 		fields = append(fields, approvalrule.FieldFilePattern)
 	}
+	if m.FieldCleared(approvalrule.FieldCriteriaPrograms) {
+		fields = append(fields, approvalrule.FieldCriteriaPrograms)
+	}
+	if m.FieldCleared(approvalrule.FieldCriteriaSubcommands) {
+		fields = append(fields, approvalrule.FieldCriteriaSubcommands)
+	}
 	if m.FieldCleared(approvalrule.FieldReason) {
 		fields = append(fields, approvalrule.FieldReason)
 	}
@@ -2165,6 +2333,12 @@ func (m *ApprovalRuleMutation) ClearField(name string) error {
 	case approvalrule.FieldFilePattern:
 		m.ClearFilePattern()
 		return nil
+	case approvalrule.FieldCriteriaPrograms:
+		m.ClearCriteriaPrograms()
+		return nil
+	case approvalrule.FieldCriteriaSubcommands:
+		m.ClearCriteriaSubcommands()
+		return nil
 	case approvalrule.FieldReason:
 		m.ClearReason()
 		return nil
@@ -2199,6 +2373,12 @@ func (m *ApprovalRuleMutation) ResetField(name string) error {
 		return nil
 	case approvalrule.FieldFilePattern:
 		m.ResetFilePattern()
+		return nil
+	case approvalrule.FieldCriteriaPrograms:
+		m.ResetCriteriaPrograms()
+		return nil
+	case approvalrule.FieldCriteriaSubcommands:
+		m.ResetCriteriaSubcommands()
 		return nil
 	case approvalrule.FieldDecision:
 		m.ResetDecision()

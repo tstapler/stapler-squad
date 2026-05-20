@@ -639,6 +639,26 @@ func FilePatternContainsFold(v string) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldContainsFold(FieldFilePattern, v))
 }
 
+// CriteriaProgramsIsNil applies the IsNil predicate on the "criteria_programs" field.
+func CriteriaProgramsIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldCriteriaPrograms))
+}
+
+// CriteriaProgramsNotNil applies the NotNil predicate on the "criteria_programs" field.
+func CriteriaProgramsNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldCriteriaPrograms))
+}
+
+// CriteriaSubcommandsIsNil applies the IsNil predicate on the "criteria_subcommands" field.
+func CriteriaSubcommandsIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldCriteriaSubcommands))
+}
+
+// CriteriaSubcommandsNotNil applies the NotNil predicate on the "criteria_subcommands" field.
+func CriteriaSubcommandsNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldCriteriaSubcommands))
+}
+
 // DecisionEQ applies the EQ predicate on the "decision" field.
 func DecisionEQ(v int) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldEQ(FieldDecision, v))
