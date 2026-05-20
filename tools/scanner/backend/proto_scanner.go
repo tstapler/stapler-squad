@@ -142,6 +142,12 @@ var methodToID = map[string]string{
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	// Rules RPCs (SessionService — AI-assisted rule generation)
+	"GenerateSuggestedRule": "rules:generate-suggested",
+	// Insights RPCs (InsightsService in insights.proto)
+	"GetInsightsSummary":  "insights:get-summary",
+	"ListSessionTokens":   "insights:list-session-tokens",
+	"WatchInsights":       "insights:watch-insights",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)

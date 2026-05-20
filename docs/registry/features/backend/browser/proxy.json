@@ -1,17 +1,17 @@
 {
   "id": "browser:proxy",
   "type": "backend",
-  "service": "",
-  "method": "",
-  "protoFile": "",
-  "httpEndpoint": "/api/sessions/{id}/vnc",
-  "description": "VNC WebSocket proxy endpoint for browser passthrough",
+  "service": "HTTPHandler",
+  "method": "GET /api/sessions/{id}/vnc",
+  "httpMethod": "GET",
+  "httpPath": "/api/sessions/{id}/vnc",
   "markerFound": true,
+  "handlerFile": "server/services/vnc_proxy_handler.go",
   "tested": true,
   "testIds": [
     "TestVNCProxyHandler_MissingSessionID_Returns400",
     "TestVNCProxyHandler_UnknownSessionID_Returns404",
     "TestVNCProxyHandler_VNCPortZero_Returns503"
   ],
-  "lastModified": "2026-05-18T00:00:00Z"
+  "lastModified": "2026-05-20T09:22:20.988146408Z"
 }

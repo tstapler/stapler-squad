@@ -1,17 +1,17 @@
 {
   "id": "browser:cdp-stream",
   "type": "backend",
-  "service": "",
-  "method": "",
-  "protoFile": "",
-  "httpEndpoint": "/api/sessions/{id}/cdp-stream",
-  "description": "CDP WebSocket streaming endpoint — proxies JPEG frames from Chrome DevTools Protocol to the browser client",
+  "service": "HTTPHandler",
+  "method": "GET /api/sessions/{id}/cdp-stream",
+  "httpMethod": "GET",
+  "httpPath": "/api/sessions/{id}/cdp-stream",
   "markerFound": true,
+  "handlerFile": "server/services/cdp_stream_handler.go",
   "tested": true,
   "testIds": [
     "TestCDPStreamHandler_MissingSessionID_Returns400",
     "TestCDPStreamHandler_UnknownSessionID_Returns404",
     "TestCDPStreamHandler_CDPPortZero_Returns503"
   ],
-  "lastModified": "2026-05-18T00:00:00Z"
+  "lastModified": "2026-05-20T09:22:17.584146349Z"
 }

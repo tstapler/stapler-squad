@@ -51,11 +51,9 @@ func NewVNCProxyHandler(finder InstanceFinder) *VNCProxyHandler {
 	return &VNCProxyHandler{finder: finder}
 }
 
-// +api: browser:vnc-proxy
+// +http: GET /api/sessions/{id}/vnc browser:proxy
 // HandleWebSocket upgrades an HTTP request to WebSocket and proxies bytes
 // between the client and the session's local x11vnc port.
-//
-// Route: GET /api/sessions/{id}/vnc  (WebSocket upgrade)
 func (h *VNCProxyHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	if sessionID == "" {

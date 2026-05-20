@@ -48,11 +48,9 @@ func NewCDPStreamHandler(finder InstanceFinder) *CDPStreamHandler {
 	return &CDPStreamHandler{finder: finder}
 }
 
-// +api: browser:cdp-stream
+// +http: GET /api/sessions/{id}/cdp-stream browser:cdp-stream
 // HandleWebSocket upgrades an HTTP request to WebSocket and streams JPEG frames
 // from the session's Chrome CDP screencast to the client.
-//
-// Route: GET /api/sessions/{id}/cdp-stream  (WebSocket upgrade)
 func (h *CDPStreamHandler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
 	sessionID := r.PathValue("id")
 	if sessionID == "" {

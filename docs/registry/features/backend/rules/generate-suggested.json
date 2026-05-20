@@ -5,6 +5,7 @@
   "method": "GenerateSuggestedRule",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
+  "handlerFile": "server/services/rules_service.go",
   "tested": true,
   "testIds": [
     "TestGenerateSuggestedRule_AnalyticsGaps_ReturnsSuggestions",
@@ -14,5 +15,5 @@
     "TestGenerateSuggestedRule_ReturnsOnCtxCancellation",
     "TestGenerateSuggestedRule_Integration_MockAI"
   ],
-  "lastModified": "2026-05-18T00:00:00Z"
+  "lastModified": "2026-05-20T09:04:05.444530643Z"
 }
