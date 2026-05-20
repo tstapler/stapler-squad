@@ -114,6 +114,30 @@ type Repository interface {
 	// ListAnalytics retrieves recent classification decisions.
 	ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData, error)
 
+	// ListAnalyticsSince retrieves analytics entries with created_at >= since.
+	// Replaces the in-Go date filter in LoadWindow. Implements AC-1.
+	// Pass limit=0 for no limit.
+	ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error)
+
+	// ListAnalyticsByProgramSince retrieves entries for a specific program since a time.
+	// Uses the compound index (command_program, created_at). Implements AC-3.
+	// Pass limit=0 for no limit.
+	ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error)
+
+	// GetSubcommandBreakdown returns per-(subcommand, decision) counts for a program
+	// in the given time window. Uses SQL GROUP BY via ent Aggregate. Implements AC-4.
+	GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error)
+
+	// ListRecentCommandsByProgram returns the most recent n command_preview strings
+	// for (program, subcommand). Pass subcommand="" to match all subcommands.
+	// Implements AC-5.
+	ListRecentCommandsByProgram(ctx context.Context, program, subcommand string, since time.Time, n int) ([]string, error)
+
+	// GetSubcommandTrend returns raw analytics rows for (program, subcommand) since
+	// a given time. The caller buckets these using ComputeDailyBuckets. Implements AC-6.
+	// Pass subcommand="" to match all subcommands for the program.
+	GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error)
+
 	// --- Projects ---
 
 	// CreateProject inserts a new project.
@@ -172,6 +196,14 @@ type ApprovalRuleData struct {
 	Source         string
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+}
+
+// SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
+// Returned by GetSubcommandBreakdown.
+type SubcommandDecisionCount struct {
+	Subcommand string
+	Decision   string
+	Count      int
 }
 
 // AnalyticsData is the domain model for classification analytics.

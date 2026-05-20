@@ -154,6 +154,10 @@ service SessionService {
   // GetApprovalAnalytics returns aggregated analytics for classification decisions.
   rpc GetApprovalAnalytics(GetApprovalAnalyticsRequest) returns (GetApprovalAnalyticsResponse) {}
 
+  // GetProgramAnalytics returns drill-down analytics for a single command program.
+  // Shows subcommand breakdown, recent examples, and daily trend for the time window.
+  rpc GetProgramAnalytics(GetProgramAnalyticsRequest) returns (GetProgramAnalyticsResponse) {}
+
   // GenerateSuggestedRule asks an AI agent to propose a new auto-approval rule.
   // Analyzes existing rules, seed examples, and analytics data to produce a
   // pre-filled SuggestedRuleProto. May take 5–30 seconds; callers must set a
@@ -1223,6 +1227,30 @@ message GetApprovalAnalyticsResponse {
   AnalyticsSummaryProto summary = 1;
   // Daily breakdown sorted ascending by date, covering the requested window.
   repeated DailyBucketProto daily_buckets = 2;
+}
+
+// ============================================================================
+// Program Analytics Drill-Down Messages
+// ============================================================================
+
+message GetProgramAnalyticsRequest {
+  // program is the executable name (e.g., "git", "gh", "npm").
+  string program = 1;
+  // window_days controls the time window (default 7, max 90).
+  optional int32 window_days = 2;
+}
+
+message GetProgramAnalyticsResponse {
+  // program echoed from the request.
+  string program = 1;
+  // category is the program's category (e.g., "vcs", "node").
+  string category = 2;
+  // subcommands contains per-subcommand decision breakdown, sorted by total descending.
+  repeated SubcommandBreakdownProto subcommands = 3;
+  // recent_examples contains the last 20 raw command_preview strings across all subcommands.
+  repeated string recent_examples = 4;
+  // trend contains per-day counts for the whole program in the window.
+  repeated DailyBucketProto trend = 5;
 }
 
 // ============================================================================

@@ -208,6 +208,11 @@ var (
 				Unique:  false,
 				Columns: []*schema.Column{ClassificationAnalyticsColumns[18]},
 			},
+			{
+				Name:    "classificationanalytics_command_program_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ClassificationAnalyticsColumns[14], ClassificationAnalyticsColumns[18]},
+			},
 		},
 	}
 	// ClaudeMetadataColumns holds the columns for the "claude_metadata" table.

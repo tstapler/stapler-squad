@@ -2078,6 +2078,14 @@ func (s *SessionService) GetApprovalAnalytics(
 	return s.rulesSvc.GetApprovalAnalytics(ctx, req)
 }
 
+// GetProgramAnalytics returns drill-down analytics for a single command program.
+func (s *SessionService) GetProgramAnalytics(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetProgramAnalyticsRequest],
+) (*connect.Response[sessionv1.GetProgramAnalyticsResponse], error) {
+	return s.rulesSvc.GetProgramAnalytics(ctx, req)
+}
+
 // GenerateSuggestedRule asks an AI to propose new auto-approval rules.
 func (s *SessionService) GenerateSuggestedRule(
 	ctx context.Context,
@@ -3186,4 +3194,3 @@ func (s *SessionService) UpdateFeatureFlag(
 		},
 	}), nil
 }
-

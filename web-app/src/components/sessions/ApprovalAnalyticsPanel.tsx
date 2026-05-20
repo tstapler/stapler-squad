@@ -5,6 +5,7 @@ import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { DailyBucketProto, SubcommandStatProto, SuggestionSource } from "@/gen/session/v1/types_pb";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
+import { ProgramDetailPanel } from "./ProgramDetailPanel";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   windowSelector, windowBtn, windowBtnActive,
@@ -72,6 +73,7 @@ export function ApprovalAnalyticsPanel() {
   const { summary, dailyBuckets, loading, error, refresh } = useApprovalAnalytics({ windowDays });
   const { suggestions, loading: generateLoading, error: generateError, generate, clear } = useGenerateRule();
   const [activeRowKey, setActiveRowKey] = useState<string | null>(null);
+  const [selectedProgram, setSelectedProgram] = useState<string | null>(null);
 
   const total = summary?.totalDecisions ?? 0;
   const autoAllowCount = summary?.decisionCounts["auto_allow"] ?? 0;
@@ -453,9 +455,17 @@ export function ApprovalAnalyticsPanel() {
                       const isGenerating = isActive && generateLoading;
                       const activeSuggestion = isActive && !generateLoading && suggestions.length > 0 ? suggestions[0] : null;
                       const activeError = isActive && !generateLoading ? generateError : null;
+                      const isDrillOpen = selectedProgram === p.programName;
                       return (
                         <React.Fragment key={p.programName}>
-                          <tr className={row}>
+                          <tr
+                            className={row}
+                            style={{ cursor: "pointer" }}
+                            aria-expanded={isDrillOpen}
+                            onClick={() =>
+                              setSelectedProgram(isDrillOpen ? null : p.programName)
+                            }
+                          >
                             <td className={td}><code className={toolName}>{p.programName}</code></td>
                             <td className={td}><span className={categoryBadge}>{p.category}</span></td>
                             <td className={`${td} ${tdRight}`}>{p.count}</td>
@@ -510,6 +520,17 @@ export function ApprovalAnalyticsPanel() {
                                     clear();
                                     setActiveRowKey(null);
                                   }}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                          {isDrillOpen && (
+                            <tr>
+                              <td colSpan={5} onClick={(e) => e.stopPropagation()}>
+                                <ProgramDetailPanel
+                                  program={p.programName}
+                                  windowDays={windowDays}
+                                  onClose={() => setSelectedProgram(null)}
                                 />
                               </td>
                             </tr>

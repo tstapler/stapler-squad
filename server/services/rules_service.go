@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
@@ -177,6 +178,145 @@ func (rs *RulesService) GetApprovalAnalytics(
 		})
 	}
 	return connect.NewResponse(protoResp), nil
+}
+
+// GetProgramAnalytics returns drill-down analytics for a single program.
+// Implements AC-7 (subcommand breakdown, examples, trend).
+func (rs *RulesService) GetProgramAnalytics(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetProgramAnalyticsRequest],
+) (*connect.Response[sessionv1.GetProgramAnalyticsResponse], error) {
+	program := strings.TrimSpace(req.Msg.Program)
+	if program == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("program is required"))
+	}
+
+	days := 7
+	if req.Msg.WindowDays != nil {
+		days = int(*req.Msg.WindowDays)
+		if days <= 0 || days > 90 {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("window_days must be 1–90"))
+		}
+	}
+	since := time.Now().AddDate(0, 0, -days)
+
+	// AC-4: subcommand breakdown (SQL GROUP BY)
+	breakdownRows, err := rs.analyticsStore.GetSubcommandBreakdown(program, since)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("subcommand breakdown: %w", err))
+	}
+
+	// AC-5: recent examples (up to 20, all subcommands)
+	examples, err := rs.analyticsStore.ListRecentCommands(program, "", since, 20)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("recent examples: %w", err))
+	}
+
+	// AC-6: trend (all rows for program in window → Go-level daily bucketing)
+	entries, err := rs.analyticsStore.LoadProgramWindow(program, since)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("program window: %w", err))
+	}
+	dailyBuckets := ComputeDailyBuckets(entries)
+
+	// Derive category from entries (use first non-empty value)
+	category := ""
+	for _, e := range entries {
+		if e.CommandCategory != "" {
+			category = e.CommandCategory
+			break
+		}
+	}
+
+	// Rule coverage check (AC-10 / has_rule_coverage)
+	coveredSubcmds := rs.coveredSubcommands(program)
+
+	// Aggregate per-subcommand breakdown into proto messages
+	aggr := make(map[string]map[string]int32) // subcommand → decision → count
+	for _, row := range breakdownRows {
+		sub := row.Subcommand // may be ""
+		if aggr[sub] == nil {
+			aggr[sub] = make(map[string]int32)
+		}
+		aggr[sub][row.Decision] += int32(row.Count) //#nosec G115 — count fits int32
+	}
+
+	subProtos := make([]*sessionv1.SubcommandBreakdownProto, 0, len(aggr))
+	for sub, decMap := range aggr {
+		p := &sessionv1.SubcommandBreakdownProto{
+			Subcommand:        sub,
+			AutoAllow:         decMap["auto_allow"],
+			AutoDeny:          decMap["auto_deny"],
+			Escalate:          decMap["escalate"],
+			ManualAllow:       decMap["manual_allow"],
+			ManualDeny:        decMap["manual_deny"],
+			HasRuleCoverage:   coveredSubcmds[sub],
+			SuggestedRuleHint: sub,
+		}
+		p.Total = p.AutoAllow + p.AutoDeny + p.Escalate + p.ManualAllow + p.ManualDeny
+		subProtos = append(subProtos, p)
+	}
+	// Sort by total descending
+	sort.Slice(subProtos, func(i, j int) bool {
+		return subProtos[i].Total > subProtos[j].Total
+	})
+
+	// Build daily trend proto
+	trendProtos := make([]*sessionv1.DailyBucketProto, 0, len(dailyBuckets))
+	for _, b := range dailyBuckets {
+		trendProtos = append(trendProtos, &sessionv1.DailyBucketProto{
+			Date:        b.Date,
+			AutoAllow:   int32(b.AutoAllow),
+			AutoDeny:    int32(b.AutoDeny),
+			Escalate:    int32(b.Escalate),
+			ManualAllow: int32(b.ManualAllow),
+			ManualDeny:  int32(b.ManualDeny),
+			Total:       int32(b.Total),
+		})
+	}
+
+	return connect.NewResponse(&sessionv1.GetProgramAnalyticsResponse{
+		Program:        program,
+		Category:       category,
+		Subcommands:    subProtos,
+		RecentExamples: examples,
+		Trend:          trendProtos,
+	}), nil
+}
+
+// coveredSubcommands returns a map of subcommand → true for all subcommands
+// of the given program that are covered by at least one existing rule.
+func (rs *RulesService) coveredSubcommands(program string) map[string]bool {
+	specs := rs.allRuleSpecs()
+	covered := make(map[string]bool)
+	for _, spec := range specs {
+		if !spec.Enabled {
+			continue
+		}
+		// Check for Bash tool match (exact or category)
+		isBashTool := strings.EqualFold(spec.ToolName, "Bash")
+		isBashCat := strings.EqualFold(spec.ToolCategory, "bash")
+		if !isBashTool && !isBashCat && spec.ToolName != "" {
+			continue
+		}
+		if spec.CommandPattern == "" {
+			// A rule with no CommandPattern matches all commands — every subcommand covered.
+			covered[""] = true
+			continue
+		}
+		// Heuristic: extract the first two tokens from the pattern as "program subcommand".
+		pat := strings.TrimLeft(spec.CommandPattern, "^")
+		tokens := strings.Fields(pat)
+		if len(tokens) >= 2 && strings.EqualFold(tokens[0], program) {
+			// second token is the subcommand (may have regex chars — strip them)
+			sub := strings.TrimRight(tokens[1], ".*+?$")
+			covered[sub] = true
+		} else if len(tokens) == 1 && strings.EqualFold(tokens[0], program) {
+			// Pattern matches just the program name — covers all subcommands
+			covered[""] = true
+		}
+	}
+	return covered
 }
 
 // allRuleSpecs returns user rules + seed rules as specs (for listing).

@@ -214,41 +214,68 @@ func (s *AnalyticsStore) DroppedCount() int64 {
 	return atomic.LoadInt64(&s.dropped)
 }
 
+// analyticsDataToEntry maps a session.AnalyticsData row to an AnalyticsEntry.
+func analyticsDataToEntry(d session.AnalyticsData) AnalyticsEntry {
+	return AnalyticsEntry{
+		ID:                 d.ID,
+		Timestamp:          d.CreatedAt,
+		SessionID:          d.SessionID,
+		ToolName:           d.ToolName,
+		CommandPreview:     d.CommandPreview,
+		Cwd:                d.Cwd,
+		Decision:           d.Decision,
+		RiskLevel:          d.RiskLevel,
+		RuleID:             d.RuleID,
+		RuleName:           d.RuleName,
+		Reason:             d.Reason,
+		Alternative:        d.Alternative,
+		DurationMs:         d.DurationMs,
+		ApprovalID:         d.ApprovalID,
+		CommandProgram:     d.CommandProgram,
+		CommandCategory:    d.CommandCategory,
+		CommandSubcategory: d.CommandSubcategory,
+		PythonImports:      d.PythonImports,
+	}
+}
+
 // LoadWindow reads entries from DB with timestamps >= since.
-// TODO: Add a timestamp-filtered query to the repository layer to avoid
-// loading all rows into memory as the analytics table grows.
+// Uses a DB-level WHERE clause via ListAnalyticsSince (AC-1).
 func (s *AnalyticsStore) LoadWindow(since time.Time) ([]AnalyticsEntry, error) {
-	data, err := s.storage.ListAnalytics(context.Background(), 0)
+	data, err := s.storage.ListAnalyticsSince(context.Background(), since, 0)
 	if err != nil {
-		return nil, fmt.Errorf("list analytics from DB: %w", err)
+		return nil, fmt.Errorf("list analytics since %s from DB: %w", since.Format(time.RFC3339), err)
 	}
 
-	var entries []AnalyticsEntry
+	entries := make([]AnalyticsEntry, 0, len(data))
 	for _, d := range data {
-		if !d.CreatedAt.Before(since) {
-			entries = append(entries, AnalyticsEntry{
-				ID:                 d.ID,
-				Timestamp:          d.CreatedAt,
-				SessionID:          d.SessionID,
-				ToolName:           d.ToolName,
-				CommandPreview:     d.CommandPreview,
-				Cwd:                d.Cwd,
-				Decision:           d.Decision,
-				RiskLevel:          d.RiskLevel,
-				RuleID:             d.RuleID,
-				RuleName:           d.RuleName,
-				Reason:             d.Reason,
-				Alternative:        d.Alternative,
-				DurationMs:         d.DurationMs,
-				ApprovalID:         d.ApprovalID,
-				CommandProgram:     d.CommandProgram,
-				CommandCategory:    d.CommandCategory,
-				CommandSubcategory: d.CommandSubcategory,
-				PythonImports:      d.PythonImports,
-			})
-		}
+		entries = append(entries, analyticsDataToEntry(d))
 	}
 	return entries, nil
+}
+
+// LoadProgramWindow loads analytics entries for a specific program in the given window.
+// Used by GetProgramAnalytics RPC for trend computation.
+func (s *AnalyticsStore) LoadProgramWindow(program string, since time.Time) ([]AnalyticsEntry, error) {
+	data, err := s.storage.ListAnalyticsByProgramSince(context.Background(), program, since, 0)
+	if err != nil {
+		return nil, fmt.Errorf("list analytics by program %q since %s: %w", program, since.Format(time.RFC3339), err)
+	}
+	entries := make([]AnalyticsEntry, 0, len(data))
+	for _, d := range data {
+		entries = append(entries, analyticsDataToEntry(d))
+	}
+	return entries, nil
+}
+
+// GetSubcommandBreakdown returns per-(subcommand, decision) aggregate counts.
+func (s *AnalyticsStore) GetSubcommandBreakdown(program string, since time.Time) ([]session.SubcommandDecisionCount, error) {
+	return s.storage.GetSubcommandBreakdown(context.Background(), program, since)
+}
+
+// ListRecentCommands returns up to n command_preview strings for (program, subcommand).
+// Pass subcommand="" to match all subcommands.
+func (s *AnalyticsStore) ListRecentCommands(program, subcommand string, since time.Time, n int) ([]string, error) {
+	return s.storage.ListRecentCommandsByProgram(context.Background(), program, subcommand, since, n)
 }
 
 // ReclassifyGaps re-runs the current classifier against entries that were

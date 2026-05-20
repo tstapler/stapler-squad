@@ -1037,6 +1037,26 @@ message DailyBucketProto {
   int32 total = 7;
 }
 
+// SubcommandBreakdownProto is a per-subcommand decision breakdown for the drill-down panel.
+message SubcommandBreakdownProto {
+  // subcommand is the first positional argument (e.g., "commit", "push").
+  // Empty string means no subcommand was detected.
+  string subcommand = 1;
+  // total is the total call count for this subcommand in the window.
+  int32 total = 2;
+  // Per-decision counts.
+  int32 auto_allow = 3;
+  int32 auto_deny = 4;
+  int32 escalate = 5;
+  int32 manual_allow = 6;
+  int32 manual_deny = 7;
+  // has_rule_coverage is true if any existing rule covers this (program, subcommand) pair.
+  bool has_rule_coverage = 8;
+  // suggested_rule_hint is an optional pre-fill pattern hint for the rule form.
+  // Format: the subcommand string itself (e.g., "push") — the UI appends context.
+  string suggested_rule_hint = 9;
+}
+
 // ============================================================================
 // Database / Workspace Switcher Types
 // ============================================================================

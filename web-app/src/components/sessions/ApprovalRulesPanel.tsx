@@ -109,6 +109,8 @@ export function ApprovalRulesPanel() {
     clear: cmdGenClear,
   } = useGenerateRule();
 
+  const formSectionRef = useRef<HTMLDivElement>(null);
+
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState<RuleFormState>(emptyForm);
@@ -119,6 +121,45 @@ export function ApprovalRulesPanel() {
 
   // Track which form fields the user has manually edited (not overwritten by AI pre-fill).
   const touchedFieldsRef = useRef<Set<keyof RuleFormState>>(new Set());
+
+  // ── URL param pre-fill (from analytics "Add rule →" links) ───────────────
+  // Runs once on mount (client only). Reads window.location.search directly to
+  // avoid useSearchParams + Suspense complications in the static export.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tool = params.get("tool");
+    const program = params.get("program");
+    const subcommand = params.get("subcommand");
+    if (!tool && !program) return;
+
+    const prefill: Partial<RuleFormState> = {};
+    if (tool) {
+      prefill.toolName = tool;
+      prefill.name = `Allow ${tool}`;
+    } else if (program) {
+      prefill.toolName = "Bash";
+      if (subcommand) {
+        prefill.commandPattern = `\\b${program}\\b.*\\b${subcommand}\\b`;
+        prefill.name = `Allow ${program} ${subcommand}`;
+      } else {
+        prefill.commandPattern = `\\b${program}\\b`;
+        prefill.name = `Allow ${program}`;
+      }
+    }
+
+    setShowForm(true);
+    setForm({ ...emptyForm, ...prefill });
+    setFormError(null);
+    setAiPrefilled(false);
+    setCmdSampleValue("");
+    touchedFieldsRef.current = new Set();
+    cmdGenClear();
+
+    setTimeout(() => {
+      formSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── filter ────────────────────────────────────────────────────────────────
 
@@ -468,7 +509,7 @@ export function ApprovalRulesPanel() {
       </div>
 
       {/* ── Add rule form ── */}
-      <div className={formSection}>
+      <div className={formSection} ref={formSectionRef}>
         {!showForm ? (
           <button className={addButton} onClick={openForm}>
             + Add Custom Rule

@@ -70,5 +70,6 @@ func (ClassificationAnalytics) Indexes() []ent.Index {
 		index.Fields("risk_level"),
 		index.Fields("rule_id"),
 		index.Fields("created_at"),
+		index.Fields("command_program", "created_at"), // NEW: AC-2
 	}
 }

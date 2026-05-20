@@ -1,0 +1,10 @@
+{
+  "id": "analytics-drill-down",
+  "type": "frontend",
+  "component": "ProgramDetailPanel",
+  "path": "web-app/src/components/sessions/ProgramDetailPanel.tsx",
+  "markerLine": 1,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-20T00:00:00Z"
+}

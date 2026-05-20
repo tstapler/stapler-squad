@@ -14,6 +14,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/predicate"
 	"github.com/tstapler/stapler-squad/session/ent/project"
 	"github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
@@ -1127,30 +1128,148 @@ func (r *EntRepository) ListAnalytics(ctx context.Context, limit int) ([]Analyti
 		return nil, err
 	}
 
-	result := make([]AnalyticsData, len(entries))
-	for i, entry := range entries {
-		result[i] = AnalyticsData{
-			ID:                 entry.AnalyticsID,
-			SessionID:          entry.SessionID,
-			ToolName:           entry.ToolName,
-			CommandPreview:     entry.CommandPreview,
-			Cwd:                entry.Cwd,
-			Decision:           entry.Decision,
-			RiskLevel:          entry.RiskLevel,
-			RuleID:             entry.RuleID,
-			RuleName:           entry.RuleName,
-			Reason:             entry.Reason,
-			Alternative:        entry.Alternative,
-			DurationMs:         entry.DurationMs,
-			ApprovalID:         entry.ApprovalID,
-			CommandProgram:     entry.CommandProgram,
-			CommandCategory:    entry.CommandCategory,
-			CommandSubcategory: entry.CommandSubcategory,
-			PythonImports:      entry.PythonImports,
-			CreatedAt:          entry.CreatedAt,
-		}
+	return convertAnalyticsEntries(entries), nil
+}
+
+// convertAnalyticsEntry maps a single ent row to the domain model.
+func convertAnalyticsEntry(e *ent.ClassificationAnalytics) AnalyticsData {
+	return AnalyticsData{
+		ID:                 e.AnalyticsID,
+		SessionID:          e.SessionID,
+		ToolName:           e.ToolName,
+		CommandPreview:     e.CommandPreview,
+		Cwd:                e.Cwd,
+		Decision:           e.Decision,
+		RiskLevel:          e.RiskLevel,
+		RuleID:             e.RuleID,
+		RuleName:           e.RuleName,
+		Reason:             e.Reason,
+		Alternative:        e.Alternative,
+		DurationMs:         e.DurationMs,
+		ApprovalID:         e.ApprovalID,
+		CommandProgram:     e.CommandProgram,
+		CommandCategory:    e.CommandCategory,
+		CommandSubcategory: e.CommandSubcategory,
+		PythonImports:      e.PythonImports,
+		CreatedAt:          e.CreatedAt,
+	}
+}
+
+// convertAnalyticsEntries maps a slice of ent rows to the domain model.
+func convertAnalyticsEntries(es []*ent.ClassificationAnalytics) []AnalyticsData {
+	out := make([]AnalyticsData, len(es))
+	for i, e := range es {
+		out[i] = convertAnalyticsEntry(e)
+	}
+	return out
+}
+
+func (r *EntRepository) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error) {
+	query := r.client.ClassificationAnalytics.Query().
+		Where(classificationanalytics.CreatedAtGTE(since)).
+		Order(ent.Desc(classificationanalytics.FieldCreatedAt))
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	entries, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list analytics since %s: %w", since.Format(time.RFC3339), err)
+	}
+	return convertAnalyticsEntries(entries), nil
+}
+
+func (r *EntRepository) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error) {
+	query := r.client.ClassificationAnalytics.Query().
+		Where(
+			classificationanalytics.CommandProgramEQ(program),
+			classificationanalytics.CreatedAtGTE(since),
+		).
+		Order(ent.Desc(classificationanalytics.FieldCreatedAt))
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+	entries, err := query.All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list analytics by program %q since %s: %w", program, since.Format(time.RFC3339), err)
+	}
+	return convertAnalyticsEntries(entries), nil
+}
+
+func (r *EntRepository) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {
+	type breakdownRow struct {
+		CommandSubcategory string `json:"command_subcategory"`
+		Decision           string `json:"decision"`
+		Count              int    `json:"count"`
+	}
+	var rows []breakdownRow
+	err := r.client.ClassificationAnalytics.Query().
+		Where(
+			classificationanalytics.CommandProgramEQ(program),
+			classificationanalytics.CreatedAtGTE(since),
+		).
+		GroupBy(
+			classificationanalytics.FieldCommandSubcategory,
+			classificationanalytics.FieldDecision,
+		).
+		Aggregate(ent.Count()).
+		Scan(ctx, &rows)
+	if err != nil {
+		return nil, fmt.Errorf("subcommand breakdown for %q: %w", program, err)
+	}
+	result := make([]SubcommandDecisionCount, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, SubcommandDecisionCount{
+			Subcommand: row.CommandSubcategory,
+			Decision:   row.Decision,
+			Count:      row.Count,
+		})
 	}
 	return result, nil
+}
+
+func (r *EntRepository) ListRecentCommandsByProgram(ctx context.Context, program, subcommand string, since time.Time, n int) ([]string, error) {
+	predicates := []predicate.ClassificationAnalytics{
+		classificationanalytics.CommandProgramEQ(program),
+		classificationanalytics.CreatedAtGTE(since),
+		classificationanalytics.CommandPreviewNotNil(),
+	}
+	if subcommand != "" {
+		predicates = append(predicates, classificationanalytics.CommandSubcategoryEQ(subcommand))
+	}
+	entries, err := r.client.ClassificationAnalytics.Query().
+		Where(predicates...).
+		Order(ent.Desc(classificationanalytics.FieldCreatedAt)).
+		Limit(n).
+		Select(classificationanalytics.FieldCommandPreview).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("recent commands for %q/%q: %w", program, subcommand, err)
+	}
+	previews := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.CommandPreview != "" {
+			previews = append(previews, e.CommandPreview)
+		}
+	}
+	return previews, nil
+}
+
+func (r *EntRepository) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error) {
+	predicates := []predicate.ClassificationAnalytics{
+		classificationanalytics.CommandProgramEQ(program),
+		classificationanalytics.CreatedAtGTE(since),
+	}
+	if subcommand != "" {
+		predicates = append(predicates, classificationanalytics.CommandSubcategoryEQ(subcommand))
+	}
+	entries, err := r.client.ClassificationAnalytics.Query().
+		Where(predicates...).
+		Order(ent.Asc(classificationanalytics.FieldCreatedAt)).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("subcommand trend for %q/%q: %w", program, subcommand, err)
+	}
+	return convertAnalyticsEntries(entries), nil
 }
 
 // --- Project CRUD ---

@@ -10,6 +10,7 @@ export const panel = style({
   flexDirection: "column",
   gap: 16,
   minHeight: 0,
+  flexShrink: 0,
 });
 
 export const header = style({

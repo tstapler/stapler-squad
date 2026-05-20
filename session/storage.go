@@ -400,6 +400,31 @@ func (s *Storage) ListAnalytics(ctx context.Context, limit int) ([]AnalyticsData
 	return s.repo.ListAnalytics(ctx, limit)
 }
 
+// ListAnalyticsSince retrieves analytics entries with created_at >= since.
+func (s *Storage) ListAnalyticsSince(ctx context.Context, since time.Time, limit int) ([]AnalyticsData, error) {
+	return s.repo.ListAnalyticsSince(ctx, since, limit)
+}
+
+// ListAnalyticsByProgramSince retrieves entries for a specific program since a time.
+func (s *Storage) ListAnalyticsByProgramSince(ctx context.Context, program string, since time.Time, limit int) ([]AnalyticsData, error) {
+	return s.repo.ListAnalyticsByProgramSince(ctx, program, since, limit)
+}
+
+// GetSubcommandBreakdown returns per-(subcommand, decision) counts for a program.
+func (s *Storage) GetSubcommandBreakdown(ctx context.Context, program string, since time.Time) ([]SubcommandDecisionCount, error) {
+	return s.repo.GetSubcommandBreakdown(ctx, program, since)
+}
+
+// ListRecentCommandsByProgram returns the most recent n command_preview strings.
+func (s *Storage) ListRecentCommandsByProgram(ctx context.Context, program, subcommand string, since time.Time, n int) ([]string, error) {
+	return s.repo.ListRecentCommandsByProgram(ctx, program, subcommand, since, n)
+}
+
+// GetSubcommandTrend returns raw analytics rows for (program, subcommand) since a time.
+func (s *Storage) GetSubcommandTrend(ctx context.Context, program, subcommand string, since time.Time) ([]AnalyticsData, error) {
+	return s.repo.GetSubcommandTrend(ctx, program, subcommand, since)
+}
+
 // --- Projects ---
 
 // CreateProject inserts a new project into storage.

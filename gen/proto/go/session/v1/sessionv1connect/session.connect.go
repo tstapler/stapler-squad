@@ -159,6 +159,9 @@ const (
 	// SessionServiceGetApprovalAnalyticsProcedure is the fully-qualified name of the SessionService's
 	// GetApprovalAnalytics RPC.
 	SessionServiceGetApprovalAnalyticsProcedure = "/session.v1.SessionService/GetApprovalAnalytics"
+	// SessionServiceGetProgramAnalyticsProcedure is the fully-qualified name of the SessionService's
+	// GetProgramAnalytics RPC.
+	SessionServiceGetProgramAnalyticsProcedure = "/session.v1.SessionService/GetProgramAnalytics"
 	// SessionServiceGenerateSuggestedRuleProcedure is the fully-qualified name of the SessionService's
 	// GenerateSuggestedRule RPC.
 	SessionServiceGenerateSuggestedRuleProcedure = "/session.v1.SessionService/GenerateSuggestedRule"
@@ -392,6 +395,9 @@ type SessionServiceClient interface {
 	DeleteApprovalRule(context.Context, *connect.Request[v1.DeleteApprovalRuleRequest]) (*connect.Response[v1.DeleteApprovalRuleResponse], error)
 	// GetApprovalAnalytics returns aggregated analytics for classification decisions.
 	GetApprovalAnalytics(context.Context, *connect.Request[v1.GetApprovalAnalyticsRequest]) (*connect.Response[v1.GetApprovalAnalyticsResponse], error)
+	// GetProgramAnalytics returns drill-down analytics for a single command program.
+	// Shows subcommand breakdown, recent examples, and daily trend for the time window.
+	GetProgramAnalytics(context.Context, *connect.Request[v1.GetProgramAnalyticsRequest]) (*connect.Response[v1.GetProgramAnalyticsResponse], error)
 	// GenerateSuggestedRule asks an AI agent to propose a new auto-approval rule.
 	// Analyzes existing rules, seed examples, and analytics data to produce a
 	// pre-filled SuggestedRuleProto. May take 5–30 seconds; callers must set a
@@ -772,6 +778,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("GetApprovalAnalytics")),
 			connect.WithClientOptions(opts...),
 		),
+		getProgramAnalytics: connect.NewClient[v1.GetProgramAnalyticsRequest, v1.GetProgramAnalyticsResponse](
+			httpClient,
+			baseURL+SessionServiceGetProgramAnalyticsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetProgramAnalytics")),
+			connect.WithClientOptions(opts...),
+		),
 		generateSuggestedRule: connect.NewClient[v1.GenerateSuggestedRuleRequest, v1.GenerateSuggestedRuleResponse](
 			httpClient,
 			baseURL+SessionServiceGenerateSuggestedRuleProcedure,
@@ -1066,6 +1078,7 @@ type sessionServiceClient struct {
 	upsertApprovalRule        *connect.Client[v1.UpsertApprovalRuleRequest, v1.UpsertApprovalRuleResponse]
 	deleteApprovalRule        *connect.Client[v1.DeleteApprovalRuleRequest, v1.DeleteApprovalRuleResponse]
 	getApprovalAnalytics      *connect.Client[v1.GetApprovalAnalyticsRequest, v1.GetApprovalAnalyticsResponse]
+	getProgramAnalytics       *connect.Client[v1.GetProgramAnalyticsRequest, v1.GetProgramAnalyticsResponse]
 	generateSuggestedRule     *connect.Client[v1.GenerateSuggestedRuleRequest, v1.GenerateSuggestedRuleResponse]
 	listDatabases             *connect.Client[v1.ListDatabasesRequest, v1.ListDatabasesResponse]
 	getCurrentDatabase        *connect.Client[v1.GetCurrentDatabaseRequest, v1.GetCurrentDatabaseResponse]
@@ -1322,6 +1335,11 @@ func (c *sessionServiceClient) DeleteApprovalRule(ctx context.Context, req *conn
 // GetApprovalAnalytics calls session.v1.SessionService.GetApprovalAnalytics.
 func (c *sessionServiceClient) GetApprovalAnalytics(ctx context.Context, req *connect.Request[v1.GetApprovalAnalyticsRequest]) (*connect.Response[v1.GetApprovalAnalyticsResponse], error) {
 	return c.getApprovalAnalytics.CallUnary(ctx, req)
+}
+
+// GetProgramAnalytics calls session.v1.SessionService.GetProgramAnalytics.
+func (c *sessionServiceClient) GetProgramAnalytics(ctx context.Context, req *connect.Request[v1.GetProgramAnalyticsRequest]) (*connect.Response[v1.GetProgramAnalyticsResponse], error) {
+	return c.getProgramAnalytics.CallUnary(ctx, req)
 }
 
 // GenerateSuggestedRule calls session.v1.SessionService.GenerateSuggestedRule.
@@ -1637,6 +1655,9 @@ type SessionServiceHandler interface {
 	DeleteApprovalRule(context.Context, *connect.Request[v1.DeleteApprovalRuleRequest]) (*connect.Response[v1.DeleteApprovalRuleResponse], error)
 	// GetApprovalAnalytics returns aggregated analytics for classification decisions.
 	GetApprovalAnalytics(context.Context, *connect.Request[v1.GetApprovalAnalyticsRequest]) (*connect.Response[v1.GetApprovalAnalyticsResponse], error)
+	// GetProgramAnalytics returns drill-down analytics for a single command program.
+	// Shows subcommand breakdown, recent examples, and daily trend for the time window.
+	GetProgramAnalytics(context.Context, *connect.Request[v1.GetProgramAnalyticsRequest]) (*connect.Response[v1.GetProgramAnalyticsResponse], error)
 	// GenerateSuggestedRule asks an AI agent to propose a new auto-approval rule.
 	// Analyzes existing rules, seed examples, and analytics data to produce a
 	// pre-filled SuggestedRuleProto. May take 5–30 seconds; callers must set a
@@ -2013,6 +2034,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("GetApprovalAnalytics")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceGetProgramAnalyticsHandler := connect.NewUnaryHandler(
+		SessionServiceGetProgramAnalyticsProcedure,
+		svc.GetProgramAnalytics,
+		connect.WithSchema(sessionServiceMethods.ByName("GetProgramAnalytics")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceGenerateSuggestedRuleHandler := connect.NewUnaryHandler(
 		SessionServiceGenerateSuggestedRuleProcedure,
 		svc.GenerateSuggestedRule,
@@ -2347,6 +2374,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceDeleteApprovalRuleHandler.ServeHTTP(w, r)
 		case SessionServiceGetApprovalAnalyticsProcedure:
 			sessionServiceGetApprovalAnalyticsHandler.ServeHTTP(w, r)
+		case SessionServiceGetProgramAnalyticsProcedure:
+			sessionServiceGetProgramAnalyticsHandler.ServeHTTP(w, r)
 		case SessionServiceGenerateSuggestedRuleProcedure:
 			sessionServiceGenerateSuggestedRuleHandler.ServeHTTP(w, r)
 		case SessionServiceListDatabasesProcedure:
@@ -2608,6 +2637,10 @@ func (UnimplementedSessionServiceHandler) DeleteApprovalRule(context.Context, *c
 
 func (UnimplementedSessionServiceHandler) GetApprovalAnalytics(context.Context, *connect.Request[v1.GetApprovalAnalyticsRequest]) (*connect.Response[v1.GetApprovalAnalyticsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetApprovalAnalytics is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetProgramAnalytics(context.Context, *connect.Request[v1.GetProgramAnalyticsRequest]) (*connect.Response[v1.GetProgramAnalyticsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetProgramAnalytics is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) GenerateSuggestedRule(context.Context, *connect.Request[v1.GenerateSuggestedRuleRequest]) (*connect.Response[v1.GenerateSuggestedRuleResponse], error) {
