@@ -41,6 +41,7 @@ export const NAV_PAGES: NavPage[] = [
   { href: routes.notifications, label: "Notifications", shortLabel: "Alerts", icon: Bell, bottomNavPrimary: true },
   { href: routes.settings,      label: "Settings",      icon: Settings, mobileNav: false },
   // Secondary — hamburger / More-sheet only
+  { href: routes.insights, label: "Insights", icon: BarChart2, mobileNav: false, headerNav: false },
   { href: routes.rules,   label: "Rules",   icon: BookOpen,          headerNav: false },
   { href: routes.history, label: "History", icon: History,           headerNav: false },
   { href: routes.settings + "?tab=config-files", label: "Config Files", icon: SlidersHorizontal, headerNav: false },

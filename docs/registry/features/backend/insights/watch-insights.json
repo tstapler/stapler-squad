@@ -1,0 +1,12 @@
+{
+  "id": "insights:watch-insights",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "WatchInsights",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/insights_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-15T00:00:00Z"
+}

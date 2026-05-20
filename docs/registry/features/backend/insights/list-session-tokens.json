@@ -1,0 +1,12 @@
+{
+  "id": "insights:list-session-tokens",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "ListSessionTokens",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/insights_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-05-15T00:00:00Z"
+}

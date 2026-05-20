@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
+	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
 )
@@ -46,6 +47,9 @@ type ServerDependencies struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
+
+	// Token usage analytics.
+	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
@@ -85,6 +89,7 @@ func (rt *RuntimeDeps) ToServerDeps() *ServerDependencies {
 		UnfinishedScanner:       rt.UnfinishedScanner,
 		UnfinishedStateStore:    rt.UnfinishedStateStore,
 		UnfinishedWorkService:   rt.UnfinishedWorkService,
+		InsightsService:         rt.InsightsService,
 		BacklogService:          rt.BacklogService,
 		SyncLoop:                rt.SyncLoop,
 		AnalyticsEntClient:      rt.AnalyticsEntClient,
@@ -341,6 +346,9 @@ type RuntimeDeps struct {
 	UnfinishedScanner     *unfinished.Scanner
 	UnfinishedStateStore  *unfinished.StateStore
 	UnfinishedWorkService *services.UnfinishedWorkService
+
+	// Token usage analytics.
+	InsightsService *services.InsightsService
 
 	BacklogService *services.BacklogService
 	SyncLoop       *session.SyncLoop
@@ -648,8 +656,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	}
 
 	// 60 s reconcile ticker: safety net for abnormal exits where EventExited cannot fire.
-	// ReconcileStuck is a no-op when the listener is disabled, so this goroutine
-	// can run unconditionally.
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -666,8 +672,6 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		keyFunc = cfg.GetOrCreateEncryptionKey
 	}
 	backlogCtrl := session.NewBacklogController(backlogLifecycleListener, storage, syncRegistry, keyFunc)
-	// GetFeatureFlag is nil-safe (returns false when cfg == nil), so no additional
-	// nil guard is needed here even though cfg may be nil when LoadConfig failed.
 	if cfg.GetFeatureFlag("backlog") {
 		if err := backlogCtrl.Enable(context.Background()); err != nil {
 			log.Warn("failed to enable backlog feature on startup", "err", err)
@@ -677,12 +681,8 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Info("backlog feature disabled (toggle via Settings → Features)")
 	}
 
-	// Create BacklogService — wire sessionService as the SessionCreator so
-	// SpawnSessionFromItem, TriggerTriage, and TriggerReReview can spawn real sessions.
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg)
 	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
-
-	// Wire the BacklogController so UpdateFeatureFlag can enable/disable at runtime.
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 
 	// Check VNC dependencies once at startup so the server knows whether browser
@@ -702,6 +702,21 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		log.Info("CDP browser streaming available", "chrome", cdpDeps.ChromePath)
 	}
 
+	// Initialize TokenStore and InsightsService for token usage analytics.
+	var insightsSvc *services.InsightsService
+	if homeDir, homeDirErr := os.UserHomeDir(); homeDirErr == nil {
+		historyDir := filepath.Join(homeDir, ".claude", "projects")
+		tokenStore := tokens.NewTokenStore(historyDir)
+		pricing := tokens.DefaultPricingTable()
+		associator := tokens.NewAssociator(storage)
+		historyLinker.RegisterFileCallback(tokenStore.OnHistoryFileChanged)
+		tokenStore.Start(context.Background())
+		insightsSvc = services.NewInsightsService(tokenStore, pricing, associator)
+		log.Info("InsightsService initialized", "historyDir", historyDir)
+	} else {
+		log.Warn("could not determine home dir for InsightsService token store", "err", homeDirErr)
+	}
+
 	return &RuntimeDeps{
 		ServiceDeps:             svc,
 		Instances:               instances,
@@ -716,6 +731,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 		UnfinishedScanner:       unfinishedScanner,
 		UnfinishedStateStore:    unfinishedStateStore,
 		UnfinishedWorkService:   unfinishedWorkSvc,
+		InsightsService:         insightsSvc,
 		BacklogService:          backlogSvc,
 		SyncLoop:                nil, // managed by BacklogController
 		Config:                  cfg,

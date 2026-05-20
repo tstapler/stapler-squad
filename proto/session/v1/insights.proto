@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// InsightsService provides token usage analytics derived from JSONL transcripts.
+service InsightsService {
+  // GetInsightsSummary returns aggregated token and cost data for a time range.
+  rpc GetInsightsSummary(GetInsightsSummaryRequest)
+      returns (GetInsightsSummaryResponse) {}
+
+  // ListSessionTokens returns per-session token summaries with pagination.
+  rpc ListSessionTokens(ListSessionTokensRequest)
+      returns (ListSessionTokensResponse) {}
+
+  // WatchInsights streams summary updates when new JSONL data is parsed.
+  rpc WatchInsights(WatchInsightsRequest)
+      returns (stream InsightsEvent) {}
+}
+
+// SessionTokenSummary is the per-session aggregated token record.
+message SessionTokenSummary {
+  string session_id             = 1;  // stapler-squad session ID (may be empty for orphans)
+  string conversation_id        = 2;  // JSONL conversation UUID
+  string project_path           = 3;
+  string primary_model          = 4;
+  int64  total_input_tokens     = 5;
+  int64  total_output_tokens    = 6;
+  int64  cache_creation_tokens  = 7;
+  int64  cache_read_tokens      = 8;
+  double estimated_cost_usd     = 9;
+  double cache_hit_rate         = 10; // cache_read / (input + cache_read)
+  int32  message_count          = 11;
+  google.protobuf.Timestamp first_message_at = 12;
+  google.protobuf.Timestamp last_message_at  = 13;
+  bool   is_orphan              = 14; // true = no matching stapler-squad session
+  repeated string skill_activations = 15;
+  repeated TopToolEntry top_tools   = 16;
+}
+
+// TopToolEntry records a tool name and its call count in a session.
+message TopToolEntry {
+  string tool_name  = 1;
+  int32  call_count = 2;
+  string mcp_server = 3; // non-empty for mcp__<server>__<tool>
+}
+
+// DailyTokenBucket aggregates token usage for one calendar day.
+message DailyTokenBucket {
+  google.protobuf.Timestamp date         = 1;
+  int64  total_input_tokens  = 2;
+  int64  total_output_tokens = 3;
+  int64  cache_read_tokens   = 4;
+  double estimated_cost_usd  = 5;
+  int32  session_count       = 6;
+  // cost_by_model maps normalized model family (e.g. "claude-sonnet-4") to USD cost for that day.
+  map<string, double> cost_by_model   = 7;
+  // tokens_by_model maps normalized model family to total token count (input+output) for that day.
+  map<string, int64>  tokens_by_model = 8;
+}
+
+// ModelBreakdown aggregates token usage by model family.
+message ModelBreakdown {
+  string model_family        = 1;  // normalized, e.g. "claude-sonnet-4"
+  int64  total_input_tokens  = 2;
+  int64  total_output_tokens = 3;
+  int64  cache_read_tokens   = 4;
+  double estimated_cost_usd  = 5;
+  int32  session_count       = 6;
+}
+
+// TopEntry is a generic name/value pair for top-N tables.
+message TopEntry {
+  string name             = 1;
+  int64  token_count      = 2;
+  int32  activation_count = 3;
+  double cost_usd         = 4;
+}
+
+// GetInsightsSummaryRequest filters the summary response.
+message GetInsightsSummaryRequest {
+  google.protobuf.Timestamp from   = 1;
+  google.protobuf.Timestamp to     = 2;
+  optional string model_filter     = 3;
+  optional string session_id_filter = 4;
+  bool            include_orphans  = 5;
+}
+
+// GetInsightsSummaryResponse returns the full dashboard dataset.
+message GetInsightsSummaryResponse {
+  repeated SessionTokenSummary sessions  = 1;
+  double   total_cost_usd                = 2;
+  int64    total_input_tokens            = 3;
+  int64    total_output_tokens           = 4;
+  int64    total_cache_read_tokens       = 5;
+  double   overall_cache_hit_rate        = 6;
+  repeated DailyTokenBucket daily        = 7;
+  repeated ModelBreakdown models         = 8;
+  repeated TopEntry top_skills           = 9;
+  repeated TopEntry top_tools            = 10;
+  bool     is_loading                    = 11; // true = background parse still in progress
+  google.protobuf.Timestamp pricing_as_of = 12;
+}
+
+// ListSessionTokensRequest supports paginated session listing.
+message ListSessionTokensRequest {
+  google.protobuf.Timestamp from = 1;
+  google.protobuf.Timestamp to   = 2;
+  string sort_by                 = 3; // "cost" | "tokens" | "date" (default: "date")
+  bool   sort_desc               = 4;
+  int32  page_size               = 5;
+  string page_token              = 6;
+}
+
+// ListSessionTokensResponse returns paginated session summaries.
+message ListSessionTokensResponse {
+  repeated SessionTokenSummary sessions = 1;
+  string next_page_token                = 2;
+  int32  total_count                    = 3;
+}
+
+// WatchInsightsRequest initiates a streaming subscription.
+message WatchInsightsRequest {
+  google.protobuf.Timestamp from = 1;
+  google.protobuf.Timestamp to   = 2;
+}
+
+// InsightsEvent is pushed when TokenStore processes a new or updated JSONL file.
+message InsightsEvent {
+  string event_type                    = 1; // "update" | "parse_complete"
+  optional SessionTokenSummary session = 2;
+  bool   all_parsed                    = 3;
+}

@@ -1,0 +1,23 @@
+{
+  "id": "insights:get-summary",
+  "type": "backend",
+  "service": "InsightsService",
+  "method": "GetInsightsSummary",
+  "protoFile": "proto/session/v1/insights.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/insights_service.go",
+  "tested": true,
+  "testIds": [
+    "TestGetInsightsSummary_EmptyStore",
+    "TestGetInsightsSummary_Aggregation",
+    "TestGetInsightsSummary_TimeFilter",
+    "TestGetInsightsSummary_ModelFilter",
+    "TestGetInsightsSummary_OrphanFilter",
+    "TestGetInsightsSummary_DailyRollup",
+    "TestGetInsightsSummary_ModelBreakdown",
+    "TestGetInsightsSummary_SortByCostDesc",
+    "TestGetInsightsSummary_Pagination",
+    "TestGetInsightsSummary_CacheHitRate"
+  ],
+  "lastModified": "2026-05-15T00:00:00Z"
+}

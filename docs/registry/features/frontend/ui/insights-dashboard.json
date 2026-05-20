@@ -1,0 +1,31 @@
+{
+  "id": "insights-dashboard",
+  "type": "frontend",
+  "component": "InsightsDashboard",
+  "path": "web-app/src/app/insights/InsightsDashboard.tsx",
+  "tested": true,
+  "testIds": [
+    "insights-dashboard > insights-dashboard_should_renderPage_When_navigatedTo",
+    "insights-dashboard > insights-dashboard_should_showHeading_When_pageLoads",
+    "insights-dashboard > insights-dashboard_should_showSubtitle_When_pageLoads",
+    "insights-dashboard > insights-dashboard_should_reachableFromNav_When_hamburgerOpened",
+    "insights-dashboard > insights-dashboard_should_showLoadingOrData_When_apiAvailable",
+    "TokenBadge > TokenBadge_should_renderZero_When_costIsZero",
+    "TokenBadge > TokenBadge_should_render4Decimals_When_costIsVerySmall",
+    "TokenBadge > TokenBadge_should_render3Decimals_When_costIsSmall",
+    "TokenBadge > TokenBadge_should_render2Decimals_When_costIsDollarRange",
+    "TokenBadge > TokenBadge_should_includeFullPrecisionInTitle_When_rendered",
+    "TokenBadge > TokenBadge_should_applyNormalVariant_When_belowAllThresholds",
+    "TokenBadge > TokenBadge_should_applyWarningVariant_When_atWarnThreshold",
+    "TokenBadge > TokenBadge_should_applyAlertVariant_When_atAlertThreshold",
+    "TokenBadge > TokenBadge_should_applyAlertVariant_When_aboveAlertThreshold",
+    "TokenBadge > TokenBadge_should_renderNormally_When_noThresholdsProvided",
+    "useTopSessions > useTopSessions_should_sortByCostDesc_When_calledWithSessions",
+    "useTopSessions > useTopSessions_should_respectLimit_When_limitIsSmaller",
+    "useTopSessions > useTopSessions_should_returnEmpty_When_inputIsEmpty",
+    "useTopSessions > useTopSessions_should_returnAll_When_limitExceedsCount",
+    "useTopSessions > useTopSessions_should_notMutateInput_When_sorting",
+    "useTopSessions > useTopSessions_should_defaultTo10_When_noLimitGiven"
+  ],
+  "lastModified": "2026-05-15T00:00:00Z"
+}

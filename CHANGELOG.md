@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.29.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.28.0...v1.29.0) (2026-05-18)
+
+
+### Features
+
+* **backlog:** add full backlog management layer ([#74](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/74)) ([765b904](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/765b9049729d80d14181a228d23205b1c622bdd1))
+* **files:** resizable tree panel, mobile layout, recent files, quick-open palette ([#81](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/81)) ([78ecb19](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/78ecb19c9e547de968c2ed107964574aba0bcc68))
+* **mobile:** mobile UX fixes, Go concurrency fixes, reflect-and-fix enforcement ([790d10c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/790d10c01ead2a5a9a3affd9bada79a10203fbed))
+* **mobile:** pane header mobile fixes and session row layout improvements ([b4e841e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/b4e841e61814d6d1d195839031bf4cf9f0ff48d5))
+* **ui:** dark slate theme, compact rows, onboarding modal, /help hub ([#79](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/79)) ([cf5b838](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/cf5b8380a4a75cfc416aa8102271ca890c64c5c8))
+* **upload:** generalize file upload to accept any file type with chip UI ([#80](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/80)) ([fb70cf3](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/fb70cf315f4dd04156f2b0a5f6984c52ac7d923e))
+
+
+### Bug Fixes
+
+* **analytics:** serialize events as snake_case integers to fix null duration_ms ([0c2b35e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/0c2b35ee534fc4cdfbd3331882983c193962b3d3))
+* **mobile:** keyboard visible on foldable widths; restore overflow menu in row view ([13c7950](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/13c7950b6ae38024c261062ae0f6bd0a75bd7b4a))
+* **sessions:** pass full action set to SessionRow in row view mode ([58d8aa3](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/58d8aa3f44ebba1be81bb4c29e57907955c73ef0))
+* **tests:** use meaningful alt text on FileChipList thumbnail to fix role queries ([e67f63d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e67f63d7f6c323bd8d795d654e28f5460bf528b6))
+* **theme:** add missing statusDot and transition tokens to contract ([9f045cf](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/9f045cfe2d8ba6813b1ce93a32896324384623b9))
+
+
+### Performance Improvements
+
+* eliminate forkExec lock contention from hot subprocess paths ([#102](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/102)) ([79582d4](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/79582d49563347917065c73ee61d51dba5c9ac17))
+
 ## [1.28.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.27.0...v1.28.0) (2026-05-15)
 
 

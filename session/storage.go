@@ -7,6 +7,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
 // InstanceData represents the serializable data of an Instance
@@ -251,6 +252,29 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 // (which spawns PTY processes). Use for read-only existence and title checks.
 func (s *Storage) ListInstanceData() ([]InstanceData, error) {
 	return s.repo.List(context.Background())
+}
+
+// ListSessionRecords returns a snapshot of all sessions as SessionRecords,
+// for use by the tokens.Associator to match JSONL files to stapler-squad sessions.
+func (s *Storage) ListSessionRecords() []tokens.SessionRecord {
+	data, err := s.ListInstanceData()
+	if err != nil {
+		return nil
+	}
+	records := make([]tokens.SessionRecord, 0, len(data))
+	for _, d := range data {
+		sessionID := d.UUID
+		if sessionID == "" {
+			sessionID = d.Title
+		}
+		records = append(records, tokens.SessionRecord{
+			SessionID:      sessionID,
+			ConversationID: d.ClaudeSession.ConversationUUID,
+			Path:           d.Path,
+			CreatedAt:      d.CreatedAt,
+		})
+	}
+	return records
 }
 
 // DeleteInstance removes an instance from storage.

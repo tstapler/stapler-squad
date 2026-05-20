@@ -41,9 +41,10 @@ type HistoryLinker struct {
 	detector *HistoryFileDetector
 	watcher  *HistoryFileWatcher
 
-	mu        deadlock.RWMutex
-	instances []*Instance
-	backoffs  map[string]*sessionBackoff
+	mu              deadlock.RWMutex
+	instances       []*Instance
+	backoffs        map[string]*sessionBackoff
+	extraCallbacks  []func(string) // additional per-file callbacks (e.g. TokenStore)
 }
 
 // NewHistoryLinkerFromRealInspector creates a HistoryLinker backed by the real
@@ -69,10 +70,26 @@ func NewHistoryLinkerFromRealInspector() *HistoryLinker {
 		instances: make([]*Instance, 0),
 		backoffs:  make(map[string]*sessionBackoff),
 	}
-	hl.watcher = NewHistoryFileWatcher(watchDir, func(_ string) {
+	hl.watcher = NewHistoryFileWatcher(watchDir, func(filePath string) {
 		hl.ScanAll()
+		// Notify any extra callbacks (e.g. TokenStore for token usage tracking).
+		hl.mu.RLock()
+		cbs := hl.extraCallbacks
+		hl.mu.RUnlock()
+		for _, cb := range cbs {
+			cb(filePath)
+		}
 	})
 	return hl
+}
+
+// RegisterFileCallback registers a callback that receives the file path whenever
+// a JSONL history file is created or modified. Used to wire the TokenStore into
+// the existing fsnotify infrastructure without creating a second watcher.
+func (hl *HistoryLinker) RegisterFileCallback(cb func(filePath string)) {
+	hl.mu.Lock()
+	defer hl.mu.Unlock()
+	hl.extraCallbacks = append(hl.extraCallbacks, cb)
 }
 
 // Instances returns a snapshot of the currently monitored instances.

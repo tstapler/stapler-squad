@@ -91,8 +91,8 @@ func (w *HistoryFileWatcher) run(ctx context.Context) {
 }
 
 func (w *HistoryFileWatcher) handleEvent(event fsnotify.Event) {
-	// Only care about CREATE and RENAME events
-	if event.Op&(fsnotify.Create|fsnotify.Rename) == 0 {
+	// Care about CREATE, RENAME, and WRITE events (WRITE fires as JSONL is appended).
+	if event.Op&(fsnotify.Create|fsnotify.Rename|fsnotify.Write) == 0 {
 		return
 	}
 
