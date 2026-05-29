@@ -164,9 +164,10 @@ export const rowMemoryPressure = style({
   borderLeft: `3px solid ${vars.color.warning}`,
 });
 
-/** Applied to <li> when session is paused — dims the row to de-emphasize it. */
+/** Applied to <li> when session is paused — left-border accent distinguishes paused rows
+ *  without reducing opacity, which would drop the elapsed-time text below WCAG AA contrast. */
 export const rowPaused = style({
-  opacity: 0.7,
+  borderLeft: `2px solid ${vars.color.warningText}`,
   "@media": {
     "(prefers-reduced-motion: no-preference)": {
       transition: vars.transition.base,
