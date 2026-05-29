@@ -141,7 +141,12 @@ var forkMonitor = struct {
 	zombieRing    *timestampRing
 	alertMu       deadlock.Mutex
 	lastAlertAt   time.Time
-	alertFns      []AlertFunc
+	// Baseline fields for condition-change gating (FR-1, FR-2).
+	// All three are read and written only under alertMu.
+	lastAlertZombieCount  int64
+	lastAlertFailureCount int64
+	lastAlertLevel        ForkPressureLevel
+	alertFns              []AlertFunc
 }{
 	spawnRing:   newTimestampRing(int(forkPressureWindow/time.Second) * 5),
 	failureRing: newTimestampRing(256),
@@ -249,15 +254,41 @@ func snapshotAt(now time.Time) ForkPressureStats {
 func checkPressure(now time.Time) {
 	stats := snapshotAt(now)
 	if stats.Level == ForkPressureOK {
+		// Only pay the mutex cost when we actually need to reset the baseline.
+		// Read lastAlertLevel under the lock to avoid data races.
+		forkMonitor.alertMu.Lock()
+		if forkMonitor.lastAlertLevel != ForkPressureOK {
+			// Condition cleared — reset baseline so next re-occurrence fires a fresh alert (FR-5).
+			forkMonitor.lastAlertZombieCount = 0
+			forkMonitor.lastAlertFailureCount = 0
+			forkMonitor.lastAlertLevel = ForkPressureOK
+		}
+		forkMonitor.alertMu.Unlock()
 		return
 	}
 
 	forkMonitor.alertMu.Lock()
-	if !forkMonitor.lastAlertAt.IsZero() && now.Sub(forkMonitor.lastAlertAt) < forkAlertCooldown {
-		forkMonitor.alertMu.Unlock()
-		return
+	// Condition-change check: worsened means strictly higher counts OR level escalated.
+	// We use strict > (not >=) intentionally: if the ring-buffer count drops due to
+	// entry expiry and then rises again, we only re-alert when it exceeds the baseline
+	// set at the last alert — not just when it equals it. This prevents re-alerts on
+	// oscillation around the threshold boundary.
+	worsened := stats.Level > forkMonitor.lastAlertLevel ||
+		stats.ZombiesInWindow > forkMonitor.lastAlertZombieCount ||
+		stats.FailuresInWindow > forkMonitor.lastAlertFailureCount
+
+	if !worsened {
+		// Suppress if within the cooldown window (unchanged stable condition).
+		if !forkMonitor.lastAlertAt.IsZero() && now.Sub(forkMonitor.lastAlertAt) < forkAlertCooldown {
+			forkMonitor.alertMu.Unlock()
+			return
+		}
 	}
+	// Either worsened (bypass cooldown) or cooldown expired (allow unchanged re-alert).
 	forkMonitor.lastAlertAt = now
+	forkMonitor.lastAlertZombieCount = stats.ZombiesInWindow
+	forkMonitor.lastAlertFailureCount = stats.FailuresInWindow
+	forkMonitor.lastAlertLevel = stats.Level
 	fns := forkMonitor.alertFns
 	forkMonitor.alertMu.Unlock()
 

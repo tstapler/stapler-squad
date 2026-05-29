@@ -9,6 +9,10 @@
  *  5. INPUT_REQUIRED bypasses dedup — each notification fires independently
  *  6. Dedup window resets after 10 seconds
  *  7. Different sessionIds are never deduped against each other
+ *  8. FR-6: showBrowserNotification called for non-history events (native notification alongside toast)
+ *  9. FR-6: showBrowserNotification NOT called for history-only events
+ * 10. FR-6: approval events use approval:<id> tag
+ * 11. NFR-1: approval events never suppressed by dedup
  */
 
 import { renderHook, act } from "@testing-library/react";
@@ -36,6 +40,13 @@ jest.mock("@/lib/utils/notificationMapping", () => ({
 }));
 jest.mock("@/lib/notification-policy", () => ({
   TOAST_DEDUP_WINDOW_MS: 10_000,
+  NATIVE_ACTIONABLE_TTL_MS: 300_000,
+  nativeAutoCloseMs: jest.fn().mockReturnValue(15_000),
+}));
+
+const mockShowBrowserNotification = jest.fn().mockResolvedValue(undefined);
+jest.mock("@/lib/utils/notifications", () => ({
+  showBrowserNotification: mockShowBrowserNotification,
 }));
 
 jest.mock("@/lib/config", () => ({
@@ -108,6 +119,13 @@ describe("useSessionNotifications", () => {
     jest.useFakeTimers();
     mockAddNotification.mockClear();
     mockAddToHistoryOnly.mockClear();
+    mockShowBrowserNotification.mockClear();
+    // Grant Notification permission so native notification path is exercised
+    Object.defineProperty(window, "Notification", {
+      value: { permission: "granted" },
+      writable: true,
+      configurable: true,
+    });
   });
 
   afterEach(() => {
@@ -316,6 +334,73 @@ describe("useSessionNotifications", () => {
       });
 
       expect(mockAddNotification).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ── 7. FR-6: Native notification alongside toast ──────────────────────────
+
+  describe("FR-6: native notifications (showBrowserNotification)", () => {
+    it("handleNotification_should_callShowBrowserNotification_When_nonHistoryEvent", () => {
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false })
+      );
+
+      act(() => {
+        result.current(makeEvent(NT.ERROR));
+      });
+
+      expect(mockAddNotification).toHaveBeenCalledTimes(1);
+      expect(mockShowBrowserNotification).toHaveBeenCalledTimes(1);
+    });
+
+    it("handleNotification_should_notCallShowBrowserNotification_When_historyOnlyEvent", () => {
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false })
+      );
+
+      act(() => {
+        result.current(makeEvent(NT.TASK_COMPLETE));
+      });
+
+      expect(mockAddNotification).not.toHaveBeenCalled();
+      expect(mockShowBrowserNotification).not.toHaveBeenCalled();
+    });
+
+    it("handleNotification_should_useApprovalTag_When_approvalIdPresent", () => {
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false })
+      );
+
+      const eventWithApproval = {
+        ...makeEvent(NT.APPROVAL_NEEDED),
+        metadata: { approval_id: "abc123" },
+      };
+
+      act(() => {
+        result.current(eventWithApproval);
+      });
+
+      expect(mockShowBrowserNotification).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ tag: "approval:abc123" })
+      );
+    });
+
+    it("handleNotification_should_neverSuppressApproval_When_dedupWindowActive", () => {
+      const { result } = renderHook(() =>
+        useSessionNotifications({ enableAudio: false })
+      );
+
+      act(() => {
+        result.current(makeEvent(NT.APPROVAL_NEEDED, "test-session"));
+      });
+      act(() => {
+        result.current(makeEvent(NT.APPROVAL_NEEDED, "test-session"));
+      });
+
+      // Both approval events should fire native notifications (never suppressed)
+      expect(mockAddNotification).toHaveBeenCalledTimes(2);
+      expect(mockShowBrowserNotification).toHaveBeenCalledTimes(2);
     });
   });
 });

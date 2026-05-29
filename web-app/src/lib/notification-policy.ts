@@ -7,6 +7,7 @@
  */
 
 import type { NotificationData } from "@/lib/types/notification";
+import { NotificationPriority } from "@/gen/session/v1/types_pb";
 
 /** Non-actionable toasts are swept from the active list after 5 minutes. */
 export const TOAST_STALE_MS = 5 * 60 * 1000;
@@ -38,6 +39,27 @@ export function toastAutoCloseMs(type: NotificationData["notificationType"]): nu
   if (isActionable(type)) return ACTIONABLE_TOAST_STALE_MS;
   if (type === "error" || type === "task_failed") return 12_000;
   return 8_000;
+}
+
+/** Auto-close delay for high/urgent native (OS) notifications (FR-3). */
+export const NATIVE_HIGH_TTL_MS = 30_000;
+/** Auto-close delay for medium/low native (OS) notifications (FR-3). */
+export const NATIVE_MEDIUM_TTL_MS = 15_000;
+/** Auto-close delay for actionable native (OS) notifications (approval_needed, input_required) (FR-3). */
+export const NATIVE_ACTIONABLE_TTL_MS = 5 * 60 * 1000;
+
+/** Maps a NotificationPriority to the native notification auto-close TTL. */
+export function nativeAutoCloseMs(priority: NotificationPriority): number {
+  switch (priority) {
+    case NotificationPriority.URGENT:
+    case NotificationPriority.HIGH:
+      return NATIVE_HIGH_TTL_MS;
+    case NotificationPriority.MEDIUM:
+    case NotificationPriority.LOW:
+    case NotificationPriority.UNSPECIFIED:
+    default:
+      return NATIVE_MEDIUM_TTL_MS;
+  }
 }
 
 /**

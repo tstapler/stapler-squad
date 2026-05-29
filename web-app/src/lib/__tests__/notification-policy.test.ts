@@ -2,10 +2,14 @@ import {
   TOAST_STALE_MS,
   ACTIONABLE_TOAST_STALE_MS,
   TOAST_DEDUP_WINDOW_MS,
+  NATIVE_HIGH_TTL_MS,
+  NATIVE_MEDIUM_TTL_MS,
   isActionable,
   toastAutoCloseMs,
   toastAutoMinimizeMs,
+  nativeAutoCloseMs,
 } from "@/lib/notification-policy";
+import { NotificationPriority } from "@/gen/session/v1/types_pb";
 
 describe("notification-policy", () => {
   describe("constants", () => {
@@ -96,6 +100,28 @@ describe("notification-policy", () => {
     it("actionable types get longer close time than non-actionable", () => {
       expect(toastAutoCloseMs("approval_needed")).toBeGreaterThan(toastAutoCloseMs("error"));
       expect(toastAutoCloseMs("question")).toBeGreaterThan(toastAutoCloseMs("warning"));
+    });
+  });
+
+  describe("nativeAutoCloseMs", () => {
+    it("nativeAutoCloseMs_should_return30000_When_priorityIsUrgent", () => {
+      expect(nativeAutoCloseMs(NotificationPriority.URGENT)).toBe(30_000);
+      expect(nativeAutoCloseMs(NotificationPriority.URGENT)).toBe(NATIVE_HIGH_TTL_MS);
+    });
+
+    it("nativeAutoCloseMs_should_return30000_When_priorityIsHigh", () => {
+      expect(nativeAutoCloseMs(NotificationPriority.HIGH)).toBe(30_000);
+      expect(nativeAutoCloseMs(NotificationPriority.HIGH)).toBe(NATIVE_HIGH_TTL_MS);
+    });
+
+    it("nativeAutoCloseMs_should_return15000_When_priorityIsMedium", () => {
+      expect(nativeAutoCloseMs(NotificationPriority.MEDIUM)).toBe(15_000);
+      expect(nativeAutoCloseMs(NotificationPriority.MEDIUM)).toBe(NATIVE_MEDIUM_TTL_MS);
+    });
+
+    it("nativeAutoCloseMs_should_return15000_When_priorityIsUnspecified", () => {
+      expect(nativeAutoCloseMs(NotificationPriority.UNSPECIFIED)).toBe(15_000);
+      expect(nativeAutoCloseMs(NotificationPriority.UNSPECIFIED)).toBe(NATIVE_MEDIUM_TTL_MS);
     });
   });
 

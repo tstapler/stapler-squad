@@ -8,8 +8,9 @@ import { SessionService } from "@/gen/session/v1/session_pb";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { NotificationData } from "@/lib/types/notification";
 import { mapNotificationType, mapPriority } from "@/lib/utils/notificationMapping";
-import { TOAST_DEDUP_WINDOW_MS } from "@/lib/notification-policy";
+import { TOAST_DEDUP_WINDOW_MS, nativeAutoCloseMs, NATIVE_ACTIONABLE_TTL_MS } from "@/lib/notification-policy";
 import { getConnectTransport } from "@/lib/api/transport";
+import { showBrowserNotification } from "@/lib/utils/notifications";
 
 /**
  * Notification types that should only appear in history — no toast, no sound.
@@ -284,6 +285,20 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
 
     // Add visual notification
     addNotification(notificationData);
+
+    // Native notification (FR-6): fire alongside toast for non-history types.
+    // Each (sessionId, notificationType) gets its own tag so dedup is consistent.
+    if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+      const nativeTag = isApproval && event.metadata?.["approval_id"]
+        ? `approval:${event.metadata["approval_id"]}`
+        : `${event.sessionId}:${mapNotificationType(event.notificationType)}`;
+      void showBrowserNotification(event.title, {
+        body: event.message ?? undefined,
+        tag: nativeTag,
+        autoCloseMs: isApproval ? NATIVE_ACTIONABLE_TTL_MS : nativeAutoCloseMs(event.priority),
+        requireInteraction: isApproval,
+      });
+    }
   }, [addNotification, addToHistoryOnly]);
 
   return handleNotification;

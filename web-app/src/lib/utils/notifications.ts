@@ -2,6 +2,8 @@
  * Notification utilities for audio alerts and browser notifications
  */
 
+import { NATIVE_MEDIUM_TTL_MS, NATIVE_ACTIONABLE_TTL_MS } from "@/lib/notification-policy";
+
 /**
  * Notification sound types
  */
@@ -87,12 +89,38 @@ export function playNotificationSound(
 }
 
 /**
- * Shows a browser notification if permission is granted
- * Falls back to audio-only if notifications are not supported or denied
+ * Extended options for showBrowserNotification — superset of NotificationOptions
+ * with an optional auto-close override.
+ */
+interface BrowserNotificationOptions extends NotificationOptions {
+  /**
+   * Override the auto-close delay in ms.
+   * Defaults to NATIVE_ACTIONABLE_TTL_MS when requireInteraction is true,
+   * otherwise NATIVE_MEDIUM_TTL_MS.
+   */
+  autoCloseMs?: number;
+}
+
+/**
+ * Tracks open native Notification handles by tag for dedup and auto-close (FR-3, FR-4).
+ *
+ * macOS Notification Center limitation: notification.close() dismisses the banner
+ * but cannot remove NC entries that the user has already swiped into the NC tray.
+ * This is a known browser/OS limitation; no workaround is attempted here.
+ */
+const activeNativeNotifications = new Map<string, Notification>();
+
+/**
+ * Shows a browser notification if permission is granted.
+ * Falls back to audio-only if notifications are not supported or denied.
+ *
+ * Implements:
+ * - FR-3: Auto-close via setTimeout after autoCloseMs
+ * - FR-4: Close-before-open dedup via activeNativeNotifications Map
  */
 export async function showBrowserNotification(
   title: string,
-  options?: NotificationOptions
+  options?: BrowserNotificationOptions
 ): Promise<void> {
   // Check if notifications are enabled
   const notificationsEnabled = localStorage.getItem("notifications-enabled");
@@ -113,11 +141,43 @@ export async function showBrowserNotification(
 
   // Show notification if permission granted
   if (Notification.permission === "granted") {
-    new Notification(title, {
+    const tag = options?.tag ?? "__untagged__";
+
+    // Close previous notification for this tag (FR-4)
+    try {
+      activeNativeNotifications.get(tag)?.close();
+    } catch {}
+
+    // Strip autoCloseMs from native NotificationOptions before passing to constructor
+    const { autoCloseMs: _autoCloseMs, ...notifOptions } = options ?? {};
+    const autoCloseMs =
+      _autoCloseMs ??
+      (options?.requireInteraction ? NATIVE_ACTIONABLE_TTL_MS : NATIVE_MEDIUM_TTL_MS);
+
+    const notif = new Notification(title, {
       icon: "/favicon.ico",
       badge: "/favicon.ico",
-      ...options,
+      ...notifOptions,
     });
+    activeNativeNotifications.set(tag, notif);
+
+    // Auto-close (FR-3)
+    const timerId = setTimeout(() => {
+      try {
+        notif.close();
+      } catch {}
+      if (activeNativeNotifications.get(tag) === notif) {
+        activeNativeNotifications.delete(tag);
+      }
+    }, autoCloseMs);
+
+    // Clean up map entry when the OS closes the notification
+    notif.onclose = () => {
+      clearTimeout(timerId);
+      if (activeNativeNotifications.get(tag) === notif) {
+        activeNativeNotifications.delete(tag);
+      }
+    };
   }
 }
 
