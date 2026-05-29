@@ -1,0 +1,14 @@
+{
+  "id": "paused-session-overlay",
+  "type": "frontend",
+  "description": "Terminal overlay shown when a session is paused — explains pause state and offers Resume button",
+  "component": "SessionDetailView (pausedOverlay)",
+  "path": "web-app/src/components/sessions/SessionDetailView.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "paused-session-ux > paused-session-ux_should_showOverlay_When_pausedSessionOpened",
+    "paused-session-ux > paused-session-ux_should_resumeSession_When_overlayResumeClicked"
+  ],
+  "lastModified": "2026-05-28T00:00:00Z"
+}

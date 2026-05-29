@@ -431,6 +431,20 @@ func (_c *SessionCreate) SetNillableLastPromptSignature(v *string) *SessionCreat
 	return _c
 }
 
+// SetPauseReason sets the "pause_reason" field.
+func (_c *SessionCreate) SetPauseReason(v string) *SessionCreate {
+	_c.mutation.SetPauseReason(v)
+	return _c
+}
+
+// SetNillablePauseReason sets the "pause_reason" field if the given value is not nil.
+func (_c *SessionCreate) SetNillablePauseReason(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetPauseReason(*v)
+	}
+	return _c
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_c *SessionCreate) SetWorktreeID(id int) *SessionCreate {
 	_c.mutation.SetWorktreeID(id)
@@ -792,6 +806,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.LastPromptSignature(); ok {
 		_spec.SetField(session.FieldLastPromptSignature, field.TypeString, value)
 		_node.LastPromptSignature = value
+	}
+	if value, ok := _c.mutation.PauseReason(); ok {
+		_spec.SetField(session.FieldPauseReason, field.TypeString, value)
+		_node.PauseReason = value
 	}
 	if nodes := _c.mutation.WorktreeIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1452,6 +1470,24 @@ func (u *SessionUpsert) ClearLastPromptSignature() *SessionUpsert {
 	return u
 }
 
+// SetPauseReason sets the "pause_reason" field.
+func (u *SessionUpsert) SetPauseReason(v string) *SessionUpsert {
+	u.Set(session.FieldPauseReason, v)
+	return u
+}
+
+// UpdatePauseReason sets the "pause_reason" field to the value that was provided on create.
+func (u *SessionUpsert) UpdatePauseReason() *SessionUpsert {
+	u.SetExcluded(session.FieldPauseReason)
+	return u
+}
+
+// ClearPauseReason clears the value of the "pause_reason" field.
+func (u *SessionUpsert) ClearPauseReason() *SessionUpsert {
+	u.SetNull(session.FieldPauseReason)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -2089,6 +2125,27 @@ func (u *SessionUpsertOne) UpdateLastPromptSignature() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearLastPromptSignature() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearLastPromptSignature()
+	})
+}
+
+// SetPauseReason sets the "pause_reason" field.
+func (u *SessionUpsertOne) SetPauseReason(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetPauseReason(v)
+	})
+}
+
+// UpdatePauseReason sets the "pause_reason" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdatePauseReason() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdatePauseReason()
+	})
+}
+
+// ClearPauseReason clears the value of the "pause_reason" field.
+func (u *SessionUpsertOne) ClearPauseReason() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearPauseReason()
 	})
 }
 
@@ -2895,6 +2952,27 @@ func (u *SessionUpsertBulk) UpdateLastPromptSignature() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearLastPromptSignature() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearLastPromptSignature()
+	})
+}
+
+// SetPauseReason sets the "pause_reason" field.
+func (u *SessionUpsertBulk) SetPauseReason(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetPauseReason(v)
+	})
+}
+
+// UpdatePauseReason sets the "pause_reason" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdatePauseReason() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdatePauseReason()
+	})
+}
+
+// ClearPauseReason clears the value of the "pause_reason" field.
+func (u *SessionUpsertBulk) ClearPauseReason() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearPauseReason()
 	})
 }
 

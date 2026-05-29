@@ -229,6 +229,11 @@ type Instance struct {
 	// Values: "manual", "idle", "resource_pressure". Read by hibernateProcess.
 	hibernateReason string
 
+	// PauseReason records why this session was paused.
+	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource".
+	// Empty when session has never been paused.
+	PauseReason string `json:"pause_reason,omitempty"`
+
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 

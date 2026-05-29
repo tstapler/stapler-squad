@@ -569,6 +569,7 @@ var (
 		{Name: "processing_grace_until", Type: field.TypeTime, Nullable: true},
 		{Name: "last_prompt_detected", Type: field.TypeTime, Nullable: true},
 		{Name: "last_prompt_signature", Type: field.TypeString, Nullable: true},
+		{Name: "pause_reason", Type: field.TypeString, Nullable: true},
 		{Name: "project_sessions", Type: field.TypeInt, Nullable: true},
 	}
 	// SessionsTable holds the schema information for the "sessions" table.
@@ -579,7 +580,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sessions_projects_sessions",
-				Columns:    []*schema.Column{SessionsColumns[32]},
+				Columns:    []*schema.Column{SessionsColumns[33]},
 				RefColumns: []*schema.Column{ProjectsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},

@@ -22,7 +22,14 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import * as styles from "./SessionDetail.css";
-import { diffAdded } from "./SessionDetailView.css";
+import {
+  diffAdded,
+  pausedOverlay,
+  pausedOverlayIcon,
+  pausedOverlayTitle,
+  pausedOverlayReason,
+  pausedOverlayButton,
+} from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
 import type { SessionDetailTab } from "./SessionDetail";
 
@@ -79,6 +86,16 @@ function getSessionTypeLabel(type: SessionType): string {
     case SessionType.NEW_WORKTREE: return "New Worktree";
     case SessionType.EXISTING_WORKTREE: return "Existing Worktree";
     default: return "Unknown";
+  }
+}
+
+function formatPauseReason(reason: string): string {
+  switch (reason) {
+    case "manual": return "Paused manually";
+    case "auto:inactivity": return "Paused automatically — no recent activity";
+    case "auto:session_limit": return "Paused automatically — too many active sessions";
+    case "auto:resource": return "Paused automatically — resource pressure";
+    default: return reason;
   }
 }
 
@@ -476,6 +493,7 @@ export function SessionDetailView({
                 </p>
               </div>
             ) : session.instanceType === InstanceType.EXTERNAL && session.externalMetadata?.muxSocketPath ? (
+              // External mux sessions cannot be paused; no overlay needed.
               <div style={{ position: 'relative', flex: 1, minHeight: 0 }}>
                 {pooledMuxPaths.map(poolPath => (
                   <div
@@ -514,6 +532,34 @@ export function SessionDetailView({
                     />
                   </div>
                 ))}
+                {/* Paused overlay: sits above the pool (which stays mounted for keep-alive).
+                    Only rendered for the current session when status is PAUSED. */}
+                {session.status === SessionStatus.PAUSED && (
+                  <div
+                    className={pausedOverlay}
+                    role="status"
+                    aria-live="polite"
+                    aria-label="Session is paused"
+                  >
+                    <span className={pausedOverlayIcon} aria-hidden="true">⏸</span>
+                    <p className={pausedOverlayTitle}>This session is paused</p>
+                    {session.pauseReason && (
+                      <p className={pausedOverlayReason}>
+                        {formatPauseReason(session.pauseReason)}
+                      </p>
+                    )}
+                    <button
+                      className={pausedOverlayButton}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePauseResume();
+                      }}
+                      aria-label="Resume this session"
+                    >
+                      ▶ Resume Session
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>

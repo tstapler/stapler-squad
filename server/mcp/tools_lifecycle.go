@@ -250,6 +250,8 @@ func (lh *lifecycleHandlers) pauseSession(ctx context.Context, req mcpgo.CallToo
 		return errResult("SESSION_ALREADY_PAUSED", fmt.Sprintf("session %q is already paused", sessionID), ""), nil
 	}
 
+	// MCP tool pause is always user-initiated — record as manual.
+	inst.PauseReason = "manual"
 	if err := inst.Pause(); err != nil {
 		return errResult(ErrInternalError, fmt.Sprintf("pause session: %v", err), ""), nil
 	}

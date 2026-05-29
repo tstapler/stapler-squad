@@ -1055,11 +1055,19 @@ func (s *SessionService) UpdateSession(
 		oldStatus = instance.Status
 
 		if targetStatus == session.Paused && instance.Status != session.Paused {
+			// Set pause reason before transitioning — mirrors HibernateSession pattern.
+			if req.Msg.PauseReason == nil || *req.Msg.PauseReason == "" {
+				instance.PauseReason = "manual"
+			} else {
+				instance.PauseReason = *req.Msg.PauseReason
+			}
 			if err := instance.Pause(); err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to pause session: %w", err))
 			}
 			updatedFields = append(updatedFields, "status")
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
+			// Clear pause reason on resume.
+			instance.PauseReason = ""
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resume session: %w", err))

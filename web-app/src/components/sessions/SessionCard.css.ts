@@ -71,6 +71,16 @@ export const cardExternal = style({
   backgroundImage: `linear-gradient(to right, ${vars.color.accentBg}, ${vars.color.cardBackground})`,
 });
 
+/** Applied to the card root when session is paused — dims to de-emphasize. */
+export const cardPaused = style({
+  opacity: 0.75,
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      transition: "opacity 0.3s ease",
+    },
+  },
+});
+
 export const checkbox = style({
   position: "absolute",
   left: vars.space["4"],
@@ -182,6 +192,14 @@ export const statusReady = style({
 export const statusPaused = style({
   background: vars.statusBadge.uncommittedBg,
   color: vars.statusBadge.uncommittedFg,
+});
+
+/** Distinct style for PAUSED sessions — uses warning colors to distinguish from STOPPED/HIBERNATED.
+ *  Do NOT change statusPaused (shared with STOPPED, HIBERNATED). */
+export const statusPausedDistinct = style({
+  background: vars.color.warningBg,
+  color: vars.color.warningText,
+  border: `1px solid ${vars.color.warning}`,
 });
 
 export const statusLoading = style({

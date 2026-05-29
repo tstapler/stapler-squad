@@ -107,6 +107,9 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 	}
 	protoSession.RateLimitEnabled = inst.IsRateLimitEnabled()
 
+	// Pause reason — empty for sessions that have never been paused.
+	protoSession.PauseReason = inst.PauseReason
+
 	// VNC / browser-passthrough state.
 	if vncMgr := inst.VNCManager(); vncMgr != nil {
 		vncState := vncMgr.State()

@@ -76,6 +76,8 @@ const (
 	FieldLastPromptDetected = "last_prompt_detected"
 	// FieldLastPromptSignature holds the string denoting the last_prompt_signature field in the database.
 	FieldLastPromptSignature = "last_prompt_signature"
+	// FieldPauseReason holds the string denoting the pause_reason field in the database.
+	FieldPauseReason = "pause_reason"
 	// EdgeWorktree holds the string denoting the worktree edge name in mutations.
 	EdgeWorktree = "worktree"
 	// EdgeDiffStats holds the string denoting the diff_stats edge name in mutations.
@@ -164,6 +166,7 @@ var Columns = []string{
 	FieldProcessingGraceUntil,
 	FieldLastPromptDetected,
 	FieldLastPromptSignature,
+	FieldPauseReason,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "sessions"
@@ -380,6 +383,11 @@ func ByLastPromptDetected(opts ...sql.OrderTermOption) OrderOption {
 // ByLastPromptSignature orders the results by the last_prompt_signature field.
 func ByLastPromptSignature(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLastPromptSignature, opts...).ToFunc()
+}
+
+// ByPauseReason orders the results by the pause_reason field.
+func ByPauseReason(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldPauseReason, opts...).ToFunc()
 }
 
 // ByWorktreeField orders the results by worktree field.

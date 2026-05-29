@@ -513,8 +513,11 @@ type UpdateSessionRequest struct {
 	WorkingDir *string `protobuf:"bytes,7,opt,name=working_dir,json=workingDir,proto3,oneof" json:"working_dir,omitempty"`
 	// Update whether rate limit auto-resume is enabled for this session.
 	RateLimitEnabled *bool `protobuf:"varint,8,opt,name=rate_limit_enabled,json=rateLimitEnabled,proto3,oneof" json:"rate_limit_enabled,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Reason for pausing (only meaningful when status is set to PAUSED).
+	// If empty when pausing, defaults to "manual" in the backend handler.
+	PauseReason   *string `protobuf:"bytes,9,opt,name=pause_reason,json=pauseReason,proto3,oneof" json:"pause_reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *UpdateSessionRequest) Reset() {
@@ -601,6 +604,13 @@ func (x *UpdateSessionRequest) GetRateLimitEnabled() bool {
 		return *x.RateLimitEnabled
 	}
 	return false
+}
+
+func (x *UpdateSessionRequest) GetPauseReason() string {
+	if x != nil && x.PauseReason != nil {
+		return *x.PauseReason
+	}
+	return ""
 }
 
 type UpdateSessionResponse struct {
@@ -11489,7 +11499,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"project_id\x18\x11 \x01(\tR\tprojectId\x12*\n" +
 	"\x11create_if_missing\x18\x12 \x01(\bR\x0fcreateIfMissing\"F\n" +
 	"\x15CreateSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xfb\x02\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xb4\x03\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x126\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x19.session.v1.SessionStatusH\x00R\x06status\x88\x01\x01\x12\x1f\n" +
@@ -11499,14 +11509,16 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x04tags\x18\x06 \x03(\tR\x04tags\x12$\n" +
 	"\vworking_dir\x18\a \x01(\tH\x04R\n" +
 	"workingDir\x88\x01\x01\x121\n" +
-	"\x12rate_limit_enabled\x18\b \x01(\bH\x05R\x10rateLimitEnabled\x88\x01\x01B\t\n" +
+	"\x12rate_limit_enabled\x18\b \x01(\bH\x05R\x10rateLimitEnabled\x88\x01\x01\x12&\n" +
+	"\fpause_reason\x18\t \x01(\tH\x06R\vpauseReason\x88\x01\x01B\t\n" +
 	"\a_statusB\v\n" +
 	"\t_categoryB\b\n" +
 	"\x06_titleB\n" +
 	"\n" +
 	"\b_programB\x0e\n" +
 	"\f_working_dirB\x15\n" +
-	"\x13_rate_limit_enabled\"F\n" +
+	"\x13_rate_limit_enabledB\x0f\n" +
+	"\r_pause_reason\"F\n" +
 	"\x15UpdateSessionResponse\x12-\n" +
 	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"<\n" +
 	"\x14DeleteSessionRequest\x12\x0e\n" +

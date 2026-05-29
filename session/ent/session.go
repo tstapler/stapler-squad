@@ -83,6 +83,8 @@ type Session struct {
 	LastPromptDetected *time.Time `json:"last_prompt_detected,omitempty"`
 	// LastPromptSignature holds the value of the "last_prompt_signature" field.
 	LastPromptSignature string `json:"last_prompt_signature,omitempty"`
+	// Reason the session was paused: manual, auto:inactivity, auto:session_limit, auto:resource. Empty when never paused.
+	PauseReason string `json:"pause_reason,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the SessionQuery when eager-loading is set.
 	Edges            SessionEdges `json:"edges"`
@@ -180,7 +182,7 @@ func (*Session) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth:
 			values[i] = new(sql.NullInt64)
-		case session.FieldTitle, session.FieldUUID, session.FieldPath, session.FieldWorkingDir, session.FieldBranch, session.FieldPrompt, session.FieldProgram, session.FieldExistingWorktree, session.FieldCategory, session.FieldSessionType, session.FieldTmuxPrefix, session.FieldLastOutputSignature, session.FieldMcpServerURL, session.FieldInitialPrompt, session.FieldLastPromptSignature:
+		case session.FieldTitle, session.FieldUUID, session.FieldPath, session.FieldWorkingDir, session.FieldBranch, session.FieldPrompt, session.FieldProgram, session.FieldExistingWorktree, session.FieldCategory, session.FieldSessionType, session.FieldTmuxPrefix, session.FieldLastOutputSignature, session.FieldMcpServerURL, session.FieldInitialPrompt, session.FieldLastPromptSignature, session.FieldPauseReason:
 			values[i] = new(sql.NullString)
 		case session.FieldCreatedAt, session.FieldUpdatedAt, session.FieldLastTerminalUpdate, session.FieldLastMeaningfulOutput, session.FieldLastAddedToQueue, session.FieldLastViewed, session.FieldLastAcknowledged, session.FieldLastUserResponse, session.FieldProcessingGraceUntil, session.FieldLastPromptDetected:
 			values[i] = new(sql.NullTime)
@@ -401,6 +403,12 @@ func (_m *Session) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.LastPromptSignature = value.String
 			}
+		case session.FieldPauseReason:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field pause_reason", values[i])
+			} else if value.Valid {
+				_m.PauseReason = value.String
+			}
 		case session.ForeignKeys[0]:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for edge-field project_sessions", value)
@@ -582,6 +590,9 @@ func (_m *Session) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("last_prompt_signature=")
 	builder.WriteString(_m.LastPromptSignature)
+	builder.WriteString(", ")
+	builder.WriteString("pause_reason=")
+	builder.WriteString(_m.PauseReason)
 	builder.WriteByte(')')
 	return builder.String()
 }

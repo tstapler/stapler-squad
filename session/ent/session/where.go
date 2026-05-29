@@ -210,6 +210,11 @@ func LastPromptSignature(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldLastPromptSignature, v))
 }
 
+// PauseReason applies equality check predicate on the "pause_reason" field. It's identical to PauseReasonEQ.
+func PauseReason(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldPauseReason, v))
+}
+
 // TitleEQ applies the EQ predicate on the "title" field.
 func TitleEQ(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldTitle, v))
@@ -1953,6 +1958,81 @@ func LastPromptSignatureEqualFold(v string) predicate.Session {
 // LastPromptSignatureContainsFold applies the ContainsFold predicate on the "last_prompt_signature" field.
 func LastPromptSignatureContainsFold(v string) predicate.Session {
 	return predicate.Session(sql.FieldContainsFold(FieldLastPromptSignature, v))
+}
+
+// PauseReasonEQ applies the EQ predicate on the "pause_reason" field.
+func PauseReasonEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldPauseReason, v))
+}
+
+// PauseReasonNEQ applies the NEQ predicate on the "pause_reason" field.
+func PauseReasonNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldPauseReason, v))
+}
+
+// PauseReasonIn applies the In predicate on the "pause_reason" field.
+func PauseReasonIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldPauseReason, vs...))
+}
+
+// PauseReasonNotIn applies the NotIn predicate on the "pause_reason" field.
+func PauseReasonNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldPauseReason, vs...))
+}
+
+// PauseReasonGT applies the GT predicate on the "pause_reason" field.
+func PauseReasonGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldPauseReason, v))
+}
+
+// PauseReasonGTE applies the GTE predicate on the "pause_reason" field.
+func PauseReasonGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldPauseReason, v))
+}
+
+// PauseReasonLT applies the LT predicate on the "pause_reason" field.
+func PauseReasonLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldPauseReason, v))
+}
+
+// PauseReasonLTE applies the LTE predicate on the "pause_reason" field.
+func PauseReasonLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldPauseReason, v))
+}
+
+// PauseReasonContains applies the Contains predicate on the "pause_reason" field.
+func PauseReasonContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldPauseReason, v))
+}
+
+// PauseReasonHasPrefix applies the HasPrefix predicate on the "pause_reason" field.
+func PauseReasonHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldPauseReason, v))
+}
+
+// PauseReasonHasSuffix applies the HasSuffix predicate on the "pause_reason" field.
+func PauseReasonHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldPauseReason, v))
+}
+
+// PauseReasonIsNil applies the IsNil predicate on the "pause_reason" field.
+func PauseReasonIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldPauseReason))
+}
+
+// PauseReasonNotNil applies the NotNil predicate on the "pause_reason" field.
+func PauseReasonNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldPauseReason))
+}
+
+// PauseReasonEqualFold applies the EqualFold predicate on the "pause_reason" field.
+func PauseReasonEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldPauseReason, v))
+}
+
+// PauseReasonContainsFold applies the ContainsFold predicate on the "pause_reason" field.
+func PauseReasonContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldPauseReason, v))
 }
 
 // HasWorktree applies the HasEdge predicate on the "worktree" edge.

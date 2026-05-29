@@ -84,6 +84,8 @@ func (i *Instance) ToInstanceData() InstanceData {
 		LaunchCommand: i.LaunchCommand,
 		// MCP server URL for re-injection on restart
 		MCPServerURL: i.MCPServerURL,
+		// Pause reason — persisted so it survives restarts
+		PauseReason: i.PauseReason,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -226,6 +228,8 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		LaunchCommand: data.LaunchCommand,
 		// MCP server URL for re-injection on restart
 		MCPServerURL: data.MCPServerURL,
+		// Pause reason
+		PauseReason: data.PauseReason,
 	}
 
 	// MIGRATION: Assign UUID to existing sessions that pre-date UUID assignment

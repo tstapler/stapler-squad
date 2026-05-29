@@ -1355,8 +1355,11 @@ type Session struct {
 	// Estimated RAM freed in MB if this session were hibernated now.
 	// Equal to memory_rss_mb for Active sessions; zero for Hibernated sessions.
 	EstimatedSavingsMb int64 `protobuf:"varint,56,opt,name=estimated_savings_mb,json=estimatedSavingsMb,proto3" json:"estimated_savings_mb,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Reason why the session was paused. Empty when session has never been paused.
+	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource"
+	PauseReason   string `protobuf:"bytes,57,opt,name=pause_reason,json=pauseReason,proto3" json:"pause_reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -1765,6 +1768,13 @@ func (x *Session) GetEstimatedSavingsMb() int64 {
 		return x.EstimatedSavingsMb
 	}
 	return 0
+}
+
+func (x *Session) GetPauseReason() string {
+	if x != nil {
+		return x.PauseReason
+	}
+	return ""
 }
 
 // VNCState holds the browser-passthrough state for a session.
@@ -5537,7 +5547,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb2\x13\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd5\x13\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -5602,7 +5612,8 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"sub_status\x186 \x01(\x0e2\x15.session.v1.SubStatusR\tsubStatus\x12\"\n" +
 	"\rmemory_rss_mb\x187 \x01(\x03R\vmemoryRssMb\x120\n" +
-	"\x14estimated_savings_mb\x188 \x01(\x03R\x12estimatedSavingsMb\"\xbb\x01\n" +
+	"\x14estimated_savings_mb\x188 \x01(\x03R\x12estimatedSavingsMb\x12!\n" +
+	"\fpause_reason\x189 \x01(\tR\vpauseReason\"\xbb\x01\n" +
 	"\bVNCState\x12-\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x15.session.v1.VNCStatusR\x06status\x12%\n" +
 	"\x0edisplay_number\x18\x02 \x01(\x05R\rdisplayNumber\x12!\n" +

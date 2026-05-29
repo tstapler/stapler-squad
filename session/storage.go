@@ -115,6 +115,11 @@ type InstanceData struct {
 	// MCPServerURL is the stapler-squad HTTP MCP endpoint passed to claude via
 	// --mcp-config on session start. Persisted so restarts re-inject the flag.
 	MCPServerURL string `json:"mcp_server_url,omitempty"`
+
+	// PauseReason records why this session was paused.
+	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource".
+	// Empty when session has never been paused.
+	PauseReason string `json:"pause_reason,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

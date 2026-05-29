@@ -184,6 +184,10 @@ message Session {
   // Estimated RAM freed in MB if this session were hibernated now.
   // Equal to memory_rss_mb for Active sessions; zero for Hibernated sessions.
   int64 estimated_savings_mb = 56;
+
+  // Reason why the session was paused. Empty when session has never been paused.
+  // Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource"
+  string pause_reason = 57;
 }
 
 // VNCStatus represents the operational state of the VNC subsystem for a session.

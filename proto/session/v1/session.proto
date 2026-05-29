@@ -443,6 +443,10 @@ message UpdateSessionRequest {
 
   // Update whether rate limit auto-resume is enabled for this session.
   optional bool rate_limit_enabled = 8;
+
+  // Reason for pausing (only meaningful when status is set to PAUSED).
+  // If empty when pausing, defaults to "manual" in the backend handler.
+  optional string pause_reason = 9;
 }
 
 message UpdateSessionResponse {

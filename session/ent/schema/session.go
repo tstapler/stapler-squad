@@ -96,6 +96,9 @@ func (Session) Fields() []ent.Field {
 			Nillable(),
 		field.String("last_prompt_signature").
 			Optional(),
+		field.String("pause_reason").
+			Optional().
+			Comment("Reason the session was paused: manual, auto:inactivity, auto:session_limit, auto:resource. Empty when never paused."),
 	}
 }
 

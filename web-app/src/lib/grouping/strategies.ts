@@ -152,7 +152,25 @@ export function groupSessions(
     const specialGroups = ["Uncategorized", "Untagged", "No Branch", "No Path", "No Program", "No Project"];
     if (specialGroups.includes(a)) return 1;
     if (specialGroups.includes(b)) return -1;
-    // Regular groups sorted alphabetically
+
+    // For Status grouping: enforce preferred order so active groups appear first.
+    // "Paused" appears after active/working groups, before terminal/unknown states.
+    const statusOrder: Record<string, number> = {
+      "Running": 0,
+      "Active": 0,
+      "Ready": 1,
+      "Loading": 2,
+      "Needs Approval": 3,
+      "Paused": 4,
+      "Stopped": 5,
+      "Hibernated": 6,
+      "Unknown": 7,
+    };
+    const aOrder = statusOrder[a] ?? 99;
+    const bOrder = statusOrder[b] ?? 99;
+    if (aOrder !== bOrder) return aOrder - bOrder;
+
+    // Regular groups sorted alphabetically as fallback
     return a.localeCompare(b);
   });
 

@@ -59,6 +59,9 @@ export const statusDot = style({
     '&[data-status="needs-approval"]': {
       background: vars.color.statusDot.paused,
     },
+    '&[data-status="paused-session"]': {
+      background: vars.color.warningText,
+    },
     '&[data-status="hibernated"]': {
       background: vars.color.statusDot.idle,
     },
@@ -124,6 +127,9 @@ export const actions = style({
     [`${row}:hover &`]: {
       opacity: 1,
     },
+    [`${row}[data-paused="true"] &`]: {
+      opacity: 1,
+    },
   },
 });
 
@@ -156,6 +162,16 @@ export const memoryBadge = style({
 
 export const rowMemoryPressure = style({
   borderLeft: `3px solid ${vars.color.warning}`,
+});
+
+/** Applied to <li> when session is paused — dims the row to de-emphasize it. */
+export const rowPaused = style({
+  opacity: 0.7,
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      transition: vars.transition.base,
+    },
+  },
 });
 
 export const groupHeader = style({

@@ -14397,6 +14397,7 @@ type SessionMutation struct {
 	processing_grace_until *time.Time
 	last_prompt_detected   *time.Time
 	last_prompt_signature  *string
+	pause_reason           *string
 	clearedFields          map[string]struct{}
 	worktree               *int
 	clearedworktree        bool
@@ -15979,6 +15980,55 @@ func (m *SessionMutation) ResetLastPromptSignature() {
 	delete(m.clearedFields, session.FieldLastPromptSignature)
 }
 
+// SetPauseReason sets the "pause_reason" field.
+func (m *SessionMutation) SetPauseReason(s string) {
+	m.pause_reason = &s
+}
+
+// PauseReason returns the value of the "pause_reason" field in the mutation.
+func (m *SessionMutation) PauseReason() (r string, exists bool) {
+	v := m.pause_reason
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPauseReason returns the old "pause_reason" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldPauseReason(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPauseReason is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPauseReason requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPauseReason: %w", err)
+	}
+	return oldValue.PauseReason, nil
+}
+
+// ClearPauseReason clears the value of the "pause_reason" field.
+func (m *SessionMutation) ClearPauseReason() {
+	m.pause_reason = nil
+	m.clearedFields[session.FieldPauseReason] = struct{}{}
+}
+
+// PauseReasonCleared returns if the "pause_reason" field was cleared in this mutation.
+func (m *SessionMutation) PauseReasonCleared() bool {
+	_, ok := m.clearedFields[session.FieldPauseReason]
+	return ok
+}
+
+// ResetPauseReason resets all changes to the "pause_reason" field.
+func (m *SessionMutation) ResetPauseReason() {
+	m.pause_reason = nil
+	delete(m.clearedFields, session.FieldPauseReason)
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by id.
 func (m *SessionMutation) SetWorktreeID(id int) {
 	m.worktree = &id
@@ -16277,7 +16327,7 @@ func (m *SessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionMutation) Fields() []string {
-	fields := make([]string, 0, 31)
+	fields := make([]string, 0, 32)
 	if m.title != nil {
 		fields = append(fields, session.FieldTitle)
 	}
@@ -16371,6 +16421,9 @@ func (m *SessionMutation) Fields() []string {
 	if m.last_prompt_signature != nil {
 		fields = append(fields, session.FieldLastPromptSignature)
 	}
+	if m.pause_reason != nil {
+		fields = append(fields, session.FieldPauseReason)
+	}
 	return fields
 }
 
@@ -16441,6 +16494,8 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.LastPromptDetected()
 	case session.FieldLastPromptSignature:
 		return m.LastPromptSignature()
+	case session.FieldPauseReason:
+		return m.PauseReason()
 	}
 	return nil, false
 }
@@ -16512,6 +16567,8 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldLastPromptDetected(ctx)
 	case session.FieldLastPromptSignature:
 		return m.OldLastPromptSignature(ctx)
+	case session.FieldPauseReason:
+		return m.OldPauseReason(ctx)
 	}
 	return nil, fmt.Errorf("unknown Session field %s", name)
 }
@@ -16738,6 +16795,13 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLastPromptSignature(v)
 		return nil
+	case session.FieldPauseReason:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPauseReason(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Session field %s", name)
 }
@@ -16873,6 +16937,9 @@ func (m *SessionMutation) ClearedFields() []string {
 	if m.FieldCleared(session.FieldLastPromptSignature) {
 		fields = append(fields, session.FieldLastPromptSignature)
 	}
+	if m.FieldCleared(session.FieldPauseReason) {
+		fields = append(fields, session.FieldPauseReason)
+	}
 	return fields
 }
 
@@ -16952,6 +17019,9 @@ func (m *SessionMutation) ClearField(name string) error {
 		return nil
 	case session.FieldLastPromptSignature:
 		m.ClearLastPromptSignature()
+		return nil
+	case session.FieldPauseReason:
+		m.ClearPauseReason()
 		return nil
 	}
 	return fmt.Errorf("unknown Session nullable field %s", name)
@@ -17053,6 +17123,9 @@ func (m *SessionMutation) ResetField(name string) error {
 		return nil
 	case session.FieldLastPromptSignature:
 		m.ResetLastPromptSignature()
+		return nil
+	case session.FieldPauseReason:
+		m.ResetPauseReason()
 		return nil
 	}
 	return fmt.Errorf("unknown Session field %s", name)

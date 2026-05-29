@@ -600,6 +600,26 @@ func (_u *SessionUpdate) ClearLastPromptSignature() *SessionUpdate {
 	return _u
 }
 
+// SetPauseReason sets the "pause_reason" field.
+func (_u *SessionUpdate) SetPauseReason(v string) *SessionUpdate {
+	_u.mutation.SetPauseReason(v)
+	return _u
+}
+
+// SetNillablePauseReason sets the "pause_reason" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillablePauseReason(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetPauseReason(*v)
+	}
+	return _u
+}
+
+// ClearPauseReason clears the value of the "pause_reason" field.
+func (_u *SessionUpdate) ClearPauseReason() *SessionUpdate {
+	_u.mutation.ClearPauseReason()
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdate) SetWorktreeID(id int) *SessionUpdate {
 	_u.mutation.SetWorktreeID(id)
@@ -1009,6 +1029,12 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.LastPromptSignatureCleared() {
 		_spec.ClearField(session.FieldLastPromptSignature, field.TypeString)
+	}
+	if value, ok := _u.mutation.PauseReason(); ok {
+		_spec.SetField(session.FieldPauseReason, field.TypeString, value)
+	}
+	if _u.mutation.PauseReasonCleared() {
+		_spec.ClearField(session.FieldPauseReason, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -1801,6 +1827,26 @@ func (_u *SessionUpdateOne) ClearLastPromptSignature() *SessionUpdateOne {
 	return _u
 }
 
+// SetPauseReason sets the "pause_reason" field.
+func (_u *SessionUpdateOne) SetPauseReason(v string) *SessionUpdateOne {
+	_u.mutation.SetPauseReason(v)
+	return _u
+}
+
+// SetNillablePauseReason sets the "pause_reason" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillablePauseReason(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetPauseReason(*v)
+	}
+	return _u
+}
+
+// ClearPauseReason clears the value of the "pause_reason" field.
+func (_u *SessionUpdateOne) ClearPauseReason() *SessionUpdateOne {
+	_u.mutation.ClearPauseReason()
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdateOne) SetWorktreeID(id int) *SessionUpdateOne {
 	_u.mutation.SetWorktreeID(id)
@@ -2240,6 +2286,12 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if _u.mutation.LastPromptSignatureCleared() {
 		_spec.ClearField(session.FieldLastPromptSignature, field.TypeString)
+	}
+	if value, ok := _u.mutation.PauseReason(); ok {
+		_spec.SetField(session.FieldPauseReason, field.TypeString, value)
+	}
+	if _u.mutation.PauseReasonCleared() {
+		_spec.ClearField(session.FieldPauseReason, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{
