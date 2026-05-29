@@ -229,7 +229,7 @@ export function playPriorityNotificationSound(priority: NotificationPriority): v
  * Extended options for showBrowserNotification — superset of NotificationOptions
  * with an optional auto-close override.
  */
-interface BrowserNotificationOptions extends NotificationOptions {
+export interface BrowserNotificationOptions extends NotificationOptions {
   /**
    * Override the auto-close delay in ms.
    * Defaults to NATIVE_ACTIONABLE_TTL_MS when requireInteraction is true,

@@ -278,13 +278,12 @@ func checkPressure(now time.Time) {
 		stats.FailuresInWindow > forkMonitor.lastAlertFailureCount
 
 	if !worsened {
-		// Suppress if within the cooldown window (unchanged stable condition).
-		if !forkMonitor.lastAlertAt.IsZero() && now.Sub(forkMonitor.lastAlertAt) < forkAlertCooldown {
-			forkMonitor.alertMu.Unlock()
-			return
-		}
+		// Conditions unchanged — suppress. Re-alerts only fire when the situation
+		// genuinely worsens (higher count or escalated level), never on cooldown expiry alone.
+		forkMonitor.alertMu.Unlock()
+		return
 	}
-	// Either worsened (bypass cooldown) or cooldown expired (allow unchanged re-alert).
+	// Conditions worsened — alert immediately.
 	forkMonitor.lastAlertAt = now
 	forkMonitor.lastAlertZombieCount = stats.ZombiesInWindow
 	forkMonitor.lastAlertFailureCount = stats.FailuresInWindow
