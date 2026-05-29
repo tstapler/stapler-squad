@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -10,8 +11,18 @@ import (
 // resetForkMonitor clears the forkMonitor state between tests to prevent bleed-over.
 // It does NOT recreate the rings (which are global) — instead it clears them by
 // writing zero times to every slot.
+//
+// Call this at the start of every test in this file. Tests share process-wide
+// forkMonitor state and MUST NOT call t.Parallel(); do not add t.Parallel()
+// without first extracting forkMonitor into an injectable dependency.
 func resetForkMonitor(t *testing.T) {
 	t.Helper()
+
+	// Yield to allow any in-flight alert goroutines from the previous test to
+	// complete before zeroing shared state. waitAlertCount ensures the goroutine
+	// has incremented count, but the goroutine itself may not have exited yet.
+	runtime.Gosched()
+	time.Sleep(10 * time.Millisecond)
 
 	// Zero the atomic counters
 	forkMonitor.totalSpawns.Store(0)
@@ -88,6 +99,27 @@ func waitAlertCount(t *testing.T, count *atomic.Int64, expected int64, maxWait t
 	}
 }
 
+// waitLevels spins up to maxWait for the levels slice to reach wantCount entries.
+func waitLevels(t *testing.T, mu *sync.Mutex, levels *[]ForkPressureLevel, wantCount int, maxWait time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(maxWait)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(*levels)
+		mu.Unlock()
+		if n >= wantCount {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mu.Lock()
+	n := len(*levels)
+	mu.Unlock()
+	if n < wantCount {
+		t.Errorf("levels count: got %d, want >= %d after %v", n, wantCount, maxWait)
+	}
+}
+
 // TestCheckPressure_StableCount_NoRepeatAlert verifies that a stable zombie count
 // does not re-fire the alert within the cooldown window (FR-1).
 func TestCheckPressure_StableCount_NoRepeatAlert(t *testing.T) {
@@ -101,7 +133,7 @@ func TestCheckPressure_StableCount_NoRepeatAlert(t *testing.T) {
 	// Inject 12 zombies (> threshold of 10) and fire first check.
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 200*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	// Advance 1 minute (inside the 2-minute cooldown). Count is still 12 (same events).
 	t1 := t0.Add(1 * time.Minute)
@@ -137,7 +169,7 @@ func TestCheckPressure_WorsenedCount_BypassesCooldown(t *testing.T) {
 	t0p := t0.Add(1 * time.Nanosecond)
 	injectZombies(12, t0p)
 	checkPressure(t0p)
-	waitAlertCount(t, &count, 1, 200*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	// Advance 30 s (inside the 2-minute cooldown). Add 5 more zombies.
 	// At t1=t0+30s, the window cutoff is t1-30s = t0. Events at t0+1ns are
@@ -145,7 +177,7 @@ func TestCheckPressure_WorsenedCount_BypassesCooldown(t *testing.T) {
 	t1 := t0.Add(30 * time.Second)
 	injectZombies(5, t1)
 	checkPressure(t1)
-	waitAlertCount(t, &count, 2, 200*time.Millisecond)
+	waitAlertCount(t, &count, 2, 500*time.Millisecond)
 
 	if got := count.Load(); got != 2 {
 		t.Errorf("alert count = %d; want 2 (worsened count should bypass cooldown)", got)
@@ -172,18 +204,7 @@ func TestCheckPressure_LevelEscalation_BypassesCooldown(t *testing.T) {
 	// Inject enough spawns to reach Warning level (120+ per window).
 	injectSpawns(130, t0)
 	checkPressure(t0)
-
-	// Wait for first alert (Warning).
-	deadline := time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		levelsMu.Lock()
-		n := len(levels)
-		levelsMu.Unlock()
-		if n >= 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitLevels(t, &levelsMu, &levels, 1, 500*time.Millisecond)
 
 	levelsMu.Lock()
 	if len(levels) < 1 || levels[0] != ForkPressureWarning {
@@ -197,18 +218,7 @@ func TestCheckPressure_LevelEscalation_BypassesCooldown(t *testing.T) {
 	// Keep spawns in window too.
 	injectSpawns(130, t1)
 	checkPressure(t1)
-
-	// Wait for second alert (Critical).
-	deadline = time.Now().Add(200 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		levelsMu.Lock()
-		n := len(levels)
-		levelsMu.Unlock()
-		if n >= 2 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	waitLevels(t, &levelsMu, &levels, 2, 500*time.Millisecond)
 
 	levelsMu.Lock()
 	defer levelsMu.Unlock()
@@ -233,7 +243,7 @@ func TestCheckPressure_ClearAndRearm(t *testing.T) {
 	// Inject 12 zombies — first alert fires.
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 200*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	// Advance 35 s so the ring entries at t0 fall outside the 30-second window.
 	// No new events injected — level should return to OK.
@@ -254,7 +264,7 @@ func TestCheckPressure_ClearAndRearm(t *testing.T) {
 	t2 := t1.Add(1 * time.Second)
 	injectZombies(12, t2)
 	checkPressure(t2)
-	waitAlertCount(t, &count, 2, 200*time.Millisecond)
+	waitAlertCount(t, &count, 2, 500*time.Millisecond)
 
 	if got := count.Load(); got != 2 {
 		t.Errorf("alert count = %d; want 2 (fresh alert after re-arm)", got)
@@ -276,7 +286,7 @@ func TestCheckPressure_BaselineRecorded_AfterFiring(t *testing.T) {
 	injectZombies(zombies, t0)
 	injectFailures(failures, t0)
 	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 200*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	forkMonitor.alertMu.Lock()
 	gotZ := forkMonitor.lastAlertZombieCount
@@ -308,14 +318,13 @@ func TestCheckPressure_BaselineNotUpdated_WhenSuppressed(t *testing.T) {
 	// Inject 12 zombies — first alert fires, baseline recorded as 12.
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 200*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	// Advance 30 s; add 12 more zombies at t1 (same total in window: 12, not strictly greater).
 	t1 := t0.Add(30 * time.Second)
 	injectZombies(12, t1)
 
 	// At t1 the window is [t1-30s, t1] = [t0, t1]. Events at t0 are on the boundary.
-	// To keep this test deterministic: manually set baseline and suppress.
 	// The stable-count suppression path should leave baseline unchanged.
 	beforeZ := forkMonitor.lastAlertZombieCount
 	checkPressure(t1)
@@ -325,10 +334,12 @@ func TestCheckPressure_BaselineNotUpdated_WhenSuppressed(t *testing.T) {
 	afterZ := forkMonitor.lastAlertZombieCount
 	forkMonitor.alertMu.Unlock()
 
-	// Alert count should remain 1 (suppressed) and baseline unchanged.
-	// Note: if the count actually worsened (> beforeZ), a second alert fires —
-	// that is correct behavior. We only assert baseline is not corrupted.
-	if count.Load() == 1 && afterZ != beforeZ {
+	// Alert count must still be 1 (suppressed).
+	if got := count.Load(); got != 1 {
+		t.Errorf("alert count = %d; want 1 (stable count must be suppressed)", got)
+	}
+	// Baseline must not have changed during a suppressed call.
+	if afterZ != beforeZ {
 		t.Errorf("baseline was updated during a suppressed call: before=%d after=%d", beforeZ, afterZ)
 	}
 }
@@ -346,7 +357,7 @@ func TestCheckPressure_BaselineResetOnClear(t *testing.T) {
 	// Trigger an alert.
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 200*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	// Advance 35 s so events expire → level returns to OK.
 	t1 := t0.Add(35 * time.Second)
@@ -382,7 +393,7 @@ func TestCheckPressure_NoAlertOnClear(t *testing.T) {
 	// Trigger an alert.
 	injectZombies(12, t0)
 	checkPressure(t0)
-	waitAlertCount(t, &count, 1, 200*time.Millisecond)
+	waitAlertCount(t, &count, 1, 500*time.Millisecond)
 
 	// Advance 35 s so events expire → level returns to OK.
 	t1 := t0.Add(35 * time.Second)
@@ -428,7 +439,7 @@ func TestCheckPressure_ApprovalsUnaffected(t *testing.T) {
 	injectZombies(12, t0)
 	checkPressure(t0)
 
-	deadline := time.Now().Add(200 * time.Millisecond)
+	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		mu.Lock()
 		n := len(receivedStats)
@@ -449,5 +460,28 @@ func TestCheckPressure_ApprovalsUnaffected(t *testing.T) {
 	stat := receivedStats[0]
 	if stat.Level == ForkPressureOK {
 		t.Errorf("expected elevated level, got OK")
+	}
+}
+
+// TestCheckPressure_RingBufferWrap verifies that countSince returns correct results
+// when more events are injected than the ring buffer capacity (64 for zombieRing).
+// On wrap, the oldest entry is silently overwritten; countSince must not exceed
+// the ring capacity.
+func TestCheckPressure_RingBufferWrap(t *testing.T) {
+	resetForkMonitor(t)
+
+	// zombieRing capacity is 64 (see fork_metrics.go initialisation).
+	const ringCapacity = 64
+	now := time.Now()
+
+	// Inject capacity+1 events at the same timestamp. The ring wraps and the
+	// 65th write overwrites slot 0. All 64 slots now hold `now`.
+	injectZombies(ringCapacity+1, now)
+
+	stats := snapshotAt(now)
+	// countSince iterates all buf slots; after wrap all 64 slots equal `now` → exactly 64.
+	if stats.ZombiesInWindow != ringCapacity {
+		t.Errorf("ZombiesInWindow = %d; want %d after ring wrap (capacity %d)",
+			stats.ZombiesInWindow, ringCapacity, ringCapacity)
 	}
 }

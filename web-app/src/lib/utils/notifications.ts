@@ -1,8 +1,11 @@
+"use client";
+
 /**
  * Notification utilities for audio alerts and browser notifications
  */
 
 import { NATIVE_MEDIUM_TTL_MS, NATIVE_ACTIONABLE_TTL_MS } from "@/lib/notification-policy";
+import { NotificationPriority } from "@/gen/session/v1/types_pb";
 
 /**
  * Notification sound types
@@ -11,6 +14,24 @@ export enum NotificationSound {
   DING = "ding",
   CHIME = "chime",
   ALERT = "alert",
+}
+
+/**
+ * Returns the shared AudioContext for the page lifetime, creating it on first use.
+ * A singleton avoids accumulating OS-level audio handles — each `new AudioContext()`
+ * allocates a native context that is never released unless explicitly `.close()`d.
+ */
+let _sharedAudioCtx: AudioContext | null = null;
+function getAudioContext(): AudioContext | null {
+  if (typeof window === "undefined") return null;
+  try {
+    if (!_sharedAudioCtx || _sharedAudioCtx.state === "closed") {
+      _sharedAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    return _sharedAudioCtx;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -27,9 +48,8 @@ export function playNotificationSound(
       return;
     }
 
-    // Create audio context
-    const audioContext = new (window.AudioContext ||
-      (window as any).webkitAudioContext)();
+    const audioContext = getAudioContext();
+    if (!audioContext) return;
 
     // Create oscillator for tone generation
     const oscillator = audioContext.createOscillator();
@@ -85,6 +105,123 @@ export function playNotificationSound(
     }
   } catch (error) {
     console.warn("Failed to play notification sound:", error);
+  }
+}
+
+/**
+ * Plays a priority-mapped notification chime using the Web Audio API.
+ * URGENT → 3 rapid beeps, HIGH → 2 beeps, MEDIUM → single chime, LOW → soft tone.
+ */
+export function playPriorityNotificationSound(priority: NotificationPriority): void {
+  if (typeof window === "undefined" || !window.AudioContext) return;
+
+  try {
+    const audioCtx = getAudioContext();
+    if (!audioCtx) return;
+
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    switch (priority) {
+      case NotificationPriority.URGENT:
+        // Rapid high-pitched alert (3 quick beeps)
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // A5
+        gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.15);
+
+        setTimeout(() => {
+          const ctx = getAudioContext();
+          if (!ctx) return;
+          const osc2 = ctx.createOscillator();
+          const gain2 = ctx.createGain();
+          osc2.connect(gain2);
+          gain2.connect(ctx.destination);
+          osc2.type = "sine";
+          osc2.frequency.setValueAtTime(880, ctx.currentTime);
+          gain2.gain.setValueAtTime(0.3, ctx.currentTime);
+          gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+          osc2.start();
+          osc2.stop(ctx.currentTime + 0.15);
+        }, 150);
+
+        setTimeout(() => {
+          const ctx = getAudioContext();
+          if (!ctx) return;
+          const osc3 = ctx.createOscillator();
+          const gain3 = ctx.createGain();
+          osc3.connect(gain3);
+          gain3.connect(ctx.destination);
+          osc3.type = "sine";
+          osc3.frequency.setValueAtTime(880, ctx.currentTime);
+          gain3.gain.setValueAtTime(0.3, ctx.currentTime);
+          gain3.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+          osc3.start();
+          osc3.stop(ctx.currentTime + 0.15);
+        }, 300);
+        break;
+
+      case NotificationPriority.HIGH:
+        // Double beep
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(659, audioCtx.currentTime); // E5
+        gainNode.gain.setValueAtTime(0.2, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.2);
+
+        setTimeout(() => {
+          const ctx = getAudioContext();
+          if (!ctx) return;
+          const osc2 = ctx.createOscillator();
+          const gain2 = ctx.createGain();
+          osc2.connect(gain2);
+          gain2.connect(ctx.destination);
+          osc2.type = "sine";
+          osc2.frequency.setValueAtTime(784, ctx.currentTime); // G5
+          gain2.gain.setValueAtTime(0.2, ctx.currentTime);
+          gain2.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
+          osc2.start();
+          osc2.stop(ctx.currentTime + 0.2);
+        }, 200);
+        break;
+
+      case NotificationPriority.MEDIUM:
+        // Single soft chime
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(523, audioCtx.currentTime); // C5
+        gainNode.gain.setValueAtTime(0.15, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.4);
+        break;
+
+      case NotificationPriority.LOW:
+        // Very soft, low tone
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(392, audioCtx.currentTime); // G4
+        gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.25);
+        break;
+
+      default:
+        // Default medium chime
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(523, audioCtx.currentTime);
+        gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.4);
+    }
+  } catch (e) {
+    console.warn("Failed to play notification sound:", e);
   }
 }
 
@@ -146,7 +283,11 @@ export async function showBrowserNotification(
     // Close previous notification for this tag (FR-4)
     try {
       activeNativeNotifications.get(tag)?.close();
-    } catch {}
+    } catch (e) {
+      if (process.env.NODE_ENV === "development") {
+        console.warn("[notifications] close() on prior notification failed:", e);
+      }
+    }
 
     // Strip autoCloseMs from native NotificationOptions before passing to constructor
     const { autoCloseMs: _autoCloseMs, ...notifOptions } = options ?? {};
@@ -165,7 +306,11 @@ export async function showBrowserNotification(
     const timerId = setTimeout(() => {
       try {
         notif.close();
-      } catch {}
+      } catch (e) {
+        if (process.env.NODE_ENV === "development") {
+          console.warn("[notifications] auto-close failed:", e);
+        }
+      }
       if (activeNativeNotifications.get(tag) === notif) {
         activeNativeNotifications.delete(tag);
       }

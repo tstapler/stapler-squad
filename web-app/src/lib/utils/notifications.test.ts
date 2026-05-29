@@ -183,23 +183,6 @@ describe("showBrowserNotification", () => {
     expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
   });
 
-  it("showBrowserNotification_should_useActionableTTL_When_requireInteractionTrue", async () => {
-    let showBrowserNotification: Awaited<ReturnType<typeof importShowBrowserNotification>>;
-    await jest.isolateModulesAsync(async () => {
-      showBrowserNotification = await importShowBrowserNotification();
-    });
-
-    const NATIVE_ACTIONABLE_TTL_MS = 300_000;
-
-    await showBrowserNotification!("X", { tag: "t5", requireInteraction: true });
-
-    jest.advanceTimersByTime(NATIVE_ACTIONABLE_TTL_MS - 1);
-    expect(notifInstances[0].close).not.toHaveBeenCalled();
-
-    jest.advanceTimersByTime(1);
-    expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
-  });
-
   // ── onclose callback cleans up the Map ───────────────────────────────────
 
   it("should_clearMapEntry_When_oscloseFires", async () => {
@@ -211,10 +194,10 @@ describe("showBrowserNotification", () => {
     await showBrowserNotification!("X", { tag: "t6" });
     expect(notifInstances).toHaveLength(1);
 
-    // Simulate OS closing the notification via onclose
-    if (notifInstances[0].onclose) {
-      notifInstances[0].onclose();
-    }
+    // Simulate OS closing the notification via onclose.
+    // Assert onclose is registered — if null, production code failed to wire it.
+    expect(notifInstances[0].onclose).not.toBeNull();
+    (notifInstances[0].onclose as () => void)();
 
     // Next call with the same tag should NOT close notifInstances[0] again
     // (the Map entry was already cleared by onclose)

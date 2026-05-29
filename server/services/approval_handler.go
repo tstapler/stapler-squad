@@ -361,7 +361,7 @@ func (h *ApprovalHandler) broadcastApprovalNotification(sessionID string, approv
 		metadata["tool_input_description"] = desc
 	}
 
-	title := fmt.Sprintf("Permission Required: %s", approval.ToolName)
+	title := fmt.Sprintf("Permission Required: %s", sanitizeNotificationText(approval.ToolName))
 	message := buildApprovalMessage(approval)
 
 	event := events.NewNotificationEvent(
@@ -411,6 +411,18 @@ func truncateString(s string, maxRunes int) string {
 		return s
 	}
 	return string(r[:maxRunes]) + "..."
+}
+
+// sanitizeNotificationText strips newlines and non-printable characters from
+// user- or model-controlled strings before embedding them in OS notification
+// titles, preventing newline injection into the OS notification tray.
+func sanitizeNotificationText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 32 {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // buildApprovalMessage builds the human-readable message for an approval notification.

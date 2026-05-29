@@ -45,8 +45,10 @@ jest.mock("@/lib/notification-policy", () => ({
 }));
 
 const mockShowBrowserNotification = jest.fn().mockResolvedValue(undefined);
+const mockPlayPriorityNotificationSound = jest.fn();
 jest.mock("@/lib/utils/notifications", () => ({
   showBrowserNotification: mockShowBrowserNotification,
+  playPriorityNotificationSound: mockPlayPriorityNotificationSound,
 }));
 
 jest.mock("@/lib/config", () => ({
@@ -54,7 +56,10 @@ jest.mock("@/lib/config", () => ({
 }));
 
 // NotificationType enum values used by useSessionNotifications internals.
-// These must stay consistent between the mock and test helpers below.
+// These numeric values are sourced from proto/session/v1/types.proto and must
+// match the generated types_pb.ts. If proto enum values change, update both
+// the mock below and these constants. Hardcoded here because jest.mock()
+// intercepts the generated module before its real values are available.
 const NT = {
   APPROVAL_NEEDED: 1,
   INPUT_REQUIRED: 2,
@@ -120,6 +125,7 @@ describe("useSessionNotifications", () => {
     mockAddNotification.mockClear();
     mockAddToHistoryOnly.mockClear();
     mockShowBrowserNotification.mockClear();
+    mockPlayPriorityNotificationSound.mockClear();
     // Grant Notification permission so native notification path is exercised
     Object.defineProperty(window, "Notification", {
       value: { permission: "granted" },
@@ -401,6 +407,17 @@ describe("useSessionNotifications", () => {
       // Both approval events should fire native notifications (never suppressed)
       expect(mockAddNotification).toHaveBeenCalledTimes(2);
       expect(mockShowBrowserNotification).toHaveBeenCalledTimes(2);
+
+      // Verify the second call also uses requireInteraction:true and a session-based
+      // tag (no approval_id in makeEvent's default metadata).
+      expect(mockShowBrowserNotification).toHaveBeenNthCalledWith(
+        2,
+        "Test Notification",
+        expect.objectContaining({
+          requireInteraction: true,
+          tag: `test-session:${NT.APPROVAL_NEEDED}`,
+        })
+      );
     });
   });
 });
