@@ -1057,7 +1057,7 @@ func (s *SessionService) UpdateSession(
 		if targetStatus == session.Paused && instance.Status != session.Paused {
 			// Set pause reason before transitioning — mirrors HibernateSession pattern.
 			if req.Msg.PauseReason == nil || *req.Msg.PauseReason == "" {
-				instance.PauseReason = "manual"
+				instance.PauseReason = session.PauseReasonManual
 			} else {
 				instance.PauseReason = *req.Msg.PauseReason
 			}

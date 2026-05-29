@@ -1,4 +1,4 @@
-import { Session } from "@/gen/session/v1/types_pb";
+import { Session, SessionStatus } from "@/gen/session/v1/types_pb";
 
 /**
  * Grouping strategy options for organizing sessions.
@@ -156,10 +156,10 @@ export function groupSessions(
     // For Status grouping: enforce preferred order so active groups appear first.
     // "Paused" appears after active/working groups, before terminal/unknown states.
     const statusOrder: Record<string, number> = {
-      "Running": 0,
       "Active": 0,
       "Ready": 1,
       "Loading": 2,
+      "Creating": 2,
       "Needs Approval": 3,
       "Paused": 4,
       "Stopped": 5,
@@ -187,18 +187,15 @@ export function groupSessions(
  */
 function getStatusDisplayName(status: number): string {
   switch (status) {
-    case 1:
-      return "Running";
-    case 2:
-      return "Ready";
-    case 3:
-      return "Loading";
-    case 4:
-      return "Paused";
-    case 5:
-      return "Needs Approval";
-    default:
-      return "Unknown";
+    case SessionStatus.ACTIVE:         return "Active";   // 1 (covers legacy RUNNING alias)
+    case SessionStatus.READY:          return "Ready";    // 2 (deprecated)
+    case SessionStatus.LOADING:        return "Loading";  // 3 (deprecated)
+    case SessionStatus.PAUSED:         return "Paused";   // 4
+    case SessionStatus.NEEDS_APPROVAL: return "Needs Approval"; // 5 (deprecated)
+    case SessionStatus.CREATING:       return "Creating"; // 6
+    case SessionStatus.STOPPED:        return "Stopped";  // 7
+    case SessionStatus.HIBERNATED:     return "Hibernated"; // 8
+    default:                           return "Unknown";
   }
 }
 

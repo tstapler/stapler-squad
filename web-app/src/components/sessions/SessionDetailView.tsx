@@ -31,6 +31,7 @@ import {
   pausedOverlayButton,
 } from "./SessionDetailView.css";
 import { tabDisabled } from "./SessionDetail.css";
+import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import type { SessionDetailTab } from "./SessionDetail";
 
 // Dynamically import TerminalOutput with SSR disabled (xterm.js requires browser environment)
@@ -86,16 +87,6 @@ function getSessionTypeLabel(type: SessionType): string {
     case SessionType.NEW_WORKTREE: return "New Worktree";
     case SessionType.EXISTING_WORKTREE: return "Existing Worktree";
     default: return "Unknown";
-  }
-}
-
-function formatPauseReason(reason: string): string {
-  switch (reason) {
-    case "manual": return "Paused manually";
-    case "auto:inactivity": return "Paused automatically — no recent activity";
-    case "auto:session_limit": return "Paused automatically — too many active sessions";
-    case "auto:resource": return "Paused automatically — resource pressure";
-    default: return reason;
   }
 }
 

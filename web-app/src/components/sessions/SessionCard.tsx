@@ -10,6 +10,7 @@ import { GitHubBadge } from "./GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
+import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import {
   card,
   cardDeleting,
@@ -65,16 +66,6 @@ import {
   memoryBadge,
   cardMemoryPressure,
 } from "./SessionCard.css";
-
-function formatPauseReason(reason: string): string {
-  switch (reason) {
-    case "manual": return "Paused manually";
-    case "auto:inactivity": return "Paused automatically — no recent activity";
-    case "auto:session_limit": return "Paused automatically — too many active sessions";
-    case "auto:resource": return "Paused automatically — resource pressure";
-    default: return reason;
-  }
-}
 
 interface SessionCardProps {
   session: Session;

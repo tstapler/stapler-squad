@@ -229,8 +229,7 @@ type Instance struct {
 	// Values: "manual", "idle", "resource_pressure". Read by hibernateProcess.
 	hibernateReason string
 
-	// PauseReason records why this session was paused.
-	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource".
+	// PauseReason records why this session was paused. Use PauseReason* constants.
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
 
@@ -314,6 +313,14 @@ type Instance struct {
 }
 
 // SessionType indicates the type of session workflow to use
+// Pause reason constants. Use these instead of bare string literals.
+const (
+	PauseReasonManual         = "manual"
+	PauseReasonAutoInactivity = "auto:inactivity"
+	PauseReasonAutoLimit      = "auto:session_limit"
+	PauseReasonAutoResource   = "auto:resource"
+)
+
 type SessionType string
 
 const (

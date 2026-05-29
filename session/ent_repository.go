@@ -392,7 +392,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	if data.MCPServerURL != "" {
 		sessionUpdate.SetMcpServerURL(data.MCPServerURL)
 	}
-	sessionUpdate.SetNillablePauseReason(nilIfEmpty(data.PauseReason))
+	if data.PauseReason != "" {
+		sessionUpdate.SetPauseReason(data.PauseReason)
+	} else {
+		sessionUpdate.ClearPauseReason()
+	}
 	sessionUpdate.SetOneShot(data.OneShot)
 
 	// Update project link (look up by name or clear if empty)
