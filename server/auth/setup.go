@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,6 +15,11 @@ import (
 )
 
 const setupTokenTTL = time.Hour
+
+// SetupTokenDir is the subdirectory inside the config dir that holds the setup token.
+// Using a dedicated subdirectory keeps the fsnotify watcher away from the busy root
+// state directory, eliminating spurious wakeups from unrelated session state writes.
+const SetupTokenDir = "auth"
 
 // SetupTokenFile is the well-known filename written by print-qr-codes and
 // watched by the running server.
@@ -63,6 +69,9 @@ func (s *SetupManager) Init() (string, error) {
 // GenerateToFile generates a new setup token, writes it to path, and loads it
 // into the manager. Called by the print-qr-codes CLI command.
 func (s *SetupManager) GenerateToFile(path string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return "", fmt.Errorf("create setup token dir: %w", err)
+	}
 	token, err := randomHex(16)
 	if err != nil {
 		return "", err

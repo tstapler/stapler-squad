@@ -85,6 +85,9 @@ func (bf *BannerFilter) IsBanner(line string) bool {
 
 // stripANSICodes removes ANSI escape sequences from a string
 func stripANSICodes(s string) string {
+	if !strings.ContainsRune(s, '\x1b') {
+		return s
+	}
 	return stripANSIRe.ReplaceAllString(s, "")
 }
 

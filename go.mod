@@ -44,7 +44,10 @@ require (
 	mvdan.cc/sh/v3 v3.13.0
 )
 
-require github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
+require (
+	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
+	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
+)
 
 require (
 	github.com/grafana/pyroscope-go v1.2.8

@@ -183,16 +183,16 @@ func (d *Detector) ProcessOutput(data []byte) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	output := string(data)
-
+	// Guard before allocating the string — the vast majority of calls hit one of
+	// these early returns (wrong state or within cooldown), so we save the alloc.
 	if d.currentState != StateNone && d.currentState != StateWaiting {
 		return
 	}
-
 	if time.Since(d.lastDetection) < d.cooldown {
 		return
 	}
 
+	output := string(data)
 	detection := d.detectInOutput(output)
 	if detection != nil {
 		d.lastDetection = time.Now()
@@ -426,6 +426,10 @@ func (d *Detector) GetResetTime() time.Time {
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func stripANSI(input string) string {
+	// Fast path: AI output is usually plain text; avoid regexp allocation.
+	if !strings.ContainsRune(input, '\x1b') {
+		return input
+	}
 	return ansiRegex.ReplaceAllString(input, "")
 }
 

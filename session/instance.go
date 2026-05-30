@@ -233,9 +233,9 @@ type Instance struct {
 	// after instance creation/loading; nil disables persistence (tests, external instances).
 	shellRepo ShellRepository
 
-	// shellRegistry holds in-memory shell state (shells, handles, mutexes).
+	// shellRegistryEmbed holds in-memory shell state via a concurrent ShellRegistry.
 	// Initialized by initShellRegistry(); shell operations go through instance_shells.go.
-	shellRegistry
+	shellRegistryEmbed
 
 	// hibernateReason records why this session was hibernated.
 	// Values: "manual", "idle", "resource_pressure". Read by hibernateProcess.

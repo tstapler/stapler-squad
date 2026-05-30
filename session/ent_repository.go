@@ -741,12 +741,9 @@ func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]Instan
 // UpdateReviewQueueState efficiently updates only the review-queue interaction fields
 // for a session, avoiding the full read-modify-write cycle of updateFieldInRepo.
 func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string, lastUserResponse, processingGraceUntil, lastPromptDetected time.Time, lastPromptSignature string) error {
-	sess, err := r.client.Session.Query().Where(session.Title(title)).Only(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to find session: %w", err)
-	}
-
-	update := r.client.Session.UpdateOne(sess).SetUpdatedAt(time.Now())
+	update := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetUpdatedAt(time.Now())
 
 	if !lastUserResponse.IsZero() {
 		update.SetLastUserResponse(lastUserResponse)
@@ -763,8 +760,12 @@ func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string
 		update.SetLastPromptSignature(lastPromptSignature)
 	}
 
-	if err := update.Exec(ctx); err != nil {
+	n, err := update.Save(ctx)
+	if err != nil {
 		return fmt.Errorf("failed to update review queue state: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
 	}
 	return nil
 }

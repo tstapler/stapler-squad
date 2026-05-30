@@ -1,6 +1,6 @@
 package session
 
-// instance_shells.go — Shell registry, spawn/stop/restart/reconcile methods on Instance.
+// instance_shells.go — Shell spawn/stop/restart/reconcile methods on Instance.
 //
 // Architecture: each shell is an independent sibling tmux session named:
 //   {parentSessionName}_shell_{shellUUID}
@@ -10,7 +10,7 @@ package session
 // a separate attach-session call targeting the sibling session.
 //
 // Synchronization:
-//   - shellsMu (deadlock.RWMutex) guards all reads/writes to shells and shellHandles maps.
+//   - shells is a *ShellRegistry (xsync.Map) — bucket-level lock, never held across I/O.
 //   - spawnShellMu (deadlock.Mutex) serializes SpawnShell calls to prevent concurrent spawn races.
 //   - Per-shell exitCh is closed (not sent) on exit — fans out to any number of subscribers.
 
@@ -19,40 +19,47 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
-// shellRegistry holds runtime state for shell management on an Instance.
-// It is embedded in Instance.
-type shellRegistry struct {
-	// shellsMu guards shells and shellHandles maps.
-	// Use RLock for reads; Lock for writes.
-	shellsMu deadlock.RWMutex
-	// shells maps shellID → in-memory Shell.
-	shells map[string]*Shell
-	// shellHandles maps shellID → ShellTmuxHandle.
-	shellHandles map[string]*tmux.ShellTmuxHandle
+// shellRegistryEmbed holds runtime state for shell management on an Instance.
+// It is embedded in Instance. The heavy-lifting concurrent map lives in *ShellRegistry
+// (shell_registry.go); only the spawn serialiser and wait-group live here.
+type shellRegistryEmbed struct {
+	shells *ShellRegistry
 	// spawnShellMu serializes concurrent SpawnShell calls.
-	// Acquired before any tmux new-session call to prevent races on tmux window state.
 	spawnShellMu deadlock.Mutex
-	// shellWg tracks active watchShellExit goroutines and StreamTerminal handlers.
-	// Waited by DeleteShell to ensure no handler holds a dangling reference after map removal.
-	shellWg sync.WaitGroup
 }
 
-// initShellRegistry initializes the shell maps. Called from NewInstance.
+// initShellRegistry initialises the ShellRegistry. Called from NewInstance.
 func (i *Instance) initShellRegistry() {
-	i.shells = make(map[string]*Shell)
-	i.shellHandles = make(map[string]*tmux.ShellTmuxHandle)
+	i.shells = newShellRegistry()
+}
+
+// shellWg convenience accessors — nil-safe so instances loaded without initShellRegistry
+// can still call these without panicking.
+func (i *Instance) shellWgAdd(n int) {
+	if i.shells != nil {
+		i.shells.wg.Add(n)
+	}
+}
+func (i *Instance) shellWgDone() {
+	if i.shells != nil {
+		i.shells.wg.Done()
+	}
+}
+func (i *Instance) shellWgWait() {
+	if i.shells != nil {
+		i.shells.wg.Wait()
+	}
 }
 
 // shellTmuxSessionName computes the sibling tmux session name for a given shell.
@@ -83,7 +90,6 @@ func (i *Instance) SpawnShell(ctx context.Context, req SpawnShellRequest) (*Shel
 	if workDir != "" {
 		absWork, err := filepath.Abs(workDir)
 		if err == nil {
-			// Allow any absolute path — sec review: we restrict to session path prefix.
 			absPath := i.Path
 			if absPath != "" && !strings.HasPrefix(absWork, absPath) {
 				log.Warn("shell working_dir outside session workspace; using session path",
@@ -112,10 +118,7 @@ func (i *Instance) SpawnShell(ctx context.Context, req SpawnShellRequest) (*Shel
 	shellID := uuid.New().String()
 	sessionName := i.shellTmuxSessionName(shellID)
 
-	// Determine the order index (append to end).
-	i.shellsMu.RLock()
-	orderIndex := len(i.shells)
-	i.shellsMu.RUnlock()
+	orderIndex := i.shells.Len()
 
 	// Build the ShellTmuxHandle.
 	cmdExec := executor.Exec{}
@@ -140,11 +143,7 @@ func (i *Instance) SpawnShell(ctx context.Context, req SpawnShellRequest) (*Shel
 		watcherDone:     make(chan struct{}),
 	}
 
-	// Register in memory.
-	i.shellsMu.Lock()
-	i.shells[shellID] = shell
-	i.shellHandles[shellID] = handle
-	i.shellsMu.Unlock()
+	i.shells.Add(shell, handle)
 
 	// Persist to database (best-effort; non-fatal on error).
 	if i.shellRepo != nil {
@@ -162,7 +161,7 @@ func (i *Instance) SpawnShell(ctx context.Context, req SpawnShellRequest) (*Shel
 	}
 
 	// Watch for exit in background.
-	i.shellWg.Add(1)
+	i.shellWgAdd(1)
 	go i.watchShellExit(ctx, shellID, handle, shell.exitCh, shell.watcherDone)
 
 	log.Info("shell spawned", "session", i.Title, "shell", shellID, "name", name, "command", command)
@@ -174,9 +173,8 @@ func (i *Instance) SpawnShell(ctx context.Context, req SpawnShellRequest) (*Shel
 // watcherDone is closed after shellWg.Done() so DeleteShell can wait on this specific goroutine.
 func (i *Instance) watchShellExit(ctx context.Context, shellID string, handle *tmux.ShellTmuxHandle, exitCh chan struct{}, watcherDone chan struct{}) {
 	defer close(watcherDone) // registered first → runs last (after Done)
-	defer i.shellWg.Done()
+	defer i.shellWgDone()
 	defer func() {
-		// Safely close exitCh exactly once; using recover in case another path already closed it.
 		defer func() { recover() }() //nolint:errcheck
 		close(exitCh)
 	}()
@@ -211,16 +209,8 @@ func (i *Instance) watchShellExit(ctx context.Context, shellID string, handle *t
 	}
 
 	// Check if shell was intentionally stopped (stop-while-streaming guard, adversarial Challenge 3).
-	i.shellsMu.RLock()
-	sh, exists := i.shells[shellID]
-	var alreadyStopped bool
-	if exists {
-		alreadyStopped = sh.Status == ShellStatusStopped
-	}
-	i.shellsMu.RUnlock()
-
-	if alreadyStopped {
-		// StopShell already updated status; nothing to do here.
+	sh, exists := i.shells.Get(shellID)
+	if exists && sh.Status == ShellStatusStopped {
 		return
 	}
 
@@ -246,22 +236,10 @@ func (i *Instance) watchShellExit(ctx context.Context, shellID string, handle *t
 
 // setShellStatus updates in-memory Shell.Status and persists to ent.
 func (i *Instance) setShellStatus(ctx context.Context, shellID string, status ShellStatus, exitCode *int) {
-	i.shellsMu.Lock()
-	sh, ok := i.shells[shellID]
-	if ok {
-		sh.Status = status
-		if exitCode != nil {
-			sh.ExitCode = *exitCode
-		}
-	}
-	i.shellsMu.Unlock()
+	i.shells.UpdateStatus(shellID, status, exitCode)
 
 	if i.shellRepo != nil {
-		var exitCodePtr *int
-		if exitCode != nil {
-			exitCodePtr = exitCode
-		}
-		if err := i.shellRepo.UpdateShellStatus(ctx, shellID, string(status), exitCodePtr); err != nil {
+		if err := i.shellRepo.UpdateShellStatus(ctx, shellID, string(status), exitCode); err != nil {
 			log.Warn("setShellStatus: failed to persist", "shell", shellID, "err", err)
 		}
 	}
@@ -270,17 +248,14 @@ func (i *Instance) setShellStatus(ctx context.Context, shellID string, status Sh
 // StopShell stops a running shell by setting status first (stop-while-streaming guard),
 // then closing the handle.
 func (i *Instance) StopShell(ctx context.Context, shellID string) error {
-	i.shellsMu.Lock()
-	sh, ok := i.shells[shellID]
-	if !ok {
-		i.shellsMu.Unlock()
+	// Atomically mark stopped before closing PTY so watchShellExit treats the
+	// read error as a clean stop (not a crash).
+	updated := i.shells.UpdateStatus(shellID, ShellStatusStopped, nil)
+	if !updated {
 		return fmt.Errorf("StopShell: shell %q not found", shellID)
 	}
-	// Set status before closing PTY so watchShellExit won't treat the read error as a crash.
-	sh.Status = ShellStatusStopped
-	handle := i.shellHandles[shellID]
-	i.shellsMu.Unlock()
 
+	_, handle, _ := i.shells.GetBoth(shellID)
 	if handle != nil {
 		if err := handle.Close(); err != nil {
 			log.Warn("StopShell: handle.Close error", "shell", shellID, "err", err)
@@ -297,19 +272,14 @@ func (i *Instance) StopShell(ctx context.Context, shellID string) error {
 
 // RestartShell stops a shell (if running) and relaunches it with the same command and workdir.
 func (i *Instance) RestartShell(ctx context.Context, shellID string) error {
-	i.shellsMu.RLock()
-	sh, ok := i.shells[shellID]
+	sh, ok := i.shells.Get(shellID)
 	if !ok {
-		i.shellsMu.RUnlock()
 		return fmt.Errorf("RestartShell: shell %q not found", shellID)
 	}
 	command := sh.Command
 	workDir := sh.WorkingDir
-	name := sh.Name
-	orderIndex := sh.OrderIndex
 	exitCh := make(chan struct{})
 	watcherDone := make(chan struct{})
-	i.shellsMu.RUnlock()
 
 	// Stop if currently running.
 	if err := i.StopShell(ctx, shellID); err != nil {
@@ -324,30 +294,7 @@ func (i *Instance) RestartShell(ctx context.Context, shellID string) error {
 		return fmt.Errorf("RestartShell: spawn failed: %w", err)
 	}
 
-	// Update in-memory state.
-	i.shellsMu.Lock()
-	if existing, exists := i.shells[shellID]; exists {
-		existing.Status = ShellStatusRunning
-		existing.ExitCode = 0
-		existing.TmuxSessionName = newSessionName
-		existing.exitCh = exitCh
-		existing.watcherDone = watcherDone
-	} else {
-		i.shells[shellID] = &Shell{
-			ID:              shellID,
-			Name:            name,
-			Command:         command,
-			WorkingDir:      workDir,
-			TmuxSessionName: newSessionName,
-			Status:          ShellStatusRunning,
-			OrderIndex:      orderIndex,
-			StartedAt:       time.Now(),
-			exitCh:          exitCh,
-			watcherDone:     watcherDone,
-		}
-	}
-	i.shellHandles[shellID] = handle
-	i.shellsMu.Unlock()
+	i.shells.UpdateForRestart(shellID, handle, newSessionName, exitCh, watcherDone)
 
 	// Persist restart.
 	if i.shellRepo != nil {
@@ -357,7 +304,7 @@ func (i *Instance) RestartShell(ctx context.Context, shellID string) error {
 	}
 
 	// Launch new exit watcher.
-	i.shellWg.Add(1)
+	i.shellWgAdd(1)
 	go i.watchShellExit(ctx, shellID, handle, exitCh, watcherDone)
 
 	return nil
@@ -366,11 +313,7 @@ func (i *Instance) RestartShell(ctx context.Context, shellID string) error {
 // GetShellPTYReader returns the PTY for streaming shell output.
 // Lazily attaches if not yet attached (ADR-3: lazy PTY attach).
 func (i *Instance) GetShellPTYReader(shellID string) (*os.File, error) {
-	i.shellsMu.RLock()
-	sh, ok := i.shells[shellID]
-	handle := i.shellHandles[shellID]
-	i.shellsMu.RUnlock()
-
+	sh, handle, ok := i.shells.GetBoth(shellID)
 	if !ok {
 		return nil, fmt.Errorf("GetShellPTYReader: shell %q not found", shellID)
 	}
@@ -391,9 +334,7 @@ func (i *Instance) GetShellPTYReader(shellID string) (*os.File, error) {
 // GetShellExitCh returns a channel that is closed when the shell exits.
 // Multiple callers can select on it without coordination (closed-channel fan-out).
 func (i *Instance) GetShellExitCh(shellID string) (<-chan struct{}, bool) {
-	i.shellsMu.RLock()
-	defer i.shellsMu.RUnlock()
-	sh, ok := i.shells[shellID]
+	sh, ok := i.shells.Get(shellID)
 	if !ok {
 		return nil, false
 	}
@@ -403,53 +344,31 @@ func (i *Instance) GetShellExitCh(shellID string) (<-chan struct{}, bool) {
 // AddShellInMemory registers a pre-built Shell directly into the in-memory registry without
 // spawning a tmux process. Used by ReconcileShells and by tests that need to inject shells
 // into an Instance without going through the full SpawnShell / tmux path.
-// The caller is responsible for setting all fields on sh (including exitCh / watcherDone
-// if DeleteShell must drain the watcher goroutine; pass closed channels for stopped shells).
-// Safe to call on instances loaded from storage that have not yet called initShellRegistry.
 func (i *Instance) AddShellInMemory(sh *Shell) {
 	if sh == nil {
 		return
 	}
-	i.shellsMu.Lock()
 	if i.shells == nil {
-		i.shells = make(map[string]*Shell)
+		i.shells = newShellRegistry()
 	}
-	if i.shellHandles == nil {
-		i.shellHandles = make(map[string]*tmux.ShellTmuxHandle)
-	}
-	i.shells[sh.ID] = sh
-	i.shellsMu.Unlock()
+	i.shells.AddStopped(sh)
 }
 
 // ListShellsInMemory returns in-memory shells sorted by OrderIndex.
 func (i *Instance) ListShellsInMemory() []*Shell {
-	i.shellsMu.RLock()
-	defer i.shellsMu.RUnlock()
-
-	result := make([]*Shell, 0, len(i.shells))
-	for _, sh := range i.shells {
-		result = append(result, sh)
-	}
-	sort.Slice(result, func(a, b int) bool {
-		return result[a].OrderIndex < result[b].OrderIndex
-	})
-	return result
+	return i.shells.List()
 }
 
 // DeleteShell stops a shell (if running), waits for active handlers to drain, then
 // removes it from memory and the database.
 func (i *Instance) DeleteShell(ctx context.Context, shellID string) error {
 	// Snapshot watcherDone before stopping so we can wait on this shell's goroutine only.
-	i.shellsMu.RLock()
-	sh := i.shells[shellID]
-	i.shellsMu.RUnlock()
+	sh, _ := i.shells.Get(shellID)
 
 	// Stop first to trigger PTY EOF and allow watchShellExit to return.
 	_ = i.StopShell(ctx, shellID)
 
 	// Wait for this shell's watcher goroutine to finish before removing from the map.
-	// Using sh.watcherDone (per-shell) instead of the global shellWg so concurrent deletes
-	// of independent shells do not block each other.
 	if sh != nil && sh.watcherDone != nil {
 		select {
 		case <-sh.watcherDone:
@@ -458,10 +377,7 @@ func (i *Instance) DeleteShell(ctx context.Context, shellID string) error {
 		}
 	}
 
-	i.shellsMu.Lock()
-	delete(i.shells, shellID)
-	delete(i.shellHandles, shellID)
-	i.shellsMu.Unlock()
+	i.shells.Remove(shellID)
 
 	if i.shellRepo != nil {
 		if err := i.shellRepo.DeleteShell(ctx, shellID); err != nil {
@@ -475,6 +391,10 @@ func (i *Instance) DeleteShell(ctx context.Context, shellID string) error {
 // It queries ent for shells marked "running" and checks whether their sibling tmux
 // sessions still exist. Live sessions are rebuilt in memory (without PTY attach — lazy).
 // Dead sessions are marked stopped in ent.
+//
+// The map lock is never held during I/O: all subprocess calls and DB writes happen
+// outside any map operation; each final map insert is an independent Store call that
+// holds only the bucket lock for nanoseconds.
 func (i *Instance) ReconcileShells(ctx context.Context) {
 	if i.shellRepo == nil {
 		return
@@ -484,65 +404,101 @@ func (i *Instance) ReconcileShells(ctx context.Context) {
 		log.Warn("ReconcileShells: failed to list shells", "session", i.Title, "err", err)
 		return
 	}
+	if len(dbShells) == 0 {
+		return
+	}
 
 	cmdExec := executor.Exec{}
 
-	i.shellsMu.Lock()
-	defer i.shellsMu.Unlock()
+	// preparedShell holds all pre-computed state for one reconcile entry.
+	type preparedShell struct {
+		dbShell     *ent.Shell
+		handle      *tmux.ShellTmuxHandle
+		alive       bool // DoesSessionExist result; only meaningful when status=Running
+		exitCh      chan struct{}
+		watcherDone chan struct{}
+	}
 
-	for _, dbShell := range dbShells {
+	// Phase 1 (no lock): create handles and probe subprocess existence for running shells.
+	prepared := make([]preparedShell, len(dbShells))
+	for idx, dbShell := range dbShells {
 		handle := tmux.NewShellTmuxHandle(dbShell.TmuxSessionName, i.TmuxServerSocket, tmux.MakePtyFactory(), cmdExec)
 		exitCh := make(chan struct{})
 		watcherDone := make(chan struct{})
-
+		var alive bool
 		if dbShell.Status == string(ShellStatusRunning) {
-			if handle.DoesSessionExist() {
-				// Rebuild in-memory Shell with lazy attach (ADR-3).
-				sh := &Shell{
-					ID:              dbShell.ID,
-					Name:            dbShell.Name,
-					Command:         dbShell.Command,
-					WorkingDir:      dbShell.WorkingDir,
-					TmuxSessionName: dbShell.TmuxSessionName,
-					Status:          ShellStatusRunning,
-					OrderIndex:      dbShell.OrderIndex,
-					StartedAt:       dbShell.StartedAt,
-					exitCh:          exitCh,
-					watcherDone:     watcherDone,
-				}
-				i.shells[dbShell.ID] = sh
-				i.shellHandles[dbShell.ID] = handle
-				i.shellWg.Add(1)
-				go i.watchShellExit(ctx, dbShell.ID, handle, exitCh, watcherDone)
-				log.Info("ReconcileShells: restored running shell", "session", i.Title, "shell", dbShell.ID)
-			} else {
-				// Session gone; mark as stopped.
-				log.Info("ReconcileShells: shell tmux session missing, marking stopped", "session", i.Title, "shell", dbShell.ID)
-				close(exitCh)
-				if updateErr := i.shellRepo.UpdateShellStatus(ctx, dbShell.ID, string(ShellStatusStopped), nil); updateErr != nil {
-					log.Warn("ReconcileShells: failed to update status", "shell", dbShell.ID, "err", updateErr)
-				}
+			alive = handle.DoesSessionExist()
+		}
+		prepared[idx] = preparedShell{dbShell, handle, alive, exitCh, watcherDone}
+	}
+
+	// Phase 2 (no lock): persist stopped status for running shells whose tmux session vanished.
+	for _, e := range prepared {
+		if e.dbShell.Status == string(ShellStatusRunning) && !e.alive {
+			log.Info("ReconcileShells: shell tmux session missing, marking stopped", "session", i.Title, "shell", e.dbShell.ID)
+			close(e.exitCh)
+			if updateErr := i.shellRepo.UpdateShellStatus(ctx, e.dbShell.ID, string(ShellStatusStopped), nil); updateErr != nil {
+				log.Warn("ReconcileShells: failed to update status", "shell", e.dbShell.ID, "err", updateErr)
 			}
+		}
+	}
+
+	// Phase 3: register shells in the concurrent map. Each Store holds only a single
+	// bucket lock for nanoseconds — no I/O, no goroutines launched yet.
+	type watcherLaunch struct {
+		shellID     string
+		handle      *tmux.ShellTmuxHandle
+		exitCh      chan struct{}
+		watcherDone chan struct{}
+	}
+	var watchers []watcherLaunch
+
+	for _, e := range prepared {
+		if e.dbShell.Status == string(ShellStatusRunning) {
+			if e.alive {
+				sh := &Shell{
+					ID:              e.dbShell.ID,
+					Name:            e.dbShell.Name,
+					Command:         e.dbShell.Command,
+					WorkingDir:      e.dbShell.WorkingDir,
+					TmuxSessionName: e.dbShell.TmuxSessionName,
+					Status:          ShellStatusRunning,
+					OrderIndex:      e.dbShell.OrderIndex,
+					StartedAt:       e.dbShell.StartedAt,
+					exitCh:          e.exitCh,
+					watcherDone:     e.watcherDone,
+				}
+				i.shells.Add(sh, e.handle)
+				watchers = append(watchers, watcherLaunch{e.dbShell.ID, e.handle, e.exitCh, e.watcherDone})
+				log.Info("ReconcileShells: restored running shell", "session", i.Title, "shell", e.dbShell.ID)
+			}
+			// dead case: exitCh already closed and DB already updated in Phase 2; no map entry.
 		} else {
 			// Already stopped/error: rebuild read-only in-memory entry with closed exitCh.
-			close(exitCh)
+			close(e.exitCh)
 			exitCode := 0
-			if dbShell.ExitCode != nil {
-				exitCode = *dbShell.ExitCode
+			if e.dbShell.ExitCode != nil {
+				exitCode = *e.dbShell.ExitCode
 			}
 			sh := &Shell{
-				ID:              dbShell.ID,
-				Name:            dbShell.Name,
-				Command:         dbShell.Command,
-				WorkingDir:      dbShell.WorkingDir,
-				TmuxSessionName: dbShell.TmuxSessionName,
-				Status:          ShellStatus(dbShell.Status),
+				ID:              e.dbShell.ID,
+				Name:            e.dbShell.Name,
+				Command:         e.dbShell.Command,
+				WorkingDir:      e.dbShell.WorkingDir,
+				TmuxSessionName: e.dbShell.TmuxSessionName,
+				Status:          ShellStatus(e.dbShell.Status),
 				ExitCode:        exitCode,
-				OrderIndex:      dbShell.OrderIndex,
-				StartedAt:       dbShell.StartedAt,
-				exitCh:          exitCh,
+				OrderIndex:      e.dbShell.OrderIndex,
+				StartedAt:       e.dbShell.StartedAt,
+				exitCh:          e.exitCh,
 			}
-			i.shells[dbShell.ID] = sh
+			i.shells.AddStopped(sh)
 		}
+	}
+
+	// Phase 4 (post-map): launch watcher goroutines for restored running shells.
+	for _, w := range watchers {
+		i.shellWgAdd(1)
+		go i.watchShellExit(ctx, w.shellID, w.handle, w.exitCh, w.watcherDone)
 	}
 }
