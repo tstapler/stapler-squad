@@ -3,7 +3,15 @@
   "type": "frontend",
   "component": "ShellTabLabel",
   "path": "web-app/src/components/sessions/ShellTab.tsx",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-21T00:00:00.000000000-07:00"
+  "tested": true,
+  "testIds": [
+    "useShells > spawnShell_should_callRpc_With_correctParams > useShells_should_callSpawnShellRpc_When_spawnShellCalledWithParams",
+    "useShells > spawnShell_should_callRpc_With_correctParams > useShells_should_passEmptyStrings_When_optionalParamsOmitted",
+    "useShells > spawnShell_should_refetchShells_After_success > useShells_should_addShellToList_When_spawnShellSucceeds",
+    "useShells > stopShell_should_callRpc_With_shellId > useShells_should_callStopShellRpc_When_stopShellCalled",
+    "useShells > stopShell_should_callRpc_With_shellId > useShells_should_returnTrue_When_stopShellSucceeds",
+    "useShells > deleteShell_should_callRpc_With_shellId > useShells_should_callDeleteShellRpc_When_deleteShellCalled",
+    "useShells > deleteShell_should_callRpc_With_shellId > useShells_should_removeShellFromList_When_deleteShellSucceeds"
+  ],
+  "lastModified": "2026-05-30T00:00:00Z"
 }

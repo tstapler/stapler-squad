@@ -1,11 +1,15 @@
 {
-  "id": "error:list",
+  "id": "ListShells",
   "type": "backend",
   "service": "SessionService",
-  "method": "ListErrors",
+  "method": "ListShells",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-18T19:18:16.428607422-07:00"
+  "tested": true,
+  "testIds": [
+    "TestListShells_ReturnsAll",
+    "TestListShells_EmptySession",
+    "TestListShells_SessionNotRunning"
+  ],
+  "lastModified": "2026-05-30T00:00:00Z"
 }

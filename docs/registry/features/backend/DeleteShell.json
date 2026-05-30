@@ -1,11 +1,14 @@
 {
-  "id": "GetFeatureFlags",
+  "id": "DeleteShell",
   "type": "backend",
   "service": "SessionService",
-  "method": "GetFeatureFlags",
+  "method": "DeleteShell",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-18T19:18:16.428607422-07:00"
+  "tested": true,
+  "testIds": [
+    "TestDeleteShell_Success",
+    "TestDeleteShell_SessionNotFound"
+  ],
+  "lastModified": "2026-05-30T00:00:00Z"
 }

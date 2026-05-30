@@ -3,7 +3,14 @@
   "type": "frontend",
   "component": "NewShellDialog",
   "path": "web-app/src/components/sessions/NewShellDialog.tsx",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-21T00:00:00.000000000-07:00"
+  "tested": true,
+  "testIds": [
+    "NewShellDialog > renders_all_form_fields > NewShellDialog_should_renderNameCommandWorkingDirFields_When_mounted",
+    "NewShellDialog > submits_with_correct_params_When_formFilled > NewShellDialog_should_callOnSubmitWithCorrectArgs_When_formFilled",
+    "NewShellDialog > submit_disabled_When_spawning > NewShellDialog_should_disableSubmitButton_When_submitting",
+    "NewShellDialog > closes_When_escapePressed > NewShellDialog_should_callOnCancel_When_escapeKeyPressed",
+    "NewShellDialog > closes_When_backdropClicked > NewShellDialog_should_callOnCancel_When_overlayClicked",
+    "NewShellDialog > shows_error_When_spawnFails > NewShellDialog_should_showErrorMessage_When_onSubmitRejects"
+  ],
+  "lastModified": "2026-05-30T00:00:00Z"
 }
