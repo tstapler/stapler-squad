@@ -46,6 +46,12 @@ jest.mock("@/lib/contexts/NotificationContext", () => ({
   useNotifications: () => ({ togglePanel: mockTogglePanel, getUnreadCount: () => 0 }),
 }));
 
+// Mock useHandedness so tests don't depend on localStorage or document.documentElement
+jest.mock("@/lib/hooks/useHandedness", () => ({
+  useHandedness: () => ({ leftHanded: false, toggleHandedness: jest.fn() }),
+  HANDEDNESS_KEY: "stapler-squad:left-handed",
+}));
+
 // Mock the CSS module
 jest.mock("../BottomNav.css", () => ({
   nav: "nav",
@@ -78,6 +84,12 @@ describe("BottomNav", () => {
   beforeEach(() => {
     mockOpenOmnibar.mockClear();
     mockTogglePanel.mockClear();
+    // JSDOM doesn't provide ResizeObserver; stub it so BottomNav's height measurement doesn't throw.
+    global.ResizeObserver = jest.fn().mockImplementation(() => ({
+      observe: jest.fn(),
+      unobserve: jest.fn(),
+      disconnect: jest.fn(),
+    }));
   });
 
   it("renders all primary nav items and the New session button", () => {

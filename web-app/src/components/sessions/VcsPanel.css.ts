@@ -66,6 +66,12 @@ export const header = style({
   marginBottom: "16px",
   paddingBottom: "12px",
   borderBottom: `1px solid ${vars.color.borderColor}`,
+  selectors: {
+    // Left-handed: flip so the Refresh button lands on the left thumb side
+    ':root[data-left-handed] &': {
+      flexDirection: "row-reverse",
+    },
+  },
 });
 
 export const vcsType = style({
