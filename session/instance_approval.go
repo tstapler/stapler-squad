@@ -76,9 +76,15 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 	i.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, i.Title)
 }
 
-// GetTimeSinceLastMeaningfulOutput delegates to ReviewState.TimeSinceLastMeaningfulOutput.
-// Falls back to time since creation if no meaningful output has been recorded.
+// GetTimeSinceLastMeaningfulOutput returns how long ago meaningful output was recorded.
+// Fast path: reads the atomic shadow (no lock) once initialised via SyncAtomicTimestamps
+// or UpdateTimestamps. Fallback: acquires stateMutex.RLock when the atomic is zero
+// (before first write, or in tests that set LastMeaningfulOutput directly).
 func (i *Instance) GetTimeSinceLastMeaningfulOutput() time.Duration {
+	ns := i.loadLastMeaningfulOutputNs()
+	if ns != 0 {
+		return time.Since(time.Unix(0, ns))
+	}
 	i.stateMutex.RLock()
 	defer i.stateMutex.RUnlock()
 	return i.TimeSinceLastMeaningfulOutput(i.CreatedAt)

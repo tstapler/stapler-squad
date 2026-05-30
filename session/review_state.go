@@ -2,12 +2,13 @@ package session
 
 import (
 	"fmt"
+	"sync/atomic"
+
+	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"strings"
 	"time"
-
-	"github.com/spaolacci/murmur3"
 )
 
 // ReviewState holds all timestamps and state related to the review queue and terminal activity
@@ -72,6 +73,26 @@ type ReviewState struct {
 	// user interaction. If the session shows no activity by this time, it may be re-added
 	// to the review queue.
 	ProcessingGraceUntil time.Time
+
+	// lastMeaningfulOutputNs is a lock-free shadow of LastMeaningfulOutput stored as
+	// UnixNano. Written under stateMutex (write); read without any lock via atomic ops.
+	// Zero means "not yet recorded". Use SyncAtomicTimestamps() after construction.
+	lastMeaningfulOutputNs int64
+}
+
+// SyncAtomicTimestamps initialises atomic shadow fields from their time.Time counterparts.
+// Must be called once after constructing ReviewState from persisted or restored data so that
+// lock-free readers see the correct initial value immediately.
+func (rs *ReviewState) SyncAtomicTimestamps() {
+	if !rs.LastMeaningfulOutput.IsZero() {
+		atomic.StoreInt64(&rs.lastMeaningfulOutputNs, rs.LastMeaningfulOutput.UnixNano())
+	}
+}
+
+// loadLastMeaningfulOutputNs returns the nanosecond timestamp without acquiring any lock.
+// Returns 0 when no meaningful output has been recorded yet.
+func (rs *ReviewState) loadLastMeaningfulOutputNs() int64 {
+	return atomic.LoadInt64(&rs.lastMeaningfulOutputNs)
 }
 
 // ---- Package-level helpers -----------------------------------------------
@@ -162,6 +183,7 @@ func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shou
 		signature := computeContentSignature(filteredContent)
 		if signature != rs.LastOutputSignature {
 			rs.LastMeaningfulOutput = now
+			atomic.StoreInt64(&rs.lastMeaningfulOutputNs, now.UnixNano())
 			rs.LastOutputSignature = signature
 			log.ForSession(sessionTitle).Debug("Updated LastMeaningfulOutput timestamp")
 		} else {

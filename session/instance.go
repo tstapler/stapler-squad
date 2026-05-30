@@ -512,6 +512,9 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	// Initialize TagManager backed by the Instance.Tags slice
 	instance.tagManager = NewTagManager(&instance.Tags)
 
+	// Sync atomic shadow fields from the just-set ReviewState time.Time values.
+	instance.SyncAtomicTimestamps()
+
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The session itself is wired later by initTmuxSession() at Start() time.
 	instance.processManager = NewProcessManager(context.Background(), BackendTmux, ProcessManagerOptions{})

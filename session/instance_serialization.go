@@ -244,6 +244,9 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	// Initialize TagManager backed by the Instance.Tags slice
 	instance.tagManager = NewTagManager(&instance.Tags)
 
+	// Sync atomic shadow fields so lock-free readers see the correct initial values.
+	instance.SyncAtomicTimestamps()
+
 	// Initialize the process manager via the factory so selectedBackend is honored.
 	// The underlying session is wired below (for Paused/Stopped/Hibernated) or
 	// by initTmuxSession() when Start() is called (for Active sessions).
