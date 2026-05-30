@@ -3,6 +3,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import * as styles from "./NewShellDialog.css";
 
 interface NewShellDialogProps {
@@ -90,14 +91,11 @@ export function NewShellDialog({ onSubmit, onCancel, defaultWorkingDir = "" }: N
 
           <div className={styles.fieldGroup} style={{ marginTop: "12px" }}>
             <label htmlFor="shell-working-dir" className={styles.label}>Working Directory (optional)</label>
-            <input
+            <RepoPathInput
               id="shell-working-dir"
-              type="text"
-              className={styles.input}
               value={workingDir}
-              onChange={e => setWorkingDir(e.target.value)}
+              onChange={setWorkingDir}
               placeholder="Defaults to session directory"
-              autoComplete="off"
             />
           </div>
 

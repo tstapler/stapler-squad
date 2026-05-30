@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
 import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe } from "lucide-react";
 import dynamic from "next/dynamic";
@@ -22,6 +23,7 @@ import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
 import { useShells } from "@/lib/hooks/useShells";
+import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
 import { NewShellDialog } from "./NewShellDialog";
 import * as styles from "./SessionDetail.css";
@@ -131,6 +133,31 @@ export function SessionDetailView({
   // Shell tabs
   const { shells, spawnShell, stopShell, restartShell, deleteShell, updateShellStatus } = useShells(session.id);
   const [showNewShellDialog, setShowNewShellDialog] = useState(false);
+  const { addNotification } = useNotifications();
+
+  // Fire a toast notification when a shell exits with a non-zero exit code.
+  // Track which shell IDs we've already notified to avoid duplicate toasts.
+  const notifiedShellExitsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const shell of shells) {
+      if (
+        shell.status !== "running" &&
+        shell.exitCode != null &&
+        shell.exitCode !== 0 &&
+        !notifiedShellExitsRef.current.has(shell.id)
+      ) {
+        notifiedShellExitsRef.current.add(shell.id);
+        addNotification({
+          sessionId: session.id,
+          sessionName: session.title,
+          message: `Shell "${shell.name || shell.command || "shell"}" exited with code ${shell.exitCode}`,
+          priority: "medium",
+          notificationType: "error",
+        });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shells]);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [filesSelectedPath, setFilesSelectedPath] = useState<string | null>(null);
@@ -238,6 +265,15 @@ export function SessionDetailView({
       onTabChange?.(tabId as SessionDetailTab);
     }
   };
+
+  const handleOpenNewShellDialog = useCallback(() => setShowNewShellDialog(true), []);
+  useShortcut("terminal.spawn-shell", {
+    key: "t",
+    modifiers: { ctrl: true },
+    label: "Spawn new shell",
+    context: "terminal",
+    action: handleOpenNewShellDialog,
+  });
 
   const handleSpawnShell = useCallback(async (params: { name?: string; command?: string; workingDir?: string }) => {
     const tab = await spawnShell(params);
@@ -1184,6 +1220,13 @@ export function SessionDetailView({
                 🔄 Restart
               </button>
             )}
+            <button
+              className={styles.actionSheetItem}
+              onClick={() => { setActionSheetOpen(false); setShowNewShellDialog(true); }}
+              data-testid="action-spawn-shell"
+            >
+              &gt;_ Spawn new shell
+            </button>
             <hr className={styles.actionDivider} />
             <button
               className={`${styles.actionSheetItem} ${styles.actionSheetItemDestructive}`}

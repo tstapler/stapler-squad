@@ -11,6 +11,7 @@ export interface ActionDeps {
   deleteSession: (id: string) => Promise<void>;
   close: () => void;
   setTheme: (name: ThemeName) => void;
+  spawnShell?: (sessionId?: string, workingDir?: string, shellCommand?: string) => void;
   /** Optional analytics provider — tracking is best-effort; missing it never blocks the action */
   analytics?: Pick<AnalyticsProvider, "track">;
 }
@@ -72,6 +73,11 @@ export function dispatchOmnibarAction(
     case "set_theme":
       if (track) track({ name: "omnibar.set_theme", category: "user_action" });
       deps.setTheme(action.themeName);
+      deps.close();
+      return;
+    case "spawn_shell":
+      if (track) track({ name: "omnibar.spawn_shell", category: "user_action" });
+      deps.spawnShell?.(action.sessionId, action.workingDir, action.shellCommand);
       deps.close();
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅

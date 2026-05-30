@@ -28,6 +28,8 @@ export function ShellTabLabel({ shell, onStop, onRestart, onClose }: ShellTabPro
     onClose(shell.id);
   }, [onClose, shell.id]);
 
+  const hasError = shell.status === "error" || (shell.status !== "running" && shell.exitCode != null && shell.exitCode !== 0);
+
   return (
     <div className={styles.tabLabel}>
       <span
@@ -38,6 +40,15 @@ export function ShellTabLabel({ shell, onStop, onRestart, onClose }: ShellTabPro
       <span className={styles.tabName} title={shell.name || shell.command || "shell"}>
         {shell.name || shell.command || "shell"}
       </span>
+      {hasError && (
+        <span
+          className={styles.errorIndicator}
+          title={shell.exitCode != null ? `Exited with code ${shell.exitCode}` : "Shell errored"}
+          aria-label={shell.exitCode != null ? `Exit code ${shell.exitCode}` : "Shell errored"}
+        >
+          !
+        </span>
+      )}
       <div className={styles.actions}>
         {shell.status === "running" && (
           <button

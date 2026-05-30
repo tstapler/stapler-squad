@@ -9,6 +9,12 @@ export const tabLabel = style({
   userSelect: "none",
 });
 
+export const errorIndicator = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.error,
+  flexShrink: 0,
+});
+
 export const statusDotBase = style({
   width: "8px",
   height: "8px",

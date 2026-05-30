@@ -400,6 +400,27 @@ func (i *Instance) GetShellExitCh(shellID string) (<-chan struct{}, bool) {
 	return sh.exitCh, true
 }
 
+// AddShellInMemory registers a pre-built Shell directly into the in-memory registry without
+// spawning a tmux process. Used by ReconcileShells and by tests that need to inject shells
+// into an Instance without going through the full SpawnShell / tmux path.
+// The caller is responsible for setting all fields on sh (including exitCh / watcherDone
+// if DeleteShell must drain the watcher goroutine; pass closed channels for stopped shells).
+// Safe to call on instances loaded from storage that have not yet called initShellRegistry.
+func (i *Instance) AddShellInMemory(sh *Shell) {
+	if sh == nil {
+		return
+	}
+	i.shellsMu.Lock()
+	if i.shells == nil {
+		i.shells = make(map[string]*Shell)
+	}
+	if i.shellHandles == nil {
+		i.shellHandles = make(map[string]*tmux.ShellTmuxHandle)
+	}
+	i.shells[sh.ID] = sh
+	i.shellsMu.Unlock()
+}
+
 // ListShellsInMemory returns in-memory shells sorted by OrderIndex.
 func (i *Instance) ListShellsInMemory() []*Shell {
 	i.shellsMu.RLock()

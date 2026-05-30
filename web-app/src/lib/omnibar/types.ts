@@ -14,6 +14,7 @@ export enum InputType {
   GitHubShorthand = "github_shorthand",
   SessionSearch = "session_search",
   NewSession = "new_session",
+  SpawnShell = "spawn_shell",
 }
 
 export interface InputTypeInfo {
@@ -72,6 +73,11 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "New Session",
     icon: "✨",
     description: "Create a new session",
+  },
+  [InputType.SpawnShell]: {
+    label: "Spawn Shell",
+    icon: ">_",
+    description: "Open the new shell dialog",
   },
 };
 

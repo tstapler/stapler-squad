@@ -8,6 +8,7 @@ import { Detector } from "../detector";
  * Recognized commands:
  *   >theme matrix | cyberpunk77 | wh40k | clean | light | dark
  *   >go sessions | review | history
+ *   >shell [optional name/command]
  */
 export class CommandDetector implements Detector {
   name = "CommandDetector";
@@ -16,7 +17,7 @@ export class CommandDetector implements Detector {
   // Map of command string → type and argument
   private static COMMANDS: Array<{
     pattern: RegExp;
-    commandType: "theme" | "navigate";
+    commandType: "theme" | "navigate" | "spawn_shell";
     commandArg: string;
     suggestedName: string;
   }> = [
@@ -29,6 +30,7 @@ export class CommandDetector implements Detector {
     { pattern: /^>go\s+sessions?$/i, commandType: "navigate", commandArg: "/", suggestedName: "Go to Sessions" },
     { pattern: /^>go\s+review$/i, commandType: "navigate", commandArg: "/review-queue", suggestedName: "Go to Review Queue" },
     { pattern: /^>go\s+history$/i, commandType: "navigate", commandArg: "/history", suggestedName: "Go to History" },
+    { pattern: /^>shell(?:\s+(.+))?$/i, commandType: "spawn_shell", commandArg: "", suggestedName: "Spawn new shell" },
   ];
 
   detect(input: string): DetectionResult | null {
@@ -36,15 +38,19 @@ export class CommandDetector implements Detector {
     if (!trimmed.startsWith(">")) return null;
 
     for (const cmd of CommandDetector.COMMANDS) {
-      if (cmd.pattern.test(trimmed)) {
+      const match = trimmed.match(cmd.pattern);
+      if (match) {
+        const resultType = cmd.commandType === "spawn_shell" ? InputType.SpawnShell : InputType.Command;
+        // For >shell, capture the optional argument (name/command) from the capture group
+        const commandArg = cmd.commandType === "spawn_shell" ? (match[1] ?? "") : cmd.commandArg;
         return {
-          type: InputType.Command,
+          type: resultType,
           confidence: 1.0,
           parsedValue: trimmed,
           suggestedName: cmd.suggestedName,
           metadata: {
             commandType: cmd.commandType,
-            commandArg: cmd.commandArg,
+            commandArg,
           },
         };
       }
