@@ -35,6 +35,7 @@ interface OmnibarProps {
   onCreateSession: (data: OmnibarSessionData) => Promise<void>;
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
+  onSpawnShell?: (sessionId?: string, workingDir?: string, shellCommand?: string) => void;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
 }
@@ -118,7 +119,7 @@ function isValidProjectName(name: string): boolean {
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, initialMode, initialInput }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, initialMode, initialInput }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -677,8 +678,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       return true;
     }
 
-    // Recognized commands (>theme ..., >go ...) are always submittable
+    // Recognized commands (>theme ..., >go ...) and spawn_shell are always submittable
     if (detection?.type === InputType.Command && detection.confidence === 1.0) return true;
+    if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) return true;
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
@@ -720,6 +722,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       } else if (commandType === "navigate") {
         router.push(commandArg);
       }
+      onClose();
+      return;
+    }
+
+    // Spawn shell command (>shell [optional command]) — fire-and-forget, no session-creation flow.
+    if (detection?.type === InputType.SpawnShell && detection.confidence === 1.0) {
+      const { commandArg } = (detection.metadata ?? {}) as { commandArg?: string };
+      onSpawnShell?.(undefined, "", commandArg);
       onClose();
       return;
     }
@@ -837,6 +847,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     saveHistory,
     onCreateSession,
     onClose,
+    onSpawnShell,
     formState.firstPrompt,
     router,
     setTheme,

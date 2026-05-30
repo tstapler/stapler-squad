@@ -10,6 +10,7 @@ function makeDeps(): jest.Mocked<ActionDeps> {
     deleteSession: jest.fn().mockResolvedValue(undefined),
     close: jest.fn(),
     setTheme: jest.fn(),
+    spawnShell: jest.fn(),
   };
 }
 
@@ -139,6 +140,27 @@ describe("dispatchOmnibarAction", () => {
       const action: OmnibarAction = { type: "set_theme", themeName: "matrix" };
       dispatchOmnibarAction(action, deps);
       expect(deps.setTheme).toHaveBeenCalledWith("matrix");
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("spawn_shell", () => {
+    it("dispatchOmnibarAction_should_callSpawnShell_When_spawnShellAction", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = {
+        type: "spawn_shell",
+        sessionId: "s1",
+        workingDir: "/home/user/repo",
+        shellCommand: "bash",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.spawnShell).toHaveBeenCalledWith("s1", "/home/user/repo", "bash");
+    });
+
+    it("dispatchOmnibarAction_should_callClose_When_spawnShellAction", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = { type: "spawn_shell", sessionId: "s1" };
+      dispatchOmnibarAction(action, deps);
       expect(deps.close).toHaveBeenCalled();
     });
   });

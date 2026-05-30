@@ -94,8 +94,8 @@ export function useShells(sessionId: string): UseShellsReturn {
         const tab = shellToTab(response.shell);
         setShells(prev => [...prev, tab]);
         return tab;
-      } catch {
-        return null;
+      } catch (err) {
+        throw err;
       }
     },
     [sessionId]

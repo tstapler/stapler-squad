@@ -8,7 +8,6 @@
   "handlerFile": "server/services/session_service_shells.go",
   "tested": true,
   "testIds": [
-    "TestSpawnShell_Success",
     "TestSpawnShell_SessionNotFound",
     "TestSpawnShell_SessionNotRunning",
     "TestSpawnShell_EmptySessionId"

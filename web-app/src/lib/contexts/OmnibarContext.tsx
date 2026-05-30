@@ -44,7 +44,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
   const router = useRouter();
   const { authEnabled, authenticated, loading: authLoading } = useAuth();
-  const { createSession } = useSessionService({
+  const { createSession, spawnShell } = useSessionService({
     enabled: !authLoading && (!authEnabled || authenticated),
   });
 
@@ -153,6 +153,18 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
     [createSession, router]
   );
 
+  // Handle spawn_shell omnibar command — calls the RPC directly with an optional command arg.
+  const handleSpawnShell = useCallback(
+    async (_sessionId?: string, workingDir?: string, shellCommand?: string) => {
+      await spawnShell({
+        sessionId: _sessionId ?? "",
+        workingDir: workingDir ?? "",
+        command: shellCommand ?? "",
+      });
+    },
+    [spawnShell]
+  );
+
   const value: OmnibarContextValue = {
     isOpen,
     open,
@@ -171,6 +183,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onCreateSession={handleCreateSession}
         onNavigateToSession={handleNavigateToSession}
         onNavigateToSessionInNewPane={handleNavigateToSessionInNewPane}
+        onSpawnShell={handleSpawnShell}
         initialMode={initialMode}
         initialInput={initialInput}
       />
