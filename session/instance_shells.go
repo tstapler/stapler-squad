@@ -56,11 +56,6 @@ func (i *Instance) shellWgDone() {
 		i.shells.wg.Done()
 	}
 }
-func (i *Instance) shellWgWait() {
-	if i.shells != nil {
-		i.shells.wg.Wait()
-	}
-}
 
 // shellTmuxSessionName computes the sibling tmux session name for a given shell.
 // Format: "{parentSessionName}_shell_{shellID}"
