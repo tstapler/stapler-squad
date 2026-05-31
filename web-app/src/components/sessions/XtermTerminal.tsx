@@ -193,12 +193,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     if (!terminal) return;
     const text = terminal.getSelection();
     if (!text) return;
-    navigator.clipboard.writeText(text)
-      .then(() => showToast('copied'))
-      .catch(() => {
-        const ok = execCommandCopy(text);
-        showToast(ok ? 'copied' : 'failed');
-      });
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(() => showToast('copied'))
+        .catch(() => {
+          const ok = execCommandCopy(text);
+          showToast(ok ? 'copied' : 'failed');
+        });
+    } else {
+      const ok = execCommandCopy(text);
+      showToast(ok ? 'copied' : 'failed');
+    }
     setContextMenuState(null);
   }, [showToast, execCommandCopy]);
 
@@ -327,12 +332,17 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
             document.body.removeChild(el);
             return ok;
           };
-          navigator.clipboard.writeText(text)
-            .then(() => showToastInHandler('copied'))
-            .catch(() => {
-              const ok = execFallback(text);
-              showToastInHandler(ok ? 'copied' : 'failed');
-            });
+          if (navigator.clipboard?.writeText) {
+            navigator.clipboard.writeText(text)
+              .then(() => showToastInHandler('copied'))
+              .catch(() => {
+                const ok = execFallback(text);
+                showToastInHandler(ok ? 'copied' : 'failed');
+              });
+          } else {
+            const ok = execFallback(text);
+            showToastInHandler(ok ? 'copied' : 'failed');
+          }
           terminal.clearSelection();
           return false;
         }
