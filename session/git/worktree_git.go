@@ -15,7 +15,8 @@ import (
 func (g *GitWorktree) runGitCommand(path string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	baseArgs := []string{"-C", path}
+	baseArgs := make([]string, 0, 2+len(args))
+	baseArgs = append(baseArgs, "-C", path)
 	cmd := safeexec.CommandContext(ctx, "git", append(baseArgs, args...)...)
 
 	var output []byte

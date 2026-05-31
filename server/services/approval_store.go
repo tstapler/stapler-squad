@@ -252,7 +252,7 @@ func (s *ApprovalStore) CleanupExpired() []string {
 	}
 	s.mu.Unlock()
 
-	var ids []string
+	ids := make([]string, 0, len(expired)+len(orphanedCleaned))
 	for _, a := range expired {
 		ids = append(ids, a.ID)
 		if a.decisionCh != nil {

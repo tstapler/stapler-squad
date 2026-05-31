@@ -797,7 +797,8 @@ func startRemoteAccess(ctx context.Context, srv *server.Server, localAddr string
 	// Build SAN list for the TLS cert (include localhost, IP, and all hostnames).
 	// WebAuthn rpID must be a hostname, so including the LAN IP in the SANs
 	// is fine for HTTPS but rpID itself must be a hostname for most browsers.
-	sans := []string{"localhost", "127.0.0.1", lanIPStr}
+	sans := make([]string, 0, 3+len(hostnames))
+	sans = append(sans, "localhost", "127.0.0.1", lanIPStr)
 	sans = append(sans, hostnames...)
 
 	tlsPaths, err := server.EnsureTLSCerts(sans)

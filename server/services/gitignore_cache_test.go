@@ -9,7 +9,7 @@ import (
 )
 
 func makePatterns(lines ...string) []gitignore.Pattern {
-	var patterns []gitignore.Pattern
+	patterns := make([]gitignore.Pattern, 0, len(lines))
 	for _, l := range lines {
 		patterns = append(patterns, gitignore.ParsePattern(l, nil))
 	}

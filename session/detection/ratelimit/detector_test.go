@@ -744,3 +744,61 @@ func TestManager_SetRecoveryCallback_IsCalled(t *testing.T) {
 		t.Error("expected external recovery callback to be called within 500ms")
 	}
 }
+
+// ── Allocation enforcement ────────────────────────────────────────────────────
+
+// TestStripANSI_ZeroAllocsOnPlainText asserts that plain text (no escape codes)
+// takes the fast-path and allocates nothing.
+func TestStripANSI_ZeroAllocsOnPlainText(t *testing.T) {
+	input := "hello world, plain ASCII output from the terminal"
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = stripANSI(input)
+	})
+	if allocs != 0 {
+		t.Errorf("stripANSI plain text: got %.0f allocs, want 0 (fast path broken)", allocs)
+	}
+}
+
+// TestProcessOutput_EarlyReturnBeforeAlloc asserts that ProcessOutput allocates
+// nothing when the detector is not in an active state (the common case).
+func TestProcessOutput_EarlyReturnBeforeAlloc(t *testing.T) {
+	d := NewDetector("test-session")
+	// Drive state to StateRecovering — no detection should fire, no alloc.
+	d.currentState = StateRecovering
+	input := []byte("lots of terminal output that should not be converted to string")
+
+	allocs := testing.AllocsPerRun(100, func() {
+		d.ProcessOutput(input)
+	})
+	if allocs != 0 {
+		t.Errorf("ProcessOutput early-return: got %.0f allocs, want 0 (early-return guard broken)", allocs)
+	}
+}
+
+// ── Benchmarks ────────────────────────────────────────────────────────────────
+
+func BenchmarkStripANSI_PlainText(b *testing.B) {
+	b.ReportAllocs()
+	input := "hello world, plain terminal output without any escape codes"
+	for b.Loop() {
+		_ = stripANSI(input)
+	}
+}
+
+func BenchmarkStripANSI_WithEscapes(b *testing.B) {
+	b.ReportAllocs()
+	input := "\x1b[32mhello\x1b[0m \x1b[1mworld\x1b[0m — colored terminal output"
+	for b.Loop() {
+		_ = stripANSI(input)
+	}
+}
+
+func BenchmarkProcessOutput_InactiveState(b *testing.B) {
+	b.ReportAllocs()
+	d := NewDetector("bench-session")
+	d.currentState = StateRecovering
+	input := []byte("terminal output chunk that hits the early-return guard")
+	for b.Loop() {
+		d.ProcessOutput(input)
+	}
+}

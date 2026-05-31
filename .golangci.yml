@@ -7,6 +7,7 @@ linters:
     - gochecknoglobals
     - ineffassign
     - nilnil
+    - prealloc
     - staticcheck
     - govet
     - unused

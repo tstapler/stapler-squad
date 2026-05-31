@@ -82,7 +82,7 @@ func (m *mockTmuxExecutor) Output(cmd *exec.Cmd) ([]byte, error) {
 
 				if hasFormat {
 					// Return session names (one per line) for sessions that exist
-					var sessionNames []string
+					sessionNames := make([]string, 0, len(m.sessionsCreated))
 					for sessionName := range m.sessionsCreated {
 						sessionNames = append(sessionNames, sessionName)
 					}

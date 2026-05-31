@@ -136,6 +136,31 @@ func BenchmarkDiffShortstat(b *testing.B) {
 	}
 }
 
+// BenchmarkDiffShortstatCached enforces that the TTL cache path in GoGitVCSReader
+// is O(1) and allocation-free. Must be <1µs and 0 allocs/op on a warm cache.
+// Failure means the fast path was broken (cache miss on every call).
+func BenchmarkDiffShortstatCached(b *testing.B) {
+	repo := newBenchRepo(b, 5)
+	r := &unfinished.GoGitVCSReader{}
+	// Warm the cache with one real call.
+	if _, err := r.DiffShortstat(repo.path); err != nil {
+		b.Fatalf("warm-up failed: %v", err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = r.DiffShortstat(repo.path)
+	}
+	// Post-bench assertion: cache hit must be allocation-free.
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _ = r.DiffShortstat(repo.path)
+	})
+	if allocs != 0 {
+		b.Errorf("DiffShortstat cached path: got %.0f allocs, want 0", allocs)
+	}
+}
+
 func BenchmarkListWorktrees(b *testing.B) {
 	repo := newBenchRepo(b, 5)
 	for _, nr := range readers() {

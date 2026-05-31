@@ -404,3 +404,44 @@ func TestBannerFilter_PerformanceWithLargeInput(t *testing.T) {
 		t.Errorf("FilterBanners() returned %d lines, want %d", len(filtered), expectedFiltered)
 	}
 }
+
+// ── Allocation enforcement ────────────────────────────────────────────────────
+
+// TestStripANSICodes_ZeroAllocsOnPlainText asserts that plain text (no escape
+// codes) takes the fast-path and allocates nothing.
+func TestStripANSICodes_ZeroAllocsOnPlainText(t *testing.T) {
+	input := "hello world, plain terminal output from Claude"
+	allocs := testing.AllocsPerRun(100, func() {
+		_ = stripANSICodes(input)
+	})
+	if allocs != 0 {
+		t.Errorf("stripANSICodes plain text: got %.0f allocs, want 0 (fast path broken)", allocs)
+	}
+}
+
+// ── Benchmarks ────────────────────────────────────────────────────────────────
+
+func BenchmarkStripANSICodes_PlainText(b *testing.B) {
+	b.ReportAllocs()
+	input := "hello world, plain terminal output without escape codes"
+	for b.Loop() {
+		_ = stripANSICodes(input)
+	}
+}
+
+func BenchmarkStripANSICodes_WithEscapes(b *testing.B) {
+	b.ReportAllocs()
+	input := "\x1b[32mhello\x1b[0m \x1b[1mworld\x1b[0m"
+	for b.Loop() {
+		_ = stripANSICodes(input)
+	}
+}
+
+func BenchmarkIsBanner_PlainText(b *testing.B) {
+	b.ReportAllocs()
+	filter := NewBannerFilter()
+	line := "regular terminal output that is not a banner"
+	for b.Loop() {
+		_ = filter.IsBanner(line)
+	}
+}
