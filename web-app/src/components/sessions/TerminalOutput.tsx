@@ -30,6 +30,7 @@ const ALT_KEY_MAP: Record<string, string> = {
 };
 import { useTerminalStream } from "@/lib/hooks/useTerminalStream";
 import { useBrowserLogStream } from "@/lib/hooks/useBrowserLogStream";
+import { useHandedness } from "@/lib/hooks/useHandedness";
 import type { XtermTerminalHandle, XtermTerminalProps } from "./XtermTerminal";
 import type { ForwardRefExoticComponent, RefAttributes } from "react";
 const XtermTerminal = lazy(() => import("./XtermTerminal").then((m) => ({ default: m.XtermTerminal }))) as ForwardRefExoticComponent<XtermTerminalProps & RefAttributes<XtermTerminalHandle>>;
@@ -67,6 +68,7 @@ const XTERM_DEFAULT_ROWS = 24;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
   const { track } = useAnalytics();
+  const { leftHanded, toggleHandedness } = useHandedness();
   const xtermRef = useRef<XtermTerminalHandle | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const [connectionAttempts, setConnectionAttempts] = useState(0);
@@ -229,6 +231,31 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
   });
   const [mobileOverflowOpen, setMobileOverflowOpen] = useState(false);
+
+  // Dev tools panel — persisted in localStorage; collapsed by default
+  const [devGroupOpen, setDevGroupOpen] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return localStorage.getItem('stapler-squad-dev-toolbar') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const devToggleRef = useRef<HTMLButtonElement>(null);
+
+  const handleDevGroupToggle = () => {
+    const next = !devGroupOpen;
+    track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "dev-panel", state: next ? "open" : "closed" } });
+    setDevGroupOpen(next);
+    try {
+      localStorage.setItem('stapler-squad-dev-toolbar', next ? 'true' : 'false');
+    } catch {
+      // localStorage unavailable
+    }
+    if (!next) {
+      setTimeout(() => devToggleRef.current?.focus(), 0);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -1138,22 +1165,28 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
   const secondaryActions = [
     {
-      key: 'mouse',
-      icon: '🖱️',
-      label: mouseMode === 'none' ? 'Mouse' : 'Mouse ON',
-      ariaLabel: mouseMode === 'none' ? 'Enable mouse mode for terminal apps (vim, tmux)' : 'Disable mouse mode — enables text selection',
-      title: mouseMode === 'none' ? 'Mouse OFF — tap to enable for vim/tmux' : 'Mouse ON — tap to disable, enables selection',
-      extraClass: mouseMode === 'any' ? styles.mouseModeActive : '',
-      handler: toggleMouseMode,
-    },
-    {
       key: 'copy',
       icon: '📋',
       label: 'Copy',
       ariaLabel: 'Copy terminal output to clipboard',
       title: 'Copy selected terminal text to clipboard',
       extraClass: '',
-      handler: handleCopyOutput,
+      handler: () => {
+        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "copy" } });
+        handleCopyOutput();
+      },
+    },
+    {
+      key: 'paste',
+      icon: '📎',
+      label: 'Paste',
+      ariaLabel: 'Paste from clipboard',
+      title: 'Paste from clipboard',
+      extraClass: undefined,
+      handler: () => {
+        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "paste" } });
+        void handlePaste();
+      },
     },
     {
       key: 'bottom',
@@ -1162,16 +1195,10 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       ariaLabel: 'Scroll to bottom',
       title: 'Scroll to bottom',
       extraClass: '',
-      handler: handleScrollToBottom,
-    },
-    {
-      key: 'resize',
-      icon: '↔️',
-      label: 'Resize',
-      ariaLabel: 'Resize terminal',
-      title: 'Resize terminal to fit container',
-      extraClass: '',
-      handler: handleManualResize,
+      handler: () => {
+        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "bottom" } });
+        handleScrollToBottom();
+      },
     },
     {
       key: 'clear',
@@ -1180,7 +1207,22 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       ariaLabel: 'Clear terminal',
       title: 'Clear terminal',
       extraClass: '',
-      handler: handleClear,
+      handler: () => {
+        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "clear" } });
+        handleClear();
+      },
+    },
+    {
+      key: 'mouse',
+      icon: '🖱️',
+      label: mouseMode === 'none' ? 'Mouse' : 'Mouse ON',
+      ariaLabel: mouseMode === 'none' ? 'Enable mouse mode for terminal apps (vim, tmux)' : 'Disable mouse mode — enables text selection',
+      title: mouseMode === 'none' ? 'Mouse OFF — tap to enable for vim/tmux' : 'Mouse ON — tap to disable, enables selection',
+      extraClass: mouseMode === 'any' ? styles.mouseModeActive : '',
+      handler: () => {
+        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "mouse", state: mouseMode === 'none' ? 'on' : 'off' } });
+        toggleMouseMode();
+      },
     },
   ];
 
@@ -1244,62 +1286,20 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           )}
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
-              <button
-                className={`${styles.toolbarButton} ${styles.devOnly} ${debugMode ? styles.debugActive : ''}`}
-                onClick={handleToggleDebug}
-                title={debugMode ? "Disable debug logging" : "Enable debug logging"}
-                aria-label={debugMode ? "Disable debug mode" : "Enable debug mode"}
-                style={debugMode ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
-              >
-                🛠️ {debugMode ? 'Debug ON' : 'Debug'}
-              </button>
-              <button
-                className={`${styles.toolbarButton} ${styles.devOnly} ${logStreamEnabled ? styles.debugActive : ''}`}
-                onClick={handleToggleLogStream}
-                title={logStreamEnabled ? "Stop forwarding console logs to server" : "Forward console logs to server (Remote Debug)"}
-                aria-label={logStreamEnabled ? "Disable remote log streaming" : "Enable remote log streaming"}
-                style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
-              >
-                📡 {logStreamEnabled ? 'Log Stream ON' : 'Log Stream'}
-              </button>
-              <button
-                className={`${styles.toolbarButton} ${styles.devOnly}`}
-                onClick={() => {
-                  if (isRecording) {
-                    stopRecording();
-                    setIsRecording(false);
-                  } else {
-                    startRecording();
-                    setIsRecording(true);
-                  }
-                }}
-                title={isRecording ? "Stop recording" : "Start recording terminal output"}
-                style={isRecording ? { backgroundColor: '#ff4444', color: 'white' } : {}}
-              >
-                {isRecording ? '⏹️ Stop Rec' : '⏺️ Record'}
-              </button>
-              <select
-                value={streamingMode}
-                onChange={(e) => setStreamingMode(e.target.value as "raw" | "raw-compressed" | "state" | "hybrid")}
-                className={`${styles.toolbarButton} ${styles.devOnly}`}
-                title="Terminal streaming mode - choose how terminal output is delivered"
-                aria-label="Select terminal streaming mode"
-                disabled={!isConnected}
-                style={{ minWidth: '140px' }}
-              >
-                <option value="raw">🚀 Raw</option>
-                <option value="raw-compressed">📦 Raw+LZMA</option>
-                <option value="state">🔄 State Sync</option>
-                <option value="hybrid">🔬 Hybrid</option>
-              </select>
-              <button
-                className={styles.toolbarButton}
-                onClick={handlePaste}
-                title="Paste from clipboard — text is sent directly, images are saved to a temp file and the path is inserted"
-                aria-label="Paste from clipboard"
-              >
-                {pasteError ? `⚠️ ${pasteError}` : '📎 Paste'}
-              </button>
+              {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
+              <div className={styles.secondaryGroup} data-testid="toolbar-secondary">
+                {secondaryActions.map((action) => (
+                  <button
+                    key={action.key}
+                    className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
+                    onClick={action.handler}
+                    aria-label={action.ariaLabel}
+                    title={action.title}
+                  >
+                    {action.icon} {action.label}
+                  </button>
+                ))}
+              </div>
               {/* Hidden inputs for the three upload modes */}
               {/* Camera — capture="environment" triggers native camera on Android/iOS */}
               <input
@@ -1331,20 +1331,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 onChange={handleFilesUpload}
                 aria-hidden="true"
               />
-              {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
-              <button
-                className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
-                onClick={handleCameraButtonClick}
-                disabled={uploadingCount > 0}
-                title="Take a photo — opens camera directly"
-                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Take photo with camera"}
-              >
-                {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📷"}
-              </button>
               {/* Gallery button — always visible */}
               <button
                 className={styles.toolbarButton}
-                onClick={handleGalleryButtonClick}
+                onClick={() => {
+                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "gallery" } });
+                  handleGalleryButtonClick();
+                }}
                 disabled={uploadingCount > 0}
                 title="Attach image(s) from gallery — multi-select supported"
                 aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach images from gallery"}
@@ -1354,27 +1347,141 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
               {/* Files button — any file type, always visible */}
               <button
                 className={styles.toolbarButton}
-                onClick={handleFilesButtonClick}
+                onClick={() => {
+                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "files" } });
+                  handleFilesButtonClick();
+                }}
                 disabled={uploadingCount > 0}
                 title="Attach any file(s) — multi-select, all types accepted"
                 aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach files"}
               >
                 {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
               </button>
-              {/* Secondary actions — inline on desktop, hidden on mobile (shown in overflow row) */}
-              <div className={styles.secondaryGroup} data-testid="toolbar-secondary">
-                {secondaryActions.map((action) => (
-                  <button
-                    key={action.key}
-                    className={`${styles.toolbarButton}${action.extraClass ? ` ${action.extraClass}` : ''}`}
-                    onClick={action.handler}
-                    aria-label={action.ariaLabel}
-                    title={action.title}
+              {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
+              <button
+                className={`${styles.toolbarButton} ${styles.mobileOnlyUpload}`}
+                onClick={() => {
+                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "camera" } });
+                  handleCameraButtonClick();
+                }}
+                disabled={uploadingCount > 0}
+                title="Take a photo — opens camera directly"
+                aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Take photo with camera"}
+              >
+                {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📷"}
+              </button>
+              {/* Dev tools toggle */}
+              <button
+                ref={devToggleRef}
+                className={`${styles.toolbarButton} ${styles.devOnly}`}
+                onClick={handleDevGroupToggle}
+                aria-label={devGroupOpen ? "Collapse developer tools" : "Expand developer tools"}
+                aria-expanded={devGroupOpen}
+                aria-controls="toolbar-dev-group-inner"
+                data-testid="toolbar-dev-toggle"
+                title="Developer tools: Debug, Log Stream, Record, Raw"
+              >
+                ⚙{devGroupOpen ? ' ▴' : ' ▾'}
+              </button>
+              {/* Dev panel — inline expansion */}
+              {devGroupOpen && (
+                <div
+                  className={styles.devGroupPanel}
+                  data-testid="toolbar-dev-group"
+                >
+                  <div
+                    id="toolbar-dev-group-inner"
+                    role="group"
+                    aria-label="Developer tools"
+                    className={styles.devGroup}
                   >
-                    {action.icon} {action.label}
-                  </button>
-                ))}
-              </div>
+                    <button
+                      className={`${styles.toolbarButton} ${styles.devOnly} ${debugMode ? styles.debugActive : ''}`}
+                      onClick={() => {
+                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "debug", state: debugMode ? "off" : "on" } });
+                        handleToggleDebug();
+                      }}
+                      title={debugMode ? "Disable debug logging" : "Enable debug logging"}
+                      aria-label={debugMode ? "Disable debug mode" : "Enable debug mode"}
+                      style={debugMode ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
+                    >
+                      🛠️ {debugMode ? 'Debug ON' : 'Debug'}
+                    </button>
+                    <button
+                      className={`${styles.toolbarButton} ${styles.devOnly} ${logStreamEnabled ? styles.debugActive : ''}`}
+                      onClick={() => {
+                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "log-stream", state: logStreamEnabled ? "off" : "on" } });
+                        handleToggleLogStream();
+                      }}
+                      title={logStreamEnabled ? "Stop forwarding console logs to server" : "Forward console logs to server (Remote Debug)"}
+                      aria-label={logStreamEnabled ? "Disable remote log streaming" : "Enable remote log streaming"}
+                      style={logStreamEnabled ? { backgroundColor: '#2a4', color: 'white', fontWeight: 'bold' } : {}}
+                    >
+                      📡 {logStreamEnabled ? 'Log Stream ON' : 'Log Stream'}
+                    </button>
+                    <button
+                      className={`${styles.toolbarButton} ${styles.devOnly}`}
+                      onClick={() => {
+                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "record", state: isRecording ? "off" : "on" } });
+                        if (isRecording) {
+                          stopRecording();
+                          setIsRecording(false);
+                        } else {
+                          startRecording();
+                          setIsRecording(true);
+                        }
+                      }}
+                      title={isRecording ? "Stop recording" : "Start recording terminal output"}
+                      aria-label={isRecording ? "Stop recording terminal output" : "Start recording terminal output"}
+                      style={isRecording ? { backgroundColor: '#ff4444', color: 'white' } : {}}
+                    >
+                      {isRecording ? '⏹️ Stop Rec' : '⏺️ Record'}
+                    </button>
+                    <select
+                      value={streamingMode}
+                      onChange={(e) => {
+                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "raw-mode", state: e.target.value } });
+                        setStreamingMode(e.target.value as "raw" | "raw-compressed" | "state" | "hybrid");
+                      }}
+                      className={`${styles.toolbarButton} ${styles.devOnly}`}
+                      title="Terminal streaming mode - choose how terminal output is delivered"
+                      aria-label="Select terminal streaming mode"
+                      disabled={!isConnected}
+                      style={{ minWidth: '140px' }}
+                    >
+                      <option value="raw">🚀 Raw</option>
+                      <option value="raw-compressed">📦 Raw+LZMA</option>
+                      <option value="state">🔄 State Sync</option>
+                      <option value="hybrid">🔬 Hybrid</option>
+                    </select>
+                    {/* Resize button — moved from secondaryActions to dev panel */}
+                    <button
+                      className={`${styles.toolbarButton} ${styles.devOnly}`}
+                      onClick={() => {
+                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
+                        handleManualResize();
+                      }}
+                      aria-label="Resize terminal"
+                      title="Resize terminal to fit container"
+                    >
+                      ↔️ Resize
+                    </button>
+                    {/* Handedness shortcut — toggles left/right-handed mobile layout */}
+                    <button
+                      className={`${styles.toolbarButton} ${styles.devOnly}`}
+                      onClick={() => {
+                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "handedness", state: leftHanded ? "right" : "left" } });
+                        toggleHandedness();
+                      }}
+                      aria-label={leftHanded ? "Switch to right-handed layout" : "Switch to left-handed layout"}
+                      aria-pressed={leftHanded}
+                      title="Toggle left/right-handed mobile layout"
+                    >
+                      {leftHanded ? "✋ Left" : "🤚 Right"}
+                    </button>
+                  </div>
+                </div>
+              )}
               {/* More ▾ trigger — only visible on mobile, opens overflow row below toolbar */}
               <button
                 className={`${styles.toolbarButton} ${styles.mobileMoreButton} ${mobileOverflowOpen ? styles.mobileMoreActive : ''}`}

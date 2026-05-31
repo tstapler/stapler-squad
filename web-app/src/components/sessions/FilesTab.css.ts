@@ -75,6 +75,13 @@ export const toolbar = style({
   borderBottom: `1px solid ${vars.color.borderColor}`,
   background: vars.color.terminalTabsBg,
   flexShrink: 0,
+  selectors: {
+    // Left-handed: flip the toolbar row so action buttons (collapse, expand, refresh)
+    // land on the left thumb side; search input follows naturally
+    ':root[data-left-handed] &': {
+      flexDirection: "row-reverse",
+    },
+  },
 });
 
 export const searchInput = style({

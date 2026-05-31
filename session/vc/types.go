@@ -99,7 +99,7 @@ type VCSStatus struct {
 
 // AllChangedFiles returns all files with changes, in display order
 func (s *VCSStatus) AllChangedFiles() []FileChange {
-	var files []FileChange
+	files := make([]FileChange, 0, len(s.StagedFiles)+len(s.UnstagedFiles)+len(s.UntrackedFiles)+len(s.ConflictFiles))
 	files = append(files, s.StagedFiles...)
 	files = append(files, s.UnstagedFiles...)
 	files = append(files, s.UntrackedFiles...)

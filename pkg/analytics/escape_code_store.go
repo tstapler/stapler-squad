@@ -118,7 +118,7 @@ func (s *EscapeCodeStore) evictOldEntries() {
 		score float64
 	}
 
-	var entries []scored
+	entries := make([]scored, 0, len(s.entries))
 	now := time.Now()
 
 	for key, entry := range s.entries {

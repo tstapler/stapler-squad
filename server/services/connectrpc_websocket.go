@@ -1426,7 +1426,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 func sendInputToTmux(tmuxSessionName string, data []byte) error {
 	// Build send-keys command with hex-encoded bytes
 	// Using -H flag to send hex bytes, which handles all special characters correctly
-	args := []string{"send-keys", "-t", tmuxSessionName, "-H"}
+	args := make([]string, 0, 4+len(data))
+	args = append(args, "send-keys", "-t", tmuxSessionName, "-H")
 	for _, b := range data {
 		args = append(args, fmt.Sprintf("%02x", b))
 	}

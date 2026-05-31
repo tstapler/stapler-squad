@@ -18,8 +18,7 @@ import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { routes } from "@/lib/routes";
 import { BOTTOM_NAV_PRIMARY, BOTTOM_NAV_MORE, type NavPage } from "@/lib/nav-pages";
 import * as styles from "./BottomNav.css";
-
-const HANDEDNESS_KEY = "stapler-squad:left-handed";
+import { useHandedness } from "@/lib/hooks/useHandedness";
 
 export function BottomNav() {
   const pathname = usePathname();
@@ -28,20 +27,7 @@ export function BottomNav() {
   const { getUnreadCount } = useNotifications();
   const unreadCount = getUnreadCount();
   const [moreOpen, setMoreOpen] = useState(false);
-  const [leftHanded, setLeftHanded] = useState(false);
-
-  // Load handedness preference from localStorage (client-side only)
-  useEffect(() => {
-    try {
-      setLeftHanded(localStorage.getItem(HANDEDNESS_KEY) === "true");
-    } catch { /* ignore */ }
-  }, []);
-
-  const toggleHandedness = () => {
-    const next = !leftHanded;
-    setLeftHanded(next);
-    try { localStorage.setItem(HANDEDNESS_KEY, String(next)); } catch { /* ignore */ }
-  };
+  const { leftHanded, toggleHandedness } = useHandedness();
 
   // Close the more menu on route change
   useEffect(() => {

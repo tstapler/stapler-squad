@@ -29,6 +29,12 @@ export const toolbar = style({
       padding: "0.5rem 0.75rem",
     },
   },
+  selectors: {
+    // Left-handed: flip the row so Refresh + view-mode buttons land on the left thumb side
+    ':root[data-left-handed] &': {
+      flexDirection: "row-reverse",
+    },
+  },
 });
 
 export const stats = style({

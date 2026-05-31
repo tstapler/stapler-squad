@@ -83,6 +83,10 @@ jest.mock('@/lib/contexts/AnalyticsContext', () => ({
   useAnalytics: () => ({ track: mockTrack }),
 }));
 
+jest.mock('@/lib/hooks/useBrowserLogStream', () => ({
+  useBrowserLogStream: jest.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports (after jest.mock calls)
 // ---------------------------------------------------------------------------
@@ -163,6 +167,20 @@ beforeEach(() => {
 
   jest.spyOn(console, 'log').mockImplementation(() => {});
   jest.spyOn(console, 'warn').mockImplementation(() => {});
+  // JSDOM does not implement matchMedia — mock it so theme detection doesn't throw
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: jest.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    })),
+  });
 });
 
 afterEach(() => {

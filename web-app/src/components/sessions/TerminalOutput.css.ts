@@ -200,6 +200,23 @@ export const devOnly = style({
   },
 });
 
+export const devGroupPanel = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "0.5rem",
+  paddingLeft: "0.5rem",
+  borderLeft: `1px solid ${vars.color.borderColor}`,
+  "@media": {
+    "screen and (max-width: 768px)": { display: "none" },
+  },
+});
+
+export const devGroup = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "0.5rem",
+});
+
 // Secondary actions group — inline on desktop, hidden on mobile (actions in overflow row instead)
 export const secondaryGroup = style({
   display: "flex",
@@ -232,12 +249,15 @@ export const mobileMoreActive = style({
   borderColor: `${vars.color.borderHover} !important`,
 });
 
-// Overflow row — rendered below the toolbar when More is open; never shown on desktop
+// Overflow row — rendered below the toolbar when More is open; never shown on desktop.
+// Default: row-reverse so right-handed users reach Copy/Paste/Clear with their right thumb.
+// Left-handed override: :root[data-left-handed] flips to row so left thumb can reach them.
 export const mobileOverflowRow = style({
   display: "none",
   "@media": {
     "screen and (max-width: 768px)": {
       display: "flex",
+      flexDirection: "row-reverse",
       gap: "0.25rem",
       padding: "0.3rem 0.75rem 0.4rem",
       background: vars.color.cardBackground,
@@ -247,6 +267,11 @@ export const mobileOverflowRow = style({
       scrollbarWidth: "none",
       msOverflowStyle: "none",
       flexShrink: 0,
+    },
+  },
+  selectors: {
+    ":root[data-left-handed] &": {
+      flexDirection: "row",
     },
   },
 });

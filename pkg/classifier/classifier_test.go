@@ -1874,7 +1874,7 @@ func TestExtractAllCommands_Subshell(t *testing.T) {
 	if len(cmds) < 2 {
 		t.Fatalf("expected >=2 commands from subshell, got %d: %+v", len(cmds), cmds)
 	}
-	var programs []string
+	programs := make([]string, 0, len(cmds))
 	for _, c := range cmds {
 		programs = append(programs, c.Program)
 	}

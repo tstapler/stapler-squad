@@ -817,7 +817,8 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			// Create a new detached tmux session directly (avoid recursive call to Start).
 			// Pass -e CLAUDECODE= to unset CLAUDECODE in the child environment so that
 			// nested Claude Code sessions are not blocked by the "nested session" guard.
-			restoreArgs := []string{"new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE="}
+			restoreArgs := make([]string, 0, 6+2*len(t.ExtraEnv)+2*len(t.extraEnv)+3)
+			restoreArgs = append(restoreArgs, "new-session", "-d", "-s", t.sanitizedName, "-e", "CLAUDECODE=")
 			for _, kv := range t.ExtraEnv {
 				restoreArgs = append(restoreArgs, "-e", kv)
 			}
@@ -1165,7 +1166,7 @@ func (t *TmuxSession) DetachSafely() error {
 		t.detaching = false
 	}()
 
-	var errs []error
+	var errs []error //nolint:prealloc // size unknown before calling closePTYAndAttachCmd
 
 	// Use centralized PTY + attach process cleanup
 	errs = append(errs, t.closePTYAndAttachCmd()...)

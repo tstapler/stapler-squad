@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	git "github.com/go-git/go-git/v5"
@@ -13,6 +14,22 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
+
+// diffStatCacheTTL is how long a DiffShortstat result is reused before re-scanning.
+// The scanner runs every 30s per repo; a 30s TTL avoids redundant wt.Status() calls
+// when multiple goroutines or scan cycles hit the same worktree path.
+const diffStatCacheTTL = 30 * time.Second
+
+type diffStatEntry struct {
+	result DiffStat
+	expiry time.Time
+}
+
+// diffStatCache is a package-level result cache keyed by absolute worktreePath.
+// Values are diffStatEntry (stored by value; no mutation after Store).
+// Two-goroutine races on a miss are benign: last writer wins and both values
+// are computed from the same filesystem snapshot.
+var diffStatCache sync.Map
 
 // GoGitVCSReader implements VCSReader using the go-git library.
 // No subprocesses are spawned; all operations run in-process.
@@ -330,7 +347,27 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 	return msgs, err
 }
 
+// DiffShortstat returns changed-file and line counts for the given worktree.
+// Results are cached for diffStatCacheTTL (30s) to avoid repeated wt.Status()
+// calls from concurrent scanner workers, which was the top mutex hotspot (537M
+// cycles, 13,941 events in profiling).
 func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
+	if v, ok := diffStatCache.Load(worktreePath); ok {
+		if e := v.(diffStatEntry); time.Now().Before(e.expiry) {
+			return e.result, nil
+		}
+	}
+	result, err := g.diffShortstatUncached(worktreePath)
+	if err == nil {
+		diffStatCache.Store(worktreePath, diffStatEntry{
+			result: result,
+			expiry: time.Now().Add(diffStatCacheTTL),
+		})
+	}
+	return result, err
+}
+
+func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, error) {
 	repo, err := openWorktree(worktreePath)
 	if err != nil {
 		return DiffStat{}, err

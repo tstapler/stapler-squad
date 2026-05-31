@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	ssent "github.com/tstapler/stapler-squad/session/ent"
 )
 
 // TestEntRepository_CreateAndGet tests basic create and get operations
@@ -424,6 +427,43 @@ func TestEntRepository_UUID_EmptyDefaultDoesNotBreakList(t *testing.T) {
 }
 
 // Helper function to create a test Ent repository
+// TestUpdateReviewQueueState_SingleStatement enforces that UpdateReviewQueueState
+// issues a single direct UPDATE and does NOT perform a SELECT first.
+// Regression guard for the SELECT+UPDATE → direct UPDATE refactor (PerfFix from
+// 2026-05-30 profiling session). An ent query interceptor counts any SELECT fired
+// against the Session table; the count must be 0 after the call.
+func TestUpdateReviewQueueState_SingleStatement(t *testing.T) {
+	repo, cleanup := createTestEntRepository(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	sess := createTestSession("queue-state-test")
+	require.NoError(t, repo.Create(ctx, sess))
+
+	// Install interceptor that counts ent Query (SELECT) operations.
+	var selectCount int32
+	repo.client.Intercept(ssent.InterceptFunc(func(next ssent.Querier) ssent.Querier {
+		return ssent.QuerierFunc(func(ctx context.Context, q ssent.Query) (ssent.Value, error) {
+			atomic.AddInt32(&selectCount, 1)
+			return next.Query(ctx, q)
+		})
+	}))
+
+	now := time.Now()
+	err := repo.UpdateReviewQueueState(ctx, sess.Title, now, time.Time{}, now, "sig-abc")
+	require.NoError(t, err)
+
+	got := atomic.LoadInt32(&selectCount)
+	require.Equal(t, int32(0), got,
+		"UpdateReviewQueueState must issue a single UPDATE, not SELECT+UPDATE (got %d SELECT queries)", got)
+
+	// Verify the update actually landed.
+	updated, err := repo.Get(ctx, sess.Title)
+	require.NoError(t, err)
+	assert.Equal(t, "sig-abc", updated.LastPromptSignature)
+	assert.False(t, updated.LastPromptDetected.IsZero())
+}
+
 func createTestEntRepository(t *testing.T) (*EntRepository, func()) {
 	// Create temporary database file with unique name using timestamp to avoid conflicts
 	tmpDir := t.TempDir()

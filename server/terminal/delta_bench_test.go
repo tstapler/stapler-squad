@@ -191,7 +191,7 @@ func BenchmarkDeltaGenerator_ProgressBar(b *testing.B) {
 	frames := make([][]byte, 100)
 	base := generateANSIContent(rows-1, cols) // Stable lines above the progress bar
 	for i := range frames {
-		frame := make([]byte, len(base))
+		frame := make([]byte, len(base)) //nolint:prealloc // final size unknown before calling generateProgressBar
 		copy(frame, base)
 		frame = append(frame, generateProgressBar(i, 50)...)
 		frames[i] = frame

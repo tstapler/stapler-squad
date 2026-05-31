@@ -301,7 +301,7 @@ func handleProxy() {
 		os.Exit(1)
 	}
 
-	var escapedArgs []string
+	escapedArgs := make([]string, 0, len(cmdArgs))
 	for _, arg := range cmdArgs {
 		escapedArgs = append(escapedArgs, shellEscape(arg))
 	}
