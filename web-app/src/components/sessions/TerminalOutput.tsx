@@ -1177,6 +1177,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       },
     },
     {
+      key: 'paste',
+      icon: '📎',
+      label: 'Paste',
+      ariaLabel: 'Paste from clipboard',
+      title: 'Paste from clipboard',
+      extraClass: undefined,
+      handler: () => {
+        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "paste" } });
+        void handlePaste();
+      },
+    },
+    {
       key: 'bottom',
       icon: '↓',
       label: 'Bottom',
@@ -1274,20 +1286,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
           )}
           {toolbarExpanded && (
             <div className={styles.toolbarActions} data-testid="toolbar-actions">
-              {/* Secondary actions (Copy, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
+              {/* Secondary actions (Copy, Paste, Bottom, Clear, Mouse) — inline on desktop, hidden on mobile */}
               <div className={styles.secondaryGroup} data-testid="toolbar-secondary">
-                {/* Paste button first in secondary group for ordering */}
-                <button
-                  className={styles.toolbarButton}
-                  onClick={() => {
-                    track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "paste" } });
-                    void handlePaste();
-                  }}
-                  title="Paste from clipboard — text is sent directly, images are saved to a temp file and the path is inserted"
-                  aria-label="Paste from clipboard"
-                >
-                  {pasteError ? `⚠️ ${pasteError}` : '📎 Paste'}
-                </button>
                 {secondaryActions.map((action) => (
                   <button
                     key={action.key}
@@ -1498,7 +1498,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       </div>
       {/* Mobile overflow row — appears below toolbar when More is open; hidden on desktop */}
       {mobileOverflowOpen && toolbarExpanded && (
-        <div className={styles.mobileOverflowRow} data-testid="toolbar-overflow-row" data-left-handed={leftHanded || undefined}>
+        <div className={styles.mobileOverflowRow} data-testid="toolbar-overflow-row">
           {secondaryActions.map((action) => (
             <button
               key={action.key}
