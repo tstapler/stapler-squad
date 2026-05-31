@@ -18,6 +18,7 @@
 import { useEffect, useRef, RefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 import { getCellDimensions } from "@/lib/terminal/cellDimensions";
+import { isMouseTracking as isMouseTrackingUtil } from "@/lib/terminal/mouseTracking";
 
 // Re-export for consumers that import from this module
 export { getCellDimensions };
@@ -75,6 +76,13 @@ export function useTerminalGestures({
     let tapY = 0;
     let longPressTimer: ReturnType<typeof setTimeout> | null = null;
 
+    // Double-tap detection
+    let lastTapTime = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+    const DOUBLE_TAP_MS = 300;
+    const DOUBLE_TAP_RADIUS_PX = 20;
+
     const clearLongPressTimer = () => {
       if (longPressTimer !== null) {
         clearTimeout(longPressTimer);
@@ -82,13 +90,11 @@ export function useTerminalGestures({
       }
     };
 
-    // Task 3.1.3 — Mouse-tracking-aware mode check.
-    // Read runtime PTY-driven mode, not a prop/config value.
+    // Mouse-tracking-aware mode check — delegates to shared utility.
     const isMouseTracking = (): boolean => {
       const t = terminalRef.current;
       if (!t) return false;
-      return (t.modes as any)?.mouseTrackingMode !== 'none' &&
-             (t.modes as any)?.mouseTrackingMode !== undefined;
+      return isMouseTrackingUtil(t);
     };
 
     const getScreenEl = (): HTMLElement | null =>
@@ -236,9 +242,26 @@ export function useTerminalGestures({
         clearLongPressTimer();
         state = 'TAPPING';
 
+        const now = Date.now();
+        const isDoubleTap =
+          (now - lastTapTime) < DOUBLE_TAP_MS &&
+          Math.abs(tapX - lastTapX) < DOUBLE_TAP_RADIUS_PX &&
+          Math.abs(tapY - lastTapY) < DOUBLE_TAP_RADIUS_PX;
+
         const t = terminalRef.current;
-        if (t) {
-          // Task 3.1.6 — TAPPING action
+        if (isDoubleTap && !isMouseTracking()) {
+          // Dispatch synthetic dblclick to trigger xterm's native word selection
+          getScreenEl()?.dispatchEvent(new MouseEvent('dblclick', {
+            clientX: tapX,
+            clientY: tapY,
+            bubbles: true,
+            cancelable: true,
+            button: 0,
+            buttons: 1,
+            detail: 2,
+          }));
+        } else if (t) {
+          // Normal tap handling
           if (!isMouseTracking()) {
             t.focus();
           } else if (t.element) {
@@ -256,6 +279,10 @@ export function useTerminalGestures({
             t.focus();
           }
         }
+
+        lastTapTime = now;
+        lastTapX = tapX;
+        lastTapY = tapY;
 
         state = 'IDLE';
         return;

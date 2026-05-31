@@ -183,5 +183,6 @@ export const zIndex = {
   // Toast sits above dialog-level overlays but below the Radix modal overlay (1100),
   // so notifications are hidden behind modals rather than covering form actions.
   toast: 1080,
+  floatingTerminalUI: 1085,
   tooltip: 1100,
 } as const;

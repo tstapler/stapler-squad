@@ -1,5 +1,5 @@
 import { style, globalStyle, keyframes } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars, zIndex } from "@/styles/theme.css";
 
 export const container = style({
   width: "100%",
@@ -79,10 +79,10 @@ globalStyle(`${terminal} .xterm:focus`, {
 
 // ---- Floating Copy button (Task 3.2.2 / R3.2) ----
 // Appears above the selection end point when the user makes a text selection.
-// position: fixed is set via inline style since the coordinates are dynamic.
+// left/top are set dynamically via inline style; display toggled via ref.
 export const floatingCopyButton = style({
   position: "fixed",
-  zIndex: 9999,
+  zIndex: zIndex.floatingTerminalUI,
   padding: `${vars.space[1]} ${vars.space[3]}`,
   background: vars.color.primary,
   color: vars.color.primaryText,
@@ -104,19 +104,20 @@ export const floatingCopyButton = style({
 });
 
 const fadeInOut = keyframes({
-  "0%": { opacity: 0, transform: "translateY(4px)" },
-  "15%": { opacity: 1, transform: "translateY(0)" },
-  "85%": { opacity: 1, transform: "translateY(0)" },
-  "100%": { opacity: 0, transform: "translateY(-4px)" },
+  "0%": { opacity: 0, transform: "translateX(-50%) translateY(4px)" },
+  "15%": { opacity: 1, transform: "translateX(-50%) translateY(0)" },
+  "85%": { opacity: 1, transform: "translateX(-50%) translateY(0)" },
+  "100%": { opacity: 0, transform: "translateX(-50%) translateY(-4px)" },
 });
 
-// Brief "Copied" toast shown after clipboard write succeeds
+// Base layout for the "Copied" toast — no animation here.
+// The animation class (copiedToastVisible) is added/removed separately to allow restarting.
 export const copiedToast = style({
   position: "fixed",
   bottom: "80px",
   left: "50%",
   transform: "translateX(-50%)",
-  zIndex: 9999,
+  zIndex: zIndex.floatingTerminalUI,
   padding: `${vars.space[1]} ${vars.space[3]}`,
   background: vars.color.success,
   color: vars.color.textPrimary,
@@ -125,5 +126,9 @@ export const copiedToast = style({
   fontWeight: vars.fontWeight.medium,
   boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
   pointerEvents: "none",
+});
+
+// Animation-only class — add/remove this to restart the keyframe without re-mounting.
+export const copiedToastVisible = style({
   animation: `${fadeInOut} 1.5s ease-in-out forwards`,
 });
