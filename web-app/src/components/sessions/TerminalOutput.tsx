@@ -1224,6 +1224,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         toggleMouseMode();
       },
     },
+    {
+      key: 'resize',
+      icon: '↔️',
+      label: 'Resize',
+      ariaLabel: 'Resize terminal to fit container',
+      title: 'Resize terminal to fit container',
+      extraClass: '',
+      handler: () => {
+        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
+        handleManualResize();
+      },
+    },
   ];
 
   return (
@@ -1454,18 +1466,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                       <option value="state">🔄 State Sync</option>
                       <option value="hybrid">🔬 Hybrid</option>
                     </select>
-                    {/* Resize button — moved from secondaryActions to dev panel */}
-                    <button
-                      className={`${styles.toolbarButton} ${styles.devOnly}`}
-                      onClick={() => {
-                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
-                        handleManualResize();
-                      }}
-                      aria-label="Resize terminal"
-                      title="Resize terminal to fit container"
-                    >
-                      ↔️ Resize
-                    </button>
                     {/* Handedness shortcut — toggles left/right-handed mobile layout */}
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}
