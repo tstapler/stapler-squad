@@ -1224,18 +1224,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         toggleMouseMode();
       },
     },
-    {
-      key: 'resize',
-      icon: '↔️',
-      label: 'Resize',
-      ariaLabel: 'Resize terminal to fit container',
-      title: 'Resize terminal to fit container',
-      extraClass: '',
-      handler: () => {
-        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
-        handleManualResize();
-      },
-    },
   ];
 
   return (
@@ -1368,6 +1356,18 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                 aria-label={uploadingCount > 0 ? `Uploading ${uploadingCount} file(s)...` : "Attach files"}
               >
                 {uploadingCount > 0 ? `⏳ ${uploadingCount}…` : "📁 Files"}
+              </button>
+              {/* Resize — always visible, needed to re-fit terminal after layout changes */}
+              <button
+                className={styles.toolbarButton}
+                onClick={() => {
+                  track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "resize" } });
+                  handleManualResize();
+                }}
+                aria-label="Resize terminal to fit container"
+                title="Resize terminal to fit container"
+              >
+                ↔️ Resize
               </button>
               {/* Camera button — hidden on desktop (pointer: fine = mouse), visible on touch */}
               <button
