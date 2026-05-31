@@ -103,7 +103,17 @@ import { useSessionNotifications } from "../useSessionNotifications";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function makeEvent(notificationType: number, sessionId = "test-session"): any {
+interface TestNotificationEvent {
+  sessionId: string;
+  sessionName: string;
+  notificationType: number;
+  priority: number;
+  title: string;
+  message: string;
+  metadata: Record<string, string>;
+}
+
+function makeEvent(notificationType: number, sessionId = "test-session"): TestNotificationEvent {
   return {
     sessionId,
     sessionName: `Session ${sessionId}`,

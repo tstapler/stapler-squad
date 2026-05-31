@@ -100,14 +100,16 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     // silent until the window expires.
     const dedupKey = `${event.sessionId}:${event.notificationType}`;
     const now = Date.now();
-    const lastShown = recentToastKeys.current.get(dedupKey);
 
-    // Prune stale entries to prevent unbounded map growth
+    // Prune stale entries before reading — ensures lastShown reflects the
+    // post-prune state, so a boundary-case entry doesn't linger in the map.
     for (const [key, ts] of recentToastKeys.current) {
       if (now - ts >= TOAST_DEDUP_WINDOW_MS) {
         recentToastKeys.current.delete(key);
       }
     }
+
+    const lastShown = recentToastKeys.current.get(dedupKey);
 
     // Never suppress approval_needed or question notifications — each one blocks Claude and requires a response.
     const isApproval = event.notificationType === NotificationType.APPROVAL_NEEDED ||
@@ -138,6 +140,7 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
     const sourceBundleId = event.metadata?.["source_bundle"];
     const sourceWorkingDir = event.metadata?.["cwd"];
     const sourceProject = event.metadata?.["source_project"];
+    const approvalId = event.metadata?.["approval_id"];
 
     // Build the notification data with all available fields
     const notificationData: Omit<NotificationData, "id" | "timestamp"> = {
@@ -160,8 +163,8 @@ export function useSessionNotifications(options: UseSessionNotificationsOptions 
         ? () => focusWindow(sourceBundleId, sourceApp)
         : undefined,
       // Attach approve/deny callbacks for tool-use approval requests
-      onApprove: event.metadata?.["approval_id"] ? () => resolveApproval(event.metadata?.["approval_id"]!, "allow") : undefined,
-      onDeny: event.metadata?.["approval_id"] ? () => resolveApproval(event.metadata?.["approval_id"]!, "deny") : undefined,
+      onApprove: approvalId ? () => resolveApproval(approvalId, "allow") : undefined,
+      onDeny:    approvalId ? () => resolveApproval(approvalId, "deny")  : undefined,
     };
 
     // Duplicate visible-toast event: refresh the existing toast with updated

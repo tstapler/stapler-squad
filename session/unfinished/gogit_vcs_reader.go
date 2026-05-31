@@ -1,10 +1,12 @@
 package unfinished
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,22 +64,38 @@ var repoCache sync.Map // map[string]*cachedRepo
 // so we can decide when to run eviction without a full Range scan.
 var repoCacheSize int64
 
-// pruneRepoCache evicts entries not accessed within repoCacheTTL, and then
-// removes the oldest entries if the cache still exceeds repoCacheMaxEntries.
-// Designed to be called infrequently (e.g. from the scanner's sweep loop).
+// pruneRepoCache evicts entries not accessed within repoCacheTTL, then trims
+// the oldest entries if the cache still exceeds repoCacheMaxEntries.
+// Designed to be called infrequently (e.g. when openRepoEntry detects overflow).
 func pruneRepoCache() {
 	cutoff := time.Now().Add(-repoCacheTTL).UnixNano()
-	var keys []string
+	type liveEntry struct {
+		key          string
+		accessedAtNs int64
+	}
+	var live []liveEntry
 	repoCache.Range(func(k, v any) bool {
 		entry := v.(*cachedRepo)
-		if atomic.LoadInt64(&entry.accessedAtNs) < cutoff {
+		ts := atomic.LoadInt64(&entry.accessedAtNs)
+		if ts < cutoff {
 			repoCache.Delete(k)
 			atomic.AddInt64(&repoCacheSize, -1)
 		} else {
-			keys = append(keys, k.(string))
+			live = append(live, liveEntry{k.(string), ts})
 		}
 		return true
 	})
+
+	// LRU trim: if still over cap after TTL pass, evict coldest entries.
+	if len(live) > repoCacheMaxEntries {
+		slices.SortFunc(live, func(a, b liveEntry) int {
+			return cmp.Compare(a.accessedAtNs, b.accessedAtNs)
+		})
+		for _, e := range live[:len(live)-repoCacheMaxEntries] {
+			repoCache.Delete(e.key)
+			atomic.AddInt64(&repoCacheSize, -1)
+		}
+	}
 }
 
 // GoGitVCSReader implements VCSReader using the go-git library.
@@ -576,6 +594,12 @@ func openRepoEntry(path string) (*cachedRepo, error) {
 	// Trigger eviction before adding a new entry if the cache is large.
 	if atomic.LoadInt64(&repoCacheSize) >= repoCacheMaxEntries {
 		pruneRepoCache()
+		// Re-check after eviction — another goroutine may have stored this path.
+		if v, ok := repoCache.Load(path); ok {
+			entry := v.(*cachedRepo)
+			atomic.StoreInt64(&entry.accessedAtNs, now)
+			return entry, nil
+		}
 	}
 
 	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{
@@ -583,7 +607,7 @@ func openRepoEntry(path string) (*cachedRepo, error) {
 		EnableDotGitCommonDir: true,
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("plain open %s: %w", path, err)
 	}
 	entry := &cachedRepo{repo: repo, accessedAtNs: now}
 	actual, loaded := repoCache.LoadOrStore(path, entry)
@@ -677,7 +701,10 @@ func findMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, e
 		visited++
 		c, err := repo.CommitObject(h)
 		if err != nil {
-			continue
+			if !errors.Is(err, plumbing.ErrObjectNotFound) {
+				return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", h, err)
+			}
+			continue // object missing from shallow clone or pack — skip
 		}
 		q = append(q, c.ParentHashes...)
 	}
@@ -699,6 +726,9 @@ func findMergeBase(repo *git.Repository, h1, h2 plumbing.Hash) (plumbing.Hash, e
 		}
 		c, err := repo.CommitObject(h)
 		if err != nil {
+			if !errors.Is(err, plumbing.ErrObjectNotFound) {
+				return plumbing.ZeroHash, fmt.Errorf("commit object %s: %w", h, err)
+			}
 			continue
 		}
 		q = append(q, c.ParentHashes...)
