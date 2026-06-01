@@ -68,6 +68,7 @@ const saveToStorage = <T,>(key: string, value: T): void => {
 
 export interface HistoryFilterState {
   searchQuery: string;
+  branchFilter: string;
   selectedModel: string;
   dateFilter: DateFilter;
   sortField: SortField;
@@ -79,6 +80,7 @@ export interface HistoryFilterState {
 
 export interface HistoryFilterSetters {
   setSearchQuery: (value: string) => void;
+  setBranchFilter: (value: string) => void;
   setSelectedModel: (value: string) => void;
   setDateFilter: (value: DateFilter) => void;
   setSortField: (value: SortField) => void;
@@ -112,6 +114,7 @@ export interface UseHistoryFiltersReturn {
 export function useHistoryFilters(entries: ClaudeHistoryEntry[]): UseHistoryFiltersReturn {
   // Filter state (persisted) - use defaults initially to avoid hydration mismatch
   const [searchQuery, setSearchQuery] = useState("");
+  const [branchFilter, setBranchFilter] = useState("");
   const [selectedModel, setSelectedModel] = useState<string>("all");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [sortField, setSortField] = useState<SortField>("updated");
@@ -172,6 +175,11 @@ export function useHistoryFilters(entries: ClaudeHistoryEntry[]): UseHistoryFilt
           (entry.model && entry.model.toLowerCase().includes(query));
         if (!matchesSearch) return false;
       }
+      // Branch filter
+      if (branchFilter) {
+        const b = (entry.branch || "").toLowerCase();
+        if (!b.includes(branchFilter.toLowerCase())) return false;
+      }
       return true;
     });
 
@@ -199,11 +207,12 @@ export function useHistoryFilters(entries: ClaudeHistoryEntry[]): UseHistoryFilt
   }, [entries, selectedModel, dateFilter, searchQuery, sortField, sortOrder]);
 
   // Check if any filters are active
-  const hasActiveFilters = !!(searchQuery || selectedModel !== "all" || dateFilter !== "all");
+  const hasActiveFilters = !!(searchQuery || branchFilter || selectedModel !== "all" || dateFilter !== "all");
 
   // Actions
   const clearFilters = useCallback(() => {
     setSearchQuery("");
+    setBranchFilter("");
     setSelectedModel("all");
     setDateFilter("all");
   }, []);
@@ -218,6 +227,7 @@ export function useHistoryFilters(entries: ClaudeHistoryEntry[]): UseHistoryFilt
   return {
     filterState: {
       searchQuery,
+      branchFilter,
       selectedModel,
       dateFilter,
       sortField,
@@ -228,6 +238,7 @@ export function useHistoryFilters(entries: ClaudeHistoryEntry[]): UseHistoryFilt
     },
     setters: {
       setSearchQuery,
+      setBranchFilter,
       setSelectedModel,
       setDateFilter,
       setSortField,

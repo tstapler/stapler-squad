@@ -77,11 +77,11 @@ type argsCapturingRunner struct {
 	captured *[][]string
 }
 
-func (r *argsCapturingRunner) Run(ctx context.Context, args []string) (io.ReadCloser, func() error, error) {
-	copy := make([]string, len(args))
+func (r *argsCapturingRunner) Run(ctx context.Context, args []string, stdin io.Reader) (io.ReadCloser, func() error, error) {
+	argsCopy := make([]string, len(args))
 	for i, a := range args {
-		copy[i] = a
+		argsCopy[i] = a
 	}
-	*r.captured = append(*r.captured, copy)
-	return r.inner.Run(ctx, args)
+	*r.captured = append(*r.captured, argsCopy)
+	return r.inner.Run(ctx, args, stdin)
 }

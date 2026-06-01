@@ -67,6 +67,16 @@ export const vars = createThemeContract({
     terminalTextMuted: null,
     terminalHoverBg: null,
 
+    // Log level badge colors (semantic colors for log-level chips/rows)
+    logError: null,   // ERROR badge background
+    logWarn: null,    // WARN badge background
+    logInfo: null,    // INFO badge background
+    logDebug: null,   // DEBUG badge background
+    logTrace: null,   // TRACE badge background
+    logOnDark: null,  // text on dark log badges (error/info/debug/trace)
+    logOnAmber: null, // text on amber log badge (warn)
+    logLive: null,    // live indicator dot / success accent
+
     // Cyberpunk / glow tokens
     glowPrimary: null,
     glowSecondary: null,

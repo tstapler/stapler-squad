@@ -164,3 +164,21 @@ export const viewMoreButton = style({
     },
   },
 });
+
+export const splitButton = style({
+  display: "flex",
+  gap: 0,
+});
+
+export const splitButtonMain = style({
+  flex: 1,
+  borderTopRightRadius: 0,
+  borderBottomRightRadius: 0,
+});
+
+export const splitButtonChevron = style({
+  borderTopLeftRadius: 0,
+  borderBottomLeftRadius: 0,
+  borderLeft: `1px solid rgba(255,255,255,0.2)`,
+  padding: "0 10px",
+});

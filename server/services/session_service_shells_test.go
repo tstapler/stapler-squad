@@ -32,13 +32,13 @@ func makeStoppedShell(id, name string) *session.Shell {
 	watcherDone := make(chan struct{})
 	close(watcherDone)
 	return &session.Shell{
-		ID:          id,
-		Name:        name,
-		Command:     "/bin/sh",
-		WorkingDir:  "/tmp",
-		Status:      session.ShellStatusStopped,
-		OrderIndex:  0,
-		StartedAt:   time.Now(),
+		ID:         id,
+		Name:       name,
+		Command:    "/bin/sh",
+		WorkingDir: "/tmp",
+		Status:     session.ShellStatusStopped,
+		OrderIndex: 0,
+		StartedAt:  time.Now(),
 	}
 }
 

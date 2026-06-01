@@ -13,6 +13,7 @@ interface HistoryDetailPanelProps {
   loadingMessages: boolean;
   resuming: boolean;
   onResume: (entry: ClaudeHistoryEntry) => void;
+  onFork: (entry: ClaudeHistoryEntry) => void;
   onViewMessages: (id: string) => void;
   onExport: (entry: ClaudeHistoryEntry) => void;
   onCopyId: (id: string) => void;
@@ -25,6 +26,7 @@ export function HistoryDetailPanel({
   loadingMessages,
   resuming,
   onResume,
+  onFork,
   onViewMessages,
   onExport,
   onCopyId,
@@ -143,14 +145,26 @@ export function HistoryDetailPanel({
 
           {/* Action Buttons */}
           <div className={styles.detailActions}>
-            <button
-              onClick={() => onResume(entry)}
-              disabled={resuming || !entry.project}
-              className="btn btn-primary"
-              title={entry.project ? "Start a new session resuming this conversation" : "Cannot resume: No project path"}
-            >
-              {resuming ? "Starting..." : "▶️ Resume Session"}
-            </button>
+            {/* Split-button: Resume (primary) + Fork (secondary) */}
+            <div className={styles.splitButton}>
+              <button
+                onClick={() => onResume(entry)}
+                disabled={resuming || !entry.project}
+                className={`btn btn-primary ${styles.splitButtonMain}`}
+                title={entry.project ? "Start a new session resuming this conversation" : "Cannot resume: No project path"}
+              >
+                {resuming ? "Starting..." : "▶️ Resume"}
+              </button>
+              <button
+                onClick={() => onFork(entry)}
+                disabled={resuming || !entry.project}
+                className={`btn btn-primary ${styles.splitButtonChevron}`}
+                title="Fork conversation to a new session"
+                aria-label="Fork conversation"
+              >
+                🍴
+              </button>
+            </div>
             <button
               onClick={() => onViewMessages(entry.id)}
               disabled={loadingMessages}

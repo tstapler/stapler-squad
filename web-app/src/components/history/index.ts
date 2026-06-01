@@ -5,3 +5,6 @@ export { HistoryGroupView } from "./HistoryGroupView";
 export { HistoryEntryCard } from "./HistoryEntryCard";
 export { HistoryDetailPanel } from "./HistoryDetailPanel";
 export { HistoryMessagesModal } from "./HistoryMessagesModal";
+export { VirtualHistoryList } from "./VirtualHistoryList";
+export { ForkModal } from "./ForkModal";
+export type { ForkParams } from "./ForkModal";

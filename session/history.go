@@ -376,6 +376,12 @@ func findConversationFilePath(sessionID string) (string, error) {
 	return conversationFile, nil
 }
 
+// FindConversationFilePath is the exported wrapper for findConversationFilePath.
+// It searches ~/.claude/projects/ for the JSONL file containing sessionID.
+func FindConversationFilePath(sessionID string) (string, error) {
+	return findConversationFilePath(sessionID)
+}
+
 // extractMsgContent converts a raw conversationMessage into a ClaudeConversationMessage.
 // Returns (msg, true) when the raw entry represents a user or assistant turn;
 // (zero, false) for tool-use, metadata, and other entry types.

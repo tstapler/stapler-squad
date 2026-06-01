@@ -6,13 +6,15 @@ import { usePageView } from "@/lib/analytics/usePageView";
 import { useRouter } from "next/navigation";
 import { SessionService } from "@/gen/session/v1/session_pb";
 import { ClaudeHistoryEntry, ClaudeMessage } from "@/gen/session/v1/session_pb";
+import { SessionType } from "@/gen/session/v1/types_pb";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
 import {
-  HistorySearchResults, HistoryFilterBar, HistoryGroupView,
-  HistoryDetailPanel, HistoryMessagesModal,
+  HistorySearchResults, HistoryFilterBar, VirtualHistoryList,
+  HistoryDetailPanel, HistoryMessagesModal, ForkModal,
 } from "@/components/history";
+import type { ForkParams } from "@/components/history";
 import { useHistoryFullTextSearch, SearchResultItem } from "@/lib/hooks/useHistoryFullTextSearch";
 import { useHistoryFilters, GroupingStrategyLabels } from "@/lib/hooks/useHistoryFilters";
 import { useHistoryGrouping } from "@/lib/hooks/useHistoryGrouping";
@@ -42,11 +44,15 @@ export default function HistoryBrowserPage() {
   const [messageSearchQuery, setMessageSearchQuery] = useState("");
   const [resumeTarget, setResumeTarget] = useState<ClaudeHistoryEntry | null>(null);
   const [resumeTitle, setResumeTitle] = useState("");
+  const [forkTarget, setForkTarget] = useState<ClaudeHistoryEntry | null>(null);
+  const [forking, setForking] = useState(false);
+  const [forkError, setForkError] = useState<string | null>(null);
+  const virtualizerRef = useRef<{ scrollToIndex: (i: number) => void } | null>(null);
 
   // Hooks
   const { filterState, setters, derived, actions } = useHistoryFilters(entries);
-  const { searchQuery, selectedModel, dateFilter, sortField, sortOrder, groupingStrategy, searchMode } = filterState;
-  const { setSearchQuery, setSelectedModel, setDateFilter, setSortField, setSortOrder, setGroupingStrategy, setSearchMode } = setters;
+  const { searchQuery, branchFilter, selectedModel, dateFilter, sortField, sortOrder, groupingStrategy, searchMode } = filterState;
+  const { setSearchQuery, setBranchFilter, setSelectedModel, setDateFilter, setSortField, setSortOrder, setGroupingStrategy, setSearchMode } = setters;
   const { uniqueModels, filteredEntries, hasActiveFilters } = derived;
   const { clearFilters, cycleGroupingStrategy } = actions;
   const fullTextSearch = useHistoryFullTextSearch({ debounceMs: 300, autoSearch: true });
@@ -176,12 +182,48 @@ export default function HistoryBrowserPage() {
       setResuming(true); setError(null);
       track({ name: "history_resume_session", category: "user_action" });
       const response = await clientRef.current.createSession({
-        title, path: resumeTarget.project, resumeId: resumeTarget.id, category: "Resumed",
+        title,
+        path: resumeTarget.project,
+        resumeId: resumeTarget.id,
+        category: "Resumed",
+        sessionType: SessionType.DIRECTORY,
       });
       if (response.session) { setResumeTarget(null); router.push("/"); }
     } catch (err) { setError(`Failed to resume session: ${err}`); }
     finally { setResuming(false); }
   }, [router, resumeTarget, resumeTitle, track]);
+
+  // Callback for card inline previews — fetches last 5 messages.
+  const fetchPreview = useCallback(async (id: string): Promise<ClaudeMessage[]> => {
+    if (!clientRef.current) return [];
+    const res = await clientRef.current.getClaudeHistoryMessages({ id, limit: 5, tail: true });
+    return [...res.messages].reverse();
+  }, []);
+
+  const openForkModal = useCallback((entry: ClaudeHistoryEntry) => {
+    setForkError(null);
+    setForkTarget(entry);
+  }, []);
+
+  const handleFork = useCallback(async (params: ForkParams) => {
+    if (!clientRef.current || !forkTarget) return;
+    try {
+      setForking(true); setForkError(null);
+      track({ name: "history_fork_session", category: "user_action" });
+      const response = await clientRef.current.createSession({
+        title: params.title,
+        path: params.path,
+        branch: params.sessionType === SessionType.NEW_WORKTREE ? params.branch : undefined,
+        sessionType: params.sessionType,
+        forkSourceId: forkTarget.id,
+        forkAtMessage: params.forkAtMessage,
+        category: "Forked",
+      });
+      if (response.session) { setForkTarget(null); router.push("/"); }
+    } catch (err) {
+      setForkError(`Fork failed: ${err}`);
+    } finally { setForking(false); }
+  }, [forkTarget, router, track]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -204,13 +246,19 @@ export default function HistoryBrowserPage() {
       if (e.key === "ArrowDown" || e.key === "j") {
         e.preventDefault();
         const newIndex = Math.min(selectedIndex + 1, flatEntries.length - 1);
-        if (newIndex >= 0 && flatEntries[newIndex]) selectEntry(flatEntries[newIndex], newIndex);
+        if (newIndex >= 0 && flatEntries[newIndex]) {
+          selectEntry(flatEntries[newIndex], newIndex);
+          virtualizerRef.current?.scrollToIndex(newIndex);
+        }
         return;
       }
       if (e.key === "ArrowUp" || e.key === "k") {
         e.preventDefault();
         const newIndex = Math.max(selectedIndex - 1, 0);
-        if (flatEntries[newIndex]) selectEntry(flatEntries[newIndex], newIndex);
+        if (flatEntries[newIndex]) {
+          selectEntry(flatEntries[newIndex], newIndex);
+          virtualizerRef.current?.scrollToIndex(newIndex);
+        }
         return;
       }
       if (e.key === "Enter" && selectedEntry) { e.preventDefault(); loadMessages(selectedEntry.id); return; }
@@ -246,9 +294,11 @@ export default function HistoryBrowserPage() {
       )}
 
       <HistoryFilterBar
-        searchQuery={searchQuery} selectedModel={selectedModel} dateFilter={dateFilter}
-        sortField={sortField} sortOrder={sortOrder} groupingStrategy={groupingStrategy} searchMode={searchMode}
-        setSearchQuery={setSearchQuery} setSelectedModel={setSelectedModel} setDateFilter={setDateFilter}
+        searchQuery={searchQuery} branchFilter={branchFilter} selectedModel={selectedModel}
+        dateFilter={dateFilter} sortField={sortField} sortOrder={sortOrder}
+        groupingStrategy={groupingStrategy} searchMode={searchMode}
+        setSearchQuery={setSearchQuery} setBranchFilter={setBranchFilter}
+        setSelectedModel={setSelectedModel} setDateFilter={setDateFilter}
         setSortField={setSortField} setSortOrder={setSortOrder} setGroupingStrategy={setGroupingStrategy}
         setSearchMode={setSearchMode} uniqueModels={uniqueModels} hasActiveFilters={hasActiveFilters}
         searching={searching} onSearch={handleSearch} onClearFilters={clearFilters}
@@ -272,30 +322,25 @@ export default function HistoryBrowserPage() {
               <h2 className={styles.sectionTitle}>
                 History ({filteredEntries.length} of {entries.length} entries{nextPageToken ? "+" : ""})
               </h2>
-              <HistoryGroupView
-                groupedEntries={groupedEntries} flatEntries={flatEntries} selectedEntry={selectedEntry}
-                enrichedEntry={selectedEntry}
-                loading={loading} entriesCount={entries.length} filteredCount={filteredEntries.length}
-                hasActiveFilters={hasActiveFilters} groupingStrategy={groupingStrategy}
-                onSelectEntry={selectEntry} onClearFilters={clearFilters}
-              />
-              {nextPageToken && (
-                <div className={styles.loadMoreContainer}>
-                  <button
-                    onClick={loadMoreHistory}
-                    disabled={loadingMore}
-                    className="btn btn-secondary"
-                  >
-                    {loadingMore ? "Loading..." : "Load more"}
-                  </button>
-                </div>
-              )}
+              <div className={styles.entryList}>
+                <VirtualHistoryList
+                  groupedEntries={groupedEntries} flatEntries={flatEntries} selectedEntry={selectedEntry}
+                  enrichedEntry={selectedEntry}
+                  loading={loading} entriesCount={entries.length} filteredCount={filteredEntries.length}
+                  hasActiveFilters={hasActiveFilters} groupingStrategy={groupingStrategy}
+                  hasNextPage={!!nextPageToken} loadingMore={loadingMore}
+                  onSelectEntry={selectEntry} onClearFilters={clearFilters}
+                  onLoadMore={loadMoreHistory} fetchMessages={fetchPreview}
+                  virtualizerRef={virtualizerRef}
+                />
+              </div>
             </>
           )}
         </div>
         <HistoryDetailPanel
           entry={selectedEntry} previewMessages={previewMessages} loadingPreview={loadingPreview}
           loadingMessages={loadingMessages} resuming={resuming} onResume={openResumeModal}
+          onFork={openForkModal}
           onViewMessages={loadMessages} onExport={handleExportEntry} onCopyId={handleCopyId}
         />
       </div>
@@ -311,6 +356,14 @@ export default function HistoryBrowserPage() {
       <HistoryMessagesModal
         open={isMessagesOpen} messages={messages} messageSearchQuery={messageSearchQuery}
         onSearchChange={setMessageSearchQuery} onClose={() => setShowMessages(false)}
+      />
+
+      <ForkModal
+        entry={forkTarget}
+        submitting={forking}
+        error={forkError}
+        onClose={() => setForkTarget(null)}
+        onSubmit={handleFork}
       />
 
       {resumeTarget && (

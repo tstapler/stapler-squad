@@ -104,6 +104,10 @@ export const lightTheme = createTheme(vars, {
 
     ...terminalTokens,
 
+    logError: "#b91c1c", logWarn: "#d97706", logInfo: "#1d4ed8",
+    logDebug: "#6b7280", logTrace: "#4b5563",
+    logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
+
     glowPrimary: "rgba(0,112,243,0.4)",
     glowSecondary: "rgba(0,112,243,0.2)",
     scanlineColor: "transparent",
@@ -193,6 +197,10 @@ export const darkTheme = createTheme(vars, {
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+
+    logError: "#dc2626", logWarn: "#d97706", logInfo: "#2563eb",
+    logDebug: "#6b7280", logTrace: "#4b5563",
+    logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
 
     glowPrimary: "rgba(45,156,219,0.4)",
     glowSecondary: "rgba(45,156,219,0.2)",
@@ -286,6 +294,10 @@ export const matrixTheme = createTheme(vars, {
     placeholderColor: "#004d18",
 
     ...terminalTokens,
+
+    logError: "#cc0033", logWarn: "#cc8800", logInfo: "#00aaff",
+    logDebug: "#00802b", logTrace: "#006622",
+    logOnDark: "#00ff41", logOnAmber: "#000000", logLive: "#00ff41",
 
     glowPrimary: "rgba(0,255,65,0.5)",
     glowSecondary: "rgba(0,255,65,0.25)",
@@ -388,6 +400,10 @@ export const cyberpunk77Theme = createTheme(vars, {
 
     ...terminalTokens,
 
+    logError: "#ff2d78", logWarn: "#ffd700", logInfo: "#00d4ff",
+    logDebug: "#9d4edd", logTrace: "#7b2d8b",
+    logOnDark: "#ffffff", logOnAmber: "#0d0d1a", logLive: "#00ff9f",
+
     glowPrimary: "rgba(255,45,120,0.5)",
     glowSecondary: "rgba(0,212,255,0.4)",
     scanlineColor: "rgba(255,45,120,0.02)",
@@ -489,6 +505,10 @@ export const wh40kTheme = createTheme(vars, {
 
     ...terminalTokens,
 
+    logError: "#8b1a1a", logWarn: "#c0a020", logInfo: "#1a4a8b",
+    logDebug: "#6b6040", logTrace: "#4a4030",
+    logOnDark: "#fcee09", logOnAmber: "#0d0b00", logLive: "#c0a020",
+
     glowPrimary: "rgba(192,160,32,0.4)",
     glowSecondary: "rgba(139,26,26,0.4)",
     scanlineColor: "transparent",
@@ -589,6 +609,10 @@ export const cleanTheme = createTheme(vars, {
     placeholderColor: "#6b7280",
 
     ...terminalTokens,
+
+    logError: "#dc2626", logWarn: "#d97706", logInfo: "#4f46e5",
+    logDebug: "#6b7280", logTrace: "#4b5563",
+    logOnDark: "#ffffff", logOnAmber: "#1a1a1a", logLive: "#22c55e",
 
     glowPrimary: "rgba(99,102,241,0.3)",
     glowSecondary: "rgba(99,102,241,0.15)",

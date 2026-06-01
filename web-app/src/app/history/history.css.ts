@@ -96,8 +96,10 @@ export const content = style({
 export const entryList = style({
   flex: 1,
   minWidth: 0,
+  minHeight: 0,
   display: "flex",
   flexDirection: "column",
+  overflow: "hidden",
 });
 
 export const sectionTitle = style({

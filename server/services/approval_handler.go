@@ -505,7 +505,6 @@ func matchesIDData(d session.InstanceData, id string) bool {
 	return d.TmuxPrefix+title == id
 }
 
-
 // writeDeferDecision returns an empty HTTP 200 with no body.
 // Claude Code interprets the absence of hookSpecificOutput as "no decision made by the hook"
 // and falls back to its native terminal permission dialog.

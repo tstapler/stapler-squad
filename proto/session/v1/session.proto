@@ -436,6 +436,16 @@ message CreateSessionRequest {
   // setting this to true will create the directory and initialize a git repo.
   // The backend returns CodeNotFound when path is missing and this is false.
   bool create_if_missing = 18;
+
+  // Optional: History entry ID to fork from (ClaudeHistoryEntry.id).
+  // When set, the handler calls ForkClaudeConversation to produce a new
+  // conversation file, sets resume_id to the forked UUID, and proceeds
+  // with the normal session-start flow.
+  string fork_source_id = 19;
+
+  // Optional: Truncate the forked conversation to the first N messages.
+  // 0 means copy all messages. Only meaningful when fork_source_id is set.
+  int32 fork_at_message = 20;
 }
 
 message CreateSessionResponse {
@@ -756,6 +766,26 @@ message ClaudeHistoryEntry {
   // (lazy enrichment, not included in list responses).  Null/absent means the
   // directory is not a version-controlled repo or state was not requested.
   VCSStatus vcs_status = 8;
+
+  // Git branch the project directory was on when last observed (60s TTL cache).
+  // Empty when the directory is not a git repo or branch could not be resolved.
+  string branch = 9;
+
+  // Live session status, cross-referenced with in-memory session store via ResumeId.
+  // SESSION_STATUS_UNSPECIFIED means no live session matches this history entry.
+  SessionStatus session_status = 10;
+
+  // Short git status summary (e.g. "2 modified, 1 untracked").
+  // Only populated when a live worktree exists for this entry.
+  string git_status_summary = 11;
+
+  // Message of the most recent git commit in the project directory.
+  // Only populated when a live worktree exists for this entry.
+  string last_commit_message = 12;
+
+  // Number of files changed in the worktree diff vs HEAD.
+  // Only populated when a live worktree exists for this entry.
+  int32 diff_file_count = 13;
 }
 
 message GetClaudeHistoryMessagesRequest {

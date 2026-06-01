@@ -140,3 +140,70 @@ export const entryDirty = style({
     },
   },
 });
+
+export const headerRight = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "8px",
+  flexShrink: 0,
+});
+
+export const statusPill = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "4px",
+  fontSize: "11px",
+  fontWeight: "600",
+  padding: "1px 6px",
+  borderRadius: vars.radii.full,
+});
+
+export const status_running = style({
+  background: vars.color.successBg,
+  color: vars.color.success,
+});
+
+export const status_paused = style({
+  background: vars.color.warningBg,
+  color: vars.color.warning,
+});
+
+export const status_creating = style({
+  background: vars.color.accentBg,
+  color: vars.color.primary,
+});
+
+export const status_stopped = style({
+  background: vars.color.hoverBackground ?? "rgba(0,0,0,0.06)",
+  color: vars.color.textMuted,
+});
+
+export const statusDot = style({
+  width: "6px",
+  height: "6px",
+  borderRadius: vars.radii.full,
+  background: "currentColor",
+  animation: "pulse 2s ease-in-out infinite",
+});
+
+export const expandRow = style({
+  marginTop: "6px",
+});
+
+export const expandButton = style({
+  background: "none",
+  border: "none",
+  padding: "0",
+  cursor: "pointer",
+  fontSize: "11px",
+  color: vars.color.textMuted,
+
+  selectors: {
+    "&:hover": {
+      color: vars.color.primary,
+    },
+    [`${selected} &`]: {
+      color: vars.color.textInverse,
+    },
+  },
+});

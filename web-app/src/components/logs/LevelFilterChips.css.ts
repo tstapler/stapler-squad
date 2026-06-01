@@ -1,5 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
+import { vars } from "../../styles/theme-contract.css";
 
 export const chipRow = style({
   display: "flex",
@@ -48,19 +49,19 @@ export const chip = recipe({
   compoundVariants: [
     {
       variants: { level: "ERROR", isActive: true },
-      style: { background: "#B91C1C", color: "#fff", borderColor: "#B91C1C" },
+      style: { background: vars.color.logError, color: vars.color.logOnDark, borderColor: vars.color.logError },
     },
     {
       variants: { level: "WARN", isActive: true },
-      style: { background: "#D97706", color: "#1A1A1A", borderColor: "#D97706" },
+      style: { background: vars.color.logWarn, color: vars.color.logOnAmber, borderColor: vars.color.logWarn },
     },
     {
       variants: { level: "INFO", isActive: true },
-      style: { background: "#1D4ED8", color: "#fff", borderColor: "#1D4ED8" },
+      style: { background: vars.color.logInfo, color: vars.color.logOnDark, borderColor: vars.color.logInfo },
     },
     {
       variants: { level: "DEBUG", isActive: true },
-      style: { background: "#6B7280", color: "#fff", borderColor: "#6B7280" },
+      style: { background: vars.color.logDebug, color: vars.color.logOnDark, borderColor: vars.color.logDebug },
     },
     {
       variants: { level: "ALL", isActive: true },

@@ -1,5 +1,5 @@
 import { style } from "@vanilla-extract/css";
-import { vars } from "@/styles/theme.css";
+import { vars } from "@/styles/theme-contract.css";
 
 export const callout = style({
   display: "flex",
@@ -71,7 +71,7 @@ export const savings = style({
 
 export const hibernateBtn = style({
   background: vars.color.warning,
-  color: "#000",
+  color: vars.color.textPrimary,
   border: "none",
   borderRadius: "0.25rem",
   padding: "0.125rem 0.5rem",
@@ -93,7 +93,7 @@ export const bulkAction = style({
 
 export const hibernateAllBtn = style({
   background: vars.color.warning,
-  color: "#000",
+  color: vars.color.textPrimary,
   border: "none",
   borderRadius: "0.375rem",
   padding: "0.375rem 0.75rem",

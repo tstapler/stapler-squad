@@ -1,4 +1,5 @@
 import { style } from "@vanilla-extract/css";
+import { vars } from "@/styles/theme-contract.css";
 
 // ---------------------------------------------------------------------------
 // T3: LogViewerToolbar — collapsible search bar for narrow screens (< 430px)
@@ -160,8 +161,8 @@ export const liveTailDot = style({
   flexShrink: 0,
   selectors: {
     "[data-live='true'] &": {
-      background: "#22c55e",
-      boxShadow: "0 0 4px #22c55e",
+      background: vars.color.logLive,
+      boxShadow: `0 0 4px ${vars.color.logLive}`,
     },
   },
 });

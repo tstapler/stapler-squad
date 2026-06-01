@@ -113,8 +113,8 @@ interface TestNotificationEvent {
   metadata: Record<string, string>;
 }
 
-function makeEvent(notificationType: number, sessionId = "test-session"): TestNotificationEvent {
-  return {
+function makeEvent(notificationType: number, sessionId = "test-session"): any {
+  const event: TestNotificationEvent = {
     sessionId,
     sessionName: `Session ${sessionId}`,
     notificationType,
@@ -123,6 +123,7 @@ function makeEvent(notificationType: number, sessionId = "test-session"): TestNo
     message: "Test message",
     metadata: {},
   };
+  return event;
 }
 
 const DEDUP_WINDOW_MS = 10_000;

@@ -22,6 +22,7 @@ import * as styles from "./HistoryFilterBar.css";
 interface HistoryFilterBarProps {
   // Filter state
   searchQuery: string;
+  branchFilter: string;
   selectedModel: string;
   dateFilter: DateFilter;
   sortField: SortField;
@@ -31,6 +32,7 @@ interface HistoryFilterBarProps {
 
   // Setters
   setSearchQuery: (value: string) => void;
+  setBranchFilter: (value: string) => void;
   setSelectedModel: (value: string) => void;
   setDateFilter: (value: DateFilter) => void;
   setSortField: (value: SortField) => void;
@@ -58,6 +60,7 @@ interface HistoryFilterBarProps {
 
 export function HistoryFilterBar({
   searchQuery,
+  branchFilter,
   selectedModel,
   dateFilter,
   sortField,
@@ -65,6 +68,7 @@ export function HistoryFilterBar({
   groupingStrategy,
   searchMode,
   setSearchQuery,
+  setBranchFilter,
   setSelectedModel,
   setDateFilter,
   setSortField,
@@ -149,6 +153,15 @@ export function HistoryFilterBar({
 
       {/* Filters */}
       <ActionBar scroll compact gap="sm" className={styles.filters}>
+        <input
+          type="text"
+          placeholder="⎇ Branch…"
+          value={branchFilter}
+          onChange={(e) => setBranchFilter(e.target.value)}
+          className={styles.select}
+          style={{ minWidth: "100px" }}
+          aria-label="Filter by branch"
+        />
         <select
           value={selectedModel}
           onChange={(e) => setSelectedModel(e.target.value)}

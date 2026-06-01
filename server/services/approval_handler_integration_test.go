@@ -484,7 +484,6 @@ func TestMatchesIDData_TmuxNameBranch(t *testing.T) {
 	})
 }
 
-
 // TestHandlePermissionRequest_NotificationUsesUUID verifies end-to-end that
 // when HandlePermissionRequest fires a broadcastApprovalNotification, the
 // event published on the event bus has the session UUID, not the title.

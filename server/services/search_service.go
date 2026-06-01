@@ -5,11 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/vc"
@@ -52,6 +55,12 @@ func decodeHistoryCursor(token string) (historyCursor, bool) {
 	return c, true
 }
 
+// historyBranchEntry is a TTL-cached git branch name for a project path.
+type historyBranchEntry struct {
+	branch    string
+	expiresAt time.Time
+}
+
 // SearchService handles all Claude history and full-text search RPC methods.
 //
 // It owns the history cache and search engine state that were previously
@@ -68,6 +77,14 @@ type SearchService struct {
 	historyCache     *session.ClaudeSessionHistory
 	historyCacheTime time.Time
 	historyCacheTTL  time.Duration
+
+	// getInstances is wired after construction so ListClaudeHistory can
+	// cross-reference live sessions for session_status enrichment.
+	getInstances func() []*session.Instance
+
+	branchCacheMu  sync.RWMutex
+	branchCache    map[string]historyBranchEntry
+	branchCacheTTL time.Duration
 }
 
 // NewSearchService creates a SearchService with the given search components.
@@ -80,7 +97,62 @@ func NewSearchService(
 		searchEngine:     searchEngine,
 		snippetGenerator: snippetGenerator,
 		historyCacheTTL:  historyCacheTTL,
+		branchCache:      make(map[string]historyBranchEntry),
+		branchCacheTTL:   60 * time.Second,
 	}
+}
+
+// SetInstanceProvider wires the live-instance provider after SessionService
+// is fully constructed. Must be called before the first ListClaudeHistory.
+func (ss *SearchService) SetInstanceProvider(fn func() []*session.Instance) {
+	ss.getInstances = fn
+}
+
+// cachedBranch returns the current git branch for projectPath, caching the
+// result for branchCacheTTL (60 s). Returns "" on error or detached HEAD.
+func (ss *SearchService) cachedBranch(projectPath string) string {
+	if projectPath == "" {
+		return ""
+	}
+	now := time.Now()
+
+	ss.branchCacheMu.RLock()
+	if e, ok := ss.branchCache[projectPath]; ok && now.Before(e.expiresAt) {
+		ss.branchCacheMu.RUnlock()
+		return e.branch
+	}
+	ss.branchCacheMu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	out, err := safeexec.CommandContext(ctx, "git", "-C", projectPath, "rev-parse", "--abbrev-ref", "HEAD").Output()
+	branch := ""
+	if err == nil {
+		branch = strings.TrimSpace(string(out))
+		if branch == "HEAD" {
+			branch = "" // detached HEAD — not useful to display
+		}
+	}
+
+	ss.branchCacheMu.Lock()
+	ss.branchCache[projectPath] = historyBranchEntry{branch: branch, expiresAt: now.Add(ss.branchCacheTTL)}
+	ss.branchCacheMu.Unlock()
+	return branch
+}
+
+// liveSessionStatus returns the proto SessionStatus for the history entry
+// with the given conversationID by scanning live instances. Returns UNSPECIFIED
+// when no live session matches.
+func (ss *SearchService) liveSessionStatus(conversationID string) sessionv1.SessionStatus {
+	if conversationID == "" || ss.getInstances == nil {
+		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
+	}
+	for _, inst := range ss.getInstances() {
+		if inst.GetConversationUUID() == conversationID {
+			return adapters.StatusToProto(inst.Status)
+		}
+	}
+	return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 }
 
 // getOrRefreshHistoryCache returns the cached history or refreshes it if stale.
@@ -225,13 +297,15 @@ func (ss *SearchService) ListClaudeHistory(
 	protoEntries := make([]*sessionv1.ClaudeHistoryEntry, 0, len(entries))
 	for _, entry := range entries {
 		protoEntries = append(protoEntries, &sessionv1.ClaudeHistoryEntry{
-			Id:           entry.ID,
-			Name:         entry.Name,
-			Project:      entry.Project,
-			CreatedAt:    timestamppb.New(entry.CreatedAt),
-			UpdatedAt:    timestamppb.New(entry.UpdatedAt),
-			Model:        entry.Model,
-			MessageCount: int32(entry.MessageCount),
+			Id:            entry.ID,
+			Name:          entry.Name,
+			Project:       entry.Project,
+			CreatedAt:     timestamppb.New(entry.CreatedAt),
+			UpdatedAt:     timestamppb.New(entry.UpdatedAt),
+			Model:         entry.Model,
+			MessageCount:  int32(entry.MessageCount),
+			Branch:        ss.cachedBranch(entry.Project),
+			SessionStatus: ss.liveSessionStatus(entry.ID),
 		})
 	}
 

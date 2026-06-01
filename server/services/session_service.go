@@ -245,6 +245,9 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
+	// Wire the live-instance provider so ListClaudeHistory can populate
+	// session_status on history entries without a separate storage call.
+	svc.searchSvc.SetInstanceProvider(svc.allInstances)
 	return svc
 }
 
@@ -803,6 +806,27 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
+	// Fork dispatch: when fork_source_id is set, copy the source conversation
+	// file and set resume_id to the new UUID so the normal start path picks it
+	// up with --resume.
+	if req.Msg.ForkSourceId != "" {
+		srcPath, findErr := session.FindConversationFilePath(req.Msg.ForkSourceId)
+		if findErr != nil {
+			return nil, connect.NewError(connect.CodeNotFound,
+				fmt.Errorf("fork source conversation not found: %w", findErr))
+		}
+		lineCount := uint64(req.Msg.ForkAtMessage) //nolint:gosec // bounded by int32
+		newUUID, forkErr := session.ForkClaudeConversation(srcPath, lineCount, filepath.Dir(srcPath))
+		if forkErr != nil {
+			return nil, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("fork conversation failed: %w", forkErr))
+		}
+		req.Msg.ResumeId = newUUID
+		log.Info("[CreateSession] forked conversation",
+			"source", req.Msg.ForkSourceId, "new_uuid", newUUID,
+			"fork_at_message", req.Msg.ForkAtMessage)
+	}
+
 	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
 	resolvedPath := req.Msg.Path
 	branch := req.Msg.Branch
@@ -864,11 +888,22 @@ func (s *SessionService) CreateSession(
 	// Determine session type - use explicit session_type if provided, otherwise infer from fields
 	sessionType := resolveSessionType(req.Msg, branch)
 
+	// For resume sessions, force DIRECTORY type — we must not create a new worktree
+	// that would produce a different project path and break the --resume lookup.
+	if req.Msg.ResumeId != "" && req.Msg.ForkSourceId == "" &&
+		req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
+		sessionType = session.SessionTypeDirectory
+	}
+
 	// For Directory mode: if path does not exist and create_if_missing is not set, return
 	// CodeNotFound so the frontend can show a confirmation dialog.
 	if sessionType == session.SessionTypeDirectory {
 		if _, err := os.Stat(resolvedPath); os.IsNotExist(err) {
 			if !req.Msg.CreateIfMissing {
+				if req.Msg.ResumeId != "" {
+					return nil, connect.NewError(connect.CodeNotFound,
+						fmt.Errorf("cannot resume: project directory no longer exists: %s", resolvedPath))
+				}
 				return nil, connect.NewError(connect.CodeNotFound,
 					fmt.Errorf("path does not exist: %s", resolvedPath))
 			}

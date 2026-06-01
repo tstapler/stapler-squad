@@ -1,5 +1,6 @@
 import { style } from "@vanilla-extract/css";
 import { recipe } from "@vanilla-extract/recipes";
+import { vars } from "@/styles/theme-contract.css";
 
 // ---------------------------------------------------------------------------
 // T5: Log-level color recipe — WCAG AA compliant hardcoded values.
@@ -21,11 +22,11 @@ export const levelBadge = recipe({
   },
   variants: {
     level: {
-      ERROR: { background: "#B91C1C", color: "#FFFFFF" },
-      WARN: { background: "#D97706", color: "#1A1A1A" },
-      INFO: { background: "#1D4ED8", color: "#FFFFFF" },
-      DEBUG: { background: "#6B7280", color: "#FFFFFF" },
-      TRACE: { background: "#4B5563", color: "#FFFFFF" },
+      ERROR: { background: vars.color.logError, color: vars.color.logOnDark },
+      WARN:  { background: vars.color.logWarn,  color: vars.color.logOnAmber },
+      INFO:  { background: vars.color.logInfo,  color: vars.color.logOnDark },
+      DEBUG: { background: vars.color.logDebug, color: vars.color.logOnDark },
+      TRACE: { background: vars.color.logTrace, color: vars.color.logOnDark },
       UNKNOWN: { background: "transparent", color: "inherit" },
     },
   },
@@ -82,7 +83,7 @@ export const gutterAbsolute = style({
   width: GUTTER_WIDTH_PX,
   zIndex: 10,
   // Solid background occludes scrolling text beneath gutter
-  backgroundColor: "var(--background, #111)",
+  backgroundColor: vars.color.background,
   display: "flex",
   alignItems: "center",
   gap: 4,
