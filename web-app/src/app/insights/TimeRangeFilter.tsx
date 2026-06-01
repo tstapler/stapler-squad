@@ -1,7 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
-import { filterBar, presetGroup, presetButton, customRange, dateInput } from "./TimeRangeFilter.css";
+import { filterBar, presetGroup, presetButton, customRange, dateInput, rangeError } from "./TimeRangeFilter.css";
 
 export type TimeRangePreset = "today" | "7d" | "30d" | "90d" | "all" | "custom";
 
@@ -84,6 +84,9 @@ export function TimeRangeFilter({ value, onChange }: Props) {
             onChange={handleToChange}
             aria-label="To date"
           />
+          {value.from && value.to && value.from > value.to && (
+            <p className={rangeError}>&apos;From&apos; date must be before &apos;To&apos; date</p>
+          )}
         </div>
       )}
     </div>

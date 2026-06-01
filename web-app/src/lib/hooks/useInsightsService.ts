@@ -81,6 +81,9 @@ export function useInsightsSummary(
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.includeOrphans, filters.modelFilter, filters.sessionIdFilter, filters.from, filters.to]);
 
+  const INITIAL_RETRY_DELAY_MS = 1_000;
+  const MAX_RETRY_DELAY_MS = 30_000;
+
   /** Subscribe to WatchInsights with exponential-backoff reconnect. */
   const startWatch = useCallback(() => {
     if (abortWatchRef.current) {
@@ -90,7 +93,7 @@ export function useInsightsSummary(
     abortWatchRef.current = abort;
 
     (async () => {
-      let retryDelay = 1000;
+      let retryDelay = INITIAL_RETRY_DELAY_MS;
       while (!abort.signal.aborted) {
         try {
           const req = create(WatchInsightsRequestSchema, {
@@ -98,13 +101,22 @@ export function useInsightsSummary(
             ...(filters.to && { to: timestampFromDate(filters.to) }),
           });
           const stream = client.watchInsights(req, { signal: abort.signal });
-          retryDelay = 1000;
+          retryDelay = INITIAL_RETRY_DELAY_MS;
           for await (const event of stream) {
             if (abort.signal.aborted) break;
             if (event.eventType === "update" && event.session) {
               setIsLiveUpdating(true);
               setSummary((prev) => {
                 if (!prev) return prev;
+                // If time filter is active, skip sessions outside the filter window
+                if (filters.from || filters.to) {
+                  const lastTs = event.session!.lastMessageAt;
+                  if (lastTs) {
+                    const ts = Number(lastTs.seconds) * 1000;
+                    if (filters.from && ts < filters.from.getTime()) return prev;
+                    if (filters.to && ts > filters.to.getTime()) return prev;
+                  }
+                }
                 const key = event.session!.conversationId || event.session!.sessionId;
                 const idx = prev.sessions.findIndex(
                   (s) => (s.conversationId || s.sessionId) === key
@@ -123,12 +135,14 @@ export function useInsightsSummary(
               setIsLiveUpdating(false);
             }
           }
-        } catch {
-          // Connection closed or aborted — reconnect unless unmounted
+        } catch (err) {
+          if (!abort.signal.aborted) {
+            console.error("[WatchInsights] stream error, reconnecting:", err);
+          }
         }
         if (!abort.signal.aborted) {
           await new Promise<void>((r) => setTimeout(r, retryDelay));
-          retryDelay = Math.min(retryDelay * 2, 30_000);
+          retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY_MS);
         }
       }
     })();

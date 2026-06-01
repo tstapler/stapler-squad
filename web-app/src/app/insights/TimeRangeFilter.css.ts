@@ -68,3 +68,9 @@ export const dateInput = style({
     borderColor: vars.color.inputFocusBorder,
   },
 });
+
+export const rangeError = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.errorText,
+  width: "100%",
+});

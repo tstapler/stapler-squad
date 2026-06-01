@@ -25,31 +25,11 @@ import {
   virtualContainer,
   clickableRow,
 } from "./SessionsTable.css";
+import { fmtCost, fmtTokens, fmtPct, shortId } from "./insightsFormatters";
 
 interface Props {
   sessions: SessionTokenSummary[];
   onSessionClick?: (session: SessionTokenSummary) => void;
-}
-
-function fmtCost(usd: number): string {
-  if (usd < 0.001) return `$${usd.toFixed(5)}`;
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  return `$${usd.toFixed(3)}`;
-}
-
-function fmtTokens(n: bigint): string {
-  const num = Number(n);
-  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
-  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
-  return num.toString();
-}
-
-function fmtPct(rate: number): string {
-  return `${(rate * 100).toFixed(0)}%`;
-}
-
-function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) + "…" : id;
 }
 
 function pathBasename(p: string): string {

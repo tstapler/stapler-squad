@@ -54,4 +54,12 @@ describe("useBudgetThreshold", () => {
     await act(async () => {});
     expect(result.current.threshold).toBeNull();
   });
+
+  it("useBudgetThreshold_should_returnNullThreshold_When_storedValueIsNotNumeric", async () => {
+    localStorage.setItem("insights_budget_threshold_usd", "not-a-number");
+    const { result } = renderHook(() => useBudgetThreshold());
+    await act(async () => {});
+    expect(result.current.threshold).toBeNull();
+    expect(result.current.isHydrated).toBe(true);
+  });
 });

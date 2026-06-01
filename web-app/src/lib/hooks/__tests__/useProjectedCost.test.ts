@@ -16,6 +16,27 @@ function makeBucket(dateStr: string, cost: number): DailyTokenBucket {
   } as unknown as DailyTokenBucket;
 }
 
+const utcMidnight = (year: number, month: number, day: number): bigint =>
+  BigInt(Math.floor(Date.UTC(year, month, day) / 1000));
+
+function makeBucketFromUTC(
+  year: number,
+  month: number,
+  day: number,
+  cost: number
+): DailyTokenBucket {
+  return {
+    date: { seconds: utcMidnight(year, month, day), nanos: 0 },
+    estimatedCostUsd: cost,
+    totalInputTokens: BigInt(0),
+    totalOutputTokens: BigInt(0),
+    cacheReadTokens: BigInt(0),
+    sessionCount: 1,
+    costByModel: {},
+    tokensByModel: {},
+  } as unknown as DailyTokenBucket;
+}
+
 function currentMonthDateStr(day: number): string {
   const now = new Date();
   const y = now.getFullYear();
@@ -78,6 +99,65 @@ describe("useProjectedCost", () => {
     if (result.current) {
       // Prior month data (100.0/day) should not inflate the projection
       expect(result.current.projectedMonthly).toBeCloseTo(1.0 * 31, 5);
+    }
+
+    jest.useRealTimers();
+  });
+
+  it("useProjectedCost_should_compute28DaysInMonth_When_FebruaryNonLeapYear", () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2025-02-15T12:00:00Z"));
+
+    // 10 daily buckets for February 2025 (non-leap year), month=1 (0-indexed)
+    const daily = Array.from({ length: 10 }, (_, i) =>
+      makeBucketFromUTC(2025, 1, i + 1, 1.0)
+    );
+
+    const { result } = renderHook(() => useProjectedCost(daily));
+    expect(result.current).not.toBeNull();
+    if (result.current) {
+      expect(result.current.daysInMonth).toBe(28);
+    }
+
+    jest.useRealTimers();
+  });
+
+  it("useProjectedCost_should_compute29DaysInMonth_When_FebruaryLeapYear", () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2024-02-15T12:00:00Z"));
+
+    // 10 daily buckets for February 2024 (leap year), month=1 (0-indexed)
+    const daily = Array.from({ length: 10 }, (_, i) =>
+      makeBucketFromUTC(2024, 1, i + 1, 1.0)
+    );
+
+    const { result } = renderHook(() => useProjectedCost(daily));
+    expect(result.current).not.toBeNull();
+    if (result.current) {
+      expect(result.current.daysInMonth).toBe(29);
+    }
+
+    jest.useRealTimers();
+  });
+
+  it("useProjectedCost_should_excludeBuckets_When_UTCMonthMismatch", () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+
+    // One bucket from April 30, 2026 UTC (month=3, 0-indexed)
+    // Seven buckets from May 2026 UTC (month=4, 0-indexed)
+    const daily = [
+      makeBucketFromUTC(2026, 3, 30, 100.0),
+      ...Array.from({ length: 7 }, (_, i) =>
+        makeBucketFromUTC(2026, 4, i + 1, 1.0)
+      ),
+    ];
+
+    const { result } = renderHook(() => useProjectedCost(daily));
+    expect(result.current).not.toBeNull();
+    if (result.current) {
+      // April bucket must not be counted — daysData should be 7, not 8
+      expect(result.current.daysData).toBe(7);
     }
 
     jest.useRealTimers();

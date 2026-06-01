@@ -65,3 +65,8 @@ export const warningText = style({
   color: vars.color.warningText,
   fontWeight: vars.fontWeight.medium,
 });
+
+export const inputError = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.errorText,
+});

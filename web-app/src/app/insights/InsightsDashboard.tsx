@@ -47,6 +47,19 @@ const ModelOverTimeChart = dynamic(
   { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
 
+function friendlyError(err: string): string {
+  if (err.toLowerCase().includes("unauthenticated") || err.includes("code: 16")) {
+    return "Authentication required. Please refresh the page.";
+  }
+  if (err.includes("code: 14") || err.toLowerCase().includes("unavailable")) {
+    return "The server is temporarily unavailable. Retrying automatically…";
+  }
+  if (err.includes("code: 13") || err.toLowerCase().includes("internal")) {
+    return "An internal error occurred loading insights. Please try refreshing.";
+  }
+  return err;
+}
+
 function toLocalDateString(d: Date): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -129,7 +142,7 @@ function InsightsDashboardInner() {
         </div>
       )}
 
-      {error && <div className={errorBox}>{error}</div>}
+      {error && <div className={errorBox}>{friendlyError(error)}</div>}
 
       {loading && !summary && <InsightsDashboardSkeleton />}
 

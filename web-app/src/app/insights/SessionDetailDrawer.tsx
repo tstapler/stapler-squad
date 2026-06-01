@@ -24,34 +24,13 @@ import {
   skillList,
   skillBadge,
   emptyState,
+  srOnly,
 } from "./SessionDetailDrawer.css";
+import { fmtCost, fmtPct, fmtDate, shortId } from "./insightsFormatters";
 
 interface Props {
   session: SessionTokenSummary | null;
   onClose: () => void;
-}
-
-function fmtCost(usd: number): string {
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  if (usd < 1) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(2)}`;
-}
-
-function fmtPct(rate: number): string {
-  return `${(rate * 100).toFixed(1)}%`;
-}
-
-function fmtDate(ts: { seconds: bigint } | undefined): string {
-  if (!ts) return "—";
-  return new Date(Number(ts.seconds) * 1000).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
-function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 8) : id;
 }
 
 export function SessionDetailDrawer({ session, onClose }: Props) {
@@ -76,7 +55,11 @@ export function SessionDetailDrawer({ session, onClose }: Props) {
         role="dialog"
         aria-modal="true"
         aria-label="Session details"
+        aria-describedby="session-detail-description"
       >
+        <div id="session-detail-description" className={srOnly}>
+          Session token usage details including cost, model, tools used, and skill activations.
+        </div>
         <div className={drawerHeader}>
           <div className={drawerTitle}>
             <span className={sessionIdChip}>{shortId(displayId)}</span>

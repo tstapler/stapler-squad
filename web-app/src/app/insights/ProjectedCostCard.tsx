@@ -1,8 +1,9 @@
 // +feature: insights-dashboard
 "use client";
 
+import { useState } from "react";
 import type { ProjectedCostResult } from "@/lib/hooks/useProjectedCost";
-import { card, label, value, sub, budgetInput, warningText } from "./ProjectedCostCard.css";
+import { card, label, value, sub, budgetInput, warningText, inputError } from "./ProjectedCostCard.css";
 
 interface Props {
   projection: ProjectedCostResult;
@@ -19,15 +20,22 @@ function fmtCost(usd: number): string {
 
 export function ProjectedCostCard({ projection, threshold, isHydrated, onThresholdChange }: Props) {
   const isWarning = isHydrated && threshold !== null && threshold > 0 && projection.projectedMonthly > threshold;
+  const [inputErrorMsg, setInputErrorMsg] = useState<string | null>(null);
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const raw = e.target.value.trim();
-    if (raw === "" || raw === "0") {
+    if (raw === "") {
+      setInputErrorMsg(null);
       onThresholdChange(null);
-    } else {
-      const parsed = parseFloat(raw);
-      if (!isNaN(parsed) && parsed > 0) onThresholdChange(parsed);
+      return;
     }
+    const parsed = parseFloat(raw);
+    if (isNaN(parsed) || parsed <= 0) {
+      setInputErrorMsg("Budget must be greater than zero");
+      return;
+    }
+    setInputErrorMsg(null);
+    onThresholdChange(parsed);
   }
 
   return (
@@ -48,6 +56,9 @@ export function ProjectedCostCard({ projection, threshold, isHydrated, onThresho
         onChange={handleInputChange}
         aria-label="Monthly budget threshold in USD"
       />
+      {inputErrorMsg && (
+        <p className={inputError}>{inputErrorMsg}</p>
+      )}
     </div>
   );
 }

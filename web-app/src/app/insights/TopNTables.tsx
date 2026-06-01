@@ -3,18 +3,12 @@
 
 import type { TopEntry } from "@/gen/session/v1/insights_pb";
 import { tableCard, tableTitle, table, th, thRight, td, tdRight, empty } from "./TopNTables.css";
+import { fmtTokens } from "./insightsFormatters";
 
 interface TopTableProps {
   title: string;
   entries: TopEntry[];
   valueLabel?: string;
-}
-
-function fmtTokens(n: bigint): string {
-  const num = Number(n);
-  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
-  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
-  return num.toString();
 }
 
 export function TopNTable({ title: tableHeading, entries, valueLabel = "Tokens" }: TopTableProps) {

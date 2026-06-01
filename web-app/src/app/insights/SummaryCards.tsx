@@ -3,26 +3,10 @@
 
 import type { GetInsightsSummaryResponse } from "@/gen/session/v1/insights_pb";
 import { grid, card, cardLabel, cardValue, cardSub } from "./SummaryCards.css";
+import { fmtCost, fmtTokens, fmtPct } from "./insightsFormatters";
 
 interface Props {
   summary: GetInsightsSummaryResponse;
-}
-
-function fmtCost(usd: number): string {
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  if (usd < 1) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(2)}`;
-}
-
-function fmtTokens(n: bigint): string {
-  const num = Number(n);
-  if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;
-  if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
-  return num.toString();
-}
-
-function fmtPct(rate: number): string {
-  return `${(rate * 100).toFixed(1)}%`;
 }
 
 export function SummaryCards({ summary }: Props) {
