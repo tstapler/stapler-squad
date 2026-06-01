@@ -73,7 +73,7 @@ func ValidateTaskDepth(tasks []TaskNode, depth int) error {
 		return fmt.Errorf("task depth exceeds maximum of %d", maxTaskDepth)
 	}
 	for _, t := range tasks {
-		if !isValidTaskStatus(t.Status) {
+		if !IsValidTaskStatus(t.Status) {
 			return fmt.Errorf("invalid task status %q: must be one of pending, in_progress, done, blocked", t.Status)
 		}
 		if err := ValidateTaskDepth(t.Children, depth+1); err != nil {
@@ -99,7 +99,8 @@ func validateTasks(tasks []TaskNode) error {
 	return ValidateTaskDepth(tasks, 1)
 }
 
-func isValidTaskStatus(s string) bool {
+// IsValidTaskStatus returns true if s is a recognized task status value.
+func IsValidTaskStatus(s string) bool {
 	switch s {
 	case TaskStatusPending, TaskStatusInProgress, TaskStatusDone, TaskStatusBlocked:
 		return true

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -77,6 +78,10 @@ func sanitizeInitialPromptForTmux(s string) string {
 	s = strings.ReplaceAll(s, "\r", " ")
 	if len(s) > 4096 {
 		s = s[:4096]
+		// Step back from the truncation point to avoid splitting a multi-byte UTF-8 rune.
+		for !utf8.ValidString(s) && len(s) > 0 {
+			s = s[:len(s)-1]
+		}
 	}
 	return strings.TrimSpace(s)
 }

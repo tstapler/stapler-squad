@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/session"
 )
@@ -97,8 +99,8 @@ func TestSetSessionGoalMCP_validCallSetsGoalAndPublishesEvent(t *testing.T) {
 	case ev := <-eventsCh:
 		assert.NotNil(t, ev)
 		assert.Contains(t, ev.UpdatedFields, "goal")
-	default:
-		t.Log("no event received (acceptable if cache update did not find instance)")
+	case <-time.After(100 * time.Millisecond):
+		t.Error("expected goal event to be published within 100ms")
 	}
 }
 
@@ -208,19 +210,17 @@ func TestGetSessionGoalMCP_returnsGoalForNamedSession(t *testing.T) {
 	})
 	result, err := h.getSessionGoal(context.Background(), req)
 	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, result.Content)
 
-	tc, ok := result.Content[0].(interface{ GetText() string })
-	if !ok {
-		// Content is TextContent — just check it's not an error result
-		m := parseResult(t, result)
-		// If it parsed to a map with success=false, that's an error
-		if success, ok := m["success"]; ok {
-			assert.True(t, success.(bool), "getSessionGoal should succeed")
-		}
-		// Otherwise it's the raw goal JSON which is correct
-	} else {
-		assert.NotEmpty(t, tc.GetText())
-	}
+	tc, ok := result.Content[0].(mcpgo.TextContent)
+	require.True(t, ok, "expected TextContent in result")
+
+	var goalData session.SessionGoalData
+	require.NoError(t, json.Unmarshal([]byte(tc.Text), &goalData), "result should be valid SessionGoalData JSON")
+	assert.Equal(t, "get goal test", goalData.Goal)
+	assert.Equal(t, session.GoalStatusWorking, goalData.Status)
+	assert.Equal(t, sessionUUID, goalData.SessionUUID)
 }
 
 // ─── U-GO-25: TestGetSessionGoalMCP_returnsErrNotFoundWhenAbsent ──────────────
@@ -280,8 +280,8 @@ func TestUpdateSessionTaskMCP_updatesStatusAndPublishesEvent(t *testing.T) {
 	case ev := <-eventsCh:
 		assert.NotNil(t, ev)
 		assert.Contains(t, ev.UpdatedFields, "goal")
-	default:
-		t.Log("no event (acceptable — instance not cached in this test setup)")
+	case <-time.After(100 * time.Millisecond):
+		t.Error("expected goal event to be published within 100ms")
 	}
 }
 

@@ -58,6 +58,19 @@ describe("GoalPanel", () => {
     expect(screen.getByText(longGoal)).toBeInTheDocument();
   });
 
+  it("collapse toggle truncates text again and reverts button label", () => {
+    const longGoal = "C".repeat(130);
+    render(<GoalPanel goal={makeGoal({ goalText: longGoal })} />);
+    // Expand first.
+    fireEvent.click(screen.getByRole("button", { name: /show full goal text/i }));
+    expect(screen.getByText(longGoal)).toBeInTheDocument();
+    // Now collapse using the "Show less goal text" button.
+    fireEvent.click(screen.getByRole("button", { name: /show less goal text/i }));
+    const truncated = "C".repeat(120) + "…";
+    expect(screen.getByText(truncated)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show full goal text/i })).toBeInTheDocument();
+  });
+
   // U-TS-05
   it("renders task fraction when tasks are set", () => {
     render(<GoalPanel goal={makeGoal({ tasksTotal: 5, tasksDone: 2 })} />);

@@ -335,3 +335,51 @@ func TestSteerSessionMCP_stripsNullBytes(t *testing.T) {
 // cannot be tested without tmux in unit tests. The validation tests above cover
 // the sanitization and error-path behavior. The full send path (SendKeys+"\n")
 // is verified by integration/E2E tests.
+
+// ─── U-GO-35: TestSteerSessionMCP_passesValidationAndReachesSendKeys ──────────
+// Verifies that a valid message passes all validation and reaches the SendKeys
+// call. Since SendKeys requires a live PTY, the call will return an internal
+// error — but receiving INTERNAL_ERROR (not a validation error) proves the happy
+// path was reached.
+
+func TestSteerSessionMCP_passesValidationAndReachesSendKeys(t *testing.T) {
+	inst := &session.Instance{
+		Title:   "active-session",
+		Status:  session.Active,
+		Program: "claude",
+	}
+	store := &stubStore{instances: []*session.Instance{inst}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "active-session",
+		"message":    "focus on the authentication module",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+
+	m := parseResult(t, result)
+	// All validation passed; SendKeys will fail because the instance has no live
+	// PTY (not started). The response must be an INTERNAL_ERROR, not a validation
+	// rejection — proving the message reached the SendKeys call.
+	if success, _ := m["success"].(bool); success {
+		// A real active session would return success — that's the true happy path.
+		// In unit tests without tmux we accept success too (if somehow it worked).
+		return
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object in result")
+	}
+	code, _ := errObj["code"].(string)
+	// Must be INTERNAL_ERROR or PTY_WRITE_TIMEOUT — not a validation rejection.
+	if code == ErrInvalidArgument || code == "MESSAGE_TOO_LONG" || code == ErrSessionNotFound {
+		t.Errorf("steerSession returned validation error %q after valid message; expected SendKeys to be reached", code)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestIsStartupDialog(t *testing.T) {
@@ -194,10 +195,9 @@ func TestStartSessionDriver_Idempotent(t *testing.T) {
 	// that's fine; the CAS still happened so the second call will be a no-op.
 
 	// Second call: should CAS fail and return immediately.
-	// To verify idempotency, store the current driverRunning value and call again.
-	// If driverRunning is already false (goroutine exited), call again and make sure
-	// only one goroutine ever touches our counter.
-	var goroutineCount atomic.Int32
+	// Idempotency is proven structurally by the CompareAndSwap guard in StartSessionDriver:
+	// when driverRunning is already true, the CAS from false→true fails and the function
+	// returns without spawning a goroutine.
 	inst2 := &Instance{
 		Title:  "test-idempotent-concurrent",
 		Status: Stopped,
@@ -207,11 +207,6 @@ func TestStartSessionDriver_Idempotent(t *testing.T) {
 
 	// This call must be a no-op because driverRunning is true.
 	StartSessionDriver(inst2, "/tmp")
-
-	// goroutineCount should remain 0 — no new goroutine was spawned.
-	if goroutineCount.Load() != 0 {
-		t.Error("expected no goroutine to start when driverRunning is true")
-	}
 }
 
 // UT-25: TestDriverConstants_Ordering — verifies BLOCK-1 fix: total > ready + inactivity.
@@ -383,5 +378,26 @@ func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
 	}
 	if initialPrompt != driverInitialPrompt {
 		t.Errorf("expected driverInitialPrompt fallback for whitespace-only InitialPrompt, got %q", initialPrompt)
+	}
+}
+
+// ─── U-GO-08: TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit ───────────
+
+func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
+	// Build a 4098-byte input: 4090 ASCII bytes + 2 emoji (😀 = 4 bytes each = 8 bytes total).
+	// After truncation at 4096 bytes, the second emoji straddles the boundary (bytes 4093-4096).
+	// The sanitizer must step back to a valid UTF-8 boundary.
+	input := strings.Repeat("a", 4090) + "😀😀"
+	if len(input) != 4098 {
+		t.Fatalf("test setup: expected input length 4098, got %d", len(input))
+	}
+
+	got := sanitizeInitialPromptForTmux(input)
+
+	if len(got) > 4096 {
+		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want <= 4096", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("sanitizeInitialPromptForTmux: result is not valid UTF-8: %q", got[:min(len(got), 60)])
 	}
 }

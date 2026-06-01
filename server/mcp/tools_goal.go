@@ -86,12 +86,14 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 
 	// Priority: (1) session_id param if provided, (2) callerSessionUUID from context.
 	var targetUUID string
+	var resolvedInst *session.Instance
 	if sessionID, ok := args["session_id"].(string); ok && sessionID != "" {
 		inst, errR := h.findInstanceByID(sessionID)
 		if errR != nil {
 			return errR, nil
 		}
 		targetUUID = inst.UUID
+		resolvedInst = inst
 	} else {
 		callerUUID, err := callerSessionUUID(ctx)
 		if err != nil {
@@ -139,11 +141,14 @@ func (h *goalHandlers) setSessionGoal(ctx context.Context, req mcpgo.CallToolReq
 	}
 
 	// Update in-memory cache if the instance is loaded.
-	inst, _ := h.findInstanceByUUID(targetUUID)
-	if inst != nil {
-		inst.SetSessionGoalCached(goalData)
+	// Prefer the already-resolved instance to avoid a second LoadInstances call.
+	if resolvedInst == nil {
+		resolvedInst, _ = h.findInstanceByUUID(targetUUID)
+	}
+	if resolvedInst != nil {
+		resolvedInst.SetSessionGoalCached(goalData)
 		if h.eventBus != nil {
-			h.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"goal"}))
+			h.eventBus.Publish(events.NewSessionUpdatedEvent(resolvedInst, []string{"goal"}))
 		}
 	}
 
@@ -209,7 +214,7 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 	if !ok || newStatus == "" {
 		return errResult(ErrInvalidArgument, "status is required", ""), nil
 	}
-	if !isValidTaskStatus(newStatus) {
+	if !session.IsValidTaskStatus(newStatus) {
 		return errResult(ErrInvalidArgument, fmt.Sprintf("invalid status %q: must be one of pending, in_progress, done, blocked", newStatus), ""), nil
 	}
 
@@ -293,11 +298,3 @@ func isValidGoalStatus(s string) bool {
 	return false
 }
 
-// isValidTaskStatus returns true if s is a recognized task status value.
-func isValidTaskStatus(s string) bool {
-	switch s {
-	case session.TaskStatusPending, session.TaskStatusInProgress, session.TaskStatusDone, session.TaskStatusBlocked:
-		return true
-	}
-	return false
-}
