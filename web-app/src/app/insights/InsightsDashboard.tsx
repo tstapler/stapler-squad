@@ -47,6 +47,13 @@ const ModelOverTimeChart = dynamic(
   { ssr: false, loading: () => <Skeleton variant="rectangular" width="100%" height={200} /> }
 );
 
+function toLocalDateString(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function InsightsDashboardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -90,9 +97,9 @@ function InsightsDashboardInner() {
     const params = new URLSearchParams(searchParams.toString());
     params.set("preset", v.preset);
     if (v.preset === "custom") {
-      if (v.from) params.set("from", v.from.toISOString().slice(0, 10));
+      if (v.from) params.set("from", toLocalDateString(v.from));
       else params.delete("from");
-      if (v.to) params.set("to", v.to.toISOString().slice(0, 10));
+      if (v.to) params.set("to", toLocalDateString(v.to));
       else params.delete("to");
     } else {
       params.delete("from");

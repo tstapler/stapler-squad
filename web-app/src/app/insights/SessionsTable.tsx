@@ -1,7 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
-import { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import { TableVirtuoso } from "react-virtuoso";
 import Fuse from "fuse.js";
 import type { SessionTokenSummary } from "@/gen/session/v1/insights_pb";
@@ -109,12 +109,12 @@ export function SessionsTable({ sessions, onSessionClick }: Props) {
     setModelFilter("");
   }
 
-  function handleRowKeyDown(e: React.KeyboardEvent, s: SessionTokenSummary) {
+  const handleRowKeyDown = useCallback((e: React.KeyboardEvent<HTMLTableRowElement>, s: SessionTokenSummary) => {
     if ((e.key === "Enter" || e.key === " ") && onSessionClick) {
       e.preventDefault();
       onSessionClick(s);
     }
-  }
+  }, [onSessionClick]);
 
   const headerContent = () => (
     <tr>
@@ -128,15 +128,8 @@ export function SessionsTable({ sessions, onSessionClick }: Props) {
     </tr>
   );
 
-  const renderRow = (_index: number, s: SessionTokenSummary) => (
-    <tr
-      key={s.conversationId || s.sessionId}
-      className={onSessionClick ? clickableRow : undefined}
-      onClick={() => onSessionClick?.(s)}
-      onKeyDown={(e) => handleRowKeyDown(e, s)}
-      tabIndex={onSessionClick ? 0 : undefined}
-      role={onSessionClick ? "button" : undefined}
-    >
+  const renderCells = (_index: number, s: SessionTokenSummary) => (
+    <>
       <td className={tdMono} title={s.sessionId || s.conversationId}>
         {s.isOrphan ? (
           <>
@@ -153,8 +146,31 @@ export function SessionsTable({ sessions, onSessionClick }: Props) {
       <td className={tdRight}>{fmtTokens(s.totalOutputTokens)}</td>
       <td className={tdRight}>{fmtPct(s.cacheHitRate)}</td>
       <td className={tdRight}>{fmtCost(s.estimatedCostUsd)}</td>
-    </tr>
+    </>
   );
+
+  const virtuosoComponents = useMemo(() => ({
+    Table: ({ style: s, ...props }: React.ComponentPropsWithRef<"table">) => (
+      <table className={table} style={s} {...props} />
+    ),
+    TableHead: (props: React.ComponentPropsWithRef<"thead">) => <thead {...props} />,
+    TableBody: React.forwardRef<HTMLTableSectionElement, React.ComponentPropsWithRef<"tbody">>(
+      (props, ref) => <tbody ref={ref} {...props} />
+    ),
+    TableRow: ({ "data-index": dataIndex, ...props }: React.ComponentPropsWithRef<"tr"> & { "data-index": number }) => {
+      const s = displayed[dataIndex];
+      return (
+        <tr
+          {...props}
+          className={onSessionClick ? clickableRow : undefined}
+          onClick={onSessionClick && s ? () => onSessionClick(s) : undefined}
+          onKeyDown={s ? (e) => handleRowKeyDown(e as React.KeyboardEvent<HTMLTableRowElement>, s) : undefined}
+          tabIndex={onSessionClick ? 0 : undefined}
+          role={onSessionClick ? "button" : undefined}
+        />
+      );
+    },
+  }), [displayed, onSessionClick, handleRowKeyDown]);
 
   const titleText = hasActiveFilters
     ? `Sessions (${displayed.length} of ${sessions.length})`
@@ -214,26 +230,27 @@ export function SessionsTable({ sessions, onSessionClick }: Props) {
           <TableVirtuoso
             data={displayed}
             fixedHeaderContent={headerContent}
-            itemContent={renderRow}
+            itemContent={renderCells}
             style={{ height: "100%" }}
-            components={{
-              Table: ({ style: s, ...props }) => (
-                <table className={table} style={s} {...props} />
-              ),
-              TableHead: ({ style: s, ...props }) => (
-                <thead style={s} {...props} />
-              ),
-              TableBody: ({ style: s, ...props }) => (
-                <tbody style={s} {...props} />
-              ),
-            }}
+            components={virtuosoComponents}
           />
         </div>
       ) : (
         <table className={table}>
           <thead>{headerContent()}</thead>
           <tbody>
-            {displayed.map((s, i) => renderRow(i, s))}
+            {displayed.map((s, i) => (
+              <tr
+                key={s.conversationId || s.sessionId}
+                className={onSessionClick ? clickableRow : undefined}
+                onClick={onSessionClick ? () => onSessionClick(s) : undefined}
+                onKeyDown={(e) => handleRowKeyDown(e, s)}
+                tabIndex={onSessionClick ? 0 : undefined}
+                role={onSessionClick ? "button" : undefined}
+              >
+                {renderCells(i, s)}
+              </tr>
+            ))}
           </tbody>
         </table>
       )}

@@ -9,12 +9,15 @@ describe("useBudgetThreshold", () => {
   });
 
   it("useBudgetThreshold_should_returnIsHydratedFalse_When_mountedWithoutEffect", () => {
-    // Before effects run, isHydrated should be false
-    const { result } = renderHook(() => useBudgetThreshold());
-    // After initial render (before useEffect fires), isHydrated is false
-    // In testing, effects run synchronously in act(), so we check the initial snapshot
-    // The hook initializes isHydrated to false
-    expect(typeof result.current.isHydrated).toBe("boolean");
+    // isHydrated initializes to false — check before effects run
+    let capturedInitial: boolean | undefined;
+    renderHook(() => {
+      const hook = useBudgetThreshold();
+      // Capture on the very first render, before useEffect fires
+      if (capturedInitial === undefined) capturedInitial = hook.isHydrated;
+      return hook;
+    });
+    expect(capturedInitial).toBe(false);
   });
 
   it("useBudgetThreshold_should_loadFromLocalStorage_When_hydrated", async () => {

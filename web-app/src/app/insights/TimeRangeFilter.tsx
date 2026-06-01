@@ -116,8 +116,8 @@ export function resolveTimeRangeDates(preset: TimeRangePreset, fromParam?: strin
     }
     case "custom":
       return {
-        from: fromParam ? new Date(fromParam) : undefined,
-        to: toParam ? new Date(toParam) : undefined,
+        from: fromParam ? new Date(fromParam + "T00:00:00") : undefined,
+        to: toParam ? new Date(toParam + "T23:59:59") : undefined,
       };
     case "all":
     default:
