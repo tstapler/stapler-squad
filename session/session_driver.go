@@ -65,11 +65,34 @@ func StartSessionDriver(inst *Instance, allowedPath string) {
 	}()
 }
 
+// sanitizeInitialPromptForTmux strips characters that would corrupt the tmux
+// send-keys call: null bytes (which tmux silently drops in unpredictable ways),
+// newlines and carriage returns (collapsed to spaces so the prompt stays on one
+// line), and hard-limits the length to 4096 characters. Returns the trimmed
+// result; an empty return value means the caller should fall back to the static
+// driverInitialPrompt.
+func sanitizeInitialPromptForTmux(s string) string {
+	s = strings.ReplaceAll(s, "\x00", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	if len(s) > 4096 {
+		s = s[:4096]
+	}
+	return strings.TrimSpace(s)
+}
+
 // runSessionDriver is the thin wrapper that creates the retried flag and
 // delegates to runSessionDriverWithPrompt.
 func runSessionDriver(inst *Instance, allowedPath string) {
 	var retried atomic.Bool
-	runSessionDriverWithPrompt(inst, allowedPath, driverInitialPrompt, &retried)
+	initialPrompt := driverInitialPrompt
+	if inst.InitialPrompt != "" {
+		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		if sanitized != "" {
+			initialPrompt = sanitized
+		}
+	}
+	runSessionDriverWithPrompt(inst, allowedPath, initialPrompt, &retried)
 }
 
 // runSessionDriverWithPrompt is the core driver loop. It accepts a custom initial

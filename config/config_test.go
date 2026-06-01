@@ -742,3 +742,24 @@ func TestOSCPayloadsAreRedacted(t *testing.T) {
 		assert.False(t, cfg.OSCPayloadsAreRedacted())
 	})
 }
+
+// ─── U-GO-16, U-GO-17, U-GO-18: GetFeatureFlag default-off ─────────────────
+
+// TestGetFeatureFlag_defaultsFalse verifies backlog flag defaults to false on empty Config.
+func TestGetFeatureFlag_defaultsFalse(t *testing.T) {
+	cfg := &Config{}
+	assert.False(t, cfg.GetFeatureFlag("backlog"), "backlog feature flag should be false by default")
+	assert.False(t, cfg.GetFeatureFlag("nonexistent"), "unknown feature flag should be false")
+}
+
+// TestGetFeatureFlag_unknownKeyDefaultsFalse verifies that any unrecognized key returns false.
+func TestGetFeatureFlag_unknownKeyDefaultsFalse(t *testing.T) {
+	cfg := &Config{FeatureFlags: map[string]bool{"other": true}}
+	assert.False(t, cfg.GetFeatureFlag("nonexistent"))
+}
+
+// TestGetFeatureFlag_knownKeyReturnsValue verifies that an explicitly set flag returns its value.
+func TestGetFeatureFlag_knownKeyReturnsValue(t *testing.T) {
+	cfg := &Config{FeatureFlags: map[string]bool{"backlog": true}}
+	assert.True(t, cfg.GetFeatureFlag("backlog"))
+}

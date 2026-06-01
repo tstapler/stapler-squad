@@ -947,7 +947,10 @@ func (c *Config) GetOrCreateEncryptionKey() ([]byte, error) {
 }
 
 // GetFeatureFlag returns the persisted enabled state of the named feature flag.
-// Absent key == false (disabled by default).
+// Absent key returns false — all feature flags default to disabled.
+// Currently recognized flags:
+//
+//	"backlog" — enables the Backlog tab and backlog lifecycle controller.
 func (c *Config) GetFeatureFlag(name string) bool {
 	if c == nil || c.FeatureFlags == nil {
 		return false

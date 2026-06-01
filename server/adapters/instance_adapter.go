@@ -136,6 +136,18 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = inst.Hidden
 
+	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
+	if g := inst.GetSessionGoal(); g != nil {
+		tasksJSON, _ := session.EncodeTasks(g.Tasks) // empty string on error is safe
+		protoSession.Goal = &sessionv1.SessionGoalSummary{
+			GoalText:   g.Goal,
+			Status:     g.Status,
+			TasksTotal: int32(g.TasksTotal()),
+			TasksDone:  int32(g.TasksDone()),
+			TasksJson:  tasksJSON,
+		}
+	}
+
 	return protoSession
 }
 

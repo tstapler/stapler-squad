@@ -193,6 +193,25 @@ message Session {
   // Reason why the session was paused. Empty when session has never been paused.
   // Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource"
   string pause_reason = 58;
+
+  // Current session goal and task tracking state. Nil when no goal has been set.
+  SessionGoalSummary goal = 59;
+}
+
+// SessionGoalSummary summarizes the current goal and task state for a session.
+// Populated by the server when a goal has been set via the set_session_goal MCP tool.
+message SessionGoalSummary {
+  // Human-readable goal description (max 2000 chars).
+  string goal_text = 1;
+  // Current goal status: idle, working, blocked, done.
+  string status = 2;
+  // Total number of tasks in the task tree (all depth levels).
+  int32 tasks_total = 3;
+  // Number of tasks with status "done" (all depth levels).
+  int32 tasks_done = 4;
+  // JSON-encoded []TaskNode; empty string when no tasks have been set.
+  // Parse client-side to render the full recursive task tree.
+  string tasks_json = 5;
 }
 
 // VNCStatus represents the operational state of the VNC subsystem for a session.

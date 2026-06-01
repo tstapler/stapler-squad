@@ -8,6 +8,7 @@ import (
 
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
 	"github.com/tstapler/stapler-squad/session/tokens"
 )
 
@@ -23,8 +24,9 @@ type InstanceData struct {
 	Width      int       `json:"width"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	AutoYes    bool      `json:"auto_yes"`
-	Prompt     string    `json:"prompt"`
+	AutoYes       bool   `json:"auto_yes"`
+	Prompt        string `json:"prompt"`
+	InitialPrompt string `json:"initial_prompt,omitempty"`
 
 	Program          string          `json:"program"`
 	ExistingWorktree string          `json:"existing_worktree,omitempty"`
@@ -273,6 +275,13 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 		// Inject shell repository so shell operations can persist to the DB.
 		if sr, ok := s.repo.(ShellRepository); ok {
 			inst.SetShellRepository(sr)
+		}
+		// Restore cached goal state so the adapter can include it without a DB hit.
+		if inst.UUID != "" {
+			if goal, goalErr := s.GetSessionGoal(context.Background(), inst.UUID); goalErr == nil {
+				inst.SetSessionGoalCached(goal)
+			}
+			// ErrNotFound is expected for sessions without a goal — treat as no-op.
 		}
 		instances = append(instances, inst)
 	}
@@ -693,3 +702,84 @@ func (s *Storage) UpdateItemSessionSessionUUID(ctx context.Context, id string, s
 	}
 	return er.UpdateItemSessionSessionUUID(ctx, id, sessionUUID)
 }
+
+// --- Session Goal ---
+
+// SetSessionGoal upserts the goal for a session (1:1 per session_uuid).
+// If a goal already exists for the session, it is replaced.
+func (s *Storage) SetSessionGoal(ctx context.Context, sessionUUID string, goal string, status string, tasks []TaskNode, setBy string) (*SessionGoalData, error) {
+	client := s.GetEntClient()
+	if client == nil {
+		return nil, fmt.Errorf("goal storage not supported by this backend")
+	}
+	if err := validateTasks(tasks); err != nil {
+		return nil, err
+	}
+	tasksJSON, err := EncodeTasks(tasks)
+	if err != nil {
+		return nil, err
+	}
+	create := client.SessionGoal.Create().
+		SetSessionUUID(sessionUUID).
+		SetGoal(goal).
+		SetStatus(status).
+		SetSetBy(setBy)
+	if tasksJSON != "[]" {
+		create = create.SetTasks(tasksJSON)
+	}
+	err = create.
+		OnConflictColumns("session_uuid").
+		UpdateNewValues().
+		Exec(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upsert session goal: %w", err)
+	}
+	return s.GetSessionGoal(ctx, sessionUUID)
+}
+
+// GetSessionGoal retrieves the goal for a session by session UUID.
+// Returns ErrNotFound if no goal has been set for the session.
+func (s *Storage) GetSessionGoal(ctx context.Context, sessionUUID string) (*SessionGoalData, error) {
+	client := s.GetEntClient()
+	if client == nil {
+		return nil, ErrNotFound
+	}
+	g, err := client.SessionGoal.Query().
+		Where(sessiongoal.SessionUUID(sessionUUID)).
+		Only(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to get session goal: %w", err)
+	}
+	tasks, decodeErr := DecodeTasks(g.Tasks)
+	if decodeErr != nil {
+		tasks = []TaskNode{}
+	}
+	return &SessionGoalData{
+		UUID:        g.ID.String(),
+		SessionUUID: g.SessionUUID,
+		Goal:        g.Goal,
+		Status:      g.Status,
+		Tasks:       tasks,
+		SetBy:       g.SetBy,
+		UpdatedAt:   g.UpdatedAt,
+	}, nil
+}
+
+// UpdateSessionTaskStatus loads the goal for a session, finds the task by ID,
+// updates its status, and saves the goal back.
+// Returns ErrNotFound if no goal exists, or an error if task_id is not found in the tree.
+func (s *Storage) UpdateSessionTaskStatus(ctx context.Context, sessionUUID string, taskID string, newStatus string) (*SessionGoalData, error) {
+	existing, err := s.GetSessionGoal(ctx, sessionUUID)
+	if err != nil {
+		return nil, err
+	}
+	updated, found := findAndUpdateTask(existing.Tasks, taskID, newStatus)
+	if !found {
+		return nil, fmt.Errorf("task %q not found in goal tree", taskID)
+	}
+	return s.SetSessionGoal(ctx, sessionUUID, existing.Goal, existing.Status, updated, existing.SetBy)
+}
+

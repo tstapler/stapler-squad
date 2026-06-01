@@ -184,3 +184,43 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 		t.Errorf("expected final status Active or Paused, got %s", inst.Status)
 	}
 }
+
+// ─── U-GO-30: TestInstanceGetSetSessionGoal_threadSafe ───────────────────────
+// Run with: go test -race ./session/ -run TestInstanceGetSetSessionGoal_threadSafe
+
+func TestInstanceGetSetSessionGoal_threadSafe(t *testing.T) {
+	inst := &Instance{
+		Title: "concurrency-goal-test",
+		UUID:  "test-uuid-concurrent-goal",
+	}
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+
+	// Writers.
+	for i := 0; i < goroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			g := &SessionGoalData{
+				UUID:        "test-uuid",
+				SessionUUID: inst.UUID,
+				Goal:        "concurrent goal",
+				Status:      GoalStatusWorking,
+			}
+			inst.SetSessionGoalCached(g)
+		}()
+	}
+
+	// Readers.
+	for i := 0; i < goroutines/2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = inst.GetSessionGoal()
+		}()
+	}
+
+	wg.Wait()
+	// No data race should occur (detected by -race flag).
+}

@@ -920,6 +920,7 @@ func (s *SessionService) CreateSession(
 		Program:          program,
 		AutoYes:          autoYes,
 		Prompt:           req.Msg.Prompt,
+		InitialPrompt:    req.Msg.InitialPrompt,
 		ExistingWorktree: req.Msg.ExistingWorktree,
 		Category:         req.Msg.Category,
 		SessionType:      sessionType,
@@ -960,7 +961,8 @@ func (s *SessionService) CreateSession(
 		log.Info("[ReviewQueue] added new session to poller", "session", instance.Title)
 	}
 
-	// Record initial_prompt in prompt history so it appears in the recent-prompts dropdown.
+	// Record initial_prompt (typed into the session terminal once the session reaches Ready state)
+	// in prompt history so it appears in the recent-prompts dropdown.
 	if req.Msg.InitialPrompt != "" {
 		s.promptStore.RecordUsage(req.Msg.InitialPrompt)
 	}
@@ -1008,6 +1010,12 @@ func (s *SessionService) CreateSession(
 		if s.backlogLifecycleListener != nil {
 			s.backlogLifecycleListener.WireToInstance(instance)
 		}
+
+		// Start the session driver goroutine so UI-created sessions receive their
+		// initial prompt (typed into the session terminal once the session reaches Ready).
+		// StartSessionDriver is idempotent (CAS guard) — safe to call even if a driver
+		// was already started by another code path.
+		session.StartSessionDriver(instance, instanceRootDir)
 
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))

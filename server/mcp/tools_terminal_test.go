@@ -246,3 +246,92 @@ func TestWaitForOutputTimeout(t *testing.T) {
 		t.Error("expected non-empty output on timeout")
 	}
 }
+
+// ─── U-GO-32: TestSteerSessionMCP_rejectsEmptyMessage ────────────────────────
+
+func TestSteerSessionMCP_rejectsEmptyMessage(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "s1",
+		"message":    "",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false for empty message, got true")
+	}
+}
+
+// ─── U-GO-33: TestSteerSessionMCP_rejectsMessageExceeding4096Bytes ────────────
+
+func TestSteerSessionMCP_rejectsMessageExceeding4096Bytes(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	oversized := strings.Repeat("x", maxInputBytes+1) // 4097 bytes
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "s1",
+		"message":    oversized,
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false for oversized message, got true")
+	}
+	errObj, _ := m["error"].(map[string]interface{})
+	if errObj == nil {
+		t.Fatal("expected error object")
+	}
+	code, _ := errObj["code"].(string)
+	if code != "MESSAGE_TOO_LONG" {
+		t.Errorf("expected MESSAGE_TOO_LONG error code, got %q", code)
+	}
+}
+
+// ─── U-GO-34: TestSteerSessionMCP_stripsNullBytes ─────────────────────────────
+
+func TestSteerSessionMCP_stripsNullBytes(t *testing.T) {
+	store := &stubStore{instances: []*session.Instance{{Title: "s1"}}}
+	th := &terminalHandlers{
+		store:      store,
+		scrollback: makeScrollbackMgr(t),
+		writeLim:   newTokenBucket(10, 10),
+	}
+
+	// Message with only null bytes should be rejected after sanitization.
+	req := makeToolReq(map[string]interface{}{
+		"session_id": "s1",
+		"message":    "\x00\x00\x00",
+	})
+	result, err := th.steerSession(context.Background(), req)
+	if err != nil {
+		t.Fatalf("steerSession returned unexpected Go error: %v", err)
+	}
+	m := parseResult(t, result)
+	// After stripping null bytes, message is empty → should be rejected.
+	if success, _ := m["success"].(bool); success {
+		t.Error("expected success=false after null byte stripping results in empty message")
+	}
+}
+
+// ─── U-GO-31 note ─────────────────────────────────────────────────────────────
+// TestSteerSessionMCP_sendsMessageWithNewline requires a live PTY session and
+// cannot be tested without tmux in unit tests. The validation tests above cover
+// the sanitization and error-path behavior. The full send path (SendKeys+"\n")
+// is verified by integration/E2E tests.

@@ -80,7 +80,7 @@ func (Session) Fields() []ent.Field {
 			Optional(),
 		field.String("initial_prompt").
 			Optional().
-			Comment("Prompt injected via CLAUDE.md at first-time session creation."),
+			Comment("Prompt typed into the session terminal once the session reaches Ready state."),
 		field.Bool("one_shot").
 			Default(false).
 			Comment("When true, runs claude in -p mode; session exits after task completes."),

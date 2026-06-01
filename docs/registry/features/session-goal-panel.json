@@ -1,0 +1,24 @@
+{
+  "id": "session-goal-panel",
+  "type": "frontend",
+  "description": "GoalPanel renders the session goal text, status chip, and recursive task tree in the session detail view info tab",
+  "component": "GoalPanel",
+  "filePath": "web-app/src/components/sessions/GoalPanel.tsx",
+  "tested": true,
+  "testIds": [
+    "GoalPanel renders nothing when goal is null",
+    "GoalPanel renders nothing when goal is undefined",
+    "GoalPanel renders goal text when goal is set",
+    "GoalPanel truncates long goal text at 120 chars and shows expand toggle",
+    "GoalPanel renders task fraction when tasks are set",
+    "GoalPanel shows correct status chip label for status=idle",
+    "GoalPanel shows correct status chip label for status=working",
+    "GoalPanel shows correct status chip label for status=blocked",
+    "GoalPanel shows correct status chip label for status=done",
+    "GoalPanel renders task tree from tasksJson",
+    "GoalPanel renders nested tasks with indentation",
+    "GoalPanel falls back to fraction when tasksJson is invalid JSON",
+    "GoalPanel falls back to fraction when tasksJson is empty string"
+  ],
+  "lastModified": "2026-05-31T00:00:00Z"
+}

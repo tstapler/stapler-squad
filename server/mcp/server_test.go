@@ -19,8 +19,9 @@ func TestWriteToSessionDescriptionContainsUnfiltered(t *testing.T) {
 	}
 }
 
-// TestToolRegistrationCount verifies that exactly 15 tools are registered
-// across all tool source files by counting s.AddTool( call sites.
+// TestToolRegistrationCount verifies that exactly 16 tools are registered
+// across all core tool source files by counting s.AddTool( call sites.
+// (15 original + 1 for steer_session added in the InitialPrompt work.)
 func TestToolRegistrationCount(t *testing.T) {
 	files := []string{
 		"server.go",
@@ -38,7 +39,7 @@ func TestToolRegistrationCount(t *testing.T) {
 		}
 		count += strings.Count(string(data), "s.AddTool(")
 	}
-	if count != 15 {
-		t.Errorf("expected 15 AddTool calls across tool files, got %d", count)
+	if count != 16 {
+		t.Errorf("expected 16 AddTool calls across tool files, got %d", count)
 	}
 }

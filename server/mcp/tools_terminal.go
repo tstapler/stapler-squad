@@ -114,6 +114,21 @@ func registerTerminalTools(s *mcpserver.MCPServer, th *terminalHandlers) {
 	)
 
 	s.AddTool(
+		mcpgo.NewTool("steer_session",
+			mcpgo.WithDescription("Send a semantic steering message to a running Stapler Squad agent session. Unlike write_to_session, steer_session always appends a newline so the agent receives the message as a complete input. Use this to redirect an agent mid-task (e.g. 'Focus on the authentication module first'). Not rate-limited — this is a high-level semantic operation."),
+			mcpgo.WithString("session_id",
+				mcpgo.Description("Session ID (title) of the session"),
+				mcpgo.Required(),
+			),
+			mcpgo.WithString("message",
+				mcpgo.Description("Steering message to send to the agent (max 4096 bytes)"),
+				mcpgo.Required(),
+			),
+		),
+		th.steerSession,
+	)
+
+	s.AddTool(
 		mcpgo.NewTool("run_command",
 			mcpgo.WithDescription("Send a shell command to a running session and wait for output. Combines write + wait + read in one call. Waits until output stops changing or timeout_seconds elapses, then returns the captured output. Use this for most command execution; use write_to_session + wait_for_output only when you need finer control. Input reaches the PTY unfiltered."),
 			mcpgo.WithString("session_id",
@@ -582,6 +597,67 @@ func (th *terminalHandlers) runCommand(ctx context.Context, req mcpgo.CallToolRe
 		Truncated:    truncated,
 		TimedOut:     timedOut,
 		LastSequence: lastSeq,
+	}), nil
+}
+
+// ---- steer_session ----
+
+// SteerSessionResult is the response for steer_session.
+type SteerSessionResult struct {
+	MCPResult
+	SessionID  string `json:"session_id"`
+	CharsSent  int    `json:"chars_sent"`
+}
+
+func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	args := req.GetArguments()
+	sessionID, ok := args["session_id"].(string)
+	if !ok || sessionID == "" {
+		return errResult(ErrInvalidArgument, "session_id is required", ""), nil
+	}
+
+	message, ok := args["message"].(string)
+	if !ok || message == "" {
+		return errResult(ErrInvalidArgument, "message is required", ""), nil
+	}
+	if len(message) > maxInputBytes {
+		return errResult("MESSAGE_TOO_LONG", fmt.Sprintf("message exceeds %d bytes", maxInputBytes), "Reduce message length"), nil
+	}
+
+	// Strip null bytes to avoid silent corruption via the tmux send-keys path.
+	message = strings.ReplaceAll(message, "\x00", "")
+	if message == "" {
+		return errResult(ErrInvalidArgument, "message must be non-empty after sanitization", ""), nil
+	}
+
+	inst, errResult_ := th.findInstance(sessionID)
+	if errResult_ != nil {
+		return errResult_, nil
+	}
+
+	// steer_session always appends \n — it is a semantic steering operation and
+	// the agent must receive it as a complete message.
+	text := message + "\n"
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- inst.SendKeys(text) }()
+
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
+		}
+	case <-ctx.Done():
+		return errResult("PTY_WRITE_TIMEOUT", "timed out writing to session PTY", "The session may be blocked. Use send_control with key=C to interrupt"), nil
+	}
+
+	return okResult(SteerSessionResult{
+		MCPResult: MCPResult{Success: true},
+		SessionID: sessionID,
+		CharsSent: len(message),
 	}), nil
 }
 

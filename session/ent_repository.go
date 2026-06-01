@@ -187,6 +187,9 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.MCPServerURL != "" {
 		sessionCreate.SetMcpServerURL(data.MCPServerURL)
 	}
+	if data.InitialPrompt != "" {
+		sessionCreate.SetInitialPrompt(data.InitialPrompt)
+	}
 	if data.OneShot {
 		sessionCreate.SetOneShot(data.OneShot)
 	}
@@ -395,6 +398,9 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	if data.MCPServerURL != "" {
 		sessionUpdate.SetMcpServerURL(data.MCPServerURL)
+	}
+	if data.InitialPrompt != "" {
+		sessionUpdate.SetInitialPrompt(data.InitialPrompt)
 	}
 	if data.PauseReason != "" {
 		sessionUpdate.SetPauseReason(data.PauseReason)
@@ -882,6 +888,7 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 		UpdatedAt:           sess.UpdatedAt,
 		AutoYes:             sess.AutoYes,
 		Prompt:              sess.Prompt,
+		InitialPrompt:       sess.InitialPrompt,
 		Program:             sess.Program,
 		ExistingWorktree:    sess.ExistingWorktree,
 		Category:            sess.Category,

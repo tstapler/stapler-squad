@@ -115,6 +115,9 @@ type Instance struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
+	// InitialPrompt is the prompt injected into the tmux pane once the session reaches Ready state.
+	// Replaces the static driverInitialPrompt when non-empty.
+	InitialPrompt string
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
@@ -301,6 +304,12 @@ type Instance struct {
 	// Guarded by CompareAndSwap — see StartSessionDriver.
 	driverRunning atomic.Bool
 
+	// SessionGoal is the cached goal state for this session.
+	// Protected by goalMu — always use GetSessionGoal/SetSessionGoalCached accessors.
+	SessionGoal *SessionGoalData
+	// goalMu protects SessionGoal for concurrent read/write access.
+	goalMu sync.RWMutex
+
 	// restartCount and recentRestartTimes track rapid restarts for storm detection.
 	restartCount       int64
 	recentRestartTimes []time.Time
@@ -378,6 +387,9 @@ type InstanceOptions struct {
 	AutoYes bool
 	// Prompt is the initial prompt to pass to the instance on startup
 	Prompt string
+	// InitialPrompt, when non-empty, is typed into the tmux pane once the session reaches Ready state,
+	// replacing the static "Please proceed..." fallback.
+	InitialPrompt string
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
 	// Category is used for organizing sessions into groups
@@ -477,6 +489,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		UpdatedAt:        t,
 		AutoYes:          opts.AutoYes,
 		Prompt:           opts.Prompt,
+		InitialPrompt:    opts.InitialPrompt,
 		ExistingWorktree: opts.ExistingWorktree,
 		Category:         opts.Category,
 		Tags:             opts.Tags, // Set tags from options
@@ -558,6 +571,20 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 // loading or creating an instance. Pass nil to disable persistence (e.g., in tests).
 func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
+}
+
+// GetSessionGoal returns a thread-safe copy of the current SessionGoalData (nil if not set).
+func (i *Instance) GetSessionGoal() *SessionGoalData {
+	i.goalMu.RLock()
+	defer i.goalMu.RUnlock()
+	return i.SessionGoal
+}
+
+// SetSessionGoalCached atomically updates the in-memory SessionGoal cache.
+func (i *Instance) SetSessionGoalCached(g *SessionGoalData) {
+	i.goalMu.Lock()
+	defer i.goalMu.Unlock()
+	i.SessionGoal = g
 }
 
 // NewInstanceWithCleanup creates a new Instance and returns it along with a cleanup function.

@@ -783,3 +783,10 @@ export const memoryBadge = style({
 export const cardMemoryPressure = style({
   borderLeft: `3px solid ${vars.color.warning}`,
 });
+
+/** Goal row compact display — session list card */
+export const taskFraction = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  marginLeft: vars.space["1"],
+});

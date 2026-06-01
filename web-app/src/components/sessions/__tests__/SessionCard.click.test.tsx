@@ -77,6 +77,77 @@ const minimalSession: Partial<Session> = {
 // Tests
 // ---------------------------------------------------------------------------
 
+import { screen } from "@testing-library/react";
+import type { SessionGoalSummary } from "@/gen/session/v1/types_pb";
+
+function makeGoalSummary(overrides?: Partial<SessionGoalSummary>): SessionGoalSummary {
+  return {
+    goalText: "implement feature X",
+    status: "working",
+    tasksTotal: 3,
+    tasksDone: 1,
+    tasksJson: "",
+    ...overrides,
+  } as unknown as SessionGoalSummary;
+}
+
+// ─── U-TS-11, U-TS-12, U-TS-13, U-TS-14, U-TS-15: Goal row tests ────────────
+
+describe("SessionCard — goal row", () => {
+  // U-TS-11
+  it("goal row absent when session.goal is null", () => {
+    const session = { ...minimalSession, goal: null } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByText("Goal")).toBeNull();
+  });
+
+  // U-TS-12
+  it("goal row absent when session.goal.goalText is empty string", () => {
+    const session = {
+      ...minimalSession,
+      goal: makeGoalSummary({ goalText: "" }),
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.queryByText("Goal")).toBeNull();
+  });
+
+  // U-TS-13
+  it("goal row present with truncated text when goal is set", () => {
+    const longGoal = "X".repeat(70); // > 60 chars → truncated
+    const session = {
+      ...minimalSession,
+      goal: makeGoalSummary({ goalText: longGoal, tasksTotal: 0, tasksDone: 0 }),
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    // Should show label
+    expect(screen.getByText("Goal")).toBeInTheDocument();
+    // Truncated text ends with ellipsis
+    const truncated = "X".repeat(60) + "…";
+    expect(screen.getByText(truncated)).toBeInTheDocument();
+  });
+
+  // U-TS-14
+  it("goal row shows task fraction when tasks exist", () => {
+    const session = {
+      ...minimalSession,
+      goal: makeGoalSummary({ goalText: "a goal", tasksTotal: 5, tasksDone: 3 }),
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByText(/3\/5 done/)).toBeInTheDocument();
+  });
+
+  // U-TS-15
+  it("goal row hides task fraction when tasksTotal is 0", () => {
+    const session = {
+      ...minimalSession,
+      goal: makeGoalSummary({ goalText: "a goal", tasksTotal: 0, tasksDone: 0 }),
+    } as unknown as Session;
+    render(<SessionCard session={session} />);
+    expect(screen.getByText("Goal")).toBeInTheDocument();
+    expect(screen.queryByText(/done/)).toBeNull();
+  });
+});
+
 describe("SessionCard — stopPropagation", () => {
   it("SessionCard_should_stopPropagation_When_normalClick", () => {
     const outerClick = jest.fn();

@@ -637,7 +637,7 @@ export function OmnibarCreationPanel({
           <textarea
             id="omnibar-first-prompt"
             className={fieldInput}
-            placeholder="What should Claude do first? (injected as CLAUDE.md on session start)"
+            placeholder="What should Claude do first? (typed into the session terminal once the agent reaches the ready state)"
             rows={3}
             maxLength={2000}
             value={formState.firstPrompt}

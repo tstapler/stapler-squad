@@ -79,3 +79,56 @@ func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
 		t.Errorf("expected nil RateLimitResetTime for fresh instance, got %v", proto.RateLimitResetTime)
 	}
 }
+
+// ─── U-GO-35: TestInstanceToProto_includesGoalSummaryWhenSet ─────────────────
+
+func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
+	inst := &session.Instance{}
+	goal := &session.SessionGoalData{
+		UUID:        "goal-uuid",
+		SessionUUID: "session-uuid",
+		Goal:        "test goal",
+		Status:      session.GoalStatusWorking,
+		Tasks: []session.TaskNode{
+			{ID: "t1", Title: "Task 1", Status: session.TaskStatusDone},
+		},
+	}
+	inst.SetSessionGoalCached(goal)
+
+	proto := InstanceToProto(inst)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+	if proto.Goal == nil {
+		t.Fatal("expected Goal to be set when inst.SessionGoal is non-nil")
+	}
+	if proto.Goal.GoalText != "test goal" {
+		t.Errorf("GoalText = %q, want %q", proto.Goal.GoalText, "test goal")
+	}
+	if proto.Goal.Status != session.GoalStatusWorking {
+		t.Errorf("Status = %q, want %q", proto.Goal.Status, session.GoalStatusWorking)
+	}
+	if proto.Goal.TasksTotal != 1 {
+		t.Errorf("TasksTotal = %d, want 1", proto.Goal.TasksTotal)
+	}
+	if proto.Goal.TasksDone != 1 {
+		t.Errorf("TasksDone = %d, want 1", proto.Goal.TasksDone)
+	}
+	if proto.Goal.TasksJson == "" {
+		t.Error("TasksJson should be non-empty when tasks are set")
+	}
+}
+
+// ─── U-GO-36: TestInstanceToProto_omitsGoalSummaryWhenNil ─────────────────────
+
+func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
+	inst := &session.Instance{}
+	// SessionGoal is nil by default.
+	proto := InstanceToProto(inst)
+	if proto == nil {
+		t.Fatal("expected non-nil proto")
+	}
+	if proto.Goal != nil {
+		t.Errorf("expected Goal to be nil when inst.SessionGoal is nil, got %+v", proto.Goal)
+	}
+}

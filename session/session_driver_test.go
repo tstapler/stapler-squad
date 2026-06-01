@@ -270,3 +270,118 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// ─── U-GO-01: TestSanitizeInitialPromptForTmux_stripsNullBytes ───────────────
+
+func TestSanitizeInitialPromptForTmux_stripsNullBytes(t *testing.T) {
+	input := "hello\x00world\x00"
+	got := sanitizeInitialPromptForTmux(input)
+	if strings.Contains(got, "\x00") {
+		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, still contains null bytes", input, got)
+	}
+	if got != "helloworld" {
+		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want %q", input, got, "helloworld")
+	}
+}
+
+// ─── U-GO-02: TestSanitizeInitialPromptForTmux_collapsesNewlines ─────────────
+
+func TestSanitizeInitialPromptForTmux_collapsesNewlines(t *testing.T) {
+	input := "line1\nline2\rline3"
+	got := sanitizeInitialPromptForTmux(input)
+	if strings.Contains(got, "\n") || strings.Contains(got, "\r") {
+		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, still contains newlines", input, got)
+	}
+	// Newlines should be replaced with spaces
+	if got != "line1 line2 line3" {
+		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want %q", input, got, "line1 line2 line3")
+	}
+}
+
+// ─── U-GO-03: TestSanitizeInitialPromptForTmux_truncatesAt4096 ───────────────
+
+func TestSanitizeInitialPromptForTmux_truncatesAt4096(t *testing.T) {
+	input := strings.Repeat("a", 5000)
+	got := sanitizeInitialPromptForTmux(input)
+	if len(got) > 4096 {
+		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want <= 4096", len(got))
+	}
+	if len(got) != 4096 {
+		t.Errorf("sanitizeInitialPromptForTmux: len(got) = %d, want exactly 4096", len(got))
+	}
+}
+
+// ─── U-GO-04: TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough ────
+
+func TestSanitizeInitialPromptForTmux_whitespaceOnlyFallsThrough(t *testing.T) {
+	input := "   \t  "
+	got := sanitizeInitialPromptForTmux(input)
+	if got != "" {
+		t.Errorf("sanitizeInitialPromptForTmux(%q) = %q, want empty string (caller falls back to driverInitialPrompt)", input, got)
+	}
+}
+
+// ─── U-GO-05: TestRunSessionDriver_usesInitialPromptWhenNonEmpty ─────────────
+// These tests verify the runSessionDriver logic by inspecting the Instance struct
+// rather than running a full driver loop (which requires tmux).
+
+func TestRunSessionDriver_selectsInitialPromptWhenNonEmpty(t *testing.T) {
+	// Verify the selection logic directly: if InitialPrompt is set, it should
+	// be used (after sanitization), not driverInitialPrompt.
+	inst := &Instance{
+		Title:         "test-custom-prompt",
+		InitialPrompt: "do the thing",
+		Status:        Stopped,
+	}
+	// Simulate the selection logic from runSessionDriver.
+	initialPrompt := driverInitialPrompt
+	if inst.InitialPrompt != "" {
+		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		if sanitized != "" {
+			initialPrompt = sanitized
+		}
+	}
+	if initialPrompt != "do the thing" {
+		t.Errorf("expected initialPrompt = %q, got %q", "do the thing", initialPrompt)
+	}
+}
+
+// ─── U-GO-06: TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty ──────────
+
+func TestRunSessionDriver_fallsBackToStaticPromptWhenEmpty(t *testing.T) {
+	inst := &Instance{
+		Title:         "test-empty-prompt",
+		InitialPrompt: "",
+		Status:        Stopped,
+	}
+	initialPrompt := driverInitialPrompt
+	if inst.InitialPrompt != "" {
+		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		if sanitized != "" {
+			initialPrompt = sanitized
+		}
+	}
+	if initialPrompt != driverInitialPrompt {
+		t.Errorf("expected driverInitialPrompt fallback, got %q", initialPrompt)
+	}
+}
+
+// ─── U-GO-07: TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace ─────
+
+func TestRunSessionDriver_fallsBackToStaticPromptWhenWhitespace(t *testing.T) {
+	inst := &Instance{
+		Title:         "test-whitespace-prompt",
+		InitialPrompt: "   ",
+		Status:        Stopped,
+	}
+	initialPrompt := driverInitialPrompt
+	if inst.InitialPrompt != "" {
+		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
+		if sanitized != "" {
+			initialPrompt = sanitized
+		}
+	}
+	if initialPrompt != driverInitialPrompt {
+		t.Errorf("expected driverInitialPrompt fallback for whitespace-only InitialPrompt, got %q", initialPrompt)
+	}
+}

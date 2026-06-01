@@ -22,6 +22,7 @@ import { Modal, ModalContent, ModalTitle, ModalFooter } from "@/components/ui/Mo
 import { ResumeSessionModal } from "./ResumeSessionModal";
 import { TagEditor } from "./TagEditor";
 import { BacklogItemPanel } from "@/components/backlog/BacklogItemPanel";
+import { GoalPanel } from "./GoalPanel";
 import { useShells } from "@/lib/hooks/useShells";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { ShellTabLabel } from "./ShellTab";
@@ -1146,6 +1147,10 @@ export function SessionDetailView({
                 </div>
               )}
             </div>
+            {/* Goal & Task panel — shown when a goal has been set via MCP */}
+            {session.goal?.goalText && (
+              <GoalPanel goal={session.goal} />
+            )}
           </div>
         )}
       </div>

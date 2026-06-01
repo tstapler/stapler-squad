@@ -65,7 +65,9 @@ import {
   snapshotError,
   memoryBadge,
   cardMemoryPressure,
+  taskFraction,
 } from "./SessionCard.css";
+import { truncateGoal } from "@/lib/utils/string";
 
 interface SessionCardProps {
   session: Session;
@@ -595,6 +597,19 @@ function SessionCardInner({
               <span className={label}>Cloned To:</span>
               <span className={value} title={session.clonedRepoPath}>
                 {session.clonedRepoPath}
+              </span>
+            </div>
+          )}
+          {session.goal?.goalText && (
+            <div className={infoRow}>
+              <span className={label}>Goal</span>
+              <span className={value}>
+                {truncateGoal(session.goal.goalText, 60)}
+                {(session.goal.tasksTotal ?? 0) > 0 && (
+                  <span className={taskFraction}>
+                    {` · ${session.goal.tasksDone}/${session.goal.tasksTotal} done`}
+                  </span>
+                )}
               </span>
             </div>
           )}
