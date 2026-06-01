@@ -4,18 +4,13 @@
 import { useState } from "react";
 import type { ProjectedCostResult } from "@/lib/hooks/useProjectedCost";
 import { card, label, value, sub, budgetInput, warningText, inputError } from "./ProjectedCostCard.css";
+import { fmtCost } from "./insightsFormatters";
 
 interface Props {
   projection: ProjectedCostResult;
   threshold: number | null;
   isHydrated: boolean;
   onThresholdChange: (v: number | null) => void;
-}
-
-function fmtCost(usd: number): string {
-  if (usd < 0.01) return `$${usd.toFixed(4)}`;
-  if (usd < 1) return `$${usd.toFixed(3)}`;
-  return `$${usd.toFixed(2)}`;
 }
 
 export function ProjectedCostCard({ projection, threshold, isHydrated, onThresholdChange }: Props) {
