@@ -1,6 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
+import { useMemo } from "react";
 import type { DailyTokenBucket } from "@/gen/session/v1/insights_pb";
 import {
   ResponsiveContainer,
@@ -84,7 +85,7 @@ function fmtTick(v: number, mode: "cost" | "tokens"): string {
 }
 
 export function ModelOverTimeChart({ daily, mode = "cost" }: Props) {
-  const models = collectModels(daily);
+  const models = useMemo(() => collectModels(daily), [daily]);
 
   if (daily.length === 0 || models.length === 0) {
     return (
@@ -95,7 +96,7 @@ export function ModelOverTimeChart({ daily, mode = "cost" }: Props) {
     );
   }
 
-  const data = toDataPoints(daily, models, mode);
+  const data = useMemo(() => toDataPoints(daily, models, mode), [daily, models, mode]);
   const label = mode === "cost" ? "Spend by Model (USD)" : "Tokens by Model";
 
   return (

@@ -170,6 +170,7 @@ export const zIndex = {
   raised: 10,
   header: 100,
   dropdown: 500,
+  slideOver: 700,
   modal: 1000,
   // Navigation overlay stack (1040–1065).  Values chosen so the bottom nav and its
   // sub-menus sit above all other page content, and the mobile pane picker sits above the nav.

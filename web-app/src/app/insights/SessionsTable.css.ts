@@ -102,3 +102,68 @@ export const empty = style({
   padding: `${vars.space[4]} 0`,
   textAlign: "center",
 });
+
+export const filterBar = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space[2],
+  flexWrap: "wrap",
+});
+
+export const searchInput = style({
+  padding: `${vars.space[1]} ${vars.space[2]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.inputBorder}`,
+  background: vars.color.inputBackground,
+  color: vars.color.inputText,
+  fontSize: vars.fontSize.sm,
+  width: "180px",
+  ":focus": {
+    outline: "none",
+    borderColor: vars.color.inputFocusBorder,
+  },
+});
+
+export const modelSelect = style({
+  padding: `${vars.space[1]} ${vars.space[2]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.inputBorder}`,
+  background: vars.color.inputBackground,
+  color: vars.color.inputText,
+  fontSize: vars.fontSize.sm,
+  cursor: "pointer",
+  ":focus": {
+    outline: "none",
+    borderColor: vars.color.inputFocusBorder,
+  },
+});
+
+export const clearButton = style({
+  padding: `${vars.space[1]} ${vars.space[2]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.borderSubtle}`,
+  background: "transparent",
+  color: vars.color.textSecondary,
+  fontSize: vars.fontSize.xs,
+  cursor: "pointer",
+  ":hover": {
+    background: vars.color.hoverBackground,
+    color: vars.color.textPrimary,
+  },
+});
+
+export const virtualContainer = style({
+  height: "min(600px, 70vh)",
+  overflowY: "auto",
+});
+
+export const clickableRow = style({
+  cursor: "pointer",
+  ":hover": {
+    background: vars.color.hoverBackground,
+  },
+  ":focus": {
+    outline: `2px solid ${vars.color.inputFocusBorder}`,
+    outlineOffset: "-2px",
+  },
+});

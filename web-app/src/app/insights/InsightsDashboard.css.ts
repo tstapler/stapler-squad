@@ -47,6 +47,9 @@ export const liveIndicator = style({
   borderRadius: vars.radii.full,
   background: vars.color.successBg,
   border: `1px solid ${vars.color.success}`,
+  selectors: {
+    '&[data-live="false"]': { visibility: "hidden" },
+  },
 });
 
 export const liveDot = style({

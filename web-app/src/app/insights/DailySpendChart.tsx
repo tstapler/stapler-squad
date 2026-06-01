@@ -1,6 +1,7 @@
 // +feature: insights-dashboard
 "use client";
 
+import { useMemo } from "react";
 import type { DailyTokenBucket } from "@/gen/session/v1/insights_pb";
 import {
   ResponsiveContainer,
@@ -46,7 +47,7 @@ export function DailySpendChart({ daily }: Props) {
     );
   }
 
-  const data = toDataPoints(daily);
+  const data = useMemo(() => toDataPoints(daily), [daily]);
 
   return (
     <div className={chartCard}>
