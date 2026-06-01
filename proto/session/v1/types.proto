@@ -209,7 +209,7 @@ message SessionGoalSummary {
   int32 tasks_total = 3;
   // Number of tasks with status "done" (all depth levels).
   int32 tasks_done = 4;
-  // JSON-encoded []TaskNode; empty string when no tasks have been set.
+  // JSON-encoded []TaskNode; "[]" when no tasks have been set.
   // Parse client-side to render the full recursive task tree.
   string tasks_json = 5;
 }

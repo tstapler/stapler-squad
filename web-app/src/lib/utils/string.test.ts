@@ -5,7 +5,7 @@ describe("truncateGoal", () => {
   it("truncates at max length", () => {
     const input = "A".repeat(70);
     const result = truncateGoal(input, 60);
-    expect(result.length).toBeLessThanOrEqual(61); // 60 chars + "…"
+    expect(result.length).toBe(60); // exactly max chars (59 content + "…")
     expect(result).toContain("…");
     expect(result).not.toEqual(input);
   });

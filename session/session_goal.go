@@ -67,7 +67,8 @@ func countTasksDone(nodes []TaskNode) int {
 }
 
 // ValidateTaskDepth validates that the task tree does not exceed maxTaskDepth (3)
-// or maxGoalTasks (50) total nodes, and that all task statuses are valid enum values.
+// and that all task statuses are valid enum values. Total task count is checked
+// separately by validateTaskCount (both are called from validateTasks).
 func ValidateTaskDepth(tasks []TaskNode, depth int) error {
 	if depth > maxTaskDepth {
 		return fmt.Errorf("task depth exceeds maximum of %d", maxTaskDepth)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
@@ -235,10 +236,11 @@ func (h *goalHandlers) updateSessionTask(ctx context.Context, req mcpgo.CallTool
 		if errors.Is(err, session.ErrNotFound) {
 			return errResult(ErrItemNotFound, "no goal set for this session", ""), nil
 		}
-		return errResult(ErrInternalError, fmt.Sprintf("failed to update task: %v", err), ""), nil
+		if strings.Contains(err.Error(), "not found") {
+			return errResult(ErrItemNotFound, fmt.Sprintf("task %q not found in goal tree", taskID), "Use get_session_goal to list task IDs."), nil
+		}
+		return errResult(ErrInternalError, "failed to update task status", err.Error()), nil
 	}
-	// Check if the error was about the task not being found in the tree.
-	// UpdateSessionTaskStatus returns a descriptive error if task_id is not found.
 
 	// Update in-memory cache.
 	inst, _ := h.findInstanceByUUID(callerUUID)

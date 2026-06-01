@@ -573,11 +573,16 @@ func (i *Instance) SetShellRepository(repo ShellRepository) {
 	i.shellRepo = repo
 }
 
-// GetSessionGoal returns a thread-safe copy of the current SessionGoalData (nil if not set).
+// GetSessionGoal returns a thread-safe shallow copy of the current SessionGoalData (nil if not set).
+// A copy is returned so callers cannot mutate the shared struct without holding goalMu.
 func (i *Instance) GetSessionGoal() *SessionGoalData {
 	i.goalMu.RLock()
 	defer i.goalMu.RUnlock()
-	return i.SessionGoal
+	if i.SessionGoal == nil {
+		return nil
+	}
+	copy := *i.SessionGoal // shallow copy — Tasks slice is immutable after set
+	return &copy
 }
 
 // SetSessionGoalCached atomically updates the in-memory SessionGoal cache.
