@@ -623,7 +623,7 @@ dev-setup: install-tools ## Set up development environment
 ci: build test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # Quick development workflows
-quick-check: build test-coverage test-race lint lint-css-tokens ## Quick development validation
+quick-check: build test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
 	@echo "✅ Quick validation complete"
 
 pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation
