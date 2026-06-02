@@ -78,11 +78,11 @@ func TestMCPHandshakeSubprocess(t *testing.T) {
 	if !ok {
 		t.Fatal("tools field is not an array")
 	}
-	if len(tools) != 20 {
+	if len(tools) != 24 {
 		names := make([]string, len(tools))
 		for i, tool := range tools {
 			names[i] = tool.(map[string]interface{})["name"].(string)
 		}
-		t.Errorf("expected 20 tools, got %d: %v", len(tools), names)
+		t.Errorf("expected 24 tools, got %d: %v", len(tools), names)
 	}
 }
