@@ -63,6 +63,8 @@ export function ApprovalsProvider({ children }: { children: ReactNode }) {
     void (async () => {
       try {
         await refetch();
+      } catch (err) {
+        console.error("[ApprovalsContext] refetch failed during optimistic clear:", err);
       } finally {
         clearCountRef.current[sessionId]--;
         if ((clearCountRef.current[sessionId] ?? 0) <= 0) {

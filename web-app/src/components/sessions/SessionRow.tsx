@@ -36,6 +36,8 @@ interface SessionRowProps {
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onHibernate?: () => void;
   onResumeFromHibernation?: () => void;
+  /** When true, hides the Needs Approval SubStatusChip during optimistic clear */
+  suppressApprovalSubStatus?: boolean;
 }
 
 function getStatusDotValue(status: SessionStatus): string {
@@ -98,6 +100,7 @@ export function SessionRow({
   onRestart, onCreateCheckpoint, onRunOneShot,
   onSetRateLimitEnabled, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
+  suppressApprovalSubStatus = false,
 }: SessionRowProps) {
   const overflowRef = useRef<SessionActionsOverflowHandle>(null);
 
@@ -153,7 +156,8 @@ export function SessionRow({
           {/* Sub-status chip — only for Active sessions (ACTIVE covers legacy RUNNING) */}
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
-            session.subStatus !== SubStatus.IDLE && (
+            session.subStatus !== SubStatus.IDLE &&
+            !(suppressApprovalSubStatus && session.subStatus === SubStatus.NEEDS_APPROVAL) && (
               <SubStatusChip subStatus={session.subStatus} />
             )}
         </span>

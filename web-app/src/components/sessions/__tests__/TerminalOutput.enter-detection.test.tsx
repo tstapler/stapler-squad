@@ -5,7 +5,7 @@
  * Covers:
  *  - T-UNIT-TS-011: Enter ("\r") calls clearForSession with the current sessionId
  *  - T-UNIT-TS-012: Non-Enter ("a") does NOT call clearForSession
- *  - T-UNIT-TS-013: Every keystroke schedules a debounced refresh
+ *  - T-UNIT-TS-013: Non-Enter keystroke schedules a debounced refresh (when pendingCount > 0)
  *  - T-UNIT-TS-014: Rapid keystrokes coalesce to a single refresh call
  *  - T-UNIT-TS-015: clearForSession uses the correct sessionId (not another session's)
  *  - T-UNIT-TS-016: sendInput path is not disrupted by the new logic
@@ -22,10 +22,13 @@ import { render, act, waitFor } from "@testing-library/react";
 const mockClearForSession = jest.fn();
 const mockRefreshApprovals = jest.fn().mockResolvedValue(undefined);
 
+// Default pendingCount — overridden per-test when needed
+let mockPendingCount = 0;
+
 jest.mock("@/lib/contexts/ApprovalsContext", () => ({
   useApprovalsContext: () => ({
     approvals: [],
-    pendingCount: 0,
+    get pendingCount() { return mockPendingCount; },
     loading: false,
     error: null,
     approve: jest.fn(),
@@ -156,6 +159,7 @@ function setupMatchMedia() {
 beforeEach(() => {
   jest.clearAllMocks();
   capturedOnData = null;
+  mockPendingCount = 0;
 
   (useTerminalStream as jest.Mock).mockReturnValue(makeStreamMock());
 
@@ -166,6 +170,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  jest.clearAllTimers();
+  jest.useRealTimers();
   jest.restoreAllMocks();
 });
 
@@ -209,54 +215,60 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
   });
 
   it("T-UNIT-TS-013: handleTerminalData_should_scheduleRefresh_When_anyKeystrokeSent", async () => {
-    jest.useFakeTimers();
+    // Set pendingCount > 0 so the debounce guard allows the timer to be set
+    mockPendingCount = 1;
+
     renderTerminal("session-a");
 
-    // Without fake timers blocking waitFor, we need to flush promises first
-    await act(async () => {
-      await Promise.resolve();
+    // Wait with real timers until xterm lazy import resolves and onData is captured
+    await waitForOnData();
+
+    // NOW switch to fake timers
+    jest.useFakeTimers();
+
+    // capturedOnData is guaranteed non-null here
+    expect(capturedOnData).not.toBeNull();
+
+    act(() => {
+      capturedOnData!("a");
     });
 
-    // capturedOnData may be set now
-    if (capturedOnData) {
-      act(() => {
-        capturedOnData!("a");
-      });
+    // Refresh should not be called immediately (debounced)
+    expect(mockRefreshApprovals).not.toHaveBeenCalled();
 
-      // Refresh should not be called immediately (debounced)
-      expect(mockRefreshApprovals).not.toHaveBeenCalled();
+    // Advance timer past the 300ms debounce
+    act(() => {
+      jest.advanceTimersByTime(300);
+    });
 
-      // Advance timer past the 300ms debounce
-      act(() => {
-        jest.advanceTimersByTime(300);
-      });
-
-      expect(mockRefreshApprovals).toHaveBeenCalledTimes(1);
-    }
-    jest.useRealTimers();
+    expect(mockRefreshApprovals).toHaveBeenCalledTimes(1);
   });
 
   it("T-UNIT-TS-014: handleTerminalData_should_cancelPreviousTimer_When_keystrokeFollowsQuickly", async () => {
-    jest.useFakeTimers();
+    // Set pendingCount > 0 so the debounce guard allows the timer to be set
+    mockPendingCount = 1;
+
     renderTerminal("session-a");
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    // Wait with real timers until xterm lazy import resolves and onData is captured
+    await waitForOnData();
 
-    if (capturedOnData) {
-      // Fire two keystrokes within 300ms
-      act(() => { capturedOnData!("a"); });
-      act(() => { jest.advanceTimersByTime(100); }); // 100ms elapsed
-      act(() => { capturedOnData!("b"); });
+    // NOW switch to fake timers
+    jest.useFakeTimers();
 
-      // Advance past the second debounce window
-      act(() => { jest.advanceTimersByTime(300); });
+    // capturedOnData is guaranteed non-null here
+    expect(capturedOnData).not.toBeNull();
 
-      // Should only be called once (second keystroke cancelled the first timer)
-      expect(mockRefreshApprovals).toHaveBeenCalledTimes(1);
-    }
-    jest.useRealTimers();
+    // Fire two keystrokes within 300ms
+    act(() => { capturedOnData!("a"); });
+    act(() => { jest.advanceTimersByTime(100); }); // 100ms elapsed
+    act(() => { capturedOnData!("b"); });
+
+    // Advance past the second debounce window
+    act(() => { jest.advanceTimersByTime(300); });
+
+    // Should only be called once (second keystroke cancelled the first timer)
+    expect(mockRefreshApprovals).toHaveBeenCalledTimes(1);
   });
 
   it("T-UNIT-TS-015: handleTerminalData_should_callClearForSession_With_correctSessionId_When_enterSentToSessionA", async () => {
@@ -287,48 +299,74 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
   });
 
   it("T-UNIT-TS-017: handleTerminalData_should_cleanUpTimer_When_componentUnmounts", async () => {
-    jest.useFakeTimers();
+    // Set pendingCount > 0 so the debounce guard allows the timer to be set
+    mockPendingCount = 1;
+
     const { unmount } = renderTerminal("session-a");
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    // Wait with real timers until xterm lazy import resolves and onData is captured
+    await waitForOnData();
 
-    if (capturedOnData) {
-      // Schedule a debounce timer
-      act(() => { capturedOnData!("a"); });
+    // NOW switch to fake timers
+    jest.useFakeTimers();
 
-      // Unmount before the timer fires
-      unmount();
+    // capturedOnData is guaranteed non-null here
+    expect(capturedOnData).not.toBeNull();
 
-      // Advance past the debounce window
-      act(() => { jest.advanceTimersByTime(300); });
+    // Schedule a debounce timer
+    act(() => { capturedOnData!("a"); });
 
-      // refresh should NOT be called after unmount
-      expect(mockRefreshApprovals).not.toHaveBeenCalled();
-    }
-    jest.useRealTimers();
+    // Unmount before the timer fires
+    unmount();
+
+    // Advance past the debounce window
+    act(() => { jest.advanceTimersByTime(300); });
+
+    // refresh should NOT be called after unmount
+    expect(mockRefreshApprovals).not.toHaveBeenCalled();
   });
 
-  it("Enter also schedules a debounced refresh (not just clearForSession)", async () => {
-    jest.useFakeTimers();
+  it("Enter does NOT schedule a debounce — clearForSession fires the eager refetch instead", async () => {
+    // Set pendingCount > 0 to confirm the debounce is still skipped for Enter
+    mockPendingCount = 1;
+
     renderTerminal("session-a");
 
-    await act(async () => {
-      await Promise.resolve();
-    });
+    // Wait with real timers until xterm lazy import resolves and onData is captured
+    await waitForOnData();
 
-    if (capturedOnData) {
-      act(() => { capturedOnData!("\r"); });
+    // NOW switch to fake timers
+    jest.useFakeTimers();
 
-      // No immediate refresh
-      expect(mockRefreshApprovals).not.toHaveBeenCalled();
+    // capturedOnData is guaranteed non-null here
+    expect(capturedOnData).not.toBeNull();
 
-      act(() => { jest.advanceTimersByTime(300); });
+    act(() => { capturedOnData!("\r"); });
 
-      expect(mockClearForSession).toHaveBeenCalledTimes(1);
-      expect(mockRefreshApprovals).toHaveBeenCalledTimes(1);
-    }
-    jest.useRealTimers();
+    // clearForSession should be called (it fires the eager refetch internally)
+    expect(mockClearForSession).toHaveBeenCalledTimes(1);
+
+    // No debounce timer should be started for Enter — advance past window
+    act(() => { jest.advanceTimersByTime(300); });
+
+    // refreshApprovals should NOT be called via the debounce path for Enter
+    expect(mockRefreshApprovals).not.toHaveBeenCalled();
+  });
+
+  it("Non-Enter does NOT schedule a debounce when pendingCount === 0", async () => {
+    // mockPendingCount is 0 by default (set in beforeEach)
+    renderTerminal("session-a");
+    await waitForOnData();
+
+    jest.useFakeTimers();
+
+    expect(capturedOnData).not.toBeNull();
+
+    act(() => { capturedOnData!("a"); });
+
+    act(() => { jest.advanceTimersByTime(300); });
+
+    // No refresh call — guarded by pendingCount === 0
+    expect(mockRefreshApprovals).not.toHaveBeenCalled();
   });
 });

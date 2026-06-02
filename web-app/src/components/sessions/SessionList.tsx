@@ -170,7 +170,7 @@ export function SessionList({
   // Terminal-detected status data from Redux store
   const detectedStatusMap = useAppSelector(selectDetectedStatusMap);
 
-  // Cleared sessions set for optimistic approval suppression (ADR-6)
+  // clearedSessions: optimistic approval suppression per session (card mode only; row mode uses SubStatusChip suppression)
   const { clearedSessions } = useApprovalsContext();
 
   // Initialize state from local storage
@@ -937,6 +937,7 @@ export function SessionList({
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
                     onClearConversationState={onClearConversationState}
                     onUpdateTags={onUpdateTags}
+                    suppressApprovalSubStatus={clearedSessions.has(item.session.id)}
                   />
                 )}
               </WrapperTag>

@@ -69,7 +69,7 @@ const XTERM_DEFAULT_ROWS = 24;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
   const { track } = useAnalytics();
-  const { clearForSession, refresh: refreshApprovals } = useApprovalsContext();
+  const { clearForSession, refresh: refreshApprovals, pendingCount } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
   const xtermRef = useRef<XtermTerminalHandle | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
@@ -530,15 +530,20 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       sendInput(data);
     }
 
-    // Optimistic clear on Enter only — reduces false-positive flicker (ADR-3)
+    // Optimistic clear on Enter only — reduces false-positive flicker
     if (data === "\r") {
       clearForSession(sessionId);
+      // clearForSession fires an eager refetch — skip the debounce timer for Enter
+      // to avoid a second refetch 300ms later that would cause a flicker window
+    } else {
+      // Only debounce-refetch when there are pending approvals to update —
+      // prevents RPC storm when holding keys across N open terminals
+      if (pendingCount > 0) {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => void refreshApprovals(), 300);
+      }
     }
-
-    // Debounced re-fetch on every keystroke — ensures UI reflects true state quickly (ADR-4)
-    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-    refreshTimerRef.current = setTimeout(() => void refreshApprovals(), 300);
-  }, [sendInput, sendInputWithEcho, sspNegotiated, clearForSession, sessionId, refreshApprovals]);
+  }, [sendInput, sendInputWithEcho, sspNegotiated, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:
