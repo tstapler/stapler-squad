@@ -1,4 +1,5 @@
 "use client";
+// +feature: approval-enter-detection
 
 import { createContext, useContext, ReactNode, useCallback, useMemo, useState, useRef } from "react";
 import { useGetApprovalsQuery, useResolveApprovalMutation } from "@/lib/api/approvalsApi";
