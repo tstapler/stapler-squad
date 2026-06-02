@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, ReactNode, useCallback, useMemo } from "react";
+import { createContext, useContext, ReactNode, useCallback, useMemo, useState, useRef } from "react";
 import { useGetApprovalsQuery, useResolveApprovalMutation } from "@/lib/api/approvalsApi";
 import type { PlainApproval } from "@/lib/api/approvalsApi";
 import { toErrorOrNull } from "@/lib/utils/rtkQueryError";
@@ -13,6 +13,8 @@ export interface ApprovalsContextValue {
   approve: (approvalId: string) => Promise<void>;
   deny: (approvalId: string, message?: string) => Promise<void>;
   refresh: () => Promise<void>;
+  clearForSession: (sessionId: string) => void;
+  clearedSessions: ReadonlySet<string>;
 }
 
 const ApprovalsContext = createContext<ApprovalsContextValue | null>(null);
@@ -28,6 +30,8 @@ const FALLBACK_CONTEXT: ApprovalsContextValue = {
   approve: noopAsync,
   deny: noopAsync,
   refresh: noopAsync,
+  clearForSession: () => {},
+  clearedSessions: new Set(),
 };
 
 export function ApprovalsProvider({ children }: { children: ReactNode }) {
@@ -37,6 +41,9 @@ export function ApprovalsProvider({ children }: { children: ReactNode }) {
   });
 
   const [resolveApproval] = useResolveApprovalMutation();
+  const [clearedSessions, setClearedSessions] = useState<Set<string>>(new Set());
+  // In-flight count per session prevents premature removal when Enter is pressed twice rapidly
+  const clearCountRef = useRef<Record<string, number>>({});
 
   const approve = useCallback(async (approvalId: string) => {
     await resolveApproval({ approvalId, decision: "allow" });
@@ -50,13 +57,37 @@ export function ApprovalsProvider({ children }: { children: ReactNode }) {
     await refetch();
   }, [refetch]);
 
-  const approvals = data?.approvals ?? [];
+  const clearForSession = useCallback((sessionId: string) => {
+    clearCountRef.current[sessionId] = (clearCountRef.current[sessionId] ?? 0) + 1;
+    setClearedSessions(prev => new Set(prev).add(sessionId));
+    void (async () => {
+      try {
+        await refetch();
+      } finally {
+        clearCountRef.current[sessionId]--;
+        if ((clearCountRef.current[sessionId] ?? 0) <= 0) {
+          delete clearCountRef.current[sessionId];
+          setClearedSessions(prev => {
+            const next = new Set(prev);
+            next.delete(sessionId);
+            return next;
+          });
+        }
+      }
+    })();
+  }, [refetch]);
+
+  const filteredApprovals = useMemo(
+    () => (data?.approvals ?? []).filter(a => !clearedSessions.has(a.sessionId)),
+    [data, clearedSessions]
+  );
+
   const error = toErrorOrNull(queryError);
-  const pendingCount = approvals.length;
+  const pendingCount = filteredApprovals.length;
 
   const value = useMemo<ApprovalsContextValue>(
-    () => ({ approvals, pendingCount, loading: isLoading, error, approve, deny, refresh }),
-    [approvals, pendingCount, isLoading, error, approve, deny, refresh]
+    () => ({ approvals: filteredApprovals, pendingCount, loading: isLoading, error, approve, deny, refresh, clearForSession, clearedSessions }),
+    [filteredApprovals, pendingCount, isLoading, error, approve, deny, refresh, clearForSession, clearedSessions]
   );
 
   return (

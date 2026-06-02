@@ -16,6 +16,7 @@ import { BulkActions } from "./BulkActions";
 import { TagEditor } from "./TagEditor";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions, cycleGroupingStrategy } from "@/lib/grouping/strategies";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
+import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { MemoryPressureCallout } from "./MemoryPressureCallout";
 import { useAppSelector } from "@/lib/store";
 import { selectDetectedStatusMap } from "@/lib/store/sessionsSlice";
@@ -168,6 +169,9 @@ export function SessionList({
 
   // Terminal-detected status data from Redux store
   const detectedStatusMap = useAppSelector(selectDetectedStatusMap);
+
+  // Cleared sessions set for optimistic approval suppression (ADR-6)
+  const { clearedSessions } = useApprovalsContext();
 
   // Initialize state from local storage
   const [searchQuery, setSearchQuery] = useState(() => loadFromStorage(STORAGE_KEYS.SEARCH_QUERY, ""));
@@ -1071,6 +1075,7 @@ export function SessionList({
                         reviewItem={reviewItemBySessionId.get(session.id)}
                         detectedStatus={detectedStatusMap[session.id]?.detectedStatus}
                         detectedContext={detectedStatusMap[session.id]?.detectedContext}
+                        suppressApprovalSubStatus={clearedSessions.has(session.id)}
                       />
                     </div>
                   ))}

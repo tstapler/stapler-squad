@@ -38,6 +38,7 @@ import { TerminalStreamManager } from "@/lib/terminal/TerminalStreamManager";
 import { getCachedDimensions, saveDimensions, validateCellDimensions } from "@/lib/terminal/TerminalDimensionCache";
 import { DEFAULT_TERMINAL_CONFIG } from "@/lib/config/terminalConfig";
 import { useAnalytics } from "@/lib/contexts/AnalyticsContext";
+import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
 import * as styles from "./TerminalOutput.css";
 
@@ -68,6 +69,7 @@ const XTERM_DEFAULT_ROWS = 24;
 
 export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSessionName, isVisible, shellId, onShellStatusChange }: TerminalOutputProps) {
   const { track } = useAnalytics();
+  const { clearForSession, refresh: refreshApprovals } = useApprovalsContext();
   const { leftHanded, toggleHandedness } = useHandedness();
   const xtermRef = useRef<XtermTerminalHandle | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
@@ -86,6 +88,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
   const hasCachedDimensionsRef = useRef(false);
   // Set to true when we switch sessions while connected; triggers connect() once disconnect completes
   const pendingConnectAfterDisconnectRef = useRef(false);
+
+  // Debounce timer for the approval re-fetch triggered by any keystroke (ADR-4)
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // TerminalStreamManager ref -- lazily initialized when terminal is available
   const streamManagerRef = useRef<TerminalStreamManager | null>(null);
@@ -507,6 +512,13 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     };
   }, [disconnect]);
 
+  // Cancel the debounced approval refresh timer on unmount to prevent post-unmount calls
+  useEffect(() => {
+    return () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    };
+  }, []);
+
   // Handle terminal data input
   const handleTerminalData = useCallback((data: string) => {
     if (sspNegotiated && sendInputWithEcho) {
@@ -517,7 +529,16 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     } else {
       sendInput(data);
     }
-  }, [sendInput, sendInputWithEcho, sspNegotiated]);
+
+    // Optimistic clear on Enter only — reduces false-positive flicker (ADR-3)
+    if (data === "\r") {
+      clearForSession(sessionId);
+    }
+
+    // Debounced re-fetch on every keystroke — ensures UI reflects true state quickly (ADR-4)
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => void refreshApprovals(), 300);
+  }, [sendInput, sendInputWithEcho, sspNegotiated, clearForSession, sessionId, refreshApprovals]);
 
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:

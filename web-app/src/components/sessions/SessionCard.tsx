@@ -93,6 +93,7 @@ interface SessionCardProps {
   reviewItem?: ReviewItem; // Optional review queue item if session needs attention
   detectedStatus?: string; // Terminal-detected status from pattern analysis
   detectedContext?: string; // Context string for the detected status
+  suppressApprovalSubStatus?: boolean; // When true, hides Needs Approval chip/badge during optimistic clear
 }
 
 function SessionCardInner({
@@ -121,6 +122,7 @@ function SessionCardInner({
   reviewItem,
   detectedStatus,
   detectedContext,
+  suppressApprovalSubStatus = false,
 }: SessionCardProps) {
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -461,7 +463,8 @@ function SessionCardInner({
                 {getRateLimitStateText(session.rateLimitState)}
               </span>
             )}
-            {detectedStatus && (
+            {detectedStatus &&
+              !(suppressApprovalSubStatus && detectedStatus === "Needs Approval") && (
               <StatusBadge detectedStatus={detectedStatus} context={detectedContext} />
             )}
             {/* Sub-status chip from the proto sub_status field.
@@ -469,7 +472,8 @@ function SessionCardInner({
                 Cast to number to bypass TS's duplicate-value narrowing for allow_alias enums. */}
             {(session.status as number) === (SessionStatus.ACTIVE as number) &&
               session.subStatus !== SubStatus.UNSPECIFIED &&
-              session.subStatus !== SubStatus.IDLE && (
+              session.subStatus !== SubStatus.IDLE &&
+              !(suppressApprovalSubStatus && session.subStatus === SubStatus.NEEDS_APPROVAL) && (
                 <SubStatusChip subStatus={session.subStatus} />
               )}
             {Number(session.memoryRssMb ?? 0n) > 0 && (

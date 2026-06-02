@@ -1,0 +1,30 @@
+{
+  "id": "approval-enter-detection",
+  "type": "frontend",
+  "component": "ApprovalsContext",
+  "path": "web-app/src/lib/contexts/ApprovalsContext.tsx",
+  "markerLine": null,
+  "tested": true,
+  "testIds": [
+    "T-UNIT-TS-001",
+    "T-UNIT-TS-002",
+    "T-UNIT-TS-003",
+    "T-UNIT-TS-007",
+    "T-UNIT-TS-008",
+    "T-UNIT-TS-009",
+    "T-UNIT-TS-010",
+    "T-UNIT-TS-011",
+    "T-UNIT-TS-012",
+    "T-UNIT-TS-013",
+    "T-UNIT-TS-014",
+    "T-UNIT-TS-015",
+    "T-UNIT-TS-016",
+    "T-UNIT-TS-017",
+    "T-UNIT-TS-018",
+    "T-UNIT-TS-019",
+    "T-UNIT-TS-020",
+    "T-UNIT-TS-021",
+    "T-UNIT-TS-022"
+  ],
+  "lastModified": "2026-06-01T00:00:00Z"
+}

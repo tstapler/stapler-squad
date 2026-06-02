@@ -37,6 +37,8 @@ jest.mock("@/lib/contexts/ApprovalsContext", () => ({
     resolveApproval: jest.fn(),
     approve: jest.fn().mockResolvedValue(undefined),
     deny: jest.fn().mockResolvedValue(undefined),
+    clearForSession: jest.fn(),
+    clearedSessions: new Set(),
   }),
 }));
 
