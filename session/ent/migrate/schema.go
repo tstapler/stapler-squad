@@ -8,6 +8,51 @@ import (
 )
 
 var (
+	// AnalyticsEventsColumns holds the columns for the "analytics_events" table.
+	AnalyticsEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString, Unique: true},
+		{Name: "event_name", Type: field.TypeString},
+		{Name: "event_category", Type: field.TypeString},
+		{Name: "session_id", Type: field.TypeString, Nullable: true},
+		{Name: "duration_ms", Type: field.TypeInt64, Nullable: true},
+		{Name: "page", Type: field.TypeString, Nullable: true},
+		{Name: "component", Type: field.TypeString, Nullable: true},
+		{Name: "labels", Type: field.TypeJSON, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+	}
+	// AnalyticsEventsTable holds the schema information for the "analytics_events" table.
+	AnalyticsEventsTable = &schema.Table{
+		Name:       "analytics_events",
+		Columns:    AnalyticsEventsColumns,
+		PrimaryKey: []*schema.Column{AnalyticsEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "analyticsevent_event_name",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[1]},
+			},
+			{
+				Name:    "analyticsevent_event_category",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[2]},
+			},
+			{
+				Name:    "analyticsevent_session_id",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[3]},
+			},
+			{
+				Name:    "analyticsevent_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[8]},
+			},
+			{
+				Name:    "analyticsevent_event_name_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{AnalyticsEventsColumns[1], AnalyticsEventsColumns[8]},
+			},
+		},
+	}
 	// ApprovalRulesColumns holds the columns for the "approval_rules" table.
 	ApprovalRulesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -56,6 +101,95 @@ var (
 				Name:    "approvalrule_enabled",
 				Unique:  false,
 				Columns: []*schema.Column{ApprovalRulesColumns[13]},
+			},
+		},
+	}
+	// BacklogItemsColumns holds the columns for the "backlog_items" table.
+	BacklogItemsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "title", Type: field.TypeString},
+		{Name: "description", Type: field.TypeString, Nullable: true},
+		{Name: "acceptance_criteria", Type: field.TypeString, Nullable: true},
+		{Name: "priority", Type: field.TypeInt, Default: 3},
+		{Name: "status", Type: field.TypeString, Default: "idea"},
+		{Name: "repo_path", Type: field.TypeString, Nullable: true},
+		{Name: "skip_review_gate", Type: field.TypeBool, Default: false},
+		{Name: "skip_planning", Type: field.TypeBool, Default: false},
+		{Name: "plan_approved", Type: field.TypeBool, Default: false},
+		{Name: "plan_approved_at", Type: field.TypeTime, Nullable: true},
+		{Name: "plan_artifacts_path", Type: field.TypeString, Nullable: true},
+		{Name: "user_modified_fields", Type: field.TypeString, Nullable: true},
+		{Name: "notes", Type: field.TypeString, Nullable: true},
+		{Name: "external_id", Type: field.TypeString, Nullable: true},
+		{Name: "user_modified_status_at", Type: field.TypeTime, Nullable: true},
+		{Name: "archived_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "item_source_backlog_items", Type: field.TypeUUID, Nullable: true},
+	}
+	// BacklogItemsTable holds the schema information for the "backlog_items" table.
+	BacklogItemsTable = &schema.Table{
+		Name:       "backlog_items",
+		Columns:    BacklogItemsColumns,
+		PrimaryKey: []*schema.Column{BacklogItemsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "backlog_items_item_sources_backlog_items",
+				Columns:    []*schema.Column{BacklogItemsColumns[19]},
+				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "backlogitem_status_priority",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[4]},
+			},
+			{
+				Name:    "backlogitem_status_updated_at",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[5], BacklogItemsColumns[18]},
+			},
+			{
+				Name:    "backlogitem_external_id",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[14]},
+			},
+			{
+				Name:    "backlogitem_status",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogItemsColumns[5]},
+			},
+		},
+	}
+	// BacklogStatusEventsColumns holds the columns for the "backlog_status_events" table.
+	BacklogStatusEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "from_status", Type: field.TypeString},
+		{Name: "to_status", Type: field.TypeString},
+		{Name: "triggered_by", Type: field.TypeString, Default: "user"},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "item_id", Type: field.TypeUUID},
+	}
+	// BacklogStatusEventsTable holds the schema information for the "backlog_status_events" table.
+	BacklogStatusEventsTable = &schema.Table{
+		Name:       "backlog_status_events",
+		Columns:    BacklogStatusEventsColumns,
+		PrimaryKey: []*schema.Column{BacklogStatusEventsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "backlog_status_events_backlog_items_status_events",
+				Columns:    []*schema.Column{BacklogStatusEventsColumns[5]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "backlogstatusevent_item_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{BacklogStatusEventsColumns[5], BacklogStatusEventsColumns[4]},
 			},
 		},
 	}
@@ -111,6 +245,11 @@ var (
 				Name:    "classificationanalytics_created_at",
 				Unique:  false,
 				Columns: []*schema.Column{ClassificationAnalyticsColumns[18]},
+			},
+			{
+				Name:    "classificationanalytics_command_program_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{ClassificationAnalyticsColumns[14], ClassificationAnalyticsColumns[18]},
 			},
 		},
 	}
@@ -185,6 +324,223 @@ var (
 			},
 		},
 	}
+	// ErrorEventsColumns holds the columns for the "error_events" table.
+	ErrorEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "fingerprint", Type: field.TypeString, Unique: true},
+		{Name: "error_type", Type: field.TypeString},
+		{Name: "message", Type: field.TypeString},
+		{Name: "stack_trace", Type: field.TypeString, Size: 2147483647},
+		{Name: "rpc_procedure", Type: field.TypeString, Nullable: true},
+		{Name: "occurrence_count", Type: field.TypeInt, Default: 1},
+		{Name: "first_seen", Type: field.TypeTime},
+		{Name: "last_seen", Type: field.TypeTime},
+		{Name: "acknowledged", Type: field.TypeBool, Default: false},
+		{Name: "acknowledged_at", Type: field.TypeTime, Nullable: true},
+	}
+	// ErrorEventsTable holds the schema information for the "error_events" table.
+	ErrorEventsTable = &schema.Table{
+		Name:       "error_events",
+		Columns:    ErrorEventsColumns,
+		PrimaryKey: []*schema.Column{ErrorEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "errorevent_last_seen",
+				Unique:  false,
+				Columns: []*schema.Column{ErrorEventsColumns[8]},
+			},
+			{
+				Name:    "errorevent_acknowledged",
+				Unique:  false,
+				Columns: []*schema.Column{ErrorEventsColumns[9]},
+			},
+		},
+	}
+	// EscapeEventsColumns holds the columns for the "escape_events" table.
+	EscapeEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString, Unique: true},
+		{Name: "session_id", Type: field.TypeString},
+		{Name: "stage", Type: field.TypeString},
+		{Name: "sequence_type", Type: field.TypeString},
+		{Name: "sequence_subtype", Type: field.TypeString, Nullable: true},
+		{Name: "byte_length", Type: field.TypeInt},
+		{Name: "payload_hash", Type: field.TypeString, Nullable: true},
+		{Name: "raw_bytes", Type: field.TypeBytes, Nullable: true},
+		{Name: "mangled", Type: field.TypeBool, Default: false},
+		{Name: "mangle_type", Type: field.TypeString, Nullable: true},
+		{Name: "wall_time", Type: field.TypeTime},
+		{Name: "session_seq", Type: field.TypeInt64},
+	}
+	// EscapeEventsTable holds the schema information for the "escape_events" table.
+	EscapeEventsTable = &schema.Table{
+		Name:       "escape_events",
+		Columns:    EscapeEventsColumns,
+		PrimaryKey: []*schema.Column{EscapeEventsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "escapeevent_session_id",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[1]},
+			},
+			{
+				Name:    "escapeevent_session_id_stage",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[1], EscapeEventsColumns[2]},
+			},
+			{
+				Name:    "escapeevent_session_id_session_seq",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[1], EscapeEventsColumns[11]},
+			},
+			{
+				Name:    "escapeevent_wall_time",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[10]},
+			},
+			{
+				Name:    "escapeevent_mangled",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[8]},
+			},
+			{
+				Name:    "escapeevent_sequence_type",
+				Unique:  false,
+				Columns: []*schema.Column{EscapeEventsColumns[3]},
+			},
+		},
+	}
+	// ItemSessionsColumns holds the columns for the "item_sessions" table.
+	ItemSessionsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "session_uuid", Type: field.TypeString},
+		{Name: "session_role", Type: field.TypeString},
+		{Name: "started_at", Type: field.TypeTime, Nullable: true},
+		{Name: "ended_at", Type: field.TypeTime, Nullable: true},
+		{Name: "ac_snapshot", Type: field.TypeString, Nullable: true},
+		{Name: "triage_result", Type: field.TypeString, Nullable: true},
+		{Name: "last_commit_sha", Type: field.TypeString, Nullable: true},
+		{Name: "last_commit_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_commit_message", Type: field.TypeString, Nullable: true},
+		{Name: "commit_count_since_spawn", Type: field.TypeInt, Default: 0},
+		{Name: "last_file_touch_at", Type: field.TypeTime, Nullable: true},
+		{Name: "last_progress_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "backlog_item_item_sessions", Type: field.TypeUUID},
+	}
+	// ItemSessionsTable holds the schema information for the "item_sessions" table.
+	ItemSessionsTable = &schema.Table{
+		Name:       "item_sessions",
+		Columns:    ItemSessionsColumns,
+		PrimaryKey: []*schema.Column{ItemSessionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "item_sessions_backlog_items_item_sessions",
+				Columns:    []*schema.Column{ItemSessionsColumns[14]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "itemsession_session_uuid",
+				Unique:  false,
+				Columns: []*schema.Column{ItemSessionsColumns[1]},
+			},
+			{
+				Name:    "itemsession_created_at_backlog_item_item_sessions",
+				Unique:  false,
+				Columns: []*schema.Column{ItemSessionsColumns[13], ItemSessionsColumns[14]},
+			},
+		},
+	}
+	// ItemSourcesColumns holds the columns for the "item_sources" table.
+	ItemSourcesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "plugin_id", Type: field.TypeString},
+		{Name: "display_name", Type: field.TypeString},
+		{Name: "config", Type: field.TypeString, Nullable: true},
+		{Name: "enabled", Type: field.TypeBool, Default: true},
+		{Name: "sync_cursor", Type: field.TypeString, Nullable: true},
+		{Name: "last_synced_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// ItemSourcesTable holds the schema information for the "item_sources" table.
+	ItemSourcesTable = &schema.Table{
+		Name:       "item_sources",
+		Columns:    ItemSourcesColumns,
+		PrimaryKey: []*schema.Column{ItemSourcesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "itemsource_plugin_id",
+				Unique:  false,
+				Columns: []*schema.Column{ItemSourcesColumns[1]},
+			},
+			{
+				Name:    "itemsource_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{ItemSourcesColumns[4]},
+			},
+		},
+	}
+	// ProjectsColumns holds the columns for the "projects" table.
+	ProjectsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt, Increment: true},
+		{Name: "name", Type: field.TypeString, Unique: true},
+		{Name: "description", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// ProjectsTable holds the schema information for the "projects" table.
+	ProjectsTable = &schema.Table{
+		Name:       "projects",
+		Columns:    ProjectsColumns,
+		PrimaryKey: []*schema.Column{ProjectsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "project_name",
+				Unique:  false,
+				Columns: []*schema.Column{ProjectsColumns[1]},
+			},
+		},
+	}
+	// ReviewVerdictsColumns holds the columns for the "review_verdicts" table.
+	ReviewVerdictsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "overall_outcome", Type: field.TypeString},
+		{Name: "per_criterion", Type: field.TypeString, Nullable: true},
+		{Name: "summary", Type: field.TypeString, Nullable: true},
+		{Name: "diff_hash", Type: field.TypeString, Nullable: true},
+		{Name: "prompt_hash", Type: field.TypeString, Nullable: true},
+		{Name: "diff_token_count", Type: field.TypeInt, Nullable: true},
+		{Name: "diff_truncated", Type: field.TypeBool, Default: false},
+		{Name: "override_by", Type: field.TypeString, Nullable: true},
+		{Name: "override_reason", Type: field.TypeString, Nullable: true},
+		{Name: "override_at", Type: field.TypeTime, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "item_session_review_verdict", Type: field.TypeUUID, Unique: true},
+	}
+	// ReviewVerdictsTable holds the schema information for the "review_verdicts" table.
+	ReviewVerdictsTable = &schema.Table{
+		Name:       "review_verdicts",
+		Columns:    ReviewVerdictsColumns,
+		PrimaryKey: []*schema.Column{ReviewVerdictsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "review_verdicts_item_sessions_review_verdict",
+				Columns:    []*schema.Column{ReviewVerdictsColumns[12]},
+				RefColumns: []*schema.Column{ItemSessionsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "reviewverdict_item_session_review_verdict",
+				Unique:  true,
+				Columns: []*schema.Column{ReviewVerdictsColumns[12]},
+			},
+		},
+	}
 	// SessionsColumns holds the columns for the "sessions" table.
 	SessionsColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -213,12 +569,29 @@ var (
 		{Name: "last_viewed", Type: field.TypeTime, Nullable: true},
 		{Name: "last_acknowledged", Type: field.TypeTime, Nullable: true},
 		{Name: "mcp_server_url", Type: field.TypeString, Nullable: true},
+		{Name: "initial_prompt", Type: field.TypeString, Nullable: true},
+		{Name: "one_shot", Type: field.TypeBool, Default: false},
+		{Name: "last_user_response", Type: field.TypeTime, Nullable: true},
+		{Name: "processing_grace_until", Type: field.TypeTime, Nullable: true},
+		{Name: "last_prompt_detected", Type: field.TypeTime, Nullable: true},
+		{Name: "last_prompt_signature", Type: field.TypeString, Nullable: true},
+		{Name: "hidden", Type: field.TypeBool, Default: false},
+		{Name: "pause_reason", Type: field.TypeString, Nullable: true},
+		{Name: "project_sessions", Type: field.TypeInt, Nullable: true},
 	}
 	// SessionsTable holds the schema information for the "sessions" table.
 	SessionsTable = &schema.Table{
 		Name:       "sessions",
 		Columns:    SessionsColumns,
 		PrimaryKey: []*schema.Column{SessionsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "sessions_projects_sessions",
+				Columns:    []*schema.Column{SessionsColumns[34]},
+				RefColumns: []*schema.Column{ProjectsColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+		},
 		Indexes: []*schema.Index{
 			{
 				Name:    "session_title",
@@ -249,6 +622,109 @@ var (
 				Name:    "session_created_at",
 				Unique:  false,
 				Columns: []*schema.Column{SessionsColumns[9]},
+			},
+		},
+	}
+	// SessionGoalsColumns holds the columns for the "session_goals" table.
+	SessionGoalsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "session_uuid", Type: field.TypeString},
+		{Name: "goal", Type: field.TypeString, Size: 2000},
+		{Name: "status", Type: field.TypeString, Default: "idle"},
+		{Name: "tasks", Type: field.TypeString, Nullable: true},
+		{Name: "set_by", Type: field.TypeString, Nullable: true},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// SessionGoalsTable holds the schema information for the "session_goals" table.
+	SessionGoalsTable = &schema.Table{
+		Name:       "session_goals",
+		Columns:    SessionGoalsColumns,
+		PrimaryKey: []*schema.Column{SessionGoalsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "sessiongoal_session_uuid",
+				Unique:  true,
+				Columns: []*schema.Column{SessionGoalsColumns[1]},
+			},
+			{
+				Name:    "sessiongoal_status",
+				Unique:  false,
+				Columns: []*schema.Column{SessionGoalsColumns[3]},
+			},
+		},
+	}
+	// ShellsColumns holds the columns for the "shells" table.
+	ShellsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeString},
+		{Name: "name", Type: field.TypeString},
+		{Name: "command", Type: field.TypeString, Default: ""},
+		{Name: "working_dir", Type: field.TypeString, Nullable: true},
+		{Name: "tmux_session_name", Type: field.TypeString},
+		{Name: "status", Type: field.TypeString, Default: "running"},
+		{Name: "exit_code", Type: field.TypeInt, Nullable: true},
+		{Name: "order_index", Type: field.TypeInt, Default: 0},
+		{Name: "started_at", Type: field.TypeTime},
+		{Name: "stopped_at", Type: field.TypeTime, Nullable: true},
+		{Name: "session_shells", Type: field.TypeInt},
+	}
+	// ShellsTable holds the schema information for the "shells" table.
+	ShellsTable = &schema.Table{
+		Name:       "shells",
+		Columns:    ShellsColumns,
+		PrimaryKey: []*schema.Column{ShellsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "shells_sessions_shells",
+				Columns:    []*schema.Column{ShellsColumns[10]},
+				RefColumns: []*schema.Column{SessionsColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "shell_status",
+				Unique:  false,
+				Columns: []*schema.Column{ShellsColumns[5]},
+			},
+			{
+				Name:    "shell_order_index",
+				Unique:  false,
+				Columns: []*schema.Column{ShellsColumns[7]},
+			},
+		},
+	}
+	// SourceSyncEventsColumns holds the columns for the "source_sync_events" table.
+	SourceSyncEventsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "started_at", Type: field.TypeTime},
+		{Name: "finished_at", Type: field.TypeTime, Nullable: true},
+		{Name: "items_created", Type: field.TypeInt, Default: 0},
+		{Name: "items_updated", Type: field.TypeInt, Default: 0},
+		{Name: "items_skipped", Type: field.TypeInt, Default: 0},
+		{Name: "items_errored", Type: field.TypeInt, Default: 0},
+		{Name: "error_message", Type: field.TypeString, Nullable: true},
+		{Name: "cursor_after", Type: field.TypeString, Nullable: true},
+		{Name: "item_source_sync_events", Type: field.TypeUUID},
+	}
+	// SourceSyncEventsTable holds the schema information for the "source_sync_events" table.
+	SourceSyncEventsTable = &schema.Table{
+		Name:       "source_sync_events",
+		Columns:    SourceSyncEventsColumns,
+		PrimaryKey: []*schema.Column{SourceSyncEventsColumns[0]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "source_sync_events_item_sources_sync_events",
+				Columns:    []*schema.Column{SourceSyncEventsColumns[9]},
+				RefColumns: []*schema.Column{ItemSourcesColumns[0]},
+				OnDelete:   schema.NoAction,
+			},
+		},
+		Indexes: []*schema.Index{
+			{
+				Name:    "sourcesyncevent_item_source_sync_events",
+				Unique:  false,
+				Columns: []*schema.Column{SourceSyncEventsColumns[9]},
 			},
 		},
 	}
@@ -294,6 +770,31 @@ var (
 			},
 		},
 	}
+	// BacklogItemSessionsColumns holds the columns for the "backlog_item_sessions" table.
+	BacklogItemSessionsColumns = []*schema.Column{
+		{Name: "backlog_item_id", Type: field.TypeUUID},
+		{Name: "session_id", Type: field.TypeInt},
+	}
+	// BacklogItemSessionsTable holds the schema information for the "backlog_item_sessions" table.
+	BacklogItemSessionsTable = &schema.Table{
+		Name:       "backlog_item_sessions",
+		Columns:    BacklogItemSessionsColumns,
+		PrimaryKey: []*schema.Column{BacklogItemSessionsColumns[0], BacklogItemSessionsColumns[1]},
+		ForeignKeys: []*schema.ForeignKey{
+			{
+				Symbol:     "backlog_item_sessions_backlog_item_id",
+				Columns:    []*schema.Column{BacklogItemSessionsColumns[0]},
+				RefColumns: []*schema.Column{BacklogItemsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+			{
+				Symbol:     "backlog_item_sessions_session_id",
+				Columns:    []*schema.Column{BacklogItemSessionsColumns[1]},
+				RefColumns: []*schema.Column{SessionsColumns[0]},
+				OnDelete:   schema.Cascade,
+			},
+		},
+	}
 	// SessionTagsColumns holds the columns for the "session_tags" table.
 	SessionTagsColumns = []*schema.Column{
 		{Name: "session_id", Type: field.TypeInt},
@@ -321,23 +822,45 @@ var (
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
+		AnalyticsEventsTable,
 		ApprovalRulesTable,
+		BacklogItemsTable,
+		BacklogStatusEventsTable,
 		ClassificationAnalyticsTable,
 		ClaudeMetadataTable,
 		ClaudeSessionsTable,
 		DiffStatsTable,
+		ErrorEventsTable,
+		EscapeEventsTable,
+		ItemSessionsTable,
+		ItemSourcesTable,
+		ProjectsTable,
+		ReviewVerdictsTable,
 		SessionsTable,
+		SessionGoalsTable,
+		ShellsTable,
+		SourceSyncEventsTable,
 		TagsTable,
 		WorktreesTable,
+		BacklogItemSessionsTable,
 		SessionTagsTable,
 	}
 )
 
 func init() {
+	BacklogItemsTable.ForeignKeys[0].RefTable = ItemSourcesTable
+	BacklogStatusEventsTable.ForeignKeys[0].RefTable = BacklogItemsTable
 	ClaudeMetadataTable.ForeignKeys[0].RefTable = ClaudeSessionsTable
 	ClaudeSessionsTable.ForeignKeys[0].RefTable = SessionsTable
 	DiffStatsTable.ForeignKeys[0].RefTable = SessionsTable
+	ItemSessionsTable.ForeignKeys[0].RefTable = BacklogItemsTable
+	ReviewVerdictsTable.ForeignKeys[0].RefTable = ItemSessionsTable
+	SessionsTable.ForeignKeys[0].RefTable = ProjectsTable
+	ShellsTable.ForeignKeys[0].RefTable = SessionsTable
+	SourceSyncEventsTable.ForeignKeys[0].RefTable = ItemSourcesTable
 	WorktreesTable.ForeignKeys[0].RefTable = SessionsTable
+	BacklogItemSessionsTable.ForeignKeys[0].RefTable = BacklogItemsTable
+	BacklogItemSessionsTable.ForeignKeys[1].RefTable = SessionsTable
 	SessionTagsTable.ForeignKeys[0].RefTable = SessionsTable
 	SessionTagsTable.ForeignKeys[1].RefTable = TagsTable
 }

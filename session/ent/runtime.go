@@ -5,13 +5,26 @@ package ent
 import (
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/session/ent/analyticsevent"
 	"github.com/tstapler/stapler-squad/session/ent/approvalrule"
+	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
+	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/classificationanalytics"
 	"github.com/tstapler/stapler-squad/session/ent/claudemetadata"
 	"github.com/tstapler/stapler-squad/session/ent/claudesession"
 	"github.com/tstapler/stapler-squad/session/ent/diffstats"
+	"github.com/tstapler/stapler-squad/session/ent/errorevent"
+	"github.com/tstapler/stapler-squad/session/ent/escapeevent"
+	"github.com/tstapler/stapler-squad/session/ent/itemsession"
+	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/project"
+	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/schema"
 	"github.com/tstapler/stapler-squad/session/ent/session"
+	"github.com/tstapler/stapler-squad/session/ent/sessiongoal"
+	"github.com/tstapler/stapler-squad/session/ent/shell"
+	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
@@ -20,6 +33,24 @@ import (
 // (default values, validators, hooks and policies) and stitches it
 // to their package variables.
 func init() {
+	analyticseventFields := schema.AnalyticsEvent{}.Fields()
+	_ = analyticseventFields
+	// analyticseventDescEventName is the schema descriptor for event_name field.
+	analyticseventDescEventName := analyticseventFields[1].Descriptor()
+	// analyticsevent.EventNameValidator is a validator for the "event_name" field. It is called by the builders before save.
+	analyticsevent.EventNameValidator = analyticseventDescEventName.Validators[0].(func(string) error)
+	// analyticseventDescEventCategory is the schema descriptor for event_category field.
+	analyticseventDescEventCategory := analyticseventFields[2].Descriptor()
+	// analyticsevent.EventCategoryValidator is a validator for the "event_category" field. It is called by the builders before save.
+	analyticsevent.EventCategoryValidator = analyticseventDescEventCategory.Validators[0].(func(string) error)
+	// analyticseventDescCreatedAt is the schema descriptor for created_at field.
+	analyticseventDescCreatedAt := analyticseventFields[8].Descriptor()
+	// analyticsevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	analyticsevent.DefaultCreatedAt = analyticseventDescCreatedAt.Default.(func() time.Time)
+	// analyticseventDescID is the schema descriptor for id field.
+	analyticseventDescID := analyticseventFields[0].Descriptor()
+	// analyticsevent.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	analyticsevent.IDValidator = analyticseventDescID.Validators[0].(func(string) error)
 	approvalruleFields := schema.ApprovalRule{}.Fields()
 	_ = approvalruleFields
 	// approvalruleDescRuleID is the schema descriptor for rule_id field.
@@ -84,6 +115,76 @@ func init() {
 	approvalruleDescSafePythonImportsOnly := approvalruleFields[23].Descriptor()
 	// approvalrule.DefaultSafePythonImportsOnly holds the default value on creation for the safe_python_imports_only field.
 	approvalrule.DefaultSafePythonImportsOnly = approvalruleDescSafePythonImportsOnly.Default.(bool)
+	backlogitemFields := schema.BacklogItem{}.Fields()
+	_ = backlogitemFields
+	// backlogitemDescTitle is the schema descriptor for title field.
+	backlogitemDescTitle := backlogitemFields[1].Descriptor()
+	// backlogitem.TitleValidator is a validator for the "title" field. It is called by the builders before save.
+	backlogitem.TitleValidator = backlogitemDescTitle.Validators[0].(func(string) error)
+	// backlogitemDescPriority is the schema descriptor for priority field.
+	backlogitemDescPriority := backlogitemFields[4].Descriptor()
+	// backlogitem.DefaultPriority holds the default value on creation for the priority field.
+	backlogitem.DefaultPriority = backlogitemDescPriority.Default.(int)
+	// backlogitem.PriorityValidator is a validator for the "priority" field. It is called by the builders before save.
+	backlogitem.PriorityValidator = func() func(int) error {
+		validators := backlogitemDescPriority.Validators
+		fns := [...]func(int) error{
+			validators[0].(func(int) error),
+			validators[1].(func(int) error),
+		}
+		return func(priority int) error {
+			for _, fn := range fns {
+				if err := fn(priority); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// backlogitemDescStatus is the schema descriptor for status field.
+	backlogitemDescStatus := backlogitemFields[5].Descriptor()
+	// backlogitem.DefaultStatus holds the default value on creation for the status field.
+	backlogitem.DefaultStatus = backlogitemDescStatus.Default.(string)
+	// backlogitemDescSkipReviewGate is the schema descriptor for skip_review_gate field.
+	backlogitemDescSkipReviewGate := backlogitemFields[7].Descriptor()
+	// backlogitem.DefaultSkipReviewGate holds the default value on creation for the skip_review_gate field.
+	backlogitem.DefaultSkipReviewGate = backlogitemDescSkipReviewGate.Default.(bool)
+	// backlogitemDescSkipPlanning is the schema descriptor for skip_planning field.
+	backlogitemDescSkipPlanning := backlogitemFields[8].Descriptor()
+	// backlogitem.DefaultSkipPlanning holds the default value on creation for the skip_planning field.
+	backlogitem.DefaultSkipPlanning = backlogitemDescSkipPlanning.Default.(bool)
+	// backlogitemDescPlanApproved is the schema descriptor for plan_approved field.
+	backlogitemDescPlanApproved := backlogitemFields[9].Descriptor()
+	// backlogitem.DefaultPlanApproved holds the default value on creation for the plan_approved field.
+	backlogitem.DefaultPlanApproved = backlogitemDescPlanApproved.Default.(bool)
+	// backlogitemDescCreatedAt is the schema descriptor for created_at field.
+	backlogitemDescCreatedAt := backlogitemFields[17].Descriptor()
+	// backlogitem.DefaultCreatedAt holds the default value on creation for the created_at field.
+	backlogitem.DefaultCreatedAt = backlogitemDescCreatedAt.Default.(func() time.Time)
+	// backlogitemDescUpdatedAt is the schema descriptor for updated_at field.
+	backlogitemDescUpdatedAt := backlogitemFields[18].Descriptor()
+	// backlogitem.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	backlogitem.DefaultUpdatedAt = backlogitemDescUpdatedAt.Default.(func() time.Time)
+	// backlogitem.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	backlogitem.UpdateDefaultUpdatedAt = backlogitemDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// backlogitemDescID is the schema descriptor for id field.
+	backlogitemDescID := backlogitemFields[0].Descriptor()
+	// backlogitem.DefaultID holds the default value on creation for the id field.
+	backlogitem.DefaultID = backlogitemDescID.Default.(func() uuid.UUID)
+	backlogstatuseventFields := schema.BacklogStatusEvent{}.Fields()
+	_ = backlogstatuseventFields
+	// backlogstatuseventDescTriggeredBy is the schema descriptor for triggered_by field.
+	backlogstatuseventDescTriggeredBy := backlogstatuseventFields[4].Descriptor()
+	// backlogstatusevent.DefaultTriggeredBy holds the default value on creation for the triggered_by field.
+	backlogstatusevent.DefaultTriggeredBy = backlogstatuseventDescTriggeredBy.Default.(string)
+	// backlogstatuseventDescCreatedAt is the schema descriptor for created_at field.
+	backlogstatuseventDescCreatedAt := backlogstatuseventFields[5].Descriptor()
+	// backlogstatusevent.DefaultCreatedAt holds the default value on creation for the created_at field.
+	backlogstatusevent.DefaultCreatedAt = backlogstatuseventDescCreatedAt.Default.(func() time.Time)
+	// backlogstatuseventDescID is the schema descriptor for id field.
+	backlogstatuseventDescID := backlogstatuseventFields[0].Descriptor()
+	// backlogstatusevent.DefaultID holds the default value on creation for the id field.
+	backlogstatusevent.DefaultID = backlogstatuseventDescID.Default.(func() uuid.UUID)
 	classificationanalyticsFields := schema.ClassificationAnalytics{}.Fields()
 	_ = classificationanalyticsFields
 	// classificationanalyticsDescAnalyticsID is the schema descriptor for analytics_id field.
@@ -152,6 +253,106 @@ func init() {
 	diffstatsDescRemoved := diffstatsFields[1].Descriptor()
 	// diffstats.DefaultRemoved holds the default value on creation for the removed field.
 	diffstats.DefaultRemoved = diffstatsDescRemoved.Default.(int)
+	erroreventFields := schema.ErrorEvent{}.Fields()
+	_ = erroreventFields
+	// erroreventDescOccurrenceCount is the schema descriptor for occurrence_count field.
+	erroreventDescOccurrenceCount := erroreventFields[5].Descriptor()
+	// errorevent.DefaultOccurrenceCount holds the default value on creation for the occurrence_count field.
+	errorevent.DefaultOccurrenceCount = erroreventDescOccurrenceCount.Default.(int)
+	// erroreventDescAcknowledged is the schema descriptor for acknowledged field.
+	erroreventDescAcknowledged := erroreventFields[8].Descriptor()
+	// errorevent.DefaultAcknowledged holds the default value on creation for the acknowledged field.
+	errorevent.DefaultAcknowledged = erroreventDescAcknowledged.Default.(bool)
+	escapeeventFields := schema.EscapeEvent{}.Fields()
+	_ = escapeeventFields
+	// escapeeventDescSessionID is the schema descriptor for session_id field.
+	escapeeventDescSessionID := escapeeventFields[1].Descriptor()
+	// escapeevent.SessionIDValidator is a validator for the "session_id" field. It is called by the builders before save.
+	escapeevent.SessionIDValidator = escapeeventDescSessionID.Validators[0].(func(string) error)
+	// escapeeventDescStage is the schema descriptor for stage field.
+	escapeeventDescStage := escapeeventFields[2].Descriptor()
+	// escapeevent.StageValidator is a validator for the "stage" field. It is called by the builders before save.
+	escapeevent.StageValidator = escapeeventDescStage.Validators[0].(func(string) error)
+	// escapeeventDescSequenceType is the schema descriptor for sequence_type field.
+	escapeeventDescSequenceType := escapeeventFields[3].Descriptor()
+	// escapeevent.SequenceTypeValidator is a validator for the "sequence_type" field. It is called by the builders before save.
+	escapeevent.SequenceTypeValidator = escapeeventDescSequenceType.Validators[0].(func(string) error)
+	// escapeeventDescMangled is the schema descriptor for mangled field.
+	escapeeventDescMangled := escapeeventFields[8].Descriptor()
+	// escapeevent.DefaultMangled holds the default value on creation for the mangled field.
+	escapeevent.DefaultMangled = escapeeventDescMangled.Default.(bool)
+	// escapeeventDescWallTime is the schema descriptor for wall_time field.
+	escapeeventDescWallTime := escapeeventFields[10].Descriptor()
+	// escapeevent.DefaultWallTime holds the default value on creation for the wall_time field.
+	escapeevent.DefaultWallTime = escapeeventDescWallTime.Default.(func() time.Time)
+	// escapeeventDescID is the schema descriptor for id field.
+	escapeeventDescID := escapeeventFields[0].Descriptor()
+	// escapeevent.IDValidator is a validator for the "id" field. It is called by the builders before save.
+	escapeevent.IDValidator = escapeeventDescID.Validators[0].(func(string) error)
+	itemsessionFields := schema.ItemSession{}.Fields()
+	_ = itemsessionFields
+	// itemsessionDescCommitCountSinceSpawn is the schema descriptor for commit_count_since_spawn field.
+	itemsessionDescCommitCountSinceSpawn := itemsessionFields[10].Descriptor()
+	// itemsession.DefaultCommitCountSinceSpawn holds the default value on creation for the commit_count_since_spawn field.
+	itemsession.DefaultCommitCountSinceSpawn = itemsessionDescCommitCountSinceSpawn.Default.(int)
+	// itemsessionDescCreatedAt is the schema descriptor for created_at field.
+	itemsessionDescCreatedAt := itemsessionFields[13].Descriptor()
+	// itemsession.DefaultCreatedAt holds the default value on creation for the created_at field.
+	itemsession.DefaultCreatedAt = itemsessionDescCreatedAt.Default.(func() time.Time)
+	// itemsessionDescID is the schema descriptor for id field.
+	itemsessionDescID := itemsessionFields[0].Descriptor()
+	// itemsession.DefaultID holds the default value on creation for the id field.
+	itemsession.DefaultID = itemsessionDescID.Default.(func() uuid.UUID)
+	itemsourceFields := schema.ItemSource{}.Fields()
+	_ = itemsourceFields
+	// itemsourceDescEnabled is the schema descriptor for enabled field.
+	itemsourceDescEnabled := itemsourceFields[4].Descriptor()
+	// itemsource.DefaultEnabled holds the default value on creation for the enabled field.
+	itemsource.DefaultEnabled = itemsourceDescEnabled.Default.(bool)
+	// itemsourceDescCreatedAt is the schema descriptor for created_at field.
+	itemsourceDescCreatedAt := itemsourceFields[7].Descriptor()
+	// itemsource.DefaultCreatedAt holds the default value on creation for the created_at field.
+	itemsource.DefaultCreatedAt = itemsourceDescCreatedAt.Default.(func() time.Time)
+	// itemsourceDescUpdatedAt is the schema descriptor for updated_at field.
+	itemsourceDescUpdatedAt := itemsourceFields[8].Descriptor()
+	// itemsource.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	itemsource.DefaultUpdatedAt = itemsourceDescUpdatedAt.Default.(func() time.Time)
+	// itemsource.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	itemsource.UpdateDefaultUpdatedAt = itemsourceDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// itemsourceDescID is the schema descriptor for id field.
+	itemsourceDescID := itemsourceFields[0].Descriptor()
+	// itemsource.DefaultID holds the default value on creation for the id field.
+	itemsource.DefaultID = itemsourceDescID.Default.(func() uuid.UUID)
+	projectFields := schema.Project{}.Fields()
+	_ = projectFields
+	// projectDescName is the schema descriptor for name field.
+	projectDescName := projectFields[0].Descriptor()
+	// project.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	project.NameValidator = projectDescName.Validators[0].(func(string) error)
+	// projectDescCreatedAt is the schema descriptor for created_at field.
+	projectDescCreatedAt := projectFields[2].Descriptor()
+	// project.DefaultCreatedAt holds the default value on creation for the created_at field.
+	project.DefaultCreatedAt = projectDescCreatedAt.Default.(func() time.Time)
+	// projectDescUpdatedAt is the schema descriptor for updated_at field.
+	projectDescUpdatedAt := projectFields[3].Descriptor()
+	// project.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	project.DefaultUpdatedAt = projectDescUpdatedAt.Default.(func() time.Time)
+	// project.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	project.UpdateDefaultUpdatedAt = projectDescUpdatedAt.UpdateDefault.(func() time.Time)
+	reviewverdictFields := schema.ReviewVerdict{}.Fields()
+	_ = reviewverdictFields
+	// reviewverdictDescDiffTruncated is the schema descriptor for diff_truncated field.
+	reviewverdictDescDiffTruncated := reviewverdictFields[7].Descriptor()
+	// reviewverdict.DefaultDiffTruncated holds the default value on creation for the diff_truncated field.
+	reviewverdict.DefaultDiffTruncated = reviewverdictDescDiffTruncated.Default.(bool)
+	// reviewverdictDescCreatedAt is the schema descriptor for created_at field.
+	reviewverdictDescCreatedAt := reviewverdictFields[11].Descriptor()
+	// reviewverdict.DefaultCreatedAt holds the default value on creation for the created_at field.
+	reviewverdict.DefaultCreatedAt = reviewverdictDescCreatedAt.Default.(func() time.Time)
+	// reviewverdictDescID is the schema descriptor for id field.
+	reviewverdictDescID := reviewverdictFields[0].Descriptor()
+	// reviewverdict.DefaultID holds the default value on creation for the id field.
+	reviewverdict.DefaultID = reviewverdictDescID.Default.(func() uuid.UUID)
 	sessionFields := schema.Session{}.Fields()
 	_ = sessionFields
 	// sessionDescTitle is the schema descriptor for title field.
@@ -188,6 +389,100 @@ func init() {
 	sessionDescIsExpanded := sessionFields[15].Descriptor()
 	// session.DefaultIsExpanded holds the default value on creation for the is_expanded field.
 	session.DefaultIsExpanded = sessionDescIsExpanded.Default.(bool)
+	// sessionDescOneShot is the schema descriptor for one_shot field.
+	sessionDescOneShot := sessionFields[26].Descriptor()
+	// session.DefaultOneShot holds the default value on creation for the one_shot field.
+	session.DefaultOneShot = sessionDescOneShot.Default.(bool)
+	// sessionDescHidden is the schema descriptor for hidden field.
+	sessionDescHidden := sessionFields[31].Descriptor()
+	// session.DefaultHidden holds the default value on creation for the hidden field.
+	session.DefaultHidden = sessionDescHidden.Default.(bool)
+	sessiongoalFields := schema.SessionGoal{}.Fields()
+	_ = sessiongoalFields
+	// sessiongoalDescSessionUUID is the schema descriptor for session_uuid field.
+	sessiongoalDescSessionUUID := sessiongoalFields[1].Descriptor()
+	// sessiongoal.SessionUUIDValidator is a validator for the "session_uuid" field. It is called by the builders before save.
+	sessiongoal.SessionUUIDValidator = sessiongoalDescSessionUUID.Validators[0].(func(string) error)
+	// sessiongoalDescGoal is the schema descriptor for goal field.
+	sessiongoalDescGoal := sessiongoalFields[2].Descriptor()
+	// sessiongoal.GoalValidator is a validator for the "goal" field. It is called by the builders before save.
+	sessiongoal.GoalValidator = func() func(string) error {
+		validators := sessiongoalDescGoal.Validators
+		fns := [...]func(string) error{
+			validators[0].(func(string) error),
+			validators[1].(func(string) error),
+		}
+		return func(goal string) error {
+			for _, fn := range fns {
+				if err := fn(goal); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}()
+	// sessiongoalDescStatus is the schema descriptor for status field.
+	sessiongoalDescStatus := sessiongoalFields[3].Descriptor()
+	// sessiongoal.DefaultStatus holds the default value on creation for the status field.
+	sessiongoal.DefaultStatus = sessiongoalDescStatus.Default.(string)
+	// sessiongoalDescCreatedAt is the schema descriptor for created_at field.
+	sessiongoalDescCreatedAt := sessiongoalFields[6].Descriptor()
+	// sessiongoal.DefaultCreatedAt holds the default value on creation for the created_at field.
+	sessiongoal.DefaultCreatedAt = sessiongoalDescCreatedAt.Default.(func() time.Time)
+	// sessiongoalDescUpdatedAt is the schema descriptor for updated_at field.
+	sessiongoalDescUpdatedAt := sessiongoalFields[7].Descriptor()
+	// sessiongoal.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	sessiongoal.DefaultUpdatedAt = sessiongoalDescUpdatedAt.Default.(func() time.Time)
+	// sessiongoal.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	sessiongoal.UpdateDefaultUpdatedAt = sessiongoalDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// sessiongoalDescID is the schema descriptor for id field.
+	sessiongoalDescID := sessiongoalFields[0].Descriptor()
+	// sessiongoal.DefaultID holds the default value on creation for the id field.
+	sessiongoal.DefaultID = sessiongoalDescID.Default.(func() uuid.UUID)
+	shellFields := schema.Shell{}.Fields()
+	_ = shellFields
+	// shellDescCommand is the schema descriptor for command field.
+	shellDescCommand := shellFields[2].Descriptor()
+	// shell.DefaultCommand holds the default value on creation for the command field.
+	shell.DefaultCommand = shellDescCommand.Default.(string)
+	// shellDescStatus is the schema descriptor for status field.
+	shellDescStatus := shellFields[5].Descriptor()
+	// shell.DefaultStatus holds the default value on creation for the status field.
+	shell.DefaultStatus = shellDescStatus.Default.(string)
+	// shellDescOrderIndex is the schema descriptor for order_index field.
+	shellDescOrderIndex := shellFields[7].Descriptor()
+	// shell.DefaultOrderIndex holds the default value on creation for the order_index field.
+	shell.DefaultOrderIndex = shellDescOrderIndex.Default.(int)
+	// shellDescStartedAt is the schema descriptor for started_at field.
+	shellDescStartedAt := shellFields[8].Descriptor()
+	// shell.DefaultStartedAt holds the default value on creation for the started_at field.
+	shell.DefaultStartedAt = shellDescStartedAt.Default.(func() time.Time)
+	sourcesynceventFields := schema.SourceSyncEvent{}.Fields()
+	_ = sourcesynceventFields
+	// sourcesynceventDescStartedAt is the schema descriptor for started_at field.
+	sourcesynceventDescStartedAt := sourcesynceventFields[1].Descriptor()
+	// sourcesyncevent.DefaultStartedAt holds the default value on creation for the started_at field.
+	sourcesyncevent.DefaultStartedAt = sourcesynceventDescStartedAt.Default.(func() time.Time)
+	// sourcesynceventDescItemsCreated is the schema descriptor for items_created field.
+	sourcesynceventDescItemsCreated := sourcesynceventFields[3].Descriptor()
+	// sourcesyncevent.DefaultItemsCreated holds the default value on creation for the items_created field.
+	sourcesyncevent.DefaultItemsCreated = sourcesynceventDescItemsCreated.Default.(int)
+	// sourcesynceventDescItemsUpdated is the schema descriptor for items_updated field.
+	sourcesynceventDescItemsUpdated := sourcesynceventFields[4].Descriptor()
+	// sourcesyncevent.DefaultItemsUpdated holds the default value on creation for the items_updated field.
+	sourcesyncevent.DefaultItemsUpdated = sourcesynceventDescItemsUpdated.Default.(int)
+	// sourcesynceventDescItemsSkipped is the schema descriptor for items_skipped field.
+	sourcesynceventDescItemsSkipped := sourcesynceventFields[5].Descriptor()
+	// sourcesyncevent.DefaultItemsSkipped holds the default value on creation for the items_skipped field.
+	sourcesyncevent.DefaultItemsSkipped = sourcesynceventDescItemsSkipped.Default.(int)
+	// sourcesynceventDescItemsErrored is the schema descriptor for items_errored field.
+	sourcesynceventDescItemsErrored := sourcesynceventFields[6].Descriptor()
+	// sourcesyncevent.DefaultItemsErrored holds the default value on creation for the items_errored field.
+	sourcesyncevent.DefaultItemsErrored = sourcesynceventDescItemsErrored.Default.(int)
+	// sourcesynceventDescID is the schema descriptor for id field.
+	sourcesynceventDescID := sourcesynceventFields[0].Descriptor()
+	// sourcesyncevent.DefaultID holds the default value on creation for the id field.
+	sourcesyncevent.DefaultID = sourcesynceventDescID.Default.(func() uuid.UUID)
 	tagFields := schema.Tag{}.Fields()
 	_ = tagFields
 	// tagDescName is the schema descriptor for name field.

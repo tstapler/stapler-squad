@@ -67,15 +67,15 @@ export function ParsedRuleCard({ result, status }: ParsedRuleCardProps) {
         )}
       </div>
 
-      {rule && (rule.toolName || (rule.criteriaPrograms && rule.criteriaPrograms.length > 0) || rule.toolPattern || rule.commandPattern || rule.filePattern) && (
+      {rule && (rule.toolName || (rule.programs && rule.programs.length > 0) || rule.toolPattern || rule.commandPattern || rule.filePattern) && (
         <div className={matchChips}>
           {rule.toolName && <code className={matchChip}>{rule.toolName}</code>}
           {rule.toolPattern && <code className={matchChip}>pattern: {rule.toolPattern}</code>}
-          {rule.criteriaPrograms && rule.criteriaPrograms.length > 0 && (
-            <code className={matchChip}>programs: {rule.criteriaPrograms.join(", ")}</code>
+          {rule.programs && rule.programs.length > 0 && (
+            <code className={matchChip}>programs: {rule.programs.join(", ")}</code>
           )}
-          {rule.criteriaSubcommands && rule.criteriaSubcommands.length > 0 && (
-            <code className={matchChip}>sub: {rule.criteriaSubcommands.join(", ")}</code>
+          {rule.subcommands && rule.subcommands.length > 0 && (
+            <code className={matchChip}>sub: {rule.subcommands.join(", ")}</code>
           )}
           {rule.commandPattern && <code className={matchChip}>cmd: {rule.commandPattern}</code>}
           {rule.filePattern && <code className={matchChip}>file: {rule.filePattern}</code>}

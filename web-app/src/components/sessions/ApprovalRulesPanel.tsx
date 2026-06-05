@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
@@ -28,7 +28,6 @@ import {
   generateButtonRow, generateButton, cancelGenerateButton,
   generateErrorBanner, dismissErrorButton, suggestionsContainer,
   ruleModalContent, rowCount,
-  tabLabelFull, tabLabelShort,
 } from "./ApprovalRulesPanel.css";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -87,16 +86,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     cancel,
     clear,
   } = useGenerateRule();
-
-  // ── Epic 6: command-sample generate hook (separate instance) ─────────────
-  const {
-    suggestions: cmdSuggestions,
-    loading: cmdGenLoading,
-    generate: cmdGenerate,
-    clear: cmdGenClear,
-  } = useGenerateRule();
-
-  const nameInputRef = useRef<HTMLInputElement>(null);
 
   const [sourceFilter, setSourceFilter] = useState<string>("all");
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -157,8 +146,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
         toolCategory: rule.toolCategory,
         commandPattern: rule.commandPattern,
         filePattern: rule.filePattern,
-        criteriaPrograms: rule.criteriaPrograms,
-        criteriaSubcommands: rule.criteriaSubcommands,
         decision: rule.decision,
         riskLevel: rule.riskLevel,
         reason: rule.reason,
@@ -177,61 +164,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     } catch (e) {
       console.error("Failed to toggle rule:", e);
     }
-  };
-
-  // ── open/close form ───────────────────────────────────────────────────────
-
-  const openForm = () => {
-    setShowForm(true);
-    setForm(emptyForm);
-    setFormError(null);
-    setAiPrefilled(false);
-    setCmdSampleValue("");
-    touchedFieldsRef.current = new Set();
-    cmdGenClear();
-  };
-
-  const closeForm = () => {
-    setShowForm(false);
-    setForm(emptyForm);
-    setFormError(null);
-    setAiPrefilled(false);
-    setCmdSampleValue("");
-    touchedFieldsRef.current = new Set();
-    cmdGenClear();
-  };
-
-  // ── Epic 6: pre-fill form from command-sample suggestion ──────────────────
-  // useEffect ensures prefill runs after the form is open (showForm=true) and
-  // only when cmdSuggestions actually changes.
-  useEffect(() => {
-    if (!showForm) return;
-    if (cmdSuggestions.length === 0) return;
-    const suggestion = cmdSuggestions[0];
-    const touched = touchedFieldsRef.current;
-    setForm((prev) => ({
-      name:                touched.has("name")                ? prev.name                : suggestion.name || prev.name,
-      toolName:            touched.has("toolName")            ? prev.toolName            : suggestion.toolName || prev.toolName,
-      toolPattern:         touched.has("toolPattern")         ? prev.toolPattern         : suggestion.toolPattern || prev.toolPattern,
-      commandPattern:      touched.has("commandPattern")      ? prev.commandPattern      : suggestion.commandPattern || prev.commandPattern,
-      filePattern:         touched.has("filePattern")         ? prev.filePattern         : suggestion.filePattern || prev.filePattern,
-      criteriaPrograms:    touched.has("criteriaPrograms")    ? prev.criteriaPrograms    : prev.criteriaPrograms,
-      criteriaSubcommands: touched.has("criteriaSubcommands") ? prev.criteriaSubcommands : prev.criteriaSubcommands,
-      decision:            touched.has("decision")            ? prev.decision            : (suggestion.decision !== AutoDecision.UNSPECIFIED ? suggestion.decision : prev.decision),
-      reason:              touched.has("reason")              ? prev.reason              : suggestion.reason || prev.reason,
-      alternative:         touched.has("alternative")         ? prev.alternative         : suggestion.alternative || prev.alternative,
-      priority:            touched.has("priority")            ? prev.priority            : (suggestion.priority > 0 ? suggestion.priority : prev.priority),
-      enabled:             prev.enabled,
-    }));
-    setAiPrefilled(true);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cmdSuggestions, showForm]);
-
-  // ── Epic 6: handle manual field changes (mark touched) ───────────────────
-
-  const setFormField = <K extends keyof RuleFormState>(key: K, value: RuleFormState[K]) => {
-    touchedFieldsRef.current.add(key);
-    setForm((prev) => ({ ...prev, [key]: value }));
   };
 
   // ── Epic 3: handle suggestion cards ──────────────────────────────────────
