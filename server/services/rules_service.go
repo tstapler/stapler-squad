@@ -84,21 +84,29 @@ func (rs *RulesService) UpsertApprovalRule(
 	}
 
 	spec := RuleSpec{
-		ID:                  r.Id,
-		Name:                r.Name,
-		ToolName:            r.ToolName,
-		ToolPattern:         r.ToolPattern,
-		CommandPattern:      r.CommandPattern,
-		FilePattern:         r.FilePattern,
-		CriteriaPrograms:    r.CriteriaPrograms,
-		CriteriaSubcommands: r.CriteriaSubcommands,
-		Decision:            autoDecisionToString(r.Decision),
-		RiskLevel:           r.RiskLevel,
-		Reason:              r.Reason,
-		Alternative:         r.Alternative,
-		Priority:            int(r.Priority),
-		Enabled:             r.Enabled,
-		Source:              "user",
+		ID:             r.Id,
+		Name:           r.Name,
+		ToolName:       r.ToolName,
+		ToolPattern:    r.ToolPattern,
+		ToolCategory:   r.ToolCategory,
+		CommandPattern: r.CommandPattern,
+		FilePattern:    r.FilePattern,
+		Decision:       autoDecisionToString(r.Decision),
+		RiskLevel:      r.RiskLevel,
+		Reason:         r.Reason,
+		Alternative:    r.Alternative,
+		Priority:       int(r.Priority),
+		Enabled:        r.Enabled,
+		Source:         "user",
+
+		Programs:              r.Programs,
+		Subcommands:           r.Subcommands,
+		BlockedSubcommands:    r.BlockedSubcommands,
+		RequiredFlags:         r.RequiredFlags,
+		ForbiddenFlags:        r.ForbiddenFlags,
+		RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
+		PythonModes:           r.PythonModes,
+		SafePythonImportsOnly: r.SafePythonImportsOnly,
 	}
 	if r.CreatedAt != nil {
 		spec.CreatedAt = r.CreatedAt.AsTime()
@@ -309,23 +317,23 @@ func (rs *RulesService) coveredSubcommands(program string, knownSubcmds []string
 			continue
 		}
 		// Criteria-based matching: check Programs + Subcommands directly.
-		if len(spec.CriteriaPrograms) > 0 {
+		if len(spec.Programs) > 0 {
 			programMatched := false
-			for _, p := range spec.CriteriaPrograms {
+			for _, p := range spec.Programs {
 				if strings.EqualFold(p, program) {
 					programMatched = true
 					break
 				}
 			}
 			if programMatched {
-				if len(spec.CriteriaSubcommands) == 0 {
+				if len(spec.Subcommands) == 0 {
 					// No subcommand restriction — covers all subcommands.
 					covered[""] = true
 					for _, sub := range knownSubcmds {
 						covered[sub] = true
 					}
 				} else {
-					for _, sub := range spec.CriteriaSubcommands {
+					for _, sub := range spec.Subcommands {
 						covered[sub] = true
 					}
 				}
@@ -403,21 +411,29 @@ func (rs *RulesService) rebuildClassifier() {
 
 func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 	p := &sessionv1.ApprovalRuleProto{
-		Id:                  spec.ID,
-		Name:                spec.Name,
-		ToolName:            spec.ToolName,
-		ToolPattern:         spec.ToolPattern,
-		CommandPattern:      spec.CommandPattern,
-		FilePattern:         spec.FilePattern,
-		CriteriaPrograms:    spec.CriteriaPrograms,
-		CriteriaSubcommands: spec.CriteriaSubcommands,
-		Decision:            stringToAutoDecision(spec.Decision),
-		RiskLevel:           spec.RiskLevel,
-		Reason:              spec.Reason,
-		Alternative:         spec.Alternative,
-		Priority:            int32(spec.Priority),
-		Enabled:             spec.Enabled,
-		Source:              spec.Source,
+		Id:             spec.ID,
+		Name:           spec.Name,
+		ToolName:       spec.ToolName,
+		ToolPattern:    spec.ToolPattern,
+		ToolCategory:   spec.ToolCategory,
+		CommandPattern: spec.CommandPattern,
+		FilePattern:    spec.FilePattern,
+		Decision:       stringToAutoDecision(spec.Decision),
+		RiskLevel:      spec.RiskLevel,
+		Reason:         spec.Reason,
+		Alternative:    spec.Alternative,
+		Priority:       int32(spec.Priority),
+		Enabled:        spec.Enabled,
+		Source:         spec.Source,
+
+		Programs:              spec.Programs,
+		Subcommands:           spec.Subcommands,
+		BlockedSubcommands:    spec.BlockedSubcommands,
+		RequiredFlags:         spec.RequiredFlags,
+		ForbiddenFlags:        spec.ForbiddenFlags,
+		RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
+		PythonModes:           spec.PythonModes,
+		SafePythonImportsOnly: spec.SafePythonImportsOnly,
 	}
 	if !spec.CreatedAt.IsZero() {
 		p.CreatedAt = timestamppb.New(spec.CreatedAt)
@@ -427,16 +443,17 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 
 func ruleToSpec(r classifier.Rule) RuleSpec {
 	spec := RuleSpec{
-		ID:          r.ID,
-		Name:        r.Name,
-		ToolName:    r.ToolName,
-		Decision:    decisionString(r.Decision),
-		RiskLevel:   riskLevelString(r.RiskLevel),
-		Reason:      r.Reason,
-		Alternative: r.Alternative,
-		Priority:    r.Priority,
-		Enabled:     r.Enabled,
-		Source:      r.Source,
+		ID:           r.ID,
+		Name:         r.Name,
+		ToolName:     r.ToolName,
+		ToolCategory: r.ToolCategory,
+		Decision:     decisionString(r.Decision),
+		RiskLevel:    riskLevelString(r.RiskLevel),
+		Reason:       r.Reason,
+		Alternative:  r.Alternative,
+		Priority:     r.Priority,
+		Enabled:      r.Enabled,
+		Source:       r.Source,
 	}
 	if r.ToolPattern != nil {
 		spec.ToolPattern = r.ToolPattern.String()
@@ -447,9 +464,16 @@ func ruleToSpec(r classifier.Rule) RuleSpec {
 	if r.FilePattern != nil {
 		spec.FilePattern = r.FilePattern.String()
 	}
+	// Expose structured CommandCriteria so seed/claude-settings rules are readable in the UI.
 	if r.Criteria != nil {
-		spec.CriteriaPrograms = r.Criteria.Programs
-		spec.CriteriaSubcommands = r.Criteria.Subcommands
+		spec.Programs = r.Criteria.Programs
+		spec.Subcommands = r.Criteria.Subcommands
+		spec.BlockedSubcommands = r.Criteria.BlockedSubcommands
+		spec.RequiredFlags = r.Criteria.RequiredFlags
+		spec.ForbiddenFlags = r.Criteria.ForbiddenFlags
+		spec.RequiredFlagPrefixes = r.Criteria.RequiredFlagPrefixes
+		spec.PythonModes = r.Criteria.PythonModes
+		spec.SafePythonImportsOnly = r.Criteria.SafePythonImportsOnly
 	}
 	return spec
 }
@@ -985,19 +1009,19 @@ func validateYAMLEntry(e yamlRuleEntry) (*sessionv1.ApprovalRuleProto, []string)
 	}
 
 	return &sessionv1.ApprovalRuleProto{
-		Name:                e.Name,
-		ToolName:            e.Tool,
-		ToolPattern:         e.ToolPattern,
-		CriteriaPrograms:    e.Programs,
-		CriteriaSubcommands: e.Subcommands,
-		CommandPattern:      e.CommandPattern,
-		FilePattern:         e.FilePattern,
-		Decision:            decision,
-		Reason:              e.Reason,
-		Alternative:         e.Alternative,
-		Priority:            priority,
-		Enabled:             enabled,
-		Source:              "user",
+		Name:           e.Name,
+		ToolName:       e.Tool,
+		ToolPattern:    e.ToolPattern,
+		Programs:       e.Programs,
+		Subcommands:    e.Subcommands,
+		CommandPattern: e.CommandPattern,
+		FilePattern:    e.FilePattern,
+		Decision:       decision,
+		Reason:         e.Reason,
+		Alternative:    e.Alternative,
+		Priority:       priority,
+		Enabled:        enabled,
+		Source:         "user",
 	}, nil
 }
 
@@ -1031,8 +1055,8 @@ func (rs *RulesService) ExportRules(
 			Name:           spec.Name,
 			Tool:           spec.ToolName,
 			ToolPattern:    spec.ToolPattern,
-			Programs:       spec.CriteriaPrograms,
-			Subcommands:    spec.CriteriaSubcommands,
+			Programs:       spec.Programs,
+			Subcommands:    spec.Subcommands,
 			CommandPattern: spec.CommandPattern,
 			FilePattern:    spec.FilePattern,
 			Decision:       decision,
@@ -1100,8 +1124,8 @@ func (rs *RulesService) BulkUpsertRules(
 			ToolPattern:    proto.ToolPattern,
 			CommandPattern: proto.CommandPattern,
 			FilePattern:    proto.FilePattern,
-			Programs:       proto.CriteriaPrograms,
-			Subcommands:    proto.CriteriaSubcommands,
+			Programs:       proto.Programs,
+			Subcommands:    proto.Subcommands,
 			Decision:       autoDecisionToYAML(proto.Decision),
 			Reason:         proto.Reason,
 			Alternative:    proto.Alternative,
@@ -1141,20 +1165,26 @@ func ruleProtoToSpec(p *sessionv1.ApprovalRuleProto) RuleSpec {
 	}
 	return RuleSpec{
 		// ID intentionally left empty -- BulkUpsert assigns "user-<uuid>" server-side.
-		Name:                p.Name,
-		ToolName:            p.ToolName,
-		ToolPattern:         p.ToolPattern,
-		CommandPattern:      p.CommandPattern,
-		FilePattern:         p.FilePattern,
-		CriteriaPrograms:    p.CriteriaPrograms,
-		CriteriaSubcommands: p.CriteriaSubcommands,
-		Decision:            autoDecisionToString(p.Decision),
-		RiskLevel:           p.RiskLevel,
-		Reason:              p.Reason,
-		Alternative:         p.Alternative,
-		Priority:            int(p.Priority),
-		Enabled:             p.Enabled,
-		Source:              "user", // always override -- never accept client-supplied source
-		CreatedAt:           time.Now(),
+		Name:                  p.Name,
+		ToolName:              p.ToolName,
+		ToolPattern:           p.ToolPattern,
+		CommandPattern:        p.CommandPattern,
+		FilePattern:           p.FilePattern,
+		Programs:              p.Programs,
+		Subcommands:           p.Subcommands,
+		BlockedSubcommands:    p.BlockedSubcommands,
+		RequiredFlags:         p.RequiredFlags,
+		ForbiddenFlags:        p.ForbiddenFlags,
+		RequiredFlagPrefixes:  p.RequiredFlagPrefixes,
+		PythonModes:           p.PythonModes,
+		SafePythonImportsOnly: p.SafePythonImportsOnly,
+		Decision:              autoDecisionToString(p.Decision),
+		RiskLevel:             p.RiskLevel,
+		Reason:                p.Reason,
+		Alternative:           p.Alternative,
+		Priority:              int(p.Priority),
+		Enabled:               p.Enabled,
+		Source:                "user", // always override -- never accept client-supplied source
+		CreatedAt:             time.Now(),
 	}
 }

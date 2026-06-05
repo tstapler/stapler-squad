@@ -180,32 +180,32 @@ type Repository interface {
 
 // ApprovalRuleData is the domain model for an auto-approval rule.
 type ApprovalRuleData struct {
-	ID                  string
-	Name                string
-	ToolName            string
-	ToolPattern         string
-	ToolCategory        string
-	CommandPattern      string
-	FilePattern         string
-	CriteriaPrograms    []string
-	CriteriaSubcommands []string
-	Decision            int
-	RiskLevel           int
-	Reason              string
-	Alternative         string
-	Priority            int
-	Enabled             bool
-	Source              string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-}
+	ID             string
+	Name           string
+	ToolName       string
+	ToolPattern    string
+	ToolCategory   string
+	CommandPattern string
+	FilePattern    string
+	Decision       int
+	RiskLevel      int
+	Reason         string
+	Alternative    string
+	Priority       int
+	Enabled        bool
+	Source         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 
-// SubcommandDecisionCount holds a (subcommand, decision) aggregate count.
-// Returned by GetSubcommandBreakdown.
-type SubcommandDecisionCount struct {
-	Subcommand string
-	Decision   string
-	Count      int
+	// Structured CommandCriteria fields — correspond to classifier.CommandCriteria.
+	Programs              []string
+	Subcommands           []string
+	BlockedSubcommands    []string
+	RequiredFlags         []string
+	ForbiddenFlags        []string
+	RequiredFlagPrefixes  []string
+	PythonModes           []string
+	SafePythonImportsOnly bool
 }
 
 // AnalyticsData is the domain model for classification analytics.

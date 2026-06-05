@@ -88,6 +88,7 @@ export function useApprovalRules(
         name: ruleData.name ?? "",
         toolName: ruleData.toolName ?? "",
         toolPattern: ruleData.toolPattern ?? "",
+        toolCategory: ruleData.toolCategory ?? "",
         commandPattern: ruleData.commandPattern ?? "",
         filePattern: ruleData.filePattern ?? "",
         criteriaPrograms: ruleData.criteriaPrograms ?? [],
@@ -99,6 +100,14 @@ export function useApprovalRules(
         priority: ruleData.priority ?? 10,
         enabled: ruleData.enabled ?? true,
         source: "user",
+        programs: ruleData.programs ?? [],
+        subcommands: ruleData.subcommands ?? [],
+        blockedSubcommands: ruleData.blockedSubcommands ?? [],
+        requiredFlags: ruleData.requiredFlags ?? [],
+        forbiddenFlags: ruleData.forbiddenFlags ?? [],
+        requiredFlagPrefixes: ruleData.requiredFlagPrefixes ?? [],
+        pythonModes: ruleData.pythonModes ?? [],
+        safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
       });
       const req = create(UpsertApprovalRuleRequestSchema, { rule });
       await clientRef.current.upsertApprovalRule(req);

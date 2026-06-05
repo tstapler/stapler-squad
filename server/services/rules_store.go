@@ -20,23 +20,31 @@ import (
 // RuleSpec is the JSON-serializable form of a Rule.
 // CommandPattern and FilePattern are stored as strings (compiled on load).
 type RuleSpec struct {
-	ID                  string    `json:"id"`
-	Name                string    `json:"name"`
-	ToolName            string    `json:"tool_name,omitempty"`
-	ToolPattern         string    `json:"tool_pattern,omitempty"`
-	ToolCategory        string    `json:"tool_category,omitempty"`
-	CommandPattern      string    `json:"command_pattern,omitempty"`
-	FilePattern         string    `json:"file_pattern,omitempty"`
-	CriteriaPrograms    []string  `json:"criteria_programs,omitempty"`
-	CriteriaSubcommands []string  `json:"criteria_subcommands,omitempty"`
-	Decision            string    `json:"decision"`   // "auto_allow" | "auto_deny" | "escalate"
-	RiskLevel           string    `json:"risk_level"` // "low" | "medium" | "high" | "critical"
-	Reason              string    `json:"reason,omitempty"`
-	Alternative         string    `json:"alternative,omitempty"`
-	Priority            int       `json:"priority"`
-	Enabled             bool      `json:"enabled"`
-	Source              string    `json:"source"` // "user" | "seed" | "claude-settings"
-	CreatedAt           time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	ToolName       string    `json:"tool_name,omitempty"`
+	ToolPattern    string    `json:"tool_pattern,omitempty"`
+	ToolCategory   string    `json:"tool_category,omitempty"`
+	CommandPattern string    `json:"command_pattern,omitempty"`
+	FilePattern    string    `json:"file_pattern,omitempty"`
+	Decision       string    `json:"decision"`   // "auto_allow" | "auto_deny" | "escalate"
+	RiskLevel      string    `json:"risk_level"` // "low" | "medium" | "high" | "critical"
+	Reason         string    `json:"reason,omitempty"`
+	Alternative    string    `json:"alternative,omitempty"`
+	Priority       int       `json:"priority"`
+	Enabled        bool      `json:"enabled"`
+	Source         string    `json:"source"` // "user" | "seed" | "claude-settings"
+	CreatedAt      time.Time `json:"created_at"`
+
+	// Structured CommandCriteria fields — mutually exclusive with commandPattern.
+	Programs              []string `json:"programs,omitempty"`
+	Subcommands           []string `json:"subcommands,omitempty"`
+	BlockedSubcommands    []string `json:"blocked_subcommands,omitempty"`
+	RequiredFlags         []string `json:"required_flags,omitempty"`
+	ForbiddenFlags        []string `json:"forbidden_flags,omitempty"`
+	RequiredFlagPrefixes  []string `json:"required_flag_prefixes,omitempty"`
+	PythonModes           []string `json:"python_modes,omitempty"`
+	SafePythonImportsOnly bool     `json:"safe_python_imports_only,omitempty"`
 }
 
 // RulesFile is the top-level structure of auto_approve_rules.json.
@@ -95,6 +103,14 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 			}
 		}
 	}
+	// Structured criteria and raw commandPattern are mutually exclusive.
+	hasCriteria := len(spec.Programs) > 0 || len(spec.Subcommands) > 0 ||
+		len(spec.BlockedSubcommands) > 0 || len(spec.RequiredFlags) > 0 ||
+		len(spec.ForbiddenFlags) > 0 || len(spec.RequiredFlagPrefixes) > 0 ||
+		len(spec.PythonModes) > 0 || spec.SafePythonImportsOnly
+	if hasCriteria && spec.CommandPattern != "" {
+		return RuleSpec{}, fmt.Errorf("rule cannot set both commandPattern and structured criteria; use one mode")
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,24 +132,31 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 
 	// Persist to SQLite via Storage.
 	ruleData := session.ApprovalRuleData{
-		ID:                  spec.ID,
-		Name:                spec.Name,
-		ToolName:            spec.ToolName,
-		ToolPattern:         spec.ToolPattern,
-		ToolCategory:        spec.ToolCategory,
-		CommandPattern:      spec.CommandPattern,
-		FilePattern:         spec.FilePattern,
-		CriteriaPrograms:    spec.CriteriaPrograms,
-		CriteriaSubcommands: spec.CriteriaSubcommands,
-		Decision:            decisionToInt(spec.Decision),
-		RiskLevel:           riskLevelToInt(spec.RiskLevel),
-		Reason:              spec.Reason,
-		Alternative:         spec.Alternative,
-		Priority:            spec.Priority,
-		Enabled:             spec.Enabled,
-		Source:              spec.Source,
-		CreatedAt:           spec.CreatedAt,
-		UpdatedAt:           time.Now(),
+		ID:             spec.ID,
+		Name:           spec.Name,
+		ToolName:       spec.ToolName,
+		ToolPattern:    spec.ToolPattern,
+		ToolCategory:   spec.ToolCategory,
+		CommandPattern: spec.CommandPattern,
+		FilePattern:    spec.FilePattern,
+		Decision:       decisionToInt(spec.Decision),
+		RiskLevel:      riskLevelToInt(spec.RiskLevel),
+		Reason:         spec.Reason,
+		Alternative:    spec.Alternative,
+		Priority:       spec.Priority,
+		Enabled:        spec.Enabled,
+		Source:         spec.Source,
+		CreatedAt:      spec.CreatedAt,
+		UpdatedAt:      time.Now(),
+
+		Programs:              spec.Programs,
+		Subcommands:           spec.Subcommands,
+		BlockedSubcommands:    spec.BlockedSubcommands,
+		RequiredFlags:         spec.RequiredFlags,
+		ForbiddenFlags:        spec.ForbiddenFlags,
+		RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
+		PythonModes:           spec.PythonModes,
+		SafePythonImportsOnly: spec.SafePythonImportsOnly,
 	}
 
 	if err := s.storage.UpsertRule(context.Background(), ruleData); err != nil {
@@ -181,23 +204,30 @@ func (s *RulesStore) reload() error {
 	specs := make([]RuleSpec, len(rules))
 	for i, r := range rules {
 		specs[i] = RuleSpec{
-			ID:                  r.ID,
-			Name:                r.Name,
-			ToolName:            r.ToolName,
-			ToolPattern:         r.ToolPattern,
-			ToolCategory:        r.ToolCategory,
-			CommandPattern:      r.CommandPattern,
-			FilePattern:         r.FilePattern,
-			CriteriaPrograms:    r.CriteriaPrograms,
-			CriteriaSubcommands: r.CriteriaSubcommands,
-			Decision:            decisionStringFromInt(r.Decision),
-			RiskLevel:           riskLevelStringFromInt(r.RiskLevel),
-			Reason:              r.Reason,
-			Alternative:         r.Alternative,
-			Priority:            r.Priority,
-			Enabled:             r.Enabled,
-			Source:              r.Source,
-			CreatedAt:           r.CreatedAt,
+			ID:             r.ID,
+			Name:           r.Name,
+			ToolName:       r.ToolName,
+			ToolPattern:    r.ToolPattern,
+			ToolCategory:   r.ToolCategory,
+			CommandPattern: r.CommandPattern,
+			FilePattern:    r.FilePattern,
+			Decision:       decisionStringFromInt(r.Decision),
+			RiskLevel:      riskLevelStringFromInt(r.RiskLevel),
+			Reason:         r.Reason,
+			Alternative:    r.Alternative,
+			Priority:       r.Priority,
+			Enabled:        r.Enabled,
+			Source:         r.Source,
+			CreatedAt:      r.CreatedAt,
+
+			Programs:              r.Programs,
+			Subcommands:           r.Subcommands,
+			BlockedSubcommands:    r.BlockedSubcommands,
+			RequiredFlags:         r.RequiredFlags,
+			ForbiddenFlags:        r.ForbiddenFlags,
+			RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
+			PythonModes:           r.PythonModes,
+			SafePythonImportsOnly: r.SafePythonImportsOnly,
 		}
 	}
 
@@ -276,10 +306,24 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 			}
 			r.FilePattern = re
 		}
-		if len(spec.CriteriaPrograms) > 0 {
+		// Populate Criteria from structured fields when at least one is set.
+		if len(spec.Programs) > 0 ||
+			len(spec.Subcommands) > 0 ||
+			len(spec.BlockedSubcommands) > 0 ||
+			len(spec.RequiredFlags) > 0 ||
+			len(spec.ForbiddenFlags) > 0 ||
+			len(spec.RequiredFlagPrefixes) > 0 ||
+			len(spec.PythonModes) > 0 ||
+			spec.SafePythonImportsOnly {
 			r.Criteria = &classifier.CommandCriteria{
-				Programs:    spec.CriteriaPrograms,
-				Subcommands: spec.CriteriaSubcommands,
+				Programs:              spec.Programs,
+				Subcommands:           spec.Subcommands,
+				BlockedSubcommands:    spec.BlockedSubcommands,
+				RequiredFlags:         spec.RequiredFlags,
+				ForbiddenFlags:        spec.ForbiddenFlags,
+				RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
+				PythonModes:           spec.PythonModes,
+				SafePythonImportsOnly: spec.SafePythonImportsOnly,
 			}
 		}
 		rules = append(rules, r)
@@ -411,24 +455,30 @@ func (s *RulesStore) BulkUpsert(ctx context.Context, specs []RuleSpec, overwrite
 		}
 
 		ruleData := session.ApprovalRuleData{
-			ID:                  spec.ID,
-			Name:                spec.Name,
-			ToolName:            spec.ToolName,
-			ToolPattern:         spec.ToolPattern,
-			ToolCategory:        spec.ToolCategory,
-			CommandPattern:      spec.CommandPattern,
-			FilePattern:         spec.FilePattern,
-			CriteriaPrograms:    spec.CriteriaPrograms,
-			CriteriaSubcommands: spec.CriteriaSubcommands,
-			Decision:            decisionToInt(spec.Decision),
-			RiskLevel:           riskLevelToInt(spec.RiskLevel),
-			Reason:              spec.Reason,
-			Alternative:         spec.Alternative,
-			Priority:            spec.Priority,
-			Enabled:             spec.Enabled,
-			Source:              spec.Source,
-			CreatedAt:           spec.CreatedAt,
-			UpdatedAt:           time.Now(),
+			ID:                    spec.ID,
+			Name:                  spec.Name,
+			ToolName:              spec.ToolName,
+			ToolPattern:           spec.ToolPattern,
+			ToolCategory:          spec.ToolCategory,
+			CommandPattern:        spec.CommandPattern,
+			FilePattern:           spec.FilePattern,
+			Decision:              decisionToInt(spec.Decision),
+			RiskLevel:             riskLevelToInt(spec.RiskLevel),
+			Reason:                spec.Reason,
+			Alternative:           spec.Alternative,
+			Priority:              spec.Priority,
+			Enabled:               spec.Enabled,
+			Source:                spec.Source,
+			CreatedAt:             spec.CreatedAt,
+			UpdatedAt:             time.Now(),
+			Programs:              spec.Programs,
+			Subcommands:           spec.Subcommands,
+			BlockedSubcommands:    spec.BlockedSubcommands,
+			RequiredFlags:         spec.RequiredFlags,
+			ForbiddenFlags:        spec.ForbiddenFlags,
+			RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
+			PythonModes:           spec.PythonModes,
+			SafePythonImportsOnly: spec.SafePythonImportsOnly,
 		}
 
 		if err := s.storage.UpsertRule(ctx, ruleData); err != nil {
