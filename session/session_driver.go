@@ -470,7 +470,6 @@ func tryExtractClaudeSessionID(inst *Instance) {
 	inst.SetClaudeConversationUUID(uuid)
 	log.Info("SessionDriver: captured claude session_id", "session", inst.Title, "session_id", uuid)
 }
-
 // shouldApprovePrompt returns true when the terminal output looks like a
 // directory-access dialog for a path under allowedPath.
 func shouldApprovePrompt(output, allowedPath string) bool {
