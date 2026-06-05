@@ -333,6 +333,10 @@ type Instance struct {
 	// onStatusChange is called when the ClaudeController detects a status transition.
 	// Wired by the server layer to trigger reactive queue checks.
 	onStatusChange func(detection.DetectedStatus, string)
+
+	// claudeSessionIDSavedCallback is called when SetClaudeConversationUUID stores a
+	// newly discovered session_id. Used by the service layer to trigger a storage save.
+	claudeSessionIDSavedCallback func()
 }
 
 // SessionType indicates the type of session workflow to use

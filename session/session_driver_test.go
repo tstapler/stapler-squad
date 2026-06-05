@@ -401,3 +401,40 @@ func TestSanitizeInitialPromptForTmux_utf8BoundaryNotSplit(t *testing.T) {
 		t.Errorf("sanitizeInitialPromptForTmux: result is not valid UTF-8: %q", got[:min(len(got), 60)])
 	}
 }
+
+// ─── TestParseClaudeSessionID ─────────────────────────────────────────────────
+
+// TestParseClaudeSessionID_json verifies extraction from --output-format json output.
+func TestParseClaudeSessionID_json(t *testing.T) {
+	output := `{"result":"ok","session_id":"abc-123","total_cost_usd":0.003}`
+	got := parseClaudeSessionID(output)
+	if got != "abc-123" {
+		t.Errorf("parseClaudeSessionID() = %q, want %q", got, "abc-123")
+	}
+}
+
+// TestParseClaudeSessionID_streamJson verifies extraction from stream-json init event.
+func TestParseClaudeSessionID_streamJson(t *testing.T) {
+	output := `{"type":"system","subtype":"init","data":{"session_id":"xyz-789"}}`
+	got := parseClaudeSessionID(output)
+	if got != "xyz-789" {
+		t.Errorf("parseClaudeSessionID() = %q, want %q", got, "xyz-789")
+	}
+}
+
+// TestParseClaudeSessionID_empty verifies empty string returns "".
+func TestParseClaudeSessionID_empty(t *testing.T) {
+	got := parseClaudeSessionID("")
+	if got != "" {
+		t.Errorf("parseClaudeSessionID(\"\") = %q, want empty string", got)
+	}
+}
+
+// TestParseClaudeSessionID_noSessionId verifies strings without session_id return "".
+func TestParseClaudeSessionID_noSessionId(t *testing.T) {
+	output := `{"result":"ok","cost":0.003}`
+	got := parseClaudeSessionID(output)
+	if got != "" {
+		t.Errorf("parseClaudeSessionID(%q) = %q, want empty string", output, got)
+	}
+}

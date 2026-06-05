@@ -57,9 +57,9 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		program = program + " --dangerously-skip-permissions"
 	}
 	if i.OneShot && strings.Contains(program, "claude") {
-		program = program + " -p"
+		program = program + " -p --output-format json"
 	}
-	if i.Prompt != "" && claudeSessionID == "" && strings.Contains(program, "claude") {
+	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) && strings.Contains(program, "claude") {
 		program = fmt.Sprintf("%s %q", program, i.Prompt)
 	}
 	return program

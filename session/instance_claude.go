@@ -356,6 +356,30 @@ func (i *Instance) GetConversationUUID() string {
 	return i.claudeSession.ConversationUUID
 }
 
+// SetClaudeConversationUUID stores the Claude conversation UUID so it is used
+// in subsequent --resume flags. Fires the claudeSessionIDSavedCallback if set.
+func (i *Instance) SetClaudeConversationUUID(uuid string) {
+	i.stateMutex.Lock()
+	if i.claudeSession == nil {
+		i.claudeSession = &ClaudeSessionData{}
+	}
+	i.claudeSession.ConversationUUID = uuid
+	cb := i.claudeSessionIDSavedCallback
+	i.stateMutex.Unlock()
+	if cb != nil {
+		cb()
+	}
+}
+
+// SetClaudeSessionIDSavedCallback registers a callback that fires when
+// SetClaudeConversationUUID is called. Used by the service layer to trigger
+// a storage save when the session_id is discovered.
+func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+	i.claudeSessionIDSavedCallback = fn
+}
+
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.

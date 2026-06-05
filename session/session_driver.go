@@ -152,6 +152,9 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 				return
 			}
 			// Stopped after initial prompt was sent.
+			if inst.OneShot {
+				tryExtractClaudeSessionID(inst)
+			}
 			if isOneShot(inst) || retried.Load() {
 				// One-shot sessions: BacklogLifecycleListener handles this; driver exits cleanly.
 				return
@@ -164,6 +167,9 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 					"session", inst.Title,
 					"runtime", time.Since(initialPromptSentAt).Round(time.Second),
 				)
+				if inst.OneShot {
+					tryExtractClaudeSessionID(inst)
+				}
 				return
 			}
 			log.Warn("SessionDriver: unexpected session exit after initial prompt",
@@ -197,7 +203,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			timedOut := time.Now().After(readyDeadline)
 
 			if ready || timedOut {
-				if err := inst.SendKeys(initialPrompt + "\n"); err != nil {
+				if err := inst.SendKeys(initialPrompt + "\r"); err != nil {
 					log.Warn("SessionDriver: failed to send initial prompt",
 						"session", inst.Title,
 						"ready", ready,
@@ -388,6 +394,50 @@ func isStartupDialog(output string) bool {
 		// Must have a numbered option to select — avoids false positives on
 		// non-interactive output that merely mentions trust.
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
+}
+
+// parseClaudeSessionID extracts the "session_id" value from a JSON blob
+// (both --output-format json and --output-format stream-json).
+// Returns empty string if not found.
+func parseClaudeSessionID(output string) string {
+	const key = `"session_id"`
+	idx := strings.Index(output, key)
+	if idx < 0 {
+		return ""
+	}
+	rest := strings.TrimSpace(output[idx+len(key):])
+	if !strings.HasPrefix(rest, ":") {
+		return ""
+	}
+	rest = strings.TrimSpace(rest[1:])
+	if !strings.HasPrefix(rest, `"`) {
+		return ""
+	}
+	rest = rest[1:]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+// tryExtractClaudeSessionID reads the terminal output for a completed OneShot
+// session and stores the extracted Claude session_id on the instance so that
+// future restarts use --resume.
+func tryExtractClaudeSessionID(inst *Instance) {
+	if !inst.OneShot {
+		return
+	}
+	output, err := inst.Preview()
+	if err != nil || output == "" {
+		return
+	}
+	uuid := parseClaudeSessionID(output)
+	if uuid == "" {
+		return
+	}
+	inst.SetClaudeConversationUUID(uuid)
+	log.Info("SessionDriver: captured claude session_id", "session", inst.Title, "session_id", uuid)
 }
 
 // shouldApprovePrompt returns true when the terminal output looks like a
