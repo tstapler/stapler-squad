@@ -398,6 +398,30 @@ func (_c *ApprovalRuleCreate) check() error {
 	if _, ok := _c.mutation.UpdatedAt(); !ok {
 		return &ValidationError{Name: "updated_at", err: errors.New(`ent: missing required field "ApprovalRule.updated_at"`)}
 	}
+	if _, ok := _c.mutation.Programs(); !ok {
+		return &ValidationError{Name: "programs", err: errors.New(`ent: missing required field "ApprovalRule.programs"`)}
+	}
+	if _, ok := _c.mutation.Subcommands(); !ok {
+		return &ValidationError{Name: "subcommands", err: errors.New(`ent: missing required field "ApprovalRule.subcommands"`)}
+	}
+	if _, ok := _c.mutation.BlockedSubcommands(); !ok {
+		return &ValidationError{Name: "blocked_subcommands", err: errors.New(`ent: missing required field "ApprovalRule.blocked_subcommands"`)}
+	}
+	if _, ok := _c.mutation.RequiredFlags(); !ok {
+		return &ValidationError{Name: "required_flags", err: errors.New(`ent: missing required field "ApprovalRule.required_flags"`)}
+	}
+	if _, ok := _c.mutation.ForbiddenFlags(); !ok {
+		return &ValidationError{Name: "forbidden_flags", err: errors.New(`ent: missing required field "ApprovalRule.forbidden_flags"`)}
+	}
+	if _, ok := _c.mutation.RequiredFlagPrefixes(); !ok {
+		return &ValidationError{Name: "required_flag_prefixes", err: errors.New(`ent: missing required field "ApprovalRule.required_flag_prefixes"`)}
+	}
+	if _, ok := _c.mutation.PythonModes(); !ok {
+		return &ValidationError{Name: "python_modes", err: errors.New(`ent: missing required field "ApprovalRule.python_modes"`)}
+	}
+	if _, ok := _c.mutation.SafePythonImportsOnly(); !ok {
+		return &ValidationError{Name: "safe_python_imports_only", err: errors.New(`ent: missing required field "ApprovalRule.safe_python_imports_only"`)}
+	}
 	return nil
 }
 
@@ -825,12 +849,6 @@ func (u *ApprovalRuleUpsert) UpdatePrograms() *ApprovalRuleUpsert {
 	return u
 }
 
-// ClearPrograms clears the value of the "programs" field.
-func (u *ApprovalRuleUpsert) ClearPrograms() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldPrograms)
-	return u
-}
-
 // SetSubcommands sets the "subcommands" field.
 func (u *ApprovalRuleUpsert) SetSubcommands(v []string) *ApprovalRuleUpsert {
 	u.Set(approvalrule.FieldSubcommands, v)
@@ -840,12 +858,6 @@ func (u *ApprovalRuleUpsert) SetSubcommands(v []string) *ApprovalRuleUpsert {
 // UpdateSubcommands sets the "subcommands" field to the value that was provided on create.
 func (u *ApprovalRuleUpsert) UpdateSubcommands() *ApprovalRuleUpsert {
 	u.SetExcluded(approvalrule.FieldSubcommands)
-	return u
-}
-
-// ClearSubcommands clears the value of the "subcommands" field.
-func (u *ApprovalRuleUpsert) ClearSubcommands() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldSubcommands)
 	return u
 }
 
@@ -861,12 +873,6 @@ func (u *ApprovalRuleUpsert) UpdateBlockedSubcommands() *ApprovalRuleUpsert {
 	return u
 }
 
-// ClearBlockedSubcommands clears the value of the "blocked_subcommands" field.
-func (u *ApprovalRuleUpsert) ClearBlockedSubcommands() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldBlockedSubcommands)
-	return u
-}
-
 // SetRequiredFlags sets the "required_flags" field.
 func (u *ApprovalRuleUpsert) SetRequiredFlags(v []string) *ApprovalRuleUpsert {
 	u.Set(approvalrule.FieldRequiredFlags, v)
@@ -876,12 +882,6 @@ func (u *ApprovalRuleUpsert) SetRequiredFlags(v []string) *ApprovalRuleUpsert {
 // UpdateRequiredFlags sets the "required_flags" field to the value that was provided on create.
 func (u *ApprovalRuleUpsert) UpdateRequiredFlags() *ApprovalRuleUpsert {
 	u.SetExcluded(approvalrule.FieldRequiredFlags)
-	return u
-}
-
-// ClearRequiredFlags clears the value of the "required_flags" field.
-func (u *ApprovalRuleUpsert) ClearRequiredFlags() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldRequiredFlags)
 	return u
 }
 
@@ -897,12 +897,6 @@ func (u *ApprovalRuleUpsert) UpdateForbiddenFlags() *ApprovalRuleUpsert {
 	return u
 }
 
-// ClearForbiddenFlags clears the value of the "forbidden_flags" field.
-func (u *ApprovalRuleUpsert) ClearForbiddenFlags() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldForbiddenFlags)
-	return u
-}
-
 // SetRequiredFlagPrefixes sets the "required_flag_prefixes" field.
 func (u *ApprovalRuleUpsert) SetRequiredFlagPrefixes(v []string) *ApprovalRuleUpsert {
 	u.Set(approvalrule.FieldRequiredFlagPrefixes, v)
@@ -912,12 +906,6 @@ func (u *ApprovalRuleUpsert) SetRequiredFlagPrefixes(v []string) *ApprovalRuleUp
 // UpdateRequiredFlagPrefixes sets the "required_flag_prefixes" field to the value that was provided on create.
 func (u *ApprovalRuleUpsert) UpdateRequiredFlagPrefixes() *ApprovalRuleUpsert {
 	u.SetExcluded(approvalrule.FieldRequiredFlagPrefixes)
-	return u
-}
-
-// ClearRequiredFlagPrefixes clears the value of the "required_flag_prefixes" field.
-func (u *ApprovalRuleUpsert) ClearRequiredFlagPrefixes() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldRequiredFlagPrefixes)
 	return u
 }
 
@@ -933,12 +921,6 @@ func (u *ApprovalRuleUpsert) UpdatePythonModes() *ApprovalRuleUpsert {
 	return u
 }
 
-// ClearPythonModes clears the value of the "python_modes" field.
-func (u *ApprovalRuleUpsert) ClearPythonModes() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldPythonModes)
-	return u
-}
-
 // SetSafePythonImportsOnly sets the "safe_python_imports_only" field.
 func (u *ApprovalRuleUpsert) SetSafePythonImportsOnly(v bool) *ApprovalRuleUpsert {
 	u.Set(approvalrule.FieldSafePythonImportsOnly, v)
@@ -948,12 +930,6 @@ func (u *ApprovalRuleUpsert) SetSafePythonImportsOnly(v bool) *ApprovalRuleUpser
 // UpdateSafePythonImportsOnly sets the "safe_python_imports_only" field to the value that was provided on create.
 func (u *ApprovalRuleUpsert) UpdateSafePythonImportsOnly() *ApprovalRuleUpsert {
 	u.SetExcluded(approvalrule.FieldSafePythonImportsOnly)
-	return u
-}
-
-// ClearSafePythonImportsOnly clears the value of the "safe_python_imports_only" field.
-func (u *ApprovalRuleUpsert) ClearSafePythonImportsOnly() *ApprovalRuleUpsert {
-	u.SetNull(approvalrule.FieldSafePythonImportsOnly)
 	return u
 }
 
@@ -1296,13 +1272,6 @@ func (u *ApprovalRuleUpsertOne) UpdatePrograms() *ApprovalRuleUpsertOne {
 	})
 }
 
-// ClearPrograms clears the value of the "programs" field.
-func (u *ApprovalRuleUpsertOne) ClearPrograms() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearPrograms()
-	})
-}
-
 // SetSubcommands sets the "subcommands" field.
 func (u *ApprovalRuleUpsertOne) SetSubcommands(v []string) *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -1314,13 +1283,6 @@ func (u *ApprovalRuleUpsertOne) SetSubcommands(v []string) *ApprovalRuleUpsertOn
 func (u *ApprovalRuleUpsertOne) UpdateSubcommands() *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateSubcommands()
-	})
-}
-
-// ClearSubcommands clears the value of the "subcommands" field.
-func (u *ApprovalRuleUpsertOne) ClearSubcommands() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearSubcommands()
 	})
 }
 
@@ -1338,13 +1300,6 @@ func (u *ApprovalRuleUpsertOne) UpdateBlockedSubcommands() *ApprovalRuleUpsertOn
 	})
 }
 
-// ClearBlockedSubcommands clears the value of the "blocked_subcommands" field.
-func (u *ApprovalRuleUpsertOne) ClearBlockedSubcommands() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearBlockedSubcommands()
-	})
-}
-
 // SetRequiredFlags sets the "required_flags" field.
 func (u *ApprovalRuleUpsertOne) SetRequiredFlags(v []string) *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -1356,13 +1311,6 @@ func (u *ApprovalRuleUpsertOne) SetRequiredFlags(v []string) *ApprovalRuleUpsert
 func (u *ApprovalRuleUpsertOne) UpdateRequiredFlags() *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateRequiredFlags()
-	})
-}
-
-// ClearRequiredFlags clears the value of the "required_flags" field.
-func (u *ApprovalRuleUpsertOne) ClearRequiredFlags() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearRequiredFlags()
 	})
 }
 
@@ -1380,13 +1328,6 @@ func (u *ApprovalRuleUpsertOne) UpdateForbiddenFlags() *ApprovalRuleUpsertOne {
 	})
 }
 
-// ClearForbiddenFlags clears the value of the "forbidden_flags" field.
-func (u *ApprovalRuleUpsertOne) ClearForbiddenFlags() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearForbiddenFlags()
-	})
-}
-
 // SetRequiredFlagPrefixes sets the "required_flag_prefixes" field.
 func (u *ApprovalRuleUpsertOne) SetRequiredFlagPrefixes(v []string) *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -1398,13 +1339,6 @@ func (u *ApprovalRuleUpsertOne) SetRequiredFlagPrefixes(v []string) *ApprovalRul
 func (u *ApprovalRuleUpsertOne) UpdateRequiredFlagPrefixes() *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateRequiredFlagPrefixes()
-	})
-}
-
-// ClearRequiredFlagPrefixes clears the value of the "required_flag_prefixes" field.
-func (u *ApprovalRuleUpsertOne) ClearRequiredFlagPrefixes() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearRequiredFlagPrefixes()
 	})
 }
 
@@ -1422,13 +1356,6 @@ func (u *ApprovalRuleUpsertOne) UpdatePythonModes() *ApprovalRuleUpsertOne {
 	})
 }
 
-// ClearPythonModes clears the value of the "python_modes" field.
-func (u *ApprovalRuleUpsertOne) ClearPythonModes() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearPythonModes()
-	})
-}
-
 // SetSafePythonImportsOnly sets the "safe_python_imports_only" field.
 func (u *ApprovalRuleUpsertOne) SetSafePythonImportsOnly(v bool) *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -1440,13 +1367,6 @@ func (u *ApprovalRuleUpsertOne) SetSafePythonImportsOnly(v bool) *ApprovalRuleUp
 func (u *ApprovalRuleUpsertOne) UpdateSafePythonImportsOnly() *ApprovalRuleUpsertOne {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateSafePythonImportsOnly()
-	})
-}
-
-// ClearSafePythonImportsOnly clears the value of the "safe_python_imports_only" field.
-func (u *ApprovalRuleUpsertOne) ClearSafePythonImportsOnly() *ApprovalRuleUpsertOne {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearSafePythonImportsOnly()
 	})
 }
 
@@ -1955,13 +1875,6 @@ func (u *ApprovalRuleUpsertBulk) UpdatePrograms() *ApprovalRuleUpsertBulk {
 	})
 }
 
-// ClearPrograms clears the value of the "programs" field.
-func (u *ApprovalRuleUpsertBulk) ClearPrograms() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearPrograms()
-	})
-}
-
 // SetSubcommands sets the "subcommands" field.
 func (u *ApprovalRuleUpsertBulk) SetSubcommands(v []string) *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -1973,13 +1886,6 @@ func (u *ApprovalRuleUpsertBulk) SetSubcommands(v []string) *ApprovalRuleUpsertB
 func (u *ApprovalRuleUpsertBulk) UpdateSubcommands() *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateSubcommands()
-	})
-}
-
-// ClearSubcommands clears the value of the "subcommands" field.
-func (u *ApprovalRuleUpsertBulk) ClearSubcommands() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearSubcommands()
 	})
 }
 
@@ -1997,13 +1903,6 @@ func (u *ApprovalRuleUpsertBulk) UpdateBlockedSubcommands() *ApprovalRuleUpsertB
 	})
 }
 
-// ClearBlockedSubcommands clears the value of the "blocked_subcommands" field.
-func (u *ApprovalRuleUpsertBulk) ClearBlockedSubcommands() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearBlockedSubcommands()
-	})
-}
-
 // SetRequiredFlags sets the "required_flags" field.
 func (u *ApprovalRuleUpsertBulk) SetRequiredFlags(v []string) *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -2015,13 +1914,6 @@ func (u *ApprovalRuleUpsertBulk) SetRequiredFlags(v []string) *ApprovalRuleUpser
 func (u *ApprovalRuleUpsertBulk) UpdateRequiredFlags() *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateRequiredFlags()
-	})
-}
-
-// ClearRequiredFlags clears the value of the "required_flags" field.
-func (u *ApprovalRuleUpsertBulk) ClearRequiredFlags() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearRequiredFlags()
 	})
 }
 
@@ -2039,13 +1931,6 @@ func (u *ApprovalRuleUpsertBulk) UpdateForbiddenFlags() *ApprovalRuleUpsertBulk 
 	})
 }
 
-// ClearForbiddenFlags clears the value of the "forbidden_flags" field.
-func (u *ApprovalRuleUpsertBulk) ClearForbiddenFlags() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearForbiddenFlags()
-	})
-}
-
 // SetRequiredFlagPrefixes sets the "required_flag_prefixes" field.
 func (u *ApprovalRuleUpsertBulk) SetRequiredFlagPrefixes(v []string) *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -2057,13 +1942,6 @@ func (u *ApprovalRuleUpsertBulk) SetRequiredFlagPrefixes(v []string) *ApprovalRu
 func (u *ApprovalRuleUpsertBulk) UpdateRequiredFlagPrefixes() *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateRequiredFlagPrefixes()
-	})
-}
-
-// ClearRequiredFlagPrefixes clears the value of the "required_flag_prefixes" field.
-func (u *ApprovalRuleUpsertBulk) ClearRequiredFlagPrefixes() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearRequiredFlagPrefixes()
 	})
 }
 
@@ -2081,13 +1959,6 @@ func (u *ApprovalRuleUpsertBulk) UpdatePythonModes() *ApprovalRuleUpsertBulk {
 	})
 }
 
-// ClearPythonModes clears the value of the "python_modes" field.
-func (u *ApprovalRuleUpsertBulk) ClearPythonModes() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearPythonModes()
-	})
-}
-
 // SetSafePythonImportsOnly sets the "safe_python_imports_only" field.
 func (u *ApprovalRuleUpsertBulk) SetSafePythonImportsOnly(v bool) *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
@@ -2099,13 +1970,6 @@ func (u *ApprovalRuleUpsertBulk) SetSafePythonImportsOnly(v bool) *ApprovalRuleU
 func (u *ApprovalRuleUpsertBulk) UpdateSafePythonImportsOnly() *ApprovalRuleUpsertBulk {
 	return u.Update(func(s *ApprovalRuleUpsert) {
 		s.UpdateSafePythonImportsOnly()
-	})
-}
-
-// ClearSafePythonImportsOnly clears the value of the "safe_python_imports_only" field.
-func (u *ApprovalRuleUpsertBulk) ClearSafePythonImportsOnly() *ApprovalRuleUpsertBulk {
-	return u.Update(func(s *ApprovalRuleUpsert) {
-		s.ClearSafePythonImportsOnly()
 	})
 }
 

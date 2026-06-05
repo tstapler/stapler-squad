@@ -112,25 +112,11 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 		return RuleSpec{}, fmt.Errorf("rule cannot set both commandPattern and structured criteria; use one mode")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	found := false
-	for i, r := range s.specs {
-		if r.ID == spec.ID {
-			s.specs[i] = spec
-			found = true
-			break
-		}
-	}
-	if !found {
-		if spec.CreatedAt.IsZero() {
-			spec.CreatedAt = time.Now()
-		}
-		s.specs = append(s.specs, spec)
+	if spec.CreatedAt.IsZero() {
+		spec.CreatedAt = time.Now()
 	}
 
-	// Persist to SQLite via Storage.
+	// Persist to SQLite first; only update in-memory state on success.
 	ruleData := session.ApprovalRuleData{
 		ID:             spec.ID,
 		Name:           spec.Name,
@@ -159,8 +145,24 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 		SafePythonImportsOnly: spec.SafePythonImportsOnly,
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if err := s.storage.UpsertRule(context.Background(), ruleData); err != nil {
 		return RuleSpec{}, fmt.Errorf("save rule to DB: %w", err)
+	}
+
+	// Update in-memory state only after the DB write succeeds.
+	found := false
+	for i, r := range s.specs {
+		if r.ID == spec.ID {
+			s.specs[i] = spec
+			found = true
+			break
+		}
+	}
+	if !found {
+		s.specs = append(s.specs, spec)
 	}
 
 	s.exportRulesLocked()

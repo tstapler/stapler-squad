@@ -957,24 +957,10 @@ func (m *ApprovalRuleMutation) AppendedPrograms() ([]string, bool) {
 	return m.appendprograms, true
 }
 
-// ClearPrograms clears the value of the "programs" field.
-func (m *ApprovalRuleMutation) ClearPrograms() {
-	m.programs = nil
-	m.appendprograms = nil
-	m.clearedFields[approvalrule.FieldPrograms] = struct{}{}
-}
-
-// ProgramsCleared returns if the "programs" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) ProgramsCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldPrograms]
-	return ok
-}
-
 // ResetPrograms resets all changes to the "programs" field.
 func (m *ApprovalRuleMutation) ResetPrograms() {
 	m.programs = nil
 	m.appendprograms = nil
-	delete(m.clearedFields, approvalrule.FieldPrograms)
 }
 
 // SetSubcommands sets the "subcommands" field.
@@ -1022,24 +1008,10 @@ func (m *ApprovalRuleMutation) AppendedSubcommands() ([]string, bool) {
 	return m.appendsubcommands, true
 }
 
-// ClearSubcommands clears the value of the "subcommands" field.
-func (m *ApprovalRuleMutation) ClearSubcommands() {
-	m.subcommands = nil
-	m.appendsubcommands = nil
-	m.clearedFields[approvalrule.FieldSubcommands] = struct{}{}
-}
-
-// SubcommandsCleared returns if the "subcommands" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) SubcommandsCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldSubcommands]
-	return ok
-}
-
 // ResetSubcommands resets all changes to the "subcommands" field.
 func (m *ApprovalRuleMutation) ResetSubcommands() {
 	m.subcommands = nil
 	m.appendsubcommands = nil
-	delete(m.clearedFields, approvalrule.FieldSubcommands)
 }
 
 // SetBlockedSubcommands sets the "blocked_subcommands" field.
@@ -1087,24 +1059,10 @@ func (m *ApprovalRuleMutation) AppendedBlockedSubcommands() ([]string, bool) {
 	return m.appendblocked_subcommands, true
 }
 
-// ClearBlockedSubcommands clears the value of the "blocked_subcommands" field.
-func (m *ApprovalRuleMutation) ClearBlockedSubcommands() {
-	m.blocked_subcommands = nil
-	m.appendblocked_subcommands = nil
-	m.clearedFields[approvalrule.FieldBlockedSubcommands] = struct{}{}
-}
-
-// BlockedSubcommandsCleared returns if the "blocked_subcommands" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) BlockedSubcommandsCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldBlockedSubcommands]
-	return ok
-}
-
 // ResetBlockedSubcommands resets all changes to the "blocked_subcommands" field.
 func (m *ApprovalRuleMutation) ResetBlockedSubcommands() {
 	m.blocked_subcommands = nil
 	m.appendblocked_subcommands = nil
-	delete(m.clearedFields, approvalrule.FieldBlockedSubcommands)
 }
 
 // SetRequiredFlags sets the "required_flags" field.
@@ -1152,24 +1110,10 @@ func (m *ApprovalRuleMutation) AppendedRequiredFlags() ([]string, bool) {
 	return m.appendrequired_flags, true
 }
 
-// ClearRequiredFlags clears the value of the "required_flags" field.
-func (m *ApprovalRuleMutation) ClearRequiredFlags() {
-	m.required_flags = nil
-	m.appendrequired_flags = nil
-	m.clearedFields[approvalrule.FieldRequiredFlags] = struct{}{}
-}
-
-// RequiredFlagsCleared returns if the "required_flags" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) RequiredFlagsCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldRequiredFlags]
-	return ok
-}
-
 // ResetRequiredFlags resets all changes to the "required_flags" field.
 func (m *ApprovalRuleMutation) ResetRequiredFlags() {
 	m.required_flags = nil
 	m.appendrequired_flags = nil
-	delete(m.clearedFields, approvalrule.FieldRequiredFlags)
 }
 
 // SetForbiddenFlags sets the "forbidden_flags" field.
@@ -1217,24 +1161,10 @@ func (m *ApprovalRuleMutation) AppendedForbiddenFlags() ([]string, bool) {
 	return m.appendforbidden_flags, true
 }
 
-// ClearForbiddenFlags clears the value of the "forbidden_flags" field.
-func (m *ApprovalRuleMutation) ClearForbiddenFlags() {
-	m.forbidden_flags = nil
-	m.appendforbidden_flags = nil
-	m.clearedFields[approvalrule.FieldForbiddenFlags] = struct{}{}
-}
-
-// ForbiddenFlagsCleared returns if the "forbidden_flags" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) ForbiddenFlagsCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldForbiddenFlags]
-	return ok
-}
-
 // ResetForbiddenFlags resets all changes to the "forbidden_flags" field.
 func (m *ApprovalRuleMutation) ResetForbiddenFlags() {
 	m.forbidden_flags = nil
 	m.appendforbidden_flags = nil
-	delete(m.clearedFields, approvalrule.FieldForbiddenFlags)
 }
 
 // SetRequiredFlagPrefixes sets the "required_flag_prefixes" field.
@@ -1282,24 +1212,10 @@ func (m *ApprovalRuleMutation) AppendedRequiredFlagPrefixes() ([]string, bool) {
 	return m.appendrequired_flag_prefixes, true
 }
 
-// ClearRequiredFlagPrefixes clears the value of the "required_flag_prefixes" field.
-func (m *ApprovalRuleMutation) ClearRequiredFlagPrefixes() {
-	m.required_flag_prefixes = nil
-	m.appendrequired_flag_prefixes = nil
-	m.clearedFields[approvalrule.FieldRequiredFlagPrefixes] = struct{}{}
-}
-
-// RequiredFlagPrefixesCleared returns if the "required_flag_prefixes" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) RequiredFlagPrefixesCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldRequiredFlagPrefixes]
-	return ok
-}
-
 // ResetRequiredFlagPrefixes resets all changes to the "required_flag_prefixes" field.
 func (m *ApprovalRuleMutation) ResetRequiredFlagPrefixes() {
 	m.required_flag_prefixes = nil
 	m.appendrequired_flag_prefixes = nil
-	delete(m.clearedFields, approvalrule.FieldRequiredFlagPrefixes)
 }
 
 // SetPythonModes sets the "python_modes" field.
@@ -1347,24 +1263,10 @@ func (m *ApprovalRuleMutation) AppendedPythonModes() ([]string, bool) {
 	return m.appendpython_modes, true
 }
 
-// ClearPythonModes clears the value of the "python_modes" field.
-func (m *ApprovalRuleMutation) ClearPythonModes() {
-	m.python_modes = nil
-	m.appendpython_modes = nil
-	m.clearedFields[approvalrule.FieldPythonModes] = struct{}{}
-}
-
-// PythonModesCleared returns if the "python_modes" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) PythonModesCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldPythonModes]
-	return ok
-}
-
 // ResetPythonModes resets all changes to the "python_modes" field.
 func (m *ApprovalRuleMutation) ResetPythonModes() {
 	m.python_modes = nil
 	m.appendpython_modes = nil
-	delete(m.clearedFields, approvalrule.FieldPythonModes)
 }
 
 // SetSafePythonImportsOnly sets the "safe_python_imports_only" field.
@@ -1398,22 +1300,9 @@ func (m *ApprovalRuleMutation) OldSafePythonImportsOnly(ctx context.Context) (v 
 	return oldValue.SafePythonImportsOnly, nil
 }
 
-// ClearSafePythonImportsOnly clears the value of the "safe_python_imports_only" field.
-func (m *ApprovalRuleMutation) ClearSafePythonImportsOnly() {
-	m.safe_python_imports_only = nil
-	m.clearedFields[approvalrule.FieldSafePythonImportsOnly] = struct{}{}
-}
-
-// SafePythonImportsOnlyCleared returns if the "safe_python_imports_only" field was cleared in this mutation.
-func (m *ApprovalRuleMutation) SafePythonImportsOnlyCleared() bool {
-	_, ok := m.clearedFields[approvalrule.FieldSafePythonImportsOnly]
-	return ok
-}
-
 // ResetSafePythonImportsOnly resets all changes to the "safe_python_imports_only" field.
 func (m *ApprovalRuleMutation) ResetSafePythonImportsOnly() {
 	m.safe_python_imports_only = nil
-	delete(m.clearedFields, approvalrule.FieldSafePythonImportsOnly)
 }
 
 // Where appends a list predicates to the ApprovalRuleMutation builder.
@@ -1903,30 +1792,6 @@ func (m *ApprovalRuleMutation) ClearedFields() []string {
 	if m.FieldCleared(approvalrule.FieldAlternative) {
 		fields = append(fields, approvalrule.FieldAlternative)
 	}
-	if m.FieldCleared(approvalrule.FieldPrograms) {
-		fields = append(fields, approvalrule.FieldPrograms)
-	}
-	if m.FieldCleared(approvalrule.FieldSubcommands) {
-		fields = append(fields, approvalrule.FieldSubcommands)
-	}
-	if m.FieldCleared(approvalrule.FieldBlockedSubcommands) {
-		fields = append(fields, approvalrule.FieldBlockedSubcommands)
-	}
-	if m.FieldCleared(approvalrule.FieldRequiredFlags) {
-		fields = append(fields, approvalrule.FieldRequiredFlags)
-	}
-	if m.FieldCleared(approvalrule.FieldForbiddenFlags) {
-		fields = append(fields, approvalrule.FieldForbiddenFlags)
-	}
-	if m.FieldCleared(approvalrule.FieldRequiredFlagPrefixes) {
-		fields = append(fields, approvalrule.FieldRequiredFlagPrefixes)
-	}
-	if m.FieldCleared(approvalrule.FieldPythonModes) {
-		fields = append(fields, approvalrule.FieldPythonModes)
-	}
-	if m.FieldCleared(approvalrule.FieldSafePythonImportsOnly) {
-		fields = append(fields, approvalrule.FieldSafePythonImportsOnly)
-	}
 	return fields
 }
 
@@ -1961,30 +1826,6 @@ func (m *ApprovalRuleMutation) ClearField(name string) error {
 		return nil
 	case approvalrule.FieldAlternative:
 		m.ClearAlternative()
-		return nil
-	case approvalrule.FieldPrograms:
-		m.ClearPrograms()
-		return nil
-	case approvalrule.FieldSubcommands:
-		m.ClearSubcommands()
-		return nil
-	case approvalrule.FieldBlockedSubcommands:
-		m.ClearBlockedSubcommands()
-		return nil
-	case approvalrule.FieldRequiredFlags:
-		m.ClearRequiredFlags()
-		return nil
-	case approvalrule.FieldForbiddenFlags:
-		m.ClearForbiddenFlags()
-		return nil
-	case approvalrule.FieldRequiredFlagPrefixes:
-		m.ClearRequiredFlagPrefixes()
-		return nil
-	case approvalrule.FieldPythonModes:
-		m.ClearPythonModes()
-		return nil
-	case approvalrule.FieldSafePythonImportsOnly:
-		m.ClearSafePythonImportsOnly()
 		return nil
 	}
 	return fmt.Errorf("unknown ApprovalRule nullable field %s", name)

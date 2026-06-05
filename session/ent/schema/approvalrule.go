@@ -51,30 +51,22 @@ func (ApprovalRule) Fields() []ent.Field {
 			UpdateDefault(time.Now),
 
 		// Structured CommandCriteria fields — stored as JSON arrays.
-		// Default to empty slice so existing rows need no migration.
+		// No Optional() so the DB column is NOT NULL; Default ensures existing rows get [].
 		field.JSON("programs", []string{}).
-			Optional().
 			Default([]string{}),
 		field.JSON("subcommands", []string{}).
-			Optional().
 			Default([]string{}),
 		field.JSON("blocked_subcommands", []string{}).
-			Optional().
 			Default([]string{}),
 		field.JSON("required_flags", []string{}).
-			Optional().
 			Default([]string{}),
 		field.JSON("forbidden_flags", []string{}).
-			Optional().
 			Default([]string{}),
 		field.JSON("required_flag_prefixes", []string{}).
-			Optional().
 			Default([]string{}),
 		field.JSON("python_modes", []string{}).
-			Optional().
 			Default([]string{}),
 		field.Bool("safe_python_imports_only").
-			Optional().
 			Default(false),
 	}
 }

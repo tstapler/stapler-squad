@@ -306,12 +306,6 @@ func (_u *ApprovalRuleUpdate) AppendPrograms(v []string) *ApprovalRuleUpdate {
 	return _u
 }
 
-// ClearPrograms clears the value of the "programs" field.
-func (_u *ApprovalRuleUpdate) ClearPrograms() *ApprovalRuleUpdate {
-	_u.mutation.ClearPrograms()
-	return _u
-}
-
 // SetSubcommands sets the "subcommands" field.
 func (_u *ApprovalRuleUpdate) SetSubcommands(v []string) *ApprovalRuleUpdate {
 	_u.mutation.SetSubcommands(v)
@@ -321,12 +315,6 @@ func (_u *ApprovalRuleUpdate) SetSubcommands(v []string) *ApprovalRuleUpdate {
 // AppendSubcommands appends value to the "subcommands" field.
 func (_u *ApprovalRuleUpdate) AppendSubcommands(v []string) *ApprovalRuleUpdate {
 	_u.mutation.AppendSubcommands(v)
-	return _u
-}
-
-// ClearSubcommands clears the value of the "subcommands" field.
-func (_u *ApprovalRuleUpdate) ClearSubcommands() *ApprovalRuleUpdate {
-	_u.mutation.ClearSubcommands()
 	return _u
 }
 
@@ -342,12 +330,6 @@ func (_u *ApprovalRuleUpdate) AppendBlockedSubcommands(v []string) *ApprovalRule
 	return _u
 }
 
-// ClearBlockedSubcommands clears the value of the "blocked_subcommands" field.
-func (_u *ApprovalRuleUpdate) ClearBlockedSubcommands() *ApprovalRuleUpdate {
-	_u.mutation.ClearBlockedSubcommands()
-	return _u
-}
-
 // SetRequiredFlags sets the "required_flags" field.
 func (_u *ApprovalRuleUpdate) SetRequiredFlags(v []string) *ApprovalRuleUpdate {
 	_u.mutation.SetRequiredFlags(v)
@@ -357,12 +339,6 @@ func (_u *ApprovalRuleUpdate) SetRequiredFlags(v []string) *ApprovalRuleUpdate {
 // AppendRequiredFlags appends value to the "required_flags" field.
 func (_u *ApprovalRuleUpdate) AppendRequiredFlags(v []string) *ApprovalRuleUpdate {
 	_u.mutation.AppendRequiredFlags(v)
-	return _u
-}
-
-// ClearRequiredFlags clears the value of the "required_flags" field.
-func (_u *ApprovalRuleUpdate) ClearRequiredFlags() *ApprovalRuleUpdate {
-	_u.mutation.ClearRequiredFlags()
 	return _u
 }
 
@@ -378,12 +354,6 @@ func (_u *ApprovalRuleUpdate) AppendForbiddenFlags(v []string) *ApprovalRuleUpda
 	return _u
 }
 
-// ClearForbiddenFlags clears the value of the "forbidden_flags" field.
-func (_u *ApprovalRuleUpdate) ClearForbiddenFlags() *ApprovalRuleUpdate {
-	_u.mutation.ClearForbiddenFlags()
-	return _u
-}
-
 // SetRequiredFlagPrefixes sets the "required_flag_prefixes" field.
 func (_u *ApprovalRuleUpdate) SetRequiredFlagPrefixes(v []string) *ApprovalRuleUpdate {
 	_u.mutation.SetRequiredFlagPrefixes(v)
@@ -393,12 +363,6 @@ func (_u *ApprovalRuleUpdate) SetRequiredFlagPrefixes(v []string) *ApprovalRuleU
 // AppendRequiredFlagPrefixes appends value to the "required_flag_prefixes" field.
 func (_u *ApprovalRuleUpdate) AppendRequiredFlagPrefixes(v []string) *ApprovalRuleUpdate {
 	_u.mutation.AppendRequiredFlagPrefixes(v)
-	return _u
-}
-
-// ClearRequiredFlagPrefixes clears the value of the "required_flag_prefixes" field.
-func (_u *ApprovalRuleUpdate) ClearRequiredFlagPrefixes() *ApprovalRuleUpdate {
-	_u.mutation.ClearRequiredFlagPrefixes()
 	return _u
 }
 
@@ -414,12 +378,6 @@ func (_u *ApprovalRuleUpdate) AppendPythonModes(v []string) *ApprovalRuleUpdate 
 	return _u
 }
 
-// ClearPythonModes clears the value of the "python_modes" field.
-func (_u *ApprovalRuleUpdate) ClearPythonModes() *ApprovalRuleUpdate {
-	_u.mutation.ClearPythonModes()
-	return _u
-}
-
 // SetSafePythonImportsOnly sets the "safe_python_imports_only" field.
 func (_u *ApprovalRuleUpdate) SetSafePythonImportsOnly(v bool) *ApprovalRuleUpdate {
 	_u.mutation.SetSafePythonImportsOnly(v)
@@ -431,12 +389,6 @@ func (_u *ApprovalRuleUpdate) SetNillableSafePythonImportsOnly(v *bool) *Approva
 	if v != nil {
 		_u.SetSafePythonImportsOnly(*v)
 	}
-	return _u
-}
-
-// ClearSafePythonImportsOnly clears the value of the "safe_python_imports_only" field.
-func (_u *ApprovalRuleUpdate) ClearSafePythonImportsOnly() *ApprovalRuleUpdate {
-	_u.mutation.ClearSafePythonImportsOnly()
 	return _u
 }
 
@@ -591,9 +543,6 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 			sqljson.Append(u, approvalrule.FieldPrograms, value)
 		})
 	}
-	if _u.mutation.ProgramsCleared() {
-		_spec.ClearField(approvalrule.FieldPrograms, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.Subcommands(); ok {
 		_spec.SetField(approvalrule.FieldSubcommands, field.TypeJSON, value)
 	}
@@ -601,9 +550,6 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, approvalrule.FieldSubcommands, value)
 		})
-	}
-	if _u.mutation.SubcommandsCleared() {
-		_spec.ClearField(approvalrule.FieldSubcommands, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.BlockedSubcommands(); ok {
 		_spec.SetField(approvalrule.FieldBlockedSubcommands, field.TypeJSON, value)
@@ -613,9 +559,6 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 			sqljson.Append(u, approvalrule.FieldBlockedSubcommands, value)
 		})
 	}
-	if _u.mutation.BlockedSubcommandsCleared() {
-		_spec.ClearField(approvalrule.FieldBlockedSubcommands, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.RequiredFlags(); ok {
 		_spec.SetField(approvalrule.FieldRequiredFlags, field.TypeJSON, value)
 	}
@@ -623,9 +566,6 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, approvalrule.FieldRequiredFlags, value)
 		})
-	}
-	if _u.mutation.RequiredFlagsCleared() {
-		_spec.ClearField(approvalrule.FieldRequiredFlags, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ForbiddenFlags(); ok {
 		_spec.SetField(approvalrule.FieldForbiddenFlags, field.TypeJSON, value)
@@ -635,9 +575,6 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 			sqljson.Append(u, approvalrule.FieldForbiddenFlags, value)
 		})
 	}
-	if _u.mutation.ForbiddenFlagsCleared() {
-		_spec.ClearField(approvalrule.FieldForbiddenFlags, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.RequiredFlagPrefixes(); ok {
 		_spec.SetField(approvalrule.FieldRequiredFlagPrefixes, field.TypeJSON, value)
 	}
@@ -645,9 +582,6 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, approvalrule.FieldRequiredFlagPrefixes, value)
 		})
-	}
-	if _u.mutation.RequiredFlagPrefixesCleared() {
-		_spec.ClearField(approvalrule.FieldRequiredFlagPrefixes, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.PythonModes(); ok {
 		_spec.SetField(approvalrule.FieldPythonModes, field.TypeJSON, value)
@@ -657,14 +591,8 @@ func (_u *ApprovalRuleUpdate) sqlSave(ctx context.Context) (_node int, err error
 			sqljson.Append(u, approvalrule.FieldPythonModes, value)
 		})
 	}
-	if _u.mutation.PythonModesCleared() {
-		_spec.ClearField(approvalrule.FieldPythonModes, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.SafePythonImportsOnly(); ok {
 		_spec.SetField(approvalrule.FieldSafePythonImportsOnly, field.TypeBool, value)
-	}
-	if _u.mutation.SafePythonImportsOnlyCleared() {
-		_spec.ClearField(approvalrule.FieldSafePythonImportsOnly, field.TypeBool)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -963,12 +891,6 @@ func (_u *ApprovalRuleUpdateOne) AppendPrograms(v []string) *ApprovalRuleUpdateO
 	return _u
 }
 
-// ClearPrograms clears the value of the "programs" field.
-func (_u *ApprovalRuleUpdateOne) ClearPrograms() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearPrograms()
-	return _u
-}
-
 // SetSubcommands sets the "subcommands" field.
 func (_u *ApprovalRuleUpdateOne) SetSubcommands(v []string) *ApprovalRuleUpdateOne {
 	_u.mutation.SetSubcommands(v)
@@ -978,12 +900,6 @@ func (_u *ApprovalRuleUpdateOne) SetSubcommands(v []string) *ApprovalRuleUpdateO
 // AppendSubcommands appends value to the "subcommands" field.
 func (_u *ApprovalRuleUpdateOne) AppendSubcommands(v []string) *ApprovalRuleUpdateOne {
 	_u.mutation.AppendSubcommands(v)
-	return _u
-}
-
-// ClearSubcommands clears the value of the "subcommands" field.
-func (_u *ApprovalRuleUpdateOne) ClearSubcommands() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearSubcommands()
 	return _u
 }
 
@@ -999,12 +915,6 @@ func (_u *ApprovalRuleUpdateOne) AppendBlockedSubcommands(v []string) *ApprovalR
 	return _u
 }
 
-// ClearBlockedSubcommands clears the value of the "blocked_subcommands" field.
-func (_u *ApprovalRuleUpdateOne) ClearBlockedSubcommands() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearBlockedSubcommands()
-	return _u
-}
-
 // SetRequiredFlags sets the "required_flags" field.
 func (_u *ApprovalRuleUpdateOne) SetRequiredFlags(v []string) *ApprovalRuleUpdateOne {
 	_u.mutation.SetRequiredFlags(v)
@@ -1014,12 +924,6 @@ func (_u *ApprovalRuleUpdateOne) SetRequiredFlags(v []string) *ApprovalRuleUpdat
 // AppendRequiredFlags appends value to the "required_flags" field.
 func (_u *ApprovalRuleUpdateOne) AppendRequiredFlags(v []string) *ApprovalRuleUpdateOne {
 	_u.mutation.AppendRequiredFlags(v)
-	return _u
-}
-
-// ClearRequiredFlags clears the value of the "required_flags" field.
-func (_u *ApprovalRuleUpdateOne) ClearRequiredFlags() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearRequiredFlags()
 	return _u
 }
 
@@ -1035,12 +939,6 @@ func (_u *ApprovalRuleUpdateOne) AppendForbiddenFlags(v []string) *ApprovalRuleU
 	return _u
 }
 
-// ClearForbiddenFlags clears the value of the "forbidden_flags" field.
-func (_u *ApprovalRuleUpdateOne) ClearForbiddenFlags() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearForbiddenFlags()
-	return _u
-}
-
 // SetRequiredFlagPrefixes sets the "required_flag_prefixes" field.
 func (_u *ApprovalRuleUpdateOne) SetRequiredFlagPrefixes(v []string) *ApprovalRuleUpdateOne {
 	_u.mutation.SetRequiredFlagPrefixes(v)
@@ -1050,12 +948,6 @@ func (_u *ApprovalRuleUpdateOne) SetRequiredFlagPrefixes(v []string) *ApprovalRu
 // AppendRequiredFlagPrefixes appends value to the "required_flag_prefixes" field.
 func (_u *ApprovalRuleUpdateOne) AppendRequiredFlagPrefixes(v []string) *ApprovalRuleUpdateOne {
 	_u.mutation.AppendRequiredFlagPrefixes(v)
-	return _u
-}
-
-// ClearRequiredFlagPrefixes clears the value of the "required_flag_prefixes" field.
-func (_u *ApprovalRuleUpdateOne) ClearRequiredFlagPrefixes() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearRequiredFlagPrefixes()
 	return _u
 }
 
@@ -1071,12 +963,6 @@ func (_u *ApprovalRuleUpdateOne) AppendPythonModes(v []string) *ApprovalRuleUpda
 	return _u
 }
 
-// ClearPythonModes clears the value of the "python_modes" field.
-func (_u *ApprovalRuleUpdateOne) ClearPythonModes() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearPythonModes()
-	return _u
-}
-
 // SetSafePythonImportsOnly sets the "safe_python_imports_only" field.
 func (_u *ApprovalRuleUpdateOne) SetSafePythonImportsOnly(v bool) *ApprovalRuleUpdateOne {
 	_u.mutation.SetSafePythonImportsOnly(v)
@@ -1088,12 +974,6 @@ func (_u *ApprovalRuleUpdateOne) SetNillableSafePythonImportsOnly(v *bool) *Appr
 	if v != nil {
 		_u.SetSafePythonImportsOnly(*v)
 	}
-	return _u
-}
-
-// ClearSafePythonImportsOnly clears the value of the "safe_python_imports_only" field.
-func (_u *ApprovalRuleUpdateOne) ClearSafePythonImportsOnly() *ApprovalRuleUpdateOne {
-	_u.mutation.ClearSafePythonImportsOnly()
 	return _u
 }
 
@@ -1278,9 +1158,6 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 			sqljson.Append(u, approvalrule.FieldPrograms, value)
 		})
 	}
-	if _u.mutation.ProgramsCleared() {
-		_spec.ClearField(approvalrule.FieldPrograms, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.Subcommands(); ok {
 		_spec.SetField(approvalrule.FieldSubcommands, field.TypeJSON, value)
 	}
@@ -1288,9 +1165,6 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, approvalrule.FieldSubcommands, value)
 		})
-	}
-	if _u.mutation.SubcommandsCleared() {
-		_spec.ClearField(approvalrule.FieldSubcommands, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.BlockedSubcommands(); ok {
 		_spec.SetField(approvalrule.FieldBlockedSubcommands, field.TypeJSON, value)
@@ -1300,9 +1174,6 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 			sqljson.Append(u, approvalrule.FieldBlockedSubcommands, value)
 		})
 	}
-	if _u.mutation.BlockedSubcommandsCleared() {
-		_spec.ClearField(approvalrule.FieldBlockedSubcommands, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.RequiredFlags(); ok {
 		_spec.SetField(approvalrule.FieldRequiredFlags, field.TypeJSON, value)
 	}
@@ -1310,9 +1181,6 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, approvalrule.FieldRequiredFlags, value)
 		})
-	}
-	if _u.mutation.RequiredFlagsCleared() {
-		_spec.ClearField(approvalrule.FieldRequiredFlags, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.ForbiddenFlags(); ok {
 		_spec.SetField(approvalrule.FieldForbiddenFlags, field.TypeJSON, value)
@@ -1322,9 +1190,6 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 			sqljson.Append(u, approvalrule.FieldForbiddenFlags, value)
 		})
 	}
-	if _u.mutation.ForbiddenFlagsCleared() {
-		_spec.ClearField(approvalrule.FieldForbiddenFlags, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.RequiredFlagPrefixes(); ok {
 		_spec.SetField(approvalrule.FieldRequiredFlagPrefixes, field.TypeJSON, value)
 	}
@@ -1332,9 +1197,6 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 		_spec.AddModifier(func(u *sql.UpdateBuilder) {
 			sqljson.Append(u, approvalrule.FieldRequiredFlagPrefixes, value)
 		})
-	}
-	if _u.mutation.RequiredFlagPrefixesCleared() {
-		_spec.ClearField(approvalrule.FieldRequiredFlagPrefixes, field.TypeJSON)
 	}
 	if value, ok := _u.mutation.PythonModes(); ok {
 		_spec.SetField(approvalrule.FieldPythonModes, field.TypeJSON, value)
@@ -1344,14 +1206,8 @@ func (_u *ApprovalRuleUpdateOne) sqlSave(ctx context.Context) (_node *ApprovalRu
 			sqljson.Append(u, approvalrule.FieldPythonModes, value)
 		})
 	}
-	if _u.mutation.PythonModesCleared() {
-		_spec.ClearField(approvalrule.FieldPythonModes, field.TypeJSON)
-	}
 	if value, ok := _u.mutation.SafePythonImportsOnly(); ok {
 		_spec.SetField(approvalrule.FieldSafePythonImportsOnly, field.TypeBool, value)
-	}
-	if _u.mutation.SafePythonImportsOnlyCleared() {
-		_spec.ClearField(approvalrule.FieldSafePythonImportsOnly, field.TypeBool)
 	}
 	_node = &ApprovalRule{config: _u.config}
 	_spec.Assign = _node.assignValues

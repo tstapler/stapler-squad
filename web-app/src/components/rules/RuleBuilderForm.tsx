@@ -154,8 +154,13 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onCan
   }, [editRule]);
 
   function handleDecisionChange(d: AutoDecision) {
+    if (d === decision) return;
+    // Only auto-default priority when the value equals the previous decision's default,
+    // so manually-edited priorities are not overwritten.
+    if (priority === defaultPriority(decision)) {
+      setPriority(defaultPriority(d));
+    }
     setDecision(d);
-    setPriority(defaultPriority(d));
   }
 
   function togglePythonMode(m: string) {

@@ -27,14 +27,14 @@ var (
 		{Name: "source", Type: field.TypeString, Default: "user"},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
-		{Name: "programs", Type: field.TypeJSON, Nullable: true},
-		{Name: "subcommands", Type: field.TypeJSON, Nullable: true},
-		{Name: "blocked_subcommands", Type: field.TypeJSON, Nullable: true},
-		{Name: "required_flags", Type: field.TypeJSON, Nullable: true},
-		{Name: "forbidden_flags", Type: field.TypeJSON, Nullable: true},
-		{Name: "required_flag_prefixes", Type: field.TypeJSON, Nullable: true},
-		{Name: "python_modes", Type: field.TypeJSON, Nullable: true},
-		{Name: "safe_python_imports_only", Type: field.TypeBool, Nullable: true, Default: false},
+		{Name: "programs", Type: field.TypeJSON},
+		{Name: "subcommands", Type: field.TypeJSON},
+		{Name: "blocked_subcommands", Type: field.TypeJSON},
+		{Name: "required_flags", Type: field.TypeJSON},
+		{Name: "forbidden_flags", Type: field.TypeJSON},
+		{Name: "required_flag_prefixes", Type: field.TypeJSON},
+		{Name: "python_modes", Type: field.TypeJSON},
+		{Name: "safe_python_imports_only", Type: field.TypeBool, Default: false},
 	}
 	// ApprovalRulesTable holds the schema information for the "approval_rules" table.
 	ApprovalRulesTable = &schema.Table{
