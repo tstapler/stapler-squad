@@ -607,6 +607,8 @@ type SteerSessionResult struct {
 	MCPResult
 	SessionID string `json:"session_id"`
 	CharsSent int    `json:"chars_sent"`
+	Result    string `json:"result,omitempty"` // set when using --resume subprocess
+	Method    string `json:"method"`           // "send_keys" or "resume_subprocess"
 }
 
 func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -635,22 +637,40 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 		return errResult_, nil
 	}
 
-	// steer_session always appends \n — it is a semantic steering operation and
-	// the agent must receive it as a complete message.
-	text := message + "\n"
+	// For OneShot sessions that have completed (Stopped) and have a conversation UUID,
+	// use claude --resume subprocess instead of PTY send-keys.
+	uuid := inst.GetClaudeConversationUUID()
+	if inst.OneShot && uuid != "" && inst.GetEffectiveStatus() == session.Stopped {
+		resumeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		result, err := inst.RunWithResume(resumeCtx, message)
+		if err != nil {
+			return errResult(ErrInternalError, fmt.Sprintf("resume subprocess failed: %v", err), "Ensure claude CLI is available and session_id is valid"), nil
+		}
+		return okResult(SteerSessionResult{
+			MCPResult: MCPResult{Success: true},
+			SessionID: sessionID,
+			CharsSent: len(message),
+			Result:    result,
+			Method:    "resume_subprocess",
+		}), nil
+	}
+
+	// Fallback: send via PTY send-keys (interactive sessions or sessions without UUID).
+	text := message + "\r"
+
+	sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- inst.SendKeys(text) }()
-
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
 
 	select {
 	case err := <-errCh:
 		if err != nil {
 			return errResult(ErrInternalError, fmt.Sprintf("send keys failed: %v", err), "Check that the session is running and not paused"), nil
 		}
-	case <-ctx.Done():
+	case <-sendCtx.Done():
 		return errResult("PTY_WRITE_TIMEOUT", "timed out writing to session PTY", "The session may be blocked. Use send_control with key=C to interrupt"), nil
 	}
 
@@ -658,6 +678,7 @@ func (th *terminalHandlers) steerSession(ctx context.Context, req mcpgo.CallTool
 		MCPResult: MCPResult{Success: true},
 		SessionID: sessionID,
 		CharsSent: len(message),
+		Method:    "send_keys",
 	}), nil
 }
 

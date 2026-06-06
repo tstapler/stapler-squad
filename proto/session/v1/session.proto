@@ -446,6 +446,14 @@ message CreateSessionRequest {
   // Optional: Truncate the forked conversation to the first N messages.
   // 0 means copy all messages. Only meaningful when fork_source_id is set.
   int32 fork_at_message = 20;
+
+  // allowed_tools pre-approves specific Claude Code tool calls, avoiding permission prompts.
+  // Format: "Bash,Read,Edit" or "Bash(git commit *),Read".
+  string allowed_tools = 21;
+
+  // permission_mode sets Claude Code's permission handling mode.
+  // Values: "default", "acceptEdits", "bypassPermissions", "auto".
+  string permission_mode = 22;
 }
 
 message CreateSessionResponse {

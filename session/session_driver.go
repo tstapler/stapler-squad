@@ -396,11 +396,11 @@ func isStartupDialog(output string) bool {
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
 }
 
-// parseClaudeSessionID extracts the "session_id" value from a JSON blob
-// (both --output-format json and --output-format stream-json).
-// Returns empty string if not found.
-func parseClaudeSessionID(output string) string {
-	const key = `"session_id"`
+// parseJSONField extracts a top-level string field value from a JSON blob without
+// full JSON parsing. Works with both --output-format json and stream-json output.
+// Returns empty string if the field is not found or has a non-string value.
+func parseJSONField(output, field string) string {
+	key := `"` + field + `"`
 	idx := strings.Index(output, key)
 	if idx < 0 {
 		return ""
@@ -419,6 +419,13 @@ func parseClaudeSessionID(output string) string {
 		return ""
 	}
 	return rest[:end]
+}
+
+// parseClaudeSessionID extracts the "session_id" value from a JSON blob
+// (both --output-format json and --output-format stream-json).
+// Returns empty string if not found.
+func parseClaudeSessionID(output string) string {
+	return parseJSONField(output, "session_id")
 }
 
 // tryExtractClaudeSessionID reads the terminal output for a completed OneShot

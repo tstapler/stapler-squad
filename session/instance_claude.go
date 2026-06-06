@@ -5,9 +5,12 @@ package session
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 )
 
@@ -354,6 +357,56 @@ func (i *Instance) GetConversationUUID() string {
 		return ""
 	}
 	return i.claudeSession.ConversationUUID
+}
+
+// GetClaudeConversationUUID returns the stored Claude conversation UUID, empty if none.
+// Thread-safe: acquires stateMutex read lock.
+func (i *Instance) GetClaudeConversationUUID() string {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+	if i.claudeSession == nil {
+		return ""
+	}
+	return i.claudeSession.ConversationUUID
+}
+
+// RunWithResume spawns a new claude subprocess using --resume <uuid> and -p <message>,
+// waits for completion, and returns the result text. Updates ConversationUUID on success.
+func (i *Instance) RunWithResume(ctx context.Context, message string) (string, error) {
+	uuid := i.GetClaudeConversationUUID()
+	if uuid == "" {
+		return "", fmt.Errorf("no conversation UUID: session has no stored session_id")
+	}
+
+	// Extract binary path from Program field (may include flags — take first word).
+	claudePath := i.Program
+	if claudePath == "" {
+		claudePath = "claude"
+	}
+	if idx := strings.IndexByte(claudePath, ' '); idx >= 0 {
+		claudePath = claudePath[:idx]
+	}
+
+	cmd := safeexec.CommandContext(ctx, claudePath, "-p", "--resume", uuid, "--output-format", "json", message)
+	cmd.Dir = i.GetEffectiveRootDir()
+
+	out, runErr := cmd.Output()
+	output := string(out)
+
+	result := parseJSONField(output, "result")
+
+	// Update UUID in case it changed (fires save callback).
+	if newUUID := parseClaudeSessionID(output); newUUID != "" && newUUID != uuid {
+		i.SetClaudeConversationUUID(newUUID)
+	}
+
+	if runErr != nil {
+		if result != "" {
+			return result, nil
+		}
+		return "", fmt.Errorf("claude subprocess error: %w", runErr)
+	}
+	return result, nil
 }
 
 // SetClaudeConversationUUID stores the Claude conversation UUID so it is used

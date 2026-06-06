@@ -932,6 +932,8 @@ func (s *SessionService) CreateSession(
 		ProjectID:        req.Msg.ProjectId,
 		MCPServerURL:     s.mcpServerURL,
 		CreateIfMissing:  req.Msg.CreateIfMissing,
+		AllowedTools:     req.Msg.AllowedTools,
+		PermissionMode:   req.Msg.PermissionMode,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
