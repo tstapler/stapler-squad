@@ -1030,7 +1030,7 @@ func TestValidateRules_YAMLBombAliasExpansion(t *testing.T) {
 func TestIntegration_ExportThenValidate_Roundtrip(t *testing.T) {
 	svc := newSimpleRulesService(t)
 	specs := []RuleSpec{
-		{ID: "user-it-1", Name: "IT Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10, CriteriaPrograms: []string{"git"}},
+		{ID: "user-it-1", Name: "IT Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10, Programs: []string{"git"}},
 		{ID: "user-it-2", Name: "IT Rule Beta", ToolPattern: "Read|Glob", Decision: "auto_deny", Enabled: true, Source: "user", Priority: 5},
 		{ID: "user-it-3", Name: "IT Rule Gamma", CommandPattern: `^npm`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
 	}
