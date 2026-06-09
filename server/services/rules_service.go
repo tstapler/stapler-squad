@@ -292,6 +292,11 @@ func (rs *RulesService) GetProgramAnalytics(
 
 // coveredSubcommands returns a map of subcommand → true for all known subcommands
 // of the given program that are covered by at least one existing rule.
+// coveredSubcommands returns the set of subcommand strings covered by existing rules for
+// the given program. The empty string key ("") is a sentinel meaning "all subcommands" —
+// set when a rule has no CommandPattern (covers all Bash commands) or when a CommandPattern
+// regex matches the bare program name. Callers must treat covered[""] as "covered regardless
+// of subcommand" rather than as a literal empty-subcommand match.
 // knownSubcmds is the list of subcommand strings observed in the analytics window;
 // it is used to test regex-based CommandPatterns against synthetic "<program> <subcommand>" strings.
 func (rs *RulesService) coveredSubcommands(program string, knownSubcmds []string) map[string]bool {

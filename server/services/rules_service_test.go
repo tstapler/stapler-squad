@@ -389,8 +389,8 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 
 // newRulesServiceForCoverage builds a RulesService that has the given specs upserted
 // into its store. Seed rules are still present (allRuleSpecs always appends them), but
-// using program="git" avoids any seed-rule interference because no seed rule has
-// CriteriaPrograms containing "git".
+// testProg ("mytestcli") is an arbitrary name with no matching seed rules, so seed-rule
+// interference cannot affect coveredSubcommands results when testProg is used as the program.
 func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
 	t.Helper()
 	storage := createTestStorage(t)
@@ -557,6 +557,32 @@ func TestCoveredSubcommands(t *testing.T) {
 			knownSubcmds: []string{"push", "commit"},
 			wantPresent:  map[string]bool{"push": true},
 			wantAbsent:   []string{"commit", ""},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-12: CriteriaPrograms case-insensitive match — "MYTESTCLI" covers "mytestcli"
+			// via strings.EqualFold; regression guard for == vs EqualFold change.
+			name: "CriteriaPrograms_caseInsensitiveMatch",
+			specs: []RuleSpec{
+				{CriteriaPrograms: []string{"MYTESTCLI"}, Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{"": true, "push": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-13: CommandPattern matches bare program name → sets covered[""] sentinel.
+			// Pattern "^mytestcli$" matches the bare program string (re.MatchString(program))
+			// but not "mytestcli push", so only the sentinel key is set (rules_service.go:378).
+			name: "CommandPattern_matchesBareProgram_setsSentinelKey",
+			specs: []RuleSpec{
+				{ToolName: "Bash", CommandPattern: "^" + testProg + "$", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"": true},
+			wantAbsent:   []string{"push", "commit"},
 			strictCheck:  true,
 		},
 	}

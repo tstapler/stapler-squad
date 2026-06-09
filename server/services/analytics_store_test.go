@@ -238,7 +238,7 @@ func TestComputeSummary_should_computeCorrectRates(t *testing.T) {
 	s := ComputeSummary(entries)
 	assert.Equal(t, 10, s.TotalDecisions, "TC-G-19: TotalDecisions must be 10")
 	assert.InDelta(t, 0.8, s.AutoApproveRate, 0.001, "TC-G-19: AutoApproveRate must be 0.8")
-	assert.InDelta(t, 0.1, s.ManualReviewRate, 0.001, "TC-G-19: ManualReviewRate must be 0.1 (escalate/total)")
+	assert.InDelta(t, 0.1, s.ManualReviewRate, 0.001, "TC-G-19: ManualReviewRate must be 0.1 (escalate+manual_allow+manual_deny)/total — only escalate present in this fixture")
 }
 
 func TestComputeSummary_should_returnZeroSummary_When_empty(t *testing.T) {
