@@ -169,6 +169,29 @@ function SubcommandRow({
   const barWidth = maxTotal > 0 ? Math.round((row.total / maxTotal) * 80) : 0;
   const manual = row.escalate + row.manualAllow + row.manualDeny;
 
+  // Determine three-state coverage: covered / partial / gap
+  const hasEscalated = row.escalate > 0;
+  let coverageCell: React.ReactNode;
+  if (row.hasRuleCoverage && !hasEscalated) {
+    coverageCell = (
+      <span className={styles.coverageYes} data-testid="coverage-covered">
+        ✓ covered
+      </span>
+    );
+  } else if (row.hasRuleCoverage && hasEscalated) {
+    coverageCell = (
+      <span className={styles.coveragePartial} data-testid="coverage-partial">
+        ⚠ partial
+      </span>
+    );
+  } else {
+    coverageCell = (
+      <span className={styles.coverageNo} data-testid="coverage-gap">
+        ✗ gap
+      </span>
+    );
+  }
+
   // AC-13: "Add rule →" link pre-populates the rule form
   const addRuleHref = `/rules?program=${encodeURIComponent(program)}&subcommand=${encodeURIComponent(row.subcommand)}`;
 
@@ -188,13 +211,7 @@ function SubcommandRow({
       <td className={styles.td}>{row.autoAllow}</td>
       <td className={styles.td}>{row.autoDeny}</td>
       <td className={styles.td}>{manual}</td>
-      <td className={styles.td}>
-        {row.hasRuleCoverage ? (
-          <span className={styles.coverageYes}>✓ covered</span>
-        ) : (
-          <span className={styles.coverageNo}>✗ gap</span>
-        )}
-      </td>
+      <td className={styles.td}>{coverageCell}</td>
       <td className={styles.td}>
         {!row.hasRuleCoverage && (
           <a href={addRuleHref} className={styles.addRuleLink}>

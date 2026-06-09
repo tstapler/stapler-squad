@@ -384,3 +384,206 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 	assert.Contains(t, suggestion.ShadowedByRuleIds, "high-priority-rule",
 		"suggestion at priority 100 should be shadowed by user rule at priority 500")
 }
+
+// ── TestCoveredSubcommands ────────────────────────────────────────────────────
+
+// newRulesServiceForCoverage builds a RulesService that has the given specs upserted
+// into its store. Seed rules are still present (allRuleSpecs always appends them), but
+// using program="git" avoids any seed-rule interference because no seed rule has
+// CriteriaPrograms containing "git".
+func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
+	t.Helper()
+	storage := createTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	for i, spec := range specs {
+		if spec.ID == "" {
+			spec.ID = fmt.Sprintf("test-rule-%d", i)
+		}
+		if spec.Name == "" {
+			spec.Name = fmt.Sprintf("Test Rule %d", i)
+		}
+		if spec.Source == "" {
+			spec.Source = "user"
+		}
+		_, err := rulesStore.Upsert(spec)
+		require.NoError(t, err)
+	}
+	analyticsStore := NewAnalyticsStore(storage)
+	c := classifier.NewRuleBasedClassifier()
+	return NewRulesService(rulesStore, analyticsStore, c, nil, nil)
+}
+
+// testProg is an arbitrary program name that has no seed rules, so seed-rule
+// interference cannot affect the coveredSubcommands results. Using a made-up
+// name ensures test isolation without needing to suppress seed rules.
+const testProg = "mytestcli"
+
+func TestCoveredSubcommands(t *testing.T) {
+	tests := []struct {
+		name         string
+		specs        []RuleSpec
+		program      string
+		knownSubcmds []string
+		// wantPresent lists keys that MUST be in the covered map.
+		wantPresent map[string]bool
+		// wantAbsent lists specific subcommands that must NOT be in the covered map.
+		// Only checked when non-nil; used for cases where we need to confirm absence
+		// of specific keys regardless of what seed rules may add.
+		wantAbsent []string
+		// strictCheck, when true, verifies no extra keys beyond wantPresent are set.
+		// Use only when testProg is used (no seed rules for testProg → clean map).
+		strictCheck bool
+	}{
+		{
+			// TC-G-01: ToolPattern "Read|Glob" rule → testProg subcommands NOT covered
+			name: "ToolPattern_ReadGlob_skipped",
+			specs: []RuleSpec{
+				{ToolPattern: "Read|Glob", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-02: ToolCategory "builtin-agent" rule → testProg NOT covered (Concern-1 guard)
+			name: "ToolCategory_BuiltinAgent_skipped",
+			specs: []RuleSpec{
+				{ToolCategory: "builtin-agent", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-03: ToolPattern "Bash" rule → all testProg subcommands covered
+			name: "ToolPattern_Bash_included",
+			specs: []RuleSpec{
+				{ToolPattern: "Bash", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"": true, "push": true, "commit": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-04: ToolPattern ".*" (wildcard) → all testProg subcommands covered
+			name: "ToolPattern_Wildcard_included",
+			specs: []RuleSpec{
+				{ToolPattern: ".*", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{"": true, "push": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-05: AllToolRule — empty ToolName and ToolPattern → covered (R1.3 preserved)
+			name: "AllToolRule_EmptyToolNameAndPattern",
+			specs: []RuleSpec{
+				{ToolName: "", ToolPattern: "", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{"": true, "push": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-06: ToolName=Bash, CommandPattern="" → all known subcommands covered (R2.1)
+			name: "ToolName_Bash_CommandPatternEmpty_allSubcmds",
+			specs: []RuleSpec{
+				{ToolName: "Bash", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit", "status"},
+			wantPresent:  map[string]bool{"": true, "push": true, "commit": true, "status": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-07: ToolName=Bash, CommandPattern="", empty knownSubcmds → only bare key
+			name: "ToolName_Bash_CommandPatternEmpty_emptyKnownSubcmds",
+			specs: []RuleSpec{
+				{ToolName: "Bash", CommandPattern: "", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{},
+			wantPresent:  map[string]bool{"": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-08: CriteriaPrograms=["testProg"], no subcommand restriction → all covered
+			name: "CriteriaPrograms_match_noSubcmdRestriction",
+			specs: []RuleSpec{
+				{CriteriaPrograms: []string{testProg}, Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"": true, "push": true, "commit": true},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-09: CriteriaPrograms=["testProg"], CriteriaSubcommands=["push"] → only "push"
+			name: "CriteriaPrograms_match_withSubcmdRestriction",
+			specs: []RuleSpec{
+				{CriteriaPrograms: []string{testProg}, CriteriaSubcommands: []string{"push"}, Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"push": true},
+			// "commit" must not be covered — only "push" was specified in CriteriaSubcommands
+			wantAbsent:  []string{"commit", ""},
+			strictCheck: true,
+		},
+		{
+			// TC-G-10: Disabled rule → nothing covered
+			name: "DisabledRule_notCovered",
+			specs: []RuleSpec{
+				{ToolName: "Bash", CommandPattern: "", Enabled: false},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push"},
+			wantPresent:  map[string]bool{},
+			strictCheck:  true,
+		},
+		{
+			// TC-G-11: CommandPattern="^testProg push" → only "push" covered (bonus)
+			name: "CommandPattern_specificSubcmd",
+			specs: []RuleSpec{
+				{ToolName: "Bash", CommandPattern: "^" + testProg + " push", Enabled: true},
+			},
+			program:      testProg,
+			knownSubcmds: []string{"push", "commit"},
+			wantPresent:  map[string]bool{"push": true},
+			wantAbsent:   []string{"commit", ""},
+			strictCheck:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := newRulesServiceForCoverage(t, tc.specs)
+			got := svc.coveredSubcommands(tc.program, tc.knownSubcmds)
+
+			// Verify every expected key is present.
+			for k, v := range tc.wantPresent {
+				assert.Equal(t, v, got[k], "expected covered[%q]=%v", k, v)
+			}
+
+			// Verify keys that must be absent.
+			for _, k := range tc.wantAbsent {
+				assert.False(t, got[k], "key %q must not be covered", k)
+			}
+
+			// For strict checks, verify no unexpected keys beyond wantPresent are set.
+			if tc.strictCheck {
+				for k, v := range got {
+					if _, ok := tc.wantPresent[k]; !ok {
+						assert.False(t, v, "unexpected covered[%q]=true", k)
+					}
+				}
+			}
+		})
+	}
+}

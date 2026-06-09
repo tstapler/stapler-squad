@@ -304,6 +304,23 @@ func (rs *RulesService) coveredSubcommands(program string, knownSubcmds []string
 		// Check for Bash tool match (exact or category)
 		isBashTool := strings.EqualFold(spec.ToolName, "Bash")
 		isBashCat := strings.EqualFold(spec.ToolCategory, "bash")
+		// If a ToolPattern is set (and ToolName is empty), check whether the pattern
+		// actually matches "Bash". A pattern like "Read|Glob|Grep" does not match Bash;
+		// a pattern like "Bash" or ".*" does.
+		if spec.ToolPattern != "" && !isBashTool {
+			re, err := regexp.Compile(spec.ToolPattern)
+			if err != nil || !re.MatchString("Bash") {
+				continue // pattern excludes Bash → skip
+			}
+			isBashTool = true // treat as bash-applicable
+		}
+		// Reject rules whose ToolCategory explicitly targets a non-Bash tool group.
+		// This catches seed rules like seed-allow-agent-tools (ToolCategory="builtin-agent")
+		// and seed-allow-mcp-read (ToolCategory="mcp-read") that have empty ToolName and
+		// empty ToolPattern — they would otherwise fall through to the "all tools" path.
+		if spec.ToolCategory != "" && !strings.EqualFold(spec.ToolCategory, "bash") && !isBashTool {
+			continue
+		}
 		if !isBashTool && !isBashCat && spec.ToolName != "" {
 			continue
 		}
@@ -335,6 +352,9 @@ func (rs *RulesService) coveredSubcommands(program string, knownSubcmds []string
 		if spec.CommandPattern == "" {
 			// A rule with no CommandPattern matches all commands — every subcommand covered.
 			covered[""] = true
+			for _, sub := range knownSubcmds {
+				covered[sub] = true
+			}
 			continue
 		}
 		// Compile the pattern once; skip invalid patterns rather than panicking.
@@ -426,16 +446,17 @@ func specToProto(spec RuleSpec) *sessionv1.ApprovalRuleProto {
 
 func ruleToSpec(r classifier.Rule) RuleSpec {
 	spec := RuleSpec{
-		ID:          r.ID,
-		Name:        r.Name,
-		ToolName:    r.ToolName,
-		Decision:    decisionString(r.Decision),
-		RiskLevel:   riskLevelString(r.RiskLevel),
-		Reason:      r.Reason,
-		Alternative: r.Alternative,
-		Priority:    r.Priority,
-		Enabled:     r.Enabled,
-		Source:      r.Source,
+		ID:           r.ID,
+		Name:         r.Name,
+		ToolName:     r.ToolName,
+		ToolCategory: r.ToolCategory,
+		Decision:     decisionString(r.Decision),
+		RiskLevel:    riskLevelString(r.RiskLevel),
+		Reason:       r.Reason,
+		Alternative:  r.Alternative,
+		Priority:     r.Priority,
+		Enabled:      r.Enabled,
+		Source:       r.Source,
 	}
 	if r.ToolPattern != nil {
 		spec.ToolPattern = r.ToolPattern.String()
