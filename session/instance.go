@@ -455,6 +455,10 @@ type InstanceOptions struct {
 	// CreateIfMissing: when SessionTypeDirectory, create the directory and run git init
 	// if the path does not exist. Only set when the user has confirmed the action.
 	CreateIfMissing bool
+
+	// AutonomousMode, when true, starts an AutonomousDriver after session creation
+	// so the session runs to completion without manual steering.
+	AutonomousMode bool
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -538,6 +542,7 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		AppendSystemPrompt: opts.AppendSystemPrompt,
 		AllowedTools:       opts.AllowedTools,
 		PermissionMode:     opts.PermissionMode,
+		AutonomousMode:     opts.AutonomousMode,
 		// Directory creation on missing path (R2 confirmation flow)
 		CreateIfMissing: opts.CreateIfMissing,
 	}

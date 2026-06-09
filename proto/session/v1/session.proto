@@ -454,6 +454,10 @@ message CreateSessionRequest {
   // permission_mode sets Claude Code's permission handling mode.
   // Values: "default", "acceptEdits", "bypassPermissions", "auto".
   string permission_mode = 22;
+
+  // Optional: If true, start an AutonomousDriver that injects orchestrator
+  // prompts when the session is idle, running the session to completion.
+  bool autonomous_mode = 23;
 }
 
 message CreateSessionResponse {

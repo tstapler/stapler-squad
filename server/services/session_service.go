@@ -934,6 +934,7 @@ func (s *SessionService) CreateSession(
 		CreateIfMissing:  req.Msg.CreateIfMissing,
 		AllowedTools:     req.Msg.AllowedTools,
 		PermissionMode:   req.Msg.PermissionMode,
+		AutonomousMode:   req.Msg.AutonomousMode,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -1021,6 +1022,15 @@ func (s *SessionService) CreateSession(
 		// StartSessionDriver is idempotent (CAS guard) — safe to call even if a driver
 		// was already started by another code path.
 		session.StartSessionDriver(instance, instanceRootDir)
+
+		if instance.AutonomousMode && s.headlessPool != nil {
+			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0)
+			if driverErr := driver.Start(context.Background()); driverErr != nil {
+				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
+			}
+		} else if instance.AutonomousMode {
+			log.Warn("[CreateSession] autonomous_mode requested but headlessPool is nil", "session", instanceTitle)
+		}
 
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))

@@ -813,12 +813,12 @@ func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T)
 	defer cancel()
 
 	fired := make(chan detection.DetectedStatus, 1)
-	cc.statusChangeListener = func(newStatus detection.DetectedStatus, _ string) {
+	cc.AddStatusChangeListener(func(newStatus detection.DetectedStatus, _ string) {
 		select {
 		case fired <- newStatus:
 		default:
 		}
-	}
+	})
 
 	// Start the background goroutine.
 	go cc.runStatusChangeLoop(cc.ctx)
@@ -844,9 +844,9 @@ func TestClaudeController_StatusChangeListener_SuppressedOnNoChange(t *testing.T
 	defer cancel()
 
 	callCount := make(chan struct{}, 10)
-	cc.statusChangeListener = func(_ detection.DetectedStatus, _ string) {
+	cc.AddStatusChangeListener(func(_ detection.DetectedStatus, _ string) {
 		callCount <- struct{}{}
-	}
+	})
 
 	go cc.runStatusChangeLoop(cc.ctx)
 
@@ -895,12 +895,12 @@ func TestClaudeController_StatusChangeListener_NotCalledAfterStop(t *testing.T) 
 	cc, _, _, cancel := newControllerWithMockAndChannel(preview)
 
 	called := make(chan struct{}, 1)
-	cc.statusChangeListener = func(_ detection.DetectedStatus, _ string) {
+	cc.AddStatusChangeListener(func(_ detection.DetectedStatus, _ string) {
 		select {
 		case called <- struct{}{}:
 		default:
 		}
-	}
+	})
 
 	go cc.runStatusChangeLoop(cc.ctx)
 

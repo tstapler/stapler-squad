@@ -314,6 +314,9 @@ type CreateSessionRequest struct {
 	// permission_mode sets Claude Code's permission handling mode.
 	// Values: "default", "acceptEdits", "bypassPermissions", "auto".
 	PermissionMode string `protobuf:"bytes,22,opt,name=permission_mode,json=permissionMode,proto3" json:"permission_mode,omitempty"`
+	// Optional: If true, start an AutonomousDriver that injects orchestrator
+	// prompts when the session is idle, running the session to completion.
+	AutonomousMode bool `protobuf:"varint,23,opt,name=autonomous_mode,json=autonomousMode,proto3" json:"autonomous_mode,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -500,6 +503,13 @@ func (x *CreateSessionRequest) GetPermissionMode() string {
 		return x.PermissionMode
 	}
 	return ""
+}
+
+func (x *CreateSessionRequest) GetAutonomousMode() bool {
+	if x != nil {
+		return x.AutonomousMode
+	}
+	return false
 }
 
 type CreateSessionResponse struct {
@@ -12103,7 +12113,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11GetSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"C\n" +
 	"\x12GetSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xe9\x05\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\x92\x06\n" +
 	"\x14CreateSessionRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +
@@ -12129,7 +12139,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x0efork_source_id\x18\x13 \x01(\tR\fforkSourceId\x12&\n" +
 	"\x0ffork_at_message\x18\x14 \x01(\x05R\rforkAtMessage\x12#\n" +
 	"\rallowed_tools\x18\x15 \x01(\tR\fallowedTools\x12'\n" +
-	"\x0fpermission_mode\x18\x16 \x01(\tR\x0epermissionMode\"F\n" +
+	"\x0fpermission_mode\x18\x16 \x01(\tR\x0epermissionMode\x12'\n" +
+	"\x0fautonomous_mode\x18\x17 \x01(\bR\x0eautonomousMode\"F\n" +
 	"\x15CreateSessionResponse\x12-\n" +
 	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xb4\x03\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +

@@ -85,9 +85,10 @@ type ClaudeController struct {
 	cancel           context.CancelFunc
 
 	// Status-change notification fields.
-	statusChangeListener StatusChangeListener
-	lastEmittedStatus    detection.DetectedStatus
-	statusCheckCh        chan struct{} // capacity 1; non-blocking send from onOutput
+	statusChangeListeners []StatusChangeListener
+	listenersMu           sync.RWMutex
+	lastEmittedStatus     detection.DetectedStatus
+	statusCheckCh         chan struct{} // capacity 1; non-blocking send from onOutput
 }
 
 // SetOnEOFCallback registers a function called when the PTY backing this controller
@@ -97,12 +98,21 @@ func (cc *ClaudeController) SetOnEOFCallback(fn func()) {
 	cc.onEOFCallback = fn
 }
 
-// SetStatusChangeListener registers fn to be called on every terminal status change.
-// Safe to call before or after Start(). fn is invoked outside cc.mu.
+// AddStatusChangeListener appends fn to the fan-out set of status-change listeners.
+// All registered listeners fire on every status transition.
+// Safe to call before or after Start(). Listeners are invoked outside cc.mu.
+func (cc *ClaudeController) AddStatusChangeListener(fn StatusChangeListener) {
+	cc.listenersMu.Lock()
+	cc.statusChangeListeners = append(cc.statusChangeListeners, fn)
+	cc.listenersMu.Unlock()
+}
+
+// SetStatusChangeListener registers fn as the sole status-change listener, replacing any
+// previously registered listeners. Kept for backward compatibility; prefer AddStatusChangeListener.
 func (cc *ClaudeController) SetStatusChangeListener(fn StatusChangeListener) {
-	cc.mu.Lock()
-	cc.statusChangeListener = fn
-	cc.mu.Unlock()
+	cc.listenersMu.Lock()
+	cc.statusChangeListeners = []StatusChangeListener{fn}
+	cc.listenersMu.Unlock()
 }
 
 // NewClaudeController creates a new controller for the given instance.
@@ -904,15 +914,22 @@ func (cc *ClaudeController) runStatusChangeLoop(ctx context.Context) {
 		case <-cc.statusCheckCh:
 			newStatus, _ := cc.GetCurrentStatus()
 			cc.mu.Lock()
-			listener := cc.statusChangeListener
-			if listener == nil || newStatus == cc.lastEmittedStatus {
+			if newStatus == cc.lastEmittedStatus {
 				cc.mu.Unlock()
 				continue
 			}
 			cc.lastEmittedStatus = newStatus
 			cc.mu.Unlock()
-			// Call listener outside cc.mu (avoids re-entrancy deadlock)
-			listener(newStatus, cc.sessionName)
+
+			cc.listenersMu.RLock()
+			listeners := make([]StatusChangeListener, len(cc.statusChangeListeners))
+			copy(listeners, cc.statusChangeListeners)
+			cc.listenersMu.RUnlock()
+
+			// Call all listeners outside cc.mu (avoids re-entrancy deadlock)
+			for _, fn := range listeners {
+				fn(newStatus, cc.sessionName)
+			}
 		}
 	}
 }
