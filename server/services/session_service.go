@@ -2266,6 +2266,30 @@ func (s *SessionService) GenerateSuggestedRule(
 	return s.rulesSvc.GenerateSuggestedRule(ctx, req)
 }
 
+// ValidateRules parses and validates a YAML rules file without applying it.
+func (s *SessionService) ValidateRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ValidateRulesRequest],
+) (*connect.Response[sessionv1.ValidateRulesResponse], error) {
+	return s.rulesSvc.ValidateRules(ctx, req)
+}
+
+// ExportRules serializes user-authored rules to YAML format for download.
+func (s *SessionService) ExportRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ExportRulesRequest],
+) (*connect.Response[sessionv1.ExportRulesResponse], error) {
+	return s.rulesSvc.ExportRules(ctx, req)
+}
+
+// BulkUpsertRules creates or updates multiple user-defined rules in one call.
+func (s *SessionService) BulkUpsertRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.BulkUpsertRulesRequest],
+) (*connect.Response[sessionv1.BulkUpsertRulesResponse], error) {
+	return s.rulesSvc.BulkUpsertRules(ctx, req)
+}
+
 // ListDatabases returns all discovered workspace databases with metadata.
 func (s *SessionService) ListDatabases(
 	ctx context.Context,

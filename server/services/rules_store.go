@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
@@ -18,23 +20,31 @@ import (
 // RuleSpec is the JSON-serializable form of a Rule.
 // CommandPattern and FilePattern are stored as strings (compiled on load).
 type RuleSpec struct {
-	ID                  string    `json:"id"`
-	Name                string    `json:"name"`
-	ToolName            string    `json:"tool_name,omitempty"`
-	ToolPattern         string    `json:"tool_pattern,omitempty"`
-	ToolCategory        string    `json:"tool_category,omitempty"`
-	CommandPattern      string    `json:"command_pattern,omitempty"`
-	FilePattern         string    `json:"file_pattern,omitempty"`
-	CriteriaPrograms    []string  `json:"criteria_programs,omitempty"`
-	CriteriaSubcommands []string  `json:"criteria_subcommands,omitempty"`
-	Decision            string    `json:"decision"`   // "auto_allow" | "auto_deny" | "escalate"
-	RiskLevel           string    `json:"risk_level"` // "low" | "medium" | "high" | "critical"
-	Reason              string    `json:"reason,omitempty"`
-	Alternative         string    `json:"alternative,omitempty"`
-	Priority            int       `json:"priority"`
-	Enabled             bool      `json:"enabled"`
-	Source              string    `json:"source"` // "user" | "seed" | "claude-settings"
-	CreatedAt           time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	ToolName       string    `json:"tool_name,omitempty"`
+	ToolPattern    string    `json:"tool_pattern,omitempty"`
+	ToolCategory   string    `json:"tool_category,omitempty"`
+	CommandPattern string    `json:"command_pattern,omitempty"`
+	FilePattern    string    `json:"file_pattern,omitempty"`
+	Decision       string    `json:"decision"`   // "auto_allow" | "auto_deny" | "escalate"
+	RiskLevel      string    `json:"risk_level"` // "low" | "medium" | "high" | "critical"
+	Reason         string    `json:"reason,omitempty"`
+	Alternative    string    `json:"alternative,omitempty"`
+	Priority       int       `json:"priority"`
+	Enabled        bool      `json:"enabled"`
+	Source         string    `json:"source"` // "user" | "seed" | "claude-settings"
+	CreatedAt      time.Time `json:"created_at"`
+
+	// Structured CommandCriteria fields — mutually exclusive with commandPattern.
+	Programs              []string `json:"programs,omitempty"`
+	Subcommands           []string `json:"subcommands,omitempty"`
+	BlockedSubcommands    []string `json:"blocked_subcommands,omitempty"`
+	RequiredFlags         []string `json:"required_flags,omitempty"`
+	ForbiddenFlags        []string `json:"forbidden_flags,omitempty"`
+	RequiredFlagPrefixes  []string `json:"required_flag_prefixes,omitempty"`
+	PythonModes           []string `json:"python_modes,omitempty"`
+	SafePythonImportsOnly bool     `json:"safe_python_imports_only,omitempty"`
 }
 
 // RulesFile is the top-level structure of auto_approve_rules.json.
@@ -93,10 +103,56 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 			}
 		}
 	}
+	// Structured criteria and raw commandPattern are mutually exclusive.
+	hasCriteria := len(spec.Programs) > 0 || len(spec.Subcommands) > 0 ||
+		len(spec.BlockedSubcommands) > 0 || len(spec.RequiredFlags) > 0 ||
+		len(spec.ForbiddenFlags) > 0 || len(spec.RequiredFlagPrefixes) > 0 ||
+		len(spec.PythonModes) > 0 || spec.SafePythonImportsOnly
+	if hasCriteria && spec.CommandPattern != "" {
+		return RuleSpec{}, fmt.Errorf("rule cannot set both commandPattern and structured criteria; use one mode")
+	}
+
+	if spec.CreatedAt.IsZero() {
+		spec.CreatedAt = time.Now()
+	}
+
+	// Persist to SQLite first; only update in-memory state on success.
+	ruleData := session.ApprovalRuleData{
+		ID:             spec.ID,
+		Name:           spec.Name,
+		ToolName:       spec.ToolName,
+		ToolPattern:    spec.ToolPattern,
+		ToolCategory:   spec.ToolCategory,
+		CommandPattern: spec.CommandPattern,
+		FilePattern:    spec.FilePattern,
+		Decision:       decisionToInt(spec.Decision),
+		RiskLevel:      riskLevelToInt(spec.RiskLevel),
+		Reason:         spec.Reason,
+		Alternative:    spec.Alternative,
+		Priority:       spec.Priority,
+		Enabled:        spec.Enabled,
+		Source:         spec.Source,
+		CreatedAt:      spec.CreatedAt,
+		UpdatedAt:      time.Now(),
+
+		Programs:              spec.Programs,
+		Subcommands:           spec.Subcommands,
+		BlockedSubcommands:    spec.BlockedSubcommands,
+		RequiredFlags:         spec.RequiredFlags,
+		ForbiddenFlags:        spec.ForbiddenFlags,
+		RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
+		PythonModes:           spec.PythonModes,
+		SafePythonImportsOnly: spec.SafePythonImportsOnly,
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.storage.UpsertRule(context.Background(), ruleData); err != nil {
+		return RuleSpec{}, fmt.Errorf("save rule to DB: %w", err)
+	}
+
+	// Update in-memory state only after the DB write succeeds.
 	found := false
 	for i, r := range s.specs {
 		if r.ID == spec.ID {
@@ -106,36 +162,7 @@ func (s *RulesStore) Upsert(spec RuleSpec) (RuleSpec, error) {
 		}
 	}
 	if !found {
-		if spec.CreatedAt.IsZero() {
-			spec.CreatedAt = time.Now()
-		}
 		s.specs = append(s.specs, spec)
-	}
-
-	// Persist to SQLite via Storage.
-	ruleData := session.ApprovalRuleData{
-		ID:                  spec.ID,
-		Name:                spec.Name,
-		ToolName:            spec.ToolName,
-		ToolPattern:         spec.ToolPattern,
-		ToolCategory:        spec.ToolCategory,
-		CommandPattern:      spec.CommandPattern,
-		FilePattern:         spec.FilePattern,
-		CriteriaPrograms:    spec.CriteriaPrograms,
-		CriteriaSubcommands: spec.CriteriaSubcommands,
-		Decision:            decisionToInt(spec.Decision),
-		RiskLevel:           riskLevelToInt(spec.RiskLevel),
-		Reason:              spec.Reason,
-		Alternative:         spec.Alternative,
-		Priority:            spec.Priority,
-		Enabled:             spec.Enabled,
-		Source:              spec.Source,
-		CreatedAt:           spec.CreatedAt,
-		UpdatedAt:           time.Now(),
-	}
-
-	if err := s.storage.UpsertRule(context.Background(), ruleData); err != nil {
-		return RuleSpec{}, fmt.Errorf("save rule to DB: %w", err)
 	}
 
 	s.exportRulesLocked()
@@ -179,23 +206,30 @@ func (s *RulesStore) reload() error {
 	specs := make([]RuleSpec, len(rules))
 	for i, r := range rules {
 		specs[i] = RuleSpec{
-			ID:                  r.ID,
-			Name:                r.Name,
-			ToolName:            r.ToolName,
-			ToolPattern:         r.ToolPattern,
-			ToolCategory:        r.ToolCategory,
-			CommandPattern:      r.CommandPattern,
-			FilePattern:         r.FilePattern,
-			CriteriaPrograms:    r.CriteriaPrograms,
-			CriteriaSubcommands: r.CriteriaSubcommands,
-			Decision:            decisionStringFromInt(r.Decision),
-			RiskLevel:           riskLevelStringFromInt(r.RiskLevel),
-			Reason:              r.Reason,
-			Alternative:         r.Alternative,
-			Priority:            r.Priority,
-			Enabled:             r.Enabled,
-			Source:              r.Source,
-			CreatedAt:           r.CreatedAt,
+			ID:             r.ID,
+			Name:           r.Name,
+			ToolName:       r.ToolName,
+			ToolPattern:    r.ToolPattern,
+			ToolCategory:   r.ToolCategory,
+			CommandPattern: r.CommandPattern,
+			FilePattern:    r.FilePattern,
+			Decision:       decisionStringFromInt(r.Decision),
+			RiskLevel:      riskLevelStringFromInt(r.RiskLevel),
+			Reason:         r.Reason,
+			Alternative:    r.Alternative,
+			Priority:       r.Priority,
+			Enabled:        r.Enabled,
+			Source:         r.Source,
+			CreatedAt:      r.CreatedAt,
+
+			Programs:              r.Programs,
+			Subcommands:           r.Subcommands,
+			BlockedSubcommands:    r.BlockedSubcommands,
+			RequiredFlags:         r.RequiredFlags,
+			ForbiddenFlags:        r.ForbiddenFlags,
+			RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
+			PythonModes:           r.PythonModes,
+			SafePythonImportsOnly: r.SafePythonImportsOnly,
 		}
 	}
 
@@ -274,10 +308,24 @@ func specsToRules(specs []RuleSpec) []classifier.Rule {
 			}
 			r.FilePattern = re
 		}
-		if len(spec.CriteriaPrograms) > 0 {
+		// Populate Criteria from structured fields when at least one is set.
+		if len(spec.Programs) > 0 ||
+			len(spec.Subcommands) > 0 ||
+			len(spec.BlockedSubcommands) > 0 ||
+			len(spec.RequiredFlags) > 0 ||
+			len(spec.ForbiddenFlags) > 0 ||
+			len(spec.RequiredFlagPrefixes) > 0 ||
+			len(spec.PythonModes) > 0 ||
+			spec.SafePythonImportsOnly {
 			r.Criteria = &classifier.CommandCriteria{
-				Programs:    spec.CriteriaPrograms,
-				Subcommands: spec.CriteriaSubcommands,
+				Programs:              spec.Programs,
+				Subcommands:           spec.Subcommands,
+				BlockedSubcommands:    spec.BlockedSubcommands,
+				RequiredFlags:         spec.RequiredFlags,
+				ForbiddenFlags:        spec.ForbiddenFlags,
+				RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
+				PythonModes:           spec.PythonModes,
+				SafePythonImportsOnly: spec.SafePythonImportsOnly,
 			}
 		}
 		rules = append(rules, r)
@@ -345,4 +393,124 @@ func decisionStringFromInt(d int) string {
 // riskLevelStringFromInt delegates to the canonical riskLevelString in analytics_store.go.
 func riskLevelStringFromInt(r int) string {
 	return riskLevelString(classifier.RiskLevel(r))
+}
+
+// ── BulkUpsert ────────────────────────────────────────────────────────────────
+
+// BulkUpsertResult holds the outcome counts for a BulkUpsert operation.
+type BulkUpsertResult struct {
+	Created int
+	Updated int
+	Skipped int
+	Errors  []string
+}
+
+// BulkUpsert creates or updates multiple user rules in one transaction.
+// If overwriteDuplicates is false, rules whose name already exists are skipped.
+// If overwriteDuplicates is true, rules whose name already exists are updated.
+// This method does NOT call rebuildClassifier -- that is RulesService's responsibility.
+// Lock ordering: BulkUpsert holds s.mu.Lock for the full operation, then calls
+// s.storage.UpsertRule while holding the lock. This is safe because storage is
+// independent of the in-memory lock (no recursive locking).
+func (s *RulesStore) BulkUpsert(ctx context.Context, specs []RuleSpec, overwriteDuplicates bool) BulkUpsertResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Build name index for O(1) duplicate detection.
+	nameIndex := make(map[string]string, len(s.specs)) // name -> id
+	for _, existing := range s.specs {
+		nameIndex[existing.Name] = existing.ID
+	}
+
+	result := BulkUpsertResult{}
+
+	// Pre-flight: validate all specs before touching storage.
+	// This catches the most common errors (bad data) before any writes occur.
+	for i := range specs {
+		if strings.TrimSpace(specs[i].Name) == "" {
+			result.Errors = append(result.Errors, fmt.Sprintf("rule at index %d: name is required", i))
+		}
+	}
+	if len(result.Errors) > 0 {
+		return result
+	}
+
+	for i := range specs {
+		spec := specs[i]
+		existingID, isDuplicate := nameIndex[spec.Name]
+		if isDuplicate && !overwriteDuplicates {
+			result.Skipped++
+			continue
+		}
+		if isDuplicate {
+			// Overwrite: preserve the existing ID.
+			spec.ID = existingID
+			result.Updated++
+		} else {
+			// New rule: assign server-generated ID.
+			spec.ID = "user-" + uuid.New().String()
+			result.Created++
+		}
+		spec.Source = "user"
+		if spec.CreatedAt.IsZero() {
+			spec.CreatedAt = time.Now()
+		}
+
+		ruleData := session.ApprovalRuleData{
+			ID:                    spec.ID,
+			Name:                  spec.Name,
+			ToolName:              spec.ToolName,
+			ToolPattern:           spec.ToolPattern,
+			ToolCategory:          spec.ToolCategory,
+			CommandPattern:        spec.CommandPattern,
+			FilePattern:           spec.FilePattern,
+			Decision:              decisionToInt(spec.Decision),
+			RiskLevel:             riskLevelToInt(spec.RiskLevel),
+			Reason:                spec.Reason,
+			Alternative:           spec.Alternative,
+			Priority:              spec.Priority,
+			Enabled:               spec.Enabled,
+			Source:                spec.Source,
+			CreatedAt:             spec.CreatedAt,
+			UpdatedAt:             time.Now(),
+			Programs:              spec.Programs,
+			Subcommands:           spec.Subcommands,
+			BlockedSubcommands:    spec.BlockedSubcommands,
+			RequiredFlags:         spec.RequiredFlags,
+			ForbiddenFlags:        spec.ForbiddenFlags,
+			RequiredFlagPrefixes:  spec.RequiredFlagPrefixes,
+			PythonModes:           spec.PythonModes,
+			SafePythonImportsOnly: spec.SafePythonImportsOnly,
+		}
+
+		if err := s.storage.UpsertRule(ctx, ruleData); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("rule %q: %v", spec.Name, err))
+			if isDuplicate {
+				result.Updated--
+			} else {
+				result.Created--
+			}
+			continue
+		}
+
+		// Update name index so subsequent rules in this batch see the new name.
+		nameIndex[spec.Name] = spec.ID
+
+		// Update in-memory slice.
+		found := false
+		for j, r := range s.specs {
+			if r.ID == spec.ID {
+				s.specs[j] = spec
+				found = true
+				break
+			}
+		}
+		if !found {
+			s.specs = append(s.specs, spec)
+		}
+	}
+
+	// Write the JSON export file once at the end (not per-rule).
+	s.exportRulesLocked()
+	return result
 }

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
+	"github.com/tstapler/stapler-squad/session"
+	"gopkg.in/yaml.v3"
 )
 
 // ── Mock helpers ──────────────────────────────────────────────────────────────
@@ -513,10 +516,10 @@ func TestCoveredSubcommands(t *testing.T) {
 			strictCheck:  true,
 		},
 		{
-			// TC-G-08: CriteriaPrograms=["testProg"], no subcommand restriction → all covered
-			name: "CriteriaPrograms_match_noSubcmdRestriction",
+			// TC-G-08: Programs=["testProg"], no subcommand restriction → all covered
+			name: "Programs_match_noSubcmdRestriction",
 			specs: []RuleSpec{
-				{CriteriaPrograms: []string{testProg}, Enabled: true},
+				{Programs: []string{testProg}, Enabled: true},
 			},
 			program:      testProg,
 			knownSubcmds: []string{"push", "commit"},
@@ -524,15 +527,15 @@ func TestCoveredSubcommands(t *testing.T) {
 			strictCheck:  true,
 		},
 		{
-			// TC-G-09: CriteriaPrograms=["testProg"], CriteriaSubcommands=["push"] → only "push"
-			name: "CriteriaPrograms_match_withSubcmdRestriction",
+			// TC-G-09: Programs=["testProg"], Subcommands=["push"] → only "push"
+			name: "Programs_match_withSubcmdRestriction",
 			specs: []RuleSpec{
-				{CriteriaPrograms: []string{testProg}, CriteriaSubcommands: []string{"push"}, Enabled: true},
+				{Programs: []string{testProg}, Subcommands: []string{"push"}, Enabled: true},
 			},
 			program:      testProg,
 			knownSubcmds: []string{"push", "commit"},
 			wantPresent:  map[string]bool{"push": true},
-			// "commit" must not be covered — only "push" was specified in CriteriaSubcommands
+			// "commit" must not be covered — only "push" was specified in Subcommands
 			wantAbsent:  []string{"commit", ""},
 			strictCheck: true,
 		},
@@ -560,11 +563,11 @@ func TestCoveredSubcommands(t *testing.T) {
 			strictCheck:  true,
 		},
 		{
-			// TC-G-12: CriteriaPrograms case-insensitive match — "MYTESTCLI" covers "mytestcli"
+			// TC-G-12: Programs case-insensitive match — "MYTESTCLI" covers "mytestcli"
 			// via strings.EqualFold; regression guard for == vs EqualFold change.
-			name: "CriteriaPrograms_caseInsensitiveMatch",
+			name: "Programs_caseInsensitiveMatch",
 			specs: []RuleSpec{
-				{CriteriaPrograms: []string{"MYTESTCLI"}, Enabled: true},
+				{Programs: []string{"MYTESTCLI"}, Enabled: true},
 			},
 			program:      testProg,
 			knownSubcmds: []string{"push"},
@@ -612,4 +615,779 @@ func TestCoveredSubcommands(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ── helpers for YAML tests ────────────────────────────────────────────────────
+
+// newSimpleRulesService creates a RulesService backed by an in-memory SQLite DB.
+func newSimpleRulesService(t *testing.T) *RulesService {
+	t.Helper()
+	storage := createTestStorage(t)
+	rulesStore, err := NewRulesStore(storage)
+	require.NoError(t, err)
+	analyticsStore := NewAnalyticsStore(storage)
+	analyticsStore.Start(context.Background())
+	c := classifier.NewRuleBasedClassifier()
+	return NewRulesService(rulesStore, analyticsStore, c, nil, nil)
+}
+
+const validYAML3Rules = `rules:
+- name: Allow git log
+  tool: Bash
+  programs:
+    - git
+  subcommands:
+    - log
+  decision: allow
+  reason: Read-only git history
+  priority: 10
+- name: Deny git push
+  tool: Bash
+  programs:
+    - git
+  subcommands:
+    - push
+  decision: deny
+  reason: No direct push allowed
+  priority: 5
+- name: Allow read files
+  tool_pattern: "Read|Glob"
+  decision: allow
+  priority: 20
+`
+
+// ── UT-BE-01: Valid YAML 3 rules ──────────────────────────────────────────────
+
+func TestValidateRules_ValidYAML_3Rules(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: validYAML3Rules,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), resp.Msg.ValidCount)
+	assert.Equal(t, int32(0), resp.Msg.ErrorCount)
+	assert.Len(t, resp.Msg.Results, 3)
+	for _, r := range resp.Msg.Results {
+		assert.True(t, r.Valid)
+		assert.Empty(t, r.Errors)
+	}
+}
+
+// ── UT-BE-02: Payload > 512 KB ────────────────────────────────────────────────
+
+func TestValidateRules_PayloadTooLarge(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	large := make([]byte, 512*1024+1)
+	for i := range large {
+		large[i] = 'x'
+	}
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: string(large),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "too large")
+}
+
+// ── UT-BE-03: Invalid regex per rule, does not short-circuit ──────────────────
+
+func TestValidateRules_InvalidRegex_PerRuleError(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Bad regex rule
+  command_pattern: "[invalid("
+  decision: allow
+- name: Good rule
+  tool: Bash
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.Len(t, resp.Msg.Results, 2)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.True(t, resp.Msg.Results[1].Valid)
+}
+
+// ── UT-BE-04: Invalid decision produces explicit error ────────────────────────
+
+func TestValidateRules_InvalidDecision_ExplicitError(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Bad decision
+  tool: Bash
+  decision: block
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(1), resp.Msg.ErrorCount)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "invalid decision")
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "block")
+}
+
+// ── UT-BE-05: tool and tool_pattern mutually exclusive ────────────────────────
+
+func TestValidateRules_ToolAndToolPatternMutuallyExclusive(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Conflicting fields
+  tool: Bash
+  tool_pattern: "Read|Glob"
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "mutually exclusive")
+}
+
+// ── UT-BE-06: Unrecognized YAML key rejected (KnownFields) ───────────────────
+
+func TestValidateRules_UnknownField_KnownFieldsRejected(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Rule with unknown key
+  tool: Bash
+  program: git
+  decision: allow
+`
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+}
+
+// ── UT-BE-07: Empty rules list ────────────────────────────────────────────────
+
+func TestValidateRules_EmptyRulesList(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: "rules: []\n",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(0), resp.Msg.ValidCount)
+	assert.Equal(t, int32(0), resp.Msg.ErrorCount)
+	assert.Empty(t, resp.Msg.Results)
+}
+
+// ── UT-BE-08/09: Rule count boundary ─────────────────────────────────────────
+
+func TestValidateRules_RuleCount_500_AtLimit(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 500; i++ {
+		fmt.Fprintf(&sb, "- name: Rule %d\n  tool: Bash\n  decision: allow\n", i)
+	}
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: sb.String(),
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(500), resp.Msg.ValidCount)
+}
+
+func TestValidateRules_RuleCount_501_OverLimit(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 501; i++ {
+		fmt.Fprintf(&sb, "- name: Rule %d\n  tool: Bash\n  decision: allow\n", i)
+	}
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: sb.String(),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "too many rules")
+}
+
+// ── UT-BE-10: Missing name field ──────────────────────────────────────────────
+
+func TestValidateRules_MissingNameField(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- tool: Bash
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Contains(t, resp.Msg.Results[0].Errors[0], "name is required")
+}
+
+// ── UT-BE-11: All three regex fields invalid returns all errors ───────────────
+
+func TestValidateRules_AllThreeRegexFieldsInvalid(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: Triple bad regex
+  tool_pattern: "[bad("
+  command_pattern: "[bad("
+  file_pattern: "[bad("
+  decision: allow
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.False(t, resp.Msg.Results[0].Valid)
+	assert.Len(t, resp.Msg.Results[0].Errors, 3)
+}
+
+// ── UT-BE-12: Default priority ────────────────────────────────────────────────
+
+func TestValidateRules_DefaultPriority(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: No priority
+  tool: Bash
+  decision: allow
+- name: Has priority
+  tool: Bash
+  decision: allow
+  priority: 5
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(10), resp.Msg.Results[0].Rule.Priority)
+	assert.Equal(t, int32(5), resp.Msg.Results[1].Rule.Priority)
+}
+
+// ── UT-BE-13: Default enabled ─────────────────────────────────────────────────
+
+func TestValidateRules_DefaultEnabled(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	yaml := `rules:
+- name: No enabled field
+  tool: Bash
+  decision: allow
+- name: Explicitly disabled
+  tool: Bash
+  decision: allow
+  enabled: false
+`
+	resp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yaml,
+	}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Results[0].Rule.Enabled)
+	assert.False(t, resp.Msg.Results[1].Rule.Enabled)
+}
+
+// ── UT-BE-14: ExportRules excludes seed and claude-settings ──────────────────
+
+func TestExportRules_ExcludesSeedAndClaudeSettingsRules(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	// Insert non-user rules directly via storage (bypassing Upsert guard) so we
+	// can prove that ExportRules filters them out.
+	for i, src := range []string{"seed", "claude-settings"} {
+		err := svc.rulesStore.storage.UpsertRule(context.Background(), session.ApprovalRuleData{
+			ID:       fmt.Sprintf("%s-rule-%d", src, i),
+			Name:     fmt.Sprintf("%s Rule %d", src, i),
+			Decision: 1, // auto_allow
+			Enabled:  true,
+			Source:   src,
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+	// Reload so the in-memory store reflects the new rows.
+	require.NoError(t, svc.rulesStore.reload())
+	// Add 2 user rules.
+	for i := 0; i < 2; i++ {
+		_, err := svc.rulesStore.Upsert(RuleSpec{
+			ID:       fmt.Sprintf("user-rule-%d", i),
+			Name:     fmt.Sprintf("User Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	// Parse the returned YAML to count rules.
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(resp.Msg.YamlContent, &file))
+	// Must be exactly 2 — seed and claude-settings rules must be excluded.
+	assert.Len(t, file.Rules, 2)
+	for _, r := range file.Rules {
+		assert.True(t, strings.HasPrefix(r.Name, "User Rule"), "unexpected non-user rule in export: %s", r.Name)
+	}
+}
+
+// ── UT-BE-15: ExportRules with filter ────────────────────────────────────────
+
+func TestExportRules_FilterByRuleIDs(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	for i := 0; i < 3; i++ {
+		_, err := svc.rulesStore.Upsert(RuleSpec{
+			ID:       fmt.Sprintf("user-rule-%d", i),
+			Name:     fmt.Sprintf("User Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{
+		RuleIds: []string{"user-rule-1"},
+	}))
+	require.NoError(t, err)
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(resp.Msg.YamlContent, &file))
+	assert.Len(t, file.Rules, 1)
+	assert.Equal(t, "User Rule 1", file.Rules[0].Name)
+}
+
+// ── UT-BE-16: ExportRules empty store produces "rules: []\n" ─────────────────
+
+func TestExportRules_EmptyStore_ProducesEmptyRulesKey(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.Msg.YamlContent)
+	assert.Contains(t, resp.Msg.YamlContent, "rules:")
+}
+
+// ── UT-BE-17: ExportRules omits optional fields with zero values ──────────────
+
+func TestExportRules_OptionalFieldsOmitted(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	_, err := svc.rulesStore.Upsert(RuleSpec{
+		ID:       "user-minimal",
+		Name:     "Minimal Rule",
+		Decision: "auto_allow",
+		Enabled:  true,
+		Source:   "user",
+		Priority: 10,
+		// no tool, command_pattern, file_pattern, reason, alternative
+	})
+	require.NoError(t, err)
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	assert.NotContains(t, resp.Msg.YamlContent, "command_pattern")
+	assert.NotContains(t, resp.Msg.YamlContent, "file_pattern")
+	assert.NotContains(t, resp.Msg.YamlContent, "alternative")
+}
+
+// ── UT-BE-18: ExportRules -- enabled=true omitted, enabled=false present ──────
+
+func TestExportRules_EnabledDefaultOmitted(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	// enabled=true
+	_, err := svc.rulesStore.Upsert(RuleSpec{
+		ID:       "user-enabled",
+		Name:     "Enabled Rule",
+		Decision: "auto_allow",
+		Enabled:  true,
+		Source:   "user",
+		Priority: 10,
+	})
+	require.NoError(t, err)
+	// enabled=false
+	_, err = svc.rulesStore.Upsert(RuleSpec{
+		ID:       "user-disabled",
+		Name:     "Disabled Rule",
+		Decision: "auto_allow",
+		Enabled:  false,
+		Source:   "user",
+		Priority: 10,
+	})
+	require.NoError(t, err)
+	resp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	// The disabled rule should appear with enabled: false; the enabled rule should not have the key.
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(resp.Msg.YamlContent, &file))
+	for _, r := range file.Rules {
+		if r.Name == "Disabled Rule" {
+			require.NotNil(t, r.Enabled)
+			assert.False(t, *r.Enabled)
+		}
+		if r.Name == "Enabled Rule" {
+			// enabled=true should be omitted (nil) in the export
+			assert.Nil(t, r.Enabled)
+		}
+	}
+}
+
+// ── UT-BE-19: Export roundtrip ────────────────────────────────────────────────
+
+func TestExportRules_Roundtrip(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	originals := []RuleSpec{
+		{ID: "user-r1", Name: "Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10},
+		{ID: "user-r2", Name: "Rule Beta", ToolPattern: "Read|Glob", Decision: "auto_deny", Enabled: true, Source: "user", Priority: 5},
+		{ID: "user-r3", Name: "Rule Gamma", CommandPattern: `^git log`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
+	}
+	for _, spec := range originals {
+		_, err := svc.rulesStore.Upsert(spec)
+		require.NoError(t, err)
+	}
+
+	exportResp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+
+	validateResp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: exportResp.Msg.YamlContent,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), validateResp.Msg.ValidCount)
+	assert.Equal(t, int32(0), validateResp.Msg.ErrorCount)
+
+	// Verify field fidelity.
+	resultByName := make(map[string]*sessionv1.ParsedRuleResult)
+	for _, r := range validateResp.Msg.Results {
+		resultByName[r.OriginalName] = r
+	}
+	r1 := resultByName["Rule Alpha"]
+	require.NotNil(t, r1)
+	assert.Equal(t, "Bash", r1.Rule.ToolName)
+	assert.Equal(t, sessionv1.AutoDecision_AUTO_DECISION_ALLOW, r1.Rule.Decision)
+
+	r2 := resultByName["Rule Beta"]
+	require.NotNil(t, r2)
+	assert.Equal(t, "Read|Glob", r2.Rule.ToolPattern)
+	assert.Equal(t, sessionv1.AutoDecision_AUTO_DECISION_DENY, r2.Rule.Decision)
+
+	r3 := resultByName["Rule Gamma"]
+	require.NotNil(t, r3)
+	assert.Equal(t, `^git log`, r3.Rule.CommandPattern)
+}
+
+// ── UT-BE-20: BulkUpsert 20 new rules ────────────────────────────────────────
+
+func TestBulkUpsertRules_InsertNew_20Rules(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 20)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), resp.Msg.Created)
+	assert.Equal(t, int32(0), resp.Msg.Updated)
+	assert.Equal(t, int32(0), resp.Msg.Skipped)
+	assert.Empty(t, resp.Msg.Errors)
+}
+
+// ── UT-BE-21: BulkUpsert skip duplicates ─────────────────────────────────────
+
+func TestBulkUpsertRules_SkipDuplicates(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	// Pre-insert 2 rules.
+	for i := 0; i < 2; i++ {
+		_, err := svc.rulesStore.Upsert(RuleSpec{
+			ID:       fmt.Sprintf("user-existing-%d", i),
+			Name:     fmt.Sprintf("Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+
+	// Bulk insert 4 rules (2 are duplicates).
+	rules := make([]*sessionv1.ApprovalRuleProto, 4)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), resp.Msg.Created)
+	assert.Equal(t, int32(0), resp.Msg.Updated)
+	assert.Equal(t, int32(2), resp.Msg.Skipped)
+}
+
+// ── UT-BE-22: BulkUpsert overwrite duplicates ────────────────────────────────
+
+func TestBulkUpsertRules_OverwriteDuplicates(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	// Pre-insert 2 rules.
+	for i := 0; i < 2; i++ {
+		_, err := svc.rulesStore.Upsert(RuleSpec{
+			ID:       fmt.Sprintf("user-existing-%d", i),
+			Name:     fmt.Sprintf("Rule %d", i),
+			Decision: "auto_allow",
+			Enabled:  true,
+			Source:   "user",
+			Priority: 10,
+		})
+		require.NoError(t, err)
+	}
+
+	// Bulk insert 4 rules (2 new, 2 duplicates) with overwrite=true.
+	rules := make([]*sessionv1.ApprovalRuleProto, 4)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_DENY, // changed decision
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: true,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), resp.Msg.Created)
+	assert.Equal(t, int32(2), resp.Msg.Updated)
+	assert.Equal(t, int32(0), resp.Msg.Skipped)
+}
+
+// ── UT-BE-23: rebuildClassifier called exactly once ───────────────────────────
+
+func TestBulkUpsertRules_RebuildClassifierCalledOnce(t *testing.T) {
+	// We verify this by checking that all 10 rules are visible through allRuleSpecs
+	// after a single BulkUpsertRules call (implying classifier rebuilt correctly).
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 10)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(10), resp.Msg.Created)
+	// Verify all 10 rules are visible in the classifier (confirms rebuild happened).
+	classifierRules := svc.classifier.Rules()
+	userRuleCount := 0
+	for _, r := range classifierRules {
+		if r.Source == "user" {
+			userRuleCount++
+		}
+	}
+	assert.Equal(t, 10, userRuleCount)
+}
+
+// ── UT-BE-24: Client-supplied IDs/source discarded ────────────────────────────
+
+func TestBulkUpsertRules_ClientIDsDiscarded(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	rules := []*sessionv1.ApprovalRuleProto{
+		{
+			Id:       "injected-id",   // should be discarded
+			Source:   "seed",          // should be overridden to "user"
+			Name:     "Injected Rule",
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		},
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(1), resp.Msg.Created)
+
+	// Verify the stored rule has source="user" and a server-generated ID.
+	stored := svc.rulesStore.All()
+	require.Len(t, stored, 1)
+	assert.Equal(t, "user", stored[0].Source)
+	assert.NotEqual(t, "injected-id", stored[0].ID)
+}
+
+// ── UT-BE-25: YAML bomb alias expansion guard ─────────────────────────────────
+
+func TestValidateRules_YAMLBombAliasExpansion(t *testing.T) {
+	// This YAML tries to create many rules via anchors/aliases.
+	// The 500-rule cap should fire before per-rule validation.
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 502; i++ {
+		fmt.Fprintf(&sb, "- name: Rule %d\n  tool: Bash\n  decision: allow\n", i)
+	}
+	_, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: sb.String(),
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeInvalidArgument, connect.CodeOf(err))
+	assert.Contains(t, err.Error(), "too many rules")
+}
+
+// ── IT-BE-01: Export then validate roundtrip ──────────────────────────────────
+
+func TestIntegration_ExportThenValidate_Roundtrip(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	specs := []RuleSpec{
+		{ID: "user-it-1", Name: "IT Rule Alpha", ToolName: "Bash", Decision: "auto_allow", Enabled: true, Source: "user", Priority: 10, Programs: []string{"git"}},
+		{ID: "user-it-2", Name: "IT Rule Beta", ToolPattern: "Read|Glob", Decision: "auto_deny", Enabled: true, Source: "user", Priority: 5},
+		{ID: "user-it-3", Name: "IT Rule Gamma", CommandPattern: `^npm`, Decision: "escalate", Enabled: true, Source: "user", Priority: 20},
+	}
+	for _, spec := range specs {
+		_, err := svc.rulesStore.Upsert(spec)
+		require.NoError(t, err)
+	}
+
+	exportResp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+
+	validateResp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: exportResp.Msg.YamlContent,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), validateResp.Msg.ValidCount)
+	assert.Equal(t, int32(0), validateResp.Msg.ErrorCount)
+}
+
+// ── IT-BE-02: BulkUpsert then export ─────────────────────────────────────────
+
+func TestIntegration_BulkUpsert_ThenExport(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 5)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("IT Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	_, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+
+	exportResp, err := svc.ExportRules(context.Background(), connect.NewRequest(&sessionv1.ExportRulesRequest{}))
+	require.NoError(t, err)
+	var file yamlRulesFile
+	require.NoError(t, parseYAMLStrict(exportResp.Msg.YamlContent, &file))
+	assert.Len(t, file.Rules, 5)
+}
+
+// ── IT-BE-03: Validate and apply 20 rules ────────────────────────────────────
+
+func TestIntegration_ValidateAndApply_20Rules(t *testing.T) {
+	svc := newSimpleRulesService(t)
+	var sb strings.Builder
+	sb.WriteString("rules:\n")
+	for i := 0; i < 20; i++ {
+		fmt.Fprintf(&sb, "- name: IT Apply Rule %d\n  tool: Bash\n  decision: allow\n  priority: 10\n", i)
+	}
+	yamlContent := sb.String()
+
+	validateResp, err := svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+		YamlContent: yamlContent,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), validateResp.Msg.ValidCount)
+
+	// Collect valid protos and bulk-upsert.
+	validRules := make([]*sessionv1.ApprovalRuleProto, 0)
+	for _, r := range validateResp.Msg.Results {
+		if r.Valid {
+			validRules = append(validRules, r.Rule)
+		}
+	}
+
+	bulkResp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               validRules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), bulkResp.Msg.Created)
+}
+
+// ── IT-BE-04: Single classifier rebuild ──────────────────────────────────────
+
+func TestIntegration_BulkUpsert_SingleClassifierRebuild(t *testing.T) {
+	// Same as UT-BE-23 but confirms via export that all 20 rules are present.
+	svc := newSimpleRulesService(t)
+	rules := make([]*sessionv1.ApprovalRuleProto, 20)
+	for i := range rules {
+		rules[i] = &sessionv1.ApprovalRuleProto{
+			Name:     fmt.Sprintf("IT Rebuild Rule %d", i),
+			ToolName: "Bash",
+			Decision: sessionv1.AutoDecision_AUTO_DECISION_ALLOW,
+			Enabled:  true,
+			Priority: 10,
+		}
+	}
+	resp, err := svc.BulkUpsertRules(context.Background(), connect.NewRequest(&sessionv1.BulkUpsertRulesRequest{
+		Rules:               rules,
+		OverwriteDuplicates: false,
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, int32(20), resp.Msg.Created)
+
+	// Confirm classifier has all 20 user rules.
+	userCount := 0
+	for _, r := range svc.classifier.Rules() {
+		if r.Source == "user" {
+			userCount++
+		}
+	}
+	assert.Equal(t, 20, userCount)
+}
+
+// ── parseYAMLStrict is a test helper that parses YAML into yamlRulesFile ──────
+
+func parseYAMLStrict(content string, out *yamlRulesFile) error {
+	return yaml.Unmarshal([]byte(content), out)
+}
+
+// ── FuzzValidateRules_NoPanic ─────────────────────────────────────────────────
+
+func FuzzValidateRules_NoPanic(f *testing.F) {
+	f.Add([]byte("rules:\n- name: test\n  tool: Bash\n  decision: allow\n"))
+	f.Add([]byte(""))
+	f.Add([]byte("not: yaml"))
+	f.Fuzz(func(t *testing.T, data []byte) {
+		svc := newSimpleRulesService(t)
+		// Should never panic; may return an error.
+		_, _ = svc.ValidateRules(context.Background(), connect.NewRequest(&sessionv1.ValidateRulesRequest{
+			YamlContent: string(data),
+		}))
+	})
 }

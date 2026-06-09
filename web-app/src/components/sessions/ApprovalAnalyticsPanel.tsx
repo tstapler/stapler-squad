@@ -1,11 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import { useState } from "react";
+import { buildPrefillHref } from "@/lib/ruleBuilderPrefill";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
-import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
-import { DailyBucketProto, SubcommandStatProto, SuggestionSource } from "@/gen/session/v1/types_pb";
-import { SuggestedRuleCard } from "./SuggestedRuleCard";
-import { ProgramDetailPanel } from "./ProgramDetailPanel";
+import { DailyBucketProto, SubcommandStatProto } from "@/gen/session/v1/types_pb";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   windowSelector, windowBtn, windowBtnActive,
@@ -18,8 +16,6 @@ import {
   categoryBadge, subSectionTitle, filterInput, addRuleLink,
   coverageGapHeader, coverageGapHigh, coverageGapMed, coverageGapLow,
   coverageGapTitleRow, coverageGapIcon, coverageGapTitle, coverageGapBadge, coverageGapDesc,
-  suggestRuleButton, addRuleManualLink, rowActions, rowGeneratingText,
-  inlineSuggestionRow, inlineSuggestionCell, inlineErrorText,
 } from "./ApprovalAnalyticsPanel.css";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -71,9 +67,6 @@ const WINDOW_OPTIONS = [
 export function ApprovalAnalyticsPanel() {
   const [windowDays, setWindowDays] = useState(7);
   const { summary, dailyBuckets, loading, error, refresh } = useApprovalAnalytics({ windowDays });
-  const { suggestions, loading: generateLoading, error: generateError, generate, clear } = useGenerateRule();
-  const [activeRowKey, setActiveRowKey] = useState<string | null>(null);
-  const [selectedProgram, setSelectedProgram] = useState<string | null>(null);
 
   const total = summary?.totalDecisions ?? 0;
   const autoAllowCount = summary?.decisionCounts["auto_allow"] ?? 0;
@@ -151,6 +144,20 @@ export function ApprovalAnalyticsPanel() {
           <span className={cardLabel}>Manual review</span>
           <span className={cardSub}>{escalateCount} requests</span>
         </div>
+        {escalateCount > 0 && (() => {
+          const manualAllow = summary?.decisionCounts["manual_allow"] ?? 0;
+          const manualDeny  = summary?.decisionCounts["manual_deny"]  ?? 0;
+          const manualTotal = manualAllow + manualDeny;
+          if (manualTotal === 0) return null;
+          const allowedPct = Math.round((manualAllow / manualTotal) * 100);
+          return (
+            <div className={`${card} ${cardAllow}`}>
+              <span className={cardValue}>{allowedPct}%</span>
+              <span className={cardLabel}>Manual → Allowed</span>
+              <span className={cardSub}>{manualDeny} denied</span>
+            </div>
+          );
+        })()}
         <div className={card}>
           <span className={cardValue}>{avgPerDay}</span>
           <span className={cardLabel}>Avg / day</span>
@@ -361,74 +368,20 @@ export function ApprovalAnalyticsPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.topUncoveredTools.map((t) => {
-                      const isActive = activeRowKey === `tool:${t.toolName}`;
-                      const isGenerating = isActive && generateLoading;
-                      const activeSuggestion = isActive && !generateLoading && suggestions.length > 0 ? suggestions[0] : null;
-                      const activeError = isActive && !generateLoading ? generateError : null;
-                      return (
-                        <React.Fragment key={t.toolName}>
-                          <tr className={row}>
-                            <td className={td}><code className={toolName}>{t.toolName}</code></td>
-                            <td className={`${td} ${tdRight}`}>{t.count}</td>
-                            <td className={`${td} ${tdBar}`}>
-                              <Bar value={t.count} max={summary.topUncoveredTools[0]?.count ?? 1} className={barGap} />
-                            </td>
-                            <td className={td}>
-                              <div className={rowActions}>
-                                {isGenerating ? (
-                                  <span className={rowGeneratingText}>Generating…</span>
-                                ) : (
-                                  <button
-                                    className={suggestRuleButton}
-                                    data-testid={`suggest-rule-tool-${t.toolName}`}
-                                    disabled={generateLoading}
-                                    onClick={() => {
-                                      setActiveRowKey(`tool:${t.toolName}`);
-                                      void generate({
-                                        source: SuggestionSource.ANALYTICS_GAPS,
-                                        toolNameFilter: t.toolName,
-                                        windowDays,
-                                      });
-                                    }}
-                                  >
-                                    Suggest Rule
-                                  </button>
-                                )}
-                                <a href={`/rules?tool=${encodeURIComponent(t.toolName)}`} className={addRuleManualLink} title="Add a rule manually">
-                                  or add manually →
-                                </a>
-                              </div>
-                            </td>
-                          </tr>
-                          {activeError && (
-                            <tr className={inlineSuggestionRow}>
-                              <td colSpan={4} className={inlineErrorText}>
-                                Error: {activeError.message}
-                              </td>
-                            </tr>
-                          )}
-                          {activeSuggestion && (
-                            <tr className={inlineSuggestionRow}>
-                              <td colSpan={4} className={inlineSuggestionCell}>
-                                <SuggestedRuleCard
-                                  suggestion={activeSuggestion}
-                                  onAccept={() => {
-                                    clear();
-                                    setActiveRowKey(null);
-                                    refresh();
-                                  }}
-                                  onDiscard={() => {
-                                    clear();
-                                    setActiveRowKey(null);
-                                  }}
-                                />
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
+                    {summary.topUncoveredTools.map((t) => (
+                      <tr key={t.toolName} className={row}>
+                        <td className={td}><code className={toolName}>{t.toolName}</code></td>
+                        <td className={`${td} ${tdRight}`}>{t.count}</td>
+                        <td className={`${td} ${tdBar}`}>
+                          <Bar value={t.count} max={summary.topUncoveredTools[0]?.count ?? 1} className={barGap} />
+                        </td>
+                        <td className={td}>
+                          <a href={buildPrefillHref({ toolName: t.toolName })} className={addRuleLink} title={`Add a rule for ${t.toolName}`}>
+                            Add rule →
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -450,109 +403,21 @@ export function ApprovalAnalyticsPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.topUncoveredPrograms.map((p) => {
-                      const isActive = activeRowKey === `program:${p.programName}`;
-                      const isGenerating = isActive && generateLoading;
-                      const activeSuggestion = isActive && !generateLoading && suggestions.length > 0 ? suggestions[0] : null;
-                      const activeError = isActive && !generateLoading ? generateError : null;
-                      const isDrillOpen = selectedProgram === p.programName;
-                      return (
-                        <React.Fragment key={p.programName}>
-                          <tr
-                            className={row}
-                            style={{ cursor: "pointer" }}
-                            tabIndex={0}
-                            role="button"
-                            aria-expanded={isDrillOpen}
-                            aria-label={`${p.programName} — click to ${isDrillOpen ? "collapse" : "expand"} details`}
-                            onClick={() =>
-                              setSelectedProgram(isDrillOpen ? null : p.programName)
-                            }
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                setSelectedProgram(isDrillOpen ? null : p.programName);
-                              }
-                            }}
-                          >
-                            <td className={td}><code className={toolName}>{p.programName}</code></td>
-                            <td className={td}><span className={categoryBadge}>{p.category}</span></td>
-                            <td className={`${td} ${tdRight}`}>{p.count}</td>
-                            <td className={`${td} ${tdBar}`}>
-                              <Bar value={p.count} max={summary.topUncoveredPrograms[0]?.count ?? 1} className={barGap} />
-                            </td>
-                            <td className={td}>
-                              <div className={rowActions}>
-                                {isGenerating ? (
-                                  <span className={rowGeneratingText}>Generating…</span>
-                                ) : (
-                                  <button
-                                    className={suggestRuleButton}
-                                    data-testid={`suggest-rule-program-${p.programName}`}
-                                    disabled={generateLoading}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setActiveRowKey(`program:${p.programName}`);
-                                      void generate({
-                                        source: SuggestionSource.ANALYTICS_GAPS,
-                                        programNameFilter: p.programName,
-                                        windowDays,
-                                      });
-                                    }}
-                                  >
-                                    Suggest Rule
-                                  </button>
-                                )}
-                                <a
-                                  href={`/rules?program=${encodeURIComponent(p.programName)}`}
-                                  className={addRuleManualLink}
-                                  title="Add a rule manually"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  or add manually →
-                                </a>
-                              </div>
-                            </td>
-                          </tr>
-                          {activeError && (
-                            <tr className={inlineSuggestionRow}>
-                              <td colSpan={5} className={inlineErrorText}>
-                                Error: {activeError.message}
-                              </td>
-                            </tr>
-                          )}
-                          {activeSuggestion && (
-                            <tr className={inlineSuggestionRow}>
-                              <td colSpan={5} className={inlineSuggestionCell}>
-                                <SuggestedRuleCard
-                                  suggestion={activeSuggestion}
-                                  onAccept={() => {
-                                    clear();
-                                    setActiveRowKey(null);
-                                    refresh();
-                                  }}
-                                  onDiscard={() => {
-                                    clear();
-                                    setActiveRowKey(null);
-                                  }}
-                                />
-                              </td>
-                            </tr>
-                          )}
-                          {isDrillOpen && (
-                            <tr>
-                              <td colSpan={5} onClick={(e) => e.stopPropagation()}>
-                                <ProgramDetailPanel
-                                  program={p.programName}
-                                  windowDays={windowDays}
-                                  onClose={() => setSelectedProgram(null)}
-                                />
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
+                    {summary.topUncoveredPrograms.map((p) => (
+                      <tr key={p.programName} className={row}>
+                        <td className={td}><code className={toolName}>{p.programName}</code></td>
+                        <td className={td}><span className={categoryBadge}>{p.category}</span></td>
+                        <td className={`${td} ${tdRight}`}>{p.count}</td>
+                        <td className={`${td} ${tdBar}`}>
+                          <Bar value={p.count} max={summary.topUncoveredPrograms[0]?.count ?? 1} className={barGap} />
+                        </td>
+                        <td className={td}>
+                          <a href={buildPrefillHref({ programs: [p.programName] })} className={addRuleLink} title={`Add a rule for ${p.programName}`}>
+                            Add rule →
+                          </a>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -618,7 +483,10 @@ function CommandDistributionTable({ stats }: { stats: SubcommandStatProto[] }) {
                 </td>
                 <td className={td}>
                   <a
-                    href={`/rules?program=${encodeURIComponent(s.programName)}&subcommand=${encodeURIComponent(s.subcommand)}`}
+                    href={buildPrefillHref({
+                      programs: [s.programName],
+                      subcommands: s.subcommand ? [s.subcommand] : [],
+                    })}
                     className={addRuleLink}
                     title={`Add a rule for ${s.programName} ${s.subcommand}`}
                   >

@@ -164,6 +164,18 @@ service SessionService {
   // 60-second deadline via AbortController.
   rpc GenerateSuggestedRule(GenerateSuggestedRuleRequest) returns (GenerateSuggestedRuleResponse) {}
 
+  // ValidateRules parses and validates a YAML rules file without applying it.
+  // Returns per-rule results including any parse or validation errors.
+  rpc ValidateRules(ValidateRulesRequest) returns (ValidateRulesResponse) {}
+
+  // ExportRules serializes user-authored rules to YAML format for download.
+  // Passing rule_ids limits export to those rules; empty = export all user rules.
+  rpc ExportRules(ExportRulesRequest) returns (ExportRulesResponse) {}
+
+  // BulkUpsertRules creates or updates multiple user-defined rules in one call.
+  // Rebuilds the in-memory classifier exactly once after all rules are stored.
+  rpc BulkUpsertRules(BulkUpsertRulesRequest) returns (BulkUpsertRulesResponse) {}
+
   // ListDatabases returns all discovered workspace databases with metadata.
   // Used by the workspace switcher UI to show available workspaces.
   rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse) {}
@@ -2147,4 +2159,44 @@ message ResumeHibernatedSessionRequest {
 
 message ResumeHibernatedSessionResponse {
   Session session = 1;
+}
+
+// ValidateRules messages
+message ValidateRulesRequest {
+  string yaml_content = 1;
+}
+
+message ValidateRulesResponse {
+  repeated ParsedRuleResult results = 1;
+  int32 valid_count = 2;
+  int32 error_count = 3;
+}
+
+message ParsedRuleResult {
+  ApprovalRuleProto rule = 1;
+  repeated string errors = 2;
+  bool valid = 3;
+  string original_name = 4;
+}
+
+// ExportRules messages
+message ExportRulesRequest {
+  repeated string rule_ids = 1;
+}
+
+message ExportRulesResponse {
+  string yaml_content = 1;
+}
+
+// BulkUpsertRules messages
+message BulkUpsertRulesRequest {
+  repeated ApprovalRuleProto rules = 1;
+  bool overwrite_duplicates = 2;
+}
+
+message BulkUpsertRulesResponse {
+  int32 created = 1;
+  int32 updated = 2;
+  int32 skipped = 3;
+  repeated string errors = 4;
 }
