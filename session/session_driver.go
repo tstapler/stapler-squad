@@ -15,6 +15,7 @@ package session
 // this driver covers everything else that requires interactive input.
 
 import (
+	"encoding/json"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -396,29 +397,52 @@ func isStartupDialog(output string) bool {
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
 }
 
-// parseJSONField extracts a top-level string field value from a JSON blob without
-// full JSON parsing. Works with both --output-format json and stream-json output.
-// Returns empty string if the field is not found or has a non-string value.
+// parseJSONField extracts a string field value from a JSON blob.
+// Works with both --output-format json (single object) and stream-json (one
+// JSON object per line). Searches recursively through nested objects, so it
+// handles both top-level fields (e.g. "result") and nested fields (e.g.
+// "session_id" inside a "data" sub-object). Returns empty string if the field
+// is not found or its value is not a string.
 func parseJSONField(output, field string) string {
-	key := `"` + field + `"`
-	idx := strings.Index(output, key)
-	if idx < 0 {
-		return ""
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, field) {
+			continue
+		}
+		var tree interface{}
+		if err := json.Unmarshal([]byte(line), &tree); err != nil {
+			continue
+		}
+		if s := searchJSONString(tree, field); s != "" {
+			return s
+		}
 	}
-	rest := strings.TrimSpace(output[idx+len(key):])
-	if !strings.HasPrefix(rest, ":") {
-		return ""
+	return ""
+}
+
+// searchJSONString recursively searches a parsed JSON tree for the first
+// occurrence of a string-valued field with the given key.
+func searchJSONString(v interface{}, field string) string {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		if s, ok := val[field]; ok {
+			if str, ok := s.(string); ok {
+				return str
+			}
+		}
+		for _, child := range val {
+			if s := searchJSONString(child, field); s != "" {
+				return s
+			}
+		}
+	case []interface{}:
+		for _, item := range val {
+			if s := searchJSONString(item, field); s != "" {
+				return s
+			}
+		}
 	}
-	rest = strings.TrimSpace(rest[1:])
-	if !strings.HasPrefix(rest, `"`) {
-		return ""
-	}
-	rest = rest[1:]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
+	return ""
 }
 
 // parseClaudeSessionID extracts the "session_id" value from a JSON blob
