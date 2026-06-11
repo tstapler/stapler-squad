@@ -383,7 +383,7 @@ export function OmnibarCreationPanel({
             {sessionType === "directory" && "Works directly in the repository without worktree isolation"}
             {sessionType === "one_off" && "A fresh directory will be created automatically — no path needed"}
             {sessionType === "new_project" && "Creates a new directory, runs git init, makes an initial commit, then opens a session"}
-            {sessionType === "autonomous" && "The agent runs fully autonomously — tool-use permissions are decided by the LLM, not queued for human review"}
+            {sessionType === "autonomous" && "The agent runs fully autonomously — tool-use permissions are decided by the LLM. To stop it, delete or hibernate the session."}
           </span>
         </div>
 

@@ -487,6 +487,7 @@ function SessionCardInner({
             {session.autonomousMode && (
               <span
                 className={autonomousBadge}
+                role="status"
                 title="Running under LLM orchestration — injects prompts automatically"
                 aria-label="Autonomous mode: session is controlled by LLM orchestration"
                 data-testid="badge-autonomous"

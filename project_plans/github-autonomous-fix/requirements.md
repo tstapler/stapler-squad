@@ -186,6 +186,51 @@ These are the measurable signals that indicate the feature is working and delive
 
 ---
 
+## Target Users
+
+### Persona 1: Developer — Mechanical Fix
+A developer who has identified a well-defined, localized bug: a failing test, a lint error, or a typo in documentation. They have high confidence the LLM will succeed because the scope is narrow and the acceptance criterion is binary (CI passes / CI fails). Their main risk is that the agent edits the wrong file or introduces a regression in an adjacent module. They want a PR link and a green CI badge; they do not need to review every line before merging.
+
+### Persona 2: Tech Lead — Issue Triage
+A tech lead using autonomous mode to get a first-pass PR on a GitHub issue before assigning it to a team member. Success for this persona means a PR exists that can be reviewed and refined — not production-ready code. They are comfortable with the agent making imperfect choices and expect to leave review comments. Their primary concern is that the agent does not do destructive work (force-push, merge, delete branches) while unsupervised.
+
+---
+
+## Risky Assumptions
+
+1. **Orchestrator response quality** — The orchestrator LLM will produce well-formed `NEXT_MESSAGE`/`DONE` responses consistently enough to complete a fix in ≤ 20 turns. If the model returns malformed JSON or hedges without a clear signal, the driver will exhaust its turn budget without making progress.
+
+2. **PR URL extraction reliability** — `ExtractPRURL` will reliably find the correct PR URL among session output noise (progress lines, tool-use output, status messages). If the pattern is too narrow it will miss valid URLs; if too broad it will extract false positives from unrelated log lines.
+
+3. **Idle detection as a gate** — Session idle detection is reliable enough to gate LLM turns. A false idle (Claude still processing but briefly quiet) wastes a turn by injecting prematurely; a missed idle (Claude genuinely waiting but not detected) stalls the driver indefinitely. Both failure modes degrade completion rate silently.
+
+---
+
+## Observability & SLA
+
+### Log Patterns to Watch
+
+| Log Pattern | Meaning |
+|---|---|
+| `AutonomousDriver: DONE signal received` | Driver completed successfully; check for `pr_url` field |
+| `AutonomousDriver: stuck` | LLM evaluator returned `done=false, reason=stuck`; session needs human review |
+| `AutonomousDriver: max turns reached` | Turn budget exhausted without completion; increase budget or investigate prompt |
+| `onAutonomousDriverComplete: instance not found` | Silent failure — driver finished but session was already GC'd; notification not sent |
+
+### Key Log File
+
+`~/.stapler-squad/logs/stapler-squad.log`
+
+### Silent Failure Indicator
+
+A session shows the "Auto" badge in the UI but never fires a completion notification. Check the log file for `onAutonomousDriverComplete: instance not found` — this indicates the driver ran to completion after the session was removed from memory, so the backlog item was never transitioned and the push notification was never sent.
+
+### SLA
+
+No hard SLA in v1. P95 target for issues with fewer than 50 changed lines: complete within 10 turns or 15 minutes, whichever comes first.
+
+---
+
 ## Prioritization
 
 | Priority | Story | Rationale |

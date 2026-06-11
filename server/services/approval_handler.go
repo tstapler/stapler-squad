@@ -298,7 +298,13 @@ createApproval:
 	// Autonomous LLM approval: if the session is autonomous and a headless pool is configured,
 	// ask the LLM to approve or deny instead of queuing for human review.
 	if h.headlessPool != nil && h.autonomousChecker != nil && h.autonomousChecker(sessionID) {
-		query := buildApprovalQuery(payload.ToolName, payload.ToolInput, "")
+		var sessionTail string
+		if h.queueChecker != nil && sessionID != "unknown" {
+			if inst := h.queueChecker.FindInstance(sessionID); inst != nil {
+				sessionTail, _ = inst.Preview()
+			}
+		}
+		query := buildApprovalQuery(payload.ToolName, payload.ToolInput, sessionTail)
 		const approvalSystemPrompt = `You are a security reviewer for an autonomous coding session.
 Evaluate the requested tool call and decide if it is safe to approve.
 Reply with APPROVE: <reason> if safe, or DENY: <reason> if risky.`

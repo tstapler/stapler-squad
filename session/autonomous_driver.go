@@ -195,8 +195,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 
 		// Wait for idle before the next turn.
 		turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
-		waitForIdle(turnCtx, statusCh, d.controller)
+		idleReached := waitForIdle(turnCtx, statusCh, d.controller)
 		turnCancel()
+		if !idleReached {
+			log.Warn("AutonomousDriver: session did not become idle after turn, proceeding anyway", "session", sessionName, "turn", turnCount+1)
+		}
 	}
 
 	if !outcome.Done {
