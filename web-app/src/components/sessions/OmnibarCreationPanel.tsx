@@ -26,7 +26,7 @@ export const SESSION_TYPES = [
   { value: "existing_worktree", label: "Use Worktree" },
   { value: "one_off", label: "One-off" },
   { value: "new_project", label: "New Project" },
-  { value: "autonomous", label: "Fix Autonomously" },
+  { value: "autonomous", label: "Fix Autonomously (Beta)" },
 ] as const;
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
@@ -383,7 +383,7 @@ export function OmnibarCreationPanel({
             {sessionType === "directory" && "Works directly in the repository without worktree isolation"}
             {sessionType === "one_off" && "A fresh directory will be created automatically — no path needed"}
             {sessionType === "new_project" && "Creates a new directory, runs git init, makes an initial commit, then opens a session"}
-            {sessionType === "autonomous" && "The agent runs fully autonomously — tool-use permissions are decided by the LLM. To stop it, delete or hibernate the session."}
+            {sessionType === "autonomous" && "The agent runs fully autonomously — risky tool calls are approved by an LLM reviewer rather than queued for you. You will be notified on completion. To stop it, delete or hibernate the session."}
           </span>
         </div>
 
