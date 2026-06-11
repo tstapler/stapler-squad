@@ -70,6 +70,9 @@ func (d *AutonomousDriver) RegisterCompletionCallback(cb CompletionCallback) {
 
 // Start begins the autonomous driver goroutine. The second call is a no-op.
 func (d *AutonomousDriver) Start(ctx context.Context) error {
+	if d.headlessPool == nil {
+		return fmt.Errorf("AutonomousDriver: headlessPool is nil for session %q", d.inst.Title)
+	}
 	if !d.driverRunning.CompareAndSwap(false, true) {
 		log.Debug("AutonomousDriver: already running, skipping duplicate start", "session", d.inst.Title)
 		return nil
@@ -153,7 +156,11 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 		tail, _ := d.inst.Preview()
 		userPrompt := buildOrchestrationPrompt(d.goal, tail, turnCount+1, d.maxTurns)
 
-		featureKey := headless.FeatureKey("autonomous_fix-" + sessionID[:8])
+		keyLen := 8
+		if len(sessionID) < keyLen {
+			keyLen = len(sessionID)
+		}
+		featureKey := headless.FeatureKey("autonomous_fix-" + sessionID[:keyLen])
 		resp, err := d.headlessPool.CallBlockingWithOptions(ctx, featureKey, autonomousSystemPrompt, userPrompt, headless.CallOptions{})
 		if err != nil {
 			log.Warn("AutonomousDriver: LLM call failed", "session", sessionName, "turn", turnCount+1, "err", err)
@@ -198,11 +205,19 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 	d.fireCompletion(sessionName, outcome)
 }
 
+// maxRateLimitWait caps how long waitForRateLimitClear will block in total.
+const maxRateLimitWait = 4 * time.Hour
+
 // waitForRateLimitClear blocks until the controller's rate limit state is StateNone.
+// Returns an error if ctx is cancelled or the total wait exceeds maxRateLimitWait.
 func (d *AutonomousDriver) waitForRateLimitClear(ctx context.Context) error {
+	deadline := time.Now().Add(maxRateLimitWait)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("rate limit wait exceeded %v", maxRateLimitWait)
 		}
 		state := d.controller.GetRateLimitState()
 		if state == ratelimit.StateNone {
@@ -212,6 +227,10 @@ func (d *AutonomousDriver) waitForRateLimitClear(ctx context.Context) error {
 		waitUntil := resetTime.Add(5 * time.Second)
 		if waitUntil.Before(time.Now()) {
 			waitUntil = time.Now().Add(30 * time.Second)
+		}
+		// Don't wait past the overall deadline.
+		if waitUntil.After(deadline) {
+			waitUntil = deadline
 		}
 		log.Info("AutonomousDriver: rate limited, waiting", "session", d.inst.Title, "until", waitUntil)
 		select {
@@ -263,12 +282,16 @@ Reply with exactly one of:
 No other text.`
 
 // buildOrchestrationPrompt constructs the user prompt for the orchestrator LLM call.
+// Goal and session output are wrapped in XML-style delimiters so that user-controlled
+// content (e.g., GitHub PR body embedded in the goal) cannot escape its section and
+// spoof a NEXT_MESSAGE or DONE directive in the outer prompt text.
 func buildOrchestrationPrompt(goal, tail string, turnCount, maxTurns int) string {
 	const maxTailBytes = 80 * 120 // ~80 lines × 120 chars
 	if len(tail) > maxTailBytes {
 		tail = tail[len(tail)-maxTailBytes:]
 	}
-	return fmt.Sprintf("Goal: %s\n\nSession tail (last ~80 lines):\n%s\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text> or DONE: <reason>.",
+	return fmt.Sprintf(
+		"<goal>\n%s\n</goal>\n\n<session_output>\n%s\n</session_output>\n\nTurn %d/%d. Reply with NEXT_MESSAGE: <text> or DONE: <reason>.",
 		goal, tail, turnCount, maxTurns)
 }
 

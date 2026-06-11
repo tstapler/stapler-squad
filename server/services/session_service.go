@@ -3264,6 +3264,12 @@ func (s *SessionService) LogClientEvents(
 // onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
 // Updates the linked backlog item status and fires a push notification.
 func (s *SessionService) onAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) {
+	// Deregister the completed driver so it does not leak in the registry.
+	// The goroutine has already exited at this point; Stop() is a no-op but cleans the map.
+	s.stopAndDeregisterDriver(instanceName)
+
+	// Use Background() intentionally: we want this bookkeeping to complete even if the
+	// server is shutting down concurrently (the driver just finished; its result must persist).
 	ctx := context.Background()
 
 	// Resolve the session UUID from the instance name using the live poller.
