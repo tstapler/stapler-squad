@@ -26,6 +26,7 @@ export const SESSION_TYPES = [
   { value: "existing_worktree", label: "Use Worktree" },
   { value: "one_off", label: "One-off" },
   { value: "new_project", label: "New Project" },
+  { value: "autonomous", label: "Fix Autonomously" },
 ] as const;
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
@@ -382,6 +383,7 @@ export function OmnibarCreationPanel({
             {sessionType === "directory" && "Works directly in the repository without worktree isolation"}
             {sessionType === "one_off" && "A fresh directory will be created automatically — no path needed"}
             {sessionType === "new_project" && "Creates a new directory, runs git init, makes an initial commit, then opens a session"}
+            {sessionType === "autonomous" && "The agent runs fully autonomously — tool-use permissions are decided by the LLM, not queued for human review"}
           </span>
         </div>
 
@@ -580,7 +582,7 @@ export function OmnibarCreationPanel({
         )}
 
         {/* Working Directory */}
-        {sessionType !== "one_off" && sessionType !== "new_project" && (
+        {sessionType !== "one_off" && sessionType !== "new_project" && sessionType !== "autonomous" && (
           <div className={field}>
             <label className={labelClass} htmlFor="omnibar-working-dir">
               Working Directory

@@ -31,15 +31,18 @@ export function dispatchOmnibarAction(
       return;
     case "create_session": {
       const isOneOff = action.sessionType === "one_off";
+      const isAutonomous = action.sessionType === "autonomous";
       if (track) track({ name: "omnibar.create_session", category: "user_action", labels: { sessionType: action.sessionType } });
       void deps.createSession({
         title: action.title ?? "",
         path: action.path,
-        sessionType: isOneOff ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree",
+        sessionType: (isOneOff || isAutonomous) ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree",
         branch: action.branch,
         program: action.program ?? "",
         autoYes: false,
-        oneOff: isOneOff,
+        oneOff: isOneOff ? true : undefined,
+        autonomousMode: isAutonomous ? true : undefined,
+        permissionMode: isAutonomous ? "auto" : undefined,
       });
       deps.close();
       return;
@@ -78,6 +81,19 @@ export function dispatchOmnibarAction(
     case "spawn_shell":
       if (track) track({ name: "omnibar.spawn_shell", category: "user_action" });
       deps.spawnShell?.(action.sessionId, action.workingDir, action.shellCommand);
+      deps.close();
+      return;
+    case "auto_fix":
+      if (track) track({ name: "omnibar.auto_fix", category: "user_action" });
+      void deps.createSession({
+        title: action.title,
+        path: "",
+        sessionType: undefined,
+        program: action.program ?? "",
+        autoYes: false,
+        autonomousMode: true,
+        permissionMode: "auto",
+      });
       deps.close();
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅

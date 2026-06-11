@@ -218,6 +218,8 @@ export function useSessionService(
           oneOff: request.oneOff ?? false,
           createIfMissing: request.createIfMissing ?? false,
           initialPrompt: request.initialPrompt,
+          autonomousMode: request.autonomousMode ?? false,
+          permissionMode: request.permissionMode ?? "",
         });
 
         // Add to store (with duplicate check handled by entity adapter upsertOne)

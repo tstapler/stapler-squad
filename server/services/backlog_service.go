@@ -26,6 +26,12 @@ type SessionCreator interface {
 	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
 }
 
+// AutonomousDriverStarter allows BacklogService to start an AutonomousDriver on an existing instance.
+// Wired via SetAutonomousDriverStarter from server.go after both services are constructed.
+type AutonomousDriverStarter interface {
+	StartAutonomousDriverForInstance(inst *session.Instance)
+}
+
 // SessionStopper allows BacklogService to kill live sessions.
 // It is nil-safe: BacklogService degrades gracefully when not wired.
 type SessionStopper interface {
@@ -53,6 +59,7 @@ type BacklogService struct {
 	sourceBackend  itemSourceBackend
 	sessionCreator SessionCreator
 	sessionStopper SessionStopper
+	autonomousStarter AutonomousDriverStarter
 	cfg            *config.Config
 	engine         session.WorkflowEngine
 	// worktreeMu serializes context-file writes to the same worktree path so that
@@ -84,6 +91,12 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
 func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 	s.sessionStopper = stopper
+}
+
+// SetAutonomousDriverStarter wires the optional autonomous driver starter.
+// When set, SpawnSessionFromItem with autonomous=true will start an AutonomousDriver on the spawned instance.
+func (s *BacklogService) SetAutonomousDriverStarter(starter AutonomousDriverStarter) {
+	s.autonomousStarter = starter
 }
 
 // encryptAndMergeToken produces a token config JSON string suitable for storage.
@@ -922,6 +935,10 @@ func (s *BacklogService) SpawnSessionFromItem(
 		[]string{"backlog:work"}, false, false)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
+	}
+
+	if req.Msg.Autonomous && s.autonomousStarter != nil {
+		s.autonomousStarter.StartAutonomousDriverForInstance(inst)
 	}
 
 	// 11. Create ItemSession with the real session UUID (avoids "<pending>" orphan records on failure).

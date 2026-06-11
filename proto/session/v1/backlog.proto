@@ -207,6 +207,9 @@ message TransitionBacklogItemStatusResponse {
 
 message SpawnSessionFromItemRequest {
   string item_id = 1;
+
+  // Optional: If true, start an AutonomousDriver for the spawned session.
+  bool autonomous = 3;
 }
 
 message SpawnSessionFromItemResponse {

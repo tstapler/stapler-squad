@@ -11,12 +11,14 @@ import (
 
 // Feature key constants for well-known AI features.
 const (
-	FeatureKeyReview        FeatureKey = "review"
-	FeatureKeySummarize     FeatureKey = "summarize"
-	FeatureKeyAC            FeatureKey = "acceptance-criteria"
-	FeatureKeyPRDescription FeatureKey = "pr-description"
-	FeatureKeyCommitMessage FeatureKey = "commit-message"
-	FeatureKeyCustom        FeatureKey = "custom"
+	FeatureKeyReview             FeatureKey = "review"
+	FeatureKeySummarize          FeatureKey = "summarize"
+	FeatureKeyAC                 FeatureKey = "acceptance-criteria"
+	FeatureKeyPRDescription      FeatureKey = "pr-description"
+	FeatureKeyCommitMessage      FeatureKey = "commit-message"
+	FeatureKeyCustom             FeatureKey = "custom"
+	FeatureKeyAutonomousFix      FeatureKey = "autonomous_fix"
+	FeatureKeyAutonomousApproval FeatureKey = "autonomous_approval"
 )
 
 // AllowedFeatureKeys is the set of feature keys accepted by RunHeadlessCall.

@@ -591,6 +591,20 @@ func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
 }
 
+// StartAutonomousDriverForInstance satisfies the AutonomousDriverStarter interface.
+// Starts an AutonomousDriver on inst if headlessPool is available.
+func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance) {
+	if s.headlessPool == nil {
+		log.Warn("[SessionService] StartAutonomousDriverForInstance: headlessPool is nil", "session", inst.Title)
+		return
+	}
+	driver := session.NewAutonomousDriver(inst, s.headlessPool, inst.Prompt, 0)
+	driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
+	if err := driver.Start(context.Background()); err != nil {
+		log.Warn("[SessionService] failed to start autonomous driver for backlog session", "session", inst.Title, "err", err)
+	}
+}
+
 // SetReviewQueuePoller wires the ReviewQueuePoller so new/deleted sessions are
 // added/removed from the poller and AcknowledgeSession updates poller references.
 // Must be called during server startup before any session mutation RPCs are used.
@@ -1025,6 +1039,7 @@ func (s *SessionService) CreateSession(
 
 		if instance.AutonomousMode && s.headlessPool != nil {
 			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0)
+			driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
 			if driverErr := driver.Start(context.Background()); driverErr != nil {
 				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
 			}
@@ -3183,6 +3198,60 @@ func (s *SessionService) LogClientEvents(
 		logClientEntry(entry)
 	}
 	return connect.NewResponse(&sessionv1.LogClientEventsResponse{}), nil
+}
+
+// onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
+// Updates the linked backlog item status and fires a push notification.
+func (s *SessionService) onAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) {
+	ctx := context.Background()
+
+	// Resolve the session UUID from the instance name using the live poller.
+	inst := s.FindLiveInstance(instanceName)
+	if inst == nil {
+		log.Warn("[AutonomousDriver] onAutonomousDriverComplete: instance not found", "session", instanceName)
+		return
+	}
+	sessionUUID := inst.UUID
+
+	// Look up the backlog item linked to this session.
+	concreteStorage := s.GetStorage()
+	if concreteStorage != nil {
+		is, err := concreteStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
+		if err == nil && is != nil {
+			item, itemErr := is.Edges.BacklogItemOrErr()
+			if itemErr == nil && item != nil {
+				// Autonomous driver always transitions through review; the review gate
+				// or a human then decides to mark done. Stuck sessions also go to review.
+				toStatus := session.BacklogStatusReview
+				if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID.String(), toStatus, nil); transErr != nil {
+					log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
+				} else {
+					log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
+				}
+			}
+		}
+	}
+
+	// Fire push notification via event bus.
+	var title, body string
+	notifType := int32(10) // NotificationType_INFO
+	if outcome.Done {
+		title = "Autonomous fix complete"
+		body = fmt.Sprintf("%s: %s", instanceName, outcome.Reason)
+		if outcome.PRUrl != "" {
+			body += " — " + outcome.PRUrl
+		}
+	} else {
+		title = "Autonomous fix stuck"
+		body = fmt.Sprintf("%s: %s", instanceName, outcome.Reason)
+		notifType = int32(9) // NotificationType_FAILURE
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
+		notifType,
+		int32(2), // NotificationPriority_MEDIUM
+		title, body, nil,
+	))
 }
 
 // wireStatusChangeCallback registers a ReactiveQueueManager callback on inst so that
