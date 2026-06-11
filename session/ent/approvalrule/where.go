@@ -1069,6 +1069,76 @@ func UpdatedAtLTE(v time.Time) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldLTE(FieldUpdatedAt, v))
 }
 
+// ProgramsIsNil applies the IsNil predicate on the "programs" field.
+func ProgramsIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldPrograms))
+}
+
+// ProgramsNotNil applies the NotNil predicate on the "programs" field.
+func ProgramsNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldPrograms))
+}
+
+// SubcommandsIsNil applies the IsNil predicate on the "subcommands" field.
+func SubcommandsIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldSubcommands))
+}
+
+// SubcommandsNotNil applies the NotNil predicate on the "subcommands" field.
+func SubcommandsNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldSubcommands))
+}
+
+// BlockedSubcommandsIsNil applies the IsNil predicate on the "blocked_subcommands" field.
+func BlockedSubcommandsIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldBlockedSubcommands))
+}
+
+// BlockedSubcommandsNotNil applies the NotNil predicate on the "blocked_subcommands" field.
+func BlockedSubcommandsNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldBlockedSubcommands))
+}
+
+// RequiredFlagsIsNil applies the IsNil predicate on the "required_flags" field.
+func RequiredFlagsIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldRequiredFlags))
+}
+
+// RequiredFlagsNotNil applies the NotNil predicate on the "required_flags" field.
+func RequiredFlagsNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldRequiredFlags))
+}
+
+// ForbiddenFlagsIsNil applies the IsNil predicate on the "forbidden_flags" field.
+func ForbiddenFlagsIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldForbiddenFlags))
+}
+
+// ForbiddenFlagsNotNil applies the NotNil predicate on the "forbidden_flags" field.
+func ForbiddenFlagsNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldForbiddenFlags))
+}
+
+// RequiredFlagPrefixesIsNil applies the IsNil predicate on the "required_flag_prefixes" field.
+func RequiredFlagPrefixesIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldRequiredFlagPrefixes))
+}
+
+// RequiredFlagPrefixesNotNil applies the NotNil predicate on the "required_flag_prefixes" field.
+func RequiredFlagPrefixesNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldRequiredFlagPrefixes))
+}
+
+// PythonModesIsNil applies the IsNil predicate on the "python_modes" field.
+func PythonModesIsNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldIsNull(FieldPythonModes))
+}
+
+// PythonModesNotNil applies the NotNil predicate on the "python_modes" field.
+func PythonModesNotNil() predicate.ApprovalRule {
+	return predicate.ApprovalRule(sql.FieldNotNull(FieldPythonModes))
+}
+
 // SafePythonImportsOnlyEQ applies the EQ predicate on the "safe_python_imports_only" field.
 func SafePythonImportsOnlyEQ(v bool) predicate.ApprovalRule {
 	return predicate.ApprovalRule(sql.FieldEQ(FieldSafePythonImportsOnly, v))
