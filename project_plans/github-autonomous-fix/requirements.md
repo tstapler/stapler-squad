@@ -165,6 +165,27 @@ AutonomousDriver goroutine starts
 
 ---
 
+## Success Metrics
+
+These are the measurable signals that indicate the feature is working and delivering value. Baseline is zero for all metrics (feature not yet shipped).
+
+| Metric | Target (30 days post-launch) | How to Measure |
+|---|---|---|
+| **Autonomous session completion rate** | ≥ 50% of autonomous sessions reach `DONE` outcome (vs. `stuck/max_turns`) | `onAutonomousDriverComplete` outcome log, aggregated |
+| **Time-to-PR for autonomous fix** | ≤ 30 min median from session creation to PR URL in outcome | Timestamp difference: `created_at` → `onAutonomousDriverComplete.PRUrl` extracted |
+| **LLM approval utilization** | ≥ 20% of autonomous sessions trigger at least one LLM approval (vs. 100% human review) | Count `buildApprovalQuery` calls with LLM-approved outcome |
+| **Goroutine leak rate** | 0 orphaned driver goroutines after server restart | `pprof` goroutine snapshot on restart — no goroutines referencing `AutonomousDriver.run` |
+| **Backlog item autonomous conversion** | ≥ 10 backlog items dispatched autonomously in first 30 days | Count of `SpawnSessionFromItem(autonomous=true)` calls |
+| **User satisfaction** | No regression in overall session management NPS | Periodic user survey / implicit signal: feature not disabled by users |
+
+### Instrumentation Hooks
+
+- `onAutonomousDriverComplete` already logs outcome — add structured fields for `turns`, `done`, `stuck`, `pr_url`
+- `buildApprovalQuery` call path — log `autonomous_llm_approval_attempt` / `autonomous_llm_approval_result`
+- `StartAutonomousDriverForInstance` — emit a `session.autonomous_started` event on the EventBus
+
+---
+
 ## Prioritization
 
 | Priority | Story | Rationale |

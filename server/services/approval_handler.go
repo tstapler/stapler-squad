@@ -142,14 +142,17 @@ func (h *ApprovalHandler) SetAutonomousChecker(fn func(string) bool) {
 }
 
 // buildApprovalQuery constructs the LLM prompt for an autonomous approval decision.
+// Tool arguments are JSON-encoded to prevent values containing "APPROVE:" or "DENY:"
+// from influencing the LLM's decision (prompt injection via tool input).
 func buildApprovalQuery(toolName string, toolInput map[string]interface{}, sessionTail string) string {
-	inputParts := make([]string, 0, len(toolInput))
-	for k, v := range toolInput {
-		inputParts = append(inputParts, fmt.Sprintf("%s=%v", k, v))
+	argsJSON, err := json.Marshal(toolInput)
+	argsStr := string(argsJSON)
+	if err != nil {
+		argsStr = "(encoding error)"
 	}
 	return fmt.Sprintf(
-		"Requested tool: %s\nArguments: %s\nRecent session output:\n%s\nReply APPROVE: <reason> or DENY: <reason>",
-		toolName, strings.Join(inputParts, " "), sessionTail,
+		"Requested tool: %s\nArguments (JSON): %s\nRecent session output:\n---\n%s\n---\nReply APPROVE: <reason> or DENY: <reason>",
+		toolName, argsStr, sessionTail,
 	)
 }
 

@@ -135,6 +135,16 @@ type SessionService struct {
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.
 	headlessPool *headless.Pool
+
+	// lifecycleCtx is the server's root context, cancelled by Shutdown().
+	// Autonomous driver goroutines are bound to this context so they exit with the server.
+	lifecycleCtx context.Context
+
+	// driverMu guards driverRegistry.
+	driverMu sync.RWMutex
+	// driverRegistry maps session title → running AutonomousDriver.
+	// Used to stop drivers on session delete/hibernate and prevent use-after-free.
+	driverRegistry map[string]*session.AutonomousDriver
 }
 
 // ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -591,6 +601,44 @@ func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
 }
 
+// SetLifecycleContext binds the server's root context to the service.
+// Autonomous driver goroutines are started with this context so they exit when the server shuts down.
+// Must be called once during server startup, before any sessions are created.
+func (s *SessionService) SetLifecycleContext(ctx context.Context) {
+	s.lifecycleCtx = ctx
+}
+
+// driverCtx returns the lifecycle context, falling back to Background() if not set.
+func (s *SessionService) driverCtx() context.Context {
+	if s.lifecycleCtx != nil {
+		return s.lifecycleCtx
+	}
+	return context.Background()
+}
+
+// registerDriver records a running AutonomousDriver in the registry so it can be stopped later.
+func (s *SessionService) registerDriver(sessionTitle string, d *session.AutonomousDriver) {
+	s.driverMu.Lock()
+	if s.driverRegistry == nil {
+		s.driverRegistry = make(map[string]*session.AutonomousDriver)
+	}
+	s.driverRegistry[sessionTitle] = d
+	s.driverMu.Unlock()
+}
+
+// stopAndDeregisterDriver stops the driver for sessionTitle (if any) and removes it from the registry.
+func (s *SessionService) stopAndDeregisterDriver(sessionTitle string) {
+	s.driverMu.Lock()
+	d, ok := s.driverRegistry[sessionTitle]
+	if ok {
+		delete(s.driverRegistry, sessionTitle)
+	}
+	s.driverMu.Unlock()
+	if ok && d != nil {
+		d.Stop()
+	}
+}
+
 // StartAutonomousDriverForInstance satisfies the AutonomousDriverStarter interface.
 // Starts an AutonomousDriver on inst if headlessPool is available.
 func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance) {
@@ -600,9 +648,11 @@ func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance
 	}
 	driver := session.NewAutonomousDriver(inst, s.headlessPool, inst.Prompt, 0)
 	driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
-	if err := driver.Start(context.Background()); err != nil {
+	if err := driver.Start(s.driverCtx()); err != nil {
 		log.Warn("[SessionService] failed to start autonomous driver for backlog session", "session", inst.Title, "err", err)
+		return
 	}
+	s.registerDriver(inst.Title, driver)
 }
 
 // SetReviewQueuePoller wires the ReviewQueuePoller so new/deleted sessions are
@@ -1040,8 +1090,10 @@ func (s *SessionService) CreateSession(
 		if instance.AutonomousMode && s.headlessPool != nil {
 			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0)
 			driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
-			if driverErr := driver.Start(context.Background()); driverErr != nil {
+			if driverErr := driver.Start(s.driverCtx()); driverErr != nil {
 				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
+			} else {
+				s.registerDriver(instanceTitle, driver)
 			}
 		} else if instance.AutonomousMode {
 			log.Warn("[CreateSession] autonomous_mode requested but headlessPool is nil", "session", instanceTitle)
@@ -1284,6 +1336,10 @@ func (s *SessionService) HibernateSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Stop any running autonomous driver so it does not continue injecting prompts
+	// into a session whose process is about to be killed.
+	s.stopAndDeregisterDriver(instance.Title)
+
 	// Set reason before transitioning so the After hook can read it
 	reason := req.Msg.Reason
 	if reason == "" {
@@ -1382,6 +1438,11 @@ func (s *SessionService) DeleteSession(
 	if sessionTitle == "" {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
+
+	// Stop any running autonomous driver before destroying resources.
+	// This prevents the driver goroutine from calling inst.Preview() or SendCommandImmediate
+	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
+	s.stopAndDeregisterDriver(sessionTitle)
 
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could

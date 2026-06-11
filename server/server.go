@@ -430,6 +430,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	deps.SessionService.SetMCPServerURL(mcpURL)
 	log.Info("Registered MCP HTTP handler at /mcp", "url", mcpURL)
 
+	// Bind server lifecycle context so autonomous driver goroutines exit on shutdown.
+	deps.SessionService.SetLifecycleContext(serverCtx)
+
 	// Start background expiration cleanup for pending approvals
 	services.StartExpirationCleanup(context.Background(), deps.SessionService.GetApprovalStore())
 

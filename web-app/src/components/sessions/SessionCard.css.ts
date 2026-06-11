@@ -784,6 +784,19 @@ export const cardMemoryPressure = style({
   borderLeft: `3px solid ${vars.color.warning}`,
 });
 
+export const autonomousBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} 8px`,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 600,
+  border: `1px solid ${vars.color.borderColor}`,
+});
+
 /** Goal row compact display — session list card */
 export const taskFraction = style({
   fontSize: vars.fontSize.xs,

@@ -66,6 +66,7 @@ import {
   memoryBadge,
   cardMemoryPressure,
   taskFraction,
+  autonomousBadge,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
 
@@ -481,6 +482,15 @@ function SessionCardInner({
             {Number(session.memoryRssMb ?? 0n) > 0 && (
               <span className={memoryBadge}>
                 {Number(session.memoryRssMb)} MB
+              </span>
+            )}
+            {session.autonomousMode && (
+              <span
+                className={autonomousBadge}
+                title="Running under LLM orchestration — injects prompts automatically"
+                data-testid="badge-autonomous"
+              >
+                Auto
               </span>
             )}
           </div>
