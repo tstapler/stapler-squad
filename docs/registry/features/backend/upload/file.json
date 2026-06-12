@@ -1,0 +1,13 @@
+{
+  "id": "upload:file",
+  "type": "backend",
+  "service": "HTTPHandler",
+  "method": "POST /api/v1/upload-image",
+  "httpMethod": "POST",
+  "httpPath": "/api/v1/upload-image",
+  "markerFound": true,
+  "handlerFile": "server/services/session_image_upload_handler.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-09T13:18:48.05995611-07:00"
+}
