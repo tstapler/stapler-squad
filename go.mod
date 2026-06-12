@@ -47,6 +47,7 @@ require (
 require (
 	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
 	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 )
 
 require (

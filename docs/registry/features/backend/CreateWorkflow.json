@@ -1,0 +1,16 @@
+{
+  "id": "CreateWorkflow",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "CreateWorkflow",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestCreateWorkflow_HappyPath",
+    "TestCreateWorkflow_InvalidSlug",
+    "TestCreateWorkflow_DuplicateSlug",
+    "TestCreateWorkflow_MissingCommand"
+  ],
+  "lastModified": "2026-06-11T00:00:00Z"
+}

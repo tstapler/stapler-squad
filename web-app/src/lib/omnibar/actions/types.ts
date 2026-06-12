@@ -8,6 +8,7 @@ export type OmnibarAction =
   | { type: "resume_session"; sessionId: string; label: string }
   | { type: "delete_session"; sessionId: string; label: string }
   | { type: "set_theme"; themeName: ThemeName }
-  | { type: "spawn_shell"; sessionId?: string; workingDir?: string; shellCommand?: string };
+  | { type: "spawn_shell"; sessionId?: string; workingDir?: string; shellCommand?: string }
+  | { type: "run_workflow"; workflowSlug: string; workflowArg: string; label: string };
 
 export type OmnibarActionType = OmnibarAction["type"];

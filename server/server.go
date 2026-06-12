@@ -350,6 +350,13 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)
 	}
 
+	// Start WorkflowScheduler (nil guard: disabled when workflow repo is unavailable).
+	if deps.WorkflowScheduler != nil {
+		deps.WorkflowScheduler.Start(serverCtx)
+		srv.shutdownHooks = append(srv.shutdownHooks, deps.WorkflowScheduler.Stop)
+		log.Info("WorkflowScheduler started")
+	}
+
 	// Register HeadlessService handler (nil guard: pool may be absent if claude not found).
 	if deps.HeadlessPool != nil {
 		hlSvc := services.NewHeadlessService(deps.HeadlessPool)

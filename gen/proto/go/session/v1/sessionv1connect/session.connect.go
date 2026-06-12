@@ -312,6 +312,21 @@ const (
 	// SessionServiceDeleteShellProcedure is the fully-qualified name of the SessionService's
 	// DeleteShell RPC.
 	SessionServiceDeleteShellProcedure = "/session.v1.SessionService/DeleteShell"
+	// SessionServiceCreateWorkflowProcedure is the fully-qualified name of the SessionService's
+	// CreateWorkflow RPC.
+	SessionServiceCreateWorkflowProcedure = "/session.v1.SessionService/CreateWorkflow"
+	// SessionServiceUpdateWorkflowProcedure is the fully-qualified name of the SessionService's
+	// UpdateWorkflow RPC.
+	SessionServiceUpdateWorkflowProcedure = "/session.v1.SessionService/UpdateWorkflow"
+	// SessionServiceDeleteWorkflowProcedure is the fully-qualified name of the SessionService's
+	// DeleteWorkflow RPC.
+	SessionServiceDeleteWorkflowProcedure = "/session.v1.SessionService/DeleteWorkflow"
+	// SessionServiceListWorkflowsProcedure is the fully-qualified name of the SessionService's
+	// ListWorkflows RPC.
+	SessionServiceListWorkflowsProcedure = "/session.v1.SessionService/ListWorkflows"
+	// SessionServiceRunWorkflowProcedure is the fully-qualified name of the SessionService's
+	// RunWorkflow RPC.
+	SessionServiceRunWorkflowProcedure = "/session.v1.SessionService/RunWorkflow"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -558,6 +573,16 @@ type SessionServiceClient interface {
 	ListShells(context.Context, *connect.Request[v1.ListShellsRequest]) (*connect.Response[v1.ListShellsResponse], error)
 	// DeleteShell stops a shell and removes it from storage.
 	DeleteShell(context.Context, *connect.Request[v1.DeleteShellRequest]) (*connect.Response[v1.DeleteShellResponse], error)
+	// CreateWorkflow creates a new workflow definition.
+	CreateWorkflow(context.Context, *connect.Request[v1.CreateWorkflowRequest]) (*connect.Response[v1.CreateWorkflowResponse], error)
+	// UpdateWorkflow modifies an existing workflow definition.
+	UpdateWorkflow(context.Context, *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error)
+	// DeleteWorkflow removes a workflow definition permanently.
+	DeleteWorkflow(context.Context, *connect.Request[v1.DeleteWorkflowRequest]) (*connect.Response[v1.DeleteWorkflowResponse], error)
+	// ListWorkflows returns all saved workflow definitions.
+	ListWorkflows(context.Context, *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error)
+	// RunWorkflow immediately fires a workflow (outside of cron schedule).
+	RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -1135,6 +1160,36 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("DeleteShell")),
 			connect.WithClientOptions(opts...),
 		),
+		createWorkflow: connect.NewClient[v1.CreateWorkflowRequest, v1.CreateWorkflowResponse](
+			httpClient,
+			baseURL+SessionServiceCreateWorkflowProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("CreateWorkflow")),
+			connect.WithClientOptions(opts...),
+		),
+		updateWorkflow: connect.NewClient[v1.UpdateWorkflowRequest, v1.UpdateWorkflowResponse](
+			httpClient,
+			baseURL+SessionServiceUpdateWorkflowProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("UpdateWorkflow")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteWorkflow: connect.NewClient[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse](
+			httpClient,
+			baseURL+SessionServiceDeleteWorkflowProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("DeleteWorkflow")),
+			connect.WithClientOptions(opts...),
+		),
+		listWorkflows: connect.NewClient[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse](
+			httpClient,
+			baseURL+SessionServiceListWorkflowsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ListWorkflows")),
+			connect.WithClientOptions(opts...),
+		),
+		runWorkflow: connect.NewClient[v1.RunWorkflowRequest, v1.RunWorkflowResponse](
+			httpClient,
+			baseURL+SessionServiceRunWorkflowProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("RunWorkflow")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -1234,6 +1289,11 @@ type sessionServiceClient struct {
 	restartShell              *connect.Client[v1.RestartShellRequest, v1.RestartShellResponse]
 	listShells                *connect.Client[v1.ListShellsRequest, v1.ListShellsResponse]
 	deleteShell               *connect.Client[v1.DeleteShellRequest, v1.DeleteShellResponse]
+	createWorkflow            *connect.Client[v1.CreateWorkflowRequest, v1.CreateWorkflowResponse]
+	updateWorkflow            *connect.Client[v1.UpdateWorkflowRequest, v1.UpdateWorkflowResponse]
+	deleteWorkflow            *connect.Client[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse]
+	listWorkflows             *connect.Client[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse]
+	runWorkflow               *connect.Client[v1.RunWorkflowRequest, v1.RunWorkflowResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1706,6 +1766,31 @@ func (c *sessionServiceClient) DeleteShell(ctx context.Context, req *connect.Req
 	return c.deleteShell.CallUnary(ctx, req)
 }
 
+// CreateWorkflow calls session.v1.SessionService.CreateWorkflow.
+func (c *sessionServiceClient) CreateWorkflow(ctx context.Context, req *connect.Request[v1.CreateWorkflowRequest]) (*connect.Response[v1.CreateWorkflowResponse], error) {
+	return c.createWorkflow.CallUnary(ctx, req)
+}
+
+// UpdateWorkflow calls session.v1.SessionService.UpdateWorkflow.
+func (c *sessionServiceClient) UpdateWorkflow(ctx context.Context, req *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error) {
+	return c.updateWorkflow.CallUnary(ctx, req)
+}
+
+// DeleteWorkflow calls session.v1.SessionService.DeleteWorkflow.
+func (c *sessionServiceClient) DeleteWorkflow(ctx context.Context, req *connect.Request[v1.DeleteWorkflowRequest]) (*connect.Response[v1.DeleteWorkflowResponse], error) {
+	return c.deleteWorkflow.CallUnary(ctx, req)
+}
+
+// ListWorkflows calls session.v1.SessionService.ListWorkflows.
+func (c *sessionServiceClient) ListWorkflows(ctx context.Context, req *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error) {
+	return c.listWorkflows.CallUnary(ctx, req)
+}
+
+// RunWorkflow calls session.v1.SessionService.RunWorkflow.
+func (c *sessionServiceClient) RunWorkflow(ctx context.Context, req *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error) {
+	return c.runWorkflow.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -1950,6 +2035,16 @@ type SessionServiceHandler interface {
 	ListShells(context.Context, *connect.Request[v1.ListShellsRequest]) (*connect.Response[v1.ListShellsResponse], error)
 	// DeleteShell stops a shell and removes it from storage.
 	DeleteShell(context.Context, *connect.Request[v1.DeleteShellRequest]) (*connect.Response[v1.DeleteShellResponse], error)
+	// CreateWorkflow creates a new workflow definition.
+	CreateWorkflow(context.Context, *connect.Request[v1.CreateWorkflowRequest]) (*connect.Response[v1.CreateWorkflowResponse], error)
+	// UpdateWorkflow modifies an existing workflow definition.
+	UpdateWorkflow(context.Context, *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error)
+	// DeleteWorkflow removes a workflow definition permanently.
+	DeleteWorkflow(context.Context, *connect.Request[v1.DeleteWorkflowRequest]) (*connect.Response[v1.DeleteWorkflowResponse], error)
+	// ListWorkflows returns all saved workflow definitions.
+	ListWorkflows(context.Context, *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error)
+	// RunWorkflow immediately fires a workflow (outside of cron schedule).
+	RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2523,6 +2618,36 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("DeleteShell")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceCreateWorkflowHandler := connect.NewUnaryHandler(
+		SessionServiceCreateWorkflowProcedure,
+		svc.CreateWorkflow,
+		connect.WithSchema(sessionServiceMethods.ByName("CreateWorkflow")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceUpdateWorkflowHandler := connect.NewUnaryHandler(
+		SessionServiceUpdateWorkflowProcedure,
+		svc.UpdateWorkflow,
+		connect.WithSchema(sessionServiceMethods.ByName("UpdateWorkflow")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceDeleteWorkflowHandler := connect.NewUnaryHandler(
+		SessionServiceDeleteWorkflowProcedure,
+		svc.DeleteWorkflow,
+		connect.WithSchema(sessionServiceMethods.ByName("DeleteWorkflow")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceListWorkflowsHandler := connect.NewUnaryHandler(
+		SessionServiceListWorkflowsProcedure,
+		svc.ListWorkflows,
+		connect.WithSchema(sessionServiceMethods.ByName("ListWorkflows")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceRunWorkflowHandler := connect.NewUnaryHandler(
+		SessionServiceRunWorkflowProcedure,
+		svc.RunWorkflow,
+		connect.WithSchema(sessionServiceMethods.ByName("RunWorkflow")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -2713,6 +2838,16 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListShellsHandler.ServeHTTP(w, r)
 		case SessionServiceDeleteShellProcedure:
 			sessionServiceDeleteShellHandler.ServeHTTP(w, r)
+		case SessionServiceCreateWorkflowProcedure:
+			sessionServiceCreateWorkflowHandler.ServeHTTP(w, r)
+		case SessionServiceUpdateWorkflowProcedure:
+			sessionServiceUpdateWorkflowHandler.ServeHTTP(w, r)
+		case SessionServiceDeleteWorkflowProcedure:
+			sessionServiceDeleteWorkflowHandler.ServeHTTP(w, r)
+		case SessionServiceListWorkflowsProcedure:
+			sessionServiceListWorkflowsHandler.ServeHTTP(w, r)
+		case SessionServiceRunWorkflowProcedure:
+			sessionServiceRunWorkflowHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -3096,4 +3231,24 @@ func (UnimplementedSessionServiceHandler) ListShells(context.Context, *connect.R
 
 func (UnimplementedSessionServiceHandler) DeleteShell(context.Context, *connect.Request[v1.DeleteShellRequest]) (*connect.Response[v1.DeleteShellResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.DeleteShell is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) CreateWorkflow(context.Context, *connect.Request[v1.CreateWorkflowRequest]) (*connect.Response[v1.CreateWorkflowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.CreateWorkflow is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) UpdateWorkflow(context.Context, *connect.Request[v1.UpdateWorkflowRequest]) (*connect.Response[v1.UpdateWorkflowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.UpdateWorkflow is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) DeleteWorkflow(context.Context, *connect.Request[v1.DeleteWorkflowRequest]) (*connect.Response[v1.DeleteWorkflowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.DeleteWorkflow is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ListWorkflows(context.Context, *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ListWorkflows is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.RunWorkflow is not implemented"))
 }

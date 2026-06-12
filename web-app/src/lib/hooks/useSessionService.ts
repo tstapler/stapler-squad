@@ -11,7 +11,9 @@ import {
   PromptHistoryEntry,
   RunOneShotResponse,
   SpawnShellRequest,
+  RunWorkflowRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
@@ -85,6 +87,9 @@ interface UseSessionServiceReturn {
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
   listCheckpoints: (sessionId: string) => Promise<import("@/gen/session/v1/types_pb").CheckpointProto[]>;
   forkSession: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
+
+  // Workflow methods
+  runWorkflow: (request: { id: string; arg?: string }) => Promise<string | null>;
 
   // Shell methods
   spawnShell: (request: Partial<SpawnShellRequest>) => Promise<Shell | null>;
@@ -537,6 +542,25 @@ export function useSessionService(
     []
   );
 
+  // Fire a workflow immediately (outside of cron schedule).
+  const runWorkflow = useCallback(
+    async (request: { id: string; arg?: string }): Promise<string | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const req = create(RunWorkflowRequestSchema, {
+          id: request.id,
+          arg: request.arg ?? "",
+        });
+        const response = await clientRef.current.runWorkflow(req);
+        return response.sessionId ?? null;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to run workflow"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
   // Spawn a new shell attached to a session
   const spawnShell = useCallback(
     async (request: Partial<SpawnShellRequest>): Promise<Shell | null> => {
@@ -874,6 +898,7 @@ export function useSessionService(
     listPromptHistory,
     watchSessions,
     stopWatching,
+    runWorkflow,
     spawnShell,
     stopShell,
     restartShell,

@@ -36,6 +36,7 @@ interface OmnibarProps {
   onNavigateToSession: (sessionId: string) => void;
   onNavigateToSessionInNewPane?: (sessionId: string) => void;
   onSpawnShell?: (sessionId?: string, workingDir?: string, shellCommand?: string) => void;
+  onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
 }
@@ -119,7 +120,7 @@ function isValidProjectName(name: string): boolean {
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, initialMode, initialInput }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -734,6 +735,14 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       return;
     }
 
+    // Workflow invocation (@slug [arg]) — fire-and-forget, no session-creation flow.
+    if (detection?.type === InputType.Workflow && detection.metadata?.workflowFound) {
+      const { slug, workflowArg } = detection.metadata as { slug: string; workflowArg: string };
+      void onRunWorkflow?.(slug, workflowArg ?? "");
+      onClose();
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
 
@@ -848,6 +857,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     onCreateSession,
     onClose,
     onSpawnShell,
+    onRunWorkflow,
     formState.firstPrompt,
     router,
     setTheme,

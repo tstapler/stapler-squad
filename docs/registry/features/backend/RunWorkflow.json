@@ -1,0 +1,11 @@
+{
+  "id": "RunWorkflow",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "RunWorkflow",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-11T00:00:00Z"
+}

@@ -15,6 +15,7 @@ export enum InputType {
   SessionSearch = "session_search",
   NewSession = "new_session",
   SpawnShell = "spawn_shell",
+  Workflow = "workflow",
 }
 
 export interface InputTypeInfo {
@@ -78,6 +79,11 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "Spawn Shell",
     icon: ">_",
     description: "Open the new shell dialog",
+  },
+  [InputType.Workflow]: {
+    label: "Workflow",
+    icon: "⚡",
+    description: "Quick workflow invocation",
   },
 };
 

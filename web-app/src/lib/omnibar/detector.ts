@@ -316,6 +316,14 @@ export class DetectorRegistry {
     this.detectors.sort((a, b) => a.priority - b.priority);
   }
 
+  /**
+   * Remove a detector from the registry.
+   * Safe to call when the detector is not registered (no-op).
+   */
+  unregister(detector: Detector): void {
+    this.detectors = this.detectors.filter((d) => d !== detector);
+  }
+
   detect(input: string): DetectionResult {
     for (const detector of this.detectors) {
       const result = detector.detect(input);
@@ -367,6 +375,14 @@ export function getDefaultRegistry(): DetectorRegistry {
     defaultRegistry = createDefaultRegistry();
   }
   return defaultRegistry;
+}
+
+/**
+ * Reset the singleton registry to null so subsequent getDefaultRegistry() calls
+ * return a fresh instance. Use in test afterEach blocks for test isolation.
+ */
+export function resetDefaultRegistry(): void {
+  defaultRegistry = null;
 }
 
 /**

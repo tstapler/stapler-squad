@@ -1,0 +1,10 @@
+{
+  "id": "workflows-management",
+  "type": "frontend",
+  "description": "WorkflowsPanel provides a CRUD UI for managing reusable agent workflows. WorkflowForm handles create/edit forms. Workflows are invocable from the omnibar via @slug syntax.",
+  "component": "WorkflowsPanel",
+  "filePath": "web-app/src/components/workflows/WorkflowsPanel.tsx",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-11T00:00:00Z"
+}

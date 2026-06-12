@@ -1,0 +1,14 @@
+{
+  "id": "ListWorkflows",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ListWorkflows",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestListWorkflows",
+    "TestSessionService_DelegatesListWorkflows"
+  ],
+  "lastModified": "2026-06-11T00:00:00Z"
+}

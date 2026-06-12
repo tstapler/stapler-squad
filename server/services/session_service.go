@@ -135,6 +135,10 @@ type SessionService struct {
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.
 	headlessPool *headless.Pool
+
+	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
+	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
+	workflowSvc *WorkflowService
 }
 
 // ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -3463,4 +3467,52 @@ func (s *SessionService) UpdateFeatureFlag(
 			Description: description,
 		},
 	}), nil
+}
+
+// SetWorkflowService injects the workflow sub-service using deferred setter injection.
+// Must be called after both SessionService and WorkflowService are constructed.
+func (s *SessionService) SetWorkflowService(svc *WorkflowService) {
+	s.workflowSvc = svc
+}
+
+// CreateWorkflow delegates to WorkflowService.
+func (s *SessionService) CreateWorkflow(ctx context.Context, req *connect.Request[sessionv1.CreateWorkflowRequest]) (*connect.Response[sessionv1.CreateWorkflowResponse], error) {
+	if s.workflowSvc == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
+	}
+	return s.workflowSvc.CreateWorkflow(ctx, req)
+}
+
+// UpdateWorkflow delegates to WorkflowService.
+func (s *SessionService) UpdateWorkflow(ctx context.Context, req *connect.Request[sessionv1.UpdateWorkflowRequest]) (*connect.Response[sessionv1.UpdateWorkflowResponse], error) {
+	if s.workflowSvc == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
+	}
+	return s.workflowSvc.UpdateWorkflow(ctx, req)
+}
+
+// DeleteWorkflow delegates to WorkflowService.
+func (s *SessionService) DeleteWorkflow(ctx context.Context, req *connect.Request[sessionv1.DeleteWorkflowRequest]) (*connect.Response[sessionv1.DeleteWorkflowResponse], error) {
+	if s.workflowSvc == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
+	}
+	return s.workflowSvc.DeleteWorkflow(ctx, req)
+}
+
+// ListWorkflows delegates to WorkflowService.
+func (s *SessionService) ListWorkflows(ctx context.Context, req *connect.Request[sessionv1.ListWorkflowsRequest]) (*connect.Response[sessionv1.ListWorkflowsResponse], error) {
+	if s.workflowSvc == nil {
+		return connect.NewResponse(&sessionv1.ListWorkflowsResponse{
+			Workflows: []*sessionv1.WorkflowProto{},
+		}), nil
+	}
+	return s.workflowSvc.ListWorkflows(ctx, req)
+}
+
+// RunWorkflow delegates to WorkflowService.
+func (s *SessionService) RunWorkflow(ctx context.Context, req *connect.Request[sessionv1.RunWorkflowRequest]) (*connect.Response[sessionv1.RunWorkflowResponse], error) {
+	if s.workflowSvc == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
+	}
+	return s.workflowSvc.RunWorkflow(ctx, req)
 }

@@ -349,6 +349,25 @@ service SessionService {
 
   // DeleteShell stops a shell and removes it from storage.
   rpc DeleteShell(DeleteShellRequest) returns (DeleteShellResponse) {}
+
+  // ============================================================================
+  // Workflow RPCs
+  // ============================================================================
+
+  // CreateWorkflow creates a new workflow definition.
+  rpc CreateWorkflow(CreateWorkflowRequest) returns (CreateWorkflowResponse) {}
+
+  // UpdateWorkflow modifies an existing workflow definition.
+  rpc UpdateWorkflow(UpdateWorkflowRequest) returns (UpdateWorkflowResponse) {}
+
+  // DeleteWorkflow removes a workflow definition permanently.
+  rpc DeleteWorkflow(DeleteWorkflowRequest) returns (DeleteWorkflowResponse) {}
+
+  // ListWorkflows returns all saved workflow definitions.
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse) {}
+
+  // RunWorkflow immediately fires a workflow (outside of cron schedule).
+  rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -2199,4 +2218,84 @@ message BulkUpsertRulesResponse {
   int32 updated = 2;
   int32 skipped = 3;
   repeated string errors = 4;
+}
+
+// ============================================================================
+// Workflow messages
+// ============================================================================
+
+message WorkflowProto {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  string description = 4;
+  string command = 5;
+  string target_directory = 6;
+  string input_template = 7;
+  string session_type = 8;
+  string model = 9;
+  string agent_type = 10;
+  string cron_expression = 11;
+  bool cron_enabled = 12;
+  google.protobuf.Timestamp created_at = 13;
+  google.protobuf.Timestamp updated_at = 14;
+}
+
+message CreateWorkflowRequest {
+  string slug = 1;
+  string name = 2;
+  string description = 3;
+  string command = 4;
+  string target_directory = 5;
+  string input_template = 6;
+  string session_type = 7;
+  string model = 8;
+  string agent_type = 9;
+  string cron_expression = 10;
+  bool cron_enabled = 11;
+}
+
+message CreateWorkflowResponse {
+  WorkflowProto workflow = 1;
+}
+
+message UpdateWorkflowRequest {
+  string id = 1;
+  // All fields optional — only provided fields are updated.
+  optional string name = 2;
+  optional string description = 3;
+  optional string command = 4;
+  optional string target_directory = 5;
+  optional string input_template = 6;
+  optional string session_type = 7;
+  optional string model = 8;
+  optional string agent_type = 9;
+  optional string cron_expression = 10;
+  optional bool cron_enabled = 11;
+}
+
+message UpdateWorkflowResponse {
+  WorkflowProto workflow = 1;
+}
+
+message DeleteWorkflowRequest {
+  string id = 1;
+}
+
+message DeleteWorkflowResponse {}
+
+message ListWorkflowsRequest {}
+
+message ListWorkflowsResponse {
+  repeated WorkflowProto workflows = 1;
+}
+
+message RunWorkflowRequest {
+  string id = 1;
+  // arg is injected into input_template if present (replaces {{input}}).
+  string arg = 2;
+}
+
+message RunWorkflowResponse {
+  string session_id = 1;
 }
