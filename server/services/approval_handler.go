@@ -46,6 +46,7 @@ type ReviewQueueChecker interface {
 // on notification records after the approval is resolved (or times out).
 type approvalNotificationStamper interface {
 	SetMetadata(id, key, value string) error
+	MarkRead(ids []string) (int, error)
 }
 
 // autoApprovalLogger is a narrow interface for writing silent auto-approval records
@@ -314,6 +315,14 @@ createApproval:
 			if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", "timeout"); err != nil {
 				log.Warn("[ApprovalHandler] could not stamp timeout on notification", "approval_id", approvalID, "err", err)
 			}
+			if _, err := h.notificationStamper.MarkRead([]string{approvalID}); err != nil {
+				log.Warn("[ApprovalHandler] could not mark timed-out approval read", "approval_id", approvalID, "err", err)
+			}
+		}
+		// Broadcast timeout to connected clients so they remove the toast immediately
+		// instead of waiting for ACTIONABLE_TOAST_STALE_MS (6 min).
+		if h.eventBus != nil && sessionID != "" && sessionID != "unknown" {
+			h.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, false, approvalID))
 		}
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out — returning empty response (native dialog fallback)", "approval_id", approvalID)
 		w.WriteHeader(http.StatusOK)
@@ -322,6 +331,19 @@ createApproval:
 		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
 		h.store.Remove(approvalID)
 		decision = ApprovalDecision{Behavior: "allow", Message: ""}
+		// Stamp canceled so other clients can show a resolved badge on refresh.
+		if h.notificationStamper != nil {
+			if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", "canceled"); err != nil {
+				log.Warn("[ApprovalHandler] could not stamp canceled on notification", "approval_id", approvalID, "err", err)
+			}
+			if _, err := h.notificationStamper.MarkRead([]string{approvalID}); err != nil {
+				log.Warn("[ApprovalHandler] could not mark canceled approval read", "approval_id", approvalID, "err", err)
+			}
+		}
+		// Broadcast to other connected clients (the disconnecting client cannot receive it).
+		if h.eventBus != nil && sessionID != "" && sessionID != "unknown" {
+			h.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, false, approvalID))
+		}
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval context canceled", "approval_id", approvalID)
 		return // Don't write to disconnected client
 	}

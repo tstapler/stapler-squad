@@ -248,6 +248,26 @@ export interface BrowserNotificationOptions extends NotificationOptions {
 const activeNativeNotifications = new Map<string, Notification>();
 
 /**
+ * Programmatically closes the native OS notification with the given tag.
+ * Removes the entry from activeNativeNotifications so the auto-close timer
+ * won't fire on a stale reference.
+ *
+ * Note: on macOS, notification.close() dismisses the banner but cannot
+ * remove entries already swiped into the Notification Center tray.
+ * This is a known OS/browser limitation.
+ */
+export function closeNativeNotification(tag: string): void {
+  const notif = activeNativeNotifications.get(tag);
+  if (!notif) return;
+  try {
+    notif.close();
+  } catch {
+    // Expected on macOS NC tray entries
+  }
+  activeNativeNotifications.delete(tag);
+}
+
+/**
  * Shows a browser notification if permission is granted.
  * Falls back to audio-only if notifications are not supported or denied.
  *

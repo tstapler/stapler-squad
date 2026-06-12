@@ -324,3 +324,54 @@ func newTestPendingApproval(id, sessionID, toolName string) *PendingApproval {
 		ToolName:  toolName,
 	}
 }
+
+// spyNotificationStore records calls to SetMetadata and MarkRead.
+// Implements the expanded notificationMetadataStore interface.
+type spyNotificationStore struct {
+	callLog []string // "set:<id>", "read:<id>"
+}
+
+func (s *spyNotificationStore) SetMetadata(id, key, val string) error {
+	s.callLog = append(s.callLog, "set:"+id)
+	return nil
+}
+
+func (s *spyNotificationStore) MarkRead(ids []string) (int, error) {
+	for _, id := range ids {
+		s.callLog = append(s.callLog, "read:"+id)
+	}
+	return len(ids), nil
+}
+
+// TestResolveApproval_MarksNotificationRead verifies that ResolveApproval calls
+// MarkRead after SetMetadata so the notification badge auto-clears on resolution.
+func TestResolveApproval_MarksNotificationRead(t *testing.T) {
+	store := NewApprovalStore("")
+	spy := &spyNotificationStore{}
+	svc := NewApprovalService(store)
+	svc.SetNotificationStore(spy)
+
+	a := newTestPendingApproval("appr-mark", "session-X", "Bash")
+	require.NoError(t, store.Create(a))
+
+	_, err := svc.ResolveApproval(t.Context(), connect.NewRequest(&sessionv1.ResolveApprovalRequest{
+		ApprovalId: "appr-mark",
+		Decision:   "allow",
+	}))
+	require.NoError(t, err)
+
+	require.Contains(t, spy.callLog, "set:appr-mark")
+	require.Contains(t, spy.callLog, "read:appr-mark")
+
+	setIdx := -1
+	readIdx := -1
+	for i, entry := range spy.callLog {
+		if entry == "set:appr-mark" {
+			setIdx = i
+		}
+		if entry == "read:appr-mark" {
+			readIdx = i
+		}
+	}
+	assert.Greater(t, readIdx, setIdx, "SetMetadata must be called before MarkRead")
+}

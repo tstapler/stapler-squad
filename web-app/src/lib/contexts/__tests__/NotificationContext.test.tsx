@@ -592,4 +592,123 @@ describe("NotificationContext", () => {
       expect(result.current.notificationHistory).toHaveLength(2);
     });
   });
+
+  // T-FE-03, T-FE-04
+  describe("removeToastBySessionId", () => {
+    it("T-FE-03: removes all toasts for the given session, leaves others untouched", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1", message: "s1 toast" }));
+        result.current.addNotification(makeNotification({ sessionId: "s2", message: "s2 toast" }));
+      });
+      expect(result.current.notifications).toHaveLength(2);
+
+      act(() => {
+        result.current.removeToastBySessionId("s1");
+      });
+
+      expect(result.current.notifications).toHaveLength(1);
+      expect(result.current.notifications[0].sessionId).toBe("s2");
+    });
+
+    it("T-FE-03: does NOT mark history as read (toast-only removal)", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+      });
+
+      act(() => {
+        result.current.removeToastBySessionId("s1");
+      });
+
+      expect(result.current.notifications).toHaveLength(0);
+      expect(result.current.notificationHistory).toHaveLength(1);
+      expect(result.current.notificationHistory[0].isRead).toBe(false);
+      expect(mockMarkAsRead).not.toHaveBeenCalled();
+    });
+
+    it("T-FE-04: accepts an array of session IDs and removes all matching toasts", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+        result.current.addNotification(makeNotification({ sessionId: "s2" }));
+        result.current.addNotification(makeNotification({ sessionId: "s3" }));
+      });
+      expect(result.current.notifications).toHaveLength(3);
+
+      act(() => {
+        result.current.removeToastBySessionId(["s1", "s3"]);
+      });
+
+      expect(result.current.notifications).toHaveLength(1);
+      expect(result.current.notifications[0].sessionId).toBe("s2");
+    });
+
+    it("T-FE-04: is a no-op when no toast exists for the given session", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+      });
+
+      act(() => {
+        result.current.removeToastBySessionId("nonexistent");
+      });
+
+      expect(result.current.notifications).toHaveLength(1);
+    });
+  });
+
+  // T-FE-01, T-FE-02
+  describe("removeToastByApprovalId", () => {
+    it("removes toast whose metadata.approval_id matches, leaves others untouched", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(
+          makeNotification({
+            sessionId: "s1",
+            notificationType: "approval_needed",
+            metadata: { approval_id: "appr-123" },
+          })
+        );
+        result.current.addNotification(
+          makeNotification({
+            sessionId: "s2",
+            notificationType: "approval_needed",
+            metadata: { approval_id: "appr-456" },
+          })
+        );
+      });
+
+      expect(result.current.notifications).toHaveLength(2);
+
+      act(() => {
+        result.current.removeToastByApprovalId("appr-123");
+      });
+
+      expect(result.current.notifications).toHaveLength(1);
+      expect(result.current.notifications[0].metadata?.approval_id).toBe("appr-456");
+    });
+
+    it("is a no-op when no toast has the given approval_id", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+      });
+
+      expect(result.current.notifications).toHaveLength(1);
+
+      act(() => {
+        result.current.removeToastByApprovalId("does-not-exist");
+      });
+
+      // Toast without metadata.approval_id is untouched
+      expect(result.current.notifications).toHaveLength(1);
+    });
+  });
 });

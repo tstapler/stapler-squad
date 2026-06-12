@@ -231,3 +231,73 @@ describe("showBrowserNotification", () => {
     expect(notifInstances).toHaveLength(0);
   });
 });
+
+// ── closeNativeNotification (T-FE-05, T-FE-06, T-FE-07) ─────────────────────
+
+type ShowBrowserNotificationFn = (title: string, opts?: NotificationOptions) => Promise<void>;
+
+async function importCloseNativeNotification() {
+  const mod = await import("@/lib/utils/notifications");
+  return {
+    closeNative: mod.closeNativeNotification,
+    show: mod.showBrowserNotification as ShowBrowserNotificationFn,
+  };
+}
+
+describe("closeNativeNotification", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.resetModules();
+    setupNotificationMock();
+    localStorage.removeItem("notifications-enabled");
+  });
+
+  afterEach(() => {
+    jest.runOnlyPendingTimers();
+    jest.useRealTimers();
+  });
+
+  it("T-FE-06: closeNativeNotification_should_beNoOp_When_tagAbsent", async () => {
+    // Tag never stored — should not throw
+    let closeNativeNotification!: (tag: string) => void;
+    await jest.isolateModulesAsync(async () => {
+      ({ closeNative: closeNativeNotification } = await importCloseNativeNotification());
+    });
+    expect(() => closeNativeNotification("does-not-exist")).not.toThrow();
+  });
+
+  it("T-FE-05: closeNativeNotification_should_callClose_When_tagExists", async () => {
+    let closeNativeNotification!: (tag: string) => void;
+    let showBrowserNotification!: ShowBrowserNotificationFn;
+    await jest.isolateModulesAsync(async () => {
+      ({ closeNative: closeNativeNotification, show: showBrowserNotification } =
+        await importCloseNativeNotification());
+    });
+
+    await showBrowserNotification("Banner", { tag: "approval:abc" });
+    expect(notifInstances).toHaveLength(1);
+
+    closeNativeNotification("approval:abc");
+
+    expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("T-FE-07: closeNativeNotification_should_beIdempotent_When_calledTwice", async () => {
+    let closeNativeNotification!: (tag: string) => void;
+    let showBrowserNotification!: ShowBrowserNotificationFn;
+    await jest.isolateModulesAsync(async () => {
+      ({ closeNative: closeNativeNotification, show: showBrowserNotification } =
+        await importCloseNativeNotification());
+    });
+
+    await showBrowserNotification("Banner", { tag: "t1" });
+
+    // First call — closes and removes from internal map
+    expect(() => closeNativeNotification("t1")).not.toThrow();
+    // Second call — tag is gone from map, should not throw
+    expect(() => closeNativeNotification("t1")).not.toThrow();
+
+    // .close() should have been called exactly once (not twice)
+    expect(notifInstances[0].close).toHaveBeenCalledTimes(1);
+  });
+});

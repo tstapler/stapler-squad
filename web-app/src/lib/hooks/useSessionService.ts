@@ -47,9 +47,9 @@ interface UseSessionServiceOptions {
   /**
    * Called when an approval_response event arrives on the stream. Use this to
    * refresh notification history so all connected clients stay in sync when any
-   * device resolves an approval.
+   * device resolves an approval. Receives the approvalId and sessionId from the event.
    */
-  onApprovalResponse?: () => void;
+  onApprovalResponse?: (approvalId: string, sessionId: string) => void;
   /**
    * Called when a session is deleted. Use this to clear related state such as
    * notifications keyed to the deleted session.
@@ -661,9 +661,11 @@ export function useSessionService(
         break;
       }
       case "approvalResponse": {
-        // An approval was resolved on another device — refresh history so all
-        // clients show the updated state (resolved badge, not live Approve/Deny).
-        onApprovalResponseRef.current?.();
+        // An approval was resolved on this device or another — remove the toast
+        // preemptively and refresh history to show the resolved badge.
+        const approvalId = event.event.value.context;
+        const sessionId = event.event.value.sessionId;
+        onApprovalResponseRef.current?.(approvalId, sessionId);
         break;
       }
     }

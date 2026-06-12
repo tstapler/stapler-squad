@@ -17,6 +17,7 @@ import (
 // the approval decision onto the notification record after it is resolved.
 type notificationMetadataStore interface {
 	SetMetadata(id, key, value string) error
+	MarkRead(ids []string) (int, error)
 }
 
 // ApprovalService handles Claude Code hook approval RPCs.
@@ -86,6 +87,9 @@ func (as *ApprovalService) ResolveApproval(
 	if as.notificationStore != nil {
 		if err := as.notificationStore.SetMetadata(req.Msg.ApprovalId, "approval_decision", req.Msg.Decision); err != nil {
 			log.Warn("[ApprovalService] could not persist approval decision in notification", "err", err)
+		}
+		if _, err := as.notificationStore.MarkRead([]string{req.Msg.ApprovalId}); err != nil {
+			log.Warn("[ApprovalService] could not mark approval notification read", "approval_id", req.Msg.ApprovalId, "err", err)
 		}
 	}
 
