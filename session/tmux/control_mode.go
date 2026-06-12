@@ -57,10 +57,20 @@ func init() {
 //
 // See: https://github.com/tmux/tmux/wiki/Control-Mode
 func (t *TmuxSession) StartControlMode() error {
-	// Check if control mode is already running
+	// Serialize concurrent first-time starts. Held for the full fork+init sequence
+	// to prevent two callers from both passing the controlModeCmd==nil check.
+	t.controlModeStartMu.Lock()
+	defer t.controlModeStartMu.Unlock()
+
+	// Increment refcount if already running — atomic under the same lock that
+	// protects controlModeCmd so no TOCTOU between check and increment.
+	t.controlModeSubMu.Lock()
 	if t.controlModeCmd != nil {
-		return nil // Already started
+		t.controlModeRefCount++
+		t.controlModeSubMu.Unlock()
+		return nil // Already running; just bumped the refcount
 	}
+	t.controlModeSubMu.Unlock()
 
 	// Build tmux -C attach command
 	cmd := t.buildTmuxCommand("-C", "attach-session", "-t", t.sanitizedName)
@@ -90,23 +100,20 @@ func (t *TmuxSession) StartControlMode() error {
 	}
 	TrackChildPID(cmd.Process.Pid, "tmux control-mode session="+t.sanitizedName)
 
-	// Store control mode infrastructure
+	// Store all infrastructure and initialize subscriber state atomically under subMu.
+	t.controlModeSubMu.Lock()
 	t.controlModeCmd = cmd
 	t.controlModeStdout = stdout
 	t.controlModeStdin = stdin
 	t.controlModeDone = make(chan struct{})
-
-	// Initialize priority send queues and sender-exit signal.
 	t.highPriSendCh = make(chan cmSendReq, 64)
 	t.normPriSendCh = make(chan cmSendReq, 256)
 	t.cmSenderExited = make(chan struct{})
-
-	// Initialize subscriber map and reset exited flag
-	t.controlModeSubMu.Lock()
 	if t.controlModeSubscribers == nil {
 		t.controlModeSubscribers = make(map[string]chan []byte)
 	}
 	t.controlModeExited = false
+	t.controlModeRefCount = 1
 	t.controlModeSubMu.Unlock()
 
 	// Start goroutines: priority sender, output reader, stderr monitor.
@@ -119,20 +126,44 @@ func (t *TmuxSession) StartControlMode() error {
 }
 
 // StopControlMode stops the control mode streaming and cleans up resources.
+// With refcounting, this only actually stops the underlying process when the last
+// caller disconnects. Intermediate callers decrement the refcount and return early.
 func (t *TmuxSession) StopControlMode() error {
+	// Serialize with StartControlMode to prevent races during the 0→1 and 1→0 transitions.
+	t.controlModeStartMu.Lock()
+	defer t.controlModeStartMu.Unlock()
+
+	// Decrement refcount under the lock. Only proceed to teardown when the count
+	// reaches zero (i.e., this is the last caller).
+	t.controlModeSubMu.Lock()
+	if t.controlModeRefCount > 0 {
+		t.controlModeRefCount--
+	} else {
+		log.Warn("StopControlMode called with refcount already 0", "session", t.sanitizedName)
+	}
+	remaining := t.controlModeRefCount
+	t.controlModeSubMu.Unlock()
+
+	if remaining > 0 {
+		return nil // Other callers still active; leave the process running.
+	}
+
 	if t.controlModeCmd == nil {
-		return nil // Not running
+		return nil // Not running (or already stopped by a prior call).
 	}
 
 	// Mark as intentional before closing anything so that the scanner-EOF path
 	// in readControlModeOutput() knows not to fire the onExit callback.
 	t.intentionalStop.Store(true)
 
-	// Signal termination — this causes runCMSender to drain its queues and exit.
+	// Signal termination — close controlModeDone under a lock to prevent
+	// double-close panic if two goroutines race into StopControlMode() at refcount 0.
+	t.controlModeSubMu.Lock()
 	if t.controlModeDone != nil {
 		close(t.controlModeDone)
 		t.controlModeDone = nil
 	}
+	t.controlModeSubMu.Unlock()
 
 	// Wait for the sender goroutine to exit before closing stdin. The sender
 	// owns all stdin writes; closing stdin underneath it would panic or corrupt state.
@@ -596,9 +627,11 @@ func isOctalDigits(s string) bool {
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
+// Uses a write lock (not RLock) to prevent send-on-closed-channel panics when
+// UnsubscribeFromControlModeUpdates closes a channel concurrently.
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
-	t.controlModeSubMu.RLock()
-	defer t.controlModeSubMu.RUnlock()
+	t.controlModeSubMu.Lock()
+	defer t.controlModeSubMu.Unlock()
 
 	for subscriberID, ch := range t.controlModeSubscribers {
 		select {
