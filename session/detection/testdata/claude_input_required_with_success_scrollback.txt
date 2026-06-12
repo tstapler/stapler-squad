@@ -1,0 +1,13 @@
+✻ Baked for 5m 30s
+
+Here is my analysis of the changes. I've reviewed all files and everything looks good.
+The implementation follows the existing patterns and all tests pass.
+
+ Do you want to proceed?
+
+ ❯ 1. Create PR now (Recommended)
+   2. Review the changes first
+   3. Cancel and make edits
+   4. Type here to tell Claude what to do differently
+
+Enter to select · ↑/↓ to navigate · Esc to cancel
