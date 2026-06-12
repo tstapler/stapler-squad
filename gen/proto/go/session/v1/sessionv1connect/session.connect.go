@@ -165,6 +165,15 @@ const (
 	// SessionServiceGenerateSuggestedRuleProcedure is the fully-qualified name of the SessionService's
 	// GenerateSuggestedRule RPC.
 	SessionServiceGenerateSuggestedRuleProcedure = "/session.v1.SessionService/GenerateSuggestedRule"
+	// SessionServiceValidateRulesProcedure is the fully-qualified name of the SessionService's
+	// ValidateRules RPC.
+	SessionServiceValidateRulesProcedure = "/session.v1.SessionService/ValidateRules"
+	// SessionServiceExportRulesProcedure is the fully-qualified name of the SessionService's
+	// ExportRules RPC.
+	SessionServiceExportRulesProcedure = "/session.v1.SessionService/ExportRules"
+	// SessionServiceBulkUpsertRulesProcedure is the fully-qualified name of the SessionService's
+	// BulkUpsertRules RPC.
+	SessionServiceBulkUpsertRulesProcedure = "/session.v1.SessionService/BulkUpsertRules"
 	// SessionServiceListDatabasesProcedure is the fully-qualified name of the SessionService's
 	// ListDatabases RPC.
 	SessionServiceListDatabasesProcedure = "/session.v1.SessionService/ListDatabases"
@@ -421,6 +430,15 @@ type SessionServiceClient interface {
 	// pre-filled SuggestedRuleProto. May take 5–30 seconds; callers must set a
 	// 60-second deadline via AbortController.
 	GenerateSuggestedRule(context.Context, *connect.Request[v1.GenerateSuggestedRuleRequest]) (*connect.Response[v1.GenerateSuggestedRuleResponse], error)
+	// ValidateRules parses and validates a YAML rules file without applying it.
+	// Returns per-rule results including any parse or validation errors.
+	ValidateRules(context.Context, *connect.Request[v1.ValidateRulesRequest]) (*connect.Response[v1.ValidateRulesResponse], error)
+	// ExportRules serializes user-authored rules to YAML format for download.
+	// Passing rule_ids limits export to those rules; empty = export all user rules.
+	ExportRules(context.Context, *connect.Request[v1.ExportRulesRequest]) (*connect.Response[v1.ExportRulesResponse], error)
+	// BulkUpsertRules creates or updates multiple user-defined rules in one call.
+	// Rebuilds the in-memory classifier exactly once after all rules are stored.
+	BulkUpsertRules(context.Context, *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error)
 	// ListDatabases returns all discovered workspace databases with metadata.
 	// Used by the workspace switcher UI to show available workspaces.
 	ListDatabases(context.Context, *connect.Request[v1.ListDatabasesRequest]) (*connect.Response[v1.ListDatabasesResponse], error)
@@ -823,6 +841,24 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("GenerateSuggestedRule")),
 			connect.WithClientOptions(opts...),
 		),
+		validateRules: connect.NewClient[v1.ValidateRulesRequest, v1.ValidateRulesResponse](
+			httpClient,
+			baseURL+SessionServiceValidateRulesProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ValidateRules")),
+			connect.WithClientOptions(opts...),
+		),
+		exportRules: connect.NewClient[v1.ExportRulesRequest, v1.ExportRulesResponse](
+			httpClient,
+			baseURL+SessionServiceExportRulesProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ExportRules")),
+			connect.WithClientOptions(opts...),
+		),
+		bulkUpsertRules: connect.NewClient[v1.BulkUpsertRulesRequest, v1.BulkUpsertRulesResponse](
+			httpClient,
+			baseURL+SessionServiceBulkUpsertRulesProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("BulkUpsertRules")),
+			connect.WithClientOptions(opts...),
+		),
 		listDatabases: connect.NewClient[v1.ListDatabasesRequest, v1.ListDatabasesResponse](
 			httpClient,
 			baseURL+SessionServiceListDatabasesProcedure,
@@ -1149,6 +1185,9 @@ type sessionServiceClient struct {
 	getApprovalAnalytics      *connect.Client[v1.GetApprovalAnalyticsRequest, v1.GetApprovalAnalyticsResponse]
 	getProgramAnalytics       *connect.Client[v1.GetProgramAnalyticsRequest, v1.GetProgramAnalyticsResponse]
 	generateSuggestedRule     *connect.Client[v1.GenerateSuggestedRuleRequest, v1.GenerateSuggestedRuleResponse]
+	validateRules             *connect.Client[v1.ValidateRulesRequest, v1.ValidateRulesResponse]
+	exportRules               *connect.Client[v1.ExportRulesRequest, v1.ExportRulesResponse]
+	bulkUpsertRules           *connect.Client[v1.BulkUpsertRulesRequest, v1.BulkUpsertRulesResponse]
 	listDatabases             *connect.Client[v1.ListDatabasesRequest, v1.ListDatabasesResponse]
 	getCurrentDatabase        *connect.Client[v1.GetCurrentDatabaseRequest, v1.GetCurrentDatabaseResponse]
 	switchDatabase            *connect.Client[v1.SwitchDatabaseRequest, v1.SwitchDatabaseResponse]
@@ -1420,6 +1459,21 @@ func (c *sessionServiceClient) GetProgramAnalytics(ctx context.Context, req *con
 // GenerateSuggestedRule calls session.v1.SessionService.GenerateSuggestedRule.
 func (c *sessionServiceClient) GenerateSuggestedRule(ctx context.Context, req *connect.Request[v1.GenerateSuggestedRuleRequest]) (*connect.Response[v1.GenerateSuggestedRuleResponse], error) {
 	return c.generateSuggestedRule.CallUnary(ctx, req)
+}
+
+// ValidateRules calls session.v1.SessionService.ValidateRules.
+func (c *sessionServiceClient) ValidateRules(ctx context.Context, req *connect.Request[v1.ValidateRulesRequest]) (*connect.Response[v1.ValidateRulesResponse], error) {
+	return c.validateRules.CallUnary(ctx, req)
+}
+
+// ExportRules calls session.v1.SessionService.ExportRules.
+func (c *sessionServiceClient) ExportRules(ctx context.Context, req *connect.Request[v1.ExportRulesRequest]) (*connect.Response[v1.ExportRulesResponse], error) {
+	return c.exportRules.CallUnary(ctx, req)
+}
+
+// BulkUpsertRules calls session.v1.SessionService.BulkUpsertRules.
+func (c *sessionServiceClient) BulkUpsertRules(ctx context.Context, req *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error) {
+	return c.bulkUpsertRules.CallUnary(ctx, req)
 }
 
 // ListDatabases calls session.v1.SessionService.ListDatabases.
@@ -1768,6 +1822,15 @@ type SessionServiceHandler interface {
 	// pre-filled SuggestedRuleProto. May take 5–30 seconds; callers must set a
 	// 60-second deadline via AbortController.
 	GenerateSuggestedRule(context.Context, *connect.Request[v1.GenerateSuggestedRuleRequest]) (*connect.Response[v1.GenerateSuggestedRuleResponse], error)
+	// ValidateRules parses and validates a YAML rules file without applying it.
+	// Returns per-rule results including any parse or validation errors.
+	ValidateRules(context.Context, *connect.Request[v1.ValidateRulesRequest]) (*connect.Response[v1.ValidateRulesResponse], error)
+	// ExportRules serializes user-authored rules to YAML format for download.
+	// Passing rule_ids limits export to those rules; empty = export all user rules.
+	ExportRules(context.Context, *connect.Request[v1.ExportRulesRequest]) (*connect.Response[v1.ExportRulesResponse], error)
+	// BulkUpsertRules creates or updates multiple user-defined rules in one call.
+	// Rebuilds the in-memory classifier exactly once after all rules are stored.
+	BulkUpsertRules(context.Context, *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error)
 	// ListDatabases returns all discovered workspace databases with metadata.
 	// Used by the workspace switcher UI to show available workspaces.
 	ListDatabases(context.Context, *connect.Request[v1.ListDatabasesRequest]) (*connect.Response[v1.ListDatabasesResponse], error)
@@ -2166,6 +2229,24 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("GenerateSuggestedRule")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceValidateRulesHandler := connect.NewUnaryHandler(
+		SessionServiceValidateRulesProcedure,
+		svc.ValidateRules,
+		connect.WithSchema(sessionServiceMethods.ByName("ValidateRules")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceExportRulesHandler := connect.NewUnaryHandler(
+		SessionServiceExportRulesProcedure,
+		svc.ExportRules,
+		connect.WithSchema(sessionServiceMethods.ByName("ExportRules")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceBulkUpsertRulesHandler := connect.NewUnaryHandler(
+		SessionServiceBulkUpsertRulesProcedure,
+		svc.BulkUpsertRules,
+		connect.WithSchema(sessionServiceMethods.ByName("BulkUpsertRules")),
+		connect.WithHandlerOptions(opts...),
+	)
 	sessionServiceListDatabasesHandler := connect.NewUnaryHandler(
 		SessionServiceListDatabasesProcedure,
 		svc.ListDatabases,
@@ -2534,6 +2615,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceGetProgramAnalyticsHandler.ServeHTTP(w, r)
 		case SessionServiceGenerateSuggestedRuleProcedure:
 			sessionServiceGenerateSuggestedRuleHandler.ServeHTTP(w, r)
+		case SessionServiceValidateRulesProcedure:
+			sessionServiceValidateRulesHandler.ServeHTTP(w, r)
+		case SessionServiceExportRulesProcedure:
+			sessionServiceExportRulesHandler.ServeHTTP(w, r)
+		case SessionServiceBulkUpsertRulesProcedure:
+			sessionServiceBulkUpsertRulesHandler.ServeHTTP(w, r)
 		case SessionServiceListDatabasesProcedure:
 			sessionServiceListDatabasesHandler.ServeHTTP(w, r)
 		case SessionServiceGetCurrentDatabaseProcedure:
@@ -2813,6 +2900,18 @@ func (UnimplementedSessionServiceHandler) GetProgramAnalytics(context.Context, *
 
 func (UnimplementedSessionServiceHandler) GenerateSuggestedRule(context.Context, *connect.Request[v1.GenerateSuggestedRuleRequest]) (*connect.Response[v1.GenerateSuggestedRuleResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GenerateSuggestedRule is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ValidateRules(context.Context, *connect.Request[v1.ValidateRulesRequest]) (*connect.Response[v1.ValidateRulesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ValidateRules is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ExportRules(context.Context, *connect.Request[v1.ExportRulesRequest]) (*connect.Response[v1.ExportRulesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ExportRules is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) BulkUpsertRules(context.Context, *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.BulkUpsertRules is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) ListDatabases(context.Context, *connect.Request[v1.ListDatabasesRequest]) (*connect.Response[v1.ListDatabasesResponse], error) {

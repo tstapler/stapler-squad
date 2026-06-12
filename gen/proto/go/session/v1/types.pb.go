@@ -4056,11 +4056,21 @@ type ApprovalRuleProto struct {
 	Enabled        bool                   `protobuf:"varint,12,opt,name=enabled,proto3" json:"enabled,omitempty"`
 	Source         string                 `protobuf:"bytes,13,opt,name=source,proto3" json:"source,omitempty"`
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,14,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	// Structured criteria — preferred over command_pattern for program/subcommand matching.
-	CriteriaPrograms    []string `protobuf:"bytes,15,rep,name=criteria_programs,json=criteriaPrograms,proto3" json:"criteria_programs,omitempty"`
-	CriteriaSubcommands []string `protobuf:"bytes,16,rep,name=criteria_subcommands,json=criteriaSubcommands,proto3" json:"criteria_subcommands,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Structured CommandCriteria fields (field numbers 15–19 reserved; criteria start at 20).
+	// When any of these are set, they are used instead of command_pattern for Bash matching.
+	Programs              []string `protobuf:"bytes,20,rep,name=programs,proto3" json:"programs,omitempty"`
+	Subcommands           []string `protobuf:"bytes,21,rep,name=subcommands,proto3" json:"subcommands,omitempty"`
+	BlockedSubcommands    []string `protobuf:"bytes,22,rep,name=blocked_subcommands,json=blockedSubcommands,proto3" json:"blocked_subcommands,omitempty"`
+	RequiredFlags         []string `protobuf:"bytes,23,rep,name=required_flags,json=requiredFlags,proto3" json:"required_flags,omitempty"`
+	ForbiddenFlags        []string `protobuf:"bytes,24,rep,name=forbidden_flags,json=forbiddenFlags,proto3" json:"forbidden_flags,omitempty"`
+	PythonModes           []string `protobuf:"bytes,25,rep,name=python_modes,json=pythonModes,proto3" json:"python_modes,omitempty"`
+	SafePythonImportsOnly bool     `protobuf:"varint,26,opt,name=safe_python_imports_only,json=safePythonImportsOnly,proto3" json:"safe_python_imports_only,omitempty"`
+	RequiredFlagPrefixes  []string `protobuf:"bytes,27,rep,name=required_flag_prefixes,json=requiredFlagPrefixes,proto3" json:"required_flag_prefixes,omitempty"`
+	// tool_category matches against classifier.CategorizeToolName() result.
+	// Use one of: "builtin", "builtin-agent", "mcp", "mcp-read", "mcp-write".
+	ToolCategory  string `protobuf:"bytes,28,opt,name=tool_category,json=toolCategory,proto3" json:"tool_category,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ApprovalRuleProto) Reset() {
@@ -4191,18 +4201,67 @@ func (x *ApprovalRuleProto) GetCreatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *ApprovalRuleProto) GetCriteriaPrograms() []string {
+func (x *ApprovalRuleProto) GetPrograms() []string {
 	if x != nil {
-		return x.CriteriaPrograms
+		return x.Programs
 	}
 	return nil
 }
 
-func (x *ApprovalRuleProto) GetCriteriaSubcommands() []string {
+func (x *ApprovalRuleProto) GetSubcommands() []string {
 	if x != nil {
-		return x.CriteriaSubcommands
+		return x.Subcommands
 	}
 	return nil
+}
+
+func (x *ApprovalRuleProto) GetBlockedSubcommands() []string {
+	if x != nil {
+		return x.BlockedSubcommands
+	}
+	return nil
+}
+
+func (x *ApprovalRuleProto) GetRequiredFlags() []string {
+	if x != nil {
+		return x.RequiredFlags
+	}
+	return nil
+}
+
+func (x *ApprovalRuleProto) GetForbiddenFlags() []string {
+	if x != nil {
+		return x.ForbiddenFlags
+	}
+	return nil
+}
+
+func (x *ApprovalRuleProto) GetPythonModes() []string {
+	if x != nil {
+		return x.PythonModes
+	}
+	return nil
+}
+
+func (x *ApprovalRuleProto) GetSafePythonImportsOnly() bool {
+	if x != nil {
+		return x.SafePythonImportsOnly
+	}
+	return false
+}
+
+func (x *ApprovalRuleProto) GetRequiredFlagPrefixes() []string {
+	if x != nil {
+		return x.RequiredFlagPrefixes
+	}
+	return nil
+}
+
+func (x *ApprovalRuleProto) GetToolCategory() string {
+	if x != nil {
+		return x.ToolCategory
+	}
+	return ""
 }
 
 // AnalyticsSummaryProto aggregates classification decisions over a time window.
@@ -4380,9 +4439,12 @@ func (x *AnalyticsSummaryProto) GetCommandSubcommandStats() []*SubcommandStatPro
 }
 
 type ToolStatProto struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
-	Count         int32                  `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ToolName string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
+	Count    int32                  `protobuf:"varint,2,opt,name=count,proto3" json:"count,omitempty"`
+	// manual_allow / manual_deny break down how past manual reviews resolved for this tool.
+	ManualAllow   int32 `protobuf:"varint,3,opt,name=manual_allow,json=manualAllow,proto3" json:"manual_allow,omitempty"`
+	ManualDeny    int32 `protobuf:"varint,4,opt,name=manual_deny,json=manualDeny,proto3" json:"manual_deny,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4427,6 +4489,20 @@ func (x *ToolStatProto) GetToolName() string {
 func (x *ToolStatProto) GetCount() int32 {
 	if x != nil {
 		return x.Count
+	}
+	return 0
+}
+
+func (x *ToolStatProto) GetManualAllow() int32 {
+	if x != nil {
+		return x.ManualAllow
+	}
+	return 0
+}
+
+func (x *ToolStatProto) GetManualDeny() int32 {
+	if x != nil {
+		return x.ManualDeny
 	}
 	return 0
 }
@@ -4557,8 +4633,11 @@ type ProgramStatProto struct {
 	// program_name is the executable name (e.g., "git", "npm", "python3").
 	ProgramName string `protobuf:"bytes,1,opt,name=program_name,json=programName,proto3" json:"program_name,omitempty"`
 	// category groups the program (e.g., "vcs", "node", "python").
-	Category      string `protobuf:"bytes,2,opt,name=category,proto3" json:"category,omitempty"`
-	Count         int32  `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	Category string `protobuf:"bytes,2,opt,name=category,proto3" json:"category,omitempty"`
+	Count    int32  `protobuf:"varint,3,opt,name=count,proto3" json:"count,omitempty"`
+	// manual_allow / manual_deny break down how past manual reviews resolved for this program.
+	ManualAllow   int32 `protobuf:"varint,4,opt,name=manual_allow,json=manualAllow,proto3" json:"manual_allow,omitempty"`
+	ManualDeny    int32 `protobuf:"varint,5,opt,name=manual_deny,json=manualDeny,proto3" json:"manual_deny,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4610,6 +4689,20 @@ func (x *ProgramStatProto) GetCategory() string {
 func (x *ProgramStatProto) GetCount() int32 {
 	if x != nil {
 		return x.Count
+	}
+	return 0
+}
+
+func (x *ProgramStatProto) GetManualAllow() int32 {
+	if x != nil {
+		return x.ManualAllow
+	}
+	return 0
+}
+
+func (x *ProgramStatProto) GetManualDeny() int32 {
+	if x != nil {
+		return x.ManualDeny
 	}
 	return 0
 }
@@ -4671,11 +4764,14 @@ func (x *ImportStatProto) GetCount() int32 {
 // SubcommandStatProto represents a (program, subcommand) pair with its usage count.
 // subcommand may contain a space for two-level CLIs (e.g., "pr create" for gh).
 type SubcommandStatProto struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ProgramName   string                 `protobuf:"bytes,1,opt,name=program_name,json=programName,proto3" json:"program_name,omitempty"`
-	Subcommand    string                 `protobuf:"bytes,2,opt,name=subcommand,proto3" json:"subcommand,omitempty"`
-	Category      string                 `protobuf:"bytes,3,opt,name=category,proto3" json:"category,omitempty"`
-	Count         int32                  `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ProgramName string                 `protobuf:"bytes,1,opt,name=program_name,json=programName,proto3" json:"program_name,omitempty"`
+	Subcommand  string                 `protobuf:"bytes,2,opt,name=subcommand,proto3" json:"subcommand,omitempty"`
+	Category    string                 `protobuf:"bytes,3,opt,name=category,proto3" json:"category,omitempty"`
+	Count       int32                  `protobuf:"varint,4,opt,name=count,proto3" json:"count,omitempty"`
+	// manual_allow / manual_deny break down how past manual reviews resolved for this pair.
+	ManualAllow   int32 `protobuf:"varint,5,opt,name=manual_allow,json=manualAllow,proto3" json:"manual_allow,omitempty"`
+	ManualDeny    int32 `protobuf:"varint,6,opt,name=manual_deny,json=manualDeny,proto3" json:"manual_deny,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4734,6 +4830,20 @@ func (x *SubcommandStatProto) GetCategory() string {
 func (x *SubcommandStatProto) GetCount() int32 {
 	if x != nil {
 		return x.Count
+	}
+	return 0
+}
+
+func (x *SubcommandStatProto) GetManualAllow() int32 {
+	if x != nil {
+		return x.ManualAllow
+	}
+	return 0
+}
+
+func (x *SubcommandStatProto) GetManualDeny() int32 {
+	if x != nil {
+		return x.ManualDeny
 	}
 	return 0
 }
@@ -6132,7 +6242,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x11seconds_remaining\x18\t \x01(\x05R\x10secondsRemaining\x1a<\n" +
 	"\x0eToolInputEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xbb\x04\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd1\x06\n" +
 	"\x11ApprovalRuleProto\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
@@ -6150,9 +6260,16 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\aenabled\x18\f \x01(\bR\aenabled\x12\x16\n" +
 	"\x06source\x18\r \x01(\tR\x06source\x129\n" +
 	"\n" +
-	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12+\n" +
-	"\x11criteria_programs\x18\x0f \x03(\tR\x10criteriaPrograms\x121\n" +
-	"\x14criteria_subcommands\x18\x10 \x03(\tR\x13criteriaSubcommands\"\xf7\b\n" +
+	"created_at\x18\x0e \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x1a\n" +
+	"\bprograms\x18\x14 \x03(\tR\bprograms\x12 \n" +
+	"\vsubcommands\x18\x15 \x03(\tR\vsubcommands\x12/\n" +
+	"\x13blocked_subcommands\x18\x16 \x03(\tR\x12blockedSubcommands\x12%\n" +
+	"\x0erequired_flags\x18\x17 \x03(\tR\rrequiredFlags\x12'\n" +
+	"\x0fforbidden_flags\x18\x18 \x03(\tR\x0eforbiddenFlags\x12!\n" +
+	"\fpython_modes\x18\x19 \x03(\tR\vpythonModes\x127\n" +
+	"\x18safe_python_imports_only\x18\x1a \x01(\bR\x15safePythonImportsOnly\x124\n" +
+	"\x16required_flag_prefixes\x18\x1b \x03(\tR\x14requiredFlagPrefixes\x12#\n" +
+	"\rtool_category\x18\x1c \x01(\tR\ftoolCategory\"\xf7\b\n" +
 	"\x15AnalyticsSummaryProto\x12'\n" +
 	"\x0ftotal_decisions\x18\x01 \x01(\x05R\x0etotalDecisions\x12^\n" +
 	"\x0fdecision_counts\x18\x02 \x03(\v25.session.v1.AnalyticsSummaryProto.DecisionCountsEntryR\x0edecisionCounts\x126\n" +
@@ -6174,10 +6291,13 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x18command_subcommand_stats\x18\x10 \x03(\v2\x1f.session.v1.SubcommandStatProtoR\x16commandSubcommandStats\x1aA\n" +
 	"\x13DecisionCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"B\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\x86\x01\n" +
 	"\rToolStatProto\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x05R\x05count\"_\n" +
+	"\x05count\x18\x02 \x01(\x05R\x05count\x12!\n" +
+	"\fmanual_allow\x18\x03 \x01(\x05R\vmanualAllow\x12\x1f\n" +
+	"\vmanual_deny\x18\x04 \x01(\x05R\n" +
+	"manualDeny\"_\n" +
 	"\x10CommandStatProto\x12\x18\n" +
 	"\apreview\x18\x01 \x01(\tR\apreview\x12\x1b\n" +
 	"\ttool_name\x18\x02 \x01(\tR\btoolName\x12\x14\n" +
@@ -6185,21 +6305,27 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\rRuleStatProto\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12\x1b\n" +
 	"\trule_name\x18\x02 \x01(\tR\bruleName\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\x05R\x05count\"g\n" +
+	"\x05count\x18\x03 \x01(\x05R\x05count\"\xab\x01\n" +
 	"\x10ProgramStatProto\x12!\n" +
 	"\fprogram_name\x18\x01 \x01(\tR\vprogramName\x12\x1a\n" +
 	"\bcategory\x18\x02 \x01(\tR\bcategory\x12\x14\n" +
-	"\x05count\x18\x03 \x01(\x05R\x05count\"?\n" +
+	"\x05count\x18\x03 \x01(\x05R\x05count\x12!\n" +
+	"\fmanual_allow\x18\x04 \x01(\x05R\vmanualAllow\x12\x1f\n" +
+	"\vmanual_deny\x18\x05 \x01(\x05R\n" +
+	"manualDeny\"?\n" +
 	"\x0fImportStatProto\x12\x16\n" +
 	"\x06module\x18\x01 \x01(\tR\x06module\x12\x14\n" +
-	"\x05count\x18\x02 \x01(\x05R\x05count\"\x8a\x01\n" +
+	"\x05count\x18\x02 \x01(\x05R\x05count\"\xce\x01\n" +
 	"\x13SubcommandStatProto\x12!\n" +
 	"\fprogram_name\x18\x01 \x01(\tR\vprogramName\x12\x1e\n" +
 	"\n" +
 	"subcommand\x18\x02 \x01(\tR\n" +
 	"subcommand\x12\x1a\n" +
 	"\bcategory\x18\x03 \x01(\tR\bcategory\x12\x14\n" +
-	"\x05count\x18\x04 \x01(\x05R\x05count\"\xd8\x01\n" +
+	"\x05count\x18\x04 \x01(\x05R\x05count\x12!\n" +
+	"\fmanual_allow\x18\x05 \x01(\x05R\vmanualAllow\x12\x1f\n" +
+	"\vmanual_deny\x18\x06 \x01(\x05R\n" +
+	"manualDeny\"\xd8\x01\n" +
 	"\x10DailyBucketProto\x12\x12\n" +
 	"\x04date\x18\x01 \x01(\tR\x04date\x12\x1d\n" +
 	"\n" +

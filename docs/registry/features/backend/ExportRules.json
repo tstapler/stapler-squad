@@ -1,0 +1,11 @@
+{
+  "id": "ExportRules",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "ExportRules",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-01T11:43:35.601096296-07:00"
+}

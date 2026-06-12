@@ -31,10 +31,6 @@ func (ApprovalRule) Fields() []ent.Field {
 			Optional(),
 		field.String("file_pattern").
 			Optional(),
-		field.JSON("criteria_programs", []string{}).
-			Optional(),
-		field.JSON("criteria_subcommands", []string{}).
-			Optional(),
 		field.Int("decision"),
 		field.Int("risk_level"),
 		field.String("reason").
@@ -53,6 +49,25 @@ func (ApprovalRule) Fields() []ent.Field {
 		field.Time("updated_at").
 			Default(time.Now).
 			UpdateDefault(time.Now),
+
+		// Structured CommandCriteria fields — stored as JSON arrays.
+		// No Optional() so the DB column is NOT NULL; Default ensures existing rows get [].
+		field.JSON("programs", []string{}).
+			Default([]string{}),
+		field.JSON("subcommands", []string{}).
+			Default([]string{}),
+		field.JSON("blocked_subcommands", []string{}).
+			Default([]string{}),
+		field.JSON("required_flags", []string{}).
+			Default([]string{}),
+		field.JSON("forbidden_flags", []string{}).
+			Default([]string{}),
+		field.JSON("required_flag_prefixes", []string{}).
+			Default([]string{}),
+		field.JSON("python_modes", []string{}).
+			Default([]string{}),
+		field.Bool("safe_python_imports_only").
+			Default(false),
 	}
 }
 

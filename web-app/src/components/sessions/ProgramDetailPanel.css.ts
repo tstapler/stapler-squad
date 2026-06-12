@@ -105,6 +105,14 @@ export const coverageYes = style([
   },
 ]);
 
+export const coveragePartial = style([
+  coverageBadge,
+  {
+    background: vars.color.warningBg,
+    color: vars.color.warning,
+  },
+]);
+
 export const coverageNo = style([
   coverageBadge,
   {

@@ -1063,30 +1063,65 @@ func (r *EntRepository) AllRules(ctx context.Context) ([]ApprovalRuleData, error
 	result := make([]ApprovalRuleData, len(rules))
 	for i, rule := range rules {
 		result[i] = ApprovalRuleData{
-			ID:                  rule.RuleID,
-			Name:                rule.Name,
-			ToolName:            rule.ToolName,
-			ToolPattern:         rule.ToolPattern,
-			ToolCategory:        rule.ToolCategory,
-			CommandPattern:      rule.CommandPattern,
-			FilePattern:         rule.FilePattern,
-			CriteriaPrograms:    rule.CriteriaPrograms,
-			CriteriaSubcommands: rule.CriteriaSubcommands,
-			Decision:            rule.Decision,
-			RiskLevel:           rule.RiskLevel,
-			Reason:              rule.Reason,
-			Alternative:         rule.Alternative,
-			Priority:            rule.Priority,
-			Enabled:             rule.Enabled,
-			Source:              rule.Source,
-			CreatedAt:           rule.CreatedAt,
-			UpdatedAt:           rule.UpdatedAt,
+			ID:             rule.RuleID,
+			Name:           rule.Name,
+			ToolName:       rule.ToolName,
+			ToolPattern:    rule.ToolPattern,
+			ToolCategory:   rule.ToolCategory,
+			CommandPattern: rule.CommandPattern,
+			FilePattern:    rule.FilePattern,
+			Decision:       rule.Decision,
+			RiskLevel:      rule.RiskLevel,
+			Reason:         rule.Reason,
+			Alternative:    rule.Alternative,
+			Priority:       rule.Priority,
+			Enabled:        rule.Enabled,
+			Source:         rule.Source,
+			CreatedAt:      rule.CreatedAt,
+			UpdatedAt:      rule.UpdatedAt,
+
+			Programs:              rule.Programs,
+			Subcommands:           rule.Subcommands,
+			BlockedSubcommands:    rule.BlockedSubcommands,
+			RequiredFlags:         rule.RequiredFlags,
+			ForbiddenFlags:        rule.ForbiddenFlags,
+			RequiredFlagPrefixes:  rule.RequiredFlagPrefixes,
+			PythonModes:           rule.PythonModes,
+			SafePythonImportsOnly: rule.SafePythonImportsOnly,
 		}
 	}
 	return result, nil
 }
 
 func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) error {
+	programs := data.Programs
+	if programs == nil {
+		programs = []string{}
+	}
+	subcommands := data.Subcommands
+	if subcommands == nil {
+		subcommands = []string{}
+	}
+	blockedSubcommands := data.BlockedSubcommands
+	if blockedSubcommands == nil {
+		blockedSubcommands = []string{}
+	}
+	requiredFlags := data.RequiredFlags
+	if requiredFlags == nil {
+		requiredFlags = []string{}
+	}
+	forbiddenFlags := data.ForbiddenFlags
+	if forbiddenFlags == nil {
+		forbiddenFlags = []string{}
+	}
+	requiredFlagPrefixes := data.RequiredFlagPrefixes
+	if requiredFlagPrefixes == nil {
+		requiredFlagPrefixes = []string{}
+	}
+	pythonModes := data.PythonModes
+	if pythonModes == nil {
+		pythonModes = []string{}
+	}
 	return r.client.ApprovalRule.Create().
 		SetRuleID(data.ID).
 		SetName(data.Name).
@@ -1095,8 +1130,6 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetToolCategory(data.ToolCategory).
 		SetCommandPattern(data.CommandPattern).
 		SetFilePattern(data.FilePattern).
-		SetCriteriaPrograms(data.CriteriaPrograms).
-		SetCriteriaSubcommands(data.CriteriaSubcommands).
 		SetDecision(data.Decision).
 		SetRiskLevel(data.RiskLevel).
 		SetReason(data.Reason).
@@ -1104,6 +1137,14 @@ func (r *EntRepository) UpsertRule(ctx context.Context, data ApprovalRuleData) e
 		SetPriority(data.Priority).
 		SetEnabled(data.Enabled).
 		SetSource(data.Source).
+		SetPrograms(programs).
+		SetSubcommands(subcommands).
+		SetBlockedSubcommands(blockedSubcommands).
+		SetRequiredFlags(requiredFlags).
+		SetForbiddenFlags(forbiddenFlags).
+		SetRequiredFlagPrefixes(requiredFlagPrefixes).
+		SetPythonModes(pythonModes).
+		SetSafePythonImportsOnly(data.SafePythonImportsOnly).
 		OnConflictColumns(approvalrule.FieldRuleID).
 		UpdateNewValues().
 		Exec(ctx)

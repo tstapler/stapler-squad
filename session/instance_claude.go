@@ -441,6 +441,7 @@ func (i *Instance) SetClaudeSessionIDSavedCallback(fn func()) {
 	i.claudeSessionIDSavedCallback = fn
 }
 
+
 // SetHistoryInfo updates the conversation UUID and history file path.
 // Thread-safe: acquires stateMutex write lock.
 // No-op if the UUID is already set to the same value.
