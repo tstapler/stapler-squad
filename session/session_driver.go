@@ -413,12 +413,36 @@ func parseJSONField(output, field string) string {
 	if !strings.HasPrefix(rest, `"`) {
 		return ""
 	}
-	rest = rest[1:]
-	end := strings.Index(rest, `"`)
-	if end < 0 {
-		return ""
+	rest = rest[1:] // skip opening quote
+	var sb strings.Builder
+	escaped := false
+	for _, ch := range rest {
+		if escaped {
+			switch ch {
+			case '"':
+				sb.WriteRune('"')
+			case '\\':
+				sb.WriteRune('\\')
+			case 'n':
+				sb.WriteRune('\n')
+			case 't':
+				sb.WriteRune('\t')
+			case 'r':
+				sb.WriteRune('\r')
+			default:
+				sb.WriteRune('\\')
+				sb.WriteRune(ch)
+			}
+			escaped = false
+		} else if ch == '\\' {
+			escaped = true
+		} else if ch == '"' {
+			return sb.String()
+		} else {
+			sb.WriteRune(ch)
+		}
 	}
-	return rest[:end]
+	return "" // unterminated string
 }
 
 // parseClaudeSessionID extracts the "session_id" value from a JSON blob

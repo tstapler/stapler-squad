@@ -352,7 +352,10 @@ func (i *Instance) tryExtractConversationUUID() {
 }
 
 // GetConversationUUID returns the Claude conversation UUID, or "" if not linked.
+// Thread-safe: acquires stateMutex read lock.
 func (i *Instance) GetConversationUUID() string {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
 	if i.claudeSession == nil {
 		return ""
 	}
@@ -411,10 +414,15 @@ func (i *Instance) RunWithResume(ctx context.Context, message string) (string, e
 
 // SetClaudeConversationUUID stores the Claude conversation UUID so it is used
 // in subsequent --resume flags. Fires the claudeSessionIDSavedCallback if set.
+// No-op (including callback) if uuid is unchanged.
 func (i *Instance) SetClaudeConversationUUID(uuid string) {
 	i.stateMutex.Lock()
 	if i.claudeSession == nil {
 		i.claudeSession = &ClaudeSessionData{}
+	}
+	if i.claudeSession.ConversationUUID == uuid {
+		i.stateMutex.Unlock()
+		return // no change, skip callback
 	}
 	i.claudeSession.ConversationUUID = uuid
 	cb := i.claudeSessionIDSavedCallback
