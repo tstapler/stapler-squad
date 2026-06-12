@@ -234,6 +234,27 @@ func TestBug2_EscToCancel_NotActive(t *testing.T) {
 	}
 }
 
+// TestCRCollapse_LastSegmentSuccessIsAuthoritative verifies that when the LAST CR
+// segment produces StatusSuccess (e.g., the task manager writes a completion line
+// that overwrites "esc to interrupt"), Success wins — the session is done.
+//
+// This is the mirror of TestBug1_CRCollapse_EscToInterrupt_Preserved: there the
+// EARLIER segment was Active and the last was Ready.  Here the LAST segment is
+// Success, which must be authoritative even though an earlier segment was Active.
+func TestCRCollapse_LastSegmentSuccessIsAuthoritative(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// Last segment (✻ Baked for 5s) overwrites the active indicator — session is done.
+	crLine := "esc to interrupt · ↓ to manage  ● main\r✻ Baked for 5s"
+	got := sd.DetectFromLines([]string{crLine})
+	if got == StatusActive {
+		t.Errorf("DetectFromLines(%q) = StatusActive, want Success/other\n"+
+			"  The last CR segment (✻ Baked) is authoritative — session completed its turn.\n"+
+			"  An earlier Active segment must not override the later Success.",
+			crLine)
+	}
+}
+
 // TestMapStatusToIdleState_ExplicitCoverage verifies that all DetectedStatus values
 // are handled explicitly in mapStatusToIdleState (no silent fall-through to default).
 func TestMapStatusToIdleState_ExplicitCoverage(t *testing.T) {
@@ -252,6 +273,12 @@ func TestMapStatusToIdleState_ExplicitCoverage(t *testing.T) {
 		{StatusSuccess, []IdleState{IdleStateWaiting}, 0, true, "Success → IdleStateWaiting"},
 		{StatusNeedsApproval, []IdleState{IdleStateWaiting}, 0, true, "NeedsApproval → IdleStateWaiting"},
 		{StatusError, []IdleState{IdleStateWaiting}, 0, true, "Error → IdleStateWaiting"},
+		// Time-dependent: may return Timeout after idle threshold, so both are valid.
+		{StatusIdle, []IdleState{IdleStateWaiting, IdleStateTimeout}, 0, true, "Idle → IdleStateWaiting/Timeout"},
+		{StatusReady, []IdleState{IdleStateWaiting, IdleStateTimeout}, 0, true, "Ready → IdleStateWaiting/Timeout"},
+		// These fall to default — documenting the expected behavior explicitly.
+		{StatusTestsFailing, []IdleState{IdleStateWaiting}, 0, true, "TestsFailing → IdleStateWaiting (default)"},
+		{StatusUnknown, []IdleState{IdleStateWaiting}, 0, true, "Unknown → IdleStateWaiting (default)"},
 	}
 
 	for _, tc := range cases {
