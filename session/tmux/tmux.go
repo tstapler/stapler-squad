@@ -1674,17 +1674,6 @@ func (t *TmuxSession) RefreshClient() error {
 	return nil
 }
 
-// cmEnabled returns true when the CM command dispatch path should be attempted.
-func (t *TmuxSession) cmEnabled() bool {
-	if !cmCommandsEnabled.Load() {
-		return false
-	}
-	t.controlModeSubMu.RLock()
-	ch := t.normPriSendCh
-	t.controlModeSubMu.RUnlock()
-	return ch != nil
-}
-
 // cmEnabledForBackground returns true when CM is available AND the normal-priority
 // send queue has room. Background ops skip CM when the queue is backed up — they
 // fall back to subprocess so that the queue stays clear for high-priority user input.

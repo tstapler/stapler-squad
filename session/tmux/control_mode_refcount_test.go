@@ -1,6 +1,7 @@
 package tmux
 
 import (
+	"context"
 	"os/exec"
 	"sync"
 	"testing"
@@ -14,7 +15,9 @@ func newRefcountTestSession(t *testing.T) *TmuxSession {
 	t.Helper()
 	doneCh := make(chan struct{})
 	// Use a real already-exited process so Kill() on it is a harmless no-op.
-	fakeCmd := exec.Command("true")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	fakeCmd := exec.CommandContext(ctx, "true")
 	if err := fakeCmd.Start(); err != nil {
 		t.Skipf("cannot start 'true': %v", err)
 	}
