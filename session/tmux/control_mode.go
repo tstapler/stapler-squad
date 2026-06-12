@@ -96,6 +96,9 @@ func (t *TmuxSession) StartControlMode() error {
 
 	// Start the control mode process
 	if err := cmd.Start(); err != nil {
+		stdout.Close()
+		stdin.Close()
+		stderr.Close()
 		return fmt.Errorf("failed to start control mode for session '%s': %w", t.sanitizedName, err)
 	}
 	TrackChildPID(cmd.Process.Pid, "tmux control-mode session="+t.sanitizedName)
@@ -157,7 +160,8 @@ func (t *TmuxSession) StopControlMode() error {
 	t.intentionalStop.Store(true)
 
 	// Signal termination — close controlModeDone under a lock to prevent
-	// double-close panic if two goroutines race into StopControlMode() at refcount 0.
+	// a panic if readControlModeOutput's unilateral-exit path has already nilled
+	// this channel before we reach teardown.
 	t.controlModeSubMu.Lock()
 	if t.controlModeDone != nil {
 		close(t.controlModeDone)
@@ -177,8 +181,12 @@ func (t *TmuxSession) StopControlMode() error {
 	}
 
 	// Nil out send queues so cmEnabled() returns false immediately.
+	// Must be done under controlModeSubMu to prevent data races with
+	// SendInputViaControlMode and enqueueCMCommand which read these fields.
+	t.controlModeSubMu.Lock()
 	t.highPriSendCh = nil
 	t.normPriSendCh = nil
+	t.controlModeSubMu.Unlock()
 
 	// Close stdin to signal tmux to exit.
 	t.cmdSendMu.Lock()
@@ -213,15 +221,17 @@ func (t *TmuxSession) StopControlMode() error {
 		t.controlModeStdout = nil
 	}
 
-	// Close all subscriber channels
+	// Close all subscriber channels and nil the cmd/refcount under the same lock
+	// so that StartControlMode() cannot observe a stale non-nil cmd after teardown.
 	t.controlModeSubMu.Lock()
 	for id, ch := range t.controlModeSubscribers {
 		close(ch)
 		delete(t.controlModeSubscribers, id)
 	}
+	t.controlModeCmd = nil
+	t.controlModeRefCount = 0
 	t.controlModeSubMu.Unlock()
 
-	t.controlModeCmd = nil
 	return nil
 }
 
@@ -269,6 +279,8 @@ func (t *TmuxSession) readControlModeOutput() {
 
 	// Control mode process has exited. Close all subscriber channels and drain pending
 	// commands so that waiting goroutines detect end-of-stream and unblock.
+	// Also reset refcount and cmd so that a subsequent StartControlMode() can fork a
+	// fresh process instead of fast-returning against a dead (but non-nil) cmd (ARCH-1).
 	t.controlModeSubMu.Lock()
 	t.controlModeExited = true
 	for _, ch := range t.pendingCmds {
@@ -282,6 +294,9 @@ func (t *TmuxSession) readControlModeOutput() {
 		close(ch)
 		delete(t.controlModeSubscribers, id)
 	}
+	// Reset so that the next StartControlMode() call sees a clean slate.
+	t.controlModeRefCount = 0
+	t.controlModeCmd = nil
 	t.controlModeSubMu.Unlock()
 
 	// Scanner-EOF fallback: if the pipe closed without a %exit notification (e.g. the
@@ -432,6 +447,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		// path in readControlModeOutput() does the same drain, but there is a race
 		// window between %exit and EOF where runCMSender can append a new resultCh
 		// to pendingCmds after the EOF drain has already run, leaving it orphaned.
+		// Also reset refcount and cmd so that StartControlMode() can fork a fresh
+		// process after this unilateral exit (ARCH-1).
 		t.controlModeSubMu.Lock()
 		if !t.controlModeExited {
 			t.controlModeExited = true
@@ -446,6 +463,9 @@ func (t *TmuxSession) processControlModeLine(line string) {
 				close(ch)
 				delete(t.controlModeSubscribers, id)
 			}
+			// Reset so the next StartControlMode() call sees a clean slate.
+			t.controlModeRefCount = 0
+			t.controlModeCmd = nil
 		}
 		t.controlModeSubMu.Unlock()
 
@@ -557,7 +577,10 @@ func (t *TmuxSession) runCMSender(doneCh <-chan struct{}, stdin io.WriteCloser) 
 // Background operations (capture-pane, resize, display-message) use this path.
 // User input calls SendInputViaControlMode which enqueues directly to highPriSendCh.
 func (t *TmuxSession) sendCMCommand(ctx context.Context, args ...string) (string, error) {
-	return t.enqueueCMCommand(ctx, t.normPriSendCh, args...)
+	t.controlModeSubMu.RLock()
+	ch := t.normPriSendCh
+	t.controlModeSubMu.RUnlock()
+	return t.enqueueCMCommand(ctx, ch, args...)
 }
 
 // enqueueCMCommand is the shared implementation: builds the request, sends it to
@@ -693,7 +716,9 @@ func (t *TmuxSession) SendInputViaControlMode(ctx context.Context, data []byte) 
 	if len(data) == 0 {
 		return nil
 	}
+	t.controlModeSubMu.RLock()
 	ch := t.highPriSendCh
+	t.controlModeSubMu.RUnlock()
 	if ch == nil {
 		return ErrControlModeNotRunning
 	}

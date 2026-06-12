@@ -213,10 +213,17 @@ func (t *TmuxSession) GetSanitizedName() string {
 
 // ResetExitOnce resets the exit callback so it can fire again after a session restart.
 // Also clears intentionalStop so the next StopControlMode() correctly guards the callback.
+// Resets control mode refcount/cmd/exited so a stale dead process left by a prior crash
+// does not corrupt the next Start/Stop cycle.
 // Call this before reusing a TmuxSession object for a restarted session.
 func (t *TmuxSession) ResetExitOnce() {
 	t.onExitOnce = sync.Once{}
 	t.intentionalStop.Store(false)
+	t.controlModeSubMu.Lock()
+	t.controlModeRefCount = 0
+	t.controlModeCmd = nil
+	t.controlModeExited = false
+	t.controlModeSubMu.Unlock()
 }
 
 // IsServerDown returns true if the tmux server is not running for the given socket.
@@ -1669,14 +1676,26 @@ func (t *TmuxSession) RefreshClient() error {
 
 // cmEnabled returns true when the CM command dispatch path should be attempted.
 func (t *TmuxSession) cmEnabled() bool {
-	return cmCommandsEnabled.Load() && t.normPriSendCh != nil
+	if !cmCommandsEnabled.Load() {
+		return false
+	}
+	t.controlModeSubMu.RLock()
+	ch := t.normPriSendCh
+	t.controlModeSubMu.RUnlock()
+	return ch != nil
 }
 
 // cmEnabledForBackground returns true when CM is available AND the normal-priority
 // send queue has room. Background ops skip CM when the queue is backed up — they
 // fall back to subprocess so that the queue stays clear for high-priority user input.
 func (t *TmuxSession) cmEnabledForBackground() bool {
-	return t.cmEnabled() && len(t.normPriSendCh) == 0
+	if !cmCommandsEnabled.Load() {
+		return false
+	}
+	t.controlModeSubMu.RLock()
+	ch := t.normPriSendCh
+	t.controlModeSubMu.RUnlock()
+	return ch != nil && len(ch) == 0
 }
 
 // cmCtx returns a 3-second context for use with sendCMCommand.

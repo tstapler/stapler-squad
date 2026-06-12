@@ -9,12 +9,16 @@ import (
 
 // newRefcountTestSession builds a TmuxSession that looks like it has a running control mode
 // process (controlModeCmd set, channels allocated) so we can test refcount logic without
-// actually forking tmux. The fake cmd is a sentinel that will never be waited on.
+// actually forking tmux. The cmd is a real already-exited process so Kill() is a no-op.
 func newRefcountTestSession(t *testing.T) *TmuxSession {
 	t.Helper()
 	doneCh := make(chan struct{})
-	// Use a sentinel exec.Cmd so controlModeCmd != nil. We never call cmd.Start() or Wait().
-	fakeCmd := &exec.Cmd{}
+	// Use a real already-exited process so Kill() on it is a harmless no-op.
+	fakeCmd := exec.Command("true")
+	if err := fakeCmd.Start(); err != nil {
+		t.Skipf("cannot start 'true': %v", err)
+	}
+	_ = fakeCmd.Wait() // already dead; Kill() on dead process is a no-op
 	sess := &TmuxSession{
 		sanitizedName:          "refcount_test",
 		controlModeCmd:         fakeCmd,
@@ -100,47 +104,45 @@ func TestRefcount_StopWithActiveClientsDoesNotKillProcess(t *testing.T) {
 	}
 }
 
-// TestRefcount_LastStopActuallyTearesDown verifies that when refcount reaches 0,
-// StopControlMode closes controlModeDone and nils controlModeCmd.
-func TestRefcount_LastStopActuallyTearesDown(t *testing.T) {
+// TestRefcount_LastStopActuallyTearsDown verifies that when refcount reaches 0,
+// StopControlMode closes controlModeDone, nils controlModeCmd, and zeroes the refcount.
+func TestRefcount_LastStopActuallyTearsDown(t *testing.T) {
 	sess := newRefcountTestSession(t)
 	doneCh := sess.controlModeDone
 
-	// Simulate teardown path: we can't call real StopControlMode on a fake cmd
-	// (it would try to kill a nil process), so we validate the refcount logic inline
-	// by checking what happens when refcount reaches 0 via the explicit decrement path.
-
-	// Manually decrement to 0 and check that the guard passes.
-	sess.controlModeSubMu.Lock()
-	sess.controlModeRefCount = 1
-	sess.controlModeRefCount--
-	remaining := sess.controlModeRefCount
-	if sess.controlModeDone != nil {
-		close(sess.controlModeDone)
-		sess.controlModeDone = nil
+	if err := sess.StopControlMode(); err != nil {
+		t.Fatalf("final StopControlMode returned error: %v", err)
 	}
-	sess.controlModeSubMu.Unlock()
 
-	if remaining != 0 {
-		t.Errorf("remaining after final decrement = %d, want 0", remaining)
+	sess.controlModeSubMu.RLock()
+	count := sess.controlModeRefCount
+	cmd := sess.controlModeCmd
+	sess.controlModeSubMu.RUnlock()
+
+	if count != 0 {
+		t.Errorf("refcount after final Stop = %d, want 0", count)
+	}
+	if cmd != nil {
+		t.Error("final StopControlMode did not nil controlModeCmd")
 	}
 	select {
 	case <-doneCh:
-		// Expected: channel was closed.
 	case <-time.After(100 * time.Millisecond):
-		t.Error("controlModeDone was not closed after final Stop")
+		t.Error("controlModeDone not closed after final Stop")
 	}
 }
 
 // TestRefcount_UnderflowIsSafe verifies that calling StopControlMode when refcount is
 // already 0 does not panic or underflow to a negative number.
 func TestRefcount_UnderflowIsSafe(t *testing.T) {
-	sess := &TmuxSession{
-		sanitizedName:          "underflow_test",
-		controlModeSubscribers: make(map[string]chan []byte),
-	}
+	sess := newRefcountTestSession(t)
+	// Manually set refcount=0 and cmd=nil to exercise the actual underflow guard
+	// (not the early-return path that fires when controlModeCmd is nil).
+	sess.controlModeSubMu.Lock()
+	sess.controlModeRefCount = 0
+	sess.controlModeCmd = nil
+	sess.controlModeSubMu.Unlock()
 
-	// refcount starts at 0; Stop should be a no-op (controlModeCmd is nil).
 	if err := sess.StopControlMode(); err != nil {
 		t.Fatalf("StopControlMode with refcount=0 returned error: %v", err)
 	}
@@ -149,9 +151,9 @@ func TestRefcount_UnderflowIsSafe(t *testing.T) {
 	count := sess.controlModeRefCount
 	sess.controlModeSubMu.RUnlock()
 
-	// Count must not go negative.
-	if count < 0 {
-		t.Errorf("refcount underflowed to %d", count)
+	// Count must not go negative — the guard should prevent the decrement.
+	if count != 0 {
+		t.Errorf("refcount after underflow Stop = %d, want exactly 0 (guard should prevent decrement)", count)
 	}
 }
 
@@ -194,6 +196,31 @@ func TestRefcount_ConcurrentStartsAreIdempotent(t *testing.T) {
 	}
 }
 
+// TestRefcount_ConcurrentStartStopAtBoundary races a Stop against a Start at the 1→0→1
+// boundary and verifies the refcount never goes negative.
+func TestRefcount_ConcurrentStartStopAtBoundary(t *testing.T) {
+	sess := newRefcountTestSession(t)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = sess.StopControlMode()
+	}()
+	go func() {
+		defer wg.Done()
+		_ = sess.StartControlMode()
+	}()
+	wg.Wait()
+
+	sess.controlModeSubMu.RLock()
+	count := sess.controlModeRefCount
+	sess.controlModeSubMu.RUnlock()
+	if count < 0 {
+		t.Errorf("refcount went negative: %d", count)
+	}
+}
+
 // TestBroadcast_NoSendOnClosedPanic verifies that broadcastControlModeUpdate does not
 // panic when UnsubscribeFromControlModeUpdates closes a channel concurrently.
 // This is a regression test for the RACE #7 (send-on-closed-channel) fix.
@@ -225,6 +252,19 @@ func TestBroadcast_NoSendOnClosedPanic(t *testing.T) {
 		sess.UnsubscribeFromControlModeUpdates(id2)
 	}()
 	wg.Wait()
+
+	// Post-condition: subscriber 1 should still be registered; subscriber 2 should be gone.
+	sess.controlModeSubMu.RLock()
+	_, id1Exists := sess.controlModeSubscribers[id1]
+	_, id2Exists := sess.controlModeSubscribers[id2]
+	sess.controlModeSubMu.RUnlock()
+
+	if !id1Exists {
+		t.Error("subscriber 1 was incorrectly removed during concurrent broadcast")
+	}
+	if id2Exists {
+		t.Error("subscriber 2 was not removed by UnsubscribeFromControlModeUpdates")
+	}
 
 	// Clean up client 1.
 	sess.UnsubscribeFromControlModeUpdates(id1)
