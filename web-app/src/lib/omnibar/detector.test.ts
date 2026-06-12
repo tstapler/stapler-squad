@@ -93,4 +93,14 @@ describe("Detector", () => {
       expect(result.type).toBe(InputType.SessionSearch);
     });
   });
+
+  describe("default registry @-prefix fallthrough", () => {
+    it("should_returnSessionSearch_When_atPrefixedInputAndNoWorkflowDetectorRegistered", () => {
+      // WorkflowDetector is NOT in the default registry; @-prefixed input should
+      // fall through to SessionSearch (the catch-all), never resolve to Workflow.
+      const result = registry.detect("@daily-standup");
+      expect(result.type).not.toBe(InputType.Workflow);
+      expect(result.type).toBe(InputType.SessionSearch);
+    });
+  });
 });

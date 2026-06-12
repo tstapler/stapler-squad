@@ -17,6 +17,8 @@ func TestValidateWorkflowSlug(t *testing.T) {
 		{name: "valid with numbers", slug: "daily-standup-v2", wantErr: false},
 		{name: "valid min length", slug: "ab", wantErr: false},
 		{name: "valid max length", slug: "abcdefghijklmnopqrstuvwxyz01234567890123456789012345678901234", wantErr: false},
+		{name: "valid exactly 64 chars", slug: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: false},
+		{name: "invalid 65 chars", slug: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", wantErr: true},
 		// Invalid cases
 		{name: "empty", slug: "", wantErr: true},
 		{name: "too short single char", slug: "a", wantErr: true},

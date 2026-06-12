@@ -12,6 +12,7 @@ export function WorkflowsPanel() {
   const { workflows, loading, error, createWorkflow, updateWorkflow, deleteWorkflow } = useWorkflows();
   const [showForm, setShowForm] = useState(false);
   const [editTarget, setEditTarget] = useState<WorkflowProto | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   function openCreate() {
     setEditTarget(null);
@@ -37,9 +38,18 @@ export function WorkflowsPanel() {
     closeForm();
   }
 
-  async function handleDelete(wf: WorkflowProto) {
-    if (!confirm(`Delete workflow "${wf.name}"? This cannot be undone.`)) return;
-    await deleteWorkflow(wf.id);
+  function handleDeleteClick(wf: WorkflowProto) {
+    setConfirmDeleteId(wf.id);
+  }
+
+  async function handleDeleteConfirm() {
+    if (!confirmDeleteId) return;
+    await deleteWorkflow(confirmDeleteId);
+    setConfirmDeleteId(null);
+  }
+
+  function handleDeleteCancel() {
+    setConfirmDeleteId(null);
   }
 
   const formModal = showForm
@@ -120,17 +130,31 @@ export function WorkflowsPanel() {
                     )}
                   </td>
                   <td className={styles.td}>
-                    <div className={styles.actions}>
-                      <button className={styles.editButton} onClick={() => openEdit(wf)}>
-                        Edit
-                      </button>
-                      <button
-                        className={styles.deleteButton}
-                        onClick={() => handleDelete(wf)}
-                      >
-                        Delete
-                      </button>
-                    </div>
+                    {confirmDeleteId === wf.id ? (
+                      <div className={styles.actions}>
+                        <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                          Delete &quot;{wf.name}&quot;?
+                        </span>
+                        <button className={styles.deleteButton} onClick={() => void handleDeleteConfirm()}>
+                          Yes, delete
+                        </button>
+                        <button className={styles.editButton} onClick={handleDeleteCancel}>
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className={styles.actions}>
+                        <button className={styles.editButton} onClick={() => openEdit(wf)}>
+                          Edit
+                        </button>
+                        <button
+                          className={styles.deleteButton}
+                          onClick={() => handleDeleteClick(wf)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

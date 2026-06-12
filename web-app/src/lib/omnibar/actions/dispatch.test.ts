@@ -179,6 +179,22 @@ describe("dispatchOmnibarAction", () => {
       expect(deps.runWorkflow).toHaveBeenCalledWith("my-workflow", "some arg");
     });
 
+    it("dispatchOmnibarAction_should_callAnalyticsTrack_When_runWorkflowAction", () => {
+      const deps = makeDeps();
+      deps.runWorkflow = jest.fn();
+      deps.analytics = { track: jest.fn() };
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "daily-standup",
+        workflowArg: "",
+        label: "Daily Standup",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.analytics.track).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "omnibar.run_workflow", labels: expect.objectContaining({ slug: "daily-standup" }) })
+      );
+    });
+
     it("dispatchOmnibarAction_should_callClose_When_runWorkflowAction", () => {
       const deps = makeDeps();
       deps.runWorkflow = jest.fn();

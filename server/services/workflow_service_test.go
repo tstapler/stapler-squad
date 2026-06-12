@@ -11,7 +11,31 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/ent"
 )
+
+// mockScheduler is a test double for WorkflowSchedulerInterface.
+type mockScheduler struct {
+	reloadCalled  bool
+	removeCalled  bool
+	fireNowCalled bool
+	reloadErr     error
+}
+
+func (m *mockScheduler) Reload(_ context.Context, _ *ent.Workflow) error {
+	m.reloadCalled = true
+	return m.reloadErr
+}
+
+func (m *mockScheduler) Remove(_ string) error {
+	m.removeCalled = true
+	return nil
+}
+
+func (m *mockScheduler) FireNow(_ context.Context, _ *ent.Workflow, _ string) (string, error) {
+	m.fireNowCalled = true
+	return "test-session-id", nil
+}
 
 // createTestEntClient opens an in-process SQLite database with full migrations.
 func createTestEntClient(t *testing.T) *session.EntRepository {
@@ -182,10 +206,138 @@ func TestCreateWorkflow_MissingCommand(t *testing.T) {
 
 // TestSessionService_DelegatesListWorkflows verifies the delegation from SessionService.
 func TestSessionService_DelegatesListWorkflows(t *testing.T) {
-	sessSvc, _ := createTestWorkflowService(t)
+	sessSvc, workflowSvc := createTestWorkflowService(t)
 	ctx := context.Background()
+
+	// Create a workflow first so the list is non-empty.
+	_, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "delegate-wf",
+		Name:            "Delegate Workflow",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
 
 	resp, err := sessSvc.ListWorkflows(ctx, connect.NewRequest(&sessionv1.ListWorkflowsRequest{}))
 	require.NoError(t, err)
-	assert.NotNil(t, resp.Msg.Workflows)
+	assert.Len(t, resp.Msg.Workflows, 1)
+}
+
+// TestCreateWorkflow_WithCronEnabled_CallsReload verifies that creating a cron-enabled
+// workflow invokes Reload on the scheduler.
+func TestCreateWorkflow_WithCronEnabled_CallsReload(t *testing.T) {
+	_, workflowSvc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	mock := &mockScheduler{}
+	workflowSvc.scheduler = mock
+
+	_, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "cron-wf",
+		Name:            "Cron Workflow",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+		CronExpression:  "0 9 * * 1",
+		CronEnabled:     true,
+	}))
+	require.NoError(t, err)
+	assert.True(t, mock.reloadCalled, "Reload should have been called after cron-enabled create")
+}
+
+// TestDeleteWorkflow_CallsSchedulerRemove verifies that deleting a workflow
+// invokes Remove on the scheduler.
+func TestDeleteWorkflow_CallsSchedulerRemove(t *testing.T) {
+	_, workflowSvc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	mock := &mockScheduler{}
+	workflowSvc.scheduler = mock
+
+	createResp, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "remove-me",
+		Name:            "Remove Me",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	_, err = workflowSvc.DeleteWorkflow(ctx, connect.NewRequest(&sessionv1.DeleteWorkflowRequest{Id: id}))
+	require.NoError(t, err)
+	assert.True(t, mock.removeCalled, "Remove should have been called after delete")
+}
+
+// TestRunWorkflow_HappyPath verifies that RunWorkflow returns the session ID from FireNow.
+func TestRunWorkflow_HappyPath(t *testing.T) {
+	_, workflowSvc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	mock := &mockScheduler{}
+	workflowSvc.scheduler = mock
+
+	createResp, err := workflowSvc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "run-me",
+		Name:            "Run Me",
+		Command:         "cmd",
+		TargetDirectory: "/tmp/test",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	runResp, err := workflowSvc.RunWorkflow(ctx, connect.NewRequest(&sessionv1.RunWorkflowRequest{
+		Id:  id,
+		Arg: "some-arg",
+	}))
+	require.NoError(t, err)
+	assert.Equal(t, "test-session-id", runResp.Msg.SessionId)
+	assert.True(t, mock.fireNowCalled, "FireNow should have been called")
+}
+
+// TestRunWorkflow_NotFound verifies that RunWorkflow returns CodeNotFound for unknown IDs.
+func TestRunWorkflow_NotFound(t *testing.T) {
+	_, workflowSvc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	mock := &mockScheduler{}
+	workflowSvc.scheduler = mock
+
+	_, err := workflowSvc.RunWorkflow(ctx, connect.NewRequest(&sessionv1.RunWorkflowRequest{
+		Id:  "00000000-0000-0000-0000-000000000000",
+		Arg: "",
+	}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeNotFound, connect.CodeOf(err))
+}
+
+// TestUpdateWorkflow_MultipleFields verifies that multiple fields can be updated
+// simultaneously and that unaffected fields remain unchanged.
+func TestUpdateWorkflow_MultipleFields(t *testing.T) {
+	_, svc := createTestWorkflowService(t)
+	ctx := context.Background()
+
+	createResp, err := svc.CreateWorkflow(ctx, connect.NewRequest(&sessionv1.CreateWorkflowRequest{
+		Slug:            "multi-update",
+		Name:            "Original Name",
+		Command:         "original-cmd",
+		TargetDirectory: "/tmp/original",
+		Description:     "original desc",
+	}))
+	require.NoError(t, err)
+	id := createResp.Msg.Workflow.Id
+
+	updateResp, err := svc.UpdateWorkflow(ctx, connect.NewRequest(&sessionv1.UpdateWorkflowRequest{
+		Id:              id,
+		Name:            proto.String("Updated Name"),
+		Command:         proto.String("new-cmd"),
+		TargetDirectory: proto.String("/tmp/new"),
+	}))
+	require.NoError(t, err)
+
+	updated := updateResp.Msg.Workflow
+	assert.Equal(t, "Updated Name", updated.Name)
+	assert.Equal(t, "new-cmd", updated.Command)
+	assert.Equal(t, "/tmp/new", updated.TargetDirectory)
+	// Unchanged fields should retain original values.
+	assert.Equal(t, "multi-update", updated.Slug)
+	assert.Equal(t, "original desc", updated.Description)
 }

@@ -125,12 +125,18 @@ export function useWorkflows(): UseWorkflowsReturn {
   const deleteWorkflow = useCallback(
     async (id: string) => {
       if (!clientRef.current) return;
-      // Optimistic update.
-      setWorkflows((prev) => prev.filter((w) => w.id !== id));
-      const req = create(DeleteWorkflowRequestSchema, { id });
-      await clientRef.current.deleteWorkflow(req);
+      // Snapshot before optimistic update for rollback.
+      const prev = workflows;
+      setWorkflows((w) => w.filter((wf) => wf.id !== id));
+      try {
+        const req = create(DeleteWorkflowRequestSchema, { id });
+        await clientRef.current.deleteWorkflow(req);
+      } catch (err) {
+        setWorkflows(prev); // rollback on failure
+        throw err;
+      }
     },
-    []
+    [workflows]
   );
 
   return { workflows, loading, error, createWorkflow, updateWorkflow, deleteWorkflow, refresh };

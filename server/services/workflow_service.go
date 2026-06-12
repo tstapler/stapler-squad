@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/server/workflows"
@@ -55,6 +57,17 @@ func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
 	}
 }
 
+// validateTargetDirectory checks that dir is an absolute path with no traversal components.
+func validateTargetDirectory(dir string) error {
+	if !filepath.IsAbs(dir) {
+		return errors.New("target_directory must be an absolute path")
+	}
+	if filepath.Clean(dir) != dir {
+		return errors.New("target_directory contains path traversal components")
+	}
+	return nil
+}
+
 // CreateWorkflow handles the CreateWorkflow RPC.
 func (s *WorkflowService) CreateWorkflow(
 	ctx context.Context,
@@ -75,7 +88,14 @@ func (s *WorkflowService) CreateWorkflow(
 	if req.Msg.TargetDirectory == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("target_directory is required"))
 	}
-	// Validate cron expression if provided.
+	if err := validateTargetDirectory(req.Msg.TargetDirectory); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	// Validate cron fields.
+	if req.Msg.CronEnabled && req.Msg.CronExpression == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("cron_expression is required when cron_enabled is true"))
+	}
 	if req.Msg.CronExpression != "" {
 		if err := workflows.ValidateCronExpression(req.Msg.CronExpression); err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid cron expression: %w", err))
@@ -96,7 +116,7 @@ func (s *WorkflowService) CreateWorkflow(
 		CronEnabled:     req.Msg.CronEnabled,
 	})
 	if err != nil {
-		if ent.IsConstraintError(err) {
+		if errors.Is(err, session.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
 				fmt.Errorf("workflow with slug %q already exists", req.Msg.Slug))
 		}
@@ -106,8 +126,9 @@ func (s *WorkflowService) CreateWorkflow(
 	// Register cron if enabled.
 	if req.Msg.CronEnabled && s.scheduler != nil {
 		if reloadErr := s.scheduler.Reload(ctx, wf); reloadErr != nil {
-			// Non-fatal: log and continue; the workflow was persisted successfully.
-			_ = reloadErr
+			log.Warn("[WorkflowService] cron schedule registration failed after create",
+				"slug", wf.Slug, "err", reloadErr)
+			// Workflow persisted; cron will retry on next server start via Start().
 		}
 	}
 
@@ -130,7 +151,19 @@ func (s *WorkflowService) UpdateWorkflow(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid workflow id: %w", err))
 	}
 
-	// Validate cron expression if being updated.
+	// Validate target_directory if being updated.
+	if req.Msg.TargetDirectory != nil {
+		if err := validateTargetDirectory(*req.Msg.TargetDirectory); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		}
+	}
+	// Validate cron fields if being updated.
+	// If cron_enabled is being set true while cron_expression is being set to empty, reject.
+	if req.Msg.CronEnabled != nil && *req.Msg.CronEnabled &&
+		req.Msg.CronExpression != nil && *req.Msg.CronExpression == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("cron_expression is required when cron_enabled is true"))
+	}
 	if req.Msg.CronExpression != nil && *req.Msg.CronExpression != "" {
 		if err := workflows.ValidateCronExpression(*req.Msg.CronExpression); err != nil {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid cron expression: %w", err))
@@ -152,7 +185,7 @@ func (s *WorkflowService) UpdateWorkflow(
 
 	wf, err := s.repo.Update(ctx, id, update)
 	if err != nil {
-		if ent.IsNotFound(err) {
+		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("update workflow: %w", err))
@@ -161,7 +194,9 @@ func (s *WorkflowService) UpdateWorkflow(
 	// Reload cron entry (will add or remove based on cron_enabled).
 	if s.scheduler != nil {
 		if reloadErr := s.scheduler.Reload(ctx, wf); reloadErr != nil {
-			_ = reloadErr
+			log.Warn("[WorkflowService] cron schedule registration failed after update",
+				"slug", wf.Slug, "err", reloadErr)
+			// Workflow persisted; cron will retry on next server start via Start().
 		}
 	}
 
@@ -185,7 +220,7 @@ func (s *WorkflowService) DeleteWorkflow(
 	}
 
 	if err := s.repo.Delete(ctx, id); err != nil {
-		if ent.IsNotFound(err) {
+		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete workflow: %w", err))
@@ -245,7 +280,7 @@ func (s *WorkflowService) RunWorkflow(
 
 	wf, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		if ent.IsNotFound(err) {
+		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("workflow %s not found", req.Msg.Id))
 		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("get workflow: %w", err))

@@ -80,9 +80,13 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 // Stop halts the cron engine. Called as a shutdown hook.
 func (s *Scheduler) Stop() {
-	ctx := s.c.Stop()
-	<-ctx.Done()
-	log.Info("[WorkflowScheduler] stopped")
+	stopCtx := s.c.Stop()
+	select {
+	case <-stopCtx.Done():
+		log.Info("[WorkflowScheduler] stopped cleanly")
+	case <-time.After(8 * time.Second):
+		log.Warn("[WorkflowScheduler] stop timed out — in-flight cron jobs may have leaked")
+	}
 }
 
 // Reload registers or re-registers a workflow's cron job.
@@ -137,7 +141,7 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 	}
 
 	title := fmt.Sprintf("%s — %s", wf.Name, time.Now().Format("2006-01-02 15:04"))
-	oneOff := wf.SessionType == "one_off"
+	oneOff := wf.SessionType == session.SessionTypeOneOff
 
 	req := connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:         title,
@@ -168,7 +172,8 @@ func (s *Scheduler) addCronEntry(wf *ent.Workflow) error {
 
 	wfCopy := wf // capture for closure
 	entryID, err := s.c.AddFunc(wf.CronExpression, func() {
-		ctx := context.Background()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
 		if _, fireErr := s.FireNow(ctx, wfCopy, ""); fireErr != nil {
 			log.Error("[WorkflowScheduler] cron job failed", "slug", wfCopy.Slug, "err", fireErr)
 		}
