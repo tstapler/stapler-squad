@@ -793,11 +793,24 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 				if s == StatusUnknown {
 					continue
 				}
-				if s != StatusReady {
+				if s == StatusReady {
+					if bestSoFar == StatusUnknown {
+						bestSoFar = StatusReady
+					}
+					continue
+				}
+				// The last segment is always authoritative.
+				// Earlier segments: only promote high-urgency statuses (Active, NeedsApproval,
+				// InputRequired, Error) — these represent session states that can be visually
+				// hidden by a TUI overlay writing via \r but still indicate the session needs
+				// attention.  Low-urgency statuses (Success, Processing, Idle) in earlier
+				// segments were overwritten and should not override the visual display.
+				if j == len(segs)-1 || s == StatusActive || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
 					return s
 				}
+				// Low-urgency earlier segment: record as candidate but keep scanning.
 				if bestSoFar == StatusUnknown {
-					bestSoFar = StatusReady
+					bestSoFar = s
 				}
 			}
 			continue // all segments of this CR line handled above
@@ -845,11 +858,25 @@ func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedSt
 				if s == StatusUnknown {
 					continue
 				}
-				if s != StatusReady {
+				if s == StatusReady {
+					if bestStatus == StatusUnknown {
+						bestStatus = StatusReady
+						bestDesc = desc
+					}
+					continue
+				}
+				// The last segment is always authoritative.
+				// Earlier segments: only promote high-urgency statuses (Active, NeedsApproval,
+				// InputRequired, Error) — these represent session states that can be visually
+				// hidden by a TUI overlay writing via \r but still indicate the session needs
+				// attention.  Low-urgency statuses (Success, Processing, Idle) in earlier
+				// segments were overwritten and should not override the visual display.
+				if j == len(segs)-1 || s == StatusActive || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
 					return s, desc
 				}
+				// Low-urgency earlier segment: record as candidate but keep scanning.
 				if bestStatus == StatusUnknown {
-					bestStatus = StatusReady
+					bestStatus = s
 					bestDesc = desc
 				}
 			}

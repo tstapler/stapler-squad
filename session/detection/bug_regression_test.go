@@ -41,14 +41,10 @@ func TestBug1_IndentedSpinner_NoRegression(t *testing.T) {
 		name  string
 		input string
 	}{
-		// lowercase verb — spinners always have capitalized verb
-		{"lowercase verb", "  ✽ roosting…"},
-		// no ellipsis — real spinners always end with … or ...
-		{"no ellipsis", "  ✽ Roosting"},
-		// bullet point in markdown — not a spinner
-		{"markdown bullet", "  * Item one"},
-		// middle dot in timing info — not a spinner
-		{"timing separator", "(8m 39s · ↓ 834 tokens)"},
+		{"lowercase verb", "  ✽ roosting…"},         // rejected by [A-Z] (requires capital first letter)
+		{"no ellipsis", "  ✽ Roosting"},             // rejected by (?:…|\.{1,3}) (requires trailing ellipsis)
+		{"markdown bullet", "  * Item one"},          // rejected by (?:…|\.{1,3}) (no ellipsis after "one")
+		{"timing separator", "(8m 39s · ↓ 834 tokens)"}, // · not at start of meaningful pattern; no [A-Z]verb… follows
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -244,17 +240,18 @@ func TestMapStatusToIdleState_ExplicitCoverage(t *testing.T) {
 	id := NewIdleDetector("test", nil)
 
 	cases := []struct {
-		status   DetectedStatus
-		wantAny  []IdleState // any of these is acceptable
-		mustNot  IdleState   // must not be this (use -1 to skip)
-		name     string
+		status      DetectedStatus
+		wantAny     []IdleState // any of these is acceptable
+		mustNot     IdleState   // must not be this (ignored when skipMustNot is true)
+		skipMustNot bool
+		name        string
 	}{
-		{StatusActive, []IdleState{IdleStateActive}, IdleStateWaiting, "Active → IdleStateActive"},
-		{StatusProcessing, []IdleState{IdleStateActive}, IdleStateWaiting, "Processing → IdleStateActive"},
-		{StatusInputRequired, []IdleState{IdleStateWaiting}, -1, "InputRequired → IdleStateWaiting"},
-		{StatusSuccess, []IdleState{IdleStateWaiting}, -1, "Success → IdleStateWaiting"},
-		{StatusNeedsApproval, []IdleState{IdleStateWaiting}, -1, "NeedsApproval → IdleStateWaiting"},
-		{StatusError, []IdleState{IdleStateWaiting}, -1, "Error → IdleStateWaiting"},
+		{StatusActive, []IdleState{IdleStateActive}, IdleStateWaiting, false, "Active → IdleStateActive"},
+		{StatusProcessing, []IdleState{IdleStateActive}, IdleStateWaiting, false, "Processing → IdleStateActive"},
+		{StatusInputRequired, []IdleState{IdleStateWaiting}, 0, true, "InputRequired → IdleStateWaiting"},
+		{StatusSuccess, []IdleState{IdleStateWaiting}, 0, true, "Success → IdleStateWaiting"},
+		{StatusNeedsApproval, []IdleState{IdleStateWaiting}, 0, true, "NeedsApproval → IdleStateWaiting"},
+		{StatusError, []IdleState{IdleStateWaiting}, 0, true, "Error → IdleStateWaiting"},
 	}
 
 	for _, tc := range cases {
@@ -270,8 +267,8 @@ func TestMapStatusToIdleState_ExplicitCoverage(t *testing.T) {
 			if !found {
 				t.Errorf("mapStatusToIdleState(%s) = %s, want one of %v", tc.status, got, tc.wantAny)
 			}
-			if IdleState(tc.mustNot) != IdleState(-1) && got == IdleState(tc.mustNot) {
-				t.Errorf("mapStatusToIdleState(%s) = %s, must NOT be %s", tc.status, got, IdleState(tc.mustNot))
+			if !tc.skipMustNot && got == tc.mustNot {
+				t.Errorf("mapStatusToIdleState(%s) = %s, must NOT be %s", tc.status, got, tc.mustNot)
 			}
 		})
 	}
