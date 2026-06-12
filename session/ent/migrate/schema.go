@@ -72,13 +72,13 @@ var (
 		{Name: "source", Type: field.TypeString, Default: "user"},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
-		{Name: "programs", Type: field.TypeJSON},
-		{Name: "subcommands", Type: field.TypeJSON},
-		{Name: "blocked_subcommands", Type: field.TypeJSON},
-		{Name: "required_flags", Type: field.TypeJSON},
-		{Name: "forbidden_flags", Type: field.TypeJSON},
-		{Name: "required_flag_prefixes", Type: field.TypeJSON},
-		{Name: "python_modes", Type: field.TypeJSON},
+		{Name: "programs", Type: field.TypeJSON, Nullable: true},
+		{Name: "subcommands", Type: field.TypeJSON, Nullable: true},
+		{Name: "blocked_subcommands", Type: field.TypeJSON, Nullable: true},
+		{Name: "required_flags", Type: field.TypeJSON, Nullable: true},
+		{Name: "forbidden_flags", Type: field.TypeJSON, Nullable: true},
+		{Name: "required_flag_prefixes", Type: field.TypeJSON, Nullable: true},
+		{Name: "python_modes", Type: field.TypeJSON, Nullable: true},
 		{Name: "safe_python_imports_only", Type: field.TypeBool, Default: false},
 	}
 	// ApprovalRulesTable holds the schema information for the "approval_rules" table.
@@ -746,6 +746,46 @@ var (
 			},
 		},
 	}
+	// WorkflowsColumns holds the columns for the "workflows" table.
+	WorkflowsColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeUUID},
+		{Name: "slug", Type: field.TypeString, Unique: true},
+		{Name: "name", Type: field.TypeString},
+		{Name: "description", Type: field.TypeString, Nullable: true},
+		{Name: "command", Type: field.TypeString},
+		{Name: "target_directory", Type: field.TypeString, Nullable: true},
+		{Name: "input_template", Type: field.TypeString, Nullable: true},
+		{Name: "session_type", Type: field.TypeString, Nullable: true, Default: "directory"},
+		{Name: "model", Type: field.TypeString, Nullable: true},
+		{Name: "agent_type", Type: field.TypeString, Nullable: true},
+		{Name: "cron_expression", Type: field.TypeString, Nullable: true},
+		{Name: "cron_enabled", Type: field.TypeBool, Default: false},
+		{Name: "created_at", Type: field.TypeTime},
+		{Name: "updated_at", Type: field.TypeTime},
+	}
+	// WorkflowsTable holds the schema information for the "workflows" table.
+	WorkflowsTable = &schema.Table{
+		Name:       "workflows",
+		Columns:    WorkflowsColumns,
+		PrimaryKey: []*schema.Column{WorkflowsColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "workflow_slug",
+				Unique:  false,
+				Columns: []*schema.Column{WorkflowsColumns[1]},
+			},
+			{
+				Name:    "workflow_cron_enabled",
+				Unique:  false,
+				Columns: []*schema.Column{WorkflowsColumns[11]},
+			},
+			{
+				Name:    "workflow_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{WorkflowsColumns[12]},
+			},
+		},
+	}
 	// WorktreesColumns holds the columns for the "worktrees" table.
 	WorktreesColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt, Increment: true},
@@ -841,6 +881,7 @@ var (
 		ShellsTable,
 		SourceSyncEventsTable,
 		TagsTable,
+		WorkflowsTable,
 		WorktreesTable,
 		BacklogItemSessionsTable,
 		SessionTagsTable,

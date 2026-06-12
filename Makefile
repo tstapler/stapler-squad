@@ -46,7 +46,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux vet-architecture vet-rpc-markers coverage-integration
+.PHONY: help build test benchmark install-tools lint lint-custom analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux vet-architecture vet-rpc-markers coverage-integration
 
 # Default target
 help: ## Show this help message
@@ -254,7 +254,26 @@ clean-tmux: ## Remove the built tmux binary and submodule build artifacts
 	@rm -f session/tmux/embed/tmux
 	@echo "✅ tmux artifacts cleaned"
 
-install-service: build ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
+backup-binary: ## Snapshot the current binary to stapler-squad.prev before a new build (called by install-service)
+	@if [ -f ./stapler-squad ]; then \
+		cp -f ./stapler-squad ./stapler-squad.prev; \
+		echo "==> Saved current binary to ./stapler-squad.prev"; \
+	fi
+
+install-service: backup-binary build ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
+ifeq ($(UNAME_S),Darwin)
+	@$(MAKE) _codesign-binary
+endif
+	@STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
+
+rollback: ## Restore the previous build (stapler-squad.prev) and restart the service
+	@if [ ! -f ./stapler-squad.prev ]; then \
+		echo "✗ No previous build found (./stapler-squad.prev does not exist)"; \
+		exit 1; \
+	fi
+	@echo "==> Restoring previous build..."
+	@cp -f ./stapler-squad.prev ./stapler-squad
+	@echo "✓ Binary restored from stapler-squad.prev"
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
 endif

@@ -180,6 +180,14 @@ func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 		// Waiting for approval - consider this as waiting
 		return IdleStateWaiting
 
+	case StatusInputRequired:
+		// Explicit user prompt (numbered selection, question) - waiting for input
+		return IdleStateWaiting
+
+	case StatusSuccess:
+		// Task completed — session is waiting for next instruction
+		return IdleStateWaiting
+
 	case StatusError:
 		// Error state - consider as waiting (needs user attention)
 		return IdleStateWaiting

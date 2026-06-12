@@ -212,4 +212,62 @@ describe("dispatchOmnibarAction", () => {
       expect(deps.close).toHaveBeenCalled();
     });
   });
+
+  describe("run_workflow", () => {
+    it("dispatchOmnibarAction_should_callRunWorkflow_When_runWorkflowAction", () => {
+      const deps = makeDeps();
+      deps.runWorkflow = jest.fn();
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "my-workflow",
+        workflowArg: "some arg",
+        label: "My Workflow",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.runWorkflow).toHaveBeenCalledWith("my-workflow", "some arg");
+    });
+
+    it("dispatchOmnibarAction_should_callAnalyticsTrack_When_runWorkflowAction", () => {
+      const deps = makeDeps();
+      deps.runWorkflow = jest.fn();
+      deps.analytics = { track: jest.fn() };
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "daily-standup",
+        workflowArg: "",
+        label: "Daily Standup",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.analytics.track).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "omnibar.run_workflow", labels: expect.objectContaining({ slug: "daily-standup" }) })
+      );
+    });
+
+    it("dispatchOmnibarAction_should_callClose_When_runWorkflowAction", () => {
+      const deps = makeDeps();
+      deps.runWorkflow = jest.fn();
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "my-workflow",
+        workflowArg: "",
+        label: "My Workflow",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.close).toHaveBeenCalled();
+    });
+
+    it("dispatchOmnibarAction_should_noOpRunWorkflow_When_runWorkflowDepAbsent", () => {
+      const deps = makeDeps();
+      // runWorkflow dep intentionally absent (not set in makeDeps)
+      const action: OmnibarAction = {
+        type: "run_workflow",
+        workflowSlug: "my-workflow",
+        workflowArg: "",
+        label: "My Workflow",
+      };
+      // Should not throw even with missing runWorkflow dep
+      expect(() => dispatchOmnibarAction(action, deps)).not.toThrow();
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
 });

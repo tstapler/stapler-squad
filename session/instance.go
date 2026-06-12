@@ -371,6 +371,11 @@ const (
 	SessionTypeNewProject SessionType = "new_project"
 )
 
+// SessionTypeOneOff is the workflow session_type value that requests a one-off session.
+// It is a plain string (not a SessionType constant) because workflows store it as a
+// plain string field, and the backend maps it to OneOff=true at execution time.
+const SessionTypeOneOff = "one_off"
+
 // IsValid reports whether st is a recognized session type.
 func (st SessionType) IsValid() bool {
 	switch st {

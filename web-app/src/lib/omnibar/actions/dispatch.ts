@@ -12,6 +12,11 @@ export interface ActionDeps {
   close: () => void;
   setTheme: (name: ThemeName) => void;
   spawnShell?: (sessionId?: string, workingDir?: string, shellCommand?: string) => void;
+  /**
+   * runWorkflow fires a workflow by slug + optional arg.
+   * Optional to avoid breaking existing call sites; absent dep silently no-ops.
+   */
+  runWorkflow?: (slug: string, arg: string) => void;
   /** Optional analytics provider — tracking is best-effort; missing it never blocks the action */
   analytics?: Pick<AnalyticsProvider, "track">;
 }
@@ -94,6 +99,11 @@ export function dispatchOmnibarAction(
         autonomousMode: true,
         permissionMode: "auto",
       });
+      deps.close();
+      return;
+    case "run_workflow":
+      if (track) track({ name: "omnibar.run_workflow", category: "user_action", labels: { slug: action.workflowSlug } });
+      deps.runWorkflow?.(action.workflowSlug, action.workflowArg);
       deps.close();
       return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅

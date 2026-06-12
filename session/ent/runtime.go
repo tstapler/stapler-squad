@@ -26,6 +26,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/shell"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 	"github.com/tstapler/stapler-squad/session/ent/tag"
+	"github.com/tstapler/stapler-squad/session/ent/workflow"
 	"github.com/tstapler/stapler-squad/session/ent/worktree"
 )
 
@@ -489,6 +490,42 @@ func init() {
 	tagDescName := tagFields[0].Descriptor()
 	// tag.NameValidator is a validator for the "name" field. It is called by the builders before save.
 	tag.NameValidator = tagDescName.Validators[0].(func(string) error)
+	workflowFields := schema.Workflow{}.Fields()
+	_ = workflowFields
+	// workflowDescSlug is the schema descriptor for slug field.
+	workflowDescSlug := workflowFields[1].Descriptor()
+	// workflow.SlugValidator is a validator for the "slug" field. It is called by the builders before save.
+	workflow.SlugValidator = workflowDescSlug.Validators[0].(func(string) error)
+	// workflowDescName is the schema descriptor for name field.
+	workflowDescName := workflowFields[2].Descriptor()
+	// workflow.NameValidator is a validator for the "name" field. It is called by the builders before save.
+	workflow.NameValidator = workflowDescName.Validators[0].(func(string) error)
+	// workflowDescCommand is the schema descriptor for command field.
+	workflowDescCommand := workflowFields[4].Descriptor()
+	// workflow.CommandValidator is a validator for the "command" field. It is called by the builders before save.
+	workflow.CommandValidator = workflowDescCommand.Validators[0].(func(string) error)
+	// workflowDescSessionType is the schema descriptor for session_type field.
+	workflowDescSessionType := workflowFields[7].Descriptor()
+	// workflow.DefaultSessionType holds the default value on creation for the session_type field.
+	workflow.DefaultSessionType = workflowDescSessionType.Default.(string)
+	// workflowDescCronEnabled is the schema descriptor for cron_enabled field.
+	workflowDescCronEnabled := workflowFields[11].Descriptor()
+	// workflow.DefaultCronEnabled holds the default value on creation for the cron_enabled field.
+	workflow.DefaultCronEnabled = workflowDescCronEnabled.Default.(bool)
+	// workflowDescCreatedAt is the schema descriptor for created_at field.
+	workflowDescCreatedAt := workflowFields[12].Descriptor()
+	// workflow.DefaultCreatedAt holds the default value on creation for the created_at field.
+	workflow.DefaultCreatedAt = workflowDescCreatedAt.Default.(func() time.Time)
+	// workflowDescUpdatedAt is the schema descriptor for updated_at field.
+	workflowDescUpdatedAt := workflowFields[13].Descriptor()
+	// workflow.DefaultUpdatedAt holds the default value on creation for the updated_at field.
+	workflow.DefaultUpdatedAt = workflowDescUpdatedAt.Default.(func() time.Time)
+	// workflow.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
+	workflow.UpdateDefaultUpdatedAt = workflowDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// workflowDescID is the schema descriptor for id field.
+	workflowDescID := workflowFields[0].Descriptor()
+	// workflow.DefaultID holds the default value on creation for the id field.
+	workflow.DefaultID = workflowDescID.Default.(func() uuid.UUID)
 	worktreeFields := schema.Worktree{}.Fields()
 	_ = worktreeFields
 	// worktreeDescRepoPath is the schema descriptor for repo_path field.

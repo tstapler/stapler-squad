@@ -11,7 +11,9 @@ import {
   PromptHistoryEntry,
   RunOneShotResponse,
   SpawnShellRequest,
+  RunWorkflowRequestSchema,
 } from "@/gen/session/v1/session_pb";
+import { create } from "@bufbuild/protobuf";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { createRpcTimingInterceptor } from "@/lib/telemetry/rpcTiming";
@@ -47,9 +49,9 @@ interface UseSessionServiceOptions {
   /**
    * Called when an approval_response event arrives on the stream. Use this to
    * refresh notification history so all connected clients stay in sync when any
-   * device resolves an approval.
+   * device resolves an approval. Receives the approvalId and sessionId from the event.
    */
-  onApprovalResponse?: () => void;
+  onApprovalResponse?: (approvalId: string, sessionId: string) => void;
   /**
    * Called when a session is deleted. Use this to clear related state such as
    * notifications keyed to the deleted session.
@@ -86,6 +88,9 @@ interface UseSessionServiceReturn {
   listCheckpoints: (sessionId: string) => Promise<import("@/gen/session/v1/types_pb").CheckpointProto[]>;
   forkSession: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
 
+  // Workflow methods
+  runWorkflow: (request: { id: string; arg?: string }) => Promise<string | null>;
+
   // Shell methods
   spawnShell: (request: Partial<SpawnShellRequest>) => Promise<Shell | null>;
   stopShell: (sessionId: string, shellId: string) => Promise<boolean>;
@@ -106,12 +111,13 @@ interface UseSessionServiceReturn {
 export function useSessionService(
   options: UseSessionServiceOptions = {}
 ): UseSessionServiceReturn {
-  const { baseUrl = getApiBaseUrl(), autoWatch = false, enabled = true, onNotification, onReconnect, onApprovalResponse } = options;
+  const { baseUrl = getApiBaseUrl(), autoWatch = false, enabled = true, onNotification, onReconnect, onApprovalResponse, onSessionDeleted } = options;
   const analytics = useAnalytics();
   const onReconnectRef = useRef(onReconnect);
   useEffect(() => { onReconnectRef.current = onReconnect; }, [onReconnect]);
   const onNotificationRef = useRef(onNotification);
   const onApprovalResponseRef = useRef(onApprovalResponse);
+  const onSessionDeletedRef = useRef(onSessionDeleted);
 
   // Keep ref updated for callback in streaming loop
   useEffect(() => {
@@ -121,6 +127,10 @@ export function useSessionService(
   useEffect(() => {
     onApprovalResponseRef.current = onApprovalResponse;
   }, [onApprovalResponse]);
+
+  useEffect(() => {
+    onSessionDeletedRef.current = onSessionDeleted;
+  }, [onSessionDeleted]);
 
   const dispatch = useAppDispatch();
   const [systemMemoryPct, setSystemMemoryPct] = useState<number>(0);
@@ -534,6 +544,25 @@ export function useSessionService(
     []
   );
 
+  // Fire a workflow immediately (outside of cron schedule).
+  const runWorkflow = useCallback(
+    async (request: { id: string; arg?: string }): Promise<string | null> => {
+      if (!clientRef.current) return null;
+      try {
+        const req = create(RunWorkflowRequestSchema, {
+          id: request.id,
+          arg: request.arg ?? "",
+        });
+        const response = await clientRef.current.runWorkflow(req);
+        return response.sessionId ?? null;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to run workflow"));
+        return null;
+      }
+    },
+    [dispatch]
+  );
+
   // Spawn a new shell attached to a session
   const spawnShell = useCallback(
     async (request: Partial<SpawnShellRequest>): Promise<Shell | null> => {
@@ -639,7 +668,7 @@ export function useSessionService(
         const sessionId = event.event.value.sessionId;
         dispatch(removeSession(sessionId));
         dispatch(removeReviewQueueItem(sessionId));
-        options.onSessionDeleted?.(sessionId);
+        onSessionDeletedRef.current?.(sessionId);
         break;
       }
       case "statusChanged": {
@@ -663,9 +692,13 @@ export function useSessionService(
         break;
       }
       case "approvalResponse": {
-        // An approval was resolved on another device — refresh history so all
-        // clients show the updated state (resolved badge, not live Approve/Deny).
-        onApprovalResponseRef.current?.();
+        // An approval was resolved on this device or another — remove the toast
+        // preemptively and refresh history to show the resolved badge.
+        const approvalId = event.event.value.context ?? "";
+        const sessionId = event.event.value.sessionId ?? "";
+        if (approvalId) {
+          onApprovalResponseRef.current?.(approvalId, sessionId);
+        }
         break;
       }
     }
@@ -867,6 +900,7 @@ export function useSessionService(
     listPromptHistory,
     watchSessions,
     stopWatching,
+    runWorkflow,
     spawnShell,
     stopShell,
     restartShell,

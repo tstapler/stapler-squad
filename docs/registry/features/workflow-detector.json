@@ -1,0 +1,29 @@
+{
+  "id": "workflow-detector",
+  "type": "frontend",
+  "component": "WorkflowDetector",
+  "path": "web-app/src/lib/omnibar/detectors/WorkflowDetector.ts",
+  "markerLine": 1,
+  "tested": true,
+  "testIds": [
+    "WorkflowDetector_should_returnNull_When_inputLacksAtPrefix",
+    "WorkflowDetector_should_matchWorkflow_When_inputStartsWithAt",
+    "WorkflowDetector_should_returnConfidence1_When_slugKnown",
+    "WorkflowDetector_should_returnConfidence04_When_slugUnknown",
+    "WorkflowDetector_should_extractArg_When_inputContainsArgAfterSlug",
+    "WorkflowDetector_should_emptyArg_When_noArgSupplied",
+    "WorkflowDetector_should_interpolateTemplate_When_workflowHasInputTemplate",
+    "WorkflowDetector_should_useArgAsPrompt_When_noInputTemplate",
+    "WorkflowDetector_should_substituteAllOccurrences_When_templateHasMultipleInputTokens",
+    "WorkflowDetector_should_matchCaseInsensitive_When_slugTypedInUpperCase",
+    "WorkflowDetector_should_havePriority25",
+    "WorkflowDetector_should_haveCorrectName",
+    "WorkflowDetector_should_includeWorkflowObject_When_slugFound",
+    "WorkflowDetector_should_setSuggestedName_When_workflowFound",
+    "WorkflowDetector_should_setSuggestedNameToSlug_When_workflowNotFound",
+    "WorkflowDetector_should_returnNull_When_emptyInput",
+    "WorkflowDetector_should_returnNull_When_onlyAtSign",
+    "WorkflowDetector_should_trimInput_When_inputHasLeadingSpaces"
+  ],
+  "lastModified": "2026-06-11T00:00:00Z"
+}

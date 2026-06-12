@@ -563,7 +563,9 @@ func getDefaultPatterns() StatusPatterns {
 				// Full macOS spinner frame set: · ✢ ✳ ✶ ✻ ✽ (bounce cycle), * (legacy), ● (reduced-motion).
 				// Verb char class extends \w with hyphens (Dilly-dallying), apostrophes (Beboppin'),
 				// and Latin-1 accented chars (Flambéing, Sautéing) — Go RE2 \w = [0-9A-Za-z_] only.
-				Pattern:     `(?m)^[·✢✳✶✻✽●*]\s+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
+				// ^\s* allows leading whitespace so indented spinners (e.g. task manager sub-items)
+				// are detected: "  ✽ Roosting… (9m 52s · ↓ 2.8k tokens)"
+				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
 				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis",
 				Priority:    26,
 			},
@@ -769,6 +771,51 @@ func (sd *StatusDetector) DetectFromLines(lines []string) DetectedStatus {
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
 		}
+
+		// If the line contains \r (carriage return), scan its CR-split segments in
+		// reverse (last-written first, matching visual display order).  The normal
+		// collapseCarriageReturns path inside DetectFromString only keeps the LAST
+		// segment, which can hide an earlier active indicator when a TUI overlay
+		// (e.g. Claude Code's task manager panel) overwrites "esc to interrupt"
+		// with "↑/↓ to select" on the same terminal row.
+		//
+		// Reverse-segment scan: the last segment takes precedence (it is what the
+		// terminal actually shows), but if it is only Ready/Unknown we fall back to
+		// earlier segments.  This preserves the existing "✻ Baked for X\r? for
+		// shortcuts" → StatusIdle behaviour while fixing the active-session case.
+		if strings.ContainsRune(lines[i], '\r') {
+			segs := strings.Split(lines[i], "\r")
+			for j := len(segs) - 1; j >= 0; j-- {
+				if strings.TrimSpace(segs[j]) == "" {
+					continue
+				}
+				s := sd.DetectFromString(segs[j])
+				if s == StatusUnknown {
+					continue
+				}
+				if s == StatusReady {
+					if bestSoFar == StatusUnknown {
+						bestSoFar = StatusReady
+					}
+					continue
+				}
+				// The last segment is always authoritative.
+				// Earlier segments: only promote high-urgency statuses (Active, NeedsApproval,
+				// InputRequired, Error) — these represent session states that can be visually
+				// hidden by a TUI overlay writing via \r but still indicate the session needs
+				// attention.  Low-urgency statuses (Success, Processing, Idle) in earlier
+				// segments were overwritten and should not override the visual display.
+				if j == len(segs)-1 || s == StatusActive || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
+					return s
+				}
+				// Low-urgency earlier segment: record as candidate but keep scanning.
+				if bestSoFar == StatusUnknown {
+					bestSoFar = s
+				}
+			}
+			continue // all segments of this CR line handled above
+		}
+
 		status := sd.DetectFromString(lines[i])
 		if status == StatusUnknown {
 			continue
@@ -798,6 +845,44 @@ func (sd *StatusDetector) DetectWithContextFromLines(lines []string) (DetectedSt
 		if strings.TrimSpace(lines[i]) == "" {
 			continue
 		}
+
+		// Mirror DetectFromLines: scan CR-split segments in reverse so a TUI overlay
+		// that uses \r to overwrite "esc to interrupt" doesn't hide the active state.
+		if strings.ContainsRune(lines[i], '\r') {
+			segs := strings.Split(lines[i], "\r")
+			for j := len(segs) - 1; j >= 0; j-- {
+				if strings.TrimSpace(segs[j]) == "" {
+					continue
+				}
+				s, desc := sd.DetectWithContext([]byte(segs[j]))
+				if s == StatusUnknown {
+					continue
+				}
+				if s == StatusReady {
+					if bestStatus == StatusUnknown {
+						bestStatus = StatusReady
+						bestDesc = desc
+					}
+					continue
+				}
+				// The last segment is always authoritative.
+				// Earlier segments: only promote high-urgency statuses (Active, NeedsApproval,
+				// InputRequired, Error) — these represent session states that can be visually
+				// hidden by a TUI overlay writing via \r but still indicate the session needs
+				// attention.  Low-urgency statuses (Success, Processing, Idle) in earlier
+				// segments were overwritten and should not override the visual display.
+				if j == len(segs)-1 || s == StatusActive || s == StatusNeedsApproval || s == StatusInputRequired || s == StatusError {
+					return s, desc
+				}
+				// Low-urgency earlier segment: record as candidate but keep scanning.
+				if bestStatus == StatusUnknown {
+					bestStatus = s
+					bestDesc = desc
+				}
+			}
+			continue
+		}
+
 		status, desc := sd.DetectWithContext([]byte(lines[i]))
 		if status == StatusUnknown {
 			continue

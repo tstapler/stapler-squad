@@ -1,0 +1,10 @@
+{
+  "id": "workflows-management",
+  "type": "frontend",
+  "component": "WorkflowsPanel",
+  "path": "web-app/src/components/workflows/WorkflowsPanel.tsx",
+  "markerLine": 1,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-11T00:00:00Z"
+}

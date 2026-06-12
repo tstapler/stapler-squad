@@ -22,6 +22,8 @@ require (
 	github.com/linkdata/deadlock v0.5.5
 	github.com/mattn/go-runewidth v0.0.16
 	github.com/mattn/go-sqlite3 v1.14.40
+	github.com/puzpuzpuz/xsync/v4 v4.5.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spaolacci/murmur3 v1.1.0
@@ -44,10 +46,7 @@ require (
 	mvdan.cc/sh/v3 v3.13.0
 )
 
-require (
-	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
-	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
-)
+require github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
 
 require (
 	github.com/grafana/pyroscope-go v1.2.8

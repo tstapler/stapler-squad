@@ -134,6 +134,19 @@ var snapshotTests = []snapshotTest{
 		program:     "claude",
 		description: "Claude Code after ✻ completion line followed by ? for shortcuts (success state in full-text scan)",
 	},
+
+	// ── Regression: bug fixes ────────────────────────────────────────────────────
+	// Bug 1: Active session with task manager overlay was detected as idle because the
+	// indented spinner (  ✽ Roosting…) didn't match the old ^[spinner] pattern which
+	// required the spinner at column 0.  Full-text Detect() + DetectFromLines both
+	// need to return Active.  The deeper CR-collapse regression (esc to interrupt
+	// being overwritten via \r) is tested in bug_regression_test.go.
+	{
+		fixture:     "claude_active_task_manager.txt",
+		expected:    StatusActive,
+		program:     "claude",
+		description: "Claude active with background task manager overlay — indented ✽ spinner (2 leading spaces) + esc to interrupt",
+	},
 }
 
 // TestSnapshotDetection runs the detector against each fixture file and
