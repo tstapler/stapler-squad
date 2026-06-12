@@ -15,6 +15,8 @@ import { groupHeader as groupHeaderStyle } from "./SessionRow.css";
 import { BulkActions } from "./BulkActions";
 import { TagEditor } from "./TagEditor";
 import { GroupingStrategy, GroupingStrategyLabels, groupSessions, cycleGroupingStrategy } from "@/lib/grouping/strategies";
+import { ColumnKey, DEFAULT_VISIBLE_COLUMNS } from "./session-columns";
+import { ColumnPicker } from "./ColumnPicker";
 import { useReviewQueueContext } from "@/lib/contexts/ReviewQueueContext";
 import { useApprovalsContext } from "@/lib/contexts/ApprovalsContext";
 import { MemoryPressureCallout } from "./MemoryPressureCallout";
@@ -96,6 +98,7 @@ const BASE_STORAGE_KEYS = {
   GROUPING_STRATEGY: 'stapler-squad-grouping-strategy',
   SORT_FIELD: 'stapler-squad-sort-field',
   SORT_DIR: 'stapler-squad-sort-dir',
+  VISIBLE_COLUMNS: 'stapler-squad-visible-columns',
 };
 
 function makeStorageKeys(prefix = '') {
@@ -201,6 +204,10 @@ export function SessionList({
   const [sortDir, setSortDir] = useState<SortDir>(() =>
     loadFromStorage(STORAGE_KEYS.SORT_DIR, 'desc')
   );
+  const [visibleColumns, setVisibleColumns] = useState<ColumnKey[]>(() =>
+    loadFromStorage(STORAGE_KEYS.VISIBLE_COLUMNS, DEFAULT_VISIBLE_COLUMNS)
+  );
+  const [columnPickerOpen, setColumnPickerOpen] = useState(false);
 
   // Multi-select state for bulk actions
   const [selectMode, setSelectMode] = useState(false);
@@ -310,6 +317,10 @@ export function SessionList({
   useEffect(() => {
     saveToStorage(STORAGE_KEYS.SORT_DIR, sortDir);
   }, [STORAGE_KEYS, sortDir]);
+
+  useEffect(() => {
+    saveToStorage(STORAGE_KEYS.VISIBLE_COLUMNS, visibleColumns);
+  }, [STORAGE_KEYS, visibleColumns]);
 
   // Extract unique categories from sessions
   const categories = useMemo(() => {
@@ -571,6 +582,14 @@ export function SessionList({
           <h2 className={title}>Sessions ({filteredSessions.length})</h2>
           <div className={headerActions}>
             {extraHeaderActions}
+            {viewMode === "row" && (
+              <ColumnPicker
+                visibleColumns={visibleColumns}
+                onChange={setVisibleColumns}
+                open={columnPickerOpen}
+                onOpenChange={setColumnPickerOpen}
+              />
+            )}
             <button
               onClick={() => onNewSession?.()}
               className={newSessionHeaderButton}
@@ -938,6 +957,7 @@ export function SessionList({
                     onClearConversationState={onClearConversationState}
                     onUpdateTags={onUpdateTags}
                     suppressApprovalSubStatus={clearedSessions.has(item.session.id)}
+                    visibleColumns={visibleColumns}
                   />
                 )}
               </WrapperTag>

@@ -274,10 +274,6 @@ health_check_and_rollback() {
     max_wait=15
     elapsed=0
     url="http://localhost:8543/health"
-    if ! command -v curl >/dev/null 2>&1; then
-        echo "curl not found, skipping health check"
-        return 0
-    fi
     printf "==> Waiting for service to be healthy"
     while [ "$elapsed" -lt "$max_wait" ]; do
         if curl -sf "$url" >/dev/null 2>&1; then
@@ -317,7 +313,6 @@ health_check_and_rollback() {
     log_info "Check logs: tail -f ~/.stapler-squad/logs/service.log"
     return 1
 }
-
 
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 uninstall_service() {

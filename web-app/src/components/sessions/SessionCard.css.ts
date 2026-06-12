@@ -780,6 +780,19 @@ export const memoryBadge = style({
   fontVariantNumeric: "tabular-nums",
 });
 
+// Applied over memoryBadge when RSS is 300–500 MB.
+export const memoryBadgeWarning = style({
+  color: vars.color.warning,
+  fontWeight: 600,
+});
+
+// Applied over memoryBadge when RSS > 500 MB.
+export const memoryBadgeHigh = style({
+  color: vars.color.error,
+  fontWeight: 700,
+});
+
+// Only applied when RSS > 500 MB — not for every active session.
 export const cardMemoryPressure = style({
   borderLeft: `3px solid ${vars.color.warning}`,
 });

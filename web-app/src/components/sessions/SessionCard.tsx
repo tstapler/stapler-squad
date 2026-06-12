@@ -64,6 +64,8 @@ import {
   snapshotLoading,
   snapshotError,
   memoryBadge,
+  memoryBadgeWarning,
+  memoryBadgeHigh,
   cardMemoryPressure,
   taskFraction,
   autonomousBadge,
@@ -353,7 +355,7 @@ function SessionCardInner({
         isSelected ? cardSelected : "",
         isExternal ? cardExternal : "",
         isDeleting ? cardDeleting : "",
-        Number(session.estimatedSavingsMb ?? 0n) > 0 ? cardMemoryPressure : "",
+        Number(session.memoryRssMb ?? 0n) > 500 ? cardMemoryPressure : "",
         isPaused ? cardPaused : "",
       ].filter(Boolean).join(" ")}
       data-testid="session-card"
@@ -479,11 +481,25 @@ function SessionCardInner({
               !(suppressApprovalSubStatus && session.subStatus === SubStatus.NEEDS_APPROVAL) && (
                 <SubStatusChip subStatus={session.subStatus} />
               )}
-            {Number(session.memoryRssMb ?? 0n) > 0 && (
-              <span className={memoryBadge}>
-                {Number(session.memoryRssMb)} MB
-              </span>
-            )}
+            {(() => {
+              const mb = Number(session.memoryRssMb ?? 0n);
+              if (mb <= 0) return null;
+              const severityClass =
+                mb > 500 ? memoryBadgeHigh :
+                mb > 300 ? memoryBadgeWarning : "";
+              const label =
+                mb >= 1024
+                  ? `${(mb / 1024).toFixed(1)} GB RAM`
+                  : `${mb} MB RAM`;
+              return (
+                <span
+                  className={[memoryBadge, severityClass].filter(Boolean).join(" ")}
+                  title={`Process RSS: ${mb} MB`}
+                >
+                  {label}
+                </span>
+              );
+            })()}
             {session.autonomousMode && (
               <span
                 className={autonomousBadge}

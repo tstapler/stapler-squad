@@ -1,9 +1,11 @@
 package unfinished
 
 import (
+	"bytes"
 	"cmp"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,6 +16,7 @@ import (
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 )
@@ -246,14 +249,27 @@ func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
 			return false, fmt.Errorf("head tree: %w", terr)
 		}
 
+		// Walk the tree without loading blob content — only tree-entry hashes are needed.
+		// object.FileIter.Next() calls GetBlob() per entry (loads full content); TreeWalker
+		// loads only tree objects, which are orders of magnitude smaller.
 		headHashes := make(map[string]plumbing.Hash, len(headTree.Entries))
-		if ferr := headTree.Files().ForEach(func(f *object.File) error {
-			headHashes[f.Name] = f.Hash
-			return nil
-		}); ferr != nil {
-			entry.mu.Unlock()
-			return false, fmt.Errorf("walk head tree: %w", ferr)
+		tw := object.NewTreeWalker(headTree, true, nil)
+		for {
+			name, te, twErr := tw.Next()
+			if errors.Is(twErr, io.EOF) {
+				break
+			}
+			if twErr != nil {
+				tw.Close()
+				entry.mu.Unlock()
+				return false, fmt.Errorf("walk head tree: %w", twErr)
+			}
+			if te.Mode == filemode.Dir {
+				continue
+			}
+			headHashes[name] = te.Hash
 		}
+		tw.Close()
 
 		indexNames := make(map[string]bool, len(idx.Entries))
 		for _, idxEntry := range idx.Entries {
@@ -464,60 +480,197 @@ func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
 	return result, err
 }
 
+// diffShortstatUncached computes a DiffStat for worktreePath using index metadata
+// to detect changed files, then loads HEAD blobs only for those files.
+//
+// This replaces the previous wt.Status() approach, which loaded ALL blob content
+// into Go heap (MemoryObject) to hash every tracked file — allocating ~30 GB/hour
+// cumulatively across active repos. The new approach:
+//
+//  1. Identifies staged changes by comparing index hashes with HEAD tree hashes
+//     (TreeWalker, no blobs loaded).
+//  2. Identifies unstaged changes by comparing index mtime/size with disk stat
+//     (O(n) lstat calls, zero blob reads for unchanged files).
+//  3. Loads HEAD blobs only for the M actually-changed files (M << N typical).
+//  4. Computes line diffs on []byte directly, avoiding string conversion overhead.
 func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, error) {
 	entry, err := g.openRepoEntry(worktreePath)
 	if err != nil {
 		return DiffStat{}, err
 	}
+
+	// ── Phase 1: go-git metadata reads under lock (no blob loading) ──────────
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
 	repo := entry.repo
 
-	head, err := repo.Head()
+	idx, err := repo.Storer.Index()
 	if err != nil {
-		return DiffStat{}, err
-	}
-	headCommit, err := repo.CommitObject(head.Hash())
-	if err != nil {
-		return DiffStat{}, err
-	}
-	headTree, err := headCommit.Tree()
-	if err != nil {
+		entry.mu.Unlock()
 		return DiffStat{}, err
 	}
 
-	wt, err := repo.Worktree()
-	if err != nil {
-		return DiffStat{}, err
-	}
-	status, err := wt.Status()
-	if err != nil {
-		return DiffStat{}, err
+	// Build HEAD tree hash map using TreeWalker — loads only tree objects, not blobs.
+	headHashes := make(map[string]plumbing.Hash, len(idx.Entries))
+	if headRef, headErr := repo.Head(); headErr == nil {
+		if headCommit, cerr := repo.CommitObject(headRef.Hash()); cerr == nil {
+			if headTree, terr := headCommit.Tree(); terr == nil {
+				tw := object.NewTreeWalker(headTree, true, nil)
+				for {
+					name, te, twErr := tw.Next()
+					if errors.Is(twErr, io.EOF) {
+						break
+					}
+					if twErr != nil {
+						break
+					}
+					if te.Mode == filemode.Dir {
+						continue
+					}
+					headHashes[name] = te.Hash
+				}
+				tw.Close()
+			}
+		}
 	}
 
-	var d DiffStat
-	for filePath, fs := range status {
-		if fs.Worktree == git.Unmodified && fs.Staging == git.Unmodified {
+	// Classify index entries: staged-changed (index hash ≠ HEAD hash) vs stable.
+	type indexMeta struct {
+		name       string
+		indexHash  plumbing.Hash
+		headHash   plumbing.Hash // zero if not in HEAD
+		size       uint32
+		modifiedAt time.Time
+		staged     bool
+	}
+	metas := make([]indexMeta, 0, len(idx.Entries))
+	indexedNames := make(map[string]struct{}, len(idx.Entries))
+	for _, e := range idx.Entries {
+		if e.Stage != 0 {
 			continue
 		}
+		indexedNames[e.Name] = struct{}{}
+		headHash := headHashes[e.Name]
+		metas = append(metas, indexMeta{
+			name:       e.Name,
+			indexHash:  e.Hash,
+			headHash:   headHash,
+			size:       e.Size,
+			modifiedAt: e.ModifiedAt,
+			staged:     e.Hash != headHash,
+		})
+	}
+
+	// Staged deletions: files in HEAD but absent from index.
+	type stagedDel struct {
+		name     string
+		headHash plumbing.Hash
+	}
+	var stagedDels []stagedDel
+	for name, headHash := range headHashes {
+		if _, inIdx := indexedNames[name]; !inIdx {
+			stagedDels = append(stagedDels, stagedDel{name, headHash})
+		}
+	}
+
+	entry.mu.Unlock() // release before OS operations
+
+	// ── Phase 2: build change target list (no lock, no blob reads) ───────────
+	type changeTarget struct {
+		name      string
+		headHash  plumbing.Hash // zero = new file not in HEAD
+		isDeleted bool          // no working-tree file exists
+	}
+
+	stagedTargets := make([]changeTarget, 0, len(stagedDels))
+	for _, m := range metas {
+		if m.staged {
+			stagedTargets = append(stagedTargets, changeTarget{m.name, m.headHash, false})
+		}
+	}
+	for _, sd := range stagedDels {
+		stagedTargets = append(stagedTargets, changeTarget{sd.name, sd.headHash, true})
+	}
+
+	unstagedTargets := make([]changeTarget, 0)
+	for _, m := range metas {
+		if m.staged {
+			continue
+		}
+		wtPath := filepath.Join(worktreePath, m.name)
+		info, serr := os.Lstat(wtPath)
+		if serr != nil {
+			if os.IsNotExist(serr) {
+				unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, true})
+			}
+			continue
+		}
+		if info.Size() != int64(m.size) ||
+			!info.ModTime().Truncate(time.Second).Equal(m.modifiedAt.Truncate(time.Second)) {
+			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
+		}
+	}
+
+	// ── Phase 3: process each changed file inline — one blob at a time ───────
+	// Loading a blob → reading working-tree file → computing diff → discarding,
+	// before loading the next blob, keeps peak live memory proportional to the
+	// largest single changed file rather than the sum of all changed-file blobs.
+	var d DiffStat
+
+	readBlobUnderLock := func(hash plumbing.Hash) []byte {
+		if hash == (plumbing.Hash{}) {
+			return nil
+		}
+		entry.mu.Lock()
+		blob, berr := entry.repo.BlobObject(hash)
+		if berr != nil {
+			entry.mu.Unlock()
+			return nil
+		}
+		r, rerr := blob.Reader()
+		if rerr != nil {
+			entry.mu.Unlock()
+			return nil
+		}
+		data, _ := io.ReadAll(r)
+		_ = r.Close()
+		entry.mu.Unlock()
+		return data
+	}
+
+	applyDiff := func(t changeTarget) {
 		d.Files++
-
-		// HEAD content — empty string for new (untracked/added) files.
-		var headContent string
-		if f, ferr := headTree.File(filePath); ferr == nil {
-			headContent, _ = f.Contents()
+		headData := readBlobUnderLock(t.headHash)
+		if t.isDeleted {
+			d.Deletions += countBytesLines(headData)
+			return
 		}
-
-		// Working-tree content — empty string for deleted files.
-		var currentContent string
-		if data, rerr := os.ReadFile(filepath.Join(worktreePath, filePath)); rerr == nil {
-			currentContent = string(data)
+		wtData, rerr := os.ReadFile(filepath.Join(worktreePath, t.name))
+		if rerr != nil {
+			d.Deletions += countBytesLines(headData)
+			return
 		}
-
-		ins, del := LinesDiff(headContent, currentContent)
+		ins, del := linesDiffBytes(headData, wtData)
 		d.Insertions += ins
 		d.Deletions += del
+		// headData and wtData are freed after this call returns.
 	}
+
+	for _, t := range stagedTargets {
+		applyDiff(t)
+	}
+	for _, t := range unstagedTargets {
+		applyDiff(t)
+	}
+
+	// Untracked files: count lines as pure insertions (no HEAD version).
+	_ = walkUntracked(worktreePath, indexedNames, func(absPath string) {
+		data, rerr := os.ReadFile(absPath)
+		if rerr == nil {
+			d.Files++
+			d.Insertions += countBytesLines(data)
+		}
+	})
+
 	return d, nil
 }
 
@@ -570,6 +723,102 @@ func splitLines(s string) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
+}
+
+// countBytesLines counts the number of lines in data by counting '\n' bytes,
+// treating a trailing newline as not creating an extra empty line.
+func countBytesLines(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	n := bytes.Count(data, []byte("\n"))
+	if data[len(data)-1] != '\n' {
+		n++ // last line without terminating newline
+	}
+	return n
+}
+
+// linesDiffBytes returns LCS-based insertion and deletion counts between old and new,
+// operating directly on []byte to avoid string conversion overhead.
+func linesDiffBytes(old, newData []byte) (insertions, deletions int) {
+	a := splitLinesBytes(old)
+	b := splitLinesBytes(newData)
+	lcs := lcsLengthBytes(a, b)
+	return len(b) - lcs, len(a) - lcs
+}
+
+// splitLinesBytes splits data into lines as subslices of data (no allocation per line).
+func splitLinesBytes(data []byte) [][]byte {
+	if len(data) == 0 {
+		return nil
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	if len(lines) > 0 && len(lines[len(lines)-1]) == 0 {
+		lines = lines[:len(lines)-1]
+	}
+	return lines
+}
+
+// lcsLengthBytes computes the LCS length of two byte-slice-of-lines sequences.
+// Uses O(min(n,m)) space rolling DP, same algorithm as lcsLength.
+func lcsLengthBytes(a, b [][]byte) int {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	if len(a) < len(b) {
+		a, b = b, a
+	}
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for i := 1; i <= len(a); i++ {
+		for j := 1; j <= len(b); j++ {
+			if bytes.Equal(a[i-1], b[j-1]) {
+				curr[j] = prev[j-1] + 1
+			} else if prev[j] > curr[j-1] {
+				curr[j] = prev[j]
+			} else {
+				curr[j] = curr[j-1]
+			}
+		}
+		prev, curr = curr, prev
+		for k := range curr {
+			curr[k] = 0
+		}
+	}
+	return prev[len(b)]
+}
+
+// walkUntracked calls fn for every file under root that is not in indexed.
+// Skips the .git directory; does not read .gitignore (best-effort for the scanner).
+func walkUntracked(root string, indexed map[string]struct{}, fn func(absPath string)) error {
+	return walkUntrackedRec(root, root, indexed, fn)
+}
+
+func walkUntrackedRec(root, dir string, indexed map[string]struct{}, fn func(string)) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, de := range entries {
+		name := de.Name()
+		if name == ".git" {
+			continue
+		}
+		full := filepath.Join(dir, name)
+		rel, relErr := filepath.Rel(root, full)
+		if relErr != nil {
+			continue
+		}
+		rel = filepath.ToSlash(rel)
+		if de.IsDir() {
+			if err := walkUntrackedRec(root, full, indexed, fn); err != nil {
+				return err
+			}
+		} else if _, tracked := indexed[rel]; !tracked {
+			fn(full)
+		}
+	}
+	return nil
 }
 
 // gitCommonDir returns the path to the common git directory (the main .git dir),

@@ -16,8 +16,13 @@ import {
   elapsed as elapsedStyle,
   actions as actionsStyle,
   memoryBadge,
+  memoryBadgeWarning,
+  memoryBadgeHigh,
+  diffBadge,
+  branchCell,
   rowMemoryPressure,
 } from "./SessionRow.css";
+import { ColumnKey, DEFAULT_VISIBLE_COLUMNS, buildRowGridTemplate } from "./session-columns";
 
 interface SessionRowProps {
   session: Session;
@@ -38,6 +43,8 @@ interface SessionRowProps {
   onResumeFromHibernation?: () => void;
   /** When true, hides the Needs Approval SubStatusChip during optimistic clear */
   suppressApprovalSubStatus?: boolean;
+  /** Which optional columns to render. Defaults to DEFAULT_VISIBLE_COLUMNS. */
+  visibleColumns?: ColumnKey[];
 }
 
 function getStatusDotValue(status: SessionStatus): string {
@@ -101,6 +108,7 @@ export function SessionRow({
   onSetRateLimitEnabled, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
   suppressApprovalSubStatus = false,
+  visibleColumns = DEFAULT_VISIBLE_COLUMNS,
 }: SessionRowProps) {
   const overflowRef = useRef<SessionActionsOverflowHandle>(null);
 
@@ -108,7 +116,14 @@ export function SessionRow({
   const isPaused = session.status === SessionStatus.PAUSED;
   const lastActivity = getLastActivity(session);
   const elapsedText = formatElapsed(lastActivity ?? session.updatedAt);
-  const displayName = session.branch || session.title;
+  // Show branch separately if the branch column is visible; otherwise fold into displayName.
+  const showBranchCol = visibleColumns.includes("branch");
+  const displayName = showBranchCol ? session.title : (session.branch || session.title);
+
+  const memMB = Number(session.memoryRssMb ?? 0n);
+  const memorySeverityClass =
+    memMB > 500 ? memoryBadgeHigh :
+    memMB > 300 ? memoryBadgeWarning : "";
 
   const handleContextMenu = (e: React.MouseEvent<HTMLLIElement>) => {
     e.preventDefault();
@@ -126,9 +141,10 @@ export function SessionRow({
     <li
       className={[
         row,
-        Number(session.estimatedSavingsMb ?? 0n) > 0 ? rowMemoryPressure : "",
+        memMB > 500 ? rowMemoryPressure : "",
         isPaused ? rowPaused : "",
       ].filter(Boolean).join(" ")}
+      style={{ gridTemplateColumns: buildRowGridTemplate(visibleColumns) }}
       data-testid="session-row"
       data-paused={isPaused ? "true" : undefined}
       onClick={onClick}
@@ -137,7 +153,7 @@ export function SessionRow({
       tabIndex={0}
       aria-label={`Session ${session.title}, status: ${isPaused ? "paused" : dotStatus}, program: ${session.program}`}
     >
-      {/* Status dot */}
+      {/* Status dot — always visible */}
       <Tooltip label={`Status: ${dotStatus}`}>
         <span
           className={statusDot}
@@ -147,13 +163,12 @@ export function SessionRow({
         />
       </Tooltip>
 
-      {/* Name + path stacked — name always visible, path wraps below */}
+      {/* Name + path stacked — always visible */}
       <span className={nameCellStyle}>
         <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
           <span className={nameStyle} aria-label={displayName} title={displayName}>
             {displayName}
           </span>
-          {/* Sub-status chip — only for Active sessions (ACTIVE covers legacy RUNNING) */}
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
             session.subStatus !== SubStatus.IDLE &&
@@ -170,32 +185,70 @@ export function SessionRow({
         )}
       </span>
 
-      {/* Agent icon */}
-      <span
-        className={agentIconStyle}
-        title={session.program}
-        aria-label={`Agent: ${session.program}`}
-      >
-        {getAgentEmoji(session.program)}
-      </span>
-
-      {/* Memory usage badge */}
-      {Number(session.memoryRssMb ?? 0n) > 0 && (
-        <span className={memoryBadge} aria-label={`${Number(session.memoryRssMb)} MB`}>
-          {Number(session.memoryRssMb)} MB
+      {/* Agent icon — optional column */}
+      {visibleColumns.includes("agent") && (
+        <span
+          className={agentIconStyle}
+          title={session.program}
+          aria-label={`Agent: ${session.program}`}
+        >
+          {getAgentEmoji(session.program)}
         </span>
       )}
 
-      {/* Elapsed time */}
-      <time
-        className={elapsedStyle}
-        dateTime={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toISOString() : undefined}
-        title={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString() : undefined}
-      >
-        {elapsedText}
-      </time>
+      {/* Diff stats — optional column */}
+      {visibleColumns.includes("diff") && (
+        <span className={diffBadge} aria-label="Diff stats">
+          {session.diffStats ? (
+            <>
+              <span style={{ color: "var(--success)" }}>+{session.diffStats.added}</span>
+              {" "}
+              <span style={{ color: "var(--error)" }}>-{session.diffStats.removed}</span>
+            </>
+          ) : (
+            <span style={{ opacity: 0.3 }}>—</span>
+          )}
+        </span>
+      )}
 
-      {/* Actions — overflow menu with pause/resume shortcut and confirmed delete */}
+      {/* Memory usage — optional column, colored by severity */}
+      {visibleColumns.includes("memory") && (
+        <span
+          className={[memoryBadge, memorySeverityClass].filter(Boolean).join(" ")}
+          title={memMB > 0 ? `Process RSS: ${memMB} MB` : undefined}
+          aria-label={memMB > 0 ? `${memMB} MB RAM` : "Memory not measured"}
+        >
+          {memMB > 0
+            ? memMB >= 1024
+              ? `${(memMB / 1024).toFixed(1)} GB`
+              : `${memMB} MB`
+            : ""}
+        </span>
+      )}
+
+      {/* Branch — optional column */}
+      {visibleColumns.includes("branch") && (
+        <span
+          className={branchCell}
+          title={session.branch || undefined}
+          aria-label={session.branch ? `Branch: ${session.branch}` : "No branch"}
+        >
+          {session.branch || <span style={{ opacity: 0.3 }}>—</span>}
+        </span>
+      )}
+
+      {/* Elapsed time — optional column */}
+      {visibleColumns.includes("elapsed") && (
+        <time
+          className={elapsedStyle}
+          dateTime={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toISOString() : undefined}
+          title={lastActivity ? new Date(Number(lastActivity.seconds) * 1000).toLocaleString() : undefined}
+        >
+          {elapsedText}
+        </time>
+      )}
+
+      {/* Actions — always visible */}
       <span className={actionsStyle} aria-label="Session actions">
         <SessionActionsOverflow
           ref={overflowRef}

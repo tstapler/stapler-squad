@@ -10,8 +10,9 @@ const pulseOpacity = keyframes({
 
 export const row = style({
   display: "grid",
-  // dot | name+path cell | icon | elapsed | actions
-  gridTemplateColumns: "8px 1fr auto 32px auto",
+  // gridTemplateColumns is set via inline style in SessionRow based on visibleColumns.
+  // Default fallback (no JS): dot | name+path | agent | memory | elapsed | actions.
+  gridTemplateColumns: "8px 1fr 20px auto 32px auto",
   alignItems: "center",
   gap: vars.space["2"],
   padding: "6px 12px",
@@ -157,9 +158,39 @@ export const memoryBadge = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
   fontVariantNumeric: "tabular-nums",
-  marginLeft: vars.space["1"],
+  justifyContent: "flex-end",
 });
 
+export const memoryBadgeWarning = style({
+  color: vars.color.warning,
+  fontWeight: 600,
+});
+
+export const memoryBadgeHigh = style({
+  color: vars.color.error,
+  fontWeight: 700,
+});
+
+export const diffBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  fontSize: vars.fontSize.xs,
+  fontVariantNumeric: "tabular-nums",
+  justifyContent: "flex-end",
+});
+
+export const branchCell = style({
+  fontFamily: vars.font.mono,
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  maxWidth: "120px",
+});
+
+// Only applied when RSS > 500 MB.
 export const rowMemoryPressure = style({
   borderLeft: `3px solid ${vars.color.warning}`,
 });
