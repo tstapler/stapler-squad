@@ -31,24 +31,33 @@ jest.mock("@/gen/session/v1/types_pb", () => ({
 
 const mockPlayNotificationSound = jest.fn();
 const mockShowBrowserNotification = jest.fn();
+const mockCloseNativeNotification = jest.fn();
 
 jest.mock("@/lib/utils/notifications", () => ({
   playNotificationSound: (...args: unknown[]) =>
     mockPlayNotificationSound(...args),
   showBrowserNotification: (...args: unknown[]) =>
     mockShowBrowserNotification(...args),
+  closeNativeNotification: (...args: unknown[]) =>
+    mockCloseNativeNotification(...args),
   NotificationSound: { DING: "ding" },
+  notificationTag: {
+    approval: (approvalId: string) => `approval:${approvalId}`,
+    tier1Review: (sessionId: string) => `review-queue-tier1-${sessionId}`,
+  },
 }));
 
 const mockShowSessionNotification = jest.fn();
 const mockAddToHistoryOnly = jest.fn();
 const mockMarkAsReadBySessionId = jest.fn();
+const mockRemoveToastBySessionId = jest.fn();
 
 jest.mock("@/lib/contexts/NotificationContext", () => ({
   useNotifications: () => ({
     showSessionNotification: mockShowSessionNotification,
     addToHistoryOnly: mockAddToHistoryOnly,
     markAsReadBySessionId: mockMarkAsReadBySessionId,
+    removeToastBySessionId: mockRemoveToastBySessionId,
   }),
 }));
 
@@ -93,6 +102,8 @@ describe("useReviewQueueNotifications — dwell-time filter", () => {
     mockShowSessionNotification.mockClear();
     mockAddToHistoryOnly.mockClear();
     mockMarkAsReadBySessionId.mockClear();
+    mockRemoveToastBySessionId.mockClear();
+    mockCloseNativeNotification.mockClear();
     mockShouldNotify.mockReturnValue(true);
     mockMarkNotifiedBatch.mockClear();
     mockCleanupExpired.mockClear();
@@ -393,7 +404,51 @@ describe("useReviewQueueNotifications — dwell-time filter", () => {
     });
   });
 
-  // ── 7. reset() ────────────────────────────────────────────────────────────
+  // ── 7. Stale-item cleanup: removeToastBySessionId + closeNativeNotification ──
+
+  describe("stale item removal (FR-4 + FR-5)", () => {
+    it("T-FE-08: calls closeNativeNotification with review-queue-tier1-<id> when item leaves queue", () => {
+      const item = makeItem("session-close-native");
+
+      const { rerender } = renderHook(
+        ({ items }) => useReviewQueueNotifications(items, { enabled: true }),
+        { initialProps: { items: [] as ReturnType<typeof makeItem>[] } }
+      );
+
+      act(() => {
+        rerender({ items: [item] });
+      });
+
+      act(() => {
+        rerender({ items: [] });
+      });
+
+      expect(mockCloseNativeNotification).toHaveBeenCalledWith(
+        "review-queue-tier1-session-close-native"
+      );
+    });
+
+    it("T-FE-09: calls removeToastBySessionId when item leaves queue", () => {
+      const item = makeItem("session-remove-toast");
+
+      const { rerender } = renderHook(
+        ({ items }) => useReviewQueueNotifications(items, { enabled: true }),
+        { initialProps: { items: [] as ReturnType<typeof makeItem>[] } }
+      );
+
+      act(() => {
+        rerender({ items: [item] });
+      });
+
+      act(() => {
+        rerender({ items: [] });
+      });
+
+      expect(mockRemoveToastBySessionId).toHaveBeenCalledWith(["session-remove-toast"]);
+    });
+  });
+
+  // ── 8. reset() ────────────────────────────────────────────────────────────
 
   describe("reset()", () => {
     it("cancels all pending timers and allows initial-load items to be re-evaluated", () => {

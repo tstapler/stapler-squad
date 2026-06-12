@@ -15,6 +15,7 @@ import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { getApiBaseUrl } from "@/lib/config";
+import { closeNativeNotification, notificationTag } from "@/lib/utils/notifications";
 import type { ConnectionState } from "@/lib/store/sessionsSlice";
 
 interface SessionServiceContextValue {
@@ -59,7 +60,7 @@ const SessionServiceContext = createContext<SessionServiceContextValue | null>(n
  */
 export function GlobalSessionServiceProvider({ children }: { children: React.ReactNode }) {
   const { authEnabled, authenticated, loading: authLoading } = useAuth();
-  const { refreshHistory, markAsReadBySessionId } = useNotifications();
+  const { refreshHistory, markAsReadBySessionId, removeToastByApprovalId } = useNotifications();
   const router = useRouter();
 
   // Navigate to the session detail when user clicks "View" on a toast.
@@ -79,7 +80,14 @@ export function GlobalSessionServiceProvider({ children }: { children: React.Rea
     enabled: !authLoading && (!authEnabled || authenticated),
     onNotification: handleNotification,
     onReconnect: refreshHistory,
-    onApprovalResponse: refreshHistory,
+    onApprovalResponse: (approvalId: string, sessionId: string) => {
+      removeToastByApprovalId(approvalId);
+      // Close native OS notification for this approval
+      closeNativeNotification(notificationTag.approval(approvalId));
+      // Also close any review-queue tier-1 notification for this session
+      closeNativeNotification(notificationTag.tier1Review(sessionId));
+      void refreshHistory();
+    },
     onSessionDeleted: markAsReadBySessionId,
   });
 

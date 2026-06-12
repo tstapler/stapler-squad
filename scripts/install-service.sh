@@ -318,6 +318,7 @@ health_check_and_rollback() {
     return 1
 }
 
+
 # ── Uninstall ─────────────────────────────────────────────────────────────────
 uninstall_service() {
     os="$1"

@@ -22,6 +22,12 @@ interface NotificationContextValue {
   addToHistoryOnly: (notification: Omit<NotificationData, "id" | "timestamp">) => void;
   removeNotification: (id: string) => void;
   /**
+   * Remove an active toast whose metadata.approval_id matches the given approvalId.
+   * Used to preemptively clear approval toasts when an approval_response event arrives,
+   * before refreshHistory() completes.
+   */
+  removeToastByApprovalId: (approvalId: string) => void;
+  /**
    * Acknowledge one or more notifications: removes the active toast(s) and marks
    * them as read in the history panel. Use this for all user-triggered dismissals
    * so the two operations are always kept in sync.
@@ -36,6 +42,13 @@ interface NotificationContextValue {
   togglePanel: () => void;
   markAsRead: (id: string | string[]) => void;
   markAsReadBySessionId: (sessionId: string | string[]) => void;
+  /**
+   * Remove active toast(s) for the given session ID(s).
+   * Does NOT mark history as read — use acknowledgeNotification for that.
+   * Used by useReviewQueueNotifications when a stale/queue item resolves,
+   * so the toast disappears even if auto-minimize hasn't fired yet.
+   */
+  removeToastBySessionId: (sessionId: string | string[]) => void;
   markAllAsRead: () => void;
   removeFromHistory: (id: string) => void;
   clearHistory: () => void;
@@ -184,6 +197,12 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
 
+  const removeToastByApprovalId = useCallback((approvalId: string) => {
+    setNotifications((prev) =>
+      prev.filter((n) => n.metadata?.approval_id !== approvalId)
+    );
+  }, []);
+
   const clearAll = useCallback(() => {
     setNotifications([]);
   }, []);
@@ -271,6 +290,13 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     });
   }, [history]);
 
+  const removeToastBySessionId = useCallback((sessionId: string | string[]) => {
+    const sessionIds = new Set(Array.isArray(sessionId) ? sessionId : [sessionId]);
+    sessionIds.delete(""); // never match notifications without a sessionId
+    if (sessionIds.size === 0) return;
+    setNotifications((prev) => prev.filter((n) => !sessionIds.has(n.sessionId ?? "")));
+  }, []);
+
   const markAllAsRead = useCallback(() => {
     setNotificationHistory((prev) => {
       const unreadCount = prev.filter((n) => !n.isRead).length;
@@ -312,12 +338,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         addNotification,
         addToHistoryOnly,
         removeNotification,
+        removeToastByApprovalId,
         acknowledgeNotification,
         clearAll,
         showSessionNotification,
         togglePanel,
         markAsRead,
         markAsReadBySessionId,
+        removeToastBySessionId,
         markAllAsRead,
         removeFromHistory,
         clearHistory,

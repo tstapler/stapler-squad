@@ -46,6 +46,7 @@ type ReviewQueueChecker interface {
 // on notification records after the approval is resolved (or times out).
 type approvalNotificationStamper interface {
 	SetMetadata(id, key, value string) error
+	MarkRead(ids []string) (int, error)
 }
 
 // autoApprovalLogger is a narrow interface for writing silent auto-approval records
@@ -81,6 +82,23 @@ func (h *ApprovalHandler) approvalTimeout() time.Duration {
 		return h.timeout
 	}
 	return 4 * time.Minute
+}
+
+// stampResolved stamps an approval decision on the notification record,
+// marks it read, and broadcasts a resolution event to connected clients.
+// Called for the timeout and cancel arms where no HTTP response decision is sent.
+func (h *ApprovalHandler) stampResolved(approvalID, sessionID, reason string) {
+	if h.notificationStamper != nil {
+		if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", reason); err != nil {
+			log.Warn("[ApprovalHandler] could not stamp "+reason+" on notification", "approval_id", approvalID, "err", err)
+		}
+		if _, err := h.notificationStamper.MarkRead([]string{approvalID}); err != nil {
+			log.Warn("[ApprovalHandler] could not mark "+reason+" approval read", "approval_id", approvalID, "err", err)
+		}
+	}
+	if h.eventBus != nil && sessionID != "" && sessionID != "unknown" {
+		h.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, false, approvalID))
+	}
 }
 
 // SetQueueChecker injects a ReviewQueueChecker for triggering immediate review queue updates
@@ -308,13 +326,7 @@ createApproval:
 		// This lets the user still approve/deny in the terminal rather than being
 		// silently allowed or denied.
 		h.store.Remove(approvalID)
-		// Stamp the notification so the panel shows a "timed out" badge instead of
-		// live Approve/Deny buttons after page refresh.
-		if h.notificationStamper != nil {
-			if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", "timeout"); err != nil {
-				log.Warn("[ApprovalHandler] could not stamp timeout on notification", "approval_id", approvalID, "err", err)
-			}
-		}
+		h.stampResolved(approvalID, sessionID, "timeout")
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out — returning empty response (native dialog fallback)", "approval_id", approvalID)
 		w.WriteHeader(http.StatusOK)
 		return
@@ -322,6 +334,7 @@ createApproval:
 		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
 		h.store.Remove(approvalID)
 		decision = ApprovalDecision{Behavior: "allow", Message: ""}
+		h.stampResolved(approvalID, sessionID, "canceled")
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval context canceled", "approval_id", approvalID)
 		return // Don't write to disconnected client
 	}
