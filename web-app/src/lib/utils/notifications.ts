@@ -8,6 +8,16 @@ import { NATIVE_MEDIUM_TTL_MS, NATIVE_ACTIONABLE_TTL_MS } from "@/lib/notificati
 import { NotificationPriority } from "@/gen/session/v1/types_pb";
 
 /**
+ * Shared tag format helpers for native OS notifications.
+ * Using helpers avoids duplicated format strings across callers
+ * and ensures close/dedup calls use the same tag as show calls.
+ */
+export const notificationTag = {
+  approval: (approvalId: string) => `approval:${approvalId}`,
+  tier1Review: (sessionId: string) => `review-queue-tier1-${sessionId}`,
+} as const;
+
+/**
  * Notification sound types
  */
 export enum NotificationSound {
@@ -246,6 +256,26 @@ export interface BrowserNotificationOptions extends NotificationOptions {
  * This is a known browser/OS limitation; no workaround is attempted here.
  */
 const activeNativeNotifications = new Map<string, Notification>();
+
+/**
+ * Programmatically closes the native OS notification with the given tag.
+ * Removes the entry from activeNativeNotifications so the auto-close timer
+ * won't fire on a stale reference.
+ *
+ * Note: on macOS, notification.close() dismisses the banner but cannot
+ * remove entries already swiped into the Notification Center tray.
+ * This is a known OS/browser limitation.
+ */
+export function closeNativeNotification(tag: string): void {
+  const notif = activeNativeNotifications.get(tag);
+  if (!notif) return;
+  try {
+    notif.close();
+  } catch {
+    // Expected on macOS NC tray entries
+  }
+  activeNativeNotifications.delete(tag);
+}
 
 /**
  * Shows a browser notification if permission is granted.
