@@ -6,6 +6,7 @@ import {
   playNotificationSound,
   showBrowserNotification,
   closeNativeNotification,
+  notificationTag,
   NotificationSound,
 } from "@/lib/utils/notifications";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
@@ -257,7 +258,7 @@ export function useReviewQueueNotifications(
 
           showBrowserNotification(notificationTitle, {
             body,
-            tag: `review-queue-tier1-${tier1Items[0].sessionId}`,
+            tag: notificationTag.tier1Review(tier1Items[0].sessionId),
             requireInteraction: true, // Tier 1: persist in OS notification center
           });
         }
@@ -327,7 +328,7 @@ export function useReviewQueueNotifications(
           pendingDwellRef.current.delete(id);
         }
         // FR-5: close native OS notification for this session
-        closeNativeNotification(`review-queue-tier1-${id}`);
+        closeNativeNotification(notificationTag.tier1Review(id));
       });
     }
 

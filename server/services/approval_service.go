@@ -13,18 +13,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// notificationMetadataStore is the narrow interface ApprovalService needs to stamp
-// the approval decision onto the notification record after it is resolved.
-type notificationMetadataStore interface {
-	SetMetadata(id, key, value string) error
-	MarkRead(ids []string) (int, error)
-}
-
 // ApprovalService handles Claude Code hook approval RPCs.
 type ApprovalService struct {
 	approvalStore     *ApprovalStore
-	notificationStore notificationMetadataStore // optional; nil-safe
-	eventBus          *events.EventBus          // optional; nil-safe; broadcasts resolution to connected clients
+	notificationStore approvalNotificationStamper // optional; nil-safe
+	eventBus          *events.EventBus            // optional; nil-safe; broadcasts resolution to connected clients
 }
 
 // NewApprovalService creates an ApprovalService with the given ApprovalStore.
@@ -34,7 +27,7 @@ func NewApprovalService(store *ApprovalStore) *ApprovalService {
 
 // SetNotificationStore wires in the notification history store so that resolved
 // approvals are stamped with their decision in the notification metadata.
-func (as *ApprovalService) SetNotificationStore(store notificationMetadataStore) {
+func (as *ApprovalService) SetNotificationStore(store approvalNotificationStamper) {
 	as.notificationStore = store
 }
 

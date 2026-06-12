@@ -15,7 +15,7 @@ import { useSessionNotifications } from "@/lib/hooks/useSessionNotifications";
 import { useAuth } from "@/lib/contexts/AuthContext";
 import { useNotifications } from "@/lib/contexts/NotificationContext";
 import { getApiBaseUrl } from "@/lib/config";
-import { closeNativeNotification } from "@/lib/utils/notifications";
+import { closeNativeNotification, notificationTag } from "@/lib/utils/notifications";
 import type { ConnectionState } from "@/lib/store/sessionsSlice";
 
 interface SessionServiceContextValue {
@@ -83,9 +83,9 @@ export function GlobalSessionServiceProvider({ children }: { children: React.Rea
     onApprovalResponse: (approvalId: string, sessionId: string) => {
       removeToastByApprovalId(approvalId);
       // Close native OS notification for this approval
-      closeNativeNotification(`approval:${approvalId}`);
+      closeNativeNotification(notificationTag.approval(approvalId));
       // Also close any review-queue tier-1 notification for this session
-      closeNativeNotification(`review-queue-tier1-${sessionId}`);
+      closeNativeNotification(notificationTag.tier1Review(sessionId));
       void refreshHistory();
     },
     onSessionDeleted: markAsReadBySessionId,

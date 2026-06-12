@@ -292,6 +292,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   const removeToastBySessionId = useCallback((sessionId: string | string[]) => {
     const sessionIds = new Set(Array.isArray(sessionId) ? sessionId : [sessionId]);
+    sessionIds.delete(""); // never match notifications without a sessionId
+    if (sessionIds.size === 0) return;
     setNotifications((prev) => prev.filter((n) => !sessionIds.has(n.sessionId ?? "")));
   }, []);
 

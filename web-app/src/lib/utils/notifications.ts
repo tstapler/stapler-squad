@@ -8,6 +8,16 @@ import { NATIVE_MEDIUM_TTL_MS, NATIVE_ACTIONABLE_TTL_MS } from "@/lib/notificati
 import { NotificationPriority } from "@/gen/session/v1/types_pb";
 
 /**
+ * Shared tag format helpers for native OS notifications.
+ * Using helpers avoids duplicated format strings across callers
+ * and ensures close/dedup calls use the same tag as show calls.
+ */
+export const notificationTag = {
+  approval: (approvalId: string) => `approval:${approvalId}`,
+  tier1Review: (sessionId: string) => `review-queue-tier1-${sessionId}`,
+} as const;
+
+/**
  * Notification sound types
  */
 export enum NotificationSound {

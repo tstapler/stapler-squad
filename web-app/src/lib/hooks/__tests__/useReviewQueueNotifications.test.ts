@@ -41,6 +41,10 @@ jest.mock("@/lib/utils/notifications", () => ({
   closeNativeNotification: (...args: unknown[]) =>
     mockCloseNativeNotification(...args),
   NotificationSound: { DING: "ding" },
+  notificationTag: {
+    approval: (approvalId: string) => `approval:${approvalId}`,
+    tier1Review: (sessionId: string) => `review-queue-tier1-${sessionId}`,
+  },
 }));
 
 const mockShowSessionNotification = jest.fn();

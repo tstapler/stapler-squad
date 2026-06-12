@@ -84,6 +84,23 @@ func (h *ApprovalHandler) approvalTimeout() time.Duration {
 	return 4 * time.Minute
 }
 
+// stampResolved stamps an approval decision on the notification record,
+// marks it read, and broadcasts a resolution event to connected clients.
+// Called for the timeout and cancel arms where no HTTP response decision is sent.
+func (h *ApprovalHandler) stampResolved(approvalID, sessionID, reason string) {
+	if h.notificationStamper != nil {
+		if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", reason); err != nil {
+			log.Warn("[ApprovalHandler] could not stamp "+reason+" on notification", "approval_id", approvalID, "err", err)
+		}
+		if _, err := h.notificationStamper.MarkRead([]string{approvalID}); err != nil {
+			log.Warn("[ApprovalHandler] could not mark "+reason+" approval read", "approval_id", approvalID, "err", err)
+		}
+	}
+	if h.eventBus != nil && sessionID != "" && sessionID != "unknown" {
+		h.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, false, approvalID))
+	}
+}
+
 // SetQueueChecker injects a ReviewQueueChecker for triggering immediate review queue updates
 // when a new approval is created. This provides <100ms feedback instead of waiting for the
 // next 2-second poll cycle.
@@ -309,21 +326,7 @@ createApproval:
 		// This lets the user still approve/deny in the terminal rather than being
 		// silently allowed or denied.
 		h.store.Remove(approvalID)
-		// Stamp the notification so the panel shows a "timed out" badge instead of
-		// live Approve/Deny buttons after page refresh.
-		if h.notificationStamper != nil {
-			if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", "timeout"); err != nil {
-				log.Warn("[ApprovalHandler] could not stamp timeout on notification", "approval_id", approvalID, "err", err)
-			}
-			if _, err := h.notificationStamper.MarkRead([]string{approvalID}); err != nil {
-				log.Warn("[ApprovalHandler] could not mark timed-out approval read", "approval_id", approvalID, "err", err)
-			}
-		}
-		// Broadcast timeout to connected clients so they remove the toast immediately
-		// instead of waiting for ACTIONABLE_TOAST_STALE_MS (6 min).
-		if h.eventBus != nil && sessionID != "" && sessionID != "unknown" {
-			h.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, false, approvalID))
-		}
+		h.stampResolved(approvalID, sessionID, "timeout")
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval timed out — returning empty response (native dialog fallback)", "approval_id", approvalID)
 		w.WriteHeader(http.StatusOK)
 		return
@@ -331,19 +334,7 @@ createApproval:
 		// Claude Code disconnected (e.g., stapler-squad restarted, network issue)
 		h.store.Remove(approvalID)
 		decision = ApprovalDecision{Behavior: "allow", Message: ""}
-		// Stamp canceled so other clients can show a resolved badge on refresh.
-		if h.notificationStamper != nil {
-			if err := h.notificationStamper.SetMetadata(approvalID, "approval_decision", "canceled"); err != nil {
-				log.Warn("[ApprovalHandler] could not stamp canceled on notification", "approval_id", approvalID, "err", err)
-			}
-			if _, err := h.notificationStamper.MarkRead([]string{approvalID}); err != nil {
-				log.Warn("[ApprovalHandler] could not mark canceled approval read", "approval_id", approvalID, "err", err)
-			}
-		}
-		// Broadcast to other connected clients (the disconnecting client cannot receive it).
-		if h.eventBus != nil && sessionID != "" && sessionID != "unknown" {
-			h.eventBus.Publish(events.NewApprovalResponseEvent(sessionID, false, approvalID))
-		}
+		h.stampResolved(approvalID, sessionID, "canceled")
 		log.ForSession(sessionID).Info("[ApprovalHandler] approval context canceled", "approval_id", approvalID)
 		return // Don't write to disconnected client
 	}

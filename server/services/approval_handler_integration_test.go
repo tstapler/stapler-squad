@@ -527,22 +527,20 @@ func TestHandlePermissionRequest_TimeoutPublishesApprovalResponseEvent(t *testin
 		h.HandlePermissionRequest(rr, req)
 	}()
 
-	select {
-	case event := <-ch:
-		// Skip notification events until we get the approval response
-		for event.Type == events.EventNotification {
-			select {
-			case event = <-ch:
-			case <-time.After(500 * time.Millisecond):
-				t.Fatal("expected EventApprovalResponse within 500ms after 10ms timeout")
+	// Drain notification events and wait for the approval response event
+	deadline := time.After(500 * time.Millisecond)
+	for {
+		select {
+		case event := <-ch:
+			if event.Type == pkgevents.EventApprovalResponse {
+				assert.Equal(t, "test-session", event.SessionID)
+				assert.False(t, event.Approved)
+				assert.NotEmpty(t, event.Context) // approval ID
+				return
 			}
+		case <-deadline:
+			t.Fatal("expected EventApprovalResponse within 500ms after 10ms timeout")
 		}
-		require.Equal(t, pkgevents.EventApprovalResponse, event.Type)
-		assert.Equal(t, "test-session", event.SessionID)
-		assert.False(t, event.Approved)
-		assert.NotEmpty(t, event.Context) // approval ID
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected EventApprovalResponse within 500ms after 10ms timeout")
 	}
 }
 
