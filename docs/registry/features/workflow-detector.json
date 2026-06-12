@@ -1,9 +1,9 @@
 {
   "id": "workflow-detector",
   "type": "frontend",
-  "description": "WorkflowDetector detects @slug [arg] omnibar input and maps it to a run_workflow action. Dynamically registered (not in createDefaultRegistry) by OmnibarContext.",
   "component": "WorkflowDetector",
-  "filePath": "web-app/src/lib/omnibar/detectors/WorkflowDetector.ts",
+  "path": "web-app/src/lib/omnibar/detectors/WorkflowDetector.ts",
+  "markerLine": 1,
   "tested": true,
   "testIds": [
     "WorkflowDetector_should_returnNull_When_inputLacksAtPrefix",

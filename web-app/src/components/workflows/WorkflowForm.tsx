@@ -89,8 +89,10 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
             placeholder="my-workflow"
             required
             disabled={isEdit}
-            pattern="[a-z0-9][a-z0-9-]*[a-z0-9]"
-            title="2-64 lowercase chars, hyphens allowed, no leading/trailing hyphens"
+            pattern="[a-z0-9]+(-[a-z0-9]+)*"
+            minLength={2}
+            maxLength={64}
+            title="2-64 lowercase chars, hyphens allowed (no consecutive or leading/trailing hyphens)"
           />
           <span className={styles.hint}>Type @slug in the omnibar to invoke</span>
         </div>

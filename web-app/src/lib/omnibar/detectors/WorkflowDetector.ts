@@ -1,3 +1,4 @@
+// +feature: workflow-detector
 /**
  * WorkflowDetector detects @slug [arg] syntax for quick workflow invocation.
  * Priority 25 — after GitHub URL detectors (10/20/30) and before NewSessionDetector (35).

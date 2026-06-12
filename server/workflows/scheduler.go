@@ -71,11 +71,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 
 	s.c.Start()
-
-	go func() {
-		<-ctx.Done()
-		s.Stop()
-	}()
+	// Stop is registered as a shutdown hook in server.go; no goroutine needed here.
 }
 
 // Stop halts the cron engine. Called as a shutdown hook.
@@ -133,12 +129,28 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 		return "", fmt.Errorf("session service not available")
 	}
 
-	prompt := wf.InputTemplate
-	if prompt != "" && arg != "" {
-		prompt = strings.ReplaceAll(prompt, "{{input}}", arg)
-	} else if prompt == "" {
-		prompt = arg
+	// Build prompt: command is the primary instruction (required). If inputTemplate is
+	// set it is appended after interpolation. If only arg is present and command has no
+	// {{input}} placeholder, append the arg as additional context.
+	var parts []string
+	if wf.Command != "" {
+		cmdPart := wf.Command
+		if arg != "" && strings.Contains(cmdPart, "{{input}}") {
+			cmdPart = strings.ReplaceAll(cmdPart, "{{input}}", arg)
+		}
+		parts = append(parts, cmdPart)
 	}
+	argInjectedIntoCommand := wf.Command != "" && strings.Contains(wf.Command, "{{input}}")
+	if wf.InputTemplate != "" {
+		tmplPart := wf.InputTemplate
+		if arg != "" {
+			tmplPart = strings.ReplaceAll(tmplPart, "{{input}}", arg)
+		}
+		parts = append(parts, tmplPart)
+	} else if arg != "" && !argInjectedIntoCommand {
+		parts = append(parts, arg)
+	}
+	prompt := strings.Join(parts, "\n\n")
 
 	title := fmt.Sprintf("%s — %s", wf.Name, time.Now().Format("2006-01-02 15:04"))
 	oneOff := wf.SessionType == session.SessionTypeOneOff

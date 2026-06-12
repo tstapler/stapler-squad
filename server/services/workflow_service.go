@@ -82,6 +82,9 @@ func (s *WorkflowService) CreateWorkflow(
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	// Validate required fields per ADR-9.
+	if req.Msg.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("name is required"))
+	}
 	if req.Msg.Command == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("command is required"))
 	}
