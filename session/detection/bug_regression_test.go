@@ -26,7 +26,7 @@ func TestBug1_IndentedSpinner(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sd.Detect([]byte(tc.input))
 			if got != StatusActive && got != StatusProcessing {
-				t.Errorf("Detect(%q) = %s, want StatusActive (indented spinner must be detected)",
+				t.Errorf("Detect(%q) = %s, want StatusActive or StatusProcessing (indented spinner must be detected)",
 					tc.input, got)
 			}
 		})

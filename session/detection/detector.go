@@ -565,7 +565,7 @@ func getDefaultPatterns() StatusPatterns {
 				// and Latin-1 accented chars (Flambéing, Sautéing) — Go RE2 \w = [0-9A-Za-z_] only.
 				// ^\s* allows leading whitespace so indented spinners (e.g. task manager sub-items)
 				// are detected: "  ✽ Roosting… (9m 52s · ↓ 2.8k tokens)"
-				Pattern:     `(?m)^\s*[·✢✳✶✻✽●*]\s+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
+				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
 				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis",
 				Priority:    26,
 			},
