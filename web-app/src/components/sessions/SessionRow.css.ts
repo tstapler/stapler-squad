@@ -206,6 +206,26 @@ export const rowPaused = style({
   },
 });
 
+const rowActivePulse = keyframes({
+  "0%": { borderLeftColor: vars.color.primary },
+  "50%": { borderLeftColor: `${vars.color.primary}66` },
+  "100%": { borderLeftColor: vars.color.primary },
+});
+
+/** Applied to <li> when subStatus === PROCESSING — pulsing left-border makes active
+ *  sessions scannable at a glance. Pulse is disabled for reduced-motion users. */
+export const rowActive = style({
+  borderLeft: `3px solid ${vars.color.primary}`,
+  "@media": {
+    "(prefers-reduced-motion: no-preference)": {
+      animationName: rowActivePulse,
+      animationDuration: "2s",
+      animationIterationCount: "infinite",
+      animationTimingFunction: "ease-in-out",
+    },
+  },
+});
+
 export const groupHeader = style({
   height: "24px",
   display: "flex",

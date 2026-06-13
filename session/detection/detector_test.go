@@ -596,7 +596,10 @@ func TestGeminiPatterns_AgyCoverage(t *testing.T) {
 	}{
 		{"╰─ Yes, allow once", StatusNeedsApproval},
 		{"Allow execution of: ls /tmp", StatusNeedsApproval},
-		{"✦ Working...", StatusProcessing},
+		// "✦ Working..." now returns StatusActive: ✦ was added to claude_thinking_verb
+		// (the Claude Code spinner pattern), which fires before gemini_working (Processing).
+		// StatusActive is correct — Gemini/agy is actively processing when showing this line.
+		{"✦ Working...", StatusActive},
 	}
 	for _, tc := range distinctiveCases {
 		t.Run(tc.line, func(t *testing.T) {
@@ -639,5 +642,131 @@ func TestDetector_AgyCoverageCommentPresent(t *testing.T) {
 	if !strings.Contains(string(src), "agy (Antigravity CLI)") {
 		t.Error("detector.go is missing the 'agy (Antigravity CLI)' coverage comment; " +
 			"if agy patterns were intentionally removed or renamed, update this test and the comment")
+	}
+}
+
+// TestStatusDetector_DetectActive_StarFourPointed verifies that ✦ (U+2726 BLACK FOUR POINTED
+// STAR) — Claude Code's primary thinking spinner — is detected as StatusActive.
+// Regression test for the gap where claude_thinking_verb lacked ✦ in its char class.
+func TestStatusDetector_DetectActive_StarFourPointed(t *testing.T) {
+	sd := NewStatusDetector()
+	testCases := []struct {
+		input string
+		desc  string
+	}{
+		{
+			"✦ Thinking… (2m 5s · ↓ 6.4k tokens)\n",
+			"claude primary spinner + Thinking verb + ellipsis",
+		},
+		{
+			"  ✦ Searching…\n",
+			"indented star-four-pointed + verb + ellipsis",
+		},
+		{
+			"✦ Compiling...\n",
+			"dot ellipsis variant (3 dots)",
+		},
+		{
+			"✦ Ruminating… (20s · ↓ 1.2k tokens)\n",
+			"random thinking verb (Ruminating)",
+		},
+		{
+			"✦ Pondering.\n",
+			"single dot ellipsis",
+		},
+	}
+	for _, tc := range testCases {
+		t.Run(tc.desc, func(t *testing.T) {
+			status := sd.Detect([]byte(tc.input))
+			if status != StatusActive {
+				t.Errorf("Detect(%q) = %v, want StatusActive", tc.input, status)
+			}
+		})
+	}
+}
+
+// TestStatusDetector_DetectActive_ScreenOverwrite verifies that bare \r (carriage return
+// not followed by \n) and ANSI cursor-up sequences are detected as StatusActive when
+// no text-based pattern matched. This catches spinner-based TUIs that animate via CR.
+func TestStatusDetector_DetectActive_ScreenOverwrite(t *testing.T) {
+	sd := NewStatusDetector()
+
+	t.Run("pure CR spinner — no keywords", func(t *testing.T) {
+		input := "⠋ Thinking\r⠙ Thinking\r⠹ Thinking\n"
+		status := sd.Detect([]byte(input))
+		if status != StatusActive {
+			t.Errorf("Detect(CR spinner) = %v, want StatusActive", status)
+		}
+	})
+
+	t.Run("ANSI cursor-up with non-keyword content triggers screen-overwrite", func(t *testing.T) {
+		// "Working..." would match the Processing text pattern, so use content with
+		// no keyword match — screen-overwrite fires before the Ready catch-all.
+		input := "......\x1b[A......\n"
+		status := sd.Detect([]byte(input))
+		if status != StatusActive {
+			t.Errorf("Detect(cursor-up) = %v, want StatusActive", status)
+		}
+	})
+
+	t.Run("Windows CRLF newlines must NOT trigger screen-overwrite", func(t *testing.T) {
+		input := "Normal line\r\nAnother line\r\n"
+		status := sd.Detect([]byte(input))
+		if status == StatusActive {
+			t.Errorf("Detect(CRLF newlines) = StatusActive; CRLF is a line ending, not a screen overwrite")
+		}
+	})
+
+	t.Run("higher-priority error pattern wins over screen-overwrite", func(t *testing.T) {
+		// Error text must be on a separate line (\n) so CR collapse doesn't erase it.
+		// "Error: ...\r⠋ Retrying\r" would collapse the error text away (CR overwrite);
+		// use \n to keep both lines visible so the error pattern matches first.
+		input := "Error: connection refused\n⠋ Retrying\r"
+		status := sd.Detect([]byte(input))
+		if status != StatusError {
+			t.Errorf("Detect(error+overwrite) = %v, want StatusError (error has higher priority)", status)
+		}
+	})
+}
+
+// TestRecentEvents verifies the detection event ring buffer and SetSessionID.
+func TestRecentEvents(t *testing.T) {
+	sd := NewStatusDetector()
+	sd.SetSessionID("test-session")
+
+	// No events yet
+	if got := sd.RecentEvents(10); len(got) != 0 {
+		t.Errorf("expected 0 events before any detection, got %d", len(got))
+	}
+
+	// Run a detection — should produce one event
+	_ = sd.Detect([]byte("✦ Thinking…\n"))
+	events := sd.RecentEvents(10)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event after 1 detection, got %d", len(events))
+	}
+	if events[0].SessionID != "test-session" {
+		t.Errorf("event.SessionID = %q, want %q", events[0].SessionID, "test-session")
+	}
+	if events[0].ResultStatus != StatusActive {
+		t.Errorf("event.ResultStatus = %v, want StatusActive", events[0].ResultStatus)
+	}
+	if events[0].MatchedPattern == "" {
+		t.Error("event.MatchedPattern should not be empty for a matched pattern")
+	}
+
+	// No-match case: TailSnippet should be populated
+	sd2 := NewStatusDetector()
+	_ = sd2.Detect([]byte("some unrecognized output"))
+	ev2 := sd2.RecentEvents(1)
+	if len(ev2) == 0 {
+		t.Fatal("expected at least 1 event from no-match detection")
+	}
+	if ev2[0].TailSnippet == "" {
+		t.Error("TailSnippet should be non-empty for no-match events (needed for debugging)")
+	}
+	if ev2[0].MatchedPattern != "<none>" && ev2[0].MatchedPattern != "claude_prompt" {
+		// claude_prompt has a catch-all ".*" ready pattern that may match — both are acceptable
+		t.Logf("no-match MatchedPattern = %q (acceptable)", ev2[0].MatchedPattern)
 	}
 }

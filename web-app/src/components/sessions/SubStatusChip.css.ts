@@ -64,6 +64,16 @@ export const chipRateLimited = style([
   },
 ]);
 
+export const chipIdle = style([
+  chip,
+  {
+    background: vars.statusBadge.idleBg,
+    color: vars.statusBadge.idleFg,
+    border: `1px solid ${vars.statusBadge.idleBorder}`,
+    opacity: 0.8,
+  },
+]);
+
 export const spinner = style({
   display: "inline-block",
   width: "10px",

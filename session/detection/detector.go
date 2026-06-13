@@ -5,6 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,6 +61,10 @@ type StatusDetector struct {
 	idleRegexes          []*regexp.Regexp
 	activeRegexes        []*regexp.Regexp
 	successRegexes       []*regexp.Regexp
+	// sessionID is set by SetSessionID() so detection events carry the owning session ID.
+	sessionID string
+	// ring is the per-detector in-memory detection event ring buffer.
+	ring eventRing
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
@@ -205,6 +210,27 @@ func stripANSI(text string) string {
 	return ansiStripRegex.ReplaceAllString(text, "")
 }
 
+// cursorUpRegex matches ANSI cursor-up escape sequences (\x1b[A or \x1b[NA).
+var cursorUpRegex = regexp.MustCompile(`\x1b\[\d*A`)
+
+// hasScreenOverwrite reports whether raw PTY bytes contain evidence of an in-progress
+// spinner: a bare carriage return (not part of \r\n, which is a Windows newline) or
+// an ANSI cursor-up escape sequence. Must be called on the raw output before
+// collapseCarriageReturns() discards this information.
+func hasScreenOverwrite(raw []byte) bool {
+	s := string(raw)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\r' {
+			// \r\n is a Windows newline — not a screen overwrite
+			if i+1 < len(s) && s[i+1] == '\n' {
+				continue
+			}
+			return true
+		}
+	}
+	return cursorUpRegex.Match(raw)
+}
+
 // collapseCarriageReturns collapses CR-overwritten segments within each line,
 // keeping only the final write. "foo\rbar" → "bar"; "\r\n" (Windows newline)
 // is treated as a newline boundary and preserved.
@@ -233,148 +259,118 @@ func collapseCarriageReturns(s string) string {
 // output when determining session status. Matches DefaultIdleDetectorConfig().BufferSize.
 const StatusDetectionTailBytes = 4096
 
+// detectFromText runs all pattern checks on pre-processed text and raw bytes.
+// Returns the matched status, the matched pattern's Name (or "" for screen-overwrite,
+// "<none>" for no match), and the context description string.
+// This is the shared core called by both Detect() and DetectWithContext().
+func (sd *StatusDetector) detectFromText(text string, raw []byte) (DetectedStatus, string, string) {
+	// Error patterns (highest priority)
+	for i, regex := range sd.errorRegexes {
+		if regex.MatchString(text) {
+			return StatusError, sd.patterns.Error[i].Name, sd.patterns.Error[i].Description
+		}
+	}
+	// Tests failing
+	for i, regex := range sd.testsFailingRegexes {
+		if regex.MatchString(text) {
+			return StatusTestsFailing, sd.patterns.TestsFailing[i].Name, sd.patterns.TestsFailing[i].Description
+		}
+	}
+	// Success / task completion
+	for i, regex := range sd.successRegexes {
+		if regex.MatchString(text) {
+			return StatusSuccess, sd.patterns.Success[i].Name, sd.patterns.Success[i].Description
+		}
+	}
+	// Needs approval
+	for i, regex := range sd.needsApprovalRegexes {
+		if regex.MatchString(text) {
+			return StatusNeedsApproval, sd.patterns.NeedsApproval[i].Name, sd.patterns.NeedsApproval[i].Description
+		}
+	}
+	// Input required (explicit prompts)
+	for i, regex := range sd.inputRequiredRegexes {
+		if regex.MatchString(text) {
+			return StatusInputRequired, sd.patterns.InputRequired[i].Name, sd.patterns.InputRequired[i].Description
+		}
+	}
+	// Active (e.g. "esc to interrupt", thinking verb)
+	for i, regex := range sd.activeRegexes {
+		if regex.MatchString(text) {
+			return StatusActive, sd.patterns.Active[i].Name, sd.patterns.Active[i].Description
+		}
+	}
+	// Processing
+	for i, regex := range sd.processingRegexes {
+		if regex.MatchString(text) {
+			return StatusProcessing, sd.patterns.Processing[i].Name, sd.patterns.Processing[i].Description
+		}
+	}
+	// Screen-overwrite fallback: bare \r or ANSI cursor-up signals a spinner animating
+	// in-place. Placed AFTER Active/Processing (visible text beats heuristic) but BEFORE
+	// Idle/Ready catch-alls so a spinning session isn't misclassified as waiting.
+	if hasScreenOverwrite(raw) {
+		return StatusActive, "screen_overwrite", "Screen overwrite — spinner actively redrawing"
+	}
+	// Idle (e.g. "— INSERT —", readline prompt)
+	for i, regex := range sd.idleRegexes {
+		if regex.MatchString(text) {
+			return StatusIdle, sd.patterns.Idle[i].Name, sd.patterns.Idle[i].Description
+		}
+	}
+	// Ready (includes ".*" catch-all — must be last)
+	for i, regex := range sd.readyRegexes {
+		if regex.MatchString(text) {
+			return StatusReady, sd.patterns.Ready[i].Name, sd.patterns.Ready[i].Description
+		}
+	}
+	return StatusUnknown, "<none>", ""
+}
+
+// appendDetectionEvent records the outcome of a detection call to the ring buffer.
+func (sd *StatusDetector) appendDetectionEvent(status DetectedStatus, patternName, cleanedText string) {
+	snippet := cleanedText
+	if len(snippet) > TailSnippetBytes {
+		snippet = snippet[len(snippet)-TailSnippetBytes:]
+	}
+	sd.ring.push(DetectionEvent{
+		SessionID:       sd.sessionID,
+		Timestamp:       time.Now(),
+		MatchedPattern:  patternName,
+		MatchedCategory: categoryName(status),
+		ResultStatus:    status,
+		TailSnippet:     snippet,
+	})
+}
+
+// SetSessionID sets the session identifier embedded in all future DetectionEvents.
+// Call this once after creating the detector, before any detections run.
+func (sd *StatusDetector) SetSessionID(id string) {
+	sd.sessionID = id
+}
+
+// RecentEvents returns up to n most-recent DetectionEvents, newest-first.
+func (sd *StatusDetector) RecentEvents(n int) []DetectionEvent {
+	return sd.ring.recent(n)
+}
+
 // Detect analyzes the provided PTY output and returns the detected status.
 // Patterns are checked in priority order: Error > TestsFailing > Success > NeedsApproval > InputRequired > Active > Processing > Idle > Ready.
 // Returns StatusUnknown if no patterns match.
 func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
-	// Collapse CR-overwritten lines then strip ANSI escape codes for cleaner pattern matching.
 	text := stripANSI(collapseCarriageReturns(string(output)))
-
-	// Check error patterns first (highest priority)
-	for _, regex := range sd.errorRegexes {
-		if regex.MatchString(text) {
-			return StatusError
-		}
-	}
-
-	// Check tests failing patterns (high priority - actionable failures)
-	for _, regex := range sd.testsFailingRegexes {
-		if regex.MatchString(text) {
-			return StatusTestsFailing
-		}
-	}
-
-	// Check success patterns (task completion)
-	for _, regex := range sd.successRegexes {
-		if regex.MatchString(text) {
-			return StatusSuccess
-		}
-	}
-
-	// Check needs approval patterns
-	for _, regex := range sd.needsApprovalRegexes {
-		if regex.MatchString(text) {
-			return StatusNeedsApproval
-		}
-	}
-
-	// Check input required patterns (explicit prompts)
-	for _, regex := range sd.inputRequiredRegexes {
-		if regex.MatchString(text) {
-			return StatusInputRequired
-		}
-	}
-
-	// Check active patterns (e.g., "esc to interrupt")
-	for _, regex := range sd.activeRegexes {
-		if regex.MatchString(text) {
-			return StatusActive
-		}
-	}
-
-	// Check processing patterns
-	for _, regex := range sd.processingRegexes {
-		if regex.MatchString(text) {
-			return StatusProcessing
-		}
-	}
-
-	// Check idle patterns (e.g., "— INSERT —")
-	for _, regex := range sd.idleRegexes {
-		if regex.MatchString(text) {
-			return StatusIdle
-		}
-	}
-
-	// Check ready patterns
-	for _, regex := range sd.readyRegexes {
-		if regex.MatchString(text) {
-			return StatusReady
-		}
-	}
-
-	return StatusUnknown
+	status, patternName, _ := sd.detectFromText(text, output)
+	sd.appendDetectionEvent(status, patternName, text)
+	return status
 }
 
 // DetectWithContext returns the detected status along with a user-friendly context message.
 // Uses the pattern's Description field for human-readable messages instead of raw matched text.
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
 	text := stripANSI(collapseCarriageReturns(string(output)))
-
-	// Check error patterns first (highest priority)
-	for i, regex := range sd.errorRegexes {
-		if regex.MatchString(text) {
-			return StatusError, sd.patterns.Error[i].Description
-		}
-	}
-
-	// Check tests failing patterns (high priority - actionable failures)
-	for i, regex := range sd.testsFailingRegexes {
-		if regex.MatchString(text) {
-			return StatusTestsFailing, sd.patterns.TestsFailing[i].Description
-		}
-	}
-
-	// Check success patterns (task completion)
-	for i, regex := range sd.successRegexes {
-		if regex.MatchString(text) {
-			return StatusSuccess, sd.patterns.Success[i].Description
-		}
-	}
-
-	// Check needs approval patterns
-	for i, regex := range sd.needsApprovalRegexes {
-		if regex.MatchString(text) {
-			return StatusNeedsApproval, sd.patterns.NeedsApproval[i].Description
-		}
-	}
-
-	// Check input required patterns
-	for i, regex := range sd.inputRequiredRegexes {
-		if regex.MatchString(text) {
-			return StatusInputRequired, sd.patterns.InputRequired[i].Description
-		}
-	}
-
-	// Check active patterns
-	for i, regex := range sd.activeRegexes {
-		if regex.MatchString(text) {
-			return StatusActive, sd.patterns.Active[i].Description
-		}
-	}
-
-	// Check processing patterns
-	for i, regex := range sd.processingRegexes {
-		if regex.MatchString(text) {
-			return StatusProcessing, sd.patterns.Processing[i].Description
-		}
-	}
-
-	// Check idle patterns
-	for i, regex := range sd.idleRegexes {
-		if regex.MatchString(text) {
-			return StatusIdle, sd.patterns.Idle[i].Description
-		}
-	}
-
-	// Check ready patterns
-	for i, regex := range sd.readyRegexes {
-		if regex.MatchString(text) {
-			return StatusReady, sd.patterns.Ready[i].Description
-		}
-	}
-
-	return StatusUnknown, ""
+	status, patternName, context := sd.detectFromText(text, output)
+	sd.appendDetectionEvent(status, patternName, text)
+	return status, context
 }
 
 // getDefaultPatterns returns the default status detection patterns for Claude Code.
@@ -560,12 +556,14 @@ func getDefaultPatterns() StatusPatterns {
 			},
 			{
 				Name: "claude_thinking_verb",
-				// Full macOS spinner frame set: · ✢ ✳ ✶ ✻ ✽ (bounce cycle), * (legacy), ● (reduced-motion).
+				// Full spinner frame set: · ✢ ✳ ✶ ✻ ✽ (macOS bounce cycle), * (legacy),
+				// ● (reduced-motion), ✦ (Claude Code primary spinner U+2726 BLACK FOUR POINTED STAR).
+				// Direct UTF-8 embedding in [...] is valid RE2; \uXXXX escapes are NOT supported.
 				// Verb char class extends \w with hyphens (Dilly-dallying), apostrophes (Beboppin'),
 				// and Latin-1 accented chars (Flambéing, Sautéing) — Go RE2 \w = [0-9A-Za-z_] only.
-				// ^\s* allows leading whitespace so indented spinners (e.g. task manager sub-items)
+				// [ \t]* allows leading whitespace so indented spinners (e.g. task manager sub-items)
 				// are detected: "  ✽ Roosting… (9m 52s · ↓ 2.8k tokens)"
-				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
+				Pattern:     `(?m)^[ \t]*[·✢✳✶✻✽●*✦][ \t]+[A-Z][a-zA-Z'\-éèêàâùûôîïëüöäÿæœ]*(?:…|\.{1,3})`,
 				Description: "Claude thinking state with random verb — any spinner frame + capitalized verb + ellipsis",
 				Priority:    26,
 			},

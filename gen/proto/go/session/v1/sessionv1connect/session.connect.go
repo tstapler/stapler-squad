@@ -327,6 +327,9 @@ const (
 	// SessionServiceRunWorkflowProcedure is the fully-qualified name of the SessionService's
 	// RunWorkflow RPC.
 	SessionServiceRunWorkflowProcedure = "/session.v1.SessionService/RunWorkflow"
+	// SessionServiceGetDetectionEventsProcedure is the fully-qualified name of the SessionService's
+	// GetDetectionEvents RPC.
+	SessionServiceGetDetectionEventsProcedure = "/session.v1.SessionService/GetDetectionEvents"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -583,6 +586,9 @@ type SessionServiceClient interface {
 	ListWorkflows(context.Context, *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error)
 	// RunWorkflow immediately fires a workflow (outside of cron schedule).
 	RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error)
+	// GetDetectionEvents returns recent status-detection events for a session.
+	// Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
+	GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -1190,6 +1196,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("RunWorkflow")),
 			connect.WithClientOptions(opts...),
 		),
+		getDetectionEvents: connect.NewClient[v1.GetDetectionEventsRequest, v1.GetDetectionEventsResponse](
+			httpClient,
+			baseURL+SessionServiceGetDetectionEventsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetDetectionEvents")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -1294,6 +1306,7 @@ type sessionServiceClient struct {
 	deleteWorkflow            *connect.Client[v1.DeleteWorkflowRequest, v1.DeleteWorkflowResponse]
 	listWorkflows             *connect.Client[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse]
 	runWorkflow               *connect.Client[v1.RunWorkflowRequest, v1.RunWorkflowResponse]
+	getDetectionEvents        *connect.Client[v1.GetDetectionEventsRequest, v1.GetDetectionEventsResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1791,6 +1804,11 @@ func (c *sessionServiceClient) RunWorkflow(ctx context.Context, req *connect.Req
 	return c.runWorkflow.CallUnary(ctx, req)
 }
 
+// GetDetectionEvents calls session.v1.SessionService.GetDetectionEvents.
+func (c *sessionServiceClient) GetDetectionEvents(ctx context.Context, req *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error) {
+	return c.getDetectionEvents.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -2045,6 +2063,9 @@ type SessionServiceHandler interface {
 	ListWorkflows(context.Context, *connect.Request[v1.ListWorkflowsRequest]) (*connect.Response[v1.ListWorkflowsResponse], error)
 	// RunWorkflow immediately fires a workflow (outside of cron schedule).
 	RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error)
+	// GetDetectionEvents returns recent status-detection events for a session.
+	// Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
+	GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2648,6 +2669,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("RunWorkflow")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceGetDetectionEventsHandler := connect.NewUnaryHandler(
+		SessionServiceGetDetectionEventsProcedure,
+		svc.GetDetectionEvents,
+		connect.WithSchema(sessionServiceMethods.ByName("GetDetectionEvents")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -2848,6 +2875,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceListWorkflowsHandler.ServeHTTP(w, r)
 		case SessionServiceRunWorkflowProcedure:
 			sessionServiceRunWorkflowHandler.ServeHTTP(w, r)
+		case SessionServiceGetDetectionEventsProcedure:
+			sessionServiceGetDetectionEventsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -3251,4 +3280,8 @@ func (UnimplementedSessionServiceHandler) ListWorkflows(context.Context, *connec
 
 func (UnimplementedSessionServiceHandler) RunWorkflow(context.Context, *connect.Request[v1.RunWorkflowRequest]) (*connect.Response[v1.RunWorkflowResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.RunWorkflow is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetDetectionEvents is not implemented"))
 }

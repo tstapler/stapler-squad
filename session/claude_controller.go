@@ -150,8 +150,9 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 	// Create response stream
 	cc.responseStream = NewResponseStream(cc.sessionName, cc.ptyAccess)
 
-	// Create status detector
+	// Create status detector and tag it with the session name for detection event attribution.
 	cc.statusDetector = detection.NewStatusDetector()
+	cc.statusDetector.SetSessionID(cc.sessionName)
 
 	// Create idle detector
 	cc.idleDetector = detection.NewIdleDetector(cc.sessionName, cc.ptyAccess)
@@ -891,6 +892,12 @@ func (cc *ClaudeController) IsRateLimitEnabled() bool {
 		return cc.rateLimitHandler.IsEnabled()
 	}
 	return false
+}
+
+// GetStatusDetector returns the status detector used by this controller.
+// Used by GetDetectionEvents RPC to retrieve recent detection events for debugging.
+func (cc *ClaudeController) GetStatusDetector() *detection.StatusDetector {
+	return cc.statusDetector
 }
 
 // runStatusChangeLoop waits for output signals on statusCheckCh, checks the current

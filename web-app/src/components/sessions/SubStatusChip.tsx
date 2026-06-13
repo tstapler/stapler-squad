@@ -7,6 +7,7 @@ import {
   chipError,
   chipTestsFailing,
   chipRateLimited,
+  chipIdle,
   spinner,
 } from "./SubStatusChip.css";
 
@@ -16,7 +17,7 @@ interface SubStatusChipProps {
 
 /**
  * SubStatusChip renders a small inline chip showing fine-grained session activity.
- * Returns null for UNSPECIFIED and IDLE — those states do not need a visible indicator.
+ * Returns null for UNSPECIFIED only — IDLE renders a muted "Waiting…" chip.
  * Only intended for sessions with lifecycle status ACTIVE.
  */
 export function SubStatusChip({ subStatus }: SubStatusChipProps) {
@@ -83,6 +84,17 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
       );
 
     case SubStatus.IDLE:
+      return (
+        <span
+          className={chipIdle}
+          role="status"
+          aria-label="Waiting for input"
+          title="Session is idle — waiting for your input"
+        >
+          ● Waiting…
+        </span>
+      );
+
     case SubStatus.UNSPECIFIED:
     default:
       return null;

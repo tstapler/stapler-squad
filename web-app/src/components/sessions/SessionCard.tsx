@@ -9,6 +9,7 @@ import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "./GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
+import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
 import {
@@ -690,6 +691,10 @@ function SessionCardInner({
           </div>
         )}
       </div>
+
+      {typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1" && (
+        <DetectionEventsPanel sessionId={session.id} />
+      )}
 
       <div className={footer}>
         <div className={timestamps}>

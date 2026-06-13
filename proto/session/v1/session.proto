@@ -368,6 +368,10 @@ service SessionService {
 
   // RunWorkflow immediately fires a workflow (outside of cron schedule).
   rpc RunWorkflow(RunWorkflowRequest) returns (RunWorkflowResponse) {}
+
+  // GetDetectionEvents returns recent status-detection events for a session.
+  // Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
+  rpc GetDetectionEvents(GetDetectionEventsRequest) returns (GetDetectionEventsResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -2298,4 +2302,24 @@ message RunWorkflowRequest {
 
 message RunWorkflowResponse {
   string session_id = 1;
+}
+
+// DetectionEventProto is the wire representation of a single status-detection event.
+message DetectionEventProto {
+  string session_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string matched_pattern = 3;   // pattern Name or "<none>" if no match
+  string matched_category = 4;  // "active", "idle", "error", etc.
+  int32 result_status = 5;      // maps to DetectedStatus int value
+  string tail_snippet = 6;      // last 512 bytes of cleaned terminal output
+}
+
+message GetDetectionEventsRequest {
+  string session_id = 1;
+  // max events to return; capped at 100 server-side; 0 means default (20)
+  int32 limit = 2;
+}
+
+message GetDetectionEventsResponse {
+  repeated DetectionEventProto events = 1;
 }
