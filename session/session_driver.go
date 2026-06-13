@@ -124,14 +124,17 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 
 	sentInitial := false
 	var initialPromptSentAt time.Time
+	var sendAttempts int
 
 	for range ticker.C {
 		if time.Now().After(totalDeadline) {
 			return
 		}
 
-		// Use GetEffectiveStatus (acquires stateMutex.RLock) to avoid data races on Status.
+		// GetEffectiveStatus for lifecycle decisions (Paused, Stopped).
+		// GetDetectedStatus for fine-grained terminal-content signals (Idle = readline prompt).
 		st := inst.GetEffectiveStatus()
+		detectedSt := inst.GetDetectedStatus()
 
 		// Paused is always a clean stop for the driver.
 		if st == Paused {
@@ -200,26 +203,92 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		}
 
 		if !sentInitial {
-			ready := st == Ready
+			// Wait for StatusIdle specifically: the `^>\s*▌?\s*$` pattern confirms
+			// Claude Code's readline is showing the input prompt and is listening.
+			//
+			// Do NOT use st == Ready (which equals st == Active — a deprecated alias
+			// that fires the moment the session starts, long before readline is ready).
+			// StatusReady is a `.*` catch-all; StatusIdle is the precise signal.
+			claudeAtPrompt := detectedSt == detection.StatusIdle
 			timedOut := time.Now().After(readyDeadline)
 
-			if ready || timedOut {
+			if claudeAtPrompt || timedOut {
+				sendAttempts++
+
+				if timedOut && !claudeAtPrompt {
+					log.Warn("SessionDriver: timed out waiting for idle prompt, sending anyway",
+						"session", inst.Title,
+						"attempt", sendAttempts,
+					)
+				}
+
+				if claudeAtPrompt {
+					// Brief settling pause after the > prompt appears: the status machine
+					// detected the line, but readline's internal input handler may need a
+					// few hundred ms to be fully listening.
+					time.Sleep(300 * time.Millisecond)
+				}
+
+				// Snapshot terminal content immediately before sending so we can verify
+				// that the keystrokes were actually received (read-back confirmation).
+				contentBefore, _ := inst.Preview()
+
 				if err := inst.SendKeys(initialPrompt + "\r"); err != nil {
 					log.Warn("SessionDriver: failed to send initial prompt",
 						"session", inst.Title,
-						"ready", ready,
+						"claudeAtPrompt", claudeAtPrompt,
 						"timedOut", timedOut,
+						"attempt", sendAttempts,
 						"err", err,
 					)
+					if sendAttempts >= 3 {
+						log.Error("SessionDriver: giving up on initial prompt after 3 failed attempts",
+							"session", inst.Title,
+						)
+						sentInitial = true
+						initialPromptSentAt = time.Now()
+					}
+					// sentInitial stays false → retry next tick
 				} else {
 					log.Info("SessionDriver: sent initial prompt",
 						"session", inst.Title,
-						"ready", ready,
+						"claudeAtPrompt", claudeAtPrompt,
 						"timedOut", timedOut,
+						"attempt", sendAttempts,
+						"promptLen", len(initialPrompt),
 					)
+
+					// Read-back verification: only when we had a confirmed idle prompt
+					// and still have retries left.  After a timeout-triggered send we
+					// cannot reliably verify (Claude may not be at a prompt).
+					if claudeAtPrompt && sendAttempts < 3 {
+						// Wait for PTY echo + pane-capture latency before reading back.
+						time.Sleep(500 * time.Millisecond)
+						contentAfter, verifyErr := inst.Preview()
+						if verifyErr == nil && contentBefore != "" && contentAfter == contentBefore {
+							// Terminal content identical to before the send — the
+							// keystrokes were likely swallowed before readline consumed
+							// them.  Retry on the next tick.
+							log.Warn("SessionDriver: terminal content unchanged after send — keystrokes may have been swallowed, retrying",
+								"session", inst.Title,
+								"attempt", sendAttempts,
+							)
+							// sentInitial stays false
+						} else {
+							// Content changed (or verification read failed) — treat as success.
+							log.Info("SessionDriver: read-back confirmed initial prompt received",
+								"session", inst.Title,
+								"attempt", sendAttempts,
+							)
+							sentInitial = true
+							initialPromptSentAt = time.Now()
+						}
+					} else {
+						// Timeout-triggered send or max retries: accept without verification.
+						sentInitial = true
+						initialPromptSentAt = time.Now()
+					}
 				}
-				sentInitial = true
-				initialPromptSentAt = time.Now()
 			}
 			continue
 		}

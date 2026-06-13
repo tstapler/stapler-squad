@@ -89,6 +89,9 @@ func (i *Instance) ToInstanceData() InstanceData {
 		MCPServerURL: i.MCPServerURL,
 		// Pause reason — persisted so it survives restarts
 		PauseReason: i.PauseReason,
+		// Workflow linkage and archive state
+		WorkflowID: i.WorkflowID,
+		ArchivedAt: i.ArchivedAt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -236,6 +239,9 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		MCPServerURL: data.MCPServerURL,
 		// Pause reason
 		PauseReason: data.PauseReason,
+		// Workflow linkage and archive state
+		WorkflowID: data.WorkflowID,
+		ArchivedAt: data.ArchivedAt,
 	}
 
 	// MIGRATION: Assign UUID to existing sessions that pre-date UUID assignment

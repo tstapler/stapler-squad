@@ -330,6 +330,15 @@ const (
 	// SessionServiceGetDetectionEventsProcedure is the fully-qualified name of the SessionService's
 	// GetDetectionEvents RPC.
 	SessionServiceGetDetectionEventsProcedure = "/session.v1.SessionService/GetDetectionEvents"
+	// SessionServiceListSlashCommandsProcedure is the fully-qualified name of the SessionService's
+	// ListSlashCommands RPC.
+	SessionServiceListSlashCommandsProcedure = "/session.v1.SessionService/ListSlashCommands"
+	// SessionServiceArchiveSessionProcedure is the fully-qualified name of the SessionService's
+	// ArchiveSession RPC.
+	SessionServiceArchiveSessionProcedure = "/session.v1.SessionService/ArchiveSession"
+	// SessionServiceUnarchiveSessionProcedure is the fully-qualified name of the SessionService's
+	// UnarchiveSession RPC.
+	SessionServiceUnarchiveSessionProcedure = "/session.v1.SessionService/UnarchiveSession"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -589,6 +598,15 @@ type SessionServiceClient interface {
 	// GetDetectionEvents returns recent status-detection events for a session.
 	// Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
 	GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error)
+	// ListSlashCommands returns slash commands available in the given directory.
+	// Walks target_directory/.claude/commands/ (project) and ~/.claude/commands/ (user),
+	// merging both with a small set of built-in Claude Code commands.
+	ListSlashCommands(context.Context, *connect.Request[v1.ListSlashCommandsRequest]) (*connect.Response[v1.ListSlashCommandsResponse], error)
+	// ArchiveSession soft-archives a session by setting archived_at.
+	// Archived sessions are excluded from the default session list.
+	ArchiveSession(context.Context, *connect.Request[v1.ArchiveSessionRequest]) (*connect.Response[v1.ArchiveSessionResponse], error)
+	// UnarchiveSession clears archived_at, restoring the session to the default list.
+	UnarchiveSession(context.Context, *connect.Request[v1.UnarchiveSessionRequest]) (*connect.Response[v1.UnarchiveSessionResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -1202,6 +1220,24 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("GetDetectionEvents")),
 			connect.WithClientOptions(opts...),
 		),
+		listSlashCommands: connect.NewClient[v1.ListSlashCommandsRequest, v1.ListSlashCommandsResponse](
+			httpClient,
+			baseURL+SessionServiceListSlashCommandsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ListSlashCommands")),
+			connect.WithClientOptions(opts...),
+		),
+		archiveSession: connect.NewClient[v1.ArchiveSessionRequest, v1.ArchiveSessionResponse](
+			httpClient,
+			baseURL+SessionServiceArchiveSessionProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("ArchiveSession")),
+			connect.WithClientOptions(opts...),
+		),
+		unarchiveSession: connect.NewClient[v1.UnarchiveSessionRequest, v1.UnarchiveSessionResponse](
+			httpClient,
+			baseURL+SessionServiceUnarchiveSessionProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("UnarchiveSession")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -1307,6 +1343,9 @@ type sessionServiceClient struct {
 	listWorkflows             *connect.Client[v1.ListWorkflowsRequest, v1.ListWorkflowsResponse]
 	runWorkflow               *connect.Client[v1.RunWorkflowRequest, v1.RunWorkflowResponse]
 	getDetectionEvents        *connect.Client[v1.GetDetectionEventsRequest, v1.GetDetectionEventsResponse]
+	listSlashCommands         *connect.Client[v1.ListSlashCommandsRequest, v1.ListSlashCommandsResponse]
+	archiveSession            *connect.Client[v1.ArchiveSessionRequest, v1.ArchiveSessionResponse]
+	unarchiveSession          *connect.Client[v1.UnarchiveSessionRequest, v1.UnarchiveSessionResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1809,6 +1848,21 @@ func (c *sessionServiceClient) GetDetectionEvents(ctx context.Context, req *conn
 	return c.getDetectionEvents.CallUnary(ctx, req)
 }
 
+// ListSlashCommands calls session.v1.SessionService.ListSlashCommands.
+func (c *sessionServiceClient) ListSlashCommands(ctx context.Context, req *connect.Request[v1.ListSlashCommandsRequest]) (*connect.Response[v1.ListSlashCommandsResponse], error) {
+	return c.listSlashCommands.CallUnary(ctx, req)
+}
+
+// ArchiveSession calls session.v1.SessionService.ArchiveSession.
+func (c *sessionServiceClient) ArchiveSession(ctx context.Context, req *connect.Request[v1.ArchiveSessionRequest]) (*connect.Response[v1.ArchiveSessionResponse], error) {
+	return c.archiveSession.CallUnary(ctx, req)
+}
+
+// UnarchiveSession calls session.v1.SessionService.UnarchiveSession.
+func (c *sessionServiceClient) UnarchiveSession(ctx context.Context, req *connect.Request[v1.UnarchiveSessionRequest]) (*connect.Response[v1.UnarchiveSessionResponse], error) {
+	return c.unarchiveSession.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -2066,6 +2120,15 @@ type SessionServiceHandler interface {
 	// GetDetectionEvents returns recent status-detection events for a session.
 	// Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
 	GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error)
+	// ListSlashCommands returns slash commands available in the given directory.
+	// Walks target_directory/.claude/commands/ (project) and ~/.claude/commands/ (user),
+	// merging both with a small set of built-in Claude Code commands.
+	ListSlashCommands(context.Context, *connect.Request[v1.ListSlashCommandsRequest]) (*connect.Response[v1.ListSlashCommandsResponse], error)
+	// ArchiveSession soft-archives a session by setting archived_at.
+	// Archived sessions are excluded from the default session list.
+	ArchiveSession(context.Context, *connect.Request[v1.ArchiveSessionRequest]) (*connect.Response[v1.ArchiveSessionResponse], error)
+	// UnarchiveSession clears archived_at, restoring the session to the default list.
+	UnarchiveSession(context.Context, *connect.Request[v1.UnarchiveSessionRequest]) (*connect.Response[v1.UnarchiveSessionResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2675,6 +2738,24 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("GetDetectionEvents")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceListSlashCommandsHandler := connect.NewUnaryHandler(
+		SessionServiceListSlashCommandsProcedure,
+		svc.ListSlashCommands,
+		connect.WithSchema(sessionServiceMethods.ByName("ListSlashCommands")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceArchiveSessionHandler := connect.NewUnaryHandler(
+		SessionServiceArchiveSessionProcedure,
+		svc.ArchiveSession,
+		connect.WithSchema(sessionServiceMethods.ByName("ArchiveSession")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceUnarchiveSessionHandler := connect.NewUnaryHandler(
+		SessionServiceUnarchiveSessionProcedure,
+		svc.UnarchiveSession,
+		connect.WithSchema(sessionServiceMethods.ByName("UnarchiveSession")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -2877,6 +2958,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceRunWorkflowHandler.ServeHTTP(w, r)
 		case SessionServiceGetDetectionEventsProcedure:
 			sessionServiceGetDetectionEventsHandler.ServeHTTP(w, r)
+		case SessionServiceListSlashCommandsProcedure:
+			sessionServiceListSlashCommandsHandler.ServeHTTP(w, r)
+		case SessionServiceArchiveSessionProcedure:
+			sessionServiceArchiveSessionHandler.ServeHTTP(w, r)
+		case SessionServiceUnarchiveSessionProcedure:
+			sessionServiceUnarchiveSessionHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -3284,4 +3371,16 @@ func (UnimplementedSessionServiceHandler) RunWorkflow(context.Context, *connect.
 
 func (UnimplementedSessionServiceHandler) GetDetectionEvents(context.Context, *connect.Request[v1.GetDetectionEventsRequest]) (*connect.Response[v1.GetDetectionEventsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetDetectionEvents is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ListSlashCommands(context.Context, *connect.Request[v1.ListSlashCommandsRequest]) (*connect.Response[v1.ListSlashCommandsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ListSlashCommands is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) ArchiveSession(context.Context, *connect.Request[v1.ArchiveSessionRequest]) (*connect.Response[v1.ArchiveSessionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.ArchiveSession is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) UnarchiveSession(context.Context, *connect.Request[v1.UnarchiveSessionRequest]) (*connect.Response[v1.UnarchiveSessionResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.UnarchiveSession is not implemented"))
 }

@@ -26,6 +26,23 @@ import (
 // when multiple goroutines or scan cycles hit the same worktree path.
 const diffStatCacheTTL = 30 * time.Second
 
+// maxUntrackedFiles is the hard cap on untracked files walked per repo. Repos with
+// large build-artifact trees (e.g. Android/Bazel projects with 200K+ .class/.dex files)
+// would otherwise trigger an OOM by calling os.ReadFile on every file.
+// Declared as var (not const) so tests can lower it without creating 10K files.
+var maxUntrackedFiles = 10_000
+
+// maxUntrackedFileSize is the per-file read limit for untracked line-counting.
+// Files larger than this (binaries, JARs, APKs, etc.) have their file count
+// incremented but their line count skipped. Also used for blob and working-tree
+// file reads in applyDiff.
+// Declared as var (not const) so tests can use smaller thresholds.
+var maxUntrackedFileSize = int64(512 * 1024) // 512 KB
+
+// errStopWalk is returned by walkUntrackedRec to signal early termination when
+// the maxUntrackedFiles cap has been reached.
+var errStopWalk = errors.New("stop untracked walk")
+
 type diffStatEntry struct {
 	result DiffStat
 	expiry time.Time
@@ -626,6 +643,12 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			entry.mu.Unlock()
 			return nil
 		}
+		// Skip blobs larger than maxUntrackedFileSize to avoid reading large
+		// binaries or auto-generated files (e.g. package-lock.json, JARs).
+		if blob.Size > maxUntrackedFileSize {
+			entry.mu.Unlock()
+			return nil
+		}
 		r, rerr := blob.Reader()
 		if rerr != nil {
 			entry.mu.Unlock()
@@ -644,8 +667,8 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			d.Deletions += countBytesLines(headData)
 			return
 		}
-		wtData, rerr := os.ReadFile(filepath.Join(worktreePath, t.name))
-		if rerr != nil {
+		wtData, ok := readFileIfSmall(filepath.Join(worktreePath, t.name))
+		if !ok {
 			d.Deletions += countBytesLines(headData)
 			return
 		}
@@ -663,15 +686,35 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	}
 
 	// Untracked files: count lines as pure insertions (no HEAD version).
+	// Limited to maxUntrackedFiles to avoid OOM on repos with large build-artifact trees.
+	// Files over maxUntrackedFileSize are counted but not read for line counting.
 	_ = walkUntracked(worktreePath, indexedNames, func(absPath string) {
-		data, rerr := os.ReadFile(absPath)
-		if rerr == nil {
-			d.Files++
+		d.Files++
+		if data, ok := readFileIfSmall(absPath); ok {
 			d.Insertions += countBytesLines(data)
 		}
 	})
 
 	return d, nil
+}
+
+// readFileIfSmall reads the file at path only if its size is ≤ maxUntrackedFileSize.
+// Returns (data, true) on success; (nil, false) when the file is too large or unreadable.
+// This is the single safe wrapper for all content reads in diffShortstatUncached —
+// callers should use this instead of os.ReadFile to prevent OOM on large build artifacts.
+func readFileIfSmall(path string) ([]byte, bool) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, false
+	}
+	if info.Size() > maxUntrackedFileSize {
+		return nil, false
+	}
+	data, err := os.ReadFile(path) //nolint:gosec
+	if err != nil {
+		return nil, false
+	}
+	return data, true
 }
 
 // LinesDiff returns inserted and deleted line counts between old and new using LCS.
@@ -790,11 +833,17 @@ func lcsLengthBytes(a, b [][]byte) int {
 
 // walkUntracked calls fn for every file under root that is not in indexed.
 // Skips the .git directory; does not read .gitignore (best-effort for the scanner).
+// Stops after maxUntrackedFiles files to avoid unbounded walks in large build trees.
 func walkUntracked(root string, indexed map[string]struct{}, fn func(absPath string)) error {
-	return walkUntrackedRec(root, root, indexed, fn)
+	count := 0
+	err := walkUntrackedRec(root, root, indexed, &count, fn)
+	if errors.Is(err, errStopWalk) {
+		return nil
+	}
+	return err
 }
 
-func walkUntrackedRec(root, dir string, indexed map[string]struct{}, fn func(string)) error {
+func walkUntrackedRec(root, dir string, indexed map[string]struct{}, count *int, fn func(string)) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -811,10 +860,14 @@ func walkUntrackedRec(root, dir string, indexed map[string]struct{}, fn func(str
 		}
 		rel = filepath.ToSlash(rel)
 		if de.IsDir() {
-			if err := walkUntrackedRec(root, full, indexed, fn); err != nil {
+			if err := walkUntrackedRec(root, full, indexed, count, fn); err != nil {
 				return err
 			}
 		} else if _, tracked := indexed[rel]; !tracked {
+			*count++
+			if *count > maxUntrackedFiles {
+				return errStopWalk
+			}
 			fn(full)
 		}
 	}

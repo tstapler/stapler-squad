@@ -1,0 +1,10 @@
+{
+  "id": "autonomous-fix",
+  "type": "frontend",
+  "description": "Fix Autonomously session creation mode — spawns a session where the AutonomousDriver orchestrates the agent and the LLM approves tool calls without human review",
+  "component": "OmnibarCreationPanel / BacklogItemDetail",
+  "filePath": "web-app/src/components/sessions/OmnibarCreationPanel.tsx",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-09T00:00:00Z"
+}

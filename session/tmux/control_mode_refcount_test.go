@@ -17,7 +17,7 @@ func newRefcountTestSession(t *testing.T) *TmuxSession {
 	// Use a real already-exited process so Kill() on it is a harmless no-op.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	fakeCmd := exec.CommandContext(ctx, "true")
+	fakeCmd := exec.CommandContext(ctx, "true") //nolint:norawexec // process is immediately Wait()ed; Kill() on the already-dead process is a harmless no-op
 	if err := fakeCmd.Start(); err != nil {
 		t.Skipf("cannot start 'true': %v", err)
 	}

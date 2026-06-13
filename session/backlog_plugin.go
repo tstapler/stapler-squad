@@ -52,5 +52,6 @@ func (r *PluginRegistry) Get(id string) (ItemSourcePlugin, bool) {
 func NewDefaultRegistry() *PluginRegistry {
 	r := NewPluginRegistry()
 	r.Register(NewGitHubIssuesPlugin())
+	r.Register(NewGitHubPRsPlugin())
 	return r
 }

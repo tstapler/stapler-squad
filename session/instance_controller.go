@@ -219,8 +219,8 @@ func (i *Instance) SetStatusChangeCallback(fn func(detection.DetectedStatus, str
 }
 
 // wireStatusChangeCallback wires the instance-level status-change callback to the
-// ClaudeController's listener. Called both from SetStatusChangeCallback and from
-// StartController before controller.Start().
+// ClaudeController's fan-out listener set. Called both from SetStatusChangeCallback
+// and from StartController before controller.Start().
 func (i *Instance) wireStatusChangeCallback(ctrl *ClaudeController) {
 	if ctrl == nil {
 		return
@@ -231,7 +231,17 @@ func (i *Instance) wireStatusChangeCallback(ctrl *ClaudeController) {
 	if fn == nil {
 		return
 	}
-	ctrl.SetStatusChangeListener(fn)
+	ctrl.AddStatusChangeListener(fn)
+}
+
+// RegisterStatusChangeCallback appends fn to the controller's fan-out listener set.
+// Unlike SetStatusChangeCallback, it does not replace existing listeners.
+// Safe to call before or after the controller is started.
+func (i *Instance) RegisterStatusChangeCallback(fn func(detection.DetectedStatus, string)) {
+	ctrl := i.GetController()
+	if ctrl != nil {
+		ctrl.AddStatusChangeListener(fn)
+	}
 }
 
 // SetRateLimitCallbacks registers server-layer callbacks for rate limit events.

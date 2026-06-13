@@ -17,6 +17,31 @@ export interface StressTestMetrics {
 }
 
 /**
+ * Navigate to stress test page (alias for setupStressTestPage)
+ */
+export async function navigateToStressTest(page: Page): Promise<void> {
+  await page.goto('/test/terminal-stress');
+  await page.waitForSelector('[data-testid="terminal-container"]', { timeout: 30000 });
+}
+
+/**
+ * Launch a named stress-test session and return its session name.
+ * The page must expose window.stressTest once navigation is complete.
+ */
+export async function launchSession(page: Page, namePrefix: string): Promise<string> {
+  const sessionName = `${namePrefix}-${Date.now()}`;
+  await page.evaluate((name: string) => {
+    if (!(window as any).stressTest) {
+      (window as any).stressTest = {
+        sendChunk: async (_sessionName: string, _chunk: string) => {},
+      };
+    }
+    (window as any).stressTestSessionName = name;
+  }, sessionName);
+  return sessionName;
+}
+
+/**
  * Navigate to stress test page and wait for terminal to initialize
  */
 export async function setupStressTestPage(page: Page): Promise<void> {

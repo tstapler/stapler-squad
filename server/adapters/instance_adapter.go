@@ -28,7 +28,8 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 		Width:       int32(inst.Width),
 		CreatedAt:   timestamppb.New(inst.CreatedAt),
 		UpdatedAt:   timestamppb.New(inst.UpdatedAt),
-		AutoYes:     inst.AutoYes,
+		AutoYes:        inst.AutoYes,
+		AutonomousMode: inst.AutonomousMode,
 		Prompt:      inst.Prompt,
 		Category:    inst.Category,
 		IsExpanded:  inst.IsExpanded,
@@ -135,6 +136,12 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = inst.Hidden
+
+	// Workflow linkage and archive state.
+	protoSession.WorkflowId = inst.WorkflowID
+	if inst.ArchivedAt != nil {
+		protoSession.ArchivedAt = timestamppb.New(*inst.ArchivedAt)
+	}
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
 	if g := inst.GetSessionGoal(); g != nil {

@@ -17,6 +17,9 @@ import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
 import { Session } from "@/gen/session/v1/types_pb";
 import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
+import { AtCommandDropdown } from "@/components/ui/AtCommandDropdown";
+import { useAtCommandSuggestions } from "@/lib/hooks/useAtCommandSuggestions";
+import type { WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
 import { OmnibarResultList, getResultListItemCount, getHighlightedItemId } from "./OmnibarResultList";
 import { OmnibarModeBadge } from "./OmnibarModeBadge";
 import { OmnibarCreationPanel, SESSION_TYPES } from "./OmnibarCreationPanel";
@@ -39,6 +42,8 @@ interface OmnibarProps {
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
+  /** Available workflows for @slug autocomplete. */
+  workflows?: WorkflowEntry[];
 }
 
 // Consolidated form state
@@ -49,7 +54,7 @@ export interface OmnibarFormState {
   category: string;
   autoYes: boolean;
   useTitleAsBranch: boolean;
-  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off" | "new_project";
+  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off" | "new_project" | "autonomous";
   existingWorktree: string;
   workingDir: string;
   // New project mode fields
@@ -86,6 +91,7 @@ interface OmnibarUIState {
   dropdownIndex: number;
   dropdownDismissed: boolean;
   resultHighlightIndex: number;
+  atSuggestIndex: number;
 }
 
 export interface OmnibarSessionData {
@@ -110,6 +116,10 @@ export interface OmnibarSessionData {
   isNewProject?: boolean;
   // Explicit opt-in to create the directory + git repo if `path` doesn't exist.
   createIfMissing?: boolean;
+  // Autonomous mode: run without human permission prompts (LLM approves tool calls).
+  autonomousMode?: boolean;
+  // Permission mode passed to Claude Code (e.g. "auto" for autonomous sessions).
+  permissionMode?: string;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -120,7 +130,7 @@ function isValidProjectName(name: string): boolean {
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput, workflows = [] }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -151,6 +161,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     dropdownIndex: -1,
     dropdownDismissed: false,
     resultHighlightIndex: -1,
+    atSuggestIndex: -1,
   });
   const setUIField = useCallback(
     <K extends keyof OmnibarUIState>(key: K, value: OmnibarUIState[K]) =>
@@ -173,7 +184,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Destructure only fields needed for validation/submission logic in Omnibar.tsx
   const { sessionName, program, category, autoYes, sessionType, branch, useTitleAsBranch, existingWorktree, workingDir, parentDir, projectName, newProjectSessionType, createIfMissing } = formState;
   const { showAdvanced } = uiState;
-  const { dropdownIndex, dropdownDismissed, resultHighlightIndex } = uiState;
+  const { dropdownIndex, dropdownDismissed, resultHighlightIndex, atSuggestIndex } = uiState;
   // Used in detection auto-fill effects
   const setSessionName = useCallback((v: string) => setFormField("sessionName", v), [setFormField]);
   const setBranch = useCallback((v: string) => setFormField("branch", v), [setFormField]);
@@ -285,6 +296,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
   // Discovery mode derived from modeState
   const isDiscoveryMode = modeState.type === "discovery";
+
+  // @command autocomplete — active while user is typing "@slug" (no space yet)
+  const { isAtCommand, suggestions: atSuggestions, complete: completeAtCommand } =
+    useAtCommandSuggestions(input, workflows);
+  const isAtDropdownVisible = isDiscoveryMode && isAtCommand;
 
   // Session search query uses the debounced input so Fuse only runs after typing pauses.
   const sessionSearchQuery = useMemo(() => {
@@ -433,13 +449,20 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setInput("");
       setDetection(null);
       setFormState(INITIAL_FORM_STATE);
-      setUIState({ showAdvanced: false, dropdownIndex: -1, dropdownDismissed: false, resultHighlightIndex: -1 });
+      setUIState({ showAdvanced: false, dropdownIndex: -1, dropdownDismissed: false, resultHighlightIndex: -1, atSuggestIndex: -1 });
       setError(null);
       lastSuggestedNameRef.current = "";
       prevDetectionTypeRef.current = null;
       dispatchMode({ kind: "reset_to_discovery" });
     }
   }, [isOpen, dispatchMode]);
+
+  // Reset atSuggestIndex when leaving @ mode (user added space or cleared the @).
+  useEffect(() => {
+    if (!isAtCommand) {
+      setUIField("atSuggestIndex", -1);
+    }
+  }, [isAtCommand, setUIField]);
 
   // On open: apply initialMode if provided
   useEffect(() => {
@@ -517,6 +540,40 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Handle keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // @command autocomplete (highest priority when visible)
+      if (isAtDropdownVisible) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setUIField("atSuggestIndex", Math.min(atSuggestIndex + 1, atSuggestions.length - 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setUIField("atSuggestIndex", Math.max(atSuggestIndex - 1, -1));
+          return;
+        }
+        if (e.key === "Tab") {
+          e.preventDefault();
+          const idx = atSuggestIndex >= 0 ? atSuggestIndex : 0;
+          if (atSuggestions[idx]) {
+            setInput(completeAtCommand(atSuggestions[idx]));
+            setUIField("atSuggestIndex", -1);
+          }
+          return;
+        }
+        if (e.key === "Enter" && atSuggestIndex >= 0 && atSuggestions[atSuggestIndex]) {
+          e.preventDefault();
+          setInput(completeAtCommand(atSuggestions[atSuggestIndex]));
+          setUIField("atSuggestIndex", -1);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.nativeEvent.stopImmediatePropagation();
+          setUIField("atSuggestIndex", -1);
+          return;
+        }
+      }
+
       // Discovery mode navigation (before dropdown check)
       if (isDiscoveryMode && (resultHighlightIndex >= 0 || e.key === "ArrowDown")) {
         if (e.key === "ArrowDown") {
@@ -634,6 +691,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setDropdownDismissed,
       setDropdownIndex,
       setResultHighlightIndex,
+      isAtDropdownVisible,
+      atSuggestIndex,
+      atSuggestions,
+      completeAtCommand,
+      setUIField,
     ]
   );
 
@@ -666,6 +728,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const canSubmit = useMemo(() => {
     // One-off mode: only session name is required (no path needed).
     if (sessionType === "one_off") {
+      return !!sessionName.trim();
+    }
+
+    // Autonomous mode: a session name is required; path or GitHub URL is optional
+    // (the agent will be spawned in a one-off directory if no path is given).
+    if (sessionType === "autonomous") {
       return !!sessionName.trim();
     }
 
@@ -776,25 +844,29 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           initialPrompt: firstPromptText,
         };
       } else {
+        const isAutonomous = sessionType === "autonomous";
+        const isOneOff = sessionType === "one_off";
         sessionData = {
           title: sessionName.trim(),
-          path: sessionType === "one_off" ? "" : (detection?.localPath || ""),
-          branch: sessionType === "one_off" ? undefined : (finalBranch || undefined),
+          path: (isOneOff || isAutonomous) ? "" : (detection?.localPath || ""),
+          branch: (isOneOff || isAutonomous) ? undefined : (finalBranch || undefined),
           program,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
-          sessionType: sessionType === "one_off" ? "directory" : sessionType,
-          existingWorktree: sessionType === "one_off" ? undefined : (existingWorktree.trim() || undefined),
-          workingDir: sessionType === "one_off" ? undefined : (workingDir.trim() || undefined),
-          oneOff: sessionType === "one_off" ? true : undefined,
+          sessionType: (isOneOff || isAutonomous) ? "directory" : sessionType,
+          existingWorktree: (isOneOff || isAutonomous) ? undefined : (existingWorktree.trim() || undefined),
+          workingDir: (isOneOff || isAutonomous) ? undefined : (workingDir.trim() || undefined),
+          oneOff: isOneOff ? true : undefined,
+          autonomousMode: isAutonomous ? true : undefined,
+          permissionMode: isAutonomous ? "auto" : undefined,
           // Only forward when relevant (non-existent path + opt-in checked).
           createIfMissing: pathDoesNotExist && createIfMissing ? true : undefined,
           initialPrompt: firstPromptText,
         };
 
         // Handle GitHub URLs - path will be resolved server-side
-        if (sessionType !== "one_off" && detection?.gitHubRef) {
+        if (!isOneOff && !isAutonomous && detection?.gitHubRef) {
           sessionData.gitHubOwner = detection.gitHubRef.owner;
           sessionData.gitHubRepo = detection.gitHubRef.repo;
           sessionData.gitHubPRNumber = detection.gitHubRef.prNumber;
@@ -824,7 +896,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       }
 
       // Persist the chosen path to history for future completions.
-      if (isPathInput && detection?.localPath && sessionType !== "one_off") {
+      if (isPathInput && detection?.localPath && sessionType !== "one_off" && sessionType !== "autonomous") {
         saveHistory(detection.localPath);
       }
       onClose();
@@ -894,7 +966,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         {/* Main Input */}
         <div className={inputContainer}>
           <span className={typeIndicator} aria-hidden="true">
-            {sessionType === "one_off" ? "⚡" : typeInfo.icon}
+            {sessionType === "one_off" ? "⚡" : sessionType === "autonomous" ? "🤖" : typeInfo.icon}
           </span>
           <input
             ref={inputRef}
@@ -903,6 +975,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             placeholder={
               sessionType === "one_off"
                 ? "Session title is the only thing needed…"
+                : sessionType === "autonomous"
+                ? "Session title (agent will run without human approval)…"
                 : isDiscoveryMode
                 ? "Jump to session or search repos..."
                 : "Enter path, GitHub URL, or owner/repo..."
@@ -971,8 +1045,22 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           )}
         </div>
 
+        {/* @command autocomplete — shown in discovery mode while typing @slug */}
+        {isAtDropdownVisible && (
+          <AtCommandDropdown
+            id="at-command-listbox"
+            suggestions={atSuggestions}
+            selectedIndex={atSuggestIndex}
+            onSelect={(wf) => {
+              setInput(completeAtCommand(wf));
+              setUIField("atSuggestIndex", -1);
+              inputRef.current?.focus();
+            }}
+          />
+        )}
+
         {/* Discovery mode: session results + recent repos */}
-        {isDiscoveryMode && (
+        {isDiscoveryMode && !isAtDropdownVisible && (
           <OmnibarResultList
             id={RESULT_LISTBOX_ID}
             sessionResults={displayedSessionResults}
@@ -990,7 +1078,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         )}
 
         {/* Creation mode: path completion dropdown (existing, unchanged) */}
-        {!isDiscoveryMode && isDropdownVisible && sessionType !== "one_off" && (
+        {!isDiscoveryMode && isDropdownVisible && sessionType !== "one_off" && sessionType !== "autonomous" && (
           <PathCompletionDropdown
             id="path-completion-listbox"
             entries={mergedEntries}
@@ -1009,7 +1097,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         )}
 
         {/* Detection Badge */}
-        {input.trim() && !isDiscoveryMode && sessionType !== "one_off" && (
+        {input.trim() && !isDiscoveryMode && sessionType !== "one_off" && sessionType !== "autonomous" && (
           <div className={detectionInfo}>
             <span
               className={`${detectionBadge} ${

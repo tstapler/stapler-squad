@@ -196,6 +196,16 @@ message Session {
 
   // Current session goal and task tracking state. Nil when no goal has been set.
   SessionGoalSummary goal = 59;
+
+  // Whether this session is running under LLM orchestration (AutonomousDriver).
+  // When true, the session injects prompts automatically based on idle detection.
+  bool autonomous_mode = 60;
+
+  // UUID of the Workflow that spawned this session. Empty for manually-created sessions.
+  string workflow_id = 62;
+
+  // When the session was archived. Zero value means not archived.
+  google.protobuf.Timestamp archived_at = 63;
 }
 
 // SessionGoalSummary summarizes the current goal and task state for a session.

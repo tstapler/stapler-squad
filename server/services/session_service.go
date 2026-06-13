@@ -91,6 +91,9 @@ type SessionService struct {
 	// pathCompletionSvc handles filesystem path completion RPCs.
 	pathCompletionSvc *PathCompletionService
 
+	// slashCommandSvc resolves slash commands from disk and built-ins.
+	slashCommandSvc *SlashCommandService
+
 	// defaultsSvc handles session defaults configuration RPCs.
 	defaultsSvc *DefaultsService
 
@@ -135,6 +138,16 @@ type SessionService struct {
 	// headlessPool is the shared LLM pool for non-interactive AI calls (RunOneShot, etc.).
 	// May be nil when the claude binary is not found at startup.
 	headlessPool *headless.Pool
+
+	// lifecycleCtx is the server's root context, cancelled by Shutdown().
+	// Autonomous driver goroutines are bound to this context so they exit with the server.
+	lifecycleCtx context.Context
+
+	// driverMu guards driverRegistry.
+	driverMu sync.RWMutex
+	// driverRegistry maps session title → running AutonomousDriver.
+	// Used to stop drivers on session delete/hibernate and prevent use-after-free.
+	driverRegistry map[string]*session.AutonomousDriver
 
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
@@ -242,6 +255,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 		databaseSvc:       NewDatabaseService(),
 		fileSvc:           NewFileService(workspaceSvc),
 		pathCompletionSvc: NewPathCompletionService(),
+		slashCommandSvc:   NewSlashCommandService(),
 		defaultsSvc:       NewDefaultsService(),
 		projectSvc:        NewProjectService(concStorage),
 		promptStore:       newPromptStore(),
@@ -282,6 +296,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		s.wireRateLimitCallbacks(inst)
 		s.wireStatusChangeCallback(inst)
 		s.wireClaudeSessionIDCallback(inst)
+		s.wireAutoArchiveCallback(inst)
 	}
 
 	return instances, nil
@@ -570,6 +585,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	s.wireRateLimitCallbacks(instance)
 	s.wireStatusChangeCallback(instance)
 	s.wireClaudeSessionIDCallback(instance)
+	s.wireAutoArchiveCallback(instance)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
@@ -593,6 +609,60 @@ func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
 // SetHeadlessPool wires the headless LLM pool for use by RunOneShot and other AI features.
 func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
+}
+
+// SetLifecycleContext binds the server's root context to the service.
+// Autonomous driver goroutines are started with this context so they exit when the server shuts down.
+// Must be called once during server startup, before any sessions are created.
+func (s *SessionService) SetLifecycleContext(ctx context.Context) {
+	s.lifecycleCtx = ctx
+}
+
+// driverCtx returns the lifecycle context, falling back to Background() if not set.
+func (s *SessionService) driverCtx() context.Context {
+	if s.lifecycleCtx != nil {
+		return s.lifecycleCtx
+	}
+	return context.Background()
+}
+
+// registerDriver records a running AutonomousDriver in the registry so it can be stopped later.
+func (s *SessionService) registerDriver(sessionTitle string, d *session.AutonomousDriver) {
+	s.driverMu.Lock()
+	if s.driverRegistry == nil {
+		s.driverRegistry = make(map[string]*session.AutonomousDriver)
+	}
+	s.driverRegistry[sessionTitle] = d
+	s.driverMu.Unlock()
+}
+
+// stopAndDeregisterDriver stops the driver for sessionTitle (if any) and removes it from the registry.
+func (s *SessionService) stopAndDeregisterDriver(sessionTitle string) {
+	s.driverMu.Lock()
+	d, ok := s.driverRegistry[sessionTitle]
+	if ok {
+		delete(s.driverRegistry, sessionTitle)
+	}
+	s.driverMu.Unlock()
+	if ok && d != nil {
+		d.Stop()
+	}
+}
+
+// StartAutonomousDriverForInstance satisfies the AutonomousDriverStarter interface.
+// Starts an AutonomousDriver on inst if headlessPool is available.
+func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance) {
+	if s.headlessPool == nil {
+		log.Warn("[SessionService] StartAutonomousDriverForInstance: headlessPool is nil", "session", inst.Title)
+		return
+	}
+	driver := session.NewAutonomousDriver(inst, s.headlessPool, inst.Prompt, 0)
+	driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
+	if err := driver.Start(s.driverCtx()); err != nil {
+		log.Warn("[SessionService] failed to start autonomous driver for backlog session", "session", inst.Title, "err", err)
+		return
+	}
+	s.registerDriver(inst.Title, driver)
 }
 
 // SetReviewQueuePoller wires the ReviewQueuePoller so new/deleted sessions are
@@ -688,6 +758,16 @@ func (s *SessionService) ListSessions(
 
 		// Exclude hidden (system/background) sessions unless explicitly requested
 		if inst.Hidden && !req.Msg.IncludeHidden {
+			continue
+		}
+
+		// Exclude archived sessions unless explicitly requested
+		if inst.ArchivedAt != nil && !req.Msg.IncludeArchived {
+			continue
+		}
+
+		// Filter by workflow_id when specified
+		if req.Msg.WorkflowId != nil && *req.Msg.WorkflowId != "" && inst.WorkflowID != *req.Msg.WorkflowId {
 			continue
 		}
 
@@ -938,6 +1018,8 @@ func (s *SessionService) CreateSession(
 		CreateIfMissing:  req.Msg.CreateIfMissing,
 		AllowedTools:     req.Msg.AllowedTools,
 		PermissionMode:   req.Msg.PermissionMode,
+		AutonomousMode:   req.Msg.AutonomousMode,
+		WorkflowID:       req.Msg.WorkflowId,
 	}
 
 	// Add GitHub metadata if this was a GitHub URL
@@ -992,6 +1074,7 @@ func (s *SessionService) CreateSession(
 		s.wireRateLimitCallbacks(instance)
 		s.wireStatusChangeCallback(instance)
 		s.wireClaudeSessionIDCallback(instance)
+		s.wireAutoArchiveCallback(instance)
 
 		instance.CreationProgress = "Starting session..."
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"creation_progress"}))
@@ -1020,11 +1103,30 @@ func (s *SessionService) CreateSession(
 			s.backlogLifecycleListener.WireToInstance(instance)
 		}
 
+		// Wire the status manager so GetDetectedStatus() returns real terminal state
+		// instead of StatusUnknown. Must happen before StartSessionDriver so the driver
+		// can detect claudeAtPrompt instead of always hitting the 30s timeout.
+		if s.statusManager != nil {
+			instance.SetStatusManager(s.statusManager)
+		}
+
 		// Start the session driver goroutine so UI-created sessions receive their
 		// initial prompt (typed into the session terminal once the session reaches Ready).
 		// StartSessionDriver is idempotent (CAS guard) — safe to call even if a driver
 		// was already started by another code path.
 		session.StartSessionDriver(instance, instanceRootDir)
+
+		if instance.AutonomousMode && s.headlessPool != nil {
+			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0)
+			driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
+			if driverErr := driver.Start(s.driverCtx()); driverErr != nil {
+				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
+			} else {
+				s.registerDriver(instanceTitle, driver)
+			}
+		} else if instance.AutonomousMode {
+			log.Warn("[CreateSession] autonomous_mode requested but headlessPool is nil", "session", instanceTitle)
+		}
 
 		_ = s.storage.SaveInstances([]*session.Instance{instance})
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
@@ -1263,6 +1365,10 @@ func (s *SessionService) HibernateSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
 
+	// Stop any running autonomous driver so it does not continue injecting prompts
+	// into a session whose process is about to be killed.
+	s.stopAndDeregisterDriver(instance.Title)
+
 	// Set reason before transitioning so the After hook can read it
 	reason := req.Msg.Reason
 	if reason == "" {
@@ -1361,6 +1467,11 @@ func (s *SessionService) DeleteSession(
 	if sessionTitle == "" {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
 	}
+
+	// Stop any running autonomous driver before destroying resources.
+	// This prevents the driver goroutine from calling inst.Preview() or SendCommandImmediate
+	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
+	s.stopAndDeregisterDriver(sessionTitle)
 
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
@@ -2509,6 +2620,13 @@ func (s *SessionService) ListPathCompletions(
 	return s.pathCompletionSvc.ListPathCompletions(ctx, req)
 }
 
+func (s *SessionService) ListSlashCommands(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListSlashCommandsRequest],
+) (*connect.Response[sessionv1.ListSlashCommandsResponse], error) {
+	return s.slashCommandSvc.ListSlashCommands(ctx, req)
+}
+
 // ListWorktrees returns the git worktrees for a given repository path.
 func (s *SessionService) ListWorktrees(
 	ctx context.Context,
@@ -3203,6 +3321,88 @@ func (s *SessionService) LogClientEvents(
 	return connect.NewResponse(&sessionv1.LogClientEventsResponse{}), nil
 }
 
+// onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
+// Updates the linked backlog item status and fires a push notification.
+func (s *SessionService) onAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) {
+	// Deregister the completed driver so it does not leak in the registry.
+	// The goroutine has already exited at this point; Stop() is a no-op but cleans the map.
+	s.stopAndDeregisterDriver(instanceName)
+
+	// Use Background() intentionally: we want this bookkeeping to complete even if the
+	// server is shutting down concurrently (the driver just finished; its result must persist).
+	ctx := context.Background()
+
+	// Resolve the session UUID from the instance name using the live poller.
+	inst := s.FindLiveInstance(instanceName)
+	if inst == nil {
+		log.Warn("[AutonomousDriver] onAutonomousDriverComplete: instance not found", "session", instanceName)
+		return
+	}
+	sessionUUID := inst.UUID
+
+	// Look up the backlog item linked to this session.
+	concreteStorage := s.GetStorage()
+	if concreteStorage != nil {
+		is, err := concreteStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
+		if err == nil && is != nil {
+			item, itemErr := is.Edges.BacklogItemOrErr()
+			if itemErr == nil && item != nil {
+				// Autonomous driver always transitions through review; the review gate
+				// or a human then decides to mark done. Stuck sessions also go to review.
+				toStatus := session.BacklogStatusReview
+				if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID.String(), toStatus, nil); transErr != nil {
+					log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
+				} else {
+					log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
+				}
+			}
+		}
+	}
+
+	// Fire push notification via event bus.
+	var title, body string
+	notifType := int32(10) // NotificationType_INFO
+	if outcome.Done {
+		title = "Autonomous fix complete"
+		body = fmt.Sprintf("%s: %s", instanceName, outcome.Reason)
+		if outcome.PRUrl != "" {
+			body += " — " + outcome.PRUrl
+		}
+	} else {
+		title = "Autonomous fix stuck"
+		body = fmt.Sprintf("%s: %s", instanceName, outcome.Reason)
+		notifType = int32(9) // NotificationType_FAILURE
+	}
+	s.eventBus.Publish(events.NewNotificationEvent(
+		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
+		notifType,
+		int32(2), // NotificationPriority_MEDIUM
+		title, body, nil,
+	))
+}
+
+// wireAutoArchiveCallback registers a lifecycle listener that auto-archives a
+// workflow-spawned session when it exits.
+func (s *SessionService) wireAutoArchiveCallback(inst *session.Instance) {
+	if inst == nil || inst.WorkflowID == "" {
+		return
+	}
+	inst.RegisterLifecycleListener(&autoArchiveListener{svc: s, inst: inst})
+}
+
+// autoArchiveListener implements session.LifecycleListener to archive workflow sessions on exit.
+type autoArchiveListener struct {
+	svc  *SessionService
+	inst *session.Instance
+}
+
+func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
+	if event == session.EventExited {
+		go l.svc.maybeAutoArchive(l.inst)
+	}
+}
+
+
 // wireStatusChangeCallback registers a ReactiveQueueManager callback on inst so that
 // ClaudeController status transitions immediately trigger a CheckSession call, bypassing
 // the poll cycle. Safe to call before or after the controller is started.
@@ -3560,4 +3760,83 @@ func (s *SessionService) GetDetectionEvents(ctx context.Context, req *connect.Re
 		})
 	}
 	return connect.NewResponse(&sessionv1.GetDetectionEventsResponse{Events: protoEvents}), nil
+}
+
+// +api: session:archive
+// ArchiveSession soft-archives a session by setting archived_at.
+// Archived sessions are excluded from the default ListSessions response.
+func (s *SessionService) ArchiveSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ArchiveSessionRequest],
+) (*connect.Response[sessionv1.ArchiveSessionResponse], error) {
+	if req.Msg.SessionId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+	inst := s.FindLiveInstance(req.Msg.SessionId)
+	if inst == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
+	}
+	now := time.Now()
+	inst.ArchivedAt = &now
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.ArchiveSessionResponse{}), nil
+}
+
+// +api: session:unarchive
+// UnarchiveSession clears archived_at, restoring the session to the default list.
+func (s *SessionService) UnarchiveSession(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UnarchiveSessionRequest],
+) (*connect.Response[sessionv1.UnarchiveSessionResponse], error) {
+	if req.Msg.SessionId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+	inst := s.FindLiveInstance(req.Msg.SessionId)
+	if inst == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
+	}
+	inst.ArchivedAt = nil
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.UnarchiveSessionResponse{}), nil
+}
+
+// maybeAutoArchive archives a workflow session that has just stopped.
+// Called in the status-update path whenever a session transitions to Stopped.
+// Only archives sessions spawned by a workflow (WorkflowID != "").
+func (s *SessionService) maybeAutoArchive(inst *session.Instance) {
+	if inst == nil || inst.WorkflowID == "" {
+		return
+	}
+	now := time.Now()
+	// CAS: set ArchivedAt only if still nil. Prevents double-archive from concurrent EventExited fires.
+	if !inst.SetArchivedAtIfNil(now) {
+		return
+	}
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		log.Warn("[SessionService] failed to auto-archive workflow session",
+			"session", inst.Title, "workflow_id", inst.WorkflowID, "err", err)
+	}
+}
+
+// ReapPausedTmuxSessions kills any tmux session that is still running for a paused
+// Instance. This is a safety net for sessions paused before the kill-on-pause change,
+// or for cases where the initial kill attempt fell back to detach.
+func (s *SessionService) ReapPausedTmuxSessions() {
+	if s.reviewQueuePoller == nil {
+		return
+	}
+	instances := s.reviewQueuePoller.GetInstances()
+	for _, inst := range instances {
+		if !inst.IsPaused() {
+			continue
+		}
+		if err := inst.KillSession(); err != nil {
+			log.Warn("[TmuxReaper] failed to kill tmux for paused session",
+				"session", inst.Title, "err", err)
+		}
+	}
 }

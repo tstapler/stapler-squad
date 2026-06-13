@@ -91,7 +91,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // @ts-expect-error
   global.WebSocket = OriginalWebSocket;
   jest.clearAllTimers();
   jest.useRealTimers();

@@ -1139,11 +1139,20 @@ export function SessionDetailView({
                   )}
                 </>
               )}
-              {/* Initial prompt */}
+              {/* Launch prompt — passed as command-line arg to the program */}
               {session.prompt && (
                 <div className={styles.infoItem}>
-                  <span className={styles.infoLabel}>Initial Prompt:</span>
+                  <span className={styles.infoLabel}>Launch Prompt:</span>
                   <span className={styles.infoValue}>{session.prompt}</span>
+                </div>
+              )}
+              {/* Terminal prompt — injected as keystrokes once the agent reached ready state */}
+              {session.initialPrompt && (
+                <div className={styles.infoItem}>
+                  <span className={styles.infoLabel}>Terminal Prompt:</span>
+                  <span className={styles.infoValue} style={{ whiteSpace: "pre-wrap", fontFamily: "monospace", fontSize: "0.85em" }}>
+                    {session.initialPrompt}
+                  </span>
                 </div>
               )}
             </div>

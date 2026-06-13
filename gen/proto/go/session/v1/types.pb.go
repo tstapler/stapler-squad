@@ -1419,9 +1419,16 @@ type Session struct {
 	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource"
 	PauseReason string `protobuf:"bytes,58,opt,name=pause_reason,json=pauseReason,proto3" json:"pause_reason,omitempty"`
 	// Current session goal and task tracking state. Nil when no goal has been set.
-	Goal          *SessionGoalSummary `protobuf:"bytes,59,opt,name=goal,proto3" json:"goal,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Goal *SessionGoalSummary `protobuf:"bytes,59,opt,name=goal,proto3" json:"goal,omitempty"`
+	// Whether this session is running under LLM orchestration (AutonomousDriver).
+	// When true, the session injects prompts automatically based on idle detection.
+	AutonomousMode bool `protobuf:"varint,60,opt,name=autonomous_mode,json=autonomousMode,proto3" json:"autonomous_mode,omitempty"`
+	// UUID of the Workflow that spawned this session. Empty for manually-created sessions.
+	WorkflowId string `protobuf:"bytes,62,opt,name=workflow_id,json=workflowId,proto3" json:"workflow_id,omitempty"`
+	// When the session was archived. Zero value means not archived.
+	ArchivedAt            *timestamppb.Timestamp `protobuf:"bytes,63,opt,name=archived_at,json=archivedAt,proto3" json:"archived_at,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -1849,6 +1856,27 @@ func (x *Session) GetPauseReason() string {
 func (x *Session) GetGoal() *SessionGoalSummary {
 	if x != nil {
 		return x.Goal
+	}
+	return nil
+}
+
+func (x *Session) GetAutonomousMode() bool {
+	if x != nil {
+		return x.AutonomousMode
+	}
+	return false
+}
+
+func (x *Session) GetWorkflowId() string {
+	if x != nil {
+		return x.WorkflowId
+	}
+	return ""
+}
+
+func (x *Session) GetArchivedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ArchivedAt
 	}
 	return nil
 }
@@ -5936,7 +5964,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xa1\x14\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xca\x14\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -6004,7 +6032,8 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x14estimated_savings_mb\x188 \x01(\x03R\x12estimatedSavingsMb\x12\x16\n" +
 	"\x06hidden\x189 \x01(\bR\x06hidden\x12!\n" +
 	"\fpause_reason\x18: \x01(\tR\vpauseReason\x122\n" +
-	"\x04goal\x18; \x01(\v2\x1e.session.v1.SessionGoalSummaryR\x04goal\"\xa8\x01\n" +
+	"\x04goal\x18; \x01(\v2\x1e.session.v1.SessionGoalSummaryR\x04goal\x12'\n" +
+	"\x0fautonomous_mode\x18< \x01(\bR\x0eautonomousMode\"\xa8\x01\n" +
 	"\x12SessionGoalSummary\x12\x1b\n" +
 	"\tgoal_text\x18\x01 \x01(\tR\bgoalText\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1f\n" +

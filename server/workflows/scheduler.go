@@ -155,12 +155,22 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 	title := fmt.Sprintf("%s — %s", wf.Name, time.Now().Format("2006-01-02 15:04"))
 	oneOff := wf.SessionType == session.SessionTypeOneOff
 
+	// Append --model flag when a model is specified and the program is claude (or defaulting to claude).
+	program := wf.AgentType
+	if wf.Model != "" {
+		isClaudeProgram := program == "" || program == "claude"
+		if isClaudeProgram {
+			program = "claude --model " + wf.Model
+		}
+	}
+
 	req := connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title:         title,
 		Path:          wf.TargetDirectory,
-		Program:       wf.AgentType,
+		Program:       program,
 		InitialPrompt: prompt,
 		OneOff:        oneOff,
+		WorkflowId:    wf.ID.String(),
 	})
 	resp, err := s.sessionSvc.CreateSession(ctx, req)
 	if err != nil {

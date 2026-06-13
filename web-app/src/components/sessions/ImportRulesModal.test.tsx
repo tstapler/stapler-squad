@@ -14,7 +14,7 @@ import type { ApprovalRuleProto } from "@/gen/session/v1/types_pb";
 // ---------------------------------------------------------------------------
 
 const mockValidateResults = jest.fn(() => ({
-  results: [],
+  results: [] as ReturnType<typeof makeParsedResult>[],
   loading: false,
   validCount: 0,
   errorCount: 0,
@@ -22,7 +22,7 @@ const mockValidateResults = jest.fn(() => ({
 }));
 
 jest.mock("@/lib/hooks/useValidateRules", () => ({
-  useValidateRules: (...args: unknown[]) => mockValidateResults(...args),
+  useValidateRules: (..._args: unknown[]) => mockValidateResults(),
 }));
 
 const mockApplyRules = jest.fn();

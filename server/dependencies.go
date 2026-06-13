@@ -738,6 +738,7 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine)
 	backlogSvc.SetSessionStopper(sessionService)
+	backlogSvc.SetAutonomousDriverStarter(sessionService)
 	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 
@@ -794,6 +795,17 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	} else {
 		log.Warn("WorkflowScheduler disabled: no workflow repository available")
 	}
+
+	// 30 min reaper: kill any tmux sessions still running for paused instances.
+	// Safety net for sessions paused before the kill-on-pause change, or where the
+	// initial kill attempt fell back to detach.
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			sessionService.ReapPausedTmuxSessions()
+		}
+	}()
 
 	return &RuntimeDeps{
 		HeadlessPool:            headlessPool,

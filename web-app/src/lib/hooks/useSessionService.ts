@@ -12,6 +12,9 @@ import {
   RunOneShotResponse,
   SpawnShellRequest,
   RunWorkflowRequestSchema,
+  ArchiveSessionRequestSchema,
+  UnarchiveSessionRequestSchema,
+  ListSessionsRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { SessionEvent, NotificationEvent } from "@/gen/session/v1/events_pb";
@@ -87,6 +90,11 @@ interface UseSessionServiceReturn {
   createCheckpoint: (sessionId: string, label: string) => Promise<boolean>;
   listCheckpoints: (sessionId: string) => Promise<import("@/gen/session/v1/types_pb").CheckpointProto[]>;
   forkSession: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
+
+  // Archive methods
+  archiveSession: (id: string) => Promise<boolean>;
+  unarchiveSession: (id: string) => Promise<boolean>;
+  listSessionsByWorkflow: (workflowId: string, includeArchived?: boolean) => Promise<Session[]>;
 
   // Workflow methods
   runWorkflow: (request: { id: string; arg?: string }) => Promise<string | null>;
@@ -228,6 +236,8 @@ export function useSessionService(
           oneOff: request.oneOff ?? false,
           createIfMissing: request.createIfMissing ?? false,
           initialPrompt: request.initialPrompt,
+          autonomousMode: request.autonomousMode ?? false,
+          permissionMode: request.permissionMode ?? "",
         });
 
         // Add to store (with duplicate check handled by entity adapter upsertOne)
@@ -543,6 +553,52 @@ export function useSessionService(
   );
 
   // Fire a workflow immediately (outside of cron schedule).
+  const archiveSession = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+      try {
+        await clientRef.current.archiveSession(create(ArchiveSessionRequestSchema, { sessionId: id }));
+        return true;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to archive session"));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+
+  const unarchiveSession = useCallback(
+    async (id: string): Promise<boolean> => {
+      if (!clientRef.current) return false;
+      try {
+        await clientRef.current.unarchiveSession(create(UnarchiveSessionRequestSchema, { sessionId: id }));
+        return true;
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to unarchive session"));
+        return false;
+      }
+    },
+    [dispatch]
+  );
+
+  const listSessionsByWorkflow = useCallback(
+    async (workflowId: string, includeArchived = true): Promise<Session[]> => {
+      if (!clientRef.current) return [];
+      try {
+        const req = create(ListSessionsRequestSchema, {
+          workflowId,
+          includeArchived,
+        });
+        const response = await clientRef.current.listSessions(req);
+        return response.sessions ?? [];
+      } catch (err) {
+        dispatch(setError(err instanceof Error ? err.message : "Failed to list workflow runs"));
+        return [];
+      }
+    },
+    [dispatch]
+  );
+
   const runWorkflow = useCallback(
     async (request: { id: string; arg?: string }): Promise<string | null> => {
       if (!clientRef.current) return null;
@@ -898,6 +954,9 @@ export function useSessionService(
     listPromptHistory,
     watchSessions,
     stopWatching,
+    archiveSession,
+    unarchiveSession,
+    listSessionsByWorkflow,
     runWorkflow,
     spawnShell,
     stopShell,

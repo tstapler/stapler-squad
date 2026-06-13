@@ -257,6 +257,13 @@ type Instance struct {
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
 
+	// WorkflowID is the UUID of the Workflow that spawned this session.
+	// Empty for manually-created sessions.
+	WorkflowID string `json:"workflow_id,omitempty"`
+
+	// ArchivedAt is set when the session is archived. Nil means not archived.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
@@ -460,6 +467,14 @@ type InstanceOptions struct {
 	// CreateIfMissing: when SessionTypeDirectory, create the directory and run git init
 	// if the path does not exist. Only set when the user has confirmed the action.
 	CreateIfMissing bool
+
+	// AutonomousMode, when true, starts an AutonomousDriver after session creation
+	// so the session runs to completion without manual steering.
+	AutonomousMode bool
+
+	// WorkflowID is the UUID of the Workflow that spawned this session.
+	// Set by the scheduler; empty for manually-created sessions.
+	WorkflowID string
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -535,14 +550,16 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		GitHubRepo:      opts.GitHubRepo,
 		GitHubSourceRef: opts.GitHubSourceRef,
 		ClonedRepoPath:  opts.ClonedRepoPath,
-		// One-shot mode, hidden flag, and project
+		// One-shot mode, hidden flag, project, and workflow linkage
 		OneShot:            opts.OneShot,
 		Hidden:             opts.Hidden,
 		ProjectID:          opts.ProjectID,
+		WorkflowID:         opts.WorkflowID,
 		MCPServerURL:       opts.MCPServerURL,
 		AppendSystemPrompt: opts.AppendSystemPrompt,
 		AllowedTools:       opts.AllowedTools,
 		PermissionMode:     opts.PermissionMode,
+		AutonomousMode:     opts.AutonomousMode,
 		// Directory creation on missing path (R2 confirmation flow)
 		CreateIfMissing: opts.CreateIfMissing,
 	}
@@ -955,11 +972,16 @@ func (i *Instance) Pause() error {
 		}
 	}
 
-	// Detach from tmux session instead of closing to preserve session output
-	if err := i.pm().DetachSafely(); err != nil {
-		errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", err))
-		log.Error("failed to detach tmux session", "err", err)
-		// Continue with pause process even if detach fails
+	// Kill the tmux session to free memory. The Claude session UUID is already
+	// persisted by wireClaudeSessionIDSavedCallback before we reach this point.
+	// Resume() handles the dead-tmux case by reinitializing with --resume <uuid>.
+	if err := i.KillSession(); err != nil {
+		log.Warn("pause: failed to kill tmux session, falling back to detach", "session", i.Title, "err", err)
+		// Non-fatal: try a plain detach so the session is at least unreachable.
+		if detachErr := i.pm().DetachSafely(); detachErr != nil {
+			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", detachErr))
+			log.Error("failed to detach tmux session", "err", detachErr)
+		}
 	}
 
 	// Check if worktree exists before trying to remove it
@@ -1055,7 +1077,34 @@ func (i *Instance) Resume() error {
 			}
 		}
 	} else {
-		// Create new tmux session
+		// Tmux session is dead (killed on pause to free memory).
+		// Rebuild the TmuxSession object with the current Claude UUID so the program
+		// is launched with the correct --resume flag, then start a fresh tmux session.
+		var claudeSessionID string
+		if i.claudeSession != nil {
+			claudeSessionID = i.claudeSession.ConversationUUID
+		}
+		program := i.buildLaunchCommand(claudeSessionID)
+		i.LaunchCommand = program
+		tmuxPrefix := i.TmuxPrefix
+		if tmuxPrefix == "" {
+			tmuxPrefix = "staplersquad_"
+		}
+		if tb, ok := i.processManager.(*TmuxBackend); ok {
+			if i.TmuxServerSocket != "" {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithServerSocket(i.Title, program, tmuxPrefix, i.TmuxServerSocket, tmux.WithRegistry(nil)))
+			} else {
+				tb.TmuxManager().SetSession(tmux.NewTmuxSessionWithPrefix(i.Title, program, tmuxPrefix))
+			}
+			if i.UUID != "" {
+				tb.TmuxManager().Session().SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
+			}
+			if claudeSessionID != "" {
+				log.Info("resume: reinitializing tmux session with --resume", "session", i.Title, "uuid", claudeSessionID)
+			}
+		} else {
+			log.Warn("resume: non-TmuxBackend process manager — --resume flag not injected", "session", i.Title)
+		}
 		if err := i.pm().Start(worktreePath); err != nil {
 			log.Error("failed to start new tmux session on resume", "err", err)
 			// Cleanup git worktree if tmux session creation fails

@@ -409,6 +409,16 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	sessionUpdate.SetOneShot(data.OneShot)
 	sessionUpdate.SetHidden(data.Hidden)
+	if data.WorkflowID != "" {
+		sessionUpdate.SetWorkflowID(data.WorkflowID)
+	} else {
+		sessionUpdate.ClearWorkflowID()
+	}
+	if data.ArchivedAt != nil {
+		sessionUpdate.SetArchivedAt(*data.ArchivedAt)
+	} else {
+		sessionUpdate.ClearArchivedAt()
+	}
 
 	// Update project link (look up by name or clear if empty)
 	if data.ProjectID != "" {
@@ -927,6 +937,8 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	}
 	data.LastPromptSignature = sess.LastPromptSignature
 	data.PauseReason = sess.PauseReason
+	data.WorkflowID = sess.WorkflowID
+	data.ArchivedAt = sess.ArchivedAt
 
 	// Set session type
 	if sess.SessionType != "" {

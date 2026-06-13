@@ -285,7 +285,7 @@ interface UseBacklogServiceReturn {
     toStatus: BacklogItemStatus,
     precondition?: BacklogItemStatus
   ) => Promise<BacklogItem | null>;
-  spawnSessionFromItem: (id: string) => Promise<{ sessionUuid: string } | null>;
+  spawnSessionFromItem: (id: string, options?: { autonomous?: boolean }) => Promise<{ sessionUuid: string } | null>;
   triggerTriage: (id: string) => Promise<{ itemSessionId: string } | null>;
   approvePlan: (id: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
@@ -441,11 +441,14 @@ export function useBacklogService(): UseBacklogServiceReturn {
   );
 
   const spawnSessionFromItem = useCallback(
-    async (id: string): Promise<{ sessionUuid: string } | null> => {
+    async (id: string, options?: { autonomous?: boolean }): Promise<{ sessionUuid: string } | null> => {
       if (!clientRef.current) return null;
       try {
         setLastError(null);
-        const resp = await clientRef.current.spawnSessionFromItem({ itemId: id });
+        const resp = await clientRef.current.spawnSessionFromItem({
+          itemId: id,
+          autonomous: options?.autonomous ?? false,
+        });
         return { sessionUuid: resp.sessionUuid };
       } catch (err) {
         console.error("[useBacklogService] spawnSessionFromItem:", err);

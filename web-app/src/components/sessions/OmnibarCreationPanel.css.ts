@@ -51,6 +51,23 @@ export const radioBtnActive = style({
   },
 });
 
+export const textareaWrapper = style({
+  position: "relative",
+});
+
+export const slashDropdownWrapper = style({
+  position: "absolute",
+  bottom: "calc(100% + 2px)",
+  left: 0,
+  right: 0,
+  zIndex: 50,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.md,
+  boxShadow: "0 -4px 12px rgba(0,0,0,0.15)",
+  overflow: "hidden",
+  background: vars.color.cardBackground,
+});
+
 // ─── Image attachment styles ──────────────────────────────────────────────────
 
 export const attachArea = style({

@@ -126,6 +126,13 @@ type InstanceData struct {
 	// Values: "manual", "auto:inactivity", "auto:session_limit", "auto:resource".
 	// Empty when session has never been paused.
 	PauseReason string `json:"pause_reason,omitempty"`
+
+	// WorkflowID is the UUID of the Workflow that spawned this session.
+	// Empty for manually-created sessions.
+	WorkflowID string `json:"workflow_id,omitempty"`
+
+	// ArchivedAt is set when the session is archived. Nil means not archived.
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 }
 
 // GitWorktreeData represents the serializable data of a GitWorktree

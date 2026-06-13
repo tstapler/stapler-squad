@@ -38,8 +38,12 @@ type ListSessionsRequest struct {
 	// When true, include hidden (system/background) sessions in results.
 	// Defaults to false — hidden sessions are excluded unless explicitly requested.
 	IncludeHidden bool `protobuf:"varint,6,opt,name=include_hidden,json=includeHidden,proto3" json:"include_hidden,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Filter by workflow_id (only return sessions spawned by this workflow).
+	WorkflowId *string `protobuf:"bytes,7,opt,name=workflow_id,json=workflowId,proto3,oneof" json:"workflow_id,omitempty"`
+	// When true, include archived sessions. Defaults to false.
+	IncludeArchived bool `protobuf:"varint,8,opt,name=include_archived,json=includeArchived,proto3" json:"include_archived,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListSessionsRequest) Reset() {
@@ -110,6 +114,20 @@ func (x *ListSessionsRequest) GetProjectId() string {
 func (x *ListSessionsRequest) GetIncludeHidden() bool {
 	if x != nil {
 		return x.IncludeHidden
+	}
+	return false
+}
+
+func (x *ListSessionsRequest) GetWorkflowId() string {
+	if x != nil && x.WorkflowId != nil {
+		return *x.WorkflowId
+	}
+	return ""
+}
+
+func (x *ListSessionsRequest) GetIncludeArchived() bool {
+	if x != nil {
+		return x.IncludeArchived
 	}
 	return false
 }
@@ -314,8 +332,13 @@ type CreateSessionRequest struct {
 	// permission_mode sets Claude Code's permission handling mode.
 	// Values: "default", "acceptEdits", "bypassPermissions", "auto".
 	PermissionMode string `protobuf:"bytes,22,opt,name=permission_mode,json=permissionMode,proto3" json:"permission_mode,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Optional: If true, start an AutonomousDriver that injects orchestrator
+	// prompts when the session is idle, running the session to completion.
+	AutonomousMode bool `protobuf:"varint,23,opt,name=autonomous_mode,json=autonomousMode,proto3" json:"autonomous_mode,omitempty"`
+	// Optional: workflow_id associates the new session with a workflow.
+	WorkflowId    string `protobuf:"bytes,24,opt,name=workflow_id,json=workflowId,proto3" json:"workflow_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateSessionRequest) Reset() {
@@ -498,6 +521,20 @@ func (x *CreateSessionRequest) GetAllowedTools() string {
 func (x *CreateSessionRequest) GetPermissionMode() string {
 	if x != nil {
 		return x.PermissionMode
+	}
+	return ""
+}
+
+func (x *CreateSessionRequest) GetAutonomousMode() bool {
+	if x != nil {
+		return x.AutonomousMode
+	}
+	return false
+}
+
+func (x *CreateSessionRequest) GetWorkflowId() string {
+	if x != nil {
+		return x.WorkflowId
 	}
 	return ""
 }
@@ -13385,6 +13422,169 @@ func (x *GetDetectionEventsResponse) GetEvents() []*DetectionEventProto {
 	return nil
 }
 
+// ListSlashCommandsRequest is the request message for the ListSlashCommands RPC.
+type ListSlashCommandsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	// Directory to scan for slash commands.
+	TargetDirectory string `protobuf:"bytes,1,opt,name=target_directory,json=targetDirectory,proto3" json:"target_directory,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *ListSlashCommandsRequest) Reset()         {}
+func (t *ListSlashCommandsRequest) ProtoMessage()  {}
+func (t *ListSlashCommandsRequest) String() string { return protoimpl.X.MessageStringOf(t) }
+func (x *ListSlashCommandsRequest) ProtoReflect() protoreflect.Message {
+	return nil
+}
+
+func (x *ListSlashCommandsRequest) GetTargetDirectory() string {
+	if x != nil {
+		return x.TargetDirectory
+	}
+	return ""
+}
+
+// SlashCommandInfo describes a single slash command.
+type SlashCommandInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Title         string                 `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+	Description   string                 `protobuf:"bytes,3,opt,name=description,proto3" json:"description,omitempty"`
+	Source        string                 `protobuf:"bytes,4,opt,name=source,proto3" json:"source,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SlashCommandInfo) Reset()         {}
+func (t *SlashCommandInfo) ProtoMessage()  {}
+func (t *SlashCommandInfo) String() string { return protoimpl.X.MessageStringOf(t) }
+func (x *SlashCommandInfo) ProtoReflect() protoreflect.Message {
+	return nil
+}
+
+func (x *SlashCommandInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SlashCommandInfo) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
+func (x *SlashCommandInfo) GetDescription() string {
+	if x != nil {
+		return x.Description
+	}
+	return ""
+}
+
+func (x *SlashCommandInfo) GetSource() string {
+	if x != nil {
+		return x.Source
+	}
+	return ""
+}
+
+// ListSlashCommandsResponse is the response message for the ListSlashCommands RPC.
+type ListSlashCommandsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Commands      []*SlashCommandInfo    `protobuf:"bytes,1,rep,name=commands,proto3" json:"commands,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSlashCommandsResponse) Reset()         {}
+func (t *ListSlashCommandsResponse) ProtoMessage()  {}
+func (t *ListSlashCommandsResponse) String() string { return protoimpl.X.MessageStringOf(t) }
+func (x *ListSlashCommandsResponse) ProtoReflect() protoreflect.Message {
+	return nil
+}
+
+func (x *ListSlashCommandsResponse) GetCommands() []*SlashCommandInfo {
+	if x != nil {
+		return x.Commands
+	}
+	return nil
+}
+
+// ArchiveSessionRequest is the request message for the ArchiveSession RPC.
+type ArchiveSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArchiveSessionRequest) Reset()         {}
+func (t *ArchiveSessionRequest) ProtoMessage()  {}
+func (t *ArchiveSessionRequest) String() string { return protoimpl.X.MessageStringOf(t) }
+func (x *ArchiveSessionRequest) ProtoReflect() protoreflect.Message {
+	return nil
+}
+
+func (x *ArchiveSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// ArchiveSessionResponse is the response message for the ArchiveSession RPC.
+type ArchiveSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ArchiveSessionResponse) Reset()         {}
+func (t *ArchiveSessionResponse) ProtoMessage()  {}
+func (t *ArchiveSessionResponse) String() string { return protoimpl.X.MessageStringOf(t) }
+func (x *ArchiveSessionResponse) ProtoReflect() protoreflect.Message {
+	return nil
+}
+
+// UnarchiveSessionRequest is the request message for the UnarchiveSession RPC.
+type UnarchiveSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnarchiveSessionRequest) Reset()         {}
+func (t *UnarchiveSessionRequest) ProtoMessage()  {}
+func (t *UnarchiveSessionRequest) String() string { return protoimpl.X.MessageStringOf(t) }
+func (x *UnarchiveSessionRequest) ProtoReflect() protoreflect.Message {
+	return nil
+}
+
+func (x *UnarchiveSessionRequest) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+// UnarchiveSessionResponse is the response message for the UnarchiveSession RPC.
+type UnarchiveSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UnarchiveSessionResponse) Reset()         {}
+func (t *UnarchiveSessionResponse) ProtoMessage()  {}
+func (t *UnarchiveSessionResponse) String() string { return protoimpl.X.MessageStringOf(t) }
+func (x *UnarchiveSessionResponse) ProtoReflect() protoreflect.Message {
+	return nil
+}
+
 var File_session_v1_session_proto protoreflect.FileDescriptor
 
 const file_session_v1_session_proto_rawDesc = "" +
@@ -13410,7 +13610,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x11GetSessionRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\"C\n" +
 	"\x12GetSessionResponse\x12-\n" +
-	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xe9\x05\n" +
+	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\x92\x06\n" +
 	"\x14CreateSessionRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1f\n" +
@@ -13436,7 +13636,8 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x0efork_source_id\x18\x13 \x01(\tR\fforkSourceId\x12&\n" +
 	"\x0ffork_at_message\x18\x14 \x01(\x05R\rforkAtMessage\x12#\n" +
 	"\rallowed_tools\x18\x15 \x01(\tR\fallowedTools\x12'\n" +
-	"\x0fpermission_mode\x18\x16 \x01(\tR\x0epermissionMode\"F\n" +
+	"\x0fpermission_mode\x18\x16 \x01(\tR\x0epermissionMode\x12'\n" +
+	"\x0fautonomous_mode\x18\x17 \x01(\bR\x0eautonomousMode\"F\n" +
 	"\x15CreateSessionResponse\x12-\n" +
 	"\asession\x18\x01 \x01(\v2\x13.session.v1.SessionR\asession\"\xb4\x03\n" +
 	"\x14UpdateSessionRequest\x12\x0e\n" +

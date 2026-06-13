@@ -220,3 +220,15 @@ func (i *Instance) ForceStatus(s Status) {
 	defer i.stateMutex.Unlock()
 	i.loadStatus(s)
 }
+
+// SetArchivedAtIfNil sets ArchivedAt to t only if it is currently nil.
+// Returns true if the value was set (CAS semantics). Thread-safe via stateMutex.
+func (i *Instance) SetArchivedAtIfNil(t time.Time) bool {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+	if i.ArchivedAt != nil {
+		return false
+	}
+	i.ArchivedAt = &t
+	return true
+}

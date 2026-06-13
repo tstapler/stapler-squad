@@ -372,6 +372,18 @@ service SessionService {
   // GetDetectionEvents returns recent status-detection events for a session.
   // Intended for debugging — surfaces which patterns matched (or didn't) per detection cycle.
   rpc GetDetectionEvents(GetDetectionEventsRequest) returns (GetDetectionEventsResponse) {}
+
+  // ListSlashCommands returns slash commands available in the given directory.
+  // Walks target_directory/.claude/commands/ (project) and ~/.claude/commands/ (user),
+  // merging both with a small set of built-in Claude Code commands.
+  rpc ListSlashCommands(ListSlashCommandsRequest) returns (ListSlashCommandsResponse) {}
+
+  // ArchiveSession soft-archives a session by setting archived_at.
+  // Archived sessions are excluded from the default session list.
+  rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
+
+  // UnarchiveSession clears archived_at, restoring the session to the default list.
+  rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -394,6 +406,13 @@ message ListSessionsRequest {
   // When true, include hidden (system/background) sessions in results.
   // Defaults to false — hidden sessions are excluded unless explicitly requested.
   bool include_hidden = 6;
+
+  // Filter by the workflow that created the session.
+  optional string workflow_id = 7;
+
+  // When true, include archived sessions in results.
+  // Defaults to false — archived sessions are excluded unless explicitly requested.
+  bool include_archived = 8;
 }
 
 message ListSessionsResponse {
@@ -489,6 +508,14 @@ message CreateSessionRequest {
   // permission_mode sets Claude Code's permission handling mode.
   // Values: "default", "acceptEdits", "bypassPermissions", "auto".
   string permission_mode = 22;
+
+  // Optional: If true, start an AutonomousDriver that injects orchestrator
+  // prompts when the session is idle, running the session to completion.
+  bool autonomous_mode = 23;
+
+  // workflow_id associates the new session with a workflow.
+  // Set by the scheduler when firing a workflow; not intended for direct client use.
+  string workflow_id = 24;
 }
 
 message CreateSessionResponse {
@@ -2300,6 +2327,28 @@ message RunWorkflowRequest {
   string arg = 2;
 }
 
+message ListSlashCommandsRequest {
+  // Directory to scan for project-level .claude/commands/. May be empty.
+  string target_directory = 1;
+}
+
+// SlashCommandInfo describes a single slash command available for autocomplete.
+message SlashCommandInfo {
+  // Command name without the leading slash, e.g. "code:fix-loop".
+  // Subdirectory separators are replaced with ":".
+  string name = 1;
+  // Human-readable title from YAML frontmatter, or the name if absent.
+  string title = 2;
+  // Short description from YAML frontmatter.
+  string description = 3;
+  // "builtin" | "user" | "project"
+  string source = 4;
+}
+
+message ListSlashCommandsResponse {
+  repeated SlashCommandInfo commands = 1;
+}
+
 message RunWorkflowResponse {
   string session_id = 1;
 }
@@ -2323,3 +2372,15 @@ message GetDetectionEventsRequest {
 message GetDetectionEventsResponse {
   repeated DetectionEventProto events = 1;
 }
+
+message ArchiveSessionRequest {
+  string session_id = 1;
+}
+
+message ArchiveSessionResponse {}
+
+message UnarchiveSessionRequest {
+  string session_id = 1;
+}
+
+message UnarchiveSessionResponse {}

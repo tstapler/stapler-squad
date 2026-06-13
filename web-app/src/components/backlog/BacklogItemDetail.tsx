@@ -133,6 +133,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "spawn_session":
             await spawnSessionFromItem(item.id);
             break;
+          case "spawn_session_autonomous":
+            await spawnSessionFromItem(item.id, { autonomous: true });
+            break;
           case "approve_plan":
             await approvePlan(item.id);
             break;
@@ -605,6 +608,20 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                   data-testid="backlog-action-spawn-session"
                 >
                   Spawn Session
+                </button>
+                <button
+                  className={styles.actionButton}
+                  onClick={() => handleAction("spawn_session_autonomous")}
+                  disabled={actionLoading || !canSpawnSession}
+                  aria-disabled={!canSpawnSession}
+                  title={
+                    !canSpawnSession
+                      ? "Approve the plan or enable skip_planning to run autonomously"
+                      : "Run the agent without human approval for tool calls"
+                  }
+                  data-testid="backlog-action-run-autonomously"
+                >
+                  Run Autonomously
                 </button>
                 {item.planArtifactsPath && (
                   <button

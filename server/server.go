@@ -399,6 +399,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		approvalHandler.SetNotificationStamper(notifStore)
 		approvalHandler.SetAutoApprovalLogger(notifStore)
 	}
+	// Wire LLM approval for autonomous sessions (E5)
+	if deps.HeadlessPool != nil {
+		approvalHandler.SetHeadlessPool(deps.HeadlessPool)
+	}
+	approvalHandler.SetAutonomousChecker(func(sessionID string) bool {
+		inst := deps.SessionService.FindLiveInstance(sessionID)
+		return inst != nil && inst.AutonomousMode
+	})
 	srv.mux.HandleFunc("/api/hooks/permission-request", approvalHandler.HandlePermissionRequest)
 	log.Info("Registered Claude Code hook approval handler at /api/hooks/permission-request")
 
@@ -428,6 +436,9 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	mcpURL := "http://" + srv.addr + "/mcp"
 	deps.SessionService.SetMCPServerURL(mcpURL)
 	log.Info("Registered MCP HTTP handler at /mcp", "url", mcpURL)
+
+	// Bind server lifecycle context so autonomous driver goroutines exit on shutdown.
+	deps.SessionService.SetLifecycleContext(serverCtx)
 
 	// Start background expiration cleanup for pending approvals
 	services.StartExpirationCleanup(context.Background(), deps.SessionService.GetApprovalStore())

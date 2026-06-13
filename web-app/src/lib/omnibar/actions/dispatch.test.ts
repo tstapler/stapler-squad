@@ -82,6 +82,24 @@ describe("dispatchOmnibarAction", () => {
     });
   });
 
+  describe("create_session (autonomous)", () => {
+    it("dispatchOmnibarAction_should_setAutonomousModeTrue_When_sessionTypeIsAutonomous", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = {
+        type: "create_session",
+        path: "",
+        sessionType: "autonomous",
+        title: "auto session",
+        program: "claude",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ autonomousMode: true, permissionMode: "auto", sessionType: undefined })
+      );
+      expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
   describe("clone_session", () => {
     it("dispatchOmnibarAction_should_callCreateSession_When_cloneSessionAction", () => {
       const deps = makeDeps();
@@ -141,6 +159,36 @@ describe("dispatchOmnibarAction", () => {
       dispatchOmnibarAction(action, deps);
       expect(deps.setTheme).toHaveBeenCalledWith("matrix");
       expect(deps.close).toHaveBeenCalled();
+    });
+  });
+
+  describe("auto_fix", () => {
+    it("dispatchOmnibarAction_should_createAutonomousSession_When_autoFixAction", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = {
+        type: "auto_fix",
+        title: "Fix the bug",
+        program: "claude",
+      };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Fix the bug",
+          autonomousMode: true,
+          permissionMode: "auto",
+          sessionType: undefined,
+        })
+      );
+      expect(deps.close).toHaveBeenCalled();
+    });
+
+    it("dispatchOmnibarAction_should_useEmptyProgram_When_programOmitted", () => {
+      const deps = makeDeps();
+      const action: OmnibarAction = { type: "auto_fix", title: "Fix it" };
+      dispatchOmnibarAction(action, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ program: "" })
+      );
     });
   });
 

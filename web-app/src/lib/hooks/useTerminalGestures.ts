@@ -180,8 +180,10 @@ export function useTerminalGestures({
       const absDy = Math.abs(dy);
 
       if (state === 'PENDING') {
-        if (absDy > 8) {
-          // Moved enough to be a scroll — cancel long-press
+        if (absDy > 15) {
+          // Moved enough to be a scroll — cancel long-press.
+          // 15px threshold (was 8px): gives long-press timer room to fire even with
+          // minor finger drift, preventing accidental scroll-instead-of-select.
           clearLongPressTimer();
           state = 'SCROLLING';
           lastY = touch.clientY;

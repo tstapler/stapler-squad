@@ -102,6 +102,13 @@ func (Session) Fields() []ent.Field {
 		field.String("pause_reason").
 			Optional().
 			Comment("Reason the session was paused: manual, auto:inactivity, auto:session_limit, auto:resource. Empty when never paused."),
+		field.String("workflow_id").
+			Optional().
+			Comment("UUID of the Workflow that spawned this session, if any."),
+		field.Time("archived_at").
+			Optional().
+			Nillable().
+			Comment("Set when the session is archived; nil = not archived."),
 	}
 }
 
@@ -146,5 +153,7 @@ func (Session) Indexes() []ent.Index {
 		index.Fields("last_meaningful_output"),
 		index.Fields("last_acknowledged"),
 		index.Fields("created_at"),
+		index.Fields("workflow_id"),
+		index.Fields("archived_at"),
 	}
 }

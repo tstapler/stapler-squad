@@ -193,6 +193,62 @@ export const deleteButton = style({
   },
 });
 
+export const runsAccordion = style({
+  borderTop: `1px solid ${vars.color.borderSubtle}`,
+  padding: `${vars.space[2]} ${vars.space[4]}`,
+});
+
+export const runsToggle = style({
+  display: "flex",
+  alignItems: "center",
+  gap: "0.4rem",
+  background: "transparent",
+  border: "none",
+  cursor: "pointer",
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  padding: 0,
+  ":hover": {
+    color: vars.color.textSecondary,
+  },
+});
+
+export const runsList = style({
+  display: "flex",
+  flexDirection: "column",
+  gap: vars.space[1],
+  marginTop: vars.space[2],
+});
+
+export const runRow = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space[2],
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textSecondary,
+});
+
+export const runLink = style({
+  color: vars.color.primary,
+  textDecoration: "none",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+  ":hover": {
+    textDecoration: "underline",
+  },
+});
+
+export const statusBadge = style({
+  display: "inline-block",
+  padding: `1px ${vars.space[1]}`,
+  borderRadius: vars.radii.sm,
+  fontSize: "0.65rem",
+  fontWeight: 600,
+  textTransform: "uppercase",
+  whiteSpace: "nowrap",
+});
+
 export const formOverlay = style({
   position: "fixed",
   inset: 0,

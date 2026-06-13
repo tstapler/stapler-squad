@@ -1,8 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef, useCallback } from "react";
 import { WorkflowProto } from "@/gen/session/v1/session_pb";
 import { WorkflowFormData } from "@/lib/hooks/useWorkflows";
+import { RepoPathInput } from "@/components/ui/RepoPathInput";
+import { SlashCommandDropdown } from "@/components/ui/SlashCommandDropdown";
+import { AutocompleteInput } from "@/components/ui/AutocompleteInput";
+import { useSlashCommands } from "@/lib/hooks/useSlashCommands";
+import { useSlashCommandSuggestions } from "@/lib/hooks/useSlashCommandSuggestions";
+import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
+import { CLAUDE_MODELS } from "@/lib/constants/programs";
 import * as styles from "./WorkflowForm.css";
 
 interface WorkflowFormProps {
@@ -48,6 +55,55 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Slash command autocomplete for the command textarea.
+  const commandRef = useRef<HTMLTextAreaElement | null>(null);
+  const [commandCursorPos, setCommandCursorPos] = useState(0);
+  const [slashSuggestIndex, setSlashSuggestIndex] = useState(-1);
+  const { commands: slashCommands } = useSlashCommands(formData.targetDirectory);
+  const availablePrograms = useAvailablePrograms();
+  const modelSuggestions = CLAUDE_MODELS.map((m) => m.value);
+  const agentTypeSuggestions = availablePrograms
+    .map((p) => p.value)
+    .filter(Boolean);
+  const slashState = useSlashCommandSuggestions(formData.command, commandCursorPos, slashCommands);
+  const isSlashDropdownVisible = slashState.isActive && slashState.suggestions.length > 0;
+
+  const handleSlashSelect = useCallback((cmd: Parameters<typeof slashState.complete>[1]) => {
+    const { newValue, newCursorPos } = slashState.complete(formData.command, cmd);
+    setField("command", newValue);
+    setSlashSuggestIndex(-1);
+    // Restore cursor after React re-renders the textarea value.
+    requestAnimationFrame(() => {
+      if (commandRef.current) {
+        commandRef.current.setSelectionRange(newCursorPos, newCursorPos);
+        commandRef.current.focus();
+        setCommandCursorPos(newCursorPos);
+      }
+    });
+  }, [slashState, formData.command, setField]);
+
+  const handleCommandKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (!isSlashDropdownVisible) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSlashSuggestIndex((i) => Math.min(i + 1, slashState.suggestions.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSlashSuggestIndex((i) => Math.max(i - 1, -1));
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      const idx = slashSuggestIndex >= 0 ? slashSuggestIndex : 0;
+      if (slashState.suggestions[idx]) handleSlashSelect(slashState.suggestions[idx]);
+    } else if (e.key === "Enter" && slashSuggestIndex >= 0) {
+      if (slashState.suggestions[slashSuggestIndex]) {
+        e.preventDefault();
+        handleSlashSelect(slashState.suggestions[slashSuggestIndex]);
+      }
+    } else if (e.key === "Escape") {
+      setSlashSuggestIndex(-1);
+    }
+  }, [isSlashDropdownVisible, slashState, slashSuggestIndex, handleSlashSelect]);
 
   const isEdit = !!existing;
 
@@ -129,16 +185,35 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
         <label className={styles.label} htmlFor="wf-command">
           Command / Prompt <span className={styles.required}>*</span>
         </label>
-        <textarea
-          id="wf-command"
-          className={styles.textarea}
-          value={formData.command}
-          onChange={(e) => setField("command", e.target.value)}
-          placeholder="Describe what the agent should do…"
-          required
-        />
+        <div className={styles.textareaWrapper}>
+          <textarea
+            ref={commandRef}
+            id="wf-command"
+            className={styles.textarea}
+            value={formData.command}
+            onChange={(e) => {
+              setField("command", e.target.value);
+              setCommandCursorPos(e.target.selectionStart ?? 0);
+              setSlashSuggestIndex(-1);
+            }}
+            onSelect={(e) => setCommandCursorPos((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
+            onKeyDown={handleCommandKeyDown}
+            placeholder="Describe what the agent should do… (type / for slash commands)"
+            required
+          />
+          {isSlashDropdownVisible && (
+            <div className={styles.slashDropdownWrapper}>
+              <SlashCommandDropdown
+                id="wf-command-slash-listbox"
+                suggestions={slashState.suggestions}
+                selectedIndex={slashSuggestIndex}
+                onSelect={handleSlashSelect}
+              />
+            </div>
+          )}
+        </div>
         <span className={styles.hint}>
-          Use <code>{"{{input}}"}</code> to inject the argument typed after @slug
+          Use <code>{"{{input}}"}</code> to inject the argument typed after @slug. Type <code>/</code> for slash commands.
         </span>
       </div>
 
@@ -146,12 +221,10 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
         <label className={styles.label} htmlFor="wf-target-dir">
           Target Directory <span className={styles.required}>*</span>
         </label>
-        <input
+        <RepoPathInput
           id="wf-target-dir"
-          className={styles.input}
-          type="text"
           value={formData.targetDirectory}
-          onChange={(e) => setField("targetDirectory", e.target.value)}
+          onChange={(v) => setField("targetDirectory", v)}
           placeholder="/path/to/project"
           required
         />
@@ -174,25 +247,25 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
       <div className={styles.row}>
         <div className={styles.fieldGroup}>
           <label className={styles.label} htmlFor="wf-model">Model</label>
-          <input
+          <AutocompleteInput
             id="wf-model"
-            className={styles.input}
-            type="text"
             value={formData.model ?? ""}
-            onChange={(e) => setField("model", e.target.value)}
-            placeholder="claude-opus-4-5"
+            onChange={(v) => setField("model", v)}
+            placeholder="claude-sonnet-4-6"
+            suggestions={modelSuggestions}
+            className={styles.input}
           />
         </div>
 
         <div className={styles.fieldGroup}>
-          <label className={styles.label} htmlFor="wf-agent-type">Agent Type</label>
-          <input
+          <label className={styles.label} htmlFor="wf-agent-type">Program</label>
+          <AutocompleteInput
             id="wf-agent-type"
-            className={styles.input}
-            type="text"
             value={formData.agentType ?? ""}
-            onChange={(e) => setField("agentType", e.target.value)}
+            onChange={(v) => setField("agentType", v)}
             placeholder="claude"
+            suggestions={agentTypeSuggestions}
+            className={styles.input}
           />
         </div>
       </div>
