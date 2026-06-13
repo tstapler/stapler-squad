@@ -30,10 +30,9 @@ type eventRing struct {
 	count  int // total filled slots (capped at EventRingCap)
 }
 
-// push adds an event to the ring, overwriting the oldest entry when full.
-func (r *eventRing) push(e DetectionEvent) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+// pushLocked adds an event to the ring, overwriting the oldest entry when full.
+// Callers MUST hold r.mu before calling pushLocked.
+func (r *eventRing) pushLocked(e DetectionEvent) {
 	r.events[r.head] = e
 	r.head = (r.head + 1) % EventRingCap
 	if r.count < EventRingCap {

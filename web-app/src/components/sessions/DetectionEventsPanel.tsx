@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { SessionService } from "@/gen/session/v1/session_pb";
@@ -26,25 +26,22 @@ export function DetectionEventsPanel({ sessionId }: DetectionEventsPanelProps) {
     clientRef.current = createClient(SessionService, transport);
   }, []);
 
-  const fetchEvents = useCallback(async () => {
-    if (!clientRef.current) return;
-    try {
-      const response = await clientRef.current.getDetectionEvents({
-        sessionId,
-        limit: 20,
-      });
-      setEvents(response.events);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [sessionId]);
-
   useEffect(() => {
-    void fetchEvents();
-    const interval = setInterval(() => void fetchEvents(), 3000);
-    return () => clearInterval(interval);
-  }, [fetchEvents]);
+    if (!clientRef.current) return;
+    let cancelled = false;
+    const run = async () => {
+      if (!clientRef.current) return;
+      try {
+        const response = await clientRef.current.getDetectionEvents({ sessionId, limit: 20 });
+        if (!cancelled) { setEvents(response.events); setError(null); }
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      }
+    };
+    void run();
+    const id = setInterval(() => void run(), 3000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [sessionId]);
 
   return (
     <section

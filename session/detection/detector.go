@@ -263,7 +263,9 @@ const StatusDetectionTailBytes = 4096
 // Returns the matched status, the matched pattern's Name (or "" for screen-overwrite,
 // "<none>" for no match), and the context description string.
 // This is the shared core called by both Detect() and DetectWithContext().
-func (sd *StatusDetector) detectFromText(text string, raw []byte) (DetectedStatus, string, string) {
+//
+// rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
+func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string) {
 	// Error patterns (highest priority)
 	for i, regex := range sd.errorRegexes {
 		if regex.MatchString(text) {
@@ -309,7 +311,7 @@ func (sd *StatusDetector) detectFromText(text string, raw []byte) (DetectedStatu
 	// Screen-overwrite fallback: bare \r or ANSI cursor-up signals a spinner animating
 	// in-place. Placed AFTER Active/Processing (visible text beats heuristic) but BEFORE
 	// Idle/Ready catch-alls so a spinning session isn't misclassified as waiting.
-	if hasScreenOverwrite(raw) {
+	if hasScreenOverwrite(rawPTY) {
 		return StatusActive, "screen_overwrite", "Screen overwrite — spinner actively redrawing"
 	}
 	// Idle (e.g. "— INSERT —", readline prompt)
@@ -328,12 +330,16 @@ func (sd *StatusDetector) detectFromText(text string, raw []byte) (DetectedStatu
 }
 
 // appendDetectionEvent records the outcome of a detection call to the ring buffer.
+// It acquires sd.ring.mu so that the sessionID read and the ring insert are atomic
+// with respect to SetSessionID, eliminating the data race between the two.
 func (sd *StatusDetector) appendDetectionEvent(status DetectedStatus, patternName, cleanedText string) {
 	snippet := cleanedText
 	if len(snippet) > TailSnippetBytes {
 		snippet = snippet[len(snippet)-TailSnippetBytes:]
 	}
-	sd.ring.push(DetectionEvent{
+	sd.ring.mu.Lock()
+	defer sd.ring.mu.Unlock()
+	sd.ring.pushLocked(DetectionEvent{
 		SessionID:       sd.sessionID,
 		Timestamp:       time.Now(),
 		MatchedPattern:  patternName,
@@ -346,7 +352,9 @@ func (sd *StatusDetector) appendDetectionEvent(status DetectedStatus, patternNam
 // SetSessionID sets the session identifier embedded in all future DetectionEvents.
 // Call this once after creating the detector, before any detections run.
 func (sd *StatusDetector) SetSessionID(id string) {
+	sd.ring.mu.Lock()
 	sd.sessionID = id
+	sd.ring.mu.Unlock()
 }
 
 // RecentEvents returns up to n most-recent DetectionEvents, newest-first.

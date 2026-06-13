@@ -72,6 +72,10 @@ import {
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
 
+const IS_DEBUG_MODE =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("debug") === "1";
+
 interface SessionCardProps {
   session: Session;
   onClick?: () => void;
@@ -692,7 +696,7 @@ function SessionCardInner({
         )}
       </div>
 
-      {typeof window !== "undefined" && new URLSearchParams(window.location.search).get("debug") === "1" && (
+      {IS_DEBUG_MODE && (
         <DetectionEventsPanel sessionId={session.id} />
       )}
 

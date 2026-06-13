@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -769,4 +770,25 @@ func TestRecentEvents(t *testing.T) {
 		// claude_prompt has a catch-all ".*" ready pattern that may match — both are acceptable
 		t.Logf("no-match MatchedPattern = %q (acceptable)", ev2[0].MatchedPattern)
 	}
+}
+
+// TestEventRing_ConcurrentPushRecent verifies that concurrent calls to Detect and
+// RecentEvents do not trigger data races on the ring buffer or the sessionID field.
+// Run with: go test ./session/detection/... -race
+func TestEventRing_ConcurrentPushRecent(t *testing.T) {
+	sd := NewStatusDetector()
+	sd.SetSessionID("race-test")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				_ = sd.Detect([]byte("✦ Thinking…\n"))
+				_ = sd.RecentEvents(10)
+			}
+		}()
+	}
+	wg.Wait()
 }
