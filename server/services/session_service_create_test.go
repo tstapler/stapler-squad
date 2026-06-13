@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -274,6 +275,50 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 	require.Error(t, err)
 	// Should be CodeInternal (failed to create one-off directory), not CodeInvalidArgument.
 	assertConnectCode(t, err, connect.CodeInternal)
+}
+
+// ---------------------------------------------------------------------------
+// Status manager wiring regression
+// ---------------------------------------------------------------------------
+
+// TestCreateSession_StatusManagerWiredBeforeDriver is a regression test for the bug
+// where CreateSession's async goroutine never called instance.SetStatusManager before
+// StartSessionDriver, so GetDetectedStatus() always returned StatusUnknown on newly
+// created sessions (rather than e.g. StatusNeedsApproval when a "Do you want to
+// proceed?" permission prompt was displayed).
+//
+// The fix (server/services/session_service.go) wires the status manager inside the
+// goroutine before the driver starts. This test verifies that wiring happens within
+// a reasonable time after the RPC returns.
+//
+// Requires tmux to be installed; skipped automatically otherwise.
+func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
+	storage := createTestStorage(t)
+	bus := events.NewEventBus(16)
+	t.Cleanup(bus.Close)
+	svc := NewSessionService(storage, bus)
+
+	// Wire a status manager AND a poller so FindLiveInstance resolves the live pointer.
+	statusMgr := session.NewInstanceStatusManager()
+	queue := session.NewReviewQueue()
+	poller := session.NewReviewQueuePoller(queue, statusMgr, nil)
+	svc.SetReviewQueuePoller(poller)
+	svc.SetStatusManager(statusMgr)
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title: "status-wiring-regression",
+		Path:  t.TempDir(),
+	}))
+	if err != nil {
+		t.Skipf("tmux not available (%v); skipping status-manager wiring assertion", err)
+	}
+	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
+
+	require.Eventually(t, func() bool {
+		inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+		return inst != nil && inst.GetStatusManager() != nil
+	}, 10*time.Second, 100*time.Millisecond,
+		"status manager must be wired onto the new instance before StartSessionDriver runs")
 }
 
 // ---------------------------------------------------------------------------
