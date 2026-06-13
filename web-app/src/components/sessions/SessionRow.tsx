@@ -217,7 +217,8 @@ export function SessionRow({
         <span
           className={[memoryBadge, memorySeverityClass].filter(Boolean).join(" ")}
           title={memMB > 0 ? `Process RSS: ${memMB} MB` : undefined}
-          aria-label={memMB > 0 ? `${memMB} MB RAM` : "Memory not measured"}
+          aria-label={memMB > 0 ? `${memMB} MB RAM` : undefined}
+          aria-hidden={memMB === 0 ? "true" : undefined}
         >
           {memMB > 0
             ? memMB >= 1024
