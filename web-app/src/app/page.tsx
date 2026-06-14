@@ -258,7 +258,16 @@ function HomeContent() {
 
   const handleToggleAutonomousMode = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
     track({ name: "session_autonomous_mode_updated", category: "user_action" });
-    await updateSession(sessionId, { autonomousMode: enabled });
+    try {
+      await updateSession(sessionId, { autonomousMode: enabled });
+    } catch (err) {
+      console.error("[page] toggleAutonomousMode failed:", err);
+    }
+  }, [updateSession, track]);
+
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
+    track({ name: "session_autonomous_steer", category: "user_action" });
+    await updateSession(sessionId, { steerMessage: message });
   }, [updateSession, track]);
 
   const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
@@ -399,6 +408,7 @@ function HomeContent() {
     onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
     onToggleAutonomousMode: handleToggleAutonomousMode,
+    onSteerAutonomousSession: handleSteerAutonomousSession,
     onClearConversationState: clearConversationState,
     onListSessions: listSessions,
   }), [
@@ -406,7 +416,7 @@ function HomeContent() {
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
     restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
-    handleToggleAutonomousMode, clearConversationState, listSessions,
+    handleToggleAutonomousMode, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
   return (

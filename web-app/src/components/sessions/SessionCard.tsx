@@ -96,6 +96,7 @@ interface SessionCardProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernate?: () => void;
   onResumeFromHibernation?: () => void;
@@ -126,6 +127,7 @@ function SessionCardInner({
   onRunOneShot,
   onSetRateLimitEnabled,
   onToggleAutonomousMode,
+  onSteerAutonomousSession,
   onClearConversationState,
   onHibernate,
   onResumeFromHibernation,
@@ -512,14 +514,48 @@ function SessionCardInner({
               );
             })()}
             {session.autonomousMode && (
+              onToggleAutonomousMode ? (
+                <button
+                  className={autonomousBadge}
+                  title="Running under LLM orchestration — click to disable"
+                  aria-label={`Auto-pilot active${session.autonomousMaxTurns > 0 ? ` (turn ${session.autonomousTurn}/${session.autonomousMaxTurns})` : ""} — click to disable`}
+                  data-testid="badge-autonomous"
+                  onClick={(e) => { e.stopPropagation(); onToggleAutonomousMode(session.id, false); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggleAutonomousMode(session.id, false); } }}
+                >
+                  {session.autonomousMaxTurns > 0 ? `Auto-pilot ${session.autonomousTurn}/${session.autonomousMaxTurns}` : "Auto-pilot"}
+                </button>
+              ) : (
+                <span
+                  className={autonomousBadge}
+                  role="status"
+                  title="Running under LLM orchestration — injects prompts automatically"
+                  aria-label="Autonomous mode: session is controlled by LLM orchestration"
+                  data-testid="badge-autonomous"
+                >
+                  {session.autonomousMaxTurns > 0 ? `Auto-pilot ${session.autonomousTurn}/${session.autonomousMaxTurns}` : "Auto-pilot"}
+                </span>
+              )
+            )}
+            {session.autonomousOutcome === "done" && (
               <span
                 className={autonomousBadge}
                 role="status"
-                title="Running under LLM orchestration — injects prompts automatically"
-                aria-label="Autonomous mode: session is controlled by LLM orchestration"
-                data-testid="badge-autonomous"
+                style={{ background: "var(--success-bg)", color: "var(--success)" }}
+                data-testid="badge-autonomous-done"
               >
-                Auto
+                Done ✓
+              </span>
+            )}
+            {session.autonomousOutcome === "stuck" && (
+              <span
+                className={autonomousBadge}
+                role="status"
+                style={{ background: "var(--warning-bg)", color: "var(--warning)" }}
+                data-testid="badge-autonomous-stuck"
+                title="Autonomous run stopped — open session to review and give next instruction"
+              >
+                Stuck
               </span>
             )}
             {session.workflowId && (
@@ -758,6 +794,7 @@ function SessionCardInner({
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}
         />

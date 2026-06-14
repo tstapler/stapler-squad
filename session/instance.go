@@ -144,6 +144,12 @@ type Instance struct {
 	// When true, the Fixer will inject correction prompts without user confirmation.
 	// When false (default), the session runs in supervised mode.
 	AutonomousMode bool `json:"autonomous_mode,omitempty"`
+	// AutonomousTurn is the current turn during an active autonomous run.
+	AutonomousTurn int32 `json:"autonomous_turn,omitempty"`
+	// AutonomousMaxTurns is the configured max turns for the current run.
+	AutonomousMaxTurns int32 `json:"autonomous_max_turns,omitempty"`
+	// AutonomousOutcome is the result of the last autonomous run: "", "done", or "stuck".
+	AutonomousOutcome string `json:"autonomous_outcome,omitempty"`
 
 	// GitHub integration fields for PR/URL-based session creation
 	// GitHubPRNumber is the PR number if this session was created from a PR URL

@@ -21,6 +21,7 @@ export interface CockpitActions {
   onRunOneShot: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode: (sessionId: string, enabled: boolean) => void;
+  onSteerAutonomousSession: (sessionId: string, message: string) => void;
   onClearConversationState: (sessionId: string) => Promise<boolean>;
   onListSessions: () => void;
 }

@@ -39,6 +39,7 @@ interface SessionRowProps {
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
   onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   onHibernate?: () => void;
@@ -107,7 +108,7 @@ export function SessionRow({
   onPause, onResume, onDelete,
   onClone, onOpenInNewPane, onNewWorkspace,
   onRestart, onCreateCheckpoint, onRunOneShot,
-  onSetRateLimitEnabled, onToggleAutonomousMode, onClearConversationState, onUpdateTags,
+  onSetRateLimitEnabled, onToggleAutonomousMode, onSteerAutonomousSession, onClearConversationState, onUpdateTags,
   onHibernate, onResumeFromHibernation,
   suppressApprovalSubStatus = false,
   visibleColumns = DEFAULT_VISIBLE_COLUMNS,
@@ -270,6 +271,7 @@ export function SessionRow({
           onRunOneShot={onRunOneShot}
           onSetRateLimitEnabled={onSetRateLimitEnabled}
           onToggleAutonomousMode={onToggleAutonomousMode}
+          onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}
         />

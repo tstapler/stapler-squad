@@ -210,6 +210,13 @@ message Session {
   // Human-readable name of the workflow that spawned this session.
   // Populated at read time from the workflow name cache; empty for manual sessions.
   string workflow_name = 64;
+
+  // Current turn number in an ongoing autonomous run. Zero when not running.
+  int32 autonomous_turn = 65;
+  // Maximum turns configured for the current autonomous run. Zero when not running.
+  int32 autonomous_max_turns = 66;
+  // Outcome of the last completed autonomous run: "", "done", "stuck".
+  string autonomous_outcome = 67;
 }
 
 // SessionGoalSummary summarizes the current goal and task state for a session.

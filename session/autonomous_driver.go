@@ -33,6 +33,9 @@ type AutonomousDriverOutcome struct {
 // CompletionCallback is called when the driver exits with a final outcome.
 type CompletionCallback func(instanceName string, outcome AutonomousDriverOutcome)
 
+// TurnCallback is called after each successful turn injection.
+type TurnCallback func(turn, maxTurns int, prompt string)
+
 // AutonomousDriver monitors a session and injects orchestrator prompts when idle.
 type AutonomousDriver struct {
 	inst          *Instance
@@ -41,6 +44,7 @@ type AutonomousDriver struct {
 	goal          string
 	maxTurns      int
 	completionCb  CompletionCallback
+	turnCb        TurnCallback
 	driverRunning atomic.Bool
 	cancel        context.CancelFunc
 	mu            sync.Mutex
@@ -66,6 +70,22 @@ func (d *AutonomousDriver) RegisterCompletionCallback(cb CompletionCallback) {
 	d.mu.Lock()
 	d.completionCb = cb
 	d.mu.Unlock()
+}
+
+// RegisterTurnCallback sets the function called after each prompt injection.
+func (d *AutonomousDriver) RegisterTurnCallback(cb TurnCallback) {
+	d.mu.Lock()
+	d.turnCb = cb
+	d.mu.Unlock()
+}
+
+func (d *AutonomousDriver) fireTurnCallback(turn, maxTurns int, prompt string) {
+	d.mu.Lock()
+	cb := d.turnCb
+	d.mu.Unlock()
+	if cb != nil {
+		cb(turn, maxTurns, prompt)
+	}
 }
 
 // Start begins the autonomous driver goroutine. The second call is a no-op.
@@ -192,6 +212,7 @@ func (d *AutonomousDriver) run(ctx context.Context) {
 			break
 		}
 		log.Info("AutonomousDriver: injected turn", "session", sessionName, "turn", turnCount+1)
+		d.fireTurnCallback(turnCount+1, d.maxTurns, nextMsg)
 
 		// Wait for idle before the next turn.
 		turnCtx, turnCancel := context.WithTimeout(ctx, 5*time.Minute)
