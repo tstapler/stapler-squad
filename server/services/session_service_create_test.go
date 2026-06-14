@@ -305,19 +305,31 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	svc.SetReviewQueuePoller(poller)
 	svc.SetStatusManager(statusMgr)
 
+	// CreateSession returns no error when tmux is absent — the async goroutine
+	// handles the failure and sets Status=Stopped. A sync error here means a
+	// pre-goroutine validation failure (storage, config) which should never be silently skipped.
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
 		Title: "status-wiring-regression",
 		Path:  t.TempDir(),
 	}))
-	if err != nil {
-		t.Skipf("tmux not available (%v); skipping status-manager wiring assertion", err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
 
+	// The instance is added to the live poller synchronously (before the goroutine fires),
+	// so FindLiveInstance is available immediately after CreateSession returns.
+	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
+	require.NotNil(t, inst, "instance must appear in live poller immediately after CreateSession")
+
+	// When tmux is absent the goroutine sets Status=Stopped before reaching SetStatusManager.
+	// Wait for the goroutine to finish and skip if tmux was not available.
 	require.Eventually(t, func() bool {
-		inst := svc.FindLiveInstance(resp.Msg.Session.Id)
-		return inst != nil && inst.GetStatusManager() != nil
-	}, 10*time.Second, 100*time.Millisecond,
+		return inst.Status == session.Active || inst.Status == session.Stopped
+	}, 5*time.Second, 50*time.Millisecond, "instance must reach Active or Stopped")
+	if inst.Status == session.Stopped {
+		t.Skip("tmux not available; skipping status-manager wiring assertion")
+	}
+
+	require.NotNil(t, inst.GetStatusManager(),
 		"status manager must be wired onto the new instance before StartSessionDriver runs")
 }
 
@@ -328,6 +340,7 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 func newCreateTestService(t *testing.T, storage *session.Storage) *SessionService {
 	t.Helper()
 	bus := events.NewEventBus(16)
+	t.Cleanup(bus.Close)
 	svc := NewSessionService(storage, bus)
 	return svc
 }

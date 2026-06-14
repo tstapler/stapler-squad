@@ -597,6 +597,9 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	if err := instance.Start(true); err != nil {
 		return nil, fmt.Errorf("CreateDirectorySession start: %w", err)
 	}
+	if s.statusManager != nil {
+		instance.SetStatusManager(s.statusManager)
+	}
 	session.StartSessionDriver(instance, path)
 	s.wireRateLimitCallbacks(instance)
 	s.wireStatusChangeCallback(instance)

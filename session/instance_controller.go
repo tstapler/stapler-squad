@@ -21,7 +21,7 @@ func (i *Instance) StartController() error {
 	i.stateMutex.Lock()
 
 	// Only start if we have a status manager
-	if i.controllerManager.statusManager == nil {
+	if i.controllerManager.statusManager.Load() == nil {
 		i.stateMutex.Unlock()
 		log.Debug("no status manager set for instance, skipping controller", "session", i.Title)
 		return nil
