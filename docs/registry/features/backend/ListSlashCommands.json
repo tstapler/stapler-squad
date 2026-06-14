@@ -1,8 +1,8 @@
 {
-  "id": "GetEscapeAnalyticsSummary",
+  "id": "ListSlashCommands",
   "type": "backend",
   "service": "SessionService",
-  "method": "GetEscapeAnalyticsSummary",
+  "method": "ListSlashCommands",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
   "tested": false,
