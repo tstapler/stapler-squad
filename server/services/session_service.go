@@ -1302,6 +1302,18 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "rate_limit_enabled")
 	}
 
+	// Handle autonomous mode toggle. Starting/stopping the AutonomousDriver is a
+	// live side-effect; we only act when the value actually changes.
+	if req.Msg.AutonomousMode != nil && *req.Msg.AutonomousMode != instance.AutonomousMode {
+		instance.AutonomousMode = *req.Msg.AutonomousMode
+		if instance.AutonomousMode {
+			s.StartAutonomousDriverForInstance(instance)
+		} else {
+			s.stopAndDeregisterDriver(instance.Title)
+		}
+		updatedFields = append(updatedFields, "autonomous_mode")
+	}
+
 	// Handle status change (pause/resume) LAST - after all metadata updates.
 	// This ensures that if Resume() fails, no partial metadata changes are persisted
 	// (save only happens after all changes succeed).

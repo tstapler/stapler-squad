@@ -275,6 +275,7 @@ export function useSessionService(
           tags: updates.tags ?? [],
           workingDir: updates.workingDir,
           rateLimitEnabled: updates.rateLimitEnabled,
+          autonomousMode: updates.autonomousMode,
         });
 
         // Update in store

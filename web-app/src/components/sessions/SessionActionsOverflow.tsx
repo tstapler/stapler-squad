@@ -52,6 +52,7 @@ export interface SessionActionsOverflowProps {
   onCreateCheckpoint?: (sessionId: string, label: string) => Promise<boolean>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onUpdateTags?: (sessionId: string, tags: string[]) => void;
   /** Trigger rename flow in parent (e.g. SessionDetail opens its rename modal) */
@@ -76,6 +77,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onCreateCheckpoint,
   onRunOneShot,
   onSetRateLimitEnabled,
+  onToggleAutonomousMode,
   onClearConversationState,
   onUpdateTags,
   onRenameRequest,
@@ -479,6 +481,15 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                 >
                   <span aria-hidden="true">{session.rateLimitEnabled ? "⏸" : "▶"}</span>{" "}
                   {session.rateLimitEnabled ? "Disable auto-resume" : "Enable auto-resume"}
+                </button>
+              )}
+              {onToggleAutonomousMode && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); close(); onToggleAutonomousMode(session.id, !session.autonomousMode); }}
+                  aria-label={session.autonomousMode ? `Disable autonomous mode for ${session.title}` : `Enable autonomous mode for ${session.title}`}
+                >
+                  <span aria-hidden="true">{session.autonomousMode ? "🤖" : "🤖"}</span>{" "}
+                  {session.autonomousMode ? "Disable autonomous mode" : "Enable autonomous mode"}
                 </button>
               )}
               {onNewWorkspace && (
