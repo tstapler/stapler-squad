@@ -1,3 +1,4 @@
+// analytics-exempt
 "use client";
 // +feature: approval-rules rules-management
 
@@ -5,7 +6,7 @@ import { Suspense, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { ApprovalRulesPanel } from "@/components/sessions/ApprovalRulesPanel";
 import { ApprovalAnalyticsPanel } from "@/components/sessions/ApprovalAnalyticsPanel";
-import { decodePrefill, RuleBuilderPrefill } from "@/lib/ruleBuilderPrefill";
+import { decodePrefill, type RuleBuilderPrefill } from "@/lib/ruleBuilderPrefill";
 import * as styles from "./page.css";
 
 function RulesPageInner() {
