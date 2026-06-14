@@ -1,6 +1,6 @@
 import type { Feature } from '../types';
 
-export const claude_configFeatures = {
+export const claudeConfigFeatures = {
   'claude-config-get': {
     id: 'claude-config-get',
     title: 'Get Claude Config',

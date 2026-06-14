@@ -7,6 +7,9 @@ import (
 )
 
 func TestRegister_DuplicatePanics(t *testing.T) {
+	featureregistry.ResetForTest()
+	t.Cleanup(featureregistry.ResetForTest)
+
 	f := featureregistry.Feature{
 		ID:     "test-dedup",
 		Title:  "Test Dedup",
@@ -26,6 +29,9 @@ func TestRegister_DuplicatePanics(t *testing.T) {
 }
 
 func TestLookupRPC_UnknownReturnsNil(t *testing.T) {
+	featureregistry.ResetForTest()
+	t.Cleanup(featureregistry.ResetForTest)
+
 	result := featureregistry.LookupRPC("nonexistent:rpc")
 	if result != nil {
 		t.Errorf("expected nil for unknown RPC, got %+v", result)
@@ -33,6 +39,9 @@ func TestLookupRPC_UnknownReturnsNil(t *testing.T) {
 }
 
 func TestLookupRPC_KnownReturnsFeature(t *testing.T) {
+	featureregistry.ResetForTest()
+	t.Cleanup(featureregistry.ResetForTest)
+
 	f := featureregistry.Feature{
 		ID:     "lookup-test-feature",
 		Title:  "Lookup Test Feature",
@@ -52,6 +61,9 @@ func TestLookupRPC_KnownReturnsFeature(t *testing.T) {
 }
 
 func TestAll_ReturnsRegisteredFeatures(t *testing.T) {
+	featureregistry.ResetForTest()
+	t.Cleanup(featureregistry.ResetForTest)
+
 	f := featureregistry.Feature{
 		ID:     "all-test-feature",
 		Title:  "All Test Feature",
@@ -75,6 +87,9 @@ func TestAll_ReturnsRegisteredFeatures(t *testing.T) {
 }
 
 func TestMustValidate_PanicsOnEmptyTitle(t *testing.T) {
+	featureregistry.ResetForTest()
+	t.Cleanup(featureregistry.ResetForTest)
+
 	// Register a feature with an empty title to trigger validation failure
 	featureregistry.Register(featureregistry.Feature{
 		ID:     "empty-title-feature",

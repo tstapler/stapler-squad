@@ -1,6 +1,6 @@
 import type { Feature } from '../types';
 
-export const client_eventFeatures = {
+export const clientEventFeatures = {
   'client-event-log': {
     id: 'client-event-log',
     title: 'Log Client Events',

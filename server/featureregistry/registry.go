@@ -44,6 +44,10 @@ func Register(f Feature) {
 	}
 	registry[f.ID] = f
 	for _, rpcID := range f.RPCIDs {
+		if existing, conflict := rpcIndex[rpcID]; conflict {
+			panic(fmt.Sprintf("featureregistry: duplicate RPC ID %q claimed by both %q and %q",
+				rpcID, existing, f.ID))
+		}
 		rpcIndex[rpcID] = f.ID
 	}
 }

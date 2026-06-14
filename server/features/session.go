@@ -172,16 +172,6 @@ var SessionRunOneShot = featureregistry.Feature{
 	Since:       "1.0.0",
 }
 
-// SessionStreamTerminal describes the stream-terminal RPC.
-var SessionStreamTerminal = featureregistry.Feature{
-	ID:          "session-stream-terminal",
-	Title:       "Stream Terminal",
-	Description: "Streams real-time terminal output from a session over a server-sent event connection.",
-	RPCIDs:      []string{"session:stream-terminal"},
-	Status:      featureregistry.StatusExperimental,
-	Since:       "1.0.0",
-}
-
 // SessionUpdate describes the update-session RPC.
 var SessionUpdate = featureregistry.Feature{
 	ID:          "session-update",
@@ -210,6 +200,5 @@ func init() {
 	featureregistry.Register(SessionRename)
 	featureregistry.Register(SessionRestart)
 	featureregistry.Register(SessionRunOneShot)
-	featureregistry.Register(SessionStreamTerminal)
 	featureregistry.Register(SessionUpdate)
 }

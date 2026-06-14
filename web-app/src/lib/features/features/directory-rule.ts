@@ -1,6 +1,6 @@
 import type { Feature } from '../types';
 
-export const directory_ruleFeatures = {
+export const directoryRuleFeatures = {
   'directory-rule-delete': {
     id: 'directory-rule-delete',
     title: 'Delete Directory Rule',

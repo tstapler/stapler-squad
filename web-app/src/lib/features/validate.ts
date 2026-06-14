@@ -10,7 +10,7 @@ import type { Feature } from './types';
 
 const VALID_STATUSES = new Set(['stable', 'experimental', 'deprecated']);
 const SEMVER_RE = /^\d+\.\d+\.\d+$/;
-const KEBAB_RE = /^[a-z][a-z0-9-]*$/;
+const KEBAB_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 let errors: string[] = [];
 

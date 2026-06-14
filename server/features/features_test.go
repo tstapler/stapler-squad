@@ -1,12 +1,18 @@
 package features_test
 
 import (
+	"os"
 	"testing"
 
 	// Side-effect import: triggers all init() registrations in server/features
 	_ "github.com/tstapler/stapler-squad/server/features"
 	"github.com/tstapler/stapler-squad/server/featureregistry"
 )
+
+func TestMain(m *testing.M) {
+	featureregistry.MustValidate(m)
+	os.Exit(m.Run())
+}
 
 func TestAllFeaturesHaveRequiredFields(t *testing.T) {
 	all := featureregistry.All()

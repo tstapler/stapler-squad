@@ -8,12 +8,12 @@ import { approvalFeatures } from './features/approval';
 import { backlogFeatures } from './features/backlog';
 import { browserFeatures } from './features/browser';
 import { checkpointFeatures } from './features/checkpoint';
-import { claude_configFeatures } from './features/claude-config';
-import { client_eventFeatures } from './features/client-event';
+import { claudeConfigFeatures } from './features/claude-config';
+import { clientEventFeatures } from './features/client-event';
 import { databaseFeatures } from './features/database';
 import { debugFeatures } from './features/debug';
 import { defaultsFeatures } from './features/defaults';
-import { directory_ruleFeatures } from './features/directory-rule';
+import { directoryRuleFeatures } from './features/directory-rule';
 import { errorFeatures } from './features/error';
 import { fileFeatures } from './features/file';
 import { flagsFeatures } from './features/flags';
@@ -53,12 +53,12 @@ export const FEATURE_CATALOG = {
   ...backlogFeatures,
   ...browserFeatures,
   ...checkpointFeatures,
-  ...claude_configFeatures,
-  ...client_eventFeatures,
+  ...claudeConfigFeatures,
+  ...clientEventFeatures,
   ...databaseFeatures,
   ...debugFeatures,
   ...defaultsFeatures,
-  ...directory_ruleFeatures,
+  ...directoryRuleFeatures,
   ...errorFeatures,
   ...fileFeatures,
   ...flagsFeatures,
