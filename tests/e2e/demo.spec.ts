@@ -1,3 +1,4 @@
+// @feature session:list, session:create, review-queue:list, approval-rules:list, unfinished-work
 import { test, expect } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';

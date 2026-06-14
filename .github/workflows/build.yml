@@ -173,7 +173,8 @@ jobs:
               exit 1
             fi
           done
-        continue-on-error: true
+          # Also validate the typed catalog
+          cd web-app && npm install --silent && npm run validate-catalog
 
       # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
       # which posts a PR comment via benchstat. Removed dead step that ran

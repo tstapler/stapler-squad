@@ -1,0 +1,13 @@
+{
+  "name": "docs-gen",
+  "version": "1.0.0",
+  "scripts": {
+    "generate": "ts-node generate.ts",
+    "diff": "ts-node diff.ts"
+  },
+  "dependencies": {
+    "@types/node": "*",
+    "ts-node": "*",
+    "typescript": "*"
+  }
+}

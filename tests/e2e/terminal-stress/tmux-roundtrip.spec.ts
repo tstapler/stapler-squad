@@ -1,3 +1,4 @@
+// @feature terminal:render
 /**
  * Full-cycle tmux roundtrip integration tests.
  *

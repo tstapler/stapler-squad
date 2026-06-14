@@ -1,3 +1,5 @@
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+const _features = [FEATURE_CATALOG['session-list'], FEATURE_CATALOG['review-queue-list']] as const;
 import { test, expect } from '@playwright/test';
 
 // Base URL falls back to the production server port; playwright.config.ts sets baseURL

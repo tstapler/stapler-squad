@@ -1,3 +1,4 @@
+// @feature terminal:render
 import { test, expect } from '@playwright/test';
 
 /**

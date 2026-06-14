@@ -96,6 +96,14 @@ registry-diff: ## Show what would change in registry without writing files (dry 
 	@echo "Comparing current code against committed registries..."
 	@./tools/scanner/validate-registry.sh
 
+docs-features: ## Generate per-feature Markdown docs from the typed catalog
+	@echo "Generating feature docs..."
+	@mkdir -p docs/api/features
+	@cd tools/docs-gen && npm install --silent && npx ts-node --project tsconfig.json generate.ts
+
+changelog-since: ## Print features introduced since a version: make changelog-since VERSION=1.4.0
+	@cd tools/docs-gen && npx ts-node --project tsconfig.json changelog.ts $(VERSION)
+
 e2e-report: ## Generate Allure HTML report from last test run
 	@cd tests/e2e && npx allure generate allure-results --clean -o allure-report
 	@echo "✅ Report generated at tests/e2e/allure-report/index.html"

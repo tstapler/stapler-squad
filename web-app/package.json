@@ -24,7 +24,8 @@
     "build-storybook": "storybook build",
     "check-contrast": "npx --yes tsx scripts/check-theme-contrast.ts",
     "lint:duplicates": "jscpd src",
-    "audit:css-tokens": "ts-node scripts/audit-css-tokens.ts"
+    "audit:css-tokens": "ts-node scripts/audit-css-tokens.ts",
+    "validate-catalog": "ts-node --project tsconfig.node.json src/lib/features/validate.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.11.0",
@@ -136,6 +137,7 @@
     "stylelint-config-standard": "^40.0.0",
     "swc-loader": "^0.2.7",
     "ts-jest": "^29.4.4",
+    "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "wait-on": "^8.0.1"
   }
