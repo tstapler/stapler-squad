@@ -4,6 +4,7 @@ package featureregistry
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"testing"
 )
@@ -93,7 +94,7 @@ func MustValidate(m *testing.M) {
 	}
 	if len(errs) > 0 {
 		for _, e := range errs {
-			fmt.Printf("featureregistry: VALIDATION ERROR: %s\n", e)
+			log.Printf("featureregistry: VALIDATION ERROR: %s", e)
 		}
 		panic("featureregistry: validation failed — see errors above")
 	}
