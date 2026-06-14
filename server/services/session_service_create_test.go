@@ -320,17 +320,28 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	inst := svc.FindLiveInstance(resp.Msg.Session.Id)
 	require.NotNil(t, inst, "instance must appear in live poller immediately after CreateSession")
 
-	// When tmux is absent the goroutine sets Status=Stopped before reaching SetStatusManager.
-	// Wait for the goroutine to finish and skip if tmux was not available.
-	require.Eventually(t, func() bool {
-		return inst.Status == session.Active || inst.Status == session.Stopped
-	}, 5*time.Second, 50*time.Millisecond, "instance must reach Active or Stopped")
-	if inst.Status == session.Stopped {
-		t.Skip("tmux not available; skipping status-manager wiring assertion")
+	// Poll until the status manager is wired (tmux-available path) or the ceiling is hit.
+	// GetStatusManager uses atomic.Pointer.Load(), so polling is race-free.
+	// We avoid testify's Eventually here because its condition runs in a goroutine,
+	// which prevents t.Skip from working correctly.
+	var managerWired bool
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if inst.GetStatusManager() != nil {
+			managerWired = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 
-	require.NotNil(t, inst.GetStatusManager(),
-		"status manager must be wired onto the new instance before StartSessionDriver runs")
+	if !managerWired {
+		// When tmux is absent the goroutine sets Status=Stopped and returns early,
+		// never reaching SetStatusManager. By 30 s the goroutine is long finished.
+		if session.Status(inst.GetStatus()) == session.Stopped {
+			t.Skip("tmux not available; skipping status-manager wiring assertion")
+		}
+		t.Error("status manager was never wired within 30 s — regression in CreateSession goroutine")
+	}
 }
 
 // ---------------------------------------------------------------------------
