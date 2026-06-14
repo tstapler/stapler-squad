@@ -2,6 +2,13 @@ package session
 
 import "sync/atomic"
 
+// noCopy prevents ControllerManager from being copied after first use.
+// go vet -copylocks will flag any copy of a type containing noCopy.
+type noCopy struct{}
+
+func (*noCopy) Lock()   {}
+func (*noCopy) Unlock() {}
+
 // ControllerManager owns the ClaudeController and InstanceStatusManager
 // references that were previously bare fields on Instance.
 //
@@ -13,7 +20,12 @@ import "sync/atomic"
 // rich data object with complex lifecycle management (persistence, re-attachment,
 // session selection) that is tightly coupled to Instance business logic.
 // It remains a direct field on Instance for now.
+//
+// The controller field is accessed only while the owning Instance.stateMutex
+// is held; statusManager uses atomic.Pointer for lock-free concurrent access.
+// ControllerManager must not be copied after first use (enforced by noCopy).
 type ControllerManager struct {
+	_             noCopy
 	controller    *ClaudeController
 	statusManager atomic.Pointer[InstanceStatusManager]
 }
