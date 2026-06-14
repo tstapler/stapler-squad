@@ -74,6 +74,34 @@ export const chipIdle = style([
   },
 ]);
 
+export const chipInputRequired = style([
+  chip,
+  {
+    background: vars.statusBadge.inputBg,
+    color: vars.statusBadge.inputFg,
+    border: `1px solid ${vars.statusBadge.inputBorder}`,
+  },
+]);
+
+export const chipReady = style([
+  chip,
+  {
+    background: vars.color.successBg,
+    color: vars.color.success,
+    border: `1px solid ${vars.color.success}`,
+    opacity: 0.85,
+  },
+]);
+
+export const chipSuccess = style([
+  chip,
+  {
+    background: vars.statusBadge.completeBg,
+    color: vars.statusBadge.completeFg,
+    border: `1px solid ${vars.statusBadge.completeBorder}`,
+  },
+]);
+
 export const spinner = style({
   display: "inline-block",
   width: "10px",

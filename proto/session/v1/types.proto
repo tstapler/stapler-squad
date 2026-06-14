@@ -357,6 +357,12 @@ enum SubStatus {
   SUB_STATUS_TESTS_FAILING = 5;
   // Session is experiencing API rate limiting.
   SUB_STATUS_RATE_LIMITED = 6;
+  // Session is presenting a numbered option menu or open-ended question — user must type or select.
+  SUB_STATUS_INPUT_REQUIRED = 7;
+  // Session is at the input prompt, ready for the user's next instruction.
+  SUB_STATUS_READY = 8;
+  // Task completed successfully.
+  SUB_STATUS_SUCCESS = 9;
 }
 
 // RateLimitState indicates whether the session is experiencing rate limiting.

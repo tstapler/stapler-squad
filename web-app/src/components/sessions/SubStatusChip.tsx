@@ -3,11 +3,14 @@
 import { SubStatus } from "@/gen/session/v1/types_pb";
 import {
   chipNeedsApproval,
+  chipInputRequired,
   chipProcessing,
   chipError,
   chipTestsFailing,
   chipRateLimited,
   chipIdle,
+  chipReady,
+  chipSuccess,
   spinner,
 } from "./SubStatusChip.css";
 
@@ -43,7 +46,19 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
           aria-label="Needs approval"
           title="Waiting for your approval on a tool request"
         >
-          🔔 Needs Approval
+          🔔 Approve Tool Use
+        </span>
+      );
+
+    case SubStatus.INPUT_REQUIRED:
+      return (
+        <span
+          className={chipInputRequired}
+          role="status"
+          aria-label="Input needed"
+          title="Waiting for you to type a response or select an option"
+        >
+          ⌨ Your Input Needed
         </span>
       );
 
@@ -92,6 +107,30 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
           title="Session is idle — waiting for your input"
         >
           ● Waiting…
+        </span>
+      );
+
+    case SubStatus.READY:
+      return (
+        <span
+          className={chipReady}
+          role="status"
+          aria-label="Ready for your next instruction"
+          title="Session is at the prompt — ready for your next message"
+        >
+          ● Ready
+        </span>
+      );
+
+    case SubStatus.SUCCESS:
+      return (
+        <span
+          className={chipSuccess}
+          role="status"
+          aria-label="Task complete"
+          title="Task completed successfully"
+        >
+          ✓ Done
         </span>
       );
 

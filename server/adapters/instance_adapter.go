@@ -210,14 +210,20 @@ func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
 	switch inst.GetDetectedStatus() {
 	case detection.StatusProcessing, detection.StatusActive:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
-	case detection.StatusNeedsApproval, detection.StatusInputRequired:
+	case detection.StatusNeedsApproval:
 		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL
+	case detection.StatusInputRequired:
+		return sessionv1.SubStatus_SUB_STATUS_INPUT_REQUIRED
 	case detection.StatusError:
 		return sessionv1.SubStatus_SUB_STATUS_ERROR
 	case detection.StatusTestsFailing:
 		return sessionv1.SubStatus_SUB_STATUS_TESTS_FAILING
-	case detection.StatusReady, detection.StatusIdle:
+	case detection.StatusReady:
+		return sessionv1.SubStatus_SUB_STATUS_READY
+	case detection.StatusIdle:
 		return sessionv1.SubStatus_SUB_STATUS_IDLE
+	case detection.StatusSuccess:
+		return sessionv1.SubStatus_SUB_STATUS_SUCCESS
 	default:
 		// Unknown / undetected — don't show a chip
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED

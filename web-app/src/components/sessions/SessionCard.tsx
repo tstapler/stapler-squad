@@ -474,8 +474,11 @@ function SessionCardInner({
                 {getRateLimitStateText(session.rateLimitState)}
               </span>
             )}
+            {/* StatusBadge: only shown when SubStatusChip has nothing to display (UNSPECIFIED or suppressed IDLE).
+                When the chip is active, it already carries the status info — showing both is duplication. */}
             {detectedStatus &&
-              !(suppressApprovalSubStatus && detectedStatus === "Needs Approval") && (
+              !(suppressApprovalSubStatus && (detectedStatus === "Needs Approval" || detectedStatus === "Input Required")) &&
+              (session.subStatus === SubStatus.UNSPECIFIED || session.subStatus === SubStatus.IDLE) && (
               <StatusBadge detectedStatus={detectedStatus} context={detectedContext} />
             )}
             {/* Sub-status chip from the proto sub_status field.
@@ -484,7 +487,7 @@ function SessionCardInner({
             {(session.status as number) === (SessionStatus.ACTIVE as number) &&
               session.subStatus !== SubStatus.UNSPECIFIED &&
               session.subStatus !== SubStatus.IDLE &&
-              !(suppressApprovalSubStatus && session.subStatus === SubStatus.NEEDS_APPROVAL) && (
+              !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
                 <SubStatusChip subStatus={session.subStatus} />
               )}
             {(() => {

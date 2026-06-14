@@ -317,6 +317,8 @@ export function ReviewQueuePanel({
         return "Complete";
       case AttentionReason.STALE:
         return "Stale";
+      case AttentionReason.WAITING_FOR_USER:
+        return "Waiting";
       default:
         return "All";
     }
@@ -342,6 +344,7 @@ export function ReviewQueuePanel({
       [AttentionReason.IDLE, "idle"],
       [AttentionReason.STALE, "stale"],
       [AttentionReason.TASK_COMPLETE, "complete"],
+      [AttentionReason.WAITING_FOR_USER, "waiting"],
     ];
     for (const [reason, label] of reasonEntries) {
       const count = byReason.get(reason) ?? 0;
@@ -493,6 +496,7 @@ export function ReviewQueuePanel({
               {[
                 AttentionReason.APPROVAL_PENDING,
                 AttentionReason.INPUT_REQUIRED,
+                AttentionReason.WAITING_FOR_USER,
                 AttentionReason.ERROR_STATE,
                 AttentionReason.IDLE_TIMEOUT,
                 AttentionReason.IDLE,

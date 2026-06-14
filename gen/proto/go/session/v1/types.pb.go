@@ -429,6 +429,12 @@ const (
 	SubStatus_SUB_STATUS_TESTS_FAILING SubStatus = 5
 	// Session is experiencing API rate limiting.
 	SubStatus_SUB_STATUS_RATE_LIMITED SubStatus = 6
+	// Session is presenting a numbered option menu or open-ended question — user must type or select.
+	SubStatus_SUB_STATUS_INPUT_REQUIRED SubStatus = 7
+	// Session is at the input prompt, ready for the user's next instruction.
+	SubStatus_SUB_STATUS_READY SubStatus = 8
+	// Task completed successfully.
+	SubStatus_SUB_STATUS_SUCCESS SubStatus = 9
 )
 
 // Enum value maps for SubStatus.
@@ -441,6 +447,9 @@ var (
 		4: "SUB_STATUS_ERROR",
 		5: "SUB_STATUS_TESTS_FAILING",
 		6: "SUB_STATUS_RATE_LIMITED",
+		7: "SUB_STATUS_INPUT_REQUIRED",
+		8: "SUB_STATUS_READY",
+		9: "SUB_STATUS_SUCCESS",
 	}
 	SubStatus_value = map[string]int32{
 		"SUB_STATUS_UNSPECIFIED":    0,
@@ -450,6 +459,9 @@ var (
 		"SUB_STATUS_ERROR":          4,
 		"SUB_STATUS_TESTS_FAILING":  5,
 		"SUB_STATUS_RATE_LIMITED":   6,
+		"SUB_STATUS_INPUT_REQUIRED": 7,
+		"SUB_STATUS_READY":          8,
+		"SUB_STATUS_SUCCESS":        9,
 	}
 )
 
@@ -6521,7 +6533,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x14WORKING_STATE_ACTIVE\x10\x01\x12\x1c\n" +
 	"\x18WORKING_STATE_PROCESSING\x10\x02\x12\x16\n" +
 	"\x12WORKING_STATE_IDLE\x10\x03\x12\x19\n" +
-	"\x15WORKING_STATE_WAITING\x10\x04*\xc7\x01\n" +
+	"\x15WORKING_STATE_WAITING\x10\x04*\x94\x02\n" +
 	"\tSubStatus\x12\x1a\n" +
 	"\x16SUB_STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSUB_STATUS_IDLE\x10\x01\x12\x19\n" +
@@ -6529,7 +6541,10 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x19SUB_STATUS_NEEDS_APPROVAL\x10\x03\x12\x14\n" +
 	"\x10SUB_STATUS_ERROR\x10\x04\x12\x1c\n" +
 	"\x18SUB_STATUS_TESTS_FAILING\x10\x05\x12\x1b\n" +
-	"\x17SUB_STATUS_RATE_LIMITED\x10\x06*\xc9\x01\n" +
+	"\x17SUB_STATUS_RATE_LIMITED\x10\x06\x12\x1d\n" +
+	"\x19SUB_STATUS_INPUT_REQUIRED\x10\a\x12\x14\n" +
+	"\x10SUB_STATUS_READY\x10\b\x12\x16\n" +
+	"\x12SUB_STATUS_SUCCESS\x10\t*\xc9\x01\n" +
 	"\x0eRateLimitState\x12 \n" +
 	"\x1cRATE_LIMIT_STATE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15RATE_LIMIT_STATE_NONE\x10\x01\x12\x1c\n" +
