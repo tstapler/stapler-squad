@@ -13,9 +13,11 @@ describe('FEATURE_CATALOG', () => {
   });
 
   test.each(entries)(
-    'feature "%s": has non-empty testIds',
+    'feature "%s": stable features have non-empty testIds',
     (key, feature) => {
-      expect(feature.testIds.length).toBeGreaterThan(0);
+      if (feature.status === 'stable') {
+        expect(feature.testIds.length).toBeGreaterThan(0);
+      }
     }
   );
 

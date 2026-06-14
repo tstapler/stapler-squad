@@ -1,4 +1,11 @@
-// @feature session:pause, session:resume, paused-session-overlay, paused-session-row-distinction
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: paused-session-ux — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['session-pause'], // TODO: add to catalog
+  // FEATURE_CATALOG['session-resume'], // TODO: add to catalog
+  // FEATURE_CATALOG['paused-session-overlay'], // TODO: add to catalog
+  // FEATURE_CATALOG['paused-session-row-distinction'], // TODO: add to catalog
+] as const;
 // Paused Session UX tests — overlay visibility, Resume button, and row visual distinction.
 // These tests verify that paused sessions are clearly communicated to users and actionable.
 //

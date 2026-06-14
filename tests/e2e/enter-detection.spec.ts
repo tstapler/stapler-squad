@@ -1,4 +1,8 @@
-// @feature session:approval-enter-detection
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: enter-detection — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['session-approval-enter-detection'], // TODO: add to catalog
+] as const;
 /**
  * E2E tests for Enter-key detection and optimistic approval dismissal.
  *

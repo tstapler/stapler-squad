@@ -1,4 +1,10 @@
-// @feature ui:mobile-ux, ui:session-list, ui:session-detail
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: touch-targets — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['ui-mobile-ux'], // TODO: add to catalog
+  // FEATURE_CATALOG['ui-session-list'], // TODO: add to catalog
+  // FEATURE_CATALOG['ui-session-detail'], // TODO: add to catalog
+] as const;
 /**
  * Touch target size enforcement.
  *

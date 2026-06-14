@@ -1,4 +1,8 @@
-// @feature terminal-mobile-overflow-menu
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: terminal-mobile-overflow — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['terminal-mobile-overflow-menu'], // TODO: add to catalog
+] as const;
 import { test, expect } from '@playwright/test';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';

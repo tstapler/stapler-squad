@@ -1,4 +1,11 @@
-// @feature backlog:create-item, backlog:list-items, backlog:transition-status, backlog:spawn-session
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: backlog — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['backlog-create-item'],
+  FEATURE_CATALOG['backlog-list-items'],
+  FEATURE_CATALOG['backlog-transition-status'],
+  FEATURE_CATALOG['backlog-spawn-session'],
+] as const;
 import { test, expect } from '@playwright/test';
 import { BacklogPage } from './pages/BacklogPage';
 

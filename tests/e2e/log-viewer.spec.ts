@@ -1,4 +1,11 @@
-// @feature logs:view, logs:search, logs:filter, logs:expand
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: log-viewer — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['logs-view'], // TODO: add to catalog
+  // FEATURE_CATALOG['logs-search'], // TODO: add to catalog
+  // FEATURE_CATALOG['logs-filter'], // TODO: add to catalog
+  // FEATURE_CATALOG['logs-expand'], // TODO: add to catalog
+] as const;
 import { test, expect } from '@playwright/test';
 
 const BASE_URL = 'http://localhost:8544';

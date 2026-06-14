@@ -1,0 +1,57 @@
+import type { Feature } from '../types';
+
+export const fileFeatures = {
+  'file-get-content': {
+    id: 'file-get-content',
+    title: 'Get File Content',
+    description: 'Retrieves the text content of a file within a session worktree.',
+    rpcIds: ['file:get-content'],
+    componentPaths: [],
+    testIds: [
+      'TestGetFileContent_TextFile',
+      'TestGetFileContent_NotFound',
+      'TestGetFileContent_BinaryFile',
+      'TestGetFileContent_FileTooLarge',
+      'TestGetFileContent_PathTraversal',
+      'TestGetFileContent_Truncation',
+    ],
+    status: 'stable',
+    since: '1.0.0',
+  },
+  'file-list': {
+    id: 'file-list',
+    title: 'List Files',
+    description: 'Lists files and directories within a session worktree, respecting gitignore rules.',
+    rpcIds: ['file:list'],
+    componentPaths: [],
+    testIds: [
+      'TestListFiles_NotFound',
+      'TestListFiles_DirectoriesFirst',
+      'TestListFiles_GitignoreFiltering',
+      'TestListFiles_HardSkipDirs',
+      'TestListFiles_NodeCap',
+      'TestListFiles_PathTraversalRejected',
+    ],
+    status: 'stable',
+    since: '1.0.0',
+  },
+  'file-search': {
+    id: 'file-search',
+    title: 'Search Files',
+    description: 'Searches for files by name within a session worktree with gitignore-aware filtering.',
+    rpcIds: ['file:search'],
+    componentPaths: [],
+    testIds: [
+      'TestSearchFiles_NestedMatch',
+      'TestSearchFiles_NoMatchReturnsEmpty',
+      'TestSearchFiles_ShortQueryReturnsEmpty',
+      'TestSearchFiles_MaxResultsCap',
+      'TestSearchFiles_PathMatchOnFullPath',
+      'TestSearchFiles_HardSkipDirs',
+      'TestSearchFiles_GitignoreFiltering',
+      'TestSearchFiles_PathTraversalRejected',
+    ],
+    status: 'stable',
+    since: '1.0.0',
+  },
+} as const satisfies Record<string, Feature>;

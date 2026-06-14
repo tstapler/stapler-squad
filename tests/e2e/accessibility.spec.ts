@@ -1,4 +1,8 @@
-// @feature ui:accessibility-gate
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: accessibility — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['ui-accessibility-gate'], // TODO: add to catalog
+] as const;
 // Story 5: UX Analysis Automation - Axe Core accessibility gate
 // This test file is the CI gate for WCAG 2.1 AA compliance.
 // critical + serious violations block merge.

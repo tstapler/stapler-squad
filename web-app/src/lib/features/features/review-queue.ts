@@ -26,4 +26,17 @@ export const reviewQueueFeatures = {
     status: 'stable',
     since: '1.0.0',
   },
+  'review-queue-get': {
+    id: 'review-queue-get',
+    title: 'Get Review Queue',
+    description: 'Fetches the current review queue of sessions requiring user attention.',
+    rpcIds: ['review-queue:get'],
+    componentPaths: [],
+    testIds: [
+      'TestGetReviewQueue_ReturnsEmpty',
+      'TestGetReviewQueue_WithItems',
+    ],
+    status: 'stable',
+    since: '1.0.0',
+  },
 } as const satisfies Record<string, Feature>;

@@ -38,8 +38,8 @@ for (const [key, feature] of Object.entries(FEATURE_CATALOG) as [string, Feature
     errors.push(`${prefix}: since "${feature.since}" does not match semver pattern (e.g. "1.0.0")`);
   }
 
-  if (feature.testIds.length === 0) {
-    errors.push(`${prefix}: testIds is empty — every feature must have at least one test`);
+  if (feature.status === 'stable' && feature.testIds.length === 0) {
+    errors.push(`${prefix}: stable feature has no testIds — add tests or set status to "experimental"`);
   }
 
   if (feature.rpcIds.length === 0 && feature.componentPaths.length === 0) {

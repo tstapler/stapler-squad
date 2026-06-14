@@ -1,4 +1,5 @@
-// @feature terminal:render
+import { FEATURE_CATALOG } from '../../../web-app/src/lib/features';
+const _features = [FEATURE_CATALOG['terminal-render']] as const;
 /**
  * Full-cycle tmux roundtrip integration tests.
  *

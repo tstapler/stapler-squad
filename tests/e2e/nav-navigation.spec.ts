@@ -1,4 +1,8 @@
-// @feature ui:header-nav
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: nav-navigation — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['ui-header-nav'], // TODO: add to catalog
+] as const;
 // Regression tests for nav link navigation from the sessions page.
 // Bug: window.history.replaceState in the nav click handler was intercepted by
 // Next.js's patched router, causing navigation to "/" instead of the target route.

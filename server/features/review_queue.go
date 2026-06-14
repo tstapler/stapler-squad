@@ -22,7 +22,18 @@ var ReviewQueueAcknowledge = featureregistry.Feature{
 	Since:       "1.0.0",
 }
 
+// ReviewQueueGet describes the get review-queue RPC.
+var ReviewQueueGet = featureregistry.Feature{
+	ID:          "review-queue-get",
+	Title:       "Get Review Queue",
+	Description: "Fetches the current review queue of sessions requiring user attention.",
+	RPCIDs:      []string{"review-queue:get"},
+	Status:      featureregistry.StatusStable,
+	Since:       "1.0.0",
+}
+
 func init() {
 	featureregistry.Register(ReviewQueueList)
 	featureregistry.Register(ReviewQueueAcknowledge)
+	featureregistry.Register(ReviewQueueGet)
 }
