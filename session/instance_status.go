@@ -203,7 +203,9 @@ func (info InstanceStatusInfo) IsWaitingForUser() bool {
 
 // NeedsAttention returns true if the instance requires user attention.
 func (info InstanceStatusInfo) NeedsAttention() bool {
-	return info.IsWaitingForUser() || info.ClaudeStatus == detection.StatusError
+	return info.IsWaitingForUser() ||
+		info.ClaudeStatus == detection.StatusError ||
+		info.ClaudeStatus == detection.StatusTestsFailing
 }
 
 // GetColorCode returns a color code for the status (for lipgloss styling).

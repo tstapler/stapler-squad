@@ -46,7 +46,7 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
           aria-label="Needs approval"
           title="Waiting for your approval on a tool request"
         >
-          🔔 Approve Tool Use
+          ● Approve Tool Use
         </span>
       );
 
@@ -103,10 +103,10 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
         <span
           className={chipIdle}
           role="status"
-          aria-label="Waiting for input"
+          aria-label="Session is idle"
           title="Session is idle — waiting for your input"
         >
-          ● Waiting…
+          ● Idle
         </span>
       );
 

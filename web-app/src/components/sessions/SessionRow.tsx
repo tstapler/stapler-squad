@@ -173,7 +173,7 @@ export function SessionRow({
           </span>
           {session.status === SessionStatus.ACTIVE &&
             session.subStatus !== SubStatus.UNSPECIFIED &&
-            !(suppressApprovalSubStatus && session.subStatus === SubStatus.NEEDS_APPROVAL) && (
+            !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
               <SubStatusChip subStatus={session.subStatus} />
             )}
         </span>

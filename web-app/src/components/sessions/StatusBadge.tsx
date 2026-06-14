@@ -29,7 +29,7 @@ export function getAttentionReasonInfo(reason: AttentionReason): StatusInfo {
     case AttentionReason.STALE:
       return { label: "Stale", icon: "⌛", variant: "stale" };
     case AttentionReason.WAITING_FOR_USER:
-      return { label: "Waiting", icon: "✏️", variant: "input" };
+      return { label: "Your Input Needed", icon: "✏️", variant: "input" };
     default:
       return { label: "Unknown", icon: "●", variant: "unknown" };
   }

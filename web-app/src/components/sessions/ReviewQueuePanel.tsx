@@ -319,6 +319,8 @@ export function ReviewQueuePanel({
         return "Stale";
       case AttentionReason.WAITING_FOR_USER:
         return "Waiting";
+      case AttentionReason.TESTS_FAILING:
+        return "Tests Failing";
       default:
         return "All";
     }
@@ -345,6 +347,7 @@ export function ReviewQueuePanel({
       [AttentionReason.STALE, "stale"],
       [AttentionReason.TASK_COMPLETE, "complete"],
       [AttentionReason.WAITING_FOR_USER, "waiting"],
+      [AttentionReason.TESTS_FAILING, "tests failing"],
     ];
     for (const [reason, label] of reasonEntries) {
       const count = byReason.get(reason) ?? 0;
@@ -498,12 +501,15 @@ export function ReviewQueuePanel({
                 AttentionReason.INPUT_REQUIRED,
                 AttentionReason.WAITING_FOR_USER,
                 AttentionReason.ERROR_STATE,
+                AttentionReason.TESTS_FAILING,
                 AttentionReason.IDLE_TIMEOUT,
                 AttentionReason.IDLE,
                 AttentionReason.STALE,
                 AttentionReason.TASK_COMPLETE,
               ].map((reason) => {
                 const reasonCount = byReason.get(reason) ?? 0;
+                // Hide TESTS_FAILING when count is 0 (detection may be disabled)
+                if (reason === AttentionReason.TESTS_FAILING && reasonCount === 0) return null;
                 return (
                   <button
                     key={reason}
