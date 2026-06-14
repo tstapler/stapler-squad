@@ -519,14 +519,18 @@ func (cc *ClaudeController) Unsubscribe(subscriberID string) error {
 //     previous call. If the tail is unchanged the cached result is returned
 //     immediately with zero allocations.
 func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string) {
+	// Read cc.instance under the lock, then release before calling Preview().
+	// Preview() calls GetRecentOutput() which also acquires mu.RLock(); holding mu
+	// across the Preview() call would cause a recursive RLock on the same goroutine.
 	cc.mu.RLock()
-	defer cc.mu.RUnlock()
+	inst := cc.instance
+	cc.mu.RUnlock()
 
-	if cc.instance == nil {
+	if inst == nil {
 		return detection.StatusUnknown, "Instance not initialized"
 	}
 
-	content, err := cc.instance.Preview()
+	content, err := inst.Preview()
 	if err != nil {
 		log.Debug("getcurrentstatus: preview error", "session", cc.sessionName, "err", err)
 		return detection.StatusUnknown, "Failed to get terminal content"

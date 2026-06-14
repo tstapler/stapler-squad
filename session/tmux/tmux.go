@@ -60,7 +60,11 @@ type TmuxSession struct {
 	ptmx *os.File
 	// attachCmd is the tmux attach-session process that owns the PTY
 	// CRITICAL: Must be killed when closing PTY to prevent orphaned processes
-	attachCmd *exec.Cmd
+	attachCmd         *exec.Cmd
+	// attachCmdWaitOnce guards attachCmd.Wait() so it is called exactly once
+	// across closePTYAndAttachCmd and the diagnostic goroutine in RestoreWithWorkDir.
+	// Reset to a new *sync.Once each time a new attachCmd is assigned.
+	attachCmdWaitOnce *sync.Once
 	// monitor monitors the tmux pane content and sends signals to the UI when it's status changes
 	monitor *statusMonitor
 	// bannerFilter detects and filters tmux status line banners from terminal output
@@ -578,6 +582,7 @@ func (t *TmuxSession) AttachToExisting() error {
 		}
 		t.ptmx = ptmx
 		t.attachCmd = cmd // CRITICAL: Save command so we can kill it on cleanup
+		t.attachCmdWaitOnce = new(sync.Once)
 		log.Info("successfully attached PTY to existing tmux session", "session", t.sanitizedName, "pid", cmd.Process.Pid)
 	}
 
@@ -903,12 +908,16 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 			}
 			t.ptmx = ptmx
 			t.attachCmd = attachCmd // CRITICAL: track so it can be killed on cleanup
+			waitOnce := new(sync.Once)
+			t.attachCmdWaitOnce = waitOnce
 			log.Info("successfully restored PTY connection for tmux session", "session", t.sanitizedName)
 			// Diagnostic: watch for unexpected early exit of the attach process.
-			go func(cmd *exec.Cmd, name string) {
-				err := cmd.Wait()
+			// Uses the same sync.Once as closePTYAndAttachCmd so Wait is called exactly once.
+			go func(cmd *exec.Cmd, name string, once *sync.Once) {
+				var err error
+				once.Do(func() { err = cmd.Wait() })
 				log.Info("attach-session process exited", "session", name, "exitErr", err)
-			}(attachCmd, t.sanitizedName)
+			}(attachCmd, t.sanitizedName, waitOnce)
 			lastPTYErr = nil
 			break
 		}
@@ -1341,9 +1350,15 @@ func (t *TmuxSession) closePTYAndAttachCmd() []error {
 				errs = append(errs, fmt.Errorf("error killing attach process: %w", err))
 			}
 		}
-		// Wait for process to be reaped to avoid zombies
-		_ = t.attachCmd.Wait()
+		// Wait for process to be reaped to avoid zombies. Use attachCmdWaitOnce so this
+		// call is safe even when RestoreWithWorkDir's diagnostic goroutine also calls Wait.
+		if t.attachCmdWaitOnce != nil {
+			t.attachCmdWaitOnce.Do(func() { _ = t.attachCmd.Wait() })
+		} else {
+			_ = t.attachCmd.Wait()
+		}
 		t.attachCmd = nil
+		t.attachCmdWaitOnce = nil
 	}
 
 	return errs
