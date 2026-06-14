@@ -20,30 +20,34 @@ type WorkflowRepository interface {
 
 // WorkflowCreateInput holds the fields for creating a new workflow.
 type WorkflowCreateInput struct {
-	Slug            string
-	Name            string
-	Description     string
-	Command         string
-	TargetDirectory string
-	InputTemplate   string
-	SessionType     string
-	Model           string
-	AgentType       string
-	CronExpression  string
-	CronEnabled     bool
+	Slug              string
+	Name              string
+	Description       string
+	Command           string
+	TargetDirectory   string
+	InputTemplate     string
+	SessionType       string
+	Model             string
+	AgentType         string
+	CronExpression    string
+	CronEnabled       bool
+	KeepSessions      *int // nil = use default (0, disabled); 0 = keep all
+	ArchiveAfterHours *int // nil = use default (0, disabled); 0 = disabled
 }
 
 // WorkflowUpdateInput holds optional fields for updating an existing workflow.
 // Pointer fields are only applied when non-nil (partial update).
 type WorkflowUpdateInput struct {
-	Name            *string
-	Description     *string
-	Command         *string
-	TargetDirectory *string
-	InputTemplate   *string
-	SessionType     *string
-	Model           *string
-	AgentType       *string
-	CronExpression  *string
-	CronEnabled     *bool
+	Name              *string
+	Description       *string
+	Command           *string
+	TargetDirectory   *string
+	InputTemplate     *string
+	SessionType       *string
+	Model             *string
+	AgentType         *string
+	CronExpression    *string
+	CronEnabled       *bool
+	KeepSessions      *int // nil = do not update; 0 = keep all (disabled)
+	ArchiveAfterHours *int // nil = do not update; 0 = disabled
 }

@@ -1155,6 +1155,26 @@ export function SessionDetailView({
                   </span>
                 </div>
               )}
+              {/* Workflow metadata */}
+              {session.workflowId && (
+                <div className={styles.workflowSection} data-testid="workflow-metadata-section">
+                  <div className={styles.infoItem}>
+                    <span className={styles.infoLabel}>Workflow:</span>
+                    <span className={styles.infoValue}>
+                      {session.workflowName || session.workflowId}
+                    </span>
+                  </div>
+                  <div className={styles.infoItem}>
+                    <span className={styles.infoLabel}>Workflow ID:</span>
+                    <span className={styles.infoValue} style={{ fontFamily: "monospace", fontSize: "0.85em" }}>
+                      {session.workflowId}
+                      <button onClick={() => handleCopy("workflowId", session.workflowId)} className={styles.editButton} title="Copy to clipboard">
+                        {copiedField === "workflowId" ? "✓" : "📋"}
+                      </button>
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
             {/* Goal & Task panel — shown when a goal has been set via MCP */}
             {session.goal?.goalText && (

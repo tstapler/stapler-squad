@@ -29,6 +29,10 @@ func (Workflow) Fields() []ent.Field {
 		field.Bool("cron_enabled").Default(false),
 		field.Time("created_at").Default(time.Now).Immutable(),
 		field.Time("updated_at").Default(time.Now).UpdateDefault(time.Now),
+		field.Int("keep_sessions").Optional().Default(0).
+			Comment("Keep only the N most recent sessions per workflow (0 = keep all, disabled)."),
+		field.Int("archive_after_hours").Optional().Default(0).
+			Comment("Auto-archive completed sessions after this many hours (0 = disabled)."),
 	}
 }
 

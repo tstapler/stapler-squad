@@ -21158,26 +21158,30 @@ func (m *TagMutation) ResetEdge(name string) error {
 // WorkflowMutation represents an operation that mutates the Workflow nodes in the graph.
 type WorkflowMutation struct {
 	config
-	op               Op
-	typ              string
-	id               *uuid.UUID
-	slug             *string
-	name             *string
-	description      *string
-	command          *string
-	target_directory *string
-	input_template   *string
-	session_type     *string
-	model            *string
-	agent_type       *string
-	cron_expression  *string
-	cron_enabled     *bool
-	created_at       *time.Time
-	updated_at       *time.Time
-	clearedFields    map[string]struct{}
-	done             bool
-	oldValue         func(context.Context) (*Workflow, error)
-	predicates       []predicate.Workflow
+	op                     Op
+	typ                    string
+	id                     *uuid.UUID
+	slug                   *string
+	name                   *string
+	description            *string
+	command                *string
+	target_directory       *string
+	input_template         *string
+	session_type           *string
+	model                  *string
+	agent_type             *string
+	cron_expression        *string
+	cron_enabled           *bool
+	created_at             *time.Time
+	updated_at             *time.Time
+	keep_sessions          *int
+	addkeep_sessions       *int
+	archive_after_hours    *int
+	addarchive_after_hours *int
+	clearedFields          map[string]struct{}
+	done                   bool
+	oldValue               func(context.Context) (*Workflow, error)
+	predicates             []predicate.Workflow
 }
 
 var _ ent.Mutation = (*WorkflowMutation)(nil)
@@ -21843,6 +21847,146 @@ func (m *WorkflowMutation) ResetUpdatedAt() {
 	m.updated_at = nil
 }
 
+// SetKeepSessions sets the "keep_sessions" field.
+func (m *WorkflowMutation) SetKeepSessions(i int) {
+	m.keep_sessions = &i
+	m.addkeep_sessions = nil
+}
+
+// KeepSessions returns the value of the "keep_sessions" field in the mutation.
+func (m *WorkflowMutation) KeepSessions() (r int, exists bool) {
+	v := m.keep_sessions
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldKeepSessions returns the old "keep_sessions" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldKeepSessions(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldKeepSessions is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldKeepSessions requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldKeepSessions: %w", err)
+	}
+	return oldValue.KeepSessions, nil
+}
+
+// AddKeepSessions adds i to the "keep_sessions" field.
+func (m *WorkflowMutation) AddKeepSessions(i int) {
+	if m.addkeep_sessions != nil {
+		*m.addkeep_sessions += i
+	} else {
+		m.addkeep_sessions = &i
+	}
+}
+
+// AddedKeepSessions returns the value that was added to the "keep_sessions" field in this mutation.
+func (m *WorkflowMutation) AddedKeepSessions() (r int, exists bool) {
+	v := m.addkeep_sessions
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearKeepSessions clears the value of the "keep_sessions" field.
+func (m *WorkflowMutation) ClearKeepSessions() {
+	m.keep_sessions = nil
+	m.addkeep_sessions = nil
+	m.clearedFields[workflow.FieldKeepSessions] = struct{}{}
+}
+
+// KeepSessionsCleared returns if the "keep_sessions" field was cleared in this mutation.
+func (m *WorkflowMutation) KeepSessionsCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldKeepSessions]
+	return ok
+}
+
+// ResetKeepSessions resets all changes to the "keep_sessions" field.
+func (m *WorkflowMutation) ResetKeepSessions() {
+	m.keep_sessions = nil
+	m.addkeep_sessions = nil
+	delete(m.clearedFields, workflow.FieldKeepSessions)
+}
+
+// SetArchiveAfterHours sets the "archive_after_hours" field.
+func (m *WorkflowMutation) SetArchiveAfterHours(i int) {
+	m.archive_after_hours = &i
+	m.addarchive_after_hours = nil
+}
+
+// ArchiveAfterHours returns the value of the "archive_after_hours" field in the mutation.
+func (m *WorkflowMutation) ArchiveAfterHours() (r int, exists bool) {
+	v := m.archive_after_hours
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldArchiveAfterHours returns the old "archive_after_hours" field's value of the Workflow entity.
+// If the Workflow object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *WorkflowMutation) OldArchiveAfterHours(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldArchiveAfterHours is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldArchiveAfterHours requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldArchiveAfterHours: %w", err)
+	}
+	return oldValue.ArchiveAfterHours, nil
+}
+
+// AddArchiveAfterHours adds i to the "archive_after_hours" field.
+func (m *WorkflowMutation) AddArchiveAfterHours(i int) {
+	if m.addarchive_after_hours != nil {
+		*m.addarchive_after_hours += i
+	} else {
+		m.addarchive_after_hours = &i
+	}
+}
+
+// AddedArchiveAfterHours returns the value that was added to the "archive_after_hours" field in this mutation.
+func (m *WorkflowMutation) AddedArchiveAfterHours() (r int, exists bool) {
+	v := m.addarchive_after_hours
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearArchiveAfterHours clears the value of the "archive_after_hours" field.
+func (m *WorkflowMutation) ClearArchiveAfterHours() {
+	m.archive_after_hours = nil
+	m.addarchive_after_hours = nil
+	m.clearedFields[workflow.FieldArchiveAfterHours] = struct{}{}
+}
+
+// ArchiveAfterHoursCleared returns if the "archive_after_hours" field was cleared in this mutation.
+func (m *WorkflowMutation) ArchiveAfterHoursCleared() bool {
+	_, ok := m.clearedFields[workflow.FieldArchiveAfterHours]
+	return ok
+}
+
+// ResetArchiveAfterHours resets all changes to the "archive_after_hours" field.
+func (m *WorkflowMutation) ResetArchiveAfterHours() {
+	m.archive_after_hours = nil
+	m.addarchive_after_hours = nil
+	delete(m.clearedFields, workflow.FieldArchiveAfterHours)
+}
+
 // Where appends a list predicates to the WorkflowMutation builder.
 func (m *WorkflowMutation) Where(ps ...predicate.Workflow) {
 	m.predicates = append(m.predicates, ps...)
@@ -21877,7 +22021,7 @@ func (m *WorkflowMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *WorkflowMutation) Fields() []string {
-	fields := make([]string, 0, 13)
+	fields := make([]string, 0, 15)
 	if m.slug != nil {
 		fields = append(fields, workflow.FieldSlug)
 	}
@@ -21917,6 +22061,12 @@ func (m *WorkflowMutation) Fields() []string {
 	if m.updated_at != nil {
 		fields = append(fields, workflow.FieldUpdatedAt)
 	}
+	if m.keep_sessions != nil {
+		fields = append(fields, workflow.FieldKeepSessions)
+	}
+	if m.archive_after_hours != nil {
+		fields = append(fields, workflow.FieldArchiveAfterHours)
+	}
 	return fields
 }
 
@@ -21951,6 +22101,10 @@ func (m *WorkflowMutation) Field(name string) (ent.Value, bool) {
 		return m.CreatedAt()
 	case workflow.FieldUpdatedAt:
 		return m.UpdatedAt()
+	case workflow.FieldKeepSessions:
+		return m.KeepSessions()
+	case workflow.FieldArchiveAfterHours:
+		return m.ArchiveAfterHours()
 	}
 	return nil, false
 }
@@ -21986,6 +22140,10 @@ func (m *WorkflowMutation) OldField(ctx context.Context, name string) (ent.Value
 		return m.OldCreatedAt(ctx)
 	case workflow.FieldUpdatedAt:
 		return m.OldUpdatedAt(ctx)
+	case workflow.FieldKeepSessions:
+		return m.OldKeepSessions(ctx)
+	case workflow.FieldArchiveAfterHours:
+		return m.OldArchiveAfterHours(ctx)
 	}
 	return nil, fmt.Errorf("unknown Workflow field %s", name)
 }
@@ -22086,6 +22244,20 @@ func (m *WorkflowMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetUpdatedAt(v)
 		return nil
+	case workflow.FieldKeepSessions:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetKeepSessions(v)
+		return nil
+	case workflow.FieldArchiveAfterHours:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetArchiveAfterHours(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Workflow field %s", name)
 }
@@ -22093,13 +22265,26 @@ func (m *WorkflowMutation) SetField(name string, value ent.Value) error {
 // AddedFields returns all numeric fields that were incremented/decremented during
 // this mutation.
 func (m *WorkflowMutation) AddedFields() []string {
-	return nil
+	var fields []string
+	if m.addkeep_sessions != nil {
+		fields = append(fields, workflow.FieldKeepSessions)
+	}
+	if m.addarchive_after_hours != nil {
+		fields = append(fields, workflow.FieldArchiveAfterHours)
+	}
+	return fields
 }
 
 // AddedField returns the numeric value that was incremented/decremented on a field
 // with the given name. The second boolean return value indicates that this field
 // was not set, or was not defined in the schema.
 func (m *WorkflowMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case workflow.FieldKeepSessions:
+		return m.AddedKeepSessions()
+	case workflow.FieldArchiveAfterHours:
+		return m.AddedArchiveAfterHours()
+	}
 	return nil, false
 }
 
@@ -22108,6 +22293,20 @@ func (m *WorkflowMutation) AddedField(name string) (ent.Value, bool) {
 // type.
 func (m *WorkflowMutation) AddField(name string, value ent.Value) error {
 	switch name {
+	case workflow.FieldKeepSessions:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddKeepSessions(v)
+		return nil
+	case workflow.FieldArchiveAfterHours:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddArchiveAfterHours(v)
+		return nil
 	}
 	return fmt.Errorf("unknown Workflow numeric field %s", name)
 }
@@ -22136,6 +22335,12 @@ func (m *WorkflowMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(workflow.FieldCronExpression) {
 		fields = append(fields, workflow.FieldCronExpression)
+	}
+	if m.FieldCleared(workflow.FieldKeepSessions) {
+		fields = append(fields, workflow.FieldKeepSessions)
+	}
+	if m.FieldCleared(workflow.FieldArchiveAfterHours) {
+		fields = append(fields, workflow.FieldArchiveAfterHours)
 	}
 	return fields
 }
@@ -22171,6 +22376,12 @@ func (m *WorkflowMutation) ClearField(name string) error {
 		return nil
 	case workflow.FieldCronExpression:
 		m.ClearCronExpression()
+		return nil
+	case workflow.FieldKeepSessions:
+		m.ClearKeepSessions()
+		return nil
+	case workflow.FieldArchiveAfterHours:
+		m.ClearArchiveAfterHours()
 		return nil
 	}
 	return fmt.Errorf("unknown Workflow nullable field %s", name)
@@ -22218,6 +22429,12 @@ func (m *WorkflowMutation) ResetField(name string) error {
 		return nil
 	case workflow.FieldUpdatedAt:
 		m.ResetUpdatedAt()
+		return nil
+	case workflow.FieldKeepSessions:
+		m.ResetKeepSessions()
+		return nil
+	case workflow.FieldArchiveAfterHours:
+		m.ResetArchiveAfterHours()
 		return nil
 	}
 	return fmt.Errorf("unknown Workflow field %s", name)

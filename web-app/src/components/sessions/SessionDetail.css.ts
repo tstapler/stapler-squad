@@ -610,3 +610,7 @@ export const tabDisabled = style({
   opacity: 0.4,
   cursor: "not-allowed",
 });
+
+export const workflowSection = style({
+  display: "contents",
+});

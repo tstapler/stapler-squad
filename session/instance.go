@@ -884,24 +884,13 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	i.startCDP(context.Background())
 	log.ForSession(i.Title).Info("session started", "first_time_setup", firstTimeSetup)
 
-	// Start controller for new sessions only; loaded sessions are wired later by server.go.
-	if firstTimeSetup {
-		if err := i.StartController(); err != nil {
-			// One retry: brief delay gives the tmux session time to stabilise, then
-			// re-attempt PTY attachment (RestoreWithWorkDir is idempotent — skips
-			// recreation if the session exists, only re-attaches PTY if ptmx is nil).
-			log.Warn("controller start failed, retrying after pty re-attach", "session", i.Title, "err", err)
-			time.Sleep(200 * time.Millisecond)
-			// Session already exists; workDir only matters for the fallback recreation path.
-			_ = i.pm().RestoreWithWorkDir("")
-			if retryErr := i.StartController(); retryErr != nil {
-				log.Error("controller start failed after retry, marking degraded", "session", i.Title, "err", retryErr)
-				i.fireLifecycleEvent(EventExited, "controller-start-failed")
-			}
-		}
-	} else {
-		log.Debug("skipping controller startup for loaded instance, will be started after wiring", "session", i.Title)
-	}
+	// Controller startup is always deferred to the caller after wiring (SetStatusManager).
+	// For new sessions (firstTimeSetup=true), the caller (session_service.go async goroutine)
+	// calls SetStatusManager + StartController after Start() returns.
+	// For loaded sessions (firstTimeSetup=false), loadInstancesWithWiring does the same.
+	// Starting the controller inside Start() causes immediate PTY EIO because tmux
+	// attach-session hasn't fully initialized by the time the response stream reads.
+	log.Debug("skipping controller startup, will be started after wiring", "session", i.Title, "firstTimeSetup", firstTimeSetup)
 
 	return nil
 }

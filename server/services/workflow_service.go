@@ -39,7 +39,7 @@ func NewWorkflowService(repo session.WorkflowRepository, scheduler WorkflowSched
 
 // entWorkflowToProto converts an ent.Workflow to its proto representation.
 func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
-	return &sessionv1.WorkflowProto{
+	proto := &sessionv1.WorkflowProto{
 		Id:              w.ID.String(),
 		Slug:            w.Slug,
 		Name:            w.Name,
@@ -55,6 +55,16 @@ func entWorkflowToProto(w *ent.Workflow) *sessionv1.WorkflowProto {
 		CreatedAt:       timestamppb.New(w.CreatedAt),
 		UpdatedAt:       timestamppb.New(w.UpdatedAt),
 	}
+	// Optional retention fields — only set on proto when non-zero (zero = disabled).
+	if w.KeepSessions != 0 {
+		v := int32(w.KeepSessions)
+		proto.KeepSessions = &v
+	}
+	if w.ArchiveAfterHours != 0 {
+		v := int32(w.ArchiveAfterHours)
+		proto.ArchiveAfterHours = &v
+	}
+	return proto
 }
 
 // validateTargetDirectory checks that dir is an absolute path with no traversal components.
@@ -105,7 +115,7 @@ func (s *WorkflowService) CreateWorkflow(
 		}
 	}
 
-	wf, err := s.repo.Create(ctx, session.WorkflowCreateInput{
+	createInput := session.WorkflowCreateInput{
 		Slug:            req.Msg.Slug,
 		Name:            req.Msg.Name,
 		Description:     req.Msg.Description,
@@ -117,7 +127,16 @@ func (s *WorkflowService) CreateWorkflow(
 		AgentType:       req.Msg.AgentType,
 		CronExpression:  req.Msg.CronExpression,
 		CronEnabled:     req.Msg.CronEnabled,
-	})
+	}
+	if req.Msg.KeepSessions != nil {
+		v := int(*req.Msg.KeepSessions)
+		createInput.KeepSessions = &v
+	}
+	if req.Msg.ArchiveAfterHours != nil {
+		v := int(*req.Msg.ArchiveAfterHours)
+		createInput.ArchiveAfterHours = &v
+	}
+	wf, err := s.repo.Create(ctx, createInput)
 	if err != nil {
 		if errors.Is(err, session.ErrConflict) {
 			return nil, connect.NewError(connect.CodeAlreadyExists,
@@ -184,6 +203,14 @@ func (s *WorkflowService) UpdateWorkflow(
 		AgentType:       req.Msg.AgentType,
 		CronExpression:  req.Msg.CronExpression,
 		CronEnabled:     req.Msg.CronEnabled,
+	}
+	if req.Msg.KeepSessions != nil {
+		v := int(*req.Msg.KeepSessions)
+		update.KeepSessions = &v
+	}
+	if req.Msg.ArchiveAfterHours != nil {
+		v := int(*req.Msg.ArchiveAfterHours)
+		update.ArchiveAfterHours = &v
 	}
 
 	wf, err := s.repo.Update(ctx, id, update)

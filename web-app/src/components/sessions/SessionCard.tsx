@@ -70,6 +70,7 @@ import {
   cardMemoryPressure,
   taskFraction,
   autonomousBadge,
+  workflowBadge,
 } from "./SessionCard.css";
 import { truncateGoal } from "@/lib/utils/string";
 
@@ -514,6 +515,15 @@ function SessionCardInner({
                 data-testid="badge-autonomous"
               >
                 Auto
+              </span>
+            )}
+            {session.workflowId && (
+              <span
+                className={workflowBadge}
+                title={session.workflowName || session.workflowId}
+                data-testid="workflow-badge"
+              >
+                ⚙ {session.workflowName || "Workflow"}
               </span>
             )}
           </div>

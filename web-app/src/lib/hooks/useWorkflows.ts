@@ -9,6 +9,8 @@ import {
   CreateWorkflowRequestSchema,
   UpdateWorkflowRequestSchema,
   DeleteWorkflowRequestSchema,
+  ArchiveWorkflowSessionsRequestSchema,
+  DeleteWorkflowFailedSessionsRequestSchema,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -25,6 +27,8 @@ export interface WorkflowFormData {
   agentType?: string;
   cronExpression?: string;
   cronEnabled: boolean;
+  keepSessions?: number;
+  archiveAfterHours?: number;
 }
 
 interface UseWorkflowsReturn {
@@ -34,6 +38,8 @@ interface UseWorkflowsReturn {
   createWorkflow: (data: WorkflowFormData) => Promise<void>;
   updateWorkflow: (id: string, data: Partial<WorkflowFormData>) => Promise<void>;
   deleteWorkflow: (id: string) => Promise<void>;
+  archiveWorkflowSessions: (workflowId: string) => Promise<number>;
+  deleteWorkflowFailedSessions: (workflowId: string) => Promise<number>;
   refresh: () => Promise<void>;
 }
 
@@ -93,6 +99,8 @@ export function useWorkflows(): UseWorkflowsReturn {
         agentType: data.agentType ?? "",
         cronExpression: data.cronExpression ?? "",
         cronEnabled: data.cronEnabled,
+        ...(data.keepSessions !== undefined && { keepSessions: data.keepSessions }),
+        ...(data.archiveAfterHours !== undefined && { archiveAfterHours: data.archiveAfterHours }),
       });
       await clientRef.current.createWorkflow(req);
       await refresh();
@@ -115,6 +123,8 @@ export function useWorkflows(): UseWorkflowsReturn {
         ...(data.agentType !== undefined && { agentType: data.agentType }),
         ...(data.cronExpression !== undefined && { cronExpression: data.cronExpression }),
         ...(data.cronEnabled !== undefined && { cronEnabled: data.cronEnabled }),
+        ...(data.keepSessions !== undefined && { keepSessions: data.keepSessions }),
+        ...(data.archiveAfterHours !== undefined && { archiveAfterHours: data.archiveAfterHours }),
       });
       await clientRef.current.updateWorkflow(req);
       await refresh();
@@ -139,5 +149,27 @@ export function useWorkflows(): UseWorkflowsReturn {
     [workflows]
   );
 
-  return { workflows, loading, error, createWorkflow, updateWorkflow, deleteWorkflow, refresh };
+  const archiveWorkflowSessions = useCallback(
+    async (workflowId: string): Promise<number> => {
+      if (!clientRef.current) return 0;
+      const req = create(ArchiveWorkflowSessionsRequestSchema, { workflowId });
+      const resp = await clientRef.current.archiveWorkflowSessions(req);
+      await refresh();
+      return resp.archivedCount;
+    },
+    [refresh]
+  );
+
+  const deleteWorkflowFailedSessions = useCallback(
+    async (workflowId: string): Promise<number> => {
+      if (!clientRef.current) return 0;
+      const req = create(DeleteWorkflowFailedSessionsRequestSchema, { workflowId });
+      const resp = await clientRef.current.deleteWorkflowFailedSessions(req);
+      await refresh();
+      return resp.deletedCount;
+    },
+    [refresh]
+  );
+
+  return { workflows, loading, error, createWorkflow, updateWorkflow, deleteWorkflow, archiveWorkflowSessions, deleteWorkflowFailedSessions, refresh };
 }

@@ -11,7 +11,8 @@ import (
 )
 
 // InstanceToProto converts a session.Instance to a proto Session message.
-func InstanceToProto(inst *session.Instance) *sessionv1.Session {
+// workflowNames is an optional map from workflow UUID to workflow name; pass nil to omit workflow_name.
+func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *sessionv1.Session {
 	if inst == nil {
 		return nil
 	}
@@ -137,8 +138,11 @@ func InstanceToProto(inst *session.Instance) *sessionv1.Session {
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = inst.Hidden
 
-	// Workflow linkage and archive state.
+	// Workflow linkage, name, and archive state.
 	protoSession.WorkflowId = inst.WorkflowID
+	if inst.WorkflowID != "" && workflowNames != nil {
+		protoSession.WorkflowName = workflowNames[inst.WorkflowID]
+	}
 	if inst.ArchivedAt != nil {
 		protoSession.ArchivedAt = timestamppb.New(*inst.ArchivedAt)
 	}

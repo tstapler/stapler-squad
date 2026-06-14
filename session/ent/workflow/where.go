@@ -120,6 +120,16 @@ func UpdatedAt(v time.Time) predicate.Workflow {
 	return predicate.Workflow(sql.FieldEQ(FieldUpdatedAt, v))
 }
 
+// KeepSessions applies equality check predicate on the "keep_sessions" field. It's identical to KeepSessionsEQ.
+func KeepSessions(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldKeepSessions, v))
+}
+
+// ArchiveAfterHours applies equality check predicate on the "archive_after_hours" field. It's identical to ArchiveAfterHoursEQ.
+func ArchiveAfterHours(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldArchiveAfterHours, v))
+}
+
 // SlugEQ applies the EQ predicate on the "slug" field.
 func SlugEQ(v string) predicate.Workflow {
 	return predicate.Workflow(sql.FieldEQ(FieldSlug, v))
@@ -928,6 +938,106 @@ func UpdatedAtLT(v time.Time) predicate.Workflow {
 // UpdatedAtLTE applies the LTE predicate on the "updated_at" field.
 func UpdatedAtLTE(v time.Time) predicate.Workflow {
 	return predicate.Workflow(sql.FieldLTE(FieldUpdatedAt, v))
+}
+
+// KeepSessionsEQ applies the EQ predicate on the "keep_sessions" field.
+func KeepSessionsEQ(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldKeepSessions, v))
+}
+
+// KeepSessionsNEQ applies the NEQ predicate on the "keep_sessions" field.
+func KeepSessionsNEQ(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldKeepSessions, v))
+}
+
+// KeepSessionsIn applies the In predicate on the "keep_sessions" field.
+func KeepSessionsIn(vs ...int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldKeepSessions, vs...))
+}
+
+// KeepSessionsNotIn applies the NotIn predicate on the "keep_sessions" field.
+func KeepSessionsNotIn(vs ...int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldKeepSessions, vs...))
+}
+
+// KeepSessionsGT applies the GT predicate on the "keep_sessions" field.
+func KeepSessionsGT(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldKeepSessions, v))
+}
+
+// KeepSessionsGTE applies the GTE predicate on the "keep_sessions" field.
+func KeepSessionsGTE(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldKeepSessions, v))
+}
+
+// KeepSessionsLT applies the LT predicate on the "keep_sessions" field.
+func KeepSessionsLT(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldKeepSessions, v))
+}
+
+// KeepSessionsLTE applies the LTE predicate on the "keep_sessions" field.
+func KeepSessionsLTE(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldKeepSessions, v))
+}
+
+// KeepSessionsIsNil applies the IsNil predicate on the "keep_sessions" field.
+func KeepSessionsIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldKeepSessions))
+}
+
+// KeepSessionsNotNil applies the NotNil predicate on the "keep_sessions" field.
+func KeepSessionsNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldKeepSessions))
+}
+
+// ArchiveAfterHoursEQ applies the EQ predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursEQ(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldEQ(FieldArchiveAfterHours, v))
+}
+
+// ArchiveAfterHoursNEQ applies the NEQ predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursNEQ(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNEQ(FieldArchiveAfterHours, v))
+}
+
+// ArchiveAfterHoursIn applies the In predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursIn(vs ...int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldIn(FieldArchiveAfterHours, vs...))
+}
+
+// ArchiveAfterHoursNotIn applies the NotIn predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursNotIn(vs ...int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotIn(FieldArchiveAfterHours, vs...))
+}
+
+// ArchiveAfterHoursGT applies the GT predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursGT(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGT(FieldArchiveAfterHours, v))
+}
+
+// ArchiveAfterHoursGTE applies the GTE predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursGTE(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldGTE(FieldArchiveAfterHours, v))
+}
+
+// ArchiveAfterHoursLT applies the LT predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursLT(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLT(FieldArchiveAfterHours, v))
+}
+
+// ArchiveAfterHoursLTE applies the LTE predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursLTE(v int) predicate.Workflow {
+	return predicate.Workflow(sql.FieldLTE(FieldArchiveAfterHours, v))
+}
+
+// ArchiveAfterHoursIsNil applies the IsNil predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursIsNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldIsNull(FieldArchiveAfterHours))
+}
+
+// ArchiveAfterHoursNotNil applies the NotNil predicate on the "archive_after_hours" field.
+func ArchiveAfterHoursNotNil() predicate.Workflow {
+	return predicate.Workflow(sql.FieldNotNull(FieldArchiveAfterHours))
 }
 
 // And groups predicates with the AND operator between them.

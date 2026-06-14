@@ -384,6 +384,16 @@ service SessionService {
 
   // UnarchiveSession clears archived_at, restoring the session to the default list.
   rpc UnarchiveSession(UnarchiveSessionRequest) returns (UnarchiveSessionResponse) {}
+
+  // ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
+  // Active, Creating, and Paused sessions are silently skipped.
+  // Returns the count of sessions that were archived.
+  rpc ArchiveWorkflowSessions(ArchiveWorkflowSessionsRequest) returns (ArchiveWorkflowSessionsResponse) {}
+
+  // DeleteWorkflowFailedSessions archives (soft-deletes) sessions that appear to have
+  // failed — specifically: Stopped sessions with no meaningful terminal output.
+  // Returns the count of sessions that were archived.
+  rpc DeleteWorkflowFailedSessions(DeleteWorkflowFailedSessionsRequest) returns (DeleteWorkflowFailedSessionsResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -2270,6 +2280,10 @@ message WorkflowProto {
   bool cron_enabled = 12;
   google.protobuf.Timestamp created_at = 13;
   google.protobuf.Timestamp updated_at = 14;
+  // Retention: keep only the N most recent sessions (0 = keep all, i.e. disabled).
+  optional int32 keep_sessions = 15;
+  // Retention: auto-archive completed sessions after this many hours (0 = disabled).
+  optional int32 archive_after_hours = 16;
 }
 
 message CreateWorkflowRequest {
@@ -2284,6 +2298,10 @@ message CreateWorkflowRequest {
   string agent_type = 9;
   string cron_expression = 10;
   bool cron_enabled = 11;
+  // Retention: keep only the N most recent sessions (0 = keep all).
+  optional int32 keep_sessions = 12;
+  // Retention: auto-archive completed sessions after this many hours (0 = disabled).
+  optional int32 archive_after_hours = 13;
 }
 
 message CreateWorkflowResponse {
@@ -2303,6 +2321,10 @@ message UpdateWorkflowRequest {
   optional string agent_type = 9;
   optional string cron_expression = 10;
   optional bool cron_enabled = 11;
+  // Retention: keep only the N most recent sessions (0 = keep all).
+  optional int32 keep_sessions = 12;
+  // Retention: auto-archive completed sessions after this many hours (0 = disabled).
+  optional int32 archive_after_hours = 13;
 }
 
 message UpdateWorkflowResponse {
@@ -2384,3 +2406,21 @@ message UnarchiveSessionRequest {
 }
 
 message UnarchiveSessionResponse {}
+
+message ArchiveWorkflowSessionsRequest {
+  string workflow_id = 1;
+}
+
+message ArchiveWorkflowSessionsResponse {
+  // Number of sessions that were archived (active/creating/paused are skipped).
+  int32 archived_count = 1;
+}
+
+message DeleteWorkflowFailedSessionsRequest {
+  string workflow_id = 1;
+}
+
+message DeleteWorkflowFailedSessionsResponse {
+  // Number of sessions that were archived (soft-deleted).
+  int32 deleted_count = 1;
+}

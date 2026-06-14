@@ -88,13 +88,17 @@ function RecentRuns({ workflowId }: { workflowId: string }) {
 }
 
 export function WorkflowsPanel() {
-  const { workflows, loading, error, createWorkflow, updateWorkflow, deleteWorkflow } = useWorkflows();
+  const { workflows, loading, error, createWorkflow, updateWorkflow, deleteWorkflow, archiveWorkflowSessions, deleteWorkflowFailedSessions } = useWorkflows();
   const { runWorkflow } = useSessionService();
   const router = useRouter();
   const [showForm, setShowForm] = useState(false);
   const [editTarget, setEditTarget] = useState<WorkflowProto | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  const [confirmDeleteFailedId, setConfirmDeleteFailedId] = useState<string | null>(null);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [deletingFailedId, setDeletingFailedId] = useState<string | null>(null);
 
   function openCreate() {
     setEditTarget(null);
@@ -132,6 +136,28 @@ export function WorkflowsPanel() {
 
   function handleDeleteCancel() {
     setConfirmDeleteId(null);
+  }
+
+  async function handleArchiveConfirm() {
+    if (!confirmArchiveId) return;
+    setArchivingId(confirmArchiveId);
+    setConfirmArchiveId(null);
+    try {
+      await archiveWorkflowSessions(confirmArchiveId);
+    } finally {
+      setArchivingId(null);
+    }
+  }
+
+  async function handleDeleteFailedConfirm() {
+    if (!confirmDeleteFailedId) return;
+    setDeletingFailedId(confirmDeleteFailedId);
+    setConfirmDeleteFailedId(null);
+    try {
+      await deleteWorkflowFailedSessions(confirmDeleteFailedId);
+    } finally {
+      setDeletingFailedId(null);
+    }
   }
 
   async function handleRun(wf: WorkflowProto) {
@@ -234,6 +260,30 @@ export function WorkflowsPanel() {
                             Cancel
                           </button>
                         </div>
+                      ) : confirmArchiveId === wf.id ? (
+                        <div className={styles.actions}>
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                            Archive all sessions for &quot;{wf.name}&quot;?
+                          </span>
+                          <button className={styles.deleteButton} onClick={() => void handleArchiveConfirm()} data-testid="confirm-archive-sessions">
+                            Yes, archive
+                          </button>
+                          <button className={styles.editButton} onClick={() => setConfirmArchiveId(null)}>
+                            Cancel
+                          </button>
+                        </div>
+                      ) : confirmDeleteFailedId === wf.id ? (
+                        <div className={styles.actions}>
+                          <span style={{ fontSize: "0.75rem", color: "var(--text-secondary)" }}>
+                            Delete failed sessions for &quot;{wf.name}&quot;?
+                          </span>
+                          <button className={styles.deleteButton} onClick={() => void handleDeleteFailedConfirm()} data-testid="confirm-delete-failed-sessions">
+                            Yes, delete
+                          </button>
+                          <button className={styles.editButton} onClick={() => setConfirmDeleteFailedId(null)}>
+                            Cancel
+                          </button>
+                        </div>
                       ) : (
                         <div className={styles.actions}>
                           <button
@@ -245,6 +295,22 @@ export function WorkflowsPanel() {
                           </button>
                           <button className={styles.editButton} onClick={() => openEdit(wf)}>
                             Edit
+                          </button>
+                          <button
+                            className={styles.editButton}
+                            disabled={archivingId === wf.id}
+                            onClick={() => setConfirmArchiveId(wf.id)}
+                            data-testid="archive-sessions-button"
+                          >
+                            {archivingId === wf.id ? "…" : "Archive Sessions"}
+                          </button>
+                          <button
+                            className={styles.editButton}
+                            disabled={deletingFailedId === wf.id}
+                            onClick={() => setConfirmDeleteFailedId(wf.id)}
+                            data-testid="delete-failed-sessions-button"
+                          >
+                            {deletingFailedId === wf.id ? "…" : "Delete Failed"}
                           </button>
                           <button
                             className={styles.deleteButton}

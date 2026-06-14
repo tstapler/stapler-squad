@@ -347,14 +347,32 @@ func handleDriverFailure(inst *Instance, allowedPath string, retried *atomic.Boo
 	)
 
 	// Build continuation prompt BEFORE restart (HistoryFilePath may clear after restart).
+	// If no conversation history exists yet (early PTY exit before Claude started), use the
+	// original InitialPrompt so the workflow task is not lost on the first retry.
 	continuationPrompt := buildContinuationPrompt(inst)
+	if continuationPrompt == "Your previous session exited unexpectedly. Please continue from where you left off." &&
+		inst.InitialPrompt != "" {
+		if sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt); sanitized != "" {
+			continuationPrompt = sanitized
+		}
+	}
 
 	// Restart the session.
 	var restartErr error
 	st := inst.GetEffectiveStatus()
 	if st == Stopped {
 		inst.RecoverFromStopped()
+		// Clear the old (possibly dead) controller so StartController below creates a fresh one.
+		inst.StopController()
 		restartErr = inst.Start(false)
+		if restartErr == nil {
+			// Start(false) skips controller setup (reserved for the server wiring path).
+			// Restart it explicitly so the session driver can detect the Claude prompt.
+			if ctrlErr := inst.StartController(); ctrlErr != nil {
+				log.Warn("SessionDriver: failed to restart controller after session restart",
+					"session", inst.Title, "err", ctrlErr)
+			}
+		}
 	} else {
 		restartErr = inst.Restart(false)
 	}

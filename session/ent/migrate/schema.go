@@ -774,6 +774,8 @@ var (
 		{Name: "cron_enabled", Type: field.TypeBool, Default: false},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
+		{Name: "keep_sessions", Type: field.TypeInt, Nullable: true, Default: 0},
+		{Name: "archive_after_hours", Type: field.TypeInt, Nullable: true, Default: 0},
 	}
 	// WorkflowsTable holds the schema information for the "workflows" table.
 	WorkflowsTable = &schema.Table{

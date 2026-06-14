@@ -33,7 +33,7 @@ func TestRateLimitStateToProto_AllStates(t *testing.T) {
 }
 
 func TestInstanceToProto_NilReturnsNil(t *testing.T) {
-	result := InstanceToProto(nil)
+	result := InstanceToProto(nil, nil)
 	if result != nil {
 		t.Error("expected nil for nil input, got non-nil")
 	}
@@ -43,7 +43,7 @@ func TestInstanceToProto_NilReturnsNil(t *testing.T) {
 // is populated correctly from the Instance struct field.
 func TestInstanceToProto_RateLimitEnabled_DefaultTrue(t *testing.T) {
 	inst := &session.Instance{} // nil RateLimitAutoResume → defaults to true
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
 	}
@@ -57,7 +57,7 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 	inst := &session.Instance{
 		RateLimitAutoResume: &disabled,
 	}
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
 	}
@@ -68,7 +68,7 @@ func TestInstanceToProto_RateLimitEnabled_ExplicitFalse(t *testing.T) {
 
 func TestInstanceToProto_RateLimitState_DefaultNone(t *testing.T) {
 	inst := &session.Instance{} // no controller → state is None
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto for non-nil instance")
 	}
@@ -95,7 +95,7 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 	}
 	inst.SetSessionGoalCached(goal)
 
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto")
 	}
@@ -124,7 +124,7 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 	inst := &session.Instance{}
 	// SessionGoal is nil by default.
-	proto := InstanceToProto(inst)
+	proto := InstanceToProto(inst, nil)
 	if proto == nil {
 		t.Fatal("expected non-nil proto")
 	}

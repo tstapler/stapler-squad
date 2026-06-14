@@ -25,6 +25,7 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
+	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
@@ -152,6 +153,21 @@ type SessionService struct {
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
 	workflowSvc *WorkflowService
+
+	// workflowRepo is used to populate the workflow meta cache.
+	// Injected via SetWorkflowRepository to avoid bootstrapping cycle.
+	workflowRepo session.WorkflowRepository
+
+	// workflowMetaCache provides workflow name and retention settings keyed by workflow UUID.
+	// Populated on startup and refreshed every minute. Protected by workflowMetaMu.
+	workflowMetaCache map[string]workflowMeta
+	workflowMetaMu    sync.RWMutex
+}
+
+// workflowMeta holds cached metadata about a workflow used at session-list time.
+type workflowMeta struct {
+	name              string
+	archiveAfterHours int
 }
 
 // ScrollbackSequencer is the minimal interface SessionService needs from ScrollbackManager.
@@ -745,7 +761,7 @@ func (s *SessionService) ListSessions(
 	for _, inst := range instances {
 		// Apply optional status filter
 		if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
-			protoStatus := adapters.InstanceToProto(inst).Status
+			protoStatus := adapters.InstanceToProto(inst, nil).Status
 			if protoStatus != *req.Msg.Status {
 				continue
 			}
@@ -771,7 +787,7 @@ func (s *SessionService) ListSessions(
 			continue
 		}
 
-		protoSess := adapters.InstanceToProto(inst)
+		protoSess := adapters.InstanceToProto(inst, s.workflowNames())
 		if s.memoryCacheReader != nil && inst.IsActive() {
 			rss := s.memoryCacheReader.GetCachedRSSMB(inst.UUID)
 			protoSess.MemoryRssMb = rss
@@ -801,7 +817,7 @@ func (s *SessionService) ListSessions(
 				continue
 			}
 
-			sessions = append(sessions, adapters.InstanceToProto(extInst))
+			sessions = append(sessions, adapters.InstanceToProto(extInst, nil))
 		}
 	}
 
@@ -829,16 +845,17 @@ func (s *SessionService) GetSession(
 	// Use the poller's live in-memory instances to avoid the side effect of
 	// LoadInstances() → FromInstanceData() → Start() which restarts every session.
 	if s.reviewQueuePoller != nil {
+		wfNames := s.workflowNames()
 		if inst := s.reviewQueuePoller.FindInstance(req.Msg.Id); inst != nil {
 			return connect.NewResponse(&sessionv1.GetSessionResponse{
-				Session: adapters.InstanceToProto(inst),
+				Session: adapters.InstanceToProto(inst, wfNames),
 			}), nil
 		}
 		// Not in poller — also check external sessions
 		if s.externalDiscovery != nil {
 			if inst := s.externalDiscovery.GetSession(req.Msg.Id); inst != nil {
 				return connect.NewResponse(&sessionv1.GetSessionResponse{
-					Session: adapters.InstanceToProto(inst),
+					Session: adapters.InstanceToProto(inst, nil),
 				}), nil
 			}
 		}
@@ -852,10 +869,11 @@ func (s *SessionService) GetSession(
 	}
 
 	// Find instance by ID (UUID or legacy Title).
+	wfNames := s.workflowNames()
 	for _, inst := range instances {
 		if inst.MatchesID(req.Msg.Id) {
 			return connect.NewResponse(&sessionv1.GetSessionResponse{
-				Session: adapters.InstanceToProto(inst),
+				Session: adapters.InstanceToProto(inst, wfNames),
 			}), nil
 		}
 	}
@@ -1066,7 +1084,7 @@ func (s *SessionService) CreateSession(
 
 	// Snapshot the proto before spawning the goroutine to avoid a data race between
 	// the goroutine writing CreationProgress and the return statement reading instance.
-	creatingProto := adapters.InstanceToProto(instance)
+	creatingProto := adapters.InstanceToProto(instance, s.workflowNames())
 
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
 	go func() {
@@ -1103,11 +1121,15 @@ func (s *SessionService) CreateSession(
 			s.backlogLifecycleListener.WireToInstance(instance)
 		}
 
-		// Wire the status manager so GetDetectedStatus() returns real terminal state
-		// instead of StatusUnknown. Must happen before StartSessionDriver so the driver
-		// can detect claudeAtPrompt instead of always hitting the 30s timeout.
+		// Wire the status manager and start the controller AFTER Start() returns so the
+		// tmux attach-session process has had time to fully initialize. Starting the
+		// controller inside Start() caused immediate PTY EIO because tmux hadn't
+		// stabilized yet. This mirrors the pattern used by loadInstancesWithWiring.
 		if s.statusManager != nil {
 			instance.SetStatusManager(s.statusManager)
+			if ctrlErr := instance.StartController(); ctrlErr != nil {
+				log.Warn("[CreateSession] failed to start controller after wiring", "session", instanceTitle, "err", ctrlErr)
+			}
 		}
 
 		// Start the session driver goroutine so UI-created sessions receive their
@@ -1332,7 +1354,7 @@ func (s *SessionService) UpdateSession(
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
-		Session: adapters.InstanceToProto(instance),
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
 }
 
@@ -1388,7 +1410,7 @@ func (s *SessionService) HibernateSession(
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
 
 	return connect.NewResponse(&sessionv1.HibernateSessionResponse{
-		Session: adapters.InstanceToProto(instance),
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
 }
 
@@ -1433,7 +1455,7 @@ func (s *SessionService) ResumeHibernatedSession(
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
 
 	return connect.NewResponse(&sessionv1.ResumeHibernatedSessionResponse{
-		Session: adapters.InstanceToProto(instance),
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
 }
 
@@ -2188,7 +2210,7 @@ func (s *SessionService) RenameSession(
 	log.Info("successfully renamed session", "from", oldTitle, "to", req.Msg.NewTitle)
 
 	return connect.NewResponse(&sessionv1.RenameSessionResponse{
-		Session: adapters.InstanceToProto(instance),
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 	}), nil
 }
 
@@ -2245,7 +2267,7 @@ func (s *SessionService) RestartSession(
 	log.Info(message)
 
 	return connect.NewResponse(&sessionv1.RestartSessionResponse{
-		Session: adapters.InstanceToProto(instance),
+		Session: adapters.InstanceToProto(instance, s.workflowNames()),
 		Success: true,
 		Message: message,
 	}), nil
@@ -2550,7 +2572,7 @@ func (s *SessionService) ForkSession(
 		log.Info("[ReviewQueue] updated poller instance references after ForkSession", "session", newInst.Title)
 	}
 
-	respProto := adapters.InstanceToProto(newInst)
+	respProto := adapters.InstanceToProto(newInst, s.workflowNames())
 
 	go func() {
 		if startErr := newInst.Start(true); startErr != nil {
@@ -3675,6 +3697,49 @@ func (s *SessionService) SetWorkflowService(svc *WorkflowService) {
 	s.workflowSvc = svc
 }
 
+// SetWorkflowRepository injects the workflow repository used to populate the meta cache.
+// Must be called after both SessionService and WorkflowRepository are constructed.
+func (s *SessionService) SetWorkflowRepository(repo session.WorkflowRepository) {
+	s.workflowRepo = repo
+	s.refreshWorkflowMetaCache(context.Background())
+}
+
+// refreshWorkflowMetaCache reloads all workflow names and archiveAfterHours from the repo.
+func (s *SessionService) refreshWorkflowMetaCache(ctx context.Context) {
+	if s.workflowRepo == nil {
+		return
+	}
+	wfs, err := s.workflowRepo.ListAll(ctx)
+	if err != nil {
+		log.Warn("[SessionService] failed to refresh workflow meta cache", "err", err)
+		return
+	}
+	cache := make(map[string]workflowMeta, len(wfs))
+	for _, wf := range wfs {
+		cache[wf.ID.String()] = workflowMeta{
+			name:              wf.Name,
+			archiveAfterHours: wf.ArchiveAfterHours,
+		}
+	}
+	s.workflowMetaMu.Lock()
+	s.workflowMetaCache = cache
+	s.workflowMetaMu.Unlock()
+}
+
+// workflowNames returns a snapshot of the workflow ID→name map for use in InstanceToProto.
+func (s *SessionService) workflowNames() map[string]string {
+	s.workflowMetaMu.RLock()
+	defer s.workflowMetaMu.RUnlock()
+	if len(s.workflowMetaCache) == 0 {
+		return nil
+	}
+	m := make(map[string]string, len(s.workflowMetaCache))
+	for id, meta := range s.workflowMetaCache {
+		m[id] = meta.name
+	}
+	return m
+}
+
 // +api: workflow:create
 // CreateWorkflow delegates to WorkflowService.
 func (s *SessionService) CreateWorkflow(ctx context.Context, req *connect.Request[sessionv1.CreateWorkflowRequest]) (*connect.Response[sessionv1.CreateWorkflowResponse], error) {
@@ -3804,11 +3869,120 @@ func (s *SessionService) UnarchiveSession(
 	return connect.NewResponse(&sessionv1.UnarchiveSessionResponse{}), nil
 }
 
+// +api: session:archive-workflow-sessions
+// ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
+// Active, Creating, and Paused sessions are silently skipped.
+func (s *SessionService) ArchiveWorkflowSessions(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ArchiveWorkflowSessionsRequest],
+) (*connect.Response[sessionv1.ArchiveWorkflowSessionsResponse], error) {
+	if req.Msg.WorkflowId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("workflow_id is required"))
+	}
+
+	// Get the ent client via the concrete storage implementation.
+	concreteStorage, ok := s.storage.(*session.Storage)
+	if !ok || concreteStorage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk archive requires ent-backed storage"))
+	}
+	entClient := concreteStorage.GetEntClient()
+	if entClient == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk archive requires ent client"))
+	}
+
+	// Query all non-active, non-archived sessions for this workflow.
+	// Status guard: use Go-layer DB values (Creating=0, Active=1, Paused=2), NOT proto wire values.
+	now := time.Now()
+	updated, err := entClient.Session.Update().
+		Where(
+			entsession.WorkflowID(req.Msg.WorkflowId),
+			entsession.ArchivedAtIsNil(),
+			entsession.StatusNotIn(int(session.Active), int(session.Creating), int(session.Paused)),
+		).
+		SetArchivedAt(now).
+		Save(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bulk archive workflow sessions: %w", err))
+	}
+
+	// Update in-memory instances for any that are still in the poller.
+	if s.reviewQueuePoller != nil {
+		for _, inst := range s.reviewQueuePoller.GetInstances() {
+			if inst.WorkflowID == req.Msg.WorkflowId && inst.ArchivedAt == nil {
+				if !inst.IsActive() && !inst.IsCreating() && !inst.IsPaused() {
+					inst.ArchivedAt = &now
+				}
+			}
+		}
+	}
+
+	log.Info("[SessionService] ArchiveWorkflowSessions completed",
+		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
+
+	return connect.NewResponse(&sessionv1.ArchiveWorkflowSessionsResponse{
+		ArchivedCount: int32(updated),
+	}), nil
+}
+
+// +api: session:delete-workflow-failed-sessions
+// DeleteWorkflowFailedSessions archives (soft-deletes) sessions that appear to have
+// failed — Stopped sessions with no meaningful terminal output for the given workflow.
+func (s *SessionService) DeleteWorkflowFailedSessions(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteWorkflowFailedSessionsRequest],
+) (*connect.Response[sessionv1.DeleteWorkflowFailedSessionsResponse], error) {
+	if req.Msg.WorkflowId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("workflow_id is required"))
+	}
+
+	concreteStorage, ok := s.storage.(*session.Storage)
+	if !ok || concreteStorage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk delete requires ent-backed storage"))
+	}
+	entClient := concreteStorage.GetEntClient()
+	if entClient == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk delete requires ent client"))
+	}
+
+	// "Failed" = Stopped sessions with no meaningful output.
+	// last_meaningful_output IS NULL indicates the session never produced useful work.
+	now := time.Now()
+	updated, err := entClient.Session.Update().
+		Where(
+			entsession.WorkflowID(req.Msg.WorkflowId),
+			entsession.StatusIn(int(session.Stopped)),
+			entsession.ArchivedAtIsNil(),
+			entsession.LastMeaningfulOutputIsNil(),
+		).
+		SetArchivedAt(now).
+		Save(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete workflow failed sessions: %w", err))
+	}
+
+	log.Info("[SessionService] DeleteWorkflowFailedSessions completed",
+		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
+
+	return connect.NewResponse(&sessionv1.DeleteWorkflowFailedSessionsResponse{
+		DeletedCount: int32(updated),
+	}), nil
+}
+
 // maybeAutoArchive archives a workflow session that has just stopped.
 // Called in the status-update path whenever a session transitions to Stopped.
 // Only archives sessions spawned by a workflow (WorkflowID != "").
+// If the workflow has archive_after_hours > 0, the retention enforcer handles
+// time-delayed archival, so we skip immediate archival here (ADR-4).
 func (s *SessionService) maybeAutoArchive(inst *session.Instance) {
 	if inst == nil || inst.WorkflowID == "" {
+		return
+	}
+	// Check if this workflow uses delayed archival via the retention enforcer.
+	s.workflowMetaMu.RLock()
+	meta, ok := s.workflowMetaCache[inst.WorkflowID]
+	s.workflowMetaMu.RUnlock()
+	if ok && meta.archiveAfterHours > 0 {
+		// Retention enforcer will archive this after the configured delay.
 		return
 	}
 	now := time.Now()

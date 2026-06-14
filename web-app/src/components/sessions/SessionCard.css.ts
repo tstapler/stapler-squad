@@ -810,6 +810,23 @@ export const autonomousBadge = style({
   border: `1px solid ${vars.color.borderColor}`,
 });
 
+export const workflowBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  gap: vars.space["1"],
+  padding: `${vars.space["1"]} ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.accentBg,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontSize: vars.fontSize.xs,
+  fontWeight: 500,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  maxWidth: "120px",
+});
+
 /** Goal row compact display — session list card */
 export const taskFraction = style({
   fontSize: vars.fontSize.xs,

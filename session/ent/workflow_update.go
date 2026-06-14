@@ -230,6 +230,60 @@ func (_u *WorkflowUpdate) SetUpdatedAt(v time.Time) *WorkflowUpdate {
 	return _u
 }
 
+// SetKeepSessions sets the "keep_sessions" field.
+func (_u *WorkflowUpdate) SetKeepSessions(v int) *WorkflowUpdate {
+	_u.mutation.ResetKeepSessions()
+	_u.mutation.SetKeepSessions(v)
+	return _u
+}
+
+// SetNillableKeepSessions sets the "keep_sessions" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableKeepSessions(v *int) *WorkflowUpdate {
+	if v != nil {
+		_u.SetKeepSessions(*v)
+	}
+	return _u
+}
+
+// AddKeepSessions adds value to the "keep_sessions" field.
+func (_u *WorkflowUpdate) AddKeepSessions(v int) *WorkflowUpdate {
+	_u.mutation.AddKeepSessions(v)
+	return _u
+}
+
+// ClearKeepSessions clears the value of the "keep_sessions" field.
+func (_u *WorkflowUpdate) ClearKeepSessions() *WorkflowUpdate {
+	_u.mutation.ClearKeepSessions()
+	return _u
+}
+
+// SetArchiveAfterHours sets the "archive_after_hours" field.
+func (_u *WorkflowUpdate) SetArchiveAfterHours(v int) *WorkflowUpdate {
+	_u.mutation.ResetArchiveAfterHours()
+	_u.mutation.SetArchiveAfterHours(v)
+	return _u
+}
+
+// SetNillableArchiveAfterHours sets the "archive_after_hours" field if the given value is not nil.
+func (_u *WorkflowUpdate) SetNillableArchiveAfterHours(v *int) *WorkflowUpdate {
+	if v != nil {
+		_u.SetArchiveAfterHours(*v)
+	}
+	return _u
+}
+
+// AddArchiveAfterHours adds value to the "archive_after_hours" field.
+func (_u *WorkflowUpdate) AddArchiveAfterHours(v int) *WorkflowUpdate {
+	_u.mutation.AddArchiveAfterHours(v)
+	return _u
+}
+
+// ClearArchiveAfterHours clears the value of the "archive_after_hours" field.
+func (_u *WorkflowUpdate) ClearArchiveAfterHours() *WorkflowUpdate {
+	_u.mutation.ClearArchiveAfterHours()
+	return _u
+}
+
 // Mutation returns the WorkflowMutation object of the builder.
 func (_u *WorkflowUpdate) Mutation() *WorkflowMutation {
 	return _u.mutation
@@ -359,6 +413,24 @@ func (_u *WorkflowUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(workflow.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if value, ok := _u.mutation.KeepSessions(); ok {
+		_spec.SetField(workflow.FieldKeepSessions, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedKeepSessions(); ok {
+		_spec.AddField(workflow.FieldKeepSessions, field.TypeInt, value)
+	}
+	if _u.mutation.KeepSessionsCleared() {
+		_spec.ClearField(workflow.FieldKeepSessions, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ArchiveAfterHours(); ok {
+		_spec.SetField(workflow.FieldArchiveAfterHours, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedArchiveAfterHours(); ok {
+		_spec.AddField(workflow.FieldArchiveAfterHours, field.TypeInt, value)
+	}
+	if _u.mutation.ArchiveAfterHoursCleared() {
+		_spec.ClearField(workflow.FieldArchiveAfterHours, field.TypeInt)
 	}
 	if _node, err = sqlgraph.UpdateNodes(ctx, _u.driver, _spec); err != nil {
 		if _, ok := err.(*sqlgraph.NotFoundError); ok {
@@ -582,6 +654,60 @@ func (_u *WorkflowUpdateOne) SetUpdatedAt(v time.Time) *WorkflowUpdateOne {
 	return _u
 }
 
+// SetKeepSessions sets the "keep_sessions" field.
+func (_u *WorkflowUpdateOne) SetKeepSessions(v int) *WorkflowUpdateOne {
+	_u.mutation.ResetKeepSessions()
+	_u.mutation.SetKeepSessions(v)
+	return _u
+}
+
+// SetNillableKeepSessions sets the "keep_sessions" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableKeepSessions(v *int) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetKeepSessions(*v)
+	}
+	return _u
+}
+
+// AddKeepSessions adds value to the "keep_sessions" field.
+func (_u *WorkflowUpdateOne) AddKeepSessions(v int) *WorkflowUpdateOne {
+	_u.mutation.AddKeepSessions(v)
+	return _u
+}
+
+// ClearKeepSessions clears the value of the "keep_sessions" field.
+func (_u *WorkflowUpdateOne) ClearKeepSessions() *WorkflowUpdateOne {
+	_u.mutation.ClearKeepSessions()
+	return _u
+}
+
+// SetArchiveAfterHours sets the "archive_after_hours" field.
+func (_u *WorkflowUpdateOne) SetArchiveAfterHours(v int) *WorkflowUpdateOne {
+	_u.mutation.ResetArchiveAfterHours()
+	_u.mutation.SetArchiveAfterHours(v)
+	return _u
+}
+
+// SetNillableArchiveAfterHours sets the "archive_after_hours" field if the given value is not nil.
+func (_u *WorkflowUpdateOne) SetNillableArchiveAfterHours(v *int) *WorkflowUpdateOne {
+	if v != nil {
+		_u.SetArchiveAfterHours(*v)
+	}
+	return _u
+}
+
+// AddArchiveAfterHours adds value to the "archive_after_hours" field.
+func (_u *WorkflowUpdateOne) AddArchiveAfterHours(v int) *WorkflowUpdateOne {
+	_u.mutation.AddArchiveAfterHours(v)
+	return _u
+}
+
+// ClearArchiveAfterHours clears the value of the "archive_after_hours" field.
+func (_u *WorkflowUpdateOne) ClearArchiveAfterHours() *WorkflowUpdateOne {
+	_u.mutation.ClearArchiveAfterHours()
+	return _u
+}
+
 // Mutation returns the WorkflowMutation object of the builder.
 func (_u *WorkflowUpdateOne) Mutation() *WorkflowMutation {
 	return _u.mutation
@@ -741,6 +867,24 @@ func (_u *WorkflowUpdateOne) sqlSave(ctx context.Context) (_node *Workflow, err 
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(workflow.FieldUpdatedAt, field.TypeTime, value)
+	}
+	if value, ok := _u.mutation.KeepSessions(); ok {
+		_spec.SetField(workflow.FieldKeepSessions, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedKeepSessions(); ok {
+		_spec.AddField(workflow.FieldKeepSessions, field.TypeInt, value)
+	}
+	if _u.mutation.KeepSessionsCleared() {
+		_spec.ClearField(workflow.FieldKeepSessions, field.TypeInt)
+	}
+	if value, ok := _u.mutation.ArchiveAfterHours(); ok {
+		_spec.SetField(workflow.FieldArchiveAfterHours, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedArchiveAfterHours(); ok {
+		_spec.AddField(workflow.FieldArchiveAfterHours, field.TypeInt, value)
+	}
+	if _u.mutation.ArchiveAfterHoursCleared() {
+		_spec.ClearField(workflow.FieldArchiveAfterHours, field.TypeInt)
 	}
 	_node = &Workflow{config: _u.config}
 	_spec.Assign = _node.assignValues

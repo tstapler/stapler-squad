@@ -352,7 +352,7 @@ func (ws *WorkspaceService) SwitchWorkspace(
 		CurrentRevision:  result.CurrentRevision,
 		VcsType:          protoVCSType,
 		ChangesHandled:   result.ChangesHandled,
-		Session:          adapters.InstanceToProto(instance),
+		Session:          adapters.InstanceToProto(instance, nil),
 	}), nil
 }
 

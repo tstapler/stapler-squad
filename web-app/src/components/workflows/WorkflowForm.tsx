@@ -31,6 +31,8 @@ const EMPTY: WorkflowFormData = {
   agentType: "",
   cronExpression: "",
   cronEnabled: false,
+  keepSessions: 0,
+  archiveAfterHours: 0,
 };
 
 function protoToFormData(w: WorkflowProto): WorkflowFormData {
@@ -46,6 +48,8 @@ function protoToFormData(w: WorkflowProto): WorkflowFormData {
     agentType: w.agentType,
     cronExpression: w.cronExpression,
     cronEnabled: w.cronEnabled,
+    keepSessions: w.keepSessions ?? 0,
+    archiveAfterHours: w.archiveAfterHours ?? 0,
   };
 }
 
@@ -294,6 +298,36 @@ export function WorkflowForm({ existing, onSubmit, onCancel }: WorkflowFormProps
             />
             Enable scheduled runs
           </label>
+        </div>
+      </div>
+
+      <div className={styles.row}>
+        <div className={styles.fieldGroup}>
+          <label className={styles.label} htmlFor="wf-keep-sessions">Keep Sessions</label>
+          <input
+            id="wf-keep-sessions"
+            className={styles.input}
+            type="number"
+            min={0}
+            value={formData.keepSessions ?? 0}
+            onChange={(e) => setField("keepSessions", parseInt(e.target.value, 10) || 0)}
+            data-testid="keep-sessions-input"
+          />
+          <span className={styles.hint}>Keep only the N most recent sessions (0 = keep all)</span>
+        </div>
+
+        <div className={styles.fieldGroup}>
+          <label className={styles.label} htmlFor="wf-archive-after-hours">Archive After Hours</label>
+          <input
+            id="wf-archive-after-hours"
+            className={styles.input}
+            type="number"
+            min={0}
+            value={formData.archiveAfterHours ?? 0}
+            onChange={(e) => setField("archiveAfterHours", parseInt(e.target.value, 10) || 0)}
+            data-testid="archive-after-hours-input"
+          />
+          <span className={styles.hint}>Auto-archive completed sessions after N hours (0 = disabled)</span>
         </div>
       </div>
 

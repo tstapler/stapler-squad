@@ -43,8 +43,12 @@ type Workflow struct {
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
-	UpdatedAt    time.Time `json:"updated_at,omitempty"`
-	selectValues sql.SelectValues
+	UpdatedAt time.Time `json:"updated_at,omitempty"`
+	// Keep only the N most recent sessions per workflow (0 = keep all, disabled).
+	KeepSessions int `json:"keep_sessions,omitempty"`
+	// Auto-archive completed sessions after this many hours (0 = disabled).
+	ArchiveAfterHours int `json:"archive_after_hours,omitempty"`
+	selectValues      sql.SelectValues
 }
 
 // scanValues returns the types for scanning values from sql.Rows.
@@ -54,6 +58,8 @@ func (*Workflow) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case workflow.FieldCronEnabled:
 			values[i] = new(sql.NullBool)
+		case workflow.FieldKeepSessions, workflow.FieldArchiveAfterHours:
+			values[i] = new(sql.NullInt64)
 		case workflow.FieldSlug, workflow.FieldName, workflow.FieldDescription, workflow.FieldCommand, workflow.FieldTargetDirectory, workflow.FieldInputTemplate, workflow.FieldSessionType, workflow.FieldModel, workflow.FieldAgentType, workflow.FieldCronExpression:
 			values[i] = new(sql.NullString)
 		case workflow.FieldCreatedAt, workflow.FieldUpdatedAt:
@@ -159,6 +165,18 @@ func (_m *Workflow) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.UpdatedAt = value.Time
 			}
+		case workflow.FieldKeepSessions:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field keep_sessions", values[i])
+			} else if value.Valid {
+				_m.KeepSessions = int(value.Int64)
+			}
+		case workflow.FieldArchiveAfterHours:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field archive_after_hours", values[i])
+			} else if value.Valid {
+				_m.ArchiveAfterHours = int(value.Int64)
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -233,6 +251,12 @@ func (_m *Workflow) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("updated_at=")
 	builder.WriteString(_m.UpdatedAt.Format(time.ANSIC))
+	builder.WriteString(", ")
+	builder.WriteString("keep_sessions=")
+	builder.WriteString(fmt.Sprintf("%v", _m.KeepSessions))
+	builder.WriteString(", ")
+	builder.WriteString("archive_after_hours=")
+	builder.WriteString(fmt.Sprintf("%v", _m.ArchiveAfterHours))
 	builder.WriteByte(')')
 	return builder.String()
 }

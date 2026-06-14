@@ -20,14 +20,14 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 	case events.EventSessionCreated:
 		protoEvent.Event = &sessionv1.SessionEvent_SessionCreated{
 			SessionCreated: &sessionv1.SessionCreatedEvent{
-				Session: adapters.InstanceToProto(event.Session),
+				Session: adapters.InstanceToProto(event.Session, nil),
 			},
 		}
 
 	case events.EventSessionUpdated:
 		protoEvent.Event = &sessionv1.SessionEvent_SessionUpdated{
 			SessionUpdated: &sessionv1.SessionUpdatedEvent{
-				Session:       adapters.InstanceToProto(event.Session),
+				Session:       adapters.InstanceToProto(event.Session, nil),
 				UpdatedFields: event.UpdatedFields,
 			},
 		}
@@ -90,7 +90,7 @@ func createInitialSnapshotEvent(instance *session.Instance) *sessionv1.SessionEv
 		Timestamp: timestamppb.Now(),
 		Event: &sessionv1.SessionEvent_SessionCreated{
 			SessionCreated: &sessionv1.SessionCreatedEvent{
-				Session: adapters.InstanceToProto(instance),
+				Session: adapters.InstanceToProto(instance, nil),
 			},
 		},
 	}

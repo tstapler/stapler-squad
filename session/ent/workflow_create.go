@@ -182,6 +182,34 @@ func (_c *WorkflowCreate) SetNillableUpdatedAt(v *time.Time) *WorkflowCreate {
 	return _c
 }
 
+// SetKeepSessions sets the "keep_sessions" field.
+func (_c *WorkflowCreate) SetKeepSessions(v int) *WorkflowCreate {
+	_c.mutation.SetKeepSessions(v)
+	return _c
+}
+
+// SetNillableKeepSessions sets the "keep_sessions" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableKeepSessions(v *int) *WorkflowCreate {
+	if v != nil {
+		_c.SetKeepSessions(*v)
+	}
+	return _c
+}
+
+// SetArchiveAfterHours sets the "archive_after_hours" field.
+func (_c *WorkflowCreate) SetArchiveAfterHours(v int) *WorkflowCreate {
+	_c.mutation.SetArchiveAfterHours(v)
+	return _c
+}
+
+// SetNillableArchiveAfterHours sets the "archive_after_hours" field if the given value is not nil.
+func (_c *WorkflowCreate) SetNillableArchiveAfterHours(v *int) *WorkflowCreate {
+	if v != nil {
+		_c.SetArchiveAfterHours(*v)
+	}
+	return _c
+}
+
 // SetID sets the "id" field.
 func (_c *WorkflowCreate) SetID(v uuid.UUID) *WorkflowCreate {
 	_c.mutation.SetID(v)
@@ -246,6 +274,14 @@ func (_c *WorkflowCreate) defaults() {
 	if _, ok := _c.mutation.UpdatedAt(); !ok {
 		v := workflow.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
+	}
+	if _, ok := _c.mutation.KeepSessions(); !ok {
+		v := workflow.DefaultKeepSessions
+		_c.mutation.SetKeepSessions(v)
+	}
+	if _, ok := _c.mutation.ArchiveAfterHours(); !ok {
+		v := workflow.DefaultArchiveAfterHours
+		_c.mutation.SetArchiveAfterHours(v)
 	}
 	if _, ok := _c.mutation.ID(); !ok {
 		v := workflow.DefaultID()
@@ -375,6 +411,14 @@ func (_c *WorkflowCreate) createSpec() (*Workflow, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.UpdatedAt(); ok {
 		_spec.SetField(workflow.FieldUpdatedAt, field.TypeTime, value)
 		_node.UpdatedAt = value
+	}
+	if value, ok := _c.mutation.KeepSessions(); ok {
+		_spec.SetField(workflow.FieldKeepSessions, field.TypeInt, value)
+		_node.KeepSessions = value
+	}
+	if value, ok := _c.mutation.ArchiveAfterHours(); ok {
+		_spec.SetField(workflow.FieldArchiveAfterHours, field.TypeInt, value)
+		_node.ArchiveAfterHours = value
 	}
 	return _node, _spec
 }
@@ -611,6 +655,54 @@ func (u *WorkflowUpsert) SetUpdatedAt(v time.Time) *WorkflowUpsert {
 // UpdateUpdatedAt sets the "updated_at" field to the value that was provided on create.
 func (u *WorkflowUpsert) UpdateUpdatedAt() *WorkflowUpsert {
 	u.SetExcluded(workflow.FieldUpdatedAt)
+	return u
+}
+
+// SetKeepSessions sets the "keep_sessions" field.
+func (u *WorkflowUpsert) SetKeepSessions(v int) *WorkflowUpsert {
+	u.Set(workflow.FieldKeepSessions, v)
+	return u
+}
+
+// UpdateKeepSessions sets the "keep_sessions" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateKeepSessions() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldKeepSessions)
+	return u
+}
+
+// AddKeepSessions adds v to the "keep_sessions" field.
+func (u *WorkflowUpsert) AddKeepSessions(v int) *WorkflowUpsert {
+	u.Add(workflow.FieldKeepSessions, v)
+	return u
+}
+
+// ClearKeepSessions clears the value of the "keep_sessions" field.
+func (u *WorkflowUpsert) ClearKeepSessions() *WorkflowUpsert {
+	u.SetNull(workflow.FieldKeepSessions)
+	return u
+}
+
+// SetArchiveAfterHours sets the "archive_after_hours" field.
+func (u *WorkflowUpsert) SetArchiveAfterHours(v int) *WorkflowUpsert {
+	u.Set(workflow.FieldArchiveAfterHours, v)
+	return u
+}
+
+// UpdateArchiveAfterHours sets the "archive_after_hours" field to the value that was provided on create.
+func (u *WorkflowUpsert) UpdateArchiveAfterHours() *WorkflowUpsert {
+	u.SetExcluded(workflow.FieldArchiveAfterHours)
+	return u
+}
+
+// AddArchiveAfterHours adds v to the "archive_after_hours" field.
+func (u *WorkflowUpsert) AddArchiveAfterHours(v int) *WorkflowUpsert {
+	u.Add(workflow.FieldArchiveAfterHours, v)
+	return u
+}
+
+// ClearArchiveAfterHours clears the value of the "archive_after_hours" field.
+func (u *WorkflowUpsert) ClearArchiveAfterHours() *WorkflowUpsert {
+	u.SetNull(workflow.FieldArchiveAfterHours)
 	return u
 }
 
@@ -879,6 +971,62 @@ func (u *WorkflowUpsertOne) SetUpdatedAt(v time.Time) *WorkflowUpsertOne {
 func (u *WorkflowUpsertOne) UpdateUpdatedAt() *WorkflowUpsertOne {
 	return u.Update(func(s *WorkflowUpsert) {
 		s.UpdateUpdatedAt()
+	})
+}
+
+// SetKeepSessions sets the "keep_sessions" field.
+func (u *WorkflowUpsertOne) SetKeepSessions(v int) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetKeepSessions(v)
+	})
+}
+
+// AddKeepSessions adds v to the "keep_sessions" field.
+func (u *WorkflowUpsertOne) AddKeepSessions(v int) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.AddKeepSessions(v)
+	})
+}
+
+// UpdateKeepSessions sets the "keep_sessions" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateKeepSessions() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateKeepSessions()
+	})
+}
+
+// ClearKeepSessions clears the value of the "keep_sessions" field.
+func (u *WorkflowUpsertOne) ClearKeepSessions() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearKeepSessions()
+	})
+}
+
+// SetArchiveAfterHours sets the "archive_after_hours" field.
+func (u *WorkflowUpsertOne) SetArchiveAfterHours(v int) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetArchiveAfterHours(v)
+	})
+}
+
+// AddArchiveAfterHours adds v to the "archive_after_hours" field.
+func (u *WorkflowUpsertOne) AddArchiveAfterHours(v int) *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.AddArchiveAfterHours(v)
+	})
+}
+
+// UpdateArchiveAfterHours sets the "archive_after_hours" field to the value that was provided on create.
+func (u *WorkflowUpsertOne) UpdateArchiveAfterHours() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateArchiveAfterHours()
+	})
+}
+
+// ClearArchiveAfterHours clears the value of the "archive_after_hours" field.
+func (u *WorkflowUpsertOne) ClearArchiveAfterHours() *WorkflowUpsertOne {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearArchiveAfterHours()
 	})
 }
 
@@ -1314,6 +1462,62 @@ func (u *WorkflowUpsertBulk) SetUpdatedAt(v time.Time) *WorkflowUpsertBulk {
 func (u *WorkflowUpsertBulk) UpdateUpdatedAt() *WorkflowUpsertBulk {
 	return u.Update(func(s *WorkflowUpsert) {
 		s.UpdateUpdatedAt()
+	})
+}
+
+// SetKeepSessions sets the "keep_sessions" field.
+func (u *WorkflowUpsertBulk) SetKeepSessions(v int) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetKeepSessions(v)
+	})
+}
+
+// AddKeepSessions adds v to the "keep_sessions" field.
+func (u *WorkflowUpsertBulk) AddKeepSessions(v int) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.AddKeepSessions(v)
+	})
+}
+
+// UpdateKeepSessions sets the "keep_sessions" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateKeepSessions() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateKeepSessions()
+	})
+}
+
+// ClearKeepSessions clears the value of the "keep_sessions" field.
+func (u *WorkflowUpsertBulk) ClearKeepSessions() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearKeepSessions()
+	})
+}
+
+// SetArchiveAfterHours sets the "archive_after_hours" field.
+func (u *WorkflowUpsertBulk) SetArchiveAfterHours(v int) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.SetArchiveAfterHours(v)
+	})
+}
+
+// AddArchiveAfterHours adds v to the "archive_after_hours" field.
+func (u *WorkflowUpsertBulk) AddArchiveAfterHours(v int) *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.AddArchiveAfterHours(v)
+	})
+}
+
+// UpdateArchiveAfterHours sets the "archive_after_hours" field to the value that was provided on create.
+func (u *WorkflowUpsertBulk) UpdateArchiveAfterHours() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.UpdateArchiveAfterHours()
+	})
+}
+
+// ClearArchiveAfterHours clears the value of the "archive_after_hours" field.
+func (u *WorkflowUpsertBulk) ClearArchiveAfterHours() *WorkflowUpsertBulk {
+	return u.Update(func(s *WorkflowUpsert) {
+		s.ClearArchiveAfterHours()
 	})
 }
 

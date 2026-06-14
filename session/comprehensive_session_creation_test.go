@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	creackpty "github.com/creack/pty"
 	"github.com/tstapler/stapler-squad/session/tmux"
 
 	"github.com/stretchr/testify/assert"
@@ -234,6 +235,10 @@ type mockPtyFactory struct{}
 func (m *mockPtyFactory) Start(cmd *exec.Cmd) (*os.File, *exec.Cmd, error) {
 	// Return a mock file descriptor - we can use stdin as a safe mock
 	return os.Stdin, cmd, nil
+}
+
+func (m *mockPtyFactory) StartWithSize(cmd *exec.Cmd, _ *creackpty.Winsize) (*os.File, *exec.Cmd, error) {
+	return m.Start(cmd)
 }
 
 func (m *mockPtyFactory) Close() {

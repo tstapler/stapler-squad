@@ -40,6 +40,10 @@ const (
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
 	FieldUpdatedAt = "updated_at"
+	// FieldKeepSessions holds the string denoting the keep_sessions field in the database.
+	FieldKeepSessions = "keep_sessions"
+	// FieldArchiveAfterHours holds the string denoting the archive_after_hours field in the database.
+	FieldArchiveAfterHours = "archive_after_hours"
 	// Table holds the table name of the workflow in the database.
 	Table = "workflows"
 )
@@ -60,6 +64,8 @@ var Columns = []string{
 	FieldCronEnabled,
 	FieldCreatedAt,
 	FieldUpdatedAt,
+	FieldKeepSessions,
+	FieldArchiveAfterHours,
 }
 
 // ValidColumn reports if the column name is valid (part of the table columns).
@@ -89,6 +95,10 @@ var (
 	DefaultUpdatedAt func() time.Time
 	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
 	UpdateDefaultUpdatedAt func() time.Time
+	// DefaultKeepSessions holds the default value on creation for the "keep_sessions" field.
+	DefaultKeepSessions int
+	// DefaultArchiveAfterHours holds the default value on creation for the "archive_after_hours" field.
+	DefaultArchiveAfterHours int
 	// DefaultID holds the default value on creation for the "id" field.
 	DefaultID func() uuid.UUID
 )
@@ -164,4 +174,14 @@ func ByCreatedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByUpdatedAt orders the results by the updated_at field.
 func ByUpdatedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldUpdatedAt, opts...).ToFunc()
+}
+
+// ByKeepSessions orders the results by the keep_sessions field.
+func ByKeepSessions(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldKeepSessions, opts...).ToFunc()
+}
+
+// ByArchiveAfterHours orders the results by the archive_after_hours field.
+func ByArchiveAfterHours(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldArchiveAfterHours, opts...).ToFunc()
 }

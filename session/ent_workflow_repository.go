@@ -49,6 +49,12 @@ func (r *EntWorkflowRepository) Create(ctx context.Context, w WorkflowCreateInpu
 	if w.CronExpression != "" {
 		c.SetCronExpression(w.CronExpression)
 	}
+	if w.KeepSessions != nil {
+		c.SetKeepSessions(*w.KeepSessions)
+	}
+	if w.ArchiveAfterHours != nil {
+		c.SetArchiveAfterHours(*w.ArchiveAfterHours)
+	}
 
 	wf, err := c.Save(ctx)
 	if err != nil {
@@ -93,6 +99,12 @@ func (r *EntWorkflowRepository) Update(ctx context.Context, id uuid.UUID, w Work
 	}
 	if w.CronEnabled != nil {
 		u.SetCronEnabled(*w.CronEnabled)
+	}
+	if w.KeepSessions != nil {
+		u.SetKeepSessions(*w.KeepSessions)
+	}
+	if w.ArchiveAfterHours != nil {
+		u.SetArchiveAfterHours(*w.ArchiveAfterHours)
 	}
 
 	wf, err := u.Save(ctx)

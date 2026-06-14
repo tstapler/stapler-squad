@@ -206,6 +206,10 @@ message Session {
 
   // When the session was archived. Zero value means not archived.
   google.protobuf.Timestamp archived_at = 63;
+
+  // Human-readable name of the workflow that spawned this session.
+  // Populated at read time from the workflow name cache; empty for manual sessions.
+  string workflow_name = 64;
 }
 
 // SessionGoalSummary summarizes the current goal and task state for a session.

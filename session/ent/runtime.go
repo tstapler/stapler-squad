@@ -522,6 +522,14 @@ func init() {
 	workflow.DefaultUpdatedAt = workflowDescUpdatedAt.Default.(func() time.Time)
 	// workflow.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
 	workflow.UpdateDefaultUpdatedAt = workflowDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// workflowDescKeepSessions is the schema descriptor for keep_sessions field.
+	workflowDescKeepSessions := workflowFields[14].Descriptor()
+	// workflow.DefaultKeepSessions holds the default value on creation for the keep_sessions field.
+	workflow.DefaultKeepSessions = workflowDescKeepSessions.Default.(int)
+	// workflowDescArchiveAfterHours is the schema descriptor for archive_after_hours field.
+	workflowDescArchiveAfterHours := workflowFields[15].Descriptor()
+	// workflow.DefaultArchiveAfterHours holds the default value on creation for the archive_after_hours field.
+	workflow.DefaultArchiveAfterHours = workflowDescArchiveAfterHours.Default.(int)
 	// workflowDescID is the schema descriptor for id field.
 	workflowDescID := workflowFields[0].Descriptor()
 	// workflow.DefaultID holds the default value on creation for the id field.

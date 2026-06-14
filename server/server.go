@@ -21,6 +21,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/push"
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/web"
+	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/memory"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -355,6 +356,15 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		deps.WorkflowScheduler.Start(serverCtx)
 		srv.shutdownHooks = append(srv.shutdownHooks, deps.WorkflowScheduler.Stop)
 		log.Info("WorkflowScheduler started")
+	}
+
+	// Start workflow session retention enforcer (hourly sweep).
+	// Requires both the session ent client and a workflow repository.
+	if deps.WorkflowRepo != nil && deps.Storage != nil {
+		if entClient := deps.Storage.GetEntClient(); entClient != nil {
+			workflows.StartRetentionEnforcer(serverCtx, entClient, deps.WorkflowRepo, time.Hour)
+			log.Info("WorkflowRetentionEnforcer started")
+		}
 	}
 
 	// Register HeadlessService handler (nil guard: pool may be absent if claude not found).
