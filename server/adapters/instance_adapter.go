@@ -212,7 +212,9 @@ func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
 		return sessionv1.SubStatus_SUB_STATUS_RATE_LIMITED
 	}
 	switch inst.GetDetectedStatus() {
-	case detection.StatusProcessing, detection.StatusActive:
+	case detection.StatusProcessing, detection.StatusActive, detection.StatusWaitingForAgent:
+		// StatusWaitingForAgent maps to PROCESSING — no distinct proto value exists yet;
+		// the UI shows the same "Thinking…" chip, which is correct while agents run.
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
 	case detection.StatusNeedsApproval:
 		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL
@@ -383,6 +385,8 @@ func MapIdleStateToWorkingState(s detection.IdleState) sessionv1.WorkingState {
 func MapDetectedStatusToWorkingState(s detection.DetectedStatus) sessionv1.WorkingState {
 	switch s {
 	case detection.StatusActive:
+		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
+	case detection.StatusWaitingForAgent:
 		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
 	case detection.StatusProcessing:
 		return sessionv1.WorkingState_WORKING_STATE_PROCESSING

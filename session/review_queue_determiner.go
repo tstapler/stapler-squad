@@ -227,7 +227,7 @@ func (d *DefaultStatusDeterminer) Determine(
 				shouldAdd = true
 				ctx = effectiveCtx(statusContext, "Task completed successfully")
 				log.InfoLog.Printf("[ReviewQueue] Session '%s': Task completion (no controller) - %s", inst.Title, ctx)
-			case detection.StatusActive, detection.StatusProcessing:
+			case detection.StatusActive, detection.StatusProcessing, detection.StatusWaitingForAgent:
 				return DetectionResult{Action: DetectionActionRemove, ClaudeStatus: claudeStatus}
 			}
 		}

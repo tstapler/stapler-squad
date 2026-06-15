@@ -12,7 +12,7 @@ on:
       - 'proto/**'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/package-lock.json'
+      - 'web-app/pnpm-lock.yaml'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
@@ -29,7 +29,7 @@ on:
       - 'proto/**'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/package-lock.json'
+      - 'web-app/pnpm-lock.yaml'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
@@ -115,6 +115,11 @@ jobs:
           local-threshold: 0
           badge-file-name: coverage.svg
 
+      - name: Set up pnpm (for coverage report)
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Set up Node.js (for coverage report)
         uses: actions/setup-node@v4
         with:
@@ -178,7 +183,7 @@ jobs:
             fi
           done
           # Also validate the typed catalog
-          cd web-app && npm install --silent && npm run validate-catalog
+          cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
 
       # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
       # which posts a PR comment via benchstat. Removed dead step that ran

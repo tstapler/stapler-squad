@@ -82,6 +82,8 @@ func categoryName(s DetectedStatus) string {
 		return "tests_failing"
 	case StatusReady:
 		return "ready"
+	case StatusWaitingForAgent:
+		return "waiting_for_agent"
 	default:
 		return "unknown"
 	}
