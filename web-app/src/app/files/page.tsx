@@ -28,7 +28,7 @@ function formatSize(bytes: number): string {
 }
 
 function buildServeUrl(path: string): string {
-  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const origin = window.location.origin;
   // path is absolute (starts with /); omit the trailing slash on the prefix
   // so we get /api/local/serve/abs/path rather than a double-slash URL.
   return `${origin}/api/local/serve${path}`;

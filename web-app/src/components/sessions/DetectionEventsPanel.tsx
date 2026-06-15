@@ -7,6 +7,8 @@ import { SessionService } from "@/gen/session/v1/session_pb";
 import type { DetectionEventProto } from "@/gen/session/v1/session_pb";
 import { getApiBaseUrl } from "@/lib/config";
 
+const pad = (n: number) => String(n).padStart(2, "0");
+
 // Maps the DetectedStatus int value (from proto result_status) to the Go constant name.
 // Mirrors the iota order in session/detection/detector.go.
 const STATUS_INT_TO_GO: Record<number, string> = {
@@ -87,7 +89,6 @@ export function DetectionEventsPanel({ sessionId, program = "claude" }: Detectio
         .replace("Status", "")
         .toLowerCase();
       const ts = new Date();
-      const pad = (n: number) => String(n).padStart(2, "0");
       const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`;
       const suggestedFilename = `${program}_${statusLabel}_${stamp}.txt`;
 

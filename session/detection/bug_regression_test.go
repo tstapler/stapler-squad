@@ -479,6 +479,12 @@ func TestBug3_BoxDrawingSeparator_ReadlineTypingStillWorks(t *testing.T) {
 					"  ASCII user input after ❯ must still trigger readline_typing.",
 					tc.input, got)
 			}
+			gotLines := sd.DetectFromLines(strings.Split(tc.input, "\n"))
+			if gotLines != StatusIdle {
+				t.Errorf("DetectFromLines(%q) = %s, want StatusIdle (readline typing)\n"+
+					"  ASCII user input after ❯ must still trigger readline_typing via DetectFromLines.",
+					tc.input, gotLines)
+			}
 		})
 	}
 }
@@ -554,7 +560,7 @@ func TestBug4_NonBreakingSpace_ReadlineTyping(t *testing.T) {
 	}
 }
 
-// TestBug4_NonBreakingSpace_ReadlineTyping_OtherSessions verifies the fix against the
+// TestBug4_NonBreakingSpace_OtherLayouts verifies the fix against the
 // other two live-session layouts that triggered the same bug.
 func TestBug4_NonBreakingSpace_OtherLayouts(t *testing.T) {
 	sd := NewStatusDetector()

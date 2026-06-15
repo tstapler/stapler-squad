@@ -33,7 +33,15 @@ type listDirectoryResponse struct {
 	Path    string           `json:"path"`
 	Parent  string           `json:"parent"`
 	Entries []localFileEntry `json:"entries"`
+	Total   int              `json:"total"`
+	HasMore bool             `json:"has_more"`
 }
+
+const maxLocalDirEntries = 2000
+
+// Auth is deliberately delegated to the server middleware chain: local HTTP callers
+// already have OS access; remote HTTPS callers are gated by WebAuthn. No path
+// restriction is applied — this is intentional for a personal developer tool.
 
 // ListLocalDirectory handles GET /api/local/files/list?path=/some/dir
 // Defaults to the user home directory when path is omitted.
@@ -97,16 +105,26 @@ func (s *LocalFileService) ListLocalDirectory(w http.ResponseWriter, r *http.Req
 		return entries[i].Name < entries[j].Name
 	})
 
+	total := len(entries)
+	hasMore := false
+	if total > maxLocalDirEntries {
+		entries = entries[:maxLocalDirEntries]
+		hasMore = true
+	}
+
 	parent := ""
 	if dir != "/" {
 		parent = filepath.Dir(dir)
 	}
 
+	log.Info("[LocalFileService] list", "path", dir, "entries", len(entries), "total", total, "has_more", hasMore)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(listDirectoryResponse{
 		Path:    dir,
 		Parent:  parent,
 		Entries: entries,
+		Total:   total,
+		HasMore: hasMore,
 	}); err != nil {
 		log.Error("[LocalFileService] encode response", "err", err)
 	}
@@ -141,5 +159,6 @@ func (s *LocalFileService) ServeLocalFile(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	log.Info("[LocalFileService] serve", "path", filePath)
 	http.ServeFile(w, r, filePath)
 }
