@@ -220,21 +220,7 @@ export const viewerEmpty = style({
   fontSize: vars.fontSize.sm,
 });
 
-export const viewerFrameWrapper = style({
-  flex: 1,
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-});
-
-export const viewerImageWrapper = style({
-  flex: 1,
-  display: "flex",
-  flexDirection: "column",
-  overflow: "hidden",
-});
-
-export const viewerTextWrapper = style({
+export const viewerWrapper = style({
   flex: 1,
   display: "flex",
   flexDirection: "column",
@@ -283,7 +269,7 @@ export const viewerFrame = style({
   flex: 1,
   width: "100%",
   border: "none",
-  background: "white",
+  background: vars.color.background,
 });
 
 export const viewerImage = style({

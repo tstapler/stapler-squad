@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const maxLocalDirEntries = 5000
+
 // LocalFileEntry is one item in a directory listing.
 type LocalFileEntry struct {
 	Name  string `json:"name"`
@@ -19,8 +21,9 @@ type LocalFileEntry struct {
 }
 
 type localDirListing struct {
-	Path    string           `json:"path"`
-	Entries []LocalFileEntry `json:"entries"`
+	Path      string           `json:"path"`
+	Entries   []LocalFileEntry `json:"entries"`
+	Truncated bool             `json:"truncated,omitempty"`
 }
 
 // LocalFileService serves local filesystem files without requiring a session.
@@ -51,6 +54,8 @@ func (s *LocalFileService) ListLocalDirectory(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "path not found", http.StatusNotFound)
+		} else if os.IsPermission(err) {
+			http.Error(w, "permission denied", http.StatusForbidden)
 		} else {
 			http.Error(w, "could not stat path", http.StatusInternalServerError)
 		}
@@ -63,8 +68,17 @@ func (s *LocalFileService) ListLocalDirectory(w http.ResponseWriter, r *http.Req
 
 	dirEntries, err := os.ReadDir(absPath)
 	if err != nil {
-		http.Error(w, "could not read directory", http.StatusInternalServerError)
+		if os.IsPermission(err) {
+			http.Error(w, "permission denied", http.StatusForbidden)
+		} else {
+			http.Error(w, "could not read directory", http.StatusInternalServerError)
+		}
 		return
+	}
+
+	truncated := len(dirEntries) > maxLocalDirEntries
+	if truncated {
+		dirEntries = dirEntries[:maxLocalDirEntries]
 	}
 
 	entries := make([]LocalFileEntry, 0, len(dirEntries))
@@ -89,7 +103,7 @@ func (s *LocalFileService) ListLocalDirectory(w http.ResponseWriter, r *http.Req
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 
-	listing := localDirListing{Path: absPath, Entries: entries}
+	listing := localDirListing{Path: absPath, Entries: entries, Truncated: truncated}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(listing)
 }
@@ -99,10 +113,16 @@ func (s *LocalFileService) ListLocalDirectory(w http.ResponseWriter, r *http.Req
 // is the absolute filesystem path, allowing HTML relative asset references to
 // resolve as sibling requests to the same prefix.
 //
+// No root restriction is enforced — this service is designed for local filesystem
+// browsing where the user has the same access as the running process. On HTTPS
+// remote access, the WebAuthn middleware is the sole gate; on localhost no auth
+// is required by design (same model as opening a file manager).
+//
 // Security headers:
 //   - SVG: Content-Security-Policy: sandbox (prevents embedded script execution)
 //   - HTML: CSP sandbox allowing scripts/forms/popups but blocking parent frame access
 //   - All: X-Frame-Options: SAMEORIGIN (only our own pages may embed these)
+//   - All: X-Content-Type-Options: nosniff (prevents MIME-type confusion attacks)
 func (s *LocalFileService) ServeLocalFile(w http.ResponseWriter, r *http.Request) {
 	// After StripPrefix the URL path is already the absolute filesystem path.
 	absPath := filepath.Clean(r.URL.Path)
@@ -115,6 +135,8 @@ func (s *LocalFileService) ServeLocalFile(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "file not found", http.StatusNotFound)
+		} else if os.IsPermission(err) {
+			http.Error(w, "permission denied", http.StatusForbidden)
 		} else {
 			http.Error(w, "could not stat file", http.StatusInternalServerError)
 		}
@@ -127,7 +149,11 @@ func (s *LocalFileService) ServeLocalFile(w http.ResponseWriter, r *http.Request
 
 	f, err := os.Open(absPath)
 	if err != nil {
-		http.Error(w, "could not open file", http.StatusInternalServerError)
+		if os.IsPermission(err) {
+			http.Error(w, "permission denied", http.StatusForbidden)
+		} else {
+			http.Error(w, "could not open file", http.StatusInternalServerError)
+		}
 		return
 	}
 	defer func() { _ = f.Close() }()
@@ -151,6 +177,7 @@ func (s *LocalFileService) ServeLocalFile(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 
 	lct := strings.ToLower(contentType)
 	switch {

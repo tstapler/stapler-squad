@@ -27,9 +27,28 @@ interface FileEntry {
 interface DirListing {
   path: string;
   entries: FileEntry[];
+  truncated?: boolean;
 }
 
 type RenderMode = "html" | "image" | "svg" | "pdf" | "video" | "text" | "binary";
+
+// Module-level constant — avoids allocating a new Set on every render/call.
+const TEXT_EXTENSIONS = new Set([
+  "txt", "md", "markdown", "rst", "log", "diff", "patch",
+  "js", "mjs", "cjs", "ts", "tsx", "jsx",
+  "css", "scss", "sass", "less",
+  "json", "jsonc", "yaml", "yml", "toml", "ini", "env", "envrc", "conf", "cfg",
+  "xml", "go", "py", "rb", "rs", "swift", "kt", "java", "scala",
+  "c", "cpp", "cc", "cxx", "h", "hpp",
+  "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1",
+  "sql", "graphql", "gql", "proto",
+  "tf", "tfvars", "hcl", "mod", "sum", "lock",
+  "dockerfile", "makefile", "mk",
+  "gitignore", "gitattributes", "editorconfig",
+  "php", "lua", "r", "pl", "pm",
+]);
+
+const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024; // 2 MB
 
 function inferRenderMode(filename: string): RenderMode {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
@@ -39,21 +58,7 @@ function inferRenderMode(filename: string): RenderMode {
     return "image";
   if (ext === "pdf") return "pdf";
   if (["mp4", "webm", "ogv", "mov", "avi"].includes(ext)) return "video";
-  const textExts = new Set([
-    "txt", "md", "markdown", "rst", "log", "diff", "patch",
-    "js", "mjs", "cjs", "ts", "tsx", "jsx",
-    "css", "scss", "sass", "less",
-    "json", "jsonc", "yaml", "yml", "toml", "ini", "env", "envrc", "conf", "cfg",
-    "xml", "go", "py", "rb", "rs", "swift", "kt", "java", "scala",
-    "c", "cpp", "cc", "cxx", "h", "hpp",
-    "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1",
-    "sql", "graphql", "gql", "proto",
-    "tf", "tfvars", "hcl", "mod", "sum", "lock",
-    "dockerfile", "makefile", "mk",
-    "gitignore", "gitattributes", "editorconfig",
-    "php", "lua", "r", "pl", "pm",
-  ]);
-  if (textExts.has(ext)) return "text";
+  if (TEXT_EXTENSIONS.has(ext)) return "text";
   return "binary";
 }
 
@@ -96,6 +101,24 @@ function buildBreadcrumbs(path: string): Array<{ label: string; path: string }> 
   return crumbs;
 }
 
+interface ViewerToolbarProps {
+  name: string;
+  url: string;
+  openLabel?: string;
+}
+
+function ViewerToolbar({ name, url, openLabel = "Open in new tab" }: ViewerToolbarProps) {
+  const handleOpen = () => window.open(url, "_blank", "noopener");
+  return (
+    <div className={styles.viewerToolbar}>
+      <span className={styles.viewerLabel}>{name}</span>
+      <button onClick={handleOpen} className={styles.externalButton} title={openLabel}>
+        <ExternalLink size={14} />
+      </button>
+    </div>
+  );
+}
+
 interface FileViewerProps {
   entry: FileEntry;
 }
@@ -112,31 +135,31 @@ function FileViewer({ entry }: FileViewerProps) {
       setTextError(null);
       return;
     }
+    if (entry.size > MAX_TEXT_PREVIEW_BYTES) {
+      setTextError(`File too large to preview (${formatSize(entry.size)}) — open externally`);
+      return;
+    }
+    const controller = new AbortController();
     setTextContent(null);
     setTextError(null);
-    fetch(url)
+    fetch(url, { signal: controller.signal })
       .then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.text();
       })
       .then(setTextContent)
-      .catch((e: unknown) =>
-        setTextError(e instanceof Error ? e.message : String(e))
-      );
-  }, [url, mode]);
-
-  const openExternal = () => window.open(url, "_blank", "noopener");
+      .catch((e: unknown) => {
+        if (e instanceof Error && e.name === "AbortError") return;
+        setTextError(e instanceof Error ? e.message : String(e));
+      });
+    return () => controller.abort();
+  }, [url, mode, entry.size]);
 
   switch (mode) {
     case "html":
       return (
-        <div className={styles.viewerFrameWrapper}>
-          <div className={styles.viewerToolbar}>
-            <span className={styles.viewerLabel}>{entry.name}</span>
-            <button onClick={openExternal} className={styles.externalButton} title="Open in new tab">
-              <ExternalLink size={14} />
-            </button>
-          </div>
+        <div className={styles.viewerWrapper}>
+          <ViewerToolbar name={entry.name} url={url} />
           <iframe
             src={url}
             className={styles.viewerFrame}
@@ -147,29 +170,11 @@ function FileViewer({ entry }: FileViewerProps) {
       );
 
     case "svg":
-      return (
-        <div className={styles.viewerImageWrapper}>
-          <div className={styles.viewerToolbar}>
-            <span className={styles.viewerLabel}>{entry.name}</span>
-            <button onClick={openExternal} className={styles.externalButton} title="Open in new tab">
-              <ExternalLink size={14} />
-            </button>
-          </div>
-          {/* img tag sandboxes SVG — scripts in SVG don't execute */}
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={url} alt={entry.name} className={styles.viewerImage} />
-        </div>
-      );
-
     case "image":
       return (
-        <div className={styles.viewerImageWrapper}>
-          <div className={styles.viewerToolbar}>
-            <span className={styles.viewerLabel}>{entry.name}</span>
-            <button onClick={openExternal} className={styles.externalButton} title="Open in new tab">
-              <ExternalLink size={14} />
-            </button>
-          </div>
+        <div className={styles.viewerWrapper}>
+          <ViewerToolbar name={entry.name} url={url} />
+          {/* img tag sandboxes SVG — scripts in SVG don't execute in <img> context */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={url} alt={entry.name} className={styles.viewerImage} />
         </div>
@@ -177,20 +182,20 @@ function FileViewer({ entry }: FileViewerProps) {
 
     case "pdf":
       return (
-        <div className={styles.viewerFrameWrapper}>
-          <div className={styles.viewerToolbar}>
-            <span className={styles.viewerLabel}>{entry.name}</span>
-            <button onClick={openExternal} className={styles.externalButton} title="Open in new tab">
-              <ExternalLink size={14} />
-            </button>
-          </div>
-          <iframe src={url} className={styles.viewerFrame} title={entry.name} />
+        <div className={styles.viewerWrapper}>
+          <ViewerToolbar name={entry.name} url={url} />
+          <iframe
+            src={url}
+            className={styles.viewerFrame}
+            sandbox="allow-scripts allow-forms allow-popups"
+            title={entry.name}
+          />
         </div>
       );
 
     case "video":
       return (
-        <div className={styles.viewerImageWrapper}>
+        <div className={styles.viewerWrapper}>
           <div className={styles.viewerToolbar}>
             <span className={styles.viewerLabel}>{entry.name}</span>
           </div>
@@ -207,13 +212,8 @@ function FileViewer({ entry }: FileViewerProps) {
         return <div className={styles.viewerEmpty}>Loading…</div>;
       }
       return (
-        <div className={styles.viewerTextWrapper}>
-          <div className={styles.viewerToolbar}>
-            <span className={styles.viewerLabel}>{entry.name}</span>
-            <button onClick={openExternal} className={styles.externalButton} title="Open raw">
-              <ExternalLink size={14} />
-            </button>
-          </div>
+        <div className={styles.viewerWrapper}>
+          <ViewerToolbar name={entry.name} url={url} openLabel="Open raw" />
           <pre className={styles.viewerText}>{textContent}</pre>
         </div>
       );
@@ -224,7 +224,10 @@ function FileViewer({ entry }: FileViewerProps) {
           <File size={32} />
           <span>{entry.name}</span>
           <span className={styles.viewerHint}>{formatSize(entry.size)} — binary file</span>
-          <button onClick={openExternal} className={styles.externalButton}>
+          <button
+            onClick={() => window.open(url, "_blank", "noopener")}
+            className={styles.externalButton}
+          >
             Open / Download <ExternalLink size={14} />
           </button>
         </div>
@@ -255,25 +258,29 @@ export function LocalFileBrowser() {
   );
 
   useEffect(() => {
+    const controller = new AbortController();
     setLoading(true);
     setListError(null);
     setListing(null);
-    fetch(`/api/local/files/list?path=${encodeURIComponent(currentPath)}`)
+    fetch(`/api/local/files/list?path=${encodeURIComponent(currentPath)}`, {
+      signal: controller.signal,
+    })
       .then((r) => {
         if (!r.ok)
           return r.text().then((t) => {
-            throw new Error(t || `HTTP ${r.status}`);
+            throw new Error((t || `HTTP ${r.status}`).trim());
           });
         return r.json() as Promise<DirListing>;
       })
       .then((data) => {
         setListing(data);
-        setLoading(false);
       })
       .catch((e: unknown) => {
+        if (e instanceof Error && e.name === "AbortError") return;
         setListError(e instanceof Error ? e.message : String(e));
-        setLoading(false);
-      });
+      })
+      .finally(() => setLoading(false));
+    return () => controller.abort();
   }, [currentPath]);
 
   const handlePathSubmit = (e: React.FormEvent) => {
@@ -294,21 +301,20 @@ export function LocalFileBrowser() {
   return (
     <div className={styles.page}>
       <div className={styles.pathBar}>
-        <div className={styles.pathForm}>
-          <form onSubmit={handlePathSubmit} className={styles.pathForm}>
-            <input
-              className={styles.pathInput}
-              value={pathInput}
-              onChange={(e) => setPathInput(e.target.value)}
-              placeholder="/path/to/directory"
-              aria-label="Directory path"
-              spellCheck={false}
-            />
-            <button type="submit" className={styles.pathButton}>
-              Go
-            </button>
-          </form>
+        <form onSubmit={handlePathSubmit} className={styles.pathForm}>
+          <input
+            className={styles.pathInput}
+            value={pathInput}
+            onChange={(e) => setPathInput(e.target.value)}
+            placeholder="/path/to/directory"
+            aria-label="Directory path"
+            spellCheck={false}
+          />
+          <button type="submit" className={styles.pathButton}>
+            Go
+          </button>
           <button
+            type="button"
             className={styles.upButton}
             onClick={() => navigate(parentDir(currentPath))}
             disabled={currentPath === "/"}
@@ -316,7 +322,7 @@ export function LocalFileBrowser() {
           >
             <ArrowUp size={16} />
           </button>
-        </div>
+        </form>
         <nav className={styles.breadcrumbs} aria-label="Path breadcrumbs">
           {crumbs.map((crumb, i) => (
             <span key={crumb.path} className={styles.crumbGroup}>
@@ -342,6 +348,11 @@ export function LocalFileBrowser() {
           {listError && <div className={styles.sidebarEmpty}>{listError}</div>}
           {!loading && !listError && listing && listing.entries.length === 0 && (
             <div className={styles.sidebarEmpty}>Empty directory</div>
+          )}
+          {listing?.truncated && (
+            <div className={styles.sidebarEmpty}>
+              Showing first 5000 entries
+            </div>
           )}
           {listing?.entries.map((entry) => {
             const Icon = fileIconForEntry(entry);
