@@ -6,22 +6,23 @@ import (
 	"sync"
 )
 
-// PatternSet holds compiled regex slices for all 9 StatusPatterns categories.
+// PatternSet holds compiled regex slices for all StatusPatterns categories.
 // All field mutations after construction must acquire mu before writing.
 type PatternSet struct {
 	mu sync.RWMutex
 
 	patterns StatusPatterns
 
-	readyRegexes         []*regexp.Regexp
-	processingRegexes    []*regexp.Regexp
-	needsApprovalRegexes []*regexp.Regexp
-	inputRequiredRegexes []*regexp.Regexp
-	errorRegexes         []*regexp.Regexp
-	testsFailingRegexes  []*regexp.Regexp
-	idleRegexes          []*regexp.Regexp
-	activeRegexes        []*regexp.Regexp
-	successRegexes       []*regexp.Regexp
+	readyRegexes            []*regexp.Regexp
+	processingRegexes       []*regexp.Regexp
+	needsApprovalRegexes    []*regexp.Regexp
+	inputRequiredRegexes    []*regexp.Regexp
+	errorRegexes            []*regexp.Regexp
+	testsFailingRegexes     []*regexp.Regexp
+	idleRegexes             []*regexp.Regexp
+	activeRegexes           []*regexp.Regexp
+	successRegexes          []*regexp.Regexp
+	waitingForAgentRegexes  []*regexp.Regexp
 }
 
 // NewPatternSet compiles all patterns in p. Returns an error if any regex is invalid.
@@ -50,6 +51,7 @@ func (ps *PatternSet) compile() error {
 		{"idle", ps.patterns.Idle, &ps.idleRegexes},
 		{"active", ps.patterns.Active, &ps.activeRegexes},
 		{"success", ps.patterns.Success, &ps.successRegexes},
+		{"waiting_for_agent", ps.patterns.WaitingForAgent, &ps.waitingForAgentRegexes},
 	}
 	for _, g := range groups {
 		compiled := make([]*regexp.Regexp, len(g.patterns))
@@ -107,6 +109,12 @@ func (ps *PatternSet) matchLocked(text string, rawPTY []byte) (DetectedStatus, s
 	for i, regex := range ps.successRegexes {
 		if regex.MatchString(text) {
 			return StatusSuccess, ps.patterns.Success[i].Name, ps.patterns.Success[i].Description
+		}
+	}
+	// Waiting for background agent (before generic Active — more specific)
+	for i, regex := range ps.waitingForAgentRegexes {
+		if regex.MatchString(text) {
+			return StatusWaitingForAgent, ps.patterns.WaitingForAgent[i].Name, ps.patterns.WaitingForAgent[i].Description
 		}
 	}
 	// Active

@@ -128,6 +128,8 @@ func (info InstanceStatusInfo) GetStatusIcon() string {
 		return "❗" // Needs attention
 	case detection.StatusInputRequired:
 		return "⌨" // Waiting for input
+	case detection.StatusWaitingForAgent:
+		return "⏳" // Waiting for background agent
 	case detection.StatusError:
 		return "✖" // Error
 	default:
@@ -170,6 +172,8 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 		desc = "Needs Input"
 	case detection.StatusSuccess:
 		desc = "Completed"
+	case detection.StatusWaitingForAgent:
+		desc = "Waiting for Agent"
 	case detection.StatusTestsFailing:
 		desc = "Tests Failing"
 	case detection.StatusError:
@@ -218,7 +222,7 @@ func (info InstanceStatusInfo) GetColorCode() string {
 		return "214" // Orange
 	}
 
-	if info.ClaudeStatus == detection.StatusProcessing {
+	if info.ClaudeStatus == detection.StatusProcessing || info.ClaudeStatus == detection.StatusWaitingForAgent {
 		return "39" // Blue
 	}
 

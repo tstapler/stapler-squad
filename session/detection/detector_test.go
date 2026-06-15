@@ -102,6 +102,23 @@ func TestStatusDetector_DetectSuccess(t *testing.T) {
 	}
 }
 
+func TestStatusDetector_DetectWaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		"✻ Waiting for 1 background agent to finish",
+		"✻ Waiting for 2 background agents to finish",
+		"◉ Waiting for 3 background agents to finish",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusWaitingForAgent {
+			t.Errorf("Detect(%q) returned %v, expected StatusWaitingForAgent", output, status)
+		}
+	}
+}
+
 func TestStatusDetector_DetectProcessing(t *testing.T) {
 	sd := NewStatusDetector()
 
@@ -524,6 +541,7 @@ func TestStatusString(t *testing.T) {
 		{StatusIdle, "Idle"},
 		{StatusActive, "Active"},
 		{StatusSuccess, "Success"},
+		{StatusWaitingForAgent, "Waiting for Agent"},
 		{StatusUnknown, "Unknown"},
 	}
 
