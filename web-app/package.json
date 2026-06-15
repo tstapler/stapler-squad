@@ -2,11 +2,19 @@
   "name": "web-app",
   "version": "1.0.0",
   "private": true,
+  "packageManager": "pnpm@10.27.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@swc/core",
+      "esbuild",
+      "@vanilla-extract/css"
+    ]
+  },
   "scripts": {
     "dev": "next dev --port 3001",
     "build": "next build",
     "start": "next start --port 3001",
-    "lint": "next lint && npm run lint:css && npm run lint:css-vars",
+    "lint": "next lint && pnpm run lint:css && pnpm run lint:css-vars",
     "lint:css": "stylelint 'src/**/*.css' --allow-empty-input",
     "lint:css-vars": "node scripts/check-css-vars.mjs",
     "test": "jest",

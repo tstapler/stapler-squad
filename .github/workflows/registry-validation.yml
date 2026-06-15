@@ -45,7 +45,7 @@ jobs:
         continue-on-error: true
 
       - name: Install frontend scanner dependencies
-        run: cd tools/scanner/frontend && npm install --silent
+        run: cd tools/scanner/frontend && pnpm install --silent
 
       # registry-generate now writes per-feature files under docs/registry/features/
       # and calls registry-aggregate to rebuild the gitignored monolithic JSONs locally.
