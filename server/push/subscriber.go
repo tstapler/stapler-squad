@@ -16,15 +16,19 @@ import (
 // StartDeliverySubscriber subscribes to the EventBus and fans push notifications
 // out to all provided Notifiers. It exits when ctx is cancelled.
 // A single failing Notifier does not prevent delivery to the others.
-func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifiers []Notifier) {
+// The returned channel is closed when the subscriber goroutine has fully exited.
+func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifiers []Notifier) <-chan struct{} {
+	done := make(chan struct{})
 	if bus == nil {
 		log.Warn("DeliverySubscriber EventBus is nil, not starting")
-		return
+		close(done)
+		return done
 	}
 
 	ch, _ := bus.Subscribe(ctx)
 
 	go func() {
+		defer close(done)
 		log.Info("DeliverySubscriber started", "notifiers", len(notifiers))
 		defer log.Info("DeliverySubscriber stopped")
 
@@ -63,6 +67,7 @@ func StartDeliverySubscriber(ctx context.Context, bus *events.EventBus, notifier
 			}
 		}
 	}()
+	return done
 }
 
 // StartPushSubscriber is the legacy entry-point. New code should use

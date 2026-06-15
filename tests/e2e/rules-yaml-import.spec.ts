@@ -1,4 +1,8 @@
-// @feature approval-rules:yaml-import
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: rules-yaml-import — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['approval-rules-yaml-import'], // TODO: add to catalog
+] as const;
 // E2E tests for YAML bulk import/export on the /rules page.
 // Covers E2E-01 through E2E-08.
 // All locators use data-testid or ARIA roles — no CSS class selectors.

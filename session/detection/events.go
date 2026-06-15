@@ -17,7 +17,10 @@ type DetectionEvent struct {
 
 const (
 	// EventRingCap is the maximum number of DetectionEvents retained per StatusDetector.
-	EventRingCap = 500
+	// Increased from 500: ClaudeController and IdleDetector share one ring; detectFromLines
+	// makes up to 50 appendDetectionEvent calls per status check at 1 Hz, draining a
+	// 500-slot ring in ~5 seconds. 2000 slots = ~33 seconds of headroom at 1 Hz.
+	EventRingCap = 2000
 	// TailSnippetBytes is the maximum bytes captured in TailSnippet.
 	TailSnippetBytes = 512
 )

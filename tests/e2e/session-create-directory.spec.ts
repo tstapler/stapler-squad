@@ -1,4 +1,5 @@
-// @feature session:create-directory
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+const _features = [FEATURE_CATALOG['session-create']] as const;
 import { test, expect } from '@playwright/test';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';

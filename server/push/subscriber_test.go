@@ -3,7 +3,6 @@ package push
 import (
 	"context"
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -206,24 +205,17 @@ func TestSubscriberExitsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Record count before starting, then immediately start subscriber.
-	// We capture before+StartDeliverySubscriber atomically so the baseline
-	// is not contaminated by goroutines from other parallel tests.
-	before := runtime.NumGoroutine()
-	StartDeliverySubscriber(ctx, bus, []Notifier{n})
+	done := StartDeliverySubscriber(ctx, bus, []Notifier{n})
 
-	require.NoError(t, testutil.WaitForCondition(func() bool {
-		return runtime.NumGoroutine() > before
-	}, testutil.FastWaitConfig()))
-	assert.Greater(t, runtime.NumGoroutine(), before)
-
-	// Cancel the context and poll until the goroutine exits.
+	// Cancel the context and wait for the done channel to close — this is an exact
+	// signal from the goroutine itself, not a flaky goroutine-count heuristic.
 	cancel()
-	require.NoError(t, testutil.WaitForCondition(func() bool {
-		return runtime.NumGoroutine() <= before+1
-	}, testutil.FastWaitConfig()))
-	assert.LessOrEqual(t, runtime.NumGoroutine(), before+1,
-		"subscriber goroutine should exit after context cancel")
+	select {
+	case <-done:
+		// goroutine exited cleanly
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber goroutine should exit after context cancel")
+	}
 }
 
 // IT-2.1 — APPROVAL_NEEDED at LOW priority triggers delivery [R5]

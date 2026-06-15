@@ -561,7 +561,23 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			}
 		}
 
-		// Step 7.5: Startup scan and orphaned approval sync
+		// Step 7.5: Resume session drivers for workflow sessions with an undelivered InitialPrompt.
+		// After a service restart, drivers are not automatically restarted for loaded sessions.
+		// Sessions created by the workflow scheduler that never had their prompt injected
+		// (e.g., service restarted within 30 s of session creation) need the driver resumed.
+		// The driver itself checks for an existing JSONL conversation file and skips the send
+		// if the prompt was already delivered in a previous run.
+		for _, inst := range instances {
+			if inst.InitialPrompt == "" {
+				continue
+			}
+			if inst.Status == session.Paused || inst.Status == session.Stopped || inst.Status == session.Hibernated {
+				continue
+			}
+			session.StartSessionDriver(inst, inst.GetEffectiveRootDir())
+		}
+
+		// Step 7.6: Startup scan and orphaned approval sync
 		// Brief settling delay to allow controllers to initialize their terminal readers.
 		time.Sleep(500 * time.Millisecond)
 		contentProvider := session.NewPollerContentProvider()

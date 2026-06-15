@@ -1,4 +1,9 @@
-// @feature workspace:list-targets, workspace:switch
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: workspace-management — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['workspace-list-targets'],
+  FEATURE_CATALOG['workspace-switch'],
+] as const;
 import { test, expect } from '@playwright/test';
 import { SessionsPage } from './pages/SessionsPage';
 

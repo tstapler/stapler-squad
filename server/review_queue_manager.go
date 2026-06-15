@@ -198,17 +198,6 @@ func (rqm *ReactiveQueueManager) handleUserInteraction(event *events.Event) {
 		return
 	}
 
-	// Update LastUserResponse timestamp
-	respondedAt := inst.MarkUserResponded()
-	log.Info("ReactiveQueueManager updated LastUserResponse", "session", sessionID)
-
-	// Persist timestamp (critical for restart scenarios)
-	if rqm.storage != nil {
-		if err := rqm.storage.UpdateInstanceLastUserResponse(inst.Title, respondedAt); err != nil {
-			log.Error("failed to persist LastUserResponse", "session", sessionID, "err", err)
-		}
-	}
-
 	// Snap the poll loop back to fast interval so any new prompt surfaces quickly.
 	rqm.signalActivity()
 

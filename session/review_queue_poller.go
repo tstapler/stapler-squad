@@ -75,7 +75,7 @@ type ReviewQueuePoller struct {
 	storage          *Storage
 	instances        []*Instance
 	config           ReviewQueuePollerConfig
-	statusDetector   *detection.StatusDetector // For detecting status in sessions without ClaudeController
+	statusDetector   detection.TerminalDetector // For detecting status in sessions without ClaudeController
 	approvalProvider ApprovalMetadataProvider  // Optional: enriches approval items with hook metadata
 	contentProvider  ContentProvider           // Fetches and caches terminal content
 	statusDeterminer StatusDeterminer          // Evaluates whether session should be in queue
@@ -496,39 +496,6 @@ func (rqp *ReviewQueuePoller) checkSessions() {
 	wg.Wait()
 }
 
-// detectProcessing checks if session is actively processing after user interaction.
-// Uses multiple signals to determine if the session is responding to user input.
-// detector must be the caller's already-compiled StatusDetector (e.g. rqp.statusDetector).
-func detectProcessing(inst *Instance, content string, statusInfo InstanceStatusInfo, detector *detection.StatusDetector) bool {
-	// Signal 1: Status change from prompt state to active/processing
-	if statusInfo.ClaudeStatus == detection.StatusActive ||
-		statusInfo.ClaudeStatus == detection.StatusProcessing {
-		return true
-	}
-
-	// Signal 2: Idle detector shows Active state
-	if statusInfo.IdleState.State == detection.IdleStateActive {
-		return true
-	}
-
-	// Signal 3: Recent terminal output (activity within 2 seconds)
-	if time.Since(inst.LastMeaningfulOutput) < 2*time.Second {
-		return true
-	}
-
-	// Signal 4: Detect active/processing status via ANSI-stripped tail window.
-	// This replaces the previous hardcoded string-match list and ensures the same
-	// detection pipeline (CR collapsing + ANSI stripping + regex) is used everywhere.
-	if content != "" {
-		status := detector.DetectRecent([]byte(content), detection.StatusDetectionTailBytes)
-		if status == detection.StatusActive || status == detection.StatusProcessing {
-			return true
-		}
-	}
-
-	return false
-}
-
 // previewCacheTTL is the fallback maximum age of a cached Preview() result when
 // pane activity timestamps are unavailable (e.g. tmux not running). The primary
 // invalidation mechanism is #{pane_last_activity} from batchPaneActivity(); this
@@ -643,71 +610,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// poll — avoids a subprocess spawn on every tick for idle controller-managed sessions.
 	content := rqp.contentProvider.GetContent(inst, statusInfo, paneActivity)
 
-	// STEP 2: Detect and track prompts
-	isNewPrompt := inst.detectAndTrackPrompt(content, statusInfo)
-
-	// STEP 3: Check if user responded to current prompt
-	userRespondedToPrompt := inst.UserRespondedAfterPrompt()
-
-	// STEP 4: Check if session is actively processing after user response
-	isProcessing := false
-	if userRespondedToPrompt && content != "" {
-		isProcessing = detectProcessing(inst, content, statusInfo, rqp.statusDetector)
-	}
-
-	// STEP 5: Check grace period for temporary removal
-	inGracePeriod := inst.IsInProcessingGracePeriod()
-
-	// DECISION LOGIC:
-
-	// If user responded and session is processing -> remove from queue
-	if userRespondedToPrompt && isProcessing {
-		log.Info("user responded and processing, removing from queue", "session", inst.Title)
-		rqp.queue.Remove(inst.Title)
-		inst.ProcessingGraceUntil = time.Time{} // Clear grace period
-		// Persist cleared grace period
-		if rqp.storage != nil {
-			if err := rqp.storage.UpdateInstanceProcessingGrace(inst.Title, inst.ProcessingGraceUntil); err != nil {
-				log.Error("failed to persist cleared ProcessingGraceUntil", "err", err)
-			}
-		}
-		return
-	}
-
-	// If user responded but NOT processing yet -> grace period
-	if userRespondedToPrompt && !isProcessing {
-		if inGracePeriod {
-			// Already in grace period - keep off queue
-			rqp.queue.Remove(inst.Title)
-			return
-		}
-
-		if inst.ProcessingGraceUntil.IsZero() {
-			// Fresh response - start grace period and remove from queue
-			inst.ProcessingGraceUntil = time.Now().Add(10 * time.Second)
-			log.Info("user responded, starting grace period", "session", inst.Title, "grace_until", inst.ProcessingGraceUntil)
-
-			// Persist grace period
-			if rqp.storage != nil {
-				if err := rqp.storage.UpdateInstanceProcessingGrace(inst.Title, inst.ProcessingGraceUntil); err != nil {
-					log.Error("failed to persist ProcessingGraceUntil", "err", err)
-				}
-			}
-			rqp.queue.Remove(inst.Title)
-			return
-		}
-
-		// Grace period expired and still not processing
-		// Clear grace period and fall through to add logic (will check if new prompt)
-		log.Info("grace period expired, session not responding", "session", inst.Title)
-		inst.ProcessingGraceUntil = time.Time{}
-		if rqp.storage != nil {
-			if err := rqp.storage.UpdateInstanceProcessingGrace(inst.Title, inst.ProcessingGraceUntil); err != nil {
-				log.Error("failed to persist cleared ProcessingGraceUntil", "err", err)
-			}
-		}
-	}
-
 	// Status determination: pure evaluation, no side effects.
 	// Handles controller-based and terminal-content detection, idle/staleness checks.
 	result := rqp.statusDeterminer.Determine(inst, content, statusInfo, rqp.statusDetector)
@@ -720,6 +622,21 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 
 	// Handle early-exit actions from the determiner.
 	if result.Action == DetectionActionRemove {
+		// For sessions without an active controller, the raw terminal scanner can produce
+		// false-positive Active/Processing detections during a resize redraw. Suppress
+		// removal for prompt-reason items on the no-controller path only.
+		// Controller-active sessions: trust the controller — if it returns DetectionActionRemove
+		// for an approval item, the dialog is genuinely gone (e.g., user approved the tool use).
+		if !statusInfo.IsControllerActive {
+			if existing, exists := rqp.queue.Get(inst.Title); exists {
+				isPromptReason := existing.Reason == ReasonApprovalPending ||
+					existing.Reason == ReasonInputRequired ||
+					existing.Reason == ReasonWaitingForUser
+				if isPromptReason {
+					return
+				}
+			}
+		}
 		rqp.queue.Remove(inst.Title)
 		return
 	}
@@ -757,14 +674,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				return
 			}
 		}
-	}
-
-	// Prevent re-adding same prompt user already responded to
-	// Only add if this is a NEW prompt OR user hasn't responded yet
-	if shouldAdd && userRespondedToPrompt && !isNewPrompt {
-		log.Info("user already responded to this prompt, removing from queue", "session", inst.Title)
-		rqp.queue.Remove(inst.Title)
-		return
 	}
 
 	// Spam prevention: Enforce minimum re-add interval to prevent notification spam.

@@ -232,3 +232,4 @@ make e2e-lighthouse
 | Feature registry rules | `.claude/rules/feature-registry.md` |
 | Omnibar feature testing registry | `.claude/rules/feature-testing-registry.md` |
 | Session creation mode registry (7 touchpoints) | `.claude/rules/session-creation-registry.md` |
+| systemd user service (restart, logs, D-Bus issues) | `.claude/rules/systemd-user-service.md` |

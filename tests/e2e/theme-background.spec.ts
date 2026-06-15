@@ -1,4 +1,8 @@
-// @feature ui:theme-background
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: theme-background — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['ui-theme-background'], // TODO: add to catalog
+] as const;
 // Regression: cockpitRoot lacked backgroundColor, so pages like /history showed
 // white backgrounds even under dark themes. The fix sets backgroundColor:
 // vars.color.background on cockpitRoot in layout.css.ts.

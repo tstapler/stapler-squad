@@ -46,7 +46,7 @@ type PTYReader interface {
 // It uses pattern matching on recent output and tracks state transitions with debouncing.
 type IdleDetector struct {
 	sessionName    string
-	statusDetector *StatusDetector
+	statusDetector TerminalDetector
 	ptyAccess      PTYReader
 	config         IdleDetectorConfig
 	now            func() time.Time // injectable for testing; defaults to time.Now
@@ -78,6 +78,26 @@ func NewIdleDetectorWithConfig(sessionName string, ptyAccess PTYReader, config I
 	return &IdleDetector{
 		sessionName:     sessionName,
 		statusDetector:  NewStatusDetector(),
+		ptyAccess:       ptyAccess,
+		config:          config,
+		currentState:    IdleStateUnknown,
+		lastStateChange: now,
+		lastActivity:    now,
+	}
+}
+
+// NewIdleDetectorWithDetector creates a new idle detector that uses the provided
+// TerminalDetector instead of creating its own. When detector is nil, falls back
+// to creating a new StatusDetector (same as NewIdleDetectorWithConfig).
+func NewIdleDetectorWithDetector(sessionName string, ptyAccess PTYReader, config IdleDetectorConfig, detector TerminalDetector) *IdleDetector {
+	now := time.Now()
+	sd := detector
+	if sd == nil {
+		sd = NewStatusDetector()
+	}
+	return &IdleDetector{
+		sessionName:     sessionName,
+		statusDetector:  sd,
 		ptyAccess:       ptyAccess,
 		config:          config,
 		currentState:    IdleStateUnknown,
@@ -156,6 +176,7 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 }
 
 // mapStatusToIdleState converts a DetectedStatus to an IdleState.
+// Callers MUST hold id.mu for write — this method mutates id.lastActivity.
 func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 	switch status {
 	case StatusActive:
@@ -197,17 +218,6 @@ func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 		// This handles fresh starts where we haven't detected anything yet
 		return IdleStateWaiting
 	}
-}
-
-// IsIdle returns true if the session is currently idle (waiting or timed out).
-func (id *IdleDetector) IsIdle() bool {
-	state := id.DetectState()
-	return state == IdleStateWaiting || state == IdleStateTimeout
-}
-
-// IsActive returns true if the session is actively processing commands.
-func (id *IdleDetector) IsActive() bool {
-	return id.DetectState() == IdleStateActive
 }
 
 // GetState returns the current idle state without triggering detection.
@@ -316,7 +326,7 @@ func (id *IdleDetector) InitializeFromTimestamp(timestamp time.Time) {
 	// If a session was idle for >24h, it's reasonable to show timeout immediately
 	const maxRestorationAge = 24 * time.Hour
 	age := now.Sub(timestamp)
-	if age > maxRestorationAge {
+	if age >= maxRestorationAge {
 		log.Info("timestamp too old for idle detector, using default", "session", id.sessionName, "age", FormatDuration(age))
 		return
 	}

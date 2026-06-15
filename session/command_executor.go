@@ -68,7 +68,7 @@ type CommandExecutor struct {
 	sessionName    string
 	ptyAccess      *PTYAccess
 	responseStream *ResponseStream
-	statusDetector *detection.StatusDetector
+	statusDetector detection.TerminalDetector
 	queue          *CommandQueue
 	subscriberID   string
 
@@ -94,7 +94,7 @@ func NewCommandExecutor(
 	sessionName string,
 	ptyAccess *PTYAccess,
 	responseStream *ResponseStream,
-	statusDetector *detection.StatusDetector,
+	statusDetector detection.TerminalDetector,
 	queue *CommandQueue,
 ) *CommandExecutor {
 	return &CommandExecutor{
@@ -113,7 +113,7 @@ func NewCommandExecutorWithOptions(
 	sessionName string,
 	ptyAccess *PTYAccess,
 	responseStream *ResponseStream,
-	statusDetector *detection.StatusDetector,
+	statusDetector detection.TerminalDetector,
 	queue *CommandQueue,
 	options ExecutionOptions,
 ) *CommandExecutor {

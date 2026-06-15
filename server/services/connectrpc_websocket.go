@@ -906,7 +906,6 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 					// Update timestamps for user interaction
 					instance.UpdateTerminalTimestamps(string(input.Data), true)
-					instance.MarkUserResponded()
 
 					// Try CM path first (low-latency, no subprocess). Falls back to
 					// subprocess send-keys if CM queue is backed up or not running.

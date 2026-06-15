@@ -1,4 +1,8 @@
-// @feature android-url-bar-overflow
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: android-url-bar — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['android-url-bar-overflow'], // TODO: add to catalog
+] as const;
 /**
  * Regression tests for content hidden behind the Android Chrome URL bar.
  *

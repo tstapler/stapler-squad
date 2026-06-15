@@ -12,7 +12,7 @@ import (
 type StartupScanner struct {
 	statusManager   StatusProvider
 	contentProvider ContentProvider
-	detector        *detection.StatusDetector
+	detector        detection.TerminalDetector
 	determiner      StatusDeterminer
 }
 

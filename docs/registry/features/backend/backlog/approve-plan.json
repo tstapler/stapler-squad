@@ -11,5 +11,5 @@
     "TestApprovePlan_MissingPlanArtifactsPath_ReturnsFailedPrecondition",
     "TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp"
   ],
-  "lastModified": "2026-06-09T14:46:23.910931633-07:00"
+  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
 }

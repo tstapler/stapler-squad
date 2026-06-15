@@ -1,4 +1,9 @@
-// @feature session:create-existing-worktree
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: session-create-existing-worktree — mapped from @feature annotation
+const _features = [
+  // FEATURE_CATALOG['session-create-existing-worktree'], // TODO: add to catalog
+  FEATURE_CATALOG['session-create'],
+] as const;
 import { test, expect } from '@playwright/test';
 
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';

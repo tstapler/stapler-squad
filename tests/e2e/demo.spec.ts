@@ -1,3 +1,12 @@
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: demo — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['session-list'],
+  FEATURE_CATALOG['session-create'],
+  FEATURE_CATALOG['review-queue-list'],
+  FEATURE_CATALOG['approval-list-rules'],
+  FEATURE_CATALOG['unfinished-work'],
+] as const;
 import { test, expect } from '@playwright/test';
 import * as path from 'path';
 import * as fs from 'fs';

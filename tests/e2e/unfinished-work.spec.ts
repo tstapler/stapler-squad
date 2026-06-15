@@ -1,4 +1,13 @@
-// @feature unfinished-work, unfinished:list, unfinished:watch, unfinished:scan, unfinished:dismiss, unfinished:snooze
+import { FEATURE_CATALOG } from '../../web-app/src/lib/features';
+// Features: unfinished-work — mapped from @feature annotation
+const _features = [
+  FEATURE_CATALOG['unfinished-work'],
+  // FEATURE_CATALOG['unfinished-list'], // TODO: add to catalog (covered by unfinished-work rpcIds)
+  // FEATURE_CATALOG['unfinished-watch'], // TODO: add to catalog (covered by unfinished-work rpcIds)
+  FEATURE_CATALOG['unfinished-scan'],
+  FEATURE_CATALOG['unfinished-dismiss'],
+  FEATURE_CATALOG['unfinished-snooze'],
+] as const;
 import { test, expect } from '@playwright/test';
 import { execSync } from 'child_process';
 import * as fs from 'fs';

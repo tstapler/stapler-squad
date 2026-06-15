@@ -3824,7 +3824,6 @@ func (s *SessionService) GetDetectionEvents(ctx context.Context, req *connect.Re
 			MatchedPattern:  e.MatchedPattern,
 			MatchedCategory: e.MatchedCategory,
 			ResultStatus:    int32(e.ResultStatus),
-			TailSnippet:     e.TailSnippet,
 		})
 	}
 	return connect.NewResponse(&sessionv1.GetDetectionEventsResponse{Events: protoEvents}), nil

@@ -35,6 +35,10 @@ on:
       - '.gitmodules'
       - 'third_party/tmux/**'
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # prepare: generate proto code and build web UI once, share as artifacts.
@@ -178,7 +182,8 @@ jobs:
               exit 1
             fi
           done
-        continue-on-error: true
+          # Also validate the typed catalog
+          cd web-app && npm install --silent && npm run validate-catalog
 
       # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
       # which posts a PR comment via benchstat. Removed dead step that ran
@@ -300,6 +305,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [prepare, test]
+    permissions:
+      contents: write
+      pull-requests: read
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     concurrency:
       group: baseline-push-main

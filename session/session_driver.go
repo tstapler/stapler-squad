@@ -91,7 +91,7 @@ func sanitizeInitialPromptForTmux(s string) string {
 // delegates to runSessionDriverWithPrompt.
 func runSessionDriver(inst *Instance, allowedPath string) {
 	var retried atomic.Bool
-	initialPrompt := driverInitialPrompt
+	var initialPrompt string
 	if inst.InitialPrompt != "" {
 		sanitized := sanitizeInitialPromptForTmux(inst.InitialPrompt)
 		if sanitized != "" {
@@ -122,8 +122,21 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(driverPollInterval)
 	defer ticker.Stop()
 
-	sentInitial := false
+	// No initial prompt configured — skip the send step; driver still handles
+	// startup dialogs, auto-approval, and monitoring.
+	sentInitial := initialPrompt == ""
 	var initialPromptSentAt time.Time
+	if sentInitial {
+		initialPromptSentAt = time.Now()
+	} else {
+		// Check if the prompt was already delivered in a previous service run.
+		// If a JSONL conversation file exists for this session, Claude already received
+		// the prompt and started working; re-sending would inject a duplicate command.
+		if _, err := FindConversationFilePath(inst.GetStableID()); err == nil {
+			sentInitial = true
+			initialPromptSentAt = time.Now()
+		}
+	}
 	var sendAttempts int
 
 	for range ticker.C {

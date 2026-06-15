@@ -1,0 +1,11 @@
+{
+  "id": "UnarchiveSession",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UnarchiveSession",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+}

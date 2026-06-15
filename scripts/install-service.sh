@@ -78,9 +78,10 @@ install_linux() {
     service_file="$service_dir/stapler-squad.service"
     log_dir="$HOME/.stapler-squad/logs"
 
-    # Verify systemd --user is available before writing any files
-    if ! systemctl --user is-system-running >/dev/null 2>&1 && \
-       ! systemctl --user status >/dev/null 2>&1; then
+    # Verify systemd --user is available before writing any files.
+    # Use timeout to avoid hanging indefinitely if D-Bus is unresponsive.
+    if ! timeout 5 systemctl --user is-system-running >/dev/null 2>&1 && \
+       ! timeout 5 systemctl --user status >/dev/null 2>&1; then
         log_error "systemd user session is not available."
         log_info  "On WSL or minimal containers, try adding stapler-squad to ~/.profile instead:"
         log_info  "  echo '$bin_path &' >> ~/.profile"

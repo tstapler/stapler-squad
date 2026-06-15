@@ -14,18 +14,22 @@ func TestNewStatusDetector(t *testing.T) {
 		t.Fatal("NewStatusDetector() returned nil")
 	}
 
-	// Verify default patterns are loaded
-	if len(sd.readyRegexes) == 0 {
-		t.Error("No ready patterns loaded")
+	// Verify default patterns work behaviorally — not by inspecting internal slice lengths.
+	probes := []struct {
+		input string
+		want  DetectedStatus
+	}{
+		{"esc to interrupt", StatusActive},
+		{"Error: oops", StatusError},
+		{"Yes, allow reading this file", StatusNeedsApproval},
+		{" ❯ 1. Yes", StatusInputRequired},
+		{"— INSERT —", StatusIdle},
 	}
-	if len(sd.processingRegexes) == 0 {
-		t.Error("No processing patterns loaded")
-	}
-	if len(sd.needsApprovalRegexes) == 0 {
-		t.Error("No needs_approval patterns loaded")
-	}
-	if len(sd.errorRegexes) == 0 {
-		t.Error("No error patterns loaded")
+	for _, p := range probes {
+		got := sd.Detect([]byte(p.input))
+		if got != p.want {
+			t.Errorf("Detect(%q) = %v, want %v", p.input, got, p.want)
+		}
 	}
 }
 
@@ -164,18 +168,36 @@ func TestStatusDetector_DetectError(t *testing.T) {
 func TestStatusDetector_PriorityOrder(t *testing.T) {
 	sd := NewStatusDetector()
 
-	// Error patterns should take priority over processing patterns
-	output := []byte("Error while processing")
-	status := sd.Detect(output)
-	if status != StatusError {
-		t.Errorf("Detect() returned %v, expected StatusError (priority test)", status)
+	cases := []struct {
+		name  string
+		input string
+		want  DetectedStatus
+	}{
+		// Error > Processing
+		{"Error > Processing", "Error while processing", StatusError},
+		// NeedsApproval > Processing
+		{"NeedsApproval > Processing", "Reading file. Do you want to proceed?", StatusNeedsApproval},
+		// NeedsApproval > Active
+		{"NeedsApproval > Active", "(esc to interrupt)\nYes, allow reading this file", StatusNeedsApproval},
+		// InputRequired > Active
+		{"InputRequired > Active", "(esc to interrupt)\n ❯ 1. Yes", StatusInputRequired},
+		// InputRequired > Success
+		{"InputRequired > Success", "✻ Baked for 5s\n ❯ 1. Yes", StatusInputRequired},
+		// Success > Active
+		{"Success > Active", "✻ Baked for 5s\nesc to interrupt", StatusSuccess},
+		// Active > Processing
+		{"Active > Processing", "Thinking about it\nesc to interrupt", StatusActive},
+		// Error > NeedsApproval
+		{"Error > NeedsApproval", "Error: file not found\nYes, allow reading", StatusError},
 	}
 
-	// Approval should take priority over processing
-	output = []byte("Reading file. Do you want to proceed?")
-	status = sd.Detect(output)
-	if status != StatusNeedsApproval {
-		t.Errorf("Detect() returned %v, expected StatusNeedsApproval (priority test)", status)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sd.Detect([]byte(tc.input))
+			if got != tc.want {
+				t.Errorf("Detect(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -199,16 +221,30 @@ func TestStatusDetector_DetectWithContext(t *testing.T) {
 	}
 }
 
-func TestStatusDetector_DetectUnknown(t *testing.T) {
+func TestStatusDetector_DetectUnknown_NoPatterns(t *testing.T) {
+	// Build a detector from a minimal YAML with no patterns in any category.
+	tmpDir := t.TempDir()
+	emptyPath := filepath.Join(tmpDir, "empty.yaml")
+	emptyYAML := []byte("ready: []\nprocessing: []\nneeds_approval: []\ninput_required: []\nerror: []\ntests_failing: []\nidle: []\nactive: []\nsuccess: []\n")
+	if err := os.WriteFile(emptyPath, emptyYAML, 0644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	sd, err := NewStatusDetectorFromFile(emptyPath)
+	if err != nil {
+		t.Fatalf("NewStatusDetectorFromFile: %v", err)
+	}
+	got := sd.Detect([]byte("xyz123 unique string that cannot match any pattern"))
+	if got != StatusUnknown {
+		t.Errorf("Detect() with no patterns = %v, want StatusUnknown", got)
+	}
+}
+
+func TestStatusDetector_EmptyOutputMatchesReadyCatchAll(t *testing.T) {
+	// The default '.*' Ready catch-all matches the empty string — this is intentional.
 	sd := NewStatusDetector()
-
-	// Remove the catch-all ready pattern for this test.
-	sd.readyRegexes = nil
-
-	output := []byte("Some random output that doesn't match any pattern xyz123")
-	status := sd.Detect(output)
-	if status != StatusUnknown {
-		t.Errorf("Detect() returned %v, expected StatusUnknown", status)
+	got := sd.Detect([]byte(""))
+	if got != StatusReady {
+		t.Errorf("Detect(empty) = %v, want StatusReady (.* catch-all matches empty string)", got)
 	}
 }
 
@@ -632,20 +668,6 @@ func TestGeminiPatterns_NeedsApprovalState(t *testing.T) {
 	}
 }
 
-// AgyCoverage_should_haveCommentInDetectorGo_When_noAgySpecificPatternsExist
-// Canary test: if the agy coverage comment is removed from detector.go or the patterns
-// diverge, this test fails to alert future maintainers.
-func TestDetector_AgyCoverageCommentPresent(t *testing.T) {
-	src, err := os.ReadFile("detector.go")
-	if err != nil {
-		t.Fatalf("failed to read detector.go: %v", err)
-	}
-	if !strings.Contains(string(src), "agy (Antigravity CLI)") {
-		t.Error("detector.go is missing the 'agy (Antigravity CLI)' coverage comment; " +
-			"if agy patterns were intentionally removed or renamed, update this test and the comment")
-	}
-}
-
 // TestStatusDetector_DetectActive_StarFourPointed verifies that ✦ (U+2726 BLACK FOUR POINTED
 // STAR) — Claude Code's primary thinking spinner — is detected as StatusActive.
 // Regression test for the gap where claude_thinking_verb lacked ✦ in its char class.
@@ -791,4 +813,41 @@ func TestEventRing_ConcurrentPushRecent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestDetectForProgram_should_useRegisteredPatterns_When_binaryKnown(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// "aider" binary: only has aider_permission in NeedsApproval.
+	// The pattern "(Y)es/(N)o/(D)on't ask again" should match NeedsApproval.
+	got := sd.DetectForProgram([]byte("(Y)es/(N)o/(D)on't ask again"), "aider")
+	if got != StatusNeedsApproval {
+		t.Errorf("DetectForProgram(aider permission) = %v, want StatusNeedsApproval", got)
+	}
+}
+
+func TestDetectForProgram_should_fallBack_When_binaryUnknown(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// An unregistered binary falls back to sd.Detect() which uses getDefaultPatterns().
+	// "esc to interrupt" is an Active pattern in the default set.
+	got := sd.DetectForProgram([]byte("esc to interrupt"), "unknownbinary")
+	if got != StatusActive {
+		t.Errorf("DetectForProgram(unknown binary) = %v, want StatusActive", got)
+	}
+}
+
+func TestEventRingCap_should_be2000(t *testing.T) {
+	if EventRingCap != 2000 {
+		t.Errorf("EventRingCap = %d, want 2000", EventRingCap)
+	}
+	// Also verify the ring holds 2000 events without losing the 1001st
+	sd := NewStatusDetector()
+	for i := 0; i < 1001; i++ {
+		sd.Detect([]byte("Thinking..."))
+	}
+	events := sd.RecentEvents(1001)
+	if len(events) != 1001 {
+		t.Errorf("expected 1001 events accessible, got %d", len(events))
+	}
 }

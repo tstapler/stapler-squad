@@ -98,8 +98,3 @@ func (i *Instance) GetTimeSinceLastTerminalUpdate() time.Duration {
 	return i.TimeSinceLastTerminalUpdate(i.CreatedAt)
 }
 
-// detectAndTrackPrompt detects if current state is a new prompt and tracks it.
-// Delegates to ReviewState.DetectAndTrackPrompt — caller must hold stateMutex.
-func (i *Instance) detectAndTrackPrompt(content string, statusInfo InstanceStatusInfo) bool {
-	return i.DetectAndTrackPrompt(content, statusInfo, i.Title)
-}
