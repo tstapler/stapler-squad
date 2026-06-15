@@ -177,6 +177,10 @@ type ReviewItem struct {
 	// ClaudeStatus is the raw DetectedStatus from the detection pipeline at the time
 	// this item was last evaluated. It distinguishes Active from Processing, enabling
 	// the WORKING_STATE_PROCESSING proto value that IdleState alone cannot produce.
+	//
+	// WARNING: DetectedStatus is serialized as an integer (iota). New values MUST be
+	// appended to the end of the iota block in detection/status.go — inserting values
+	// mid-iota will silently corrupt persisted queue entries read by older server versions.
 	ClaudeStatus detection.DetectedStatus `json:"claude_status,omitempty"`
 
 	// Score is set by the Fixer after a successful Sweep quality gate.
