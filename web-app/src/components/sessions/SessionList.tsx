@@ -72,6 +72,8 @@ interface SessionListProps {
   onForkFromCheckpoint?: (sessionId: string, checkpointId: string, newTitle: string) => Promise<Session | null>;
   onRunOneShot?: (sessionId: string) => Promise<void>;
   onSetRateLimitEnabled?: (sessionId: string, enabled: boolean) => void;
+  onToggleAutonomousMode?: (sessionId: string, enabled: boolean) => void;
+  onSteerAutonomousSession?: (sessionId: string, message: string) => void;
   onClearConversationState?: (sessionId: string) => Promise<boolean>;
   onHibernateSession?: (sessionId: string) => void;
   onResumeHibernatedSession?: (sessionId: string) => void;
@@ -153,6 +155,8 @@ export function SessionList({
   onForkFromCheckpoint,
   onRunOneShot,
   onSetRateLimitEnabled,
+  onToggleAutonomousMode,
+  onSteerAutonomousSession,
   onClearConversationState,
   onHibernateSession,
   onResumeHibernatedSession,
@@ -954,6 +958,8 @@ export function SessionList({
                     onCreateCheckpoint={onCreateCheckpoint}
                     onRunOneShot={onRunOneShot}
                     onSetRateLimitEnabled={onSetRateLimitEnabled}
+                    onToggleAutonomousMode={onToggleAutonomousMode}
+                    onSteerAutonomousSession={onSteerAutonomousSession}
                     onClearConversationState={onClearConversationState}
                     onUpdateTags={onUpdateTags}
                     suppressApprovalSubStatus={clearedSessions.has(item.session.id)}
@@ -1087,6 +1093,8 @@ export function SessionList({
                         onForkFromCheckpoint={onForkFromCheckpoint}
                         onRunOneShot={onRunOneShot}
                         onSetRateLimitEnabled={onSetRateLimitEnabled}
+                        onToggleAutonomousMode={onToggleAutonomousMode}
+                        onSteerAutonomousSession={onSteerAutonomousSession}
                         onClearConversationState={onClearConversationState}
                         onHibernate={onHibernateSession ? () => onHibernateSession(session.id) : undefined}
                         onResumeFromHibernation={onResumeHibernatedSession ? () => onResumeHibernatedSession(session.id) : undefined}

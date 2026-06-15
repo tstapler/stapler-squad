@@ -102,6 +102,52 @@ func TestStatusDetector_DetectSuccess(t *testing.T) {
 	}
 }
 
+func TestStatusDetector_DetectWaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		"✻ Waiting for 1 background agent to finish",
+		"✻ Waiting for 2 background agents to finish",
+		"◉ Waiting for 3 background agents to finish",
+		"\x1b[33m✻\x1b[0m Waiting for 1 background agent to finish",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusWaitingForAgent {
+			t.Errorf("Detect(%q) returned %v, expected StatusWaitingForAgent", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
+	sd := NewStatusDetector()
+	noMatch := []string{
+		"Waiting for 1 background agent to finish",      // missing bullet prefix
+		"✻ Waiting for background agents to finish",     // missing digit
+		"✻ waiting for 1 background agent to finish",    // lowercase W
+	}
+	for _, input := range noMatch {
+		got := sd.Detect([]byte(input))
+		if got == StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = StatusWaitingForAgent; want no match", input)
+		}
+	}
+}
+
+func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
+	sd := NewStatusDetector()
+	// Stale success in scrollback, current waiting line at top — waiting wins
+	lines := []string{
+		"✻ Baked for 3s",
+		"✻ Waiting for 1 background agent to finish",
+	}
+	status := sd.DetectFromLines(lines)
+	if status != StatusWaitingForAgent {
+		t.Errorf("DetectFromLines() = %v, want StatusWaitingForAgent", status)
+	}
+}
+
 func TestStatusDetector_DetectProcessing(t *testing.T) {
 	sd := NewStatusDetector()
 
@@ -436,6 +482,14 @@ func TestStatusDetector_GetPatternNames(t *testing.T) {
 	if unknownNames != nil {
 		t.Error("GetPatternNames(StatusUnknown) should return nil")
 	}
+
+	waitingNames := sd.GetPatternNames(StatusWaitingForAgent)
+	if len(waitingNames) == 0 {
+		t.Error("GetPatternNames(StatusWaitingForAgent) returned empty slice")
+	}
+	if len(waitingNames) > 0 && waitingNames[0] != "waiting_for_background_agent" {
+		t.Errorf("GetPatternNames(StatusWaitingForAgent)[0] = %q, want %q", waitingNames[0], "waiting_for_background_agent")
+	}
 }
 
 func TestStatusDetector_DetectFromString(t *testing.T) {
@@ -524,6 +578,7 @@ func TestStatusString(t *testing.T) {
 		{StatusIdle, "Idle"},
 		{StatusActive, "Active"},
 		{StatusSuccess, "Success"},
+		{StatusWaitingForAgent, "Waiting for Agent"},
 		{StatusUnknown, "Unknown"},
 	}
 

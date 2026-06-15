@@ -183,6 +183,8 @@ function SessionListPaneBody({ pane, dispatch }: { pane: LeafPane; dispatch: Rea
         onForkFromCheckpoint={actions.onForkFromCheckpoint}
         onRunOneShot={actions.onRunOneShot}
         onSetRateLimitEnabled={actions.onSetRateLimitEnabled}
+        onToggleAutonomousMode={actions.onToggleAutonomousMode}
+        onSteerAutonomousSession={actions.onSteerAutonomousSession}
         onClearConversationState={actions.onClearConversationState}
         onHibernateSession={hibernateSession ? (id) => void hibernateSession(id) : undefined}
         onResumeHibernatedSession={resumeHibernatedSession ? (id) => void resumeHibernatedSession(id) : undefined}

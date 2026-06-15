@@ -527,6 +527,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("/api/files/raw", fileSvc.ServeFileRaw)
 	log.Info("Registered raw file download handler at /api/files/raw")
 
+	// Local file browser — serves arbitrary local filesystem paths.
+	// Auth is provided by the existing middleware chain:
+	// local HTTP = no auth; remote HTTPS = WebAuthn required.
+	localFileSvc := services.NewLocalFileService()
+	srv.mux.HandleFunc("/api/local/files/list", localFileSvc.ListLocalDirectory)
+	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
+	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
+
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
 		sweeper := session.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())

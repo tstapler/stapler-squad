@@ -256,6 +256,20 @@ function HomeContent() {
     await updateSession(sessionId, { rateLimitEnabled: enabled });
   }, [updateSession, track]);
 
+  const handleToggleAutonomousMode = useCallback(async (sessionId: string, enabled: boolean): Promise<void> => {
+    track({ name: "session_autonomous_mode_updated", category: "user_action" });
+    try {
+      await updateSession(sessionId, { autonomousMode: enabled });
+    } catch (err) {
+      console.error("[page] toggleAutonomousMode failed:", err);
+    }
+  }, [updateSession, track]);
+
+  const handleSteerAutonomousSession = useCallback(async (sessionId: string, message: string): Promise<void> => {
+    track({ name: "session_autonomous_steer", category: "user_action" });
+    await updateSession(sessionId, { steerMessage: message });
+  }, [updateSession, track]);
+
   const handleRunOneShot = useCallback(async (sessionId: string): Promise<void> => {
     await runOneShot(sessionId, "Create a pull request for the changes in this session.", 0);
   }, [runOneShot]);
@@ -393,6 +407,8 @@ function HomeContent() {
     onForkFromCheckpoint: forkSession,
     onRunOneShot: handleRunOneShot,
     onSetRateLimitEnabled: handleSetRateLimitEnabled,
+    onToggleAutonomousMode: handleToggleAutonomousMode,
+    onSteerAutonomousSession: handleSteerAutonomousSession,
     onClearConversationState: clearConversationState,
     onListSessions: listSessions,
   }), [
@@ -400,7 +416,7 @@ function HomeContent() {
     handleDirectResume, handleCloneSession, handleNewWorkspaceSession, renameSession,
     restartSession, handleUpdateTags, handleNewSession, createCheckpoint,
     listCheckpoints, forkSession, handleRunOneShot, handleSetRateLimitEnabled,
-    clearConversationState, listSessions,
+    handleToggleAutonomousMode, handleSteerAutonomousSession, clearConversationState, listSessions,
   ]);
 
   return (

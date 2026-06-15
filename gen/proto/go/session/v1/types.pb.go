@@ -1441,9 +1441,15 @@ type Session struct {
 	ArchivedAt *timestamppb.Timestamp `protobuf:"bytes,63,opt,name=archived_at,json=archivedAt,proto3" json:"archived_at,omitempty"`
 	// Human-readable name of the workflow that spawned this session.
 	// Populated at read time from the workflow name cache; empty for manual sessions.
-	WorkflowName  string `protobuf:"bytes,64,opt,name=workflow_name,json=workflowName,proto3" json:"workflow_name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	WorkflowName string `protobuf:"bytes,64,opt,name=workflow_name,json=workflowName,proto3" json:"workflow_name,omitempty"`
+	// Current turn number in an ongoing autonomous run. Zero when not running.
+	AutonomousTurn int32 `protobuf:"varint,65,opt,name=autonomous_turn,json=autonomousTurn,proto3" json:"autonomous_turn,omitempty"`
+	// Maximum turns configured for the current autonomous run. Zero when not running.
+	AutonomousMaxTurns int32 `protobuf:"varint,66,opt,name=autonomous_max_turns,json=autonomousMaxTurns,proto3" json:"autonomous_max_turns,omitempty"`
+	// Outcome of the last completed autonomous run: "", "done", "stuck".
+	AutonomousOutcome string `protobuf:"bytes,67,opt,name=autonomous_outcome,json=autonomousOutcome,proto3" json:"autonomous_outcome,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Session) Reset() {
@@ -1899,6 +1905,27 @@ func (x *Session) GetArchivedAt() *timestamppb.Timestamp {
 func (x *Session) GetWorkflowName() string {
 	if x != nil {
 		return x.WorkflowName
+	}
+	return ""
+}
+
+func (x *Session) GetAutonomousTurn() int32 {
+	if x != nil {
+		return x.AutonomousTurn
+	}
+	return 0
+}
+
+func (x *Session) GetAutonomousMaxTurns() int32 {
+	if x != nil {
+		return x.AutonomousMaxTurns
+	}
+	return 0
+}
+
+func (x *Session) GetAutonomousOutcome() string {
+	if x != nil {
+		return x.AutonomousOutcome
 	}
 	return ""
 }
@@ -5986,7 +6013,7 @@ var File_session_v1_types_proto protoreflect.FileDescriptor
 const file_session_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"\x16session/v1/types.proto\x12\n" +
-	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xcd\x15\n" +
+	"session.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd7\x16\n" +
 	"\aSession\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x12\n" +
@@ -6060,7 +6087,10 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"workflowId\x12;\n" +
 	"\varchived_at\x18? \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"archivedAt\x12#\n" +
-	"\rworkflow_name\x18@ \x01(\tR\fworkflowName\"\xa8\x01\n" +
+	"\rworkflow_name\x18@ \x01(\tR\fworkflowName\x12'\n" +
+	"\x0fautonomous_turn\x18A \x01(\x05R\x0eautonomousTurn\x120\n" +
+	"\x14autonomous_max_turns\x18B \x01(\x05R\x12autonomousMaxTurns\x12-\n" +
+	"\x12autonomous_outcome\x18C \x01(\tR\x11autonomousOutcome\"\xa8\x01\n" +
 	"\x12SessionGoalSummary\x12\x1b\n" +
 	"\tgoal_text\x18\x01 \x01(\tR\bgoalText\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x12\x1f\n" +

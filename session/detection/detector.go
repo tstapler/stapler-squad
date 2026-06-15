@@ -20,12 +20,13 @@ const (
 	StatusReady
 	StatusProcessing
 	StatusNeedsApproval
-	StatusInputRequired // Explicit user input prompts (questions, "enter X:", etc.)
+	StatusInputRequired    // Explicit user input prompts (questions, "enter X:", etc.)
 	StatusError
-	StatusTestsFailing // Tests are failing
-	StatusIdle         // Waiting for user input (INSERT mode, command prompt, etc.)
-	StatusActive       // Actively executing commands (shows "esc to interrupt")
-	StatusSuccess      // Task completed successfully
+	StatusTestsFailing     // Tests are failing
+	StatusIdle             // Waiting for user input (INSERT mode, command prompt, etc.)
+	StatusActive           // Actively executing commands (shows "esc to interrupt")
+	StatusSuccess          // Task completed successfully
+	StatusWaitingForAgent  // Waiting for one or more background agents to finish
 )
 
 // StatusPattern represents a regex pattern for detecting a specific status.
@@ -490,6 +491,16 @@ func getDefaultPatterns() StatusPatterns {
 				Priority:    16,
 			},
 		},
+		WaitingForAgent: []StatusPattern{
+			{
+				Name: "waiting_for_background_agent",
+				// Matches Claude Code's "✻ Waiting for N background agent(s) to finish" line.
+				// The asterism ✻ (U+273B) is Claude's turn-marker; ◉ is an alternate.
+				Pattern:     `[✻◉]\s+Waiting for \d+ background agent`,
+				Description: "Claude is waiting for one or more background agents to finish",
+				Priority:    27,
+			},
+		},
 		InputRequired: []StatusPattern{
 			// Claude Code's AskUserQuestion prompts have a very specific format:
 			// "Do you want to proceed?"
@@ -548,6 +559,8 @@ func (s DetectedStatus) String() string {
 		return "Active"
 	case StatusSuccess:
 		return "Success"
+	case StatusWaitingForAgent:
+		return "Waiting for Agent"
 	default:
 		return "Unknown"
 	}
@@ -594,6 +607,8 @@ func (sd *StatusDetector) GetPatternNames(status DetectedStatus) []string {
 		patterns = p.Active
 	case StatusSuccess:
 		patterns = p.Success
+	case StatusWaitingForAgent:
+		patterns = p.WaitingForAgent
 	default:
 		return nil
 	}

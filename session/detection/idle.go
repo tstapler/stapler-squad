@@ -189,6 +189,11 @@ func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 		id.lastActivity = id.timeNow()
 		return IdleStateActive
 
+	case StatusWaitingForAgent:
+		// Waiting for a background agent — still actively working, update activity timestamp
+		id.lastActivity = id.timeNow()
+		return IdleStateActive
+
 	case StatusIdle, StatusReady:
 		// Waiting for input - check if we've been idle too long
 		idleDuration := id.timeNow().Sub(id.lastActivity)

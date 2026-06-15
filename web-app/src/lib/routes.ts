@@ -25,6 +25,7 @@ export const routes = {
   login: "/login",
   account: "/account",
   escapeAnalytics: "/analytics/escape",
+  files: "/files",
   sessionDetail: (id: string) => `/?session=${id}`,
   newSessionFromWorktree: (worktreePath: string, branch: string, title?: string) => {
     const params = new URLSearchParams({ worktree: worktreePath, branch });

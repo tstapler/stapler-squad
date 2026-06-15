@@ -183,7 +183,7 @@ jobs:
             fi
           done
           # Also validate the typed catalog
-          cd web-app && npm install --silent && npm run validate-catalog
+          cd web-app && pnpm install --frozen-lockfile --silent && pnpm run validate-catalog
 
       # Benchmark comparison on PRs is handled by benchmark.yml (tier-1 job),
       # which posts a PR comment via benchstat. Removed dead step that ran

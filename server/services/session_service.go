@@ -677,6 +677,25 @@ func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance
 	}
 	driver := session.NewAutonomousDriver(inst, s.headlessPool, inst.Prompt, 0)
 	driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
+	driver.RegisterTurnCallback(func(turn, maxTurns int, prompt string) {
+		if liveInst := s.FindLiveInstance(inst.Title); liveInst != nil {
+			liveInst.AutonomousTurn = int32(turn)
+			liveInst.AutonomousMaxTurns = int32(maxTurns)
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(liveInst, []string{"autonomous_turn"}))
+		}
+		truncated := prompt
+		if len(truncated) > 120 {
+			truncated = truncated[:120] + "…"
+		}
+		s.eventBus.Publish(events.NewNotificationEvent(
+			inst.UUID, inst.Title, fmt.Sprintf("autonomous-turn-%s-%d", inst.UUID, turn),
+			int32(10), // NotificationType_INFO
+			int32(1),  // NotificationPriority_LOW
+			fmt.Sprintf("Autonomous turn %d/%d", turn, maxTurns),
+			fmt.Sprintf("%s: %s", inst.Title, truncated),
+			nil,
+		))
+	})
 	if err := driver.Start(s.driverCtx()); err != nil {
 		log.Warn("[SessionService] failed to start autonomous driver for backlog session", "session", inst.Title, "err", err)
 		return
@@ -1300,6 +1319,47 @@ func (s *SessionService) UpdateSession(
 			}
 		}
 		updatedFields = append(updatedFields, "rate_limit_enabled")
+	}
+
+	// Handle autonomous mode toggle. Starting/stopping the AutonomousDriver is a
+	// live side-effect; we only act when the value actually changes.
+	if req.Msg.AutonomousMode != nil && *req.Msg.AutonomousMode != instance.AutonomousMode {
+		if *req.Msg.AutonomousMode && s.headlessPool == nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("autonomous mode requires a headless LLM to be configured"))
+		}
+		instance.AutonomousMode = *req.Msg.AutonomousMode
+		if instance.AutonomousMode {
+			instance.AutonomousOutcome = ""
+			s.StartAutonomousDriverForInstance(instance)
+		} else {
+			s.stopAndDeregisterDriver(instance.Title)
+		}
+		updatedFields = append(updatedFields, "autonomous_mode")
+	}
+
+	// Handle steering: inject a message into an active autonomous session.
+	if req.Msg.SteerMessage != nil && *req.Msg.SteerMessage != "" {
+		if !instance.AutonomousMode {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("steer_message can only be sent to sessions with autonomous_mode enabled"))
+		}
+		controller := instance.GetController()
+		if controller != nil {
+			if _, sendErr := controller.SendCommandImmediate(*req.Msg.SteerMessage + "\r"); sendErr != nil {
+				log.Warn("[UpdateSession] failed to send steer_message", "session", instance.Title, "err", sendErr)
+			} else {
+				log.Info("[UpdateSession] steering message sent", "session", instance.Title)
+				s.eventBus.Publish(events.NewNotificationEvent(
+					instance.UUID, instance.Title, fmt.Sprintf("steer-%s", instance.UUID),
+					int32(10), // NotificationType_INFO
+					int32(2),  // NotificationPriority_MEDIUM
+					"Steering input sent",
+					fmt.Sprintf("%s: %s", instance.Title, *req.Msg.SteerMessage),
+					nil,
+				))
+			}
+		}
 	}
 
 	// Handle status change (pause/resume) LAST - after all metadata updates.
@@ -3365,6 +3425,17 @@ func (s *SessionService) onAutonomousDriverComplete(instanceName string, outcome
 	}
 	sessionUUID := inst.UUID
 
+	// Clear autonomous_mode flag and set outcome on the instance so the badge updates.
+	inst.AutonomousMode = false
+	inst.AutonomousTurn = 0
+	inst.AutonomousMaxTurns = 0
+	if outcome.Done {
+		inst.AutonomousOutcome = "done"
+	} else {
+		inst.AutonomousOutcome = "stuck"
+	}
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"autonomous_mode", "autonomous_outcome"}))
+
 	// Look up the backlog item linked to this session.
 	concreteStorage := s.GetStorage()
 	if concreteStorage != nil {
@@ -3395,7 +3466,7 @@ func (s *SessionService) onAutonomousDriverComplete(instanceName string, outcome
 		}
 	} else {
 		title = "Autonomous fix stuck"
-		body = fmt.Sprintf("%s: %s", instanceName, outcome.Reason)
+		body = fmt.Sprintf("Session '%s' stopped after %d turns without completing. Open the session to review what was accomplished and give the next instruction.", instanceName, outcome.Turns)
 		notifType = int32(9) // NotificationType_FAILURE
 	}
 	s.eventBus.Publish(events.NewNotificationEvent(

@@ -131,10 +131,15 @@ endif
 # Install web-app pnpm dependencies when pnpm-lock.yaml changes
 web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml
 	@echo "Installing web-app pnpm dependencies..."
-	@cd web-app && pnpm install
+	@cd web-app && pnpm install --frozen-lockfile
 
 # Build Next.js app to web-app/out
 web-app/out: ensure-tools web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
+	@# Guard: re-install if node_modules was wiped by external tools without touching pnpm-lock.yaml
+	@test -d web-app/node_modules/next || { \
+		echo "⚠️  node_modules incomplete, re-installing..."; \
+		cd web-app && pnpm install --frozen-lockfile; \
+	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
 	@cd web-app && NEXT_BUILD_MODE=development pnpm run build
 	@touch web-app/out # Update timestamp to mark completion

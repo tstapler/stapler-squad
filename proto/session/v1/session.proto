@@ -561,6 +561,15 @@ message UpdateSessionRequest {
   // Reason for pausing (only meaningful when status is set to PAUSED).
   // If empty when pausing, defaults to "manual" in the backend handler.
   optional string pause_reason = 9;
+
+  // Enable or disable autonomous mode (AutonomousDriver) on a running session.
+  // When set to true, an AutonomousDriver is started if one is not already running.
+  // When set to false, the running driver is stopped.
+  optional bool autonomous_mode = 10;
+
+  // Steering message to inject into an autonomous session mid-run.
+  // Sends the text immediately via SendCommandImmediate. Only meaningful when autonomous_mode is true.
+  optional string steer_message = 11;
 }
 
 message UpdateSessionResponse {

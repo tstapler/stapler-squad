@@ -310,10 +310,19 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// Use GetEffectiveStatus() (acquires stateMutex.RLock) to avoid data race on Status field.
 		if st == Ready {
 			last := inst.LastMeaningfulOutputTime()
-			if !last.IsZero() && time.Since(last) > driverInactivityTimeout {
+			// Use the later of initialPromptSentAt or LastMeaningfulOutput as the activity
+			// reference. After a service restart, LastMeaningfulOutput may be stale (loaded
+			// from DB before the ReviewQueue poller had a chance to refresh it from live
+			// terminal content). Using initialPromptSentAt as a floor prevents false inactivity
+			// fires immediately after startup.
+			activityRef := initialPromptSentAt
+			if !last.IsZero() && last.After(initialPromptSentAt) {
+				activityRef = last
+			}
+			if time.Since(activityRef) > driverInactivityTimeout {
 				log.Warn("SessionDriver: session stuck — no output for inactivity timeout",
 					"session", inst.Title,
-					"inactivity", time.Since(last).Round(time.Second),
+					"inactivity", time.Since(activityRef).Round(time.Second),
 				)
 				handleDriverFailure(inst, allowedPath, retried, "inactivity timeout")
 				return
