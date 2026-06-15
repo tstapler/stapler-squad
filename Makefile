@@ -78,7 +78,7 @@ registry-generate-frontend: ## Generate frontend feature registry from React com
 	@echo "Installing frontend scanner dependencies..."
 	@cd tools/scanner/frontend && pnpm install --silent
 	@echo "Scanning frontend features..."
-	@node tools/scanner/frontend/node_modules/.bin/ts-node \
+	@tools/scanner/frontend/node_modules/.bin/ts-node \
 		tools/scanner/frontend/src/main.ts \
 		web-app/src \
 		$(REGISTRY_OUTPUT_DIR)/frontend-features.json \
