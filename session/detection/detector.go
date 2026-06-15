@@ -122,11 +122,17 @@ func (sd *StatusDetector) LoadPatterns(path string) error {
 var ansiStripRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07`)
 
 // readlineTypingRegex matches the Claude Code readline prompt when the user has
-// started composing a message (❯ at column 0 followed by non-digit text).
-// This distinguishes active user input from numbered selection menus, which
-// use an indented ❯. Checked before Success so a stale ✻ completion marker
-// in scrollback does not override the current "user is typing" state.
-var readlineTypingRegex = regexp.MustCompile(`(?m)^❯[ \t]+[^0-9\s]`)
+// started composing a message (❯ at column 0 followed by non-digit, non-box-drawing text).
+// This distinguishes active user input from:
+//   - numbered selection menus (use indented ❯ with a leading space)
+//   - horizontal separator lines ("❯ ─────..." using U+2500 BOX DRAWINGS LIGHT HORIZONTAL)
+//
+// Space matching uses [ \t\x{00a0}] because Claude Code inserts U+00A0 NON-BREAKING SPACE
+// between the ❯ cursor and the user's typed text. Regular ASCII space (U+0020) is also
+// accepted for compatibility with other tools.
+// Checked before Success so a stale ✻ completion marker in scrollback does not override
+// the current "user is typing" state.
+var readlineTypingRegex = regexp.MustCompile(`(?m)^❯[ \t\x{00a0}]+[^\s\x{00a0}0-9\x{2500}-\x{257F}]`)
 
 // stripANSI removes ANSI escape codes from text for cleaner pattern matching
 func stripANSI(text string) string {
@@ -395,6 +401,12 @@ func getDefaultPatterns() StatusPatterns {
 				Name:        "claude_shortcuts_prompt",
 				Pattern:     `\?\s+for shortcuts`,
 				Description: "Claude Code idle prompt showing ? for shortcuts",
+				Priority:    15,
+			},
+			{
+				Name:        "claude_accept_edits",
+				Pattern:     `⏵⏵\s+accept edits on`,
+				Description: "Claude Code 'accept edits' review mode — session completed turn, user reviews proposed changes",
 				Priority:    15,
 			},
 		},

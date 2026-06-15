@@ -760,7 +760,7 @@ function SessionCardInner({
       </div>
 
       {IS_DEBUG_MODE && (
-        <DetectionEventsPanel sessionId={session.id} />
+        <DetectionEventsPanel sessionId={session.id} program={session.program} />
       )}
 
       <div className={footer}>

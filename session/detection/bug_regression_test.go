@@ -401,6 +401,88 @@ func TestBug_ToolPermissionDialog_WithConcurrentWaiting(t *testing.T) {
 	}
 }
 
+// TestBug3_BoxDrawingSeparator_NotReadlineTyping guards against readlineTypingRegex
+// false-positives on the horizontal separator line "❯ ──────────────────..." that
+// Claude Code renders in the input-area border when an operation is running.
+//
+// Root cause: readlineTypingRegex (`^❯[ \t]+[^0-9\s]`) matched "❯ ─────..." because
+// ─ (U+2500 BOX DRAWINGS LIGHT HORIZONTAL) satisfies [^0-9\s]. This caused StatusIdle
+// ("readline_typing") to be returned before Active patterns were checked, so sessions
+// showing "✻ Cooking… (2h 54m 38s · ↓ 308.9k tokens)" with "esc to interrupt" were
+// incorrectly reported as idle.
+//
+// Fix: readlineTypingRegex now excludes U+2500–U+257F (Box Drawing block):
+// `^❯[ \t]+[^\s0-9\x{2500}-\x{257F}]`
+//
+// Observed terminal layout (user report 2026-06-15):
+//
+//	● Bash(npx playwright test …)  ⎿  Running… (1m 37s · timeout 3m)
+//	✻ Cooking… (2h 54m 38s · ↓ 308.9k tokens)
+//	  ⎿  Tip: Use /clear to start fresh when switching topics and free up context
+//	──────────────────────────────────────────────────────────────────────────────
+//	❯ ──────────────────────────────────────────────────────────────────────────
+//	  esc to interrupt                                    ✘ Auto-update failed
+func TestBug3_BoxDrawingSeparator_NotReadlineTyping(t *testing.T) {
+	sd := NewStatusDetector()
+
+	lines := []string{
+		"● Bash(npx playwright test tests/02-trip-creation.spec.ts --reporter=line 2>&1)  ⎿  Running… (1m 37s · timeout 3m)",
+		"   (ctrl+b ctrl+b (twice) to run in background)",
+		"✻ Cooking… (2h 54m 38s · ↓ 308.9k tokens)",
+		"  ⎿  Tip: Use /clear to start fresh when switching topics and free up context",
+		"──────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+		"❯ ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+		"  esc to interrupt                                                            ✘ Auto-update failed · Run /doctor",
+	}
+	fullContent := strings.Join(lines, "\n")
+
+	// Detect() on the full block (path used by deprecated DetectState() / PTY buffer path).
+	// The ❯ ─────... separator line must not trigger readline_typing before Active patterns.
+	gotBlock := sd.Detect([]byte(fullContent))
+	if gotBlock != StatusActive {
+		t.Errorf("Detect() on full content with ❯ box-drawing separator: got %s, want StatusActive\n"+
+			"  ❯ followed by ─ (U+2500) is a UI separator, not user typing.\n"+
+			"  readlineTypingRegex must not match U+2500–U+257F box-drawing chars.",
+			gotBlock)
+	}
+
+	// DetectFromLines() (path used by DetectStateFromContent / tmux capture-pane).
+	gotLines := sd.DetectFromLines(lines)
+	if gotLines != StatusActive {
+		t.Errorf("DetectFromLines() on active session with ❯ box-drawing separator: got %s, want StatusActive",
+			gotLines)
+	}
+}
+
+// TestBug3_BoxDrawingSeparator_ReadlineTypingStillWorks verifies that the box-drawing
+// exclusion does not break detection of actual user typing at the ❯ prompt.
+func TestBug3_BoxDrawingSeparator_ReadlineTypingStillWorks(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// These must still be detected as readline typing (StatusIdle), overriding
+	// a stale Active marker in scrollback.
+	cases := []struct {
+		name  string
+		input string
+	}{
+		{"slash command", "❯ /github:pr-ship 149"},
+		{"plain text", "❯ hello world"},
+		{"exclamation", "❯ !ls"},
+		{"letter start", "❯ what is the plan?"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sd.Detect([]byte(tc.input))
+			if got != StatusIdle {
+				t.Errorf("Detect(%q) = %s, want StatusIdle (readline typing)\n"+
+					"  ASCII user input after ❯ must still trigger readline_typing.",
+					tc.input, got)
+			}
+		})
+	}
+}
+
 // TestBug_ThinkingWithStillThinkingSuffix documents that a Claude Code spinner line
 // with a "· still thinking" suffix in the duration annotation is still detected as
 // StatusActive, not silently dropped.
@@ -426,5 +508,125 @@ func TestBug_ThinkingWithStillThinkingSuffix(t *testing.T) {
 			"  The session is actively thinking — spinner line and 'esc to interrupt' both indicate Active.\n"+
 			"  The '· still thinking' suffix on the spinner must not prevent Active detection.",
 			got)
+	}
+}
+
+// TestBug4_NonBreakingSpace_ReadlineTyping guards against readlineTypingRegex missing the
+// Claude Code readline prompt when it uses U+00A0 NON-BREAKING SPACE between ❯ and the
+// typed text instead of a regular ASCII space.
+//
+// Root cause (found via live-session exploration 2026-06-15):
+//   Claude Code inserts U+00A0 (NBSP,  ) between the ❯ cursor and the user's typed
+//   text. The old readlineTypingRegex used [ \t]+ which only matches ASCII whitespace,
+//   so "❯ what else can we clean up" did NOT fire readline_typing. The scan then
+//   fell through to find "✻ Baked for 32s" in scrollback → incorrectly StatusSuccess.
+//
+// Observed in three live sessions:
+//   - staplersquad_Slowing: "❯ what else can we clean up" + ✻ Baked for 32s
+//   - staplersquad_stelekit-bazel: "❯ push it to github" + ✻ Worked for 1h 22m 22s
+//   - staplersquad_stapler-squad-background-agent: "❯ merge when CI passes" + ✻ Churned for 2m 38s
+//
+// All three were incorrectly reported as StatusSuccess instead of StatusIdle.
+func TestBug4_NonBreakingSpace_ReadlineTyping(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// The exact terminal layout from staplersquad_Slowing (captured 2026-06-15).
+	// U+00A0 NBSP between ❯ and the typed text.
+	lines := []string{
+		"  Disk is now at 204 GB free and the home directory is considerably tidier. Anything else",
+		"  you'd like to clean up?",
+		"",
+		"✻ Baked for 32s",
+		"",
+		"───────────────────────────────────────────────────────────────────────────────────────────",
+		"❯ what else can we clean up in the home directory",
+		"───────────────────────────────────────────────────────────────────────────────────────────",
+		"  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+	}
+
+	got := sd.DetectFromLines(lines)
+	if got != StatusIdle {
+		t.Errorf("DetectFromLines with NBSP readline prompt + ✻ completion in scrollback: got %s, want StatusIdle\n"+
+			"  '❯\\u00a0what else...' uses U+00A0 NON-BREAKING SPACE after ❯.\n"+
+			"  readlineTypingRegex must match NBSP so the readline line is recognized as typing,\n"+
+			"  preventing the stale '✻ Baked for 32s' completion line from being returned as Success.",
+			got)
+	}
+}
+
+// TestBug4_NonBreakingSpace_ReadlineTyping_OtherSessions verifies the fix against the
+// other two live-session layouts that triggered the same bug.
+func TestBug4_NonBreakingSpace_OtherLayouts(t *testing.T) {
+	sd := NewStatusDetector()
+
+	cases := []struct {
+		name  string
+		lines []string
+	}{
+		{
+			name: "stelekit-bazel layout",
+			lines: []string{
+				"  Ready to ship. Want me to initialize a git repo?",
+				"",
+				"✻ Worked for 1h 22m 22s",
+				"",
+				"──────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+				"❯ push it to github",
+				"──────────────────────────────────────────────────────────────────────────────────────────────────────────────────",
+				"  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+			},
+		},
+		{
+			name: "background-agent layout",
+			lines: []string{
+				"● Pushed 85fad4bd. Now waiting on CI.",
+				"",
+				"✻ Churned for 2m 38s",
+				"",
+				"──────────────────────────────────────────────────────────────────────────────────────────────────────────",
+				"❯ merge when CI passes",
+				"──────────────────────────────────────────────────────────────────────────────────────────────────────────",
+				"  PR #115 · ← for agents",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sd.DetectFromLines(tc.lines)
+			if got != StatusIdle {
+				t.Errorf("DetectFromLines (%s): got %s, want StatusIdle\n"+
+					"  NBSP after ❯ must trigger readline_typing to prevent stale completion from winning.",
+					tc.name, got)
+			}
+		})
+	}
+}
+
+// TestBug4_AcceptEditsPattern verifies that the ⏵⏵ accept-edits status bar is recognized
+// as StatusIdle when it is the only status indicator visible (no typed readline message).
+func TestBug4_AcceptEditsPattern(t *testing.T) {
+	sd := NewStatusDetector()
+
+	// Session where the user has not yet started typing — only the ⏵⏵ bar is visible.
+	// Without the claude_accept_edits pattern, this falls through to StatusReady (catch-all),
+	// and any stale completion line in scrollback would win as StatusSuccess.
+	lines := []string{
+		"✻ Baked for 14s",
+		"",
+		"───────────────────────────────────────────────────────────────────────────────────────────",
+		"❯ ",
+		"───────────────────────────────────────────────────────────────────────────────────────────",
+		"  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents",
+	}
+
+	got := sd.DetectFromLines(lines)
+	if got == StatusSuccess {
+		t.Errorf("DetectFromLines with ⏵⏵ accept-edits bar + completion in scrollback: got StatusSuccess, want StatusIdle\n"+
+			"  ⏵⏵ accept edits on must be recognized as an idle state so the stale ✻ completion\n"+
+			"  in scrollback does not make the session appear as Success (which means 'done, no action needed').")
+	}
+	if got != StatusIdle {
+		t.Errorf("DetectFromLines with ⏵⏵ accept-edits bar: got %s, want StatusIdle", got)
 	}
 }
