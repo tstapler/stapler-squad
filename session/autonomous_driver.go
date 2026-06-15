@@ -119,6 +119,9 @@ func (d *AutonomousDriver) Start(ctx context.Context) error {
 }
 
 // Stop cancels the driver goroutine.
+// Context cancellation propagates into CallBlockingWithOptions: the headless pool passes ctx
+// to runner.Run (which kills the subprocess) and the stream reader selects on ctx.Done,
+// so Stop returns control to the caller nearly immediately — no blocking LLM call delay.
 func (d *AutonomousDriver) Stop() {
 	d.mu.Lock()
 	cancel := d.cancel

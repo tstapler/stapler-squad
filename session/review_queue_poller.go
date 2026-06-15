@@ -665,7 +665,9 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// Grace period: Don't re-add for 5 minutes after acknowledgment, even with new output.
 	// Scoped to low-priority or inactive-controller sessions only — high/medium priority sessions
 	// with an active controller should resurface promptly when new output arrives.
-	if !shouldAdd || priority == PriorityLow || !statusInfo.IsControllerActive {
+	// Only applied when shouldAdd is true: a Skip result should leave the queue unchanged,
+	// not trigger a removal through the grace-period path.
+	if shouldAdd && (priority == PriorityLow || !statusInfo.IsControllerActive) {
 		if !inst.LastAcknowledged.IsZero() {
 			gracePeriod := 5 * time.Minute
 			timeSinceAck := time.Since(inst.LastAcknowledged)
@@ -697,7 +699,14 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		}
 	}
 
-	// Add or update in queue
+	// Add or update in queue, or leave unchanged.
+	// DetectionActionSkip means the determiner saw no actionable condition — the queue
+	// entry (if any) should remain; only DetectionActionAdd and DetectionActionRemove
+	// (handled above) mutate the queue.
+	if result.Action == DetectionActionSkip {
+		return
+	}
+
 	log.Info("final decision", "session", inst.Title, "should_add", shouldAdd, "reason", reason.String(), "priority", priority.String(), "context", context)
 
 	if shouldAdd {
@@ -792,8 +801,6 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		if !isUpdate {
 			log.Info("successfully added to queue", "session", inst.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 		}
-	} else {
-		rqp.queue.Remove(inst.Title)
 	}
 }
 
