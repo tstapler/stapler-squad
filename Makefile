@@ -127,16 +127,20 @@ else
 endif
 	@echo "✅ stapler-squad built successfully"
 
-# Install web-app npm dependencies when package-lock.json changes
-web-app/node_modules/.package-lock.json: web-app/package.json web-app/package-lock.json
-	@echo "Installing web-app npm dependencies..."
-	@cd web-app && npm install
-	@touch web-app/node_modules/.package-lock.json
+# Install web-app pnpm dependencies when pnpm-lock.yaml changes
+web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml
+	@echo "Installing web-app pnpm dependencies..."
+	@cd web-app && pnpm install --frozen-lockfile
 
 # Build Next.js app to web-app/out
-web-app/out: ensure-tools web-app/node_modules/.package-lock.json $(WEB_FILES) web-app/next.config.ts
+web-app/out: ensure-tools web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
+	@# Guard: re-install if node_modules was wiped by external tools without touching pnpm-lock.yaml
+	@test -d web-app/node_modules/next || { \
+		echo "⚠️  node_modules incomplete, re-installing..."; \
+		cd web-app && pnpm install --frozen-lockfile; \
+	}
 	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@cd web-app && NEXT_BUILD_MODE=development npm run build
+	@cd web-app && NEXT_BUILD_MODE=development pnpm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -358,7 +362,7 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
 
 # Protocol Buffer code generation
-proto-gen: ensure-tools web-app/node_modules/.package-lock.json ## Generate Go and TypeScript code from proto files
+proto-gen: ensure-tools web-app/node_modules/.modules.yaml ## Generate Go and TypeScript code from proto files
 	@echo "Checking if proto files need regeneration..."
 	@if [ ! -f $(PROTO_STAMP) ] \
 	   || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ] \
