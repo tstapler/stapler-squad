@@ -12,7 +12,7 @@ on:
       - 'proto/**'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/package-lock.json'
+      - 'web-app/pnpm-lock.yaml'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
@@ -29,7 +29,7 @@ on:
       - 'proto/**'
       - 'web-app/src/**'
       - 'web-app/package.json'
-      - 'web-app/package-lock.json'
+      - 'web-app/pnpm-lock.yaml'
       - '.github/workflows/build.yml'
       - '.github/actions/prepare/**'
       - '.gitmodules'
@@ -111,6 +111,11 @@ jobs:
           local-threshold: 0
           badge-file-name: coverage.svg
 
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
       - name: Set up Node.js (for coverage report)
         uses: actions/setup-node@v4
         with:
@@ -119,7 +124,7 @@ jobs:
       - name: Generate feature E2E coverage report
         id: coverage
         run: |
-          cd tools/coverage && npm install --silent
+          cd tools/coverage && pnpm install --silent
           OUTPUT=$(npx ts-node feature-coverage.ts ../../docs/registry/backend-features.json '../../tests/e2e/**/*.spec.ts' 2>&1)
           echo "$OUTPUT"
           SUMMARY=$(echo "$OUTPUT" | grep 'Feature E2E coverage:' | head -1 || echo "Feature E2E coverage: N/A")

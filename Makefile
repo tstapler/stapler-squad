@@ -33,14 +33,15 @@ ifneq ($(wildcard .tool-versions),)
 		asdf install; \
 	fi
 endif
-	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which npm >/dev/null 2>&1; then \
+	@if which go >/dev/null 2>&1 && which buf >/dev/null 2>&1 && which pnpm >/dev/null 2>&1; then \
 		touch $(ASDF_STAMP); \
 	else \
 		if which brew >/dev/null 2>&1; then \
 			echo "🔍 Missing tools, installing via Homebrew..."; \
 			brew install go buf nodejs; \
+			brew install pnpm; \
 		else \
-			echo "❌ Error: go/buf/npm not found. Install asdf or Homebrew."; \
+			echo "❌ Error: go/buf/pnpm not found. Install asdf or Homebrew."; \
 			exit 1; \
 		fi; \
 		touch $(ASDF_STAMP); \
@@ -75,7 +76,7 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 
 registry-generate-frontend: ## Generate frontend feature registry from React component markers
 	@echo "Installing frontend scanner dependencies..."
-	@cd tools/scanner/frontend && npm install --silent
+	@cd tools/scanner/frontend && pnpm install --silent
 	@echo "Scanning frontend features..."
 	@node tools/scanner/frontend/node_modules/.bin/ts-node \
 		tools/scanner/frontend/src/main.ts \
@@ -119,16 +120,15 @@ else
 endif
 	@echo "✅ stapler-squad built successfully"
 
-# Install web-app npm dependencies when package-lock.json changes
-web-app/node_modules/.package-lock.json: web-app/package.json web-app/package-lock.json
-	@echo "Installing web-app npm dependencies..."
-	@cd web-app && npm install
-	@touch web-app/node_modules/.package-lock.json
+# Install web-app pnpm dependencies when pnpm-lock.yaml changes
+web-app/node_modules/.modules.yaml: web-app/package.json web-app/pnpm-lock.yaml
+	@echo "Installing web-app pnpm dependencies..."
+	@cd web-app && pnpm install
 
 # Build Next.js app to web-app/out
-web-app/out: ensure-tools web-app/node_modules/.package-lock.json $(WEB_FILES) web-app/next.config.ts
+web-app/out: ensure-tools web-app/node_modules/.modules.yaml $(WEB_FILES) web-app/next.config.ts
 	@echo "Building Next.js web UI (development mode for better error messages)..."
-	@cd web-app && NEXT_BUILD_MODE=development npm run build
+	@cd web-app && NEXT_BUILD_MODE=development pnpm run build
 	@touch web-app/out # Update timestamp to mark completion
 
 # Copy web-app/out to server/web/dist (used by Go embed)
@@ -350,7 +350,7 @@ preview: build ## Build and run an isolated preview instance (auto-picks port, b
 	  ./stapler-squad --listen localhost:$(PREVIEW_PORT) --tmux-keep-server
 
 # Protocol Buffer code generation
-proto-gen: ensure-tools web-app/node_modules/.package-lock.json ## Generate Go and TypeScript code from proto files
+proto-gen: ensure-tools web-app/node_modules/.modules.yaml ## Generate Go and TypeScript code from proto files
 	@echo "Checking if proto files need regeneration..."
 	@if [ ! -f $(PROTO_STAMP) ] \
 	   || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ] \
@@ -676,7 +676,7 @@ demo-gif: assets/demo.gif ## Alias for demo-post-process
 # Declaring it as a file target lets make skip the recording when the webm is
 # already newer than the stapler-squad binary and no source files changed.
 assets/demo.webm: stapler-squad tests/e2e/demo.spec.ts tests/demo/helpers.go
-	@cd tests/e2e && npm install --silent
+	@cd tests/e2e && pnpm install --silent
 	RECORD_DEMO=1 go test ./tests/demo/... -run TestRecordDemo -v -timeout 180s
 
 demo-video: assets/demo.gif ## Record demo video, add browser chrome, and export GIF (assets/demo.webm + assets/demo.gif)
@@ -685,7 +685,7 @@ demo-video: assets/demo.gif ## Record demo video, add browser chrome, and export
 validate-env: ensure-tools ## Validate development environment setup
 	@echo "Validating development environment..."
 	@go version
-	@npm --version
+	@pnpm --version
 	@buf --version
 	@which nilaway >/dev/null 2>&1 && echo "✅ nilaway installed" || echo "❌ nilaway missing (run 'make install-tools')"
 	@which staticcheck >/dev/null 2>&1 && echo "✅ staticcheck installed" || echo "❌ staticcheck missing (run 'make install-tools')"
