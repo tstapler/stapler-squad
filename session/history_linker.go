@@ -262,7 +262,7 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	// Active sessions still use the fallback so that /clear-triggered UUID changes
 	// (new conversation file created while the session is live) are detected promptly.
 	pathFallbackAllowed := !alreadyLinked ||
-		(inst.Status != Paused && inst.Status != Hibernated)
+		(inst.Status != Paused && inst.Status != Hibernated && inst.Status != Stopped)
 	if info == nil && pathFallbackAllowed {
 		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
 			info, err = hl.detector.DetectByPath(effectivePath)

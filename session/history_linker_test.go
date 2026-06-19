@@ -349,6 +349,41 @@ func TestHistoryLinker_CorrelateSession_HibernatedSession_PreservesUUID(t *testi
 		"hibernated session UUID must not be overwritten by a newer session's JSONL file")
 }
 
+// TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID verifies that a
+// Stopped session (terminal state, no live process) is also protected from UUID
+// overwrite by the path-based fallback. Stopped sessions cannot be resumed, but
+// the guard should be semantically complete.
+func TestHistoryLinker_CorrelateSession_StoppedSession_PreservesUUID(t *testing.T) {
+	tempHome := t.TempDir()
+	inspector := &mockProcessInspector{files: []string{}}
+	detector := NewHistoryFileDetectorWithHomeDir(inspector, tempHome)
+
+	sessionPath := "/home/user/myproject"
+	originalUUID := "eeeeeeee-5555-5555-5555-eeeeeeeeeeee"
+	newerUUID := "ffffffff-6666-6666-6666-ffffffffffff"
+
+	projectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(sessionPath))
+	require.NoError(t, os.MkdirAll(projectDir, 0755))
+
+	originalPath := filepath.Join(projectDir, originalUUID+".jsonl")
+	newerPath := filepath.Join(projectDir, newerUUID+".jsonl")
+	require.NoError(t, os.WriteFile(originalPath, []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(newerPath, []byte("{}"), 0644))
+
+	past := time.Now().Add(-1 * time.Second)
+	require.NoError(t, os.Chtimes(originalPath, past, past))
+
+	inst := &Instance{Title: "stopped-session", Path: sessionPath, Status: Stopped}
+	inst.SetHistoryInfo(originalUUID, originalPath)
+	require.True(t, inst.HasClaudeSession())
+
+	linker := NewHistoryLinker(detector, nil)
+	linker.correlateSession(inst, true)
+
+	assert.Equal(t, originalUUID, inst.claudeSession.ConversationUUID,
+		"stopped session UUID must not be overwritten by a newer session's JSONL file")
+}
+
 // TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree verifies
 // that DetectByPath uses inst.Path when there is no worktree (the non-worktree case).
 func TestHistoryLinker_CorrelateSession_FallsBackToBasePath_WhenNoWorktree(t *testing.T) {
