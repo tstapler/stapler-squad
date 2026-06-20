@@ -73,6 +73,9 @@ const sessionsSlice = createSlice({
     setConnectionState(state, action: PayloadAction<ConnectionState>) {
       state.connectionState = action.payload;
     },
+    removeDetectedStatus(state, action: PayloadAction<string>) {
+      delete state.detectedStatusMap[action.payload];
+    },
   },
 });
 
@@ -83,6 +86,7 @@ export const {
   setLoading,
   setError,
   setConnectionState,
+  removeDetectedStatus,
 } = sessionsSlice.actions;
 
 // Use the adapter's built-in selectors scoped to the sessions slice

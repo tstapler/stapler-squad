@@ -63,6 +63,26 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 			},
 		}
 
+	case events.EventSessionAcknowledged:
+		protoEvent.Event = &sessionv1.SessionEvent_SessionAcknowledged{
+			SessionAcknowledged: &sessionv1.SessionAcknowledgedEvent{
+				SessionId:      event.SessionID,
+				AcknowledgedAt: timestamppb.New(event.Timestamp),
+				Reason:         event.Context,
+			},
+		}
+
+	case events.EventUserInteraction:
+		// TODO: map event.InteractionType (string) to UserInteractionEvent_InteractionType enum
+		// when a full string→enum mapping is defined. Using UNSPECIFIED for now.
+		protoEvent.Event = &sessionv1.SessionEvent_UserInteraction{
+			UserInteraction: &sessionv1.UserInteractionEvent{
+				SessionId: event.SessionID,
+				Type:      sessionv1.UserInteractionEvent_INTERACTION_TYPE_UNSPECIFIED,
+				Context:   event.Context,
+			},
+		}
+
 	case events.EventApprovalResponse:
 		protoEvent.Event = &sessionv1.SessionEvent_ApprovalResponse{
 			ApprovalResponse: &sessionv1.ApprovalResponseEvent{

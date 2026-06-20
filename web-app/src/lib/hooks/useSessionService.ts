@@ -33,6 +33,7 @@ import {
   selectSessionsLoading,
   selectSessionsError,
   selectConnectionState,
+  removeDetectedStatus,
 } from "@/lib/store/sessionsSlice";
 import { removeItem as removeReviewQueueItem } from "@/lib/store/reviewQueueSlice";
 
@@ -738,8 +739,19 @@ export function useSessionService(
         // preemptively and refresh history to show the resolved badge.
         const approvalId = event.event.value.context ?? "";
         const sessionId = event.event.value.sessionId ?? "";
+        if (event.event.value.approved && sessionId) {
+          dispatch(removeDetectedStatus(sessionId));
+        }
         if (approvalId) {
           onApprovalResponseRef.current?.(approvalId, sessionId);
+        }
+        break;
+      }
+      case "sessionAcknowledged": {
+        const sessionId = event.event.value.sessionId ?? "";
+        if (sessionId) {
+          dispatch(removeDetectedStatus(sessionId));
+          dispatch(removeReviewQueueItem(sessionId));
         }
         break;
       }

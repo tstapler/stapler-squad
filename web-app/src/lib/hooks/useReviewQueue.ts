@@ -26,12 +26,15 @@ import { SessionEvent, ReviewQueueEvent } from "@/gen/session/v1/events_pb";
 import { useAppDispatch, useAppSelector } from "@/lib/store";
 import {
   setReviewQueue as setReviewQueueAction,
+  addItem,
+  updateItem,
   removeItem,
   setLoading,
   setError,
   selectReviewQueue,
   selectReviewQueueLoading,
   selectReviewQueueError,
+  selectReviewQueueItemsWithLiveStatus,
 } from "@/lib/store/reviewQueueSlice";
 
 interface UseReviewQueueOptions {
@@ -112,6 +115,7 @@ export function useReviewQueue(
 
   const dispatch = useAppDispatch();
   const reviewQueue = useAppSelector(selectReviewQueue);
+  const liveItems = useAppSelector(selectReviewQueueItemsWithLiveStatus);
   const loading = useAppSelector(selectReviewQueueLoading);
   const errorStr = useAppSelector(selectReviewQueueError);
 
@@ -229,16 +233,26 @@ export function useReviewQueue(
     handleReviewQueueEventRef.current = (event: ReviewQueueEvent) => {
       switch (event.event.case) {
         case "itemAdded":
+          if (event.event.value.item) {
+            dispatch(addItem(event.event.value.item));
+          }
+          break;
+
         case "itemRemoved":
+          if (event.event.value.sessionId) {
+            dispatch(removeItem(event.event.value.sessionId));
+          }
+          break;
+
         case "itemUpdated":
-          // For Phase 1 of the RTK migration, incremental WebSocket events trigger
-          // a full re-fetch rather than in-place mutation. This preserves existing
-          // behaviour (the original code used setState functional updaters to mutate
-          // the queue in place, but those patterns don't map cleanly to a shared
-          // Redux store without a normalised item entity adapter).
-          // The 30-second fallback poll is the safety net if the WS stream fires
-          // between refresh calls.
-          refreshRef.current();
+          if (event.event.value.item && event.event.value.sessionId) {
+            dispatch(
+              updateItem({
+                sessionId: event.event.value.sessionId,
+                updates: event.event.value.item,
+              })
+            );
+          }
           break;
 
         case "statistics":
@@ -250,7 +264,7 @@ export function useReviewQueue(
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [dispatch]);
 
   // Setup WebSocket push updates with dedicated WatchReviewQueue stream
   useEffect(() => {
@@ -262,8 +276,13 @@ export function useReviewQueue(
     }
 
     abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
 
-    (async () => {
+    let retries = 0;
+    const MAX_RETRIES = 5;
+
+    const connect = async () => {
+      if (signal.aborted) return;
       try {
         const request = create(WatchReviewQueueRequestSchema, {
           // Apply current filters
@@ -275,29 +294,32 @@ export function useReviewQueue(
           includeStatistics: true,
         });
 
-        const stream = clientRef.current!.watchReviewQueue(
-          request,
-          { signal: abortControllerRef.current!.signal }
-        );
+        const stream = clientRef.current!.watchReviewQueue(request, { signal });
 
         for await (const event of stream) {
-          // For the WebSocket stream, we handle the initial snapshot and
-          // subsequent events by dispatching the full queue state from the event.
-          // The event types (itemAdded, itemRemoved, etc.) contain incremental
-          // updates. For Phase 1, we handle the initial snapshot which arrives
-          // as a series of itemAdded events, and rely on fallback polling for
-          // subsequent updates. The ref callback is still available for future
-          // optimization.
           handleReviewQueueEventRef.current?.(event);
         }
+        // Clean close — reset retry counter
+        retries = 0;
       } catch (err) {
-        // Ignore abort errors
-        if (err instanceof Error && err.name !== "AbortError") {
-          console.error("WatchReviewQueue stream error:", err);
-          // Don't set error state - fallback polling will handle it
+        // Ignore abort errors (intentional cleanup)
+        if (err instanceof Error && err.name === "AbortError") return;
+        if (signal.aborted) return;
+
+        console.error("WatchReviewQueue stream error:", err);
+
+        if (retries < MAX_RETRIES) {
+          const delay = Math.min(1000 * Math.pow(2, retries), 30000);
+          retries++;
+          setTimeout(connect, delay);
+        } else {
+          // Exhausted retries — fallback polling will handle consistency
+          console.warn("WatchReviewQueue: max reconnect attempts reached, relying on fallback poll");
         }
       }
-    })();
+    };
+
+    void connect();
 
     return () => {
       if (abortControllerRef.current) {
@@ -406,7 +428,7 @@ export function useReviewQueue(
 
   return {
     reviewQueue,
-    items: reviewQueue?.items ?? [],
+    items: liveItems,
     loading,
     error,
     ...statistics,

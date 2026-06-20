@@ -1634,6 +1634,13 @@ func (s *SessionService) DeleteSession(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete instance from storage: %w", err))
 	}
 
+	// Cancel any pending approvals for this session before publishing the deletion event.
+	// This lets blocked approval-hook goroutines exit cleanly rather than waiting for
+	// context timeout. Non-fatal: log at warn and continue if CancelSession fails.
+	if cancelled := s.approvalStore.CancelSession(sessionUUID); len(cancelled) > 0 {
+		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
+	}
+
 	// Publish SessionDeleted event to all watchers. Use UUID so the frontend
 	// entity adapter (keyed by UUID) matches and tombstones the correct entry.
 	s.eventBus.Publish(events.NewSessionDeletedEvent(sessionUUID))
