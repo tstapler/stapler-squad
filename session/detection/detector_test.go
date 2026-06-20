@@ -148,6 +148,47 @@ func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
 	}
 }
 
+func TestStatusDetector_DetectMonitorsStillRunning(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		// Full turn-completion line with monitor suffix
+		"✻ Cogitated for 18m 41s · 1 monitor still running",
+		// Plural monitors
+		"✻ Churned for 5s · 2 monitors still running",
+		// Without "still" (bare status bar variant)
+		"1 monitor running",
+		"3 monitors running",
+		// ANSI-colored variant
+		"\x1b[33m✻\x1b[0m Cogitated for 1m · 1 monitor still running",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = %v, want StatusWaitingForAgent", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectMonitorsStillRunning_NegativeCases(t *testing.T) {
+	sd := NewStatusDetector()
+
+	noMatch := []string{
+		// "monitor" without a leading digit must not match
+		"monitor still running",
+		// Unrelated uses of "monitor"
+		"SessionMonitor initialised",
+		"monitoring CI run 27886564503", // status-bar label without count+running
+	}
+	for _, input := range noMatch {
+		got := sd.Detect([]byte(input))
+		if got == StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = StatusWaitingForAgent; want no match (false positive)", input)
+		}
+	}
+}
+
 func TestStatusDetector_DetectProcessing(t *testing.T) {
 	sd := NewStatusDetector()
 
