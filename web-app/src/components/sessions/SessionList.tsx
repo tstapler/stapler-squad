@@ -840,6 +840,7 @@ export function SessionList({
         // Row mode: virtualized — only renders visible items (~20 rows at a time).
         <div
           role="list"
+          aria-label={`Sessions, ${flatItems.filter(i => i && i.kind === "session").length} items`}
           style={{
             height: rowVirtualizer.getTotalSize(),
             width: "100%",
@@ -865,6 +866,7 @@ export function SessionList({
                 }}
               >
                 {item.kind === "header" ? (
+                  <div role="listitem">
                   <div
                     role="heading"
                     aria-level={3}
@@ -970,6 +972,7 @@ export function SessionList({
                         )}
                       </>
                     )}
+                  </div>
                   </div>
                 ) : (
                   <SessionRow

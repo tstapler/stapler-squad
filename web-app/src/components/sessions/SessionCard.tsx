@@ -156,7 +156,6 @@ function SessionCardInner({
   const isSnapshotEnabled = session.status === SessionStatus.ACTIVE && isSnapshotOpen;
   const isCreating = session.status === SessionStatus.CREATING;
   const isPaused = session.status === SessionStatus.PAUSED;
-  const isRestoring = session.status === SessionStatus.RESTORING;
   const { html: snapshotHtml, isEmpty: snapshotIsEmpty, loading: snapshotLoadingState, error: snapshotErrorMsg } =
     useTerminalSnapshot(session.id, isSnapshotEnabled);
 
@@ -171,8 +170,6 @@ function SessionCardInner({
       case SessionStatus.LOADING:
         return statusLoading;
       case SessionStatus.CREATING:
-        return statusLoading;
-      case SessionStatus.RESTORING:
         return statusLoading;
       case SessionStatus.NEEDS_APPROVAL:
         return statusNeedsApproval;
@@ -199,8 +196,6 @@ function SessionCardInner({
         return "Needs Approval";
       case SessionStatus.CREATING:
         return "Starting…";
-      case SessionStatus.RESTORING:
-        return "Restoring…";
       case SessionStatus.STOPPED:
         return "Stopped";
       case SessionStatus.HIBERNATED:
@@ -385,12 +380,11 @@ function SessionCardInner({
         isExternal ? cardExternal : "",
         isDeleting ? cardDeleting : "",
         Number(session.memoryRssMb ?? 0n) > 500 ? cardMemoryPressure : "",
-        isPaused || isRestoring ? cardPaused : "",
+        isPaused ? cardPaused : "",
       ].filter(Boolean).join(" ")}
       ref={cardRef}
       data-testid="session-card"
       data-paused={isPaused ? "true" : undefined}
-      data-restoring={isRestoring ? "true" : undefined}
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
       role="group"
@@ -433,14 +427,14 @@ function SessionCardInner({
             </span>
           ) : (
             <>
-              <h3
+              <span
                 className={title}
                 onClick={handleTitleClick}
                 title={selectMode ? undefined : "Click to rename"}
                 style={selectMode ? undefined : { cursor: "text" }}
               >
                 {session.title}
-              </h3>
+              </span>
             </>
           )}
           <div className={badges}>

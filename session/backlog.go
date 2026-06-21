@@ -159,29 +159,6 @@ func CanTransitionBacklog(from, to BacklogStatus) bool {
 	return targets[to]
 }
 
-// TriageSuggestion is a single suggestion from a triage session.
-// Canonical JSON schema — both the MCP write path (tools_backlog.go) and the
-// service read path (backlog_service.go) must use this type to prevent drift.
-type TriageSuggestion struct {
-	Text      string `json:"text"`
-	Rationale string `json:"rationale"`
-}
-
-// TriageTask is a single implementation task from a triage session.
-type TriageTask struct {
-	Text     string `json:"text"`
-	Estimate string `json:"estimate"`
-	Category string `json:"category"`
-}
-
-// TriageResultPayload is the canonical JSON envelope persisted on ItemSession.TriageResult.
-type TriageResultPayload struct {
-	Summary             string            `json:"summary"`
-	Suggestions         []TriageSuggestion `json:"suggestions"`
-	ClarifyingQuestions []string          `json:"clarifying_questions,omitempty"`
-	Tasks               []TriageTask      `json:"tasks,omitempty"`
-}
-
 // Sentinel errors for transition guards.
 var (
 	ErrACRequired            = errors.New("acceptance criteria required before marking ready")

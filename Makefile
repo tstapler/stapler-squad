@@ -276,10 +276,8 @@ backup-binary: ## Snapshot the current binary to stapler-squad.prev before a new
 install-service: backup-binary build ## Install stapler-squad as a system service (systemd on Linux, LaunchAgent on macOS)
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
-	@STAPLER_SQUAD_BIN="$(HOME)/.stapler-squad/bin/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
-else
-	@STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
 endif
+	@STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
 
 rollback: ## Restore the previous build (stapler-squad.prev) and restart the service
 	@if [ ! -f ./stapler-squad.prev ]; then \
@@ -291,24 +289,21 @@ rollback: ## Restore the previous build (stapler-squad.prev) and restart the ser
 	@echo "✓ Binary restored from stapler-squad.prev"
 ifeq ($(UNAME_S),Darwin)
 	@$(MAKE) _codesign-binary
-	@STAPLER_SQUAD_BIN="$(HOME)/.stapler-squad/bin/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
-else
-	@STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
 endif
+	@STAPLER_SQUAD_BIN="$(CURDIR)/stapler-squad" ./scripts/install-service.sh $(if $(NO_PROFILE),--no-profile) $(if $(PROFILE_PORT),--profile-port $(PROFILE_PORT))
 
-_codesign-binary: ## Copy binary to ~/.stapler-squad/bin/ and sign it there (stable location, no project files sealed)
+_codesign-binary: ## Sign the binary with StaplerSquadDev cert (called by install-service on macOS)
 	@if ! ./scripts/check-codesign.sh; then \
-		echo "  StaplerSquadDev signing cert not found — running setup-codesign..."; \
-		OPENSSL_BIN=$$(brew --prefix openssl 2>/dev/null)/bin/openssl $(MAKE) setup-codesign; \
+		echo "  StaplerSquadDev signing cert not found."; \
+		echo "   Run 'make setup-codesign' once to create it, then retry."; \
+		exit 1; \
 	fi
-	@mkdir -p "$(HOME)/.stapler-squad/bin"
-	@cp -f "$(CURDIR)/stapler-squad" "$(HOME)/.stapler-squad/bin/stapler-squad"
-	@echo "Signing binary at install location..."
-	@codesign --force \
+	@echo "Signing binary..."
+	codesign --force \
 		--sign "StaplerSquadDev" \
 		--entitlements "$(CURDIR)/entitlements.plist" \
-		"$(HOME)/.stapler-squad/bin/stapler-squad"
-	@echo "Binary signed at $(HOME)/.stapler-squad/bin/stapler-squad"
+		"$(CURDIR)/stapler-squad"
+	@echo "Binary signed"
 
 uninstall-service: ## Remove the system service and disable auto-start on login
 	@./scripts/install-service.sh --uninstall

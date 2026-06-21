@@ -646,7 +646,7 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
     jest.spyOn(console, 'error').mockImplementation(() => {});
 
     // First call: initial scrollback — creates the TerminalStreamManager lazily and
-    // writes via prependScrollbackBatch, sets isInitialScrollbackDoneRef=true.
+    // writes via writeInitialContent, sets isInitialScrollbackDoneRef=true.
     await act(async () => {
       await capturedOnScrollbackReceived!('initial-content', {
         hasMore: true,
@@ -699,8 +699,7 @@ describe('Scrollback paging: isFetchingScrollbackRef reset on prependScrollbackB
     });
 
     // The finally block reset ensures prependScrollbackBatch is reachable after the error.
-    // 3 total calls: initial load + failed paged load + successful paged load.
-    expect(managerInstance.prependScrollbackBatch).toHaveBeenCalledTimes(3);
+    expect(managerInstance.prependScrollbackBatch).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -782,115 +781,5 @@ describe('Cell dim extraction: saves pixel metrics from xterm private API', () =
     );
 
     (mockXtermHandle as any).terminal = null;
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Scrollback path: initial load uses prependScrollbackBatch, not writeInitialContent
-//
-// The server sends a clean snapshot (TerminalOutput) then a ScrollbackResponse.
-// The first ScrollbackResponse must call prependScrollbackBatch so the snapshot
-// is preserved as the viewport and history is placed above it.
-// writeInitialContent would clear the snapshot and replay raw TUI bytes, producing
-// repeated status bars (cursor-up sequences against position 0).
-// ---------------------------------------------------------------------------
-describe('Scrollback path: initial load calls prependScrollbackBatch, not writeInitialContent', () => {
-  beforeEach(() => {
-    (mockXtermHandle as any).terminal = { scrollToBottom: jest.fn() };
-  });
-
-  afterEach(() => {
-    (mockXtermHandle as any).terminal = null;
-  });
-
-  it('uses prependScrollbackBatch for the first ScrollbackResponse', async () => {
-    let capturedOnScrollbackReceived: ((scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => void) | undefined;
-
-    const stream = makeStreamMock({ isConnected: true, terminalState: 'STABLE' });
-    (useTerminalStream as jest.Mock).mockImplementation((opts: {
-      onScrollbackReceived?: (scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => void;
-    }) => {
-      capturedOnScrollbackReceived = opts.onScrollbackReceived;
-      return stream;
-    });
-
-    render(<TerminalOutput sessionId="session-sb-path" baseUrl="http://localhost:8543" />);
-    expect(capturedOnScrollbackReceived).toBeDefined();
-
-    await act(async () => {
-      await capturedOnScrollbackReceived!('initial-scrollback', {
-        hasMore: false, oldestSequence: 1, newestSequence: 10, totalLines: 10,
-      });
-    });
-
-    const MockTSM = TerminalStreamManager as unknown as jest.MockedClass<new (...args: unknown[]) => TerminalStreamManager>;
-    const mgr = MockTSM.mock.results[MockTSM.mock.results.length - 1]?.value as TerminalStreamManager;
-    expect(mgr).toBeDefined();
-
-    // The initial ScrollbackResponse must route through prependScrollbackBatch
-    expect(mgr.prependScrollbackBatch).toHaveBeenCalledWith('initial-scrollback');
-    // writeInitialContent must NOT be called (it would clear the clean snapshot)
-    expect(mgr.writeInitialContent).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Scrollback reset on session switch
-//
-// When switching to a different session (sessionId changes), isInitialScrollbackDoneRef
-// must be reset so the first ScrollbackResponse from the new connection is treated as
-// an initial load (prependScrollbackBatch) rather than a paged history load.
-// Without the reset, a reconnect would skip the initial path and incorrectly call
-// prependScrollbackBatch with a metadata-less paged load variant.
-// ---------------------------------------------------------------------------
-describe('Scrollback reset on session switch', () => {
-  beforeEach(() => {
-    (mockXtermHandle as any).terminal = { scrollToBottom: jest.fn() };
-  });
-
-  afterEach(() => {
-    (mockXtermHandle as any).terminal = null;
-  });
-
-  it('isInitialScrollbackDoneRef resets when sessionId changes so the new connection gets the initial path', async () => {
-    let capturedOnScrollbackReceived: ((scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => void) | undefined;
-
-    const stream = makeStreamMock({ isConnected: false, terminalState: 'STABLE' });
-    (useTerminalStream as jest.Mock).mockImplementation((opts: {
-      onScrollbackReceived?: (scrollback: string, metadata?: { hasMore: boolean; oldestSequence: number; newestSequence: number; totalLines: number }) => void;
-    }) => {
-      capturedOnScrollbackReceived = opts.onScrollbackReceived;
-      return stream;
-    });
-
-    const { rerender } = render(<TerminalOutput sessionId="session-A" baseUrl="http://localhost:8543" />);
-
-    // First session: receive initial scrollback → isInitialScrollbackDoneRef becomes true
-    await act(async () => {
-      await capturedOnScrollbackReceived!('session-A-history', {
-        hasMore: false, oldestSequence: 1, newestSequence: 5, totalLines: 5,
-      });
-    });
-
-    const MockTSM = TerminalStreamManager as unknown as jest.MockedClass<new (...args: unknown[]) => TerminalStreamManager>;
-    const firstMgr = MockTSM.mock.results[MockTSM.mock.results.length - 1]?.value as TerminalStreamManager;
-    expect(firstMgr.prependScrollbackBatch).toHaveBeenCalledWith('session-A-history');
-
-    // Switch to a different session — should reset isInitialScrollbackDoneRef
-    await act(async () => {
-      rerender(<TerminalOutput sessionId="session-B" baseUrl="http://localhost:8543" />);
-    });
-
-    // The new session's first ScrollbackResponse must use the initial path (prependScrollbackBatch)
-    await act(async () => {
-      await capturedOnScrollbackReceived!('session-B-history', {
-        hasMore: false, oldestSequence: 1, newestSequence: 3, totalLines: 3,
-      });
-    });
-
-    const secondMgr = MockTSM.mock.results[MockTSM.mock.results.length - 1]?.value as TerminalStreamManager;
-    // The new manager for session-B must have received the initial scrollback via prependScrollbackBatch
-    expect(secondMgr.prependScrollbackBatch).toHaveBeenCalledWith('session-B-history');
-    expect(secondMgr.writeInitialContent).not.toHaveBeenCalled();
   });
 });

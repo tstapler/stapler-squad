@@ -149,6 +149,63 @@ func TestStatusDetector_DetectFromLines_WaitingForAgent(t *testing.T) {
 	}
 }
 
+func TestStatusDetector_DetectFromLines_MonitorsStillRunning(t *testing.T) {
+	sd := NewStatusDetector()
+	// Stale success in scrollback, monitors line above — WaitingForAgent wins.
+	// Regression guard: matchLocked checks WaitingForAgent before Success, so
+	// "✻ Cogitated for 18m 41s · 1 monitor still running" must not fall through
+	// to StatusSuccess if group ordering ever changes.
+	lines := []string{
+		"✻ Baked for 3s",
+		"✻ Cogitated for 18m 41s · 1 monitor still running",
+	}
+	if got := sd.DetectFromLines(lines); got != StatusWaitingForAgent {
+		t.Errorf("DetectFromLines() = %v, want StatusWaitingForAgent (monitors line must override stale Success)", got)
+	}
+}
+
+func TestStatusDetector_DetectMonitorsStillRunning(t *testing.T) {
+	sd := NewStatusDetector()
+
+	testCases := []string{
+		// Full turn-completion line with monitor suffix
+		"✻ Cogitated for 18m 41s · 1 monitor still running",
+		// Plural monitors
+		"✻ Churned for 5s · 2 monitors still running",
+		// ANSI-colored variant
+		"\x1b[33m✻\x1b[0m Cogitated for 1m · 1 monitor still running",
+	}
+
+	for _, output := range testCases {
+		status := sd.Detect([]byte(output))
+		if status != StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = %v, want StatusWaitingForAgent", output, status)
+		}
+	}
+}
+
+func TestStatusDetector_DetectMonitorsStillRunning_NegativeCases(t *testing.T) {
+	sd := NewStatusDetector()
+
+	noMatch := []string{
+		// "monitor" without a leading digit must not match
+		"monitor still running",
+		// Unrelated uses of "monitor"
+		"SessionMonitor initialised",
+		"monitoring CI run 27886564503", // status-bar label without count+running
+		// Realistic false-positive surface — "monitor" is polysemous; these must NOT match.
+		"3 monitors running at 60Hz",      // display/screen configuration output
+		"Found 1 monitor running process", // process listing
+		"2 monitors running in parallel",  // concurrency log
+	}
+	for _, input := range noMatch {
+		got := sd.Detect([]byte(input))
+		if got == StatusWaitingForAgent {
+			t.Errorf("Detect(%q) = StatusWaitingForAgent; want no match (false positive)", input)
+		}
+	}
+}
+
 func TestStatusDetector_DetectProcessing(t *testing.T) {
 	sd := NewStatusDetector()
 

@@ -279,8 +279,6 @@ func StatusToProto(status session.Status) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
 	case session.Hibernated:
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
-	case session.Restoring:
-		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -305,10 +303,6 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
 	case "Stopped":
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
-	case "Hibernated":
-		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
-	case "Restoring":
-		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}

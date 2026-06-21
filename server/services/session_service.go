@@ -20,7 +20,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	serveranalytics "github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -132,10 +131,6 @@ type SessionService struct {
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
 	analyticsClient *ent.Client
-
-	// analyticsProvider is the analytics provider used for event recording.
-	// Populated asynchronously when the analytics DB opens; may remain nil in tests.
-	analyticsProvider serveranalytics.AnalyticsProvider
 
 	// memoryCacheReader provides per-session RSS and system memory percentage.
 	// Wired to the HibernationSweeper after startup. May be nil (fields default to 0).
@@ -485,12 +480,6 @@ func (s *SessionService) SetErrorRegistry(r *ErrorRegistry) {
 // Must be called before the first QueryEscapeAnalytics or GetEscapeAnalyticsSummary RPC.
 func (s *SessionService) SetAnalyticsClient(c *ent.Client) {
 	s.analyticsClient = c
-}
-
-// SetAnalyticsProvider wires the analytics provider. Called asynchronously once
-// the analytics DB opens; stores the provider for future use.
-func (s *SessionService) SetAnalyticsProvider(p serveranalytics.AnalyticsProvider) {
-	s.analyticsProvider = p
 }
 
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the

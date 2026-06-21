@@ -578,6 +578,16 @@ func getDefaultPatterns() StatusPatterns {
 				Description: "Background shell processes still running — session not yet idle",
 				Priority:    27,
 			},
+			{
+				Name: "monitors_still_running",
+				// Matches "✻ Cogitated for 18m 41s · 1 monitor still running" and similar
+				// lines that appear when Claude finishes a turn but background monitors (e.g.
+				// CI run watchers) are still active. Requires "still" to avoid false positives
+				// on generic "N monitors running" output from display tools, Prometheus, etc.
+				Pattern:     `\d+\s+monitors?\s+still\s+running`,
+				Description: "Background monitors still running — session not yet idle",
+				Priority:    27,
+			},
 		},
 		InputRequired: []StatusPattern{
 			// Claude Code's AskUserQuestion prompts have a very specific format:

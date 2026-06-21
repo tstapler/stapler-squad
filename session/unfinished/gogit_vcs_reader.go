@@ -48,17 +48,6 @@ type diffStatEntry struct {
 	expiry time.Time
 }
 
-type aheadBehindEntry struct {
-	ahead  int
-	behind int
-	expiry time.Time
-}
-
-type commitMessagesEntry struct {
-	msgs   []string
-	expiry time.Time
-}
-
 // repoCacheMaxEntries is the maximum number of repositories held in repoCache
 // before eviction runs. Sized for typical multi-repo workspaces; adjust higher
 // only if scanning > 100 repos simultaneously.
@@ -133,14 +122,6 @@ type GoGitVCSReader struct {
 	// Values are diffStatEntry (stored by value; no mutation after Store).
 	// Races on a cache miss are benign: last writer wins; both compute the same value.
 	diffStatCache sync.Map // map[string]diffStatEntry
-
-	// aheadBehindCache caches AheadBehind results keyed by worktreePath+"\x00"+base.
-	// Eliminates packfile-reader lock contention on repeated calls within TTL.
-	aheadBehindCache sync.Map // map[string]aheadBehindEntry
-
-	// commitMessagesCache caches CommitMessages results keyed by worktreePath+"\x00"+base.
-	// Eliminates packfile-reader lock contention on repeated commit log walks.
-	commitMessagesCache sync.Map // map[string]commitMessagesEntry
 }
 
 var _ VCSReader = (*GoGitVCSReader)(nil)
@@ -413,13 +394,6 @@ func hasUntrackedFilesRec(root, dir string, indexed map[string]bool) (bool, erro
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
 func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
-	cacheKey := worktreePath + "\x00" + base
-	if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
-		if e := v.(aheadBehindEntry); time.Now().Before(e.expiry) {
-			return e.ahead, e.behind, nil
-		}
-	}
-
 	entry, err := g.openRepoEntry(worktreePath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("open repo %s: %w", worktreePath, err)
@@ -439,7 +413,6 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 	}
 
 	if headRef.Hash() == baseHash {
-		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{expiry: time.Now().Add(diffStatCacheTTL)})
 		return 0, 0, nil
 	}
 
@@ -456,18 +429,10 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 	if err != nil {
 		return 0, 0, err
 	}
-	g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, expiry: time.Now().Add(diffStatCacheTTL)})
 	return ahead, behind, nil
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
-	cacheKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
-	if v, ok := g.commitMessagesCache.Load(cacheKey); ok {
-		if e := v.(commitMessagesEntry); time.Now().Before(e.expiry) {
-			return e.msgs, nil
-		}
-	}
-
 	entry, err := g.openRepoEntry(worktreePath)
 	if err != nil {
 		return nil, err
@@ -509,9 +474,6 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 		}
 		return nil
 	})
-	if err == nil {
-		g.commitMessagesCache.Store(cacheKey, commitMessagesEntry{msgs: msgs, expiry: time.Now().Add(diffStatCacheTTL)})
-	}
 	return msgs, err
 }
 
@@ -671,15 +633,13 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	// largest single changed file rather than the sum of all changed-file blobs.
 	var d DiffStat
 
-	// blobBuf is reused across sequential readBlobUnderLock calls to avoid a
-	// heap allocation per blob. Safe because applyDiff consumes the returned
-	// slice entirely before the next call resets the buffer.
-	var blobBuf bytes.Buffer
-
-	readBlobUnderLock := func(hash plumbing.Hash) []byte {
+	readBlob := func(hash plumbing.Hash) []byte {
 		if hash == (plumbing.Hash{}) {
 			return nil
 		}
+		// Hold the lock only long enough to open the blob reader from the ODB;
+		// the actual decompression I/O runs outside the lock so parallel workers
+		// on different worktrees of the same repo don't serialize on disk reads.
 		entry.mu.Lock()
 		blob, berr := entry.repo.BlobObject(hash)
 		if berr != nil {
@@ -693,20 +653,18 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			return nil
 		}
 		r, rerr := blob.Reader()
+		entry.mu.Unlock()
 		if rerr != nil {
-			entry.mu.Unlock()
 			return nil
 		}
-		blobBuf.Reset()
-		_, _ = blobBuf.ReadFrom(r)
+		data, _ := io.ReadAll(r)
 		_ = r.Close()
-		entry.mu.Unlock()
-		return bytes.Clone(blobBuf.Bytes())
+		return data
 	}
 
 	applyDiff := func(t changeTarget) {
 		d.Files++
-		headData := readBlobUnderLock(t.headHash)
+		headData := readBlob(t.headHash)
 		if t.isDeleted {
 			d.Deletions += countBytesLines(headData)
 			return

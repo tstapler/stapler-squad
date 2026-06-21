@@ -246,10 +246,6 @@ func (s *Storage) saveInstancesToRepo(instances []*Instance) error {
 		if !inst.Started() {
 			continue
 		}
-		if inst.Status == Restoring {
-			log.Warn("SaveInstances: skipping Restoring instance (transient status)", "session", inst.Title)
-			continue
-		}
 		data := inst.ToInstanceData()
 		log.Info("SaveInstances: converting instance",
 			"session", data.Title, "is_worktree", data.IsWorktree, "main_repo_path", data.MainRepoPath,
