@@ -839,6 +839,7 @@ export function SessionList({
       ) : viewMode === "row" ? (
         // Row mode: virtualized — only renders visible items (~20 rows at a time).
         <div
+          role="list"
           style={{
             height: rowVirtualizer.getTotalSize(),
             width: "100%",
