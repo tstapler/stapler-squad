@@ -223,9 +223,9 @@ func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
 		return sessionv1.SubStatus_SUB_STATUS_RATE_LIMITED
 	}
 	switch inst.GetDetectedStatus() {
-	case detection.StatusProcessing, detection.StatusExecuting, detection.StatusWaitingForAgent:
-		// StatusWaitingForAgent maps to PROCESSING — no distinct proto value exists yet;
-		// the UI shows the same "Thinking…" chip, which is correct while agents run.
+	case detection.StatusWaitingForAgent:
+		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
+	case detection.StatusProcessing, detection.StatusExecuting:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
 	case detection.StatusNeedsApproval:
 		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL

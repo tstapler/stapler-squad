@@ -13,6 +13,7 @@ describe("deriveWorkingState — SubStatus.PROCESSING group", () => {
     SubStatus.ERROR,
     SubStatus.TESTS_FAILING,
     SubStatus.RATE_LIMITED,
+    SubStatus.WAITING_FOR_AGENT,
   ];
 
   for (const subStatus of processingStates) {

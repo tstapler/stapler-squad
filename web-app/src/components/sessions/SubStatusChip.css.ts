@@ -107,6 +107,18 @@ export const chipSuccess = style([
   },
 ]);
 
+// Neutral/transient — agent is doing work autonomously; no user action needed.
+export const chipWaitingForAgent = style([
+  chip,
+  {
+    background: vars.color.accentBg,
+    color: vars.color.primary,
+    border: `1px solid ${vars.color.primary}`,
+    fontWeight: vars.fontWeight.normal,
+    opacity: 0.85,
+  },
+]);
+
 export const spinner = style({
   display: "inline-block",
   width: "10px",

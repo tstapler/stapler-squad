@@ -11,7 +11,9 @@ import (
 // This is the fine-grained activity state used by the frontend deriveWorkingState() utility.
 func subStatusFromItem(item *session.ReviewItem) sessionv1.SubStatus {
 	switch item.ClaudeStatus {
-	case detection.StatusProcessing, detection.StatusExecuting, detection.StatusWaitingForAgent:
+	case detection.StatusWaitingForAgent:
+		return sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT
+	case detection.StatusProcessing, detection.StatusExecuting:
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
 	case detection.StatusNeedsApproval:
 		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL

@@ -402,6 +402,8 @@ enum SubStatus {
   SUB_STATUS_READY = 8;
   // Task completed successfully.
   SUB_STATUS_SUCCESS = 9;
+  // Claude is waiting for one or more background agents to finish (e.g. "✻ Waiting for 2 background agents").
+  SUB_STATUS_WAITING_FOR_AGENT = 10;
 }
 
 // RateLimitState indicates whether the session is experiencing rate limiting.

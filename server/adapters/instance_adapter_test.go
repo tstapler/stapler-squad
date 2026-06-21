@@ -121,7 +121,7 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 }
 
 // TC-4: TestToProtoSubStatus_WaitingForAgent verifies that StatusWaitingForAgent
-// maps to SUB_STATUS_PROCESSING in the toProtoSubStatus switch.
+// maps to SUB_STATUS_WAITING_FOR_AGENT in the toProtoSubStatus switch.
 //
 // Note: toProtoSubStatus reads DetectedStatus via inst.GetDetectedStatus(), which
 // requires a running ClaudeController (not available in unit tests). The non-Active
@@ -136,13 +136,11 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 		t.Errorf("toProtoSubStatus(Paused) = %v, want SUB_STATUS_UNSPECIFIED", got)
 	}
 
-	// Verify the StatusWaitingForAgent → PROCESSING mapping via subStatusFromItem.
-	// WorkingState derivation is now done client-side; WaitingForAgent maps to
-	// SUB_STATUS_PROCESSING so the frontend deriveWorkingState() returns PROCESSING.
+	// Verify the StatusWaitingForAgent → SUB_STATUS_WAITING_FOR_AGENT mapping.
 	item := &session.ReviewItem{ClaudeStatus: detection.StatusWaitingForAgent}
 	gotSubStatus := subStatusFromItem(item)
-	if gotSubStatus != sessionv1.SubStatus_SUB_STATUS_PROCESSING {
-		t.Errorf("subStatusFromItem(StatusWaitingForAgent) = %v, want SUB_STATUS_PROCESSING", gotSubStatus)
+	if gotSubStatus != sessionv1.SubStatus_SUB_STATUS_WAITING_FOR_AGENT {
+		t.Errorf("subStatusFromItem(StatusWaitingForAgent) = %v, want SUB_STATUS_WAITING_FOR_AGENT", gotSubStatus)
 	}
 
 	// A fresh Active instance with no controller returns StatusUnknown → UNSPECIFIED,

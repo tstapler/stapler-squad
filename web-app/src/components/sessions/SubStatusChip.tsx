@@ -11,6 +11,7 @@ import {
   chipIdle,
   chipReady,
   chipSuccess,
+  chipWaitingForAgent,
   spinner,
 } from "./SubStatusChip.css";
 
@@ -28,6 +29,18 @@ interface SubStatusChipProps {
  */
 export function SubStatusChip({ subStatus }: SubStatusChipProps) {
   switch (subStatus) {
+    case SubStatus.WAITING_FOR_AGENT:
+      return (
+        <span
+          className={chipWaitingForAgent}
+          role="status"
+          aria-label="Waiting for agents"
+          title="Claude is waiting for background agents to finish"
+        >
+          ⏳ Waiting for Agents
+        </span>
+      );
+
     case SubStatus.PROCESSING:
       return (
         <span
