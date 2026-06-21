@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { ReviewItem } from "@/gen/session/v1/types_pb";
 import { useAuditLog } from "@/lib/hooks/useAuditLog";
 import { NotificationData } from "@/lib/types/notification";
@@ -79,8 +78,6 @@ export function NotificationToast({
   const [isMinimized, setIsMinimized] = useState(false);
   const [relativeTime, setRelativeTime] = useState(() => getRelativeTime(notification.timestamp));
   const auditLog = useAuditLog();
-  const router = useRouter();
-  const backlogItemId = notification.metadata?.["item_id"];
 
   // Tick every second to keep relative time live
   useEffect(() => {
@@ -131,13 +128,6 @@ export function NotificationToast({
   const handleView = () => {
     auditLog.logNotificationSessionViewed(notification.id, notification.sessionId);
     notification.onView?.();
-    handleClose();
-  };
-
-  const handleViewBacklog = () => {
-    if (!backlogItemId) return;
-    auditLog.logNotificationBacklogItemViewed(notification.id, backlogItemId);
-    router.push(`/backlog?item=${encodeURIComponent(backlogItemId)}`);
     handleClose();
   };
 
@@ -226,15 +216,9 @@ export function NotificationToast({
             ✗ Deny
           </button>
         )}
-        {backlogItemId ? (
-          <button className={viewButton} onClick={handleViewBacklog}>
-            View Backlog
-          </button>
-        ) : (
-          <button className={viewButton} onClick={handleView}>
-            View Session
-          </button>
-        )}
+        <button className={viewButton} onClick={handleView}>
+          View Session
+        </button>
         <button className={dismissButton} onClick={() => handleClose(true)}>
           Dismiss
         </button>

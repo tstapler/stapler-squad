@@ -179,7 +179,7 @@ func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
 // Callers MUST hold id.mu for write — this method mutates id.lastActivity.
 func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 	switch status {
-	case StatusActive:
+	case StatusExecuting:
 		// Actively executing commands - update activity timestamp
 		id.lastActivity = id.timeNow()
 		return IdleStateActive
@@ -218,11 +218,16 @@ func (id *IdleDetector) mapStatusToIdleState(status DetectedStatus) IdleState {
 		// Error state - consider as waiting (needs user attention)
 		return IdleStateWaiting
 
-	default:
+	case StatusTestsFailing:
+		// Tests failing — waiting for user to act
+		return IdleStateWaiting
+
+	case StatusUnknown:
 		// Unknown status - don't maintain Unknown, default to Waiting
 		// This handles fresh starts where we haven't detected anything yet
 		return IdleStateWaiting
 	}
+	return IdleStateWaiting
 }
 
 // GetState returns the current idle state without triggering detection.
@@ -366,9 +371,10 @@ func (s IdleState) String() string {
 		return "Waiting"
 	case IdleStateTimeout:
 		return "Timeout"
-	default:
+	case IdleStateUnknown:
 		return "Unknown"
 	}
+	return "Unknown"
 }
 
 // Description returns a detailed description of the idle state info.

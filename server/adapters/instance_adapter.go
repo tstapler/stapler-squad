@@ -139,6 +139,17 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// Only meaningful for Active sessions; non-Active sessions always return UNSPECIFIED.
 	protoSession.SubStatus = toProtoSubStatus(inst)
 
+	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
+	// Only meaningful for Active sessions; non-Active sessions leave these at their
+	// zero values (DETECTED_STATUS_UNSPECIFIED, empty string).
+	if inst.Status == session.Active {
+		detectedStatus := inst.GetDetectedStatus()
+		if detectedStatus != detection.StatusUnknown {
+			protoSession.DetectedStatus = detection.DetectedStatusToProto(detectedStatus)
+			protoSession.DetectedContext = inst.GetDetectedContext()
+		}
+	}
+
 	// Hidden flag — system/background sessions excluded from default list/review queue.
 	protoSession.Hidden = inst.Hidden
 
@@ -212,7 +223,7 @@ func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
 		return sessionv1.SubStatus_SUB_STATUS_RATE_LIMITED
 	}
 	switch inst.GetDetectedStatus() {
-	case detection.StatusProcessing, detection.StatusActive, detection.StatusWaitingForAgent:
+	case detection.StatusProcessing, detection.StatusExecuting, detection.StatusWaitingForAgent:
 		// StatusWaitingForAgent maps to PROCESSING — no distinct proto value exists yet;
 		// the UI shows the same "Thinking…" chip, which is correct while agents run.
 		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
@@ -230,10 +241,11 @@ func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
 		return sessionv1.SubStatus_SUB_STATUS_IDLE
 	case detection.StatusSuccess:
 		return sessionv1.SubStatus_SUB_STATUS_SUCCESS
-	default:
+	case detection.StatusUnknown:
 		// Unknown / undetected — don't show a chip
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
+	return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 }
 
 // rateLimitStateToProto converts a ratelimit.RateLimitState to proto RateLimitState enum.
@@ -267,8 +279,6 @@ func StatusToProto(status session.Status) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
 	case session.Hibernated:
 		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
-	case session.Restoring:
-		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -293,10 +303,6 @@ func StatusStringToProto(status string) sessionv1.SessionStatus {
 		return sessionv1.SessionStatus_SESSION_STATUS_CREATING
 	case "Stopped":
 		return sessionv1.SessionStatus_SESSION_STATUS_STOPPED
-	case "Hibernated":
-		return sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED
-	case "Restoring":
-		return sessionv1.SessionStatus_SESSION_STATUS_RESTORING
 	default:
 		return sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED
 	}
@@ -366,42 +372,6 @@ func instanceTypeToProto(instanceType session.InstanceType) sessionv1.InstanceTy
 		return sessionv1.InstanceType_INSTANCE_TYPE_EXTERNAL
 	default:
 		return sessionv1.InstanceType_INSTANCE_TYPE_UNSPECIFIED
-	}
-}
-
-// MapIdleStateToWorkingState converts a detection.IdleState to the proto WorkingState enum.
-// Prefer MapDetectedStatusToWorkingState when a ClaudeStatus is available, as it can
-// produce WORKING_STATE_PROCESSING which IdleState alone cannot distinguish from ACTIVE.
-func MapIdleStateToWorkingState(s detection.IdleState) sessionv1.WorkingState {
-	switch s {
-	case detection.IdleStateActive:
-		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
-	case detection.IdleStateWaiting:
-		return sessionv1.WorkingState_WORKING_STATE_IDLE
-	case detection.IdleStateTimeout:
-		return sessionv1.WorkingState_WORKING_STATE_WAITING
-	default:
-		return sessionv1.WorkingState_WORKING_STATE_UNSPECIFIED
-	}
-}
-
-// MapDetectedStatusToWorkingState converts a detection.DetectedStatus to the proto
-// WorkingState enum. It is more precise than MapIdleStateToWorkingState because
-// DetectedStatus distinguishes StatusActive from StatusProcessing.
-func MapDetectedStatusToWorkingState(s detection.DetectedStatus) sessionv1.WorkingState {
-	switch s {
-	case detection.StatusActive:
-		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
-	case detection.StatusWaitingForAgent:
-		return sessionv1.WorkingState_WORKING_STATE_ACTIVE
-	case detection.StatusProcessing:
-		return sessionv1.WorkingState_WORKING_STATE_PROCESSING
-	case detection.StatusIdle, detection.StatusReady:
-		return sessionv1.WorkingState_WORKING_STATE_IDLE
-	case detection.StatusNeedsApproval, detection.StatusInputRequired:
-		return sessionv1.WorkingState_WORKING_STATE_WAITING
-	default:
-		return sessionv1.WorkingState_WORKING_STATE_UNSPECIFIED
 	}
 }
 

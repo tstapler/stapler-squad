@@ -6,7 +6,7 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Timestamp } from "@bufbuild/protobuf/wkt";
 import { file_google_protobuf_timestamp } from "@bufbuild/protobuf/wkt";
-import type { NotificationPriority, NotificationType, ReviewItem, Session, SessionStatus, ShellStatus, WorkingState } from "./types_pb";
+import type { DetectedStatus, NotificationPriority, NotificationType, ReviewItem, Session, ShellStatus } from "./types_pb";
 import { file_session_v1_types } from "./types_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file session/v1/events.proto.
  */
 export const file_session_v1_events: GenFile = /*@__PURE__*/
-  fileDesc("ChdzZXNzaW9uL3YxL2V2ZW50cy5wcm90bxIKc2Vzc2lvbi52MSLDBAoMU2Vzc2lvbkV2ZW50Ei0KCXRpbWVzdGFtcBgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASOgoPc2Vzc2lvbl9jcmVhdGVkGAIgASgLMh8uc2Vzc2lvbi52MS5TZXNzaW9uQ3JlYXRlZEV2ZW50SAASOgoPc2Vzc2lvbl91cGRhdGVkGAMgASgLMh8uc2Vzc2lvbi52MS5TZXNzaW9uVXBkYXRlZEV2ZW50SAASOgoPc2Vzc2lvbl9kZWxldGVkGAQgASgLMh8uc2Vzc2lvbi52MS5TZXNzaW9uRGVsZXRlZEV2ZW50SAASPwoOc3RhdHVzX2NoYW5nZWQYBSABKAsyJS5zZXNzaW9uLnYxLlNlc3Npb25TdGF0dXNDaGFuZ2VkRXZlbnRIABI8ChB1c2VyX2ludGVyYWN0aW9uGAYgASgLMiAuc2Vzc2lvbi52MS5Vc2VySW50ZXJhY3Rpb25FdmVudEgAEkQKFHNlc3Npb25fYWNrbm93bGVkZ2VkGAcgASgLMiQuc2Vzc2lvbi52MS5TZXNzaW9uQWNrbm93bGVkZ2VkRXZlbnRIABI+ChFhcHByb3ZhbF9yZXNwb25zZRgIIAEoCzIhLnNlc3Npb24udjEuQXBwcm92YWxSZXNwb25zZUV2ZW50SAASNQoMbm90aWZpY2F0aW9uGAkgASgLMh0uc2Vzc2lvbi52MS5Ob3RpZmljYXRpb25FdmVudEgAEgsKA3NlcRgKIAEoBEIHCgVldmVudCI7ChNTZXNzaW9uQ3JlYXRlZEV2ZW50EiQKB3Nlc3Npb24YASABKAsyEy5zZXNzaW9uLnYxLlNlc3Npb24iUwoTU2Vzc2lvblVwZGF0ZWRFdmVudBIkCgdzZXNzaW9uGAEgASgLMhMuc2Vzc2lvbi52MS5TZXNzaW9uEhYKDnVwZGF0ZWRfZmllbGRzGAIgAygJIjkKE1Nlc3Npb25EZWxldGVkRXZlbnQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkipAIKGVNlc3Npb25TdGF0dXNDaGFuZ2VkRXZlbnQSEgoKc2Vzc2lvbl9pZBgBIAEoCRItCgpvbGRfc3RhdHVzGAIgASgOMhkuc2Vzc2lvbi52MS5TZXNzaW9uU3RhdHVzEi0KCm5ld19zdGF0dXMYAyABKA4yGS5zZXNzaW9uLnYxLlNlc3Npb25TdGF0dXMSHAoPZGV0ZWN0ZWRfc3RhdHVzGAQgASgJSACIAQESHQoQZGV0ZWN0ZWRfY29udGV4dBgFIAEoCUgBiAEBEi8KDXdvcmtpbmdfc3RhdGUYBiABKA4yGC5zZXNzaW9uLnYxLldvcmtpbmdTdGF0ZUISChBfZGV0ZWN0ZWRfc3RhdHVzQhMKEV9kZXRlY3RlZF9jb250ZXh0IoIHCgxUZXJtaW5hbERhdGESEgoKc2Vzc2lvbl9pZBgBIAEoCRIsCgZvdXRwdXQYAiABKAsyGi5zZXNzaW9uLnYxLlRlcm1pbmFsT3V0cHV0SAASKgoFaW5wdXQYAyABKAsyGS5zZXNzaW9uLnYxLlRlcm1pbmFsSW5wdXRIABIsCgZyZXNpemUYBCABKAsyGi5zZXNzaW9uLnYxLlRlcm1pbmFsUmVzaXplSAASKgoFZXJyb3IYBSABKAsyGS5zZXNzaW9uLnYxLlRlcm1pbmFsRXJyb3JIABI7ChJzY3JvbGxiYWNrX3JlcXVlc3QYBiABKAsyHS5zZXNzaW9uLnYxLlNjcm9sbGJhY2tSZXF1ZXN0SAASPQoTc2Nyb2xsYmFja19yZXNwb25zZRgHIAEoCzIeLnNlc3Npb24udjEuU2Nyb2xsYmFja1Jlc3BvbnNlSAASKgoFZGVsdGEYCCABKAsyGS5zZXNzaW9uLnYxLlRlcm1pbmFsRGVsdGFIABI+ChRjdXJyZW50X3BhbmVfcmVxdWVzdBgJIAEoCzIeLnNlc3Npb24udjEuQ3VycmVudFBhbmVSZXF1ZXN0SAASQAoVY3VycmVudF9wYW5lX3Jlc3BvbnNlGAogASgLMh8uc2Vzc2lvbi52MS5DdXJyZW50UGFuZVJlc3BvbnNlSAASLwoMZmxvd19jb250cm9sGAsgASgLMhcuc2Vzc2lvbi52MS5GbG93Q29udHJvbEgAEioKBXN0YXRlGAwgASgLMhkuc2Vzc2lvbi52MS5UZXJtaW5hbFN0YXRlSAASKAoEZGlmZhgNIAEoCzIYLnNlc3Npb24udjEuVGVybWluYWxEaWZmSAASLwoKaW5wdXRfZWNobxgOIAEoCzIZLnNlc3Npb24udjEuSW5wdXRXaXRoRWNob0gAEjUKD3NzcF9uZWdvdGlhdGlvbhgPIAEoCzIaLnNlc3Npb24udjEuU1NQTmVnb3RpYXRpb25IABI5ChFyZXNpemVfcXVpZXNjZW5jZRgQIAEoCzIcLnNlc3Npb24udjEuUmVzaXplUXVpZXNjZW5jZUgAEjwKE3NoZWxsX3N0YXR1c191cGRhdGUYEiABKAsyHS5zZXNzaW9uLnYxLlNoZWxsU3RhdHVzVXBkYXRlSAASEAoIc2hlbGxfaWQYESABKAlCBgoEZGF0YSJlChFTaGVsbFN0YXR1c1VwZGF0ZRIQCghzaGVsbF9pZBgBIAEoCRIrCgpuZXdfc3RhdHVzGAIgASgOMhcuc2Vzc2lvbi52MS5TaGVsbFN0YXR1cxIRCglleGl0X2NvZGUYAyABKAUiQAoQUmVzaXplUXVpZXNjZW5jZRIQCghyZXNpemluZxgBIAEoCBIMCgRjb2xzGAIgASgFEgwKBHJvd3MYAyABKAUiHgoOVGVybWluYWxPdXRwdXQSDAoEZGF0YRgBIAEoDCIdCg1UZXJtaW5hbElucHV0EgwKBGRhdGEYASABKAwiLAoOVGVybWluYWxSZXNpemUSDAoEcm93cxgBIAEoBRIMCgRjb2xzGAIgASgFIi4KDVRlcm1pbmFsRXJyb3ISDwoHbWVzc2FnZRgBIAEoCRIMCgRjb2RlGAIgASgJIkMKC0Zsb3dDb250cm9sEg4KBnBhdXNlZBgBIAEoCBIWCgl3YXRlcm1hcmsYAiABKARIAIgBAUIMCgpfd2F0ZXJtYXJrIjkKEVNjcm9sbGJhY2tSZXF1ZXN0EhUKDWZyb21fc2VxdWVuY2UYASABKAQSDQoFbGltaXQYAiABKAUimgEKElNjcm9sbGJhY2tSZXNwb25zZRIrCgZjaHVua3MYASADKAsyGy5zZXNzaW9uLnYxLlNjcm9sbGJhY2tDaHVuaxIQCghoYXNfbW9yZRgCIAEoCBITCgt0b3RhbF9saW5lcxgDIAEoBBIXCg9vbGRlc3Rfc2VxdWVuY2UYBCABKAQSFwoPbmV3ZXN0X3NlcXVlbmNlGAUgASgEIkcKD1Njcm9sbGJhY2tDaHVuaxIMCgRkYXRhGAEgASgMEhAKCHNlcXVlbmNlGAIgASgEEhQKDHRpbWVzdGFtcF9tcxgDIAEoAyLAAQoSQ3VycmVudFBhbmVSZXF1ZXN0Eg0KBWxpbmVzGAEgASgFEhcKD2luY2x1ZGVfZXNjYXBlcxgCIAEoCBIYCgt0YXJnZXRfY29scxgDIAEoBUgAiAEBEhgKC3RhcmdldF9yb3dzGAQgASgFSAGIAQESGwoOc3RyZWFtaW5nX21vZGUYBSABKAlIAogBAUIOCgxfdGFyZ2V0X2NvbHNCDgoMX3RhcmdldF9yb3dzQhEKD19zdHJlYW1pbmdfbW9kZSJzChNDdXJyZW50UGFuZVJlc3BvbnNlEg8KB2NvbnRlbnQYASABKAwSEAoIY3Vyc29yX3gYAiABKAUSEAoIY3Vyc29yX3kYAyABKAUSEgoKcGFuZV93aWR0aBgEIAEoBRITCgtwYW5lX2hlaWdodBgFIAEoBSLiAQoNVGVybWluYWxEZWx0YRISCgpmcm9tX3N0YXRlGAEgASgEEhAKCHRvX3N0YXRlGAIgASgEEiQKBWxpbmVzGAMgAygLMhUuc2Vzc2lvbi52MS5MaW5lRGVsdGESKgoGY3Vyc29yGAQgASgLMhouc2Vzc2lvbi52MS5DdXJzb3JQb3NpdGlvbhIRCglmdWxsX3N5bmMYBSABKAgSNwoKZGltZW5zaW9ucxgGIAEoCzIeLnNlc3Npb24udjEuVGVybWluYWxEaW1lbnNpb25zSACIAQFCDQoLX2RpbWVuc2lvbnMiwgEKCUxpbmVEZWx0YRITCgtsaW5lX251bWJlchgBIAEoDRIWCgxyZXBsYWNlX2xpbmUYAiABKAxIABIkCgRlZGl0GAMgASgLMhQuc2Vzc2lvbi52MS5MaW5lRWRpdEgAEhUKC2RlbGV0ZV9saW5lGAQgASgISAASKAoGaW5zZXJ0GAUgASgLMhYuc2Vzc2lvbi52MS5JbnNlcnRMaW5lSAASFAoKY2xlYXJfbGluZRgGIAEoCEgAQgsKCW9wZXJhdGlvbiI8CghMaW5lRWRpdBIRCglzdGFydF9jb2wYASABKA0SDwoHZW5kX2NvbBgCIAEoDRIMCgR0ZXh0GAMgASgMIi0KCkluc2VydExpbmUSDAoEdGV4dBgBIAEoDBIRCglhdF9jdXJzb3IYAiABKAgiOwoOQ3Vyc29yUG9zaXRpb24SCwoDcm93GAEgASgNEgsKA2NvbBgCIAEoDRIPCgd2aXNpYmxlGAMgASgIIjAKElRlcm1pbmFsRGltZW5zaW9ucxIMCgRyb3dzGAEgASgNEgwKBGNvbHMYAiABKA0ilwIKDFRlcm1pbmFsRGlmZhIVCg1mcm9tX3NlcXVlbmNlGAEgASgEEhMKC3RvX3NlcXVlbmNlGAIgASgEEhIKCmRpZmZfYnl0ZXMYAyABKAwSKgoIZWNob19hY2sYBCABKAsyEy5zZXNzaW9uLnYxLkVjaG9BY2tIAIgBARITCgtmdWxsX3JlZHJhdxgFIAEoCBIVCg1jaGFuZ2VkX2NlbGxzGAYgASgNEhcKD3VuY2hhbmdlZF9jZWxscxgHIAEoDRI5Cgtjb21wcmVzc2lvbhgIIAEoCzIfLnNlc3Npb24udjEuQ29tcHJlc3Npb25NZXRhZGF0YUgBiAEBQgsKCV9lY2hvX2Fja0IOCgxfY29tcHJlc3Npb24iPAoHRWNob0FjaxIUCgxlY2hvX2Fja19udW0YASABKAQSGwoTc2VydmVyX3RpbWVzdGFtcF9tcxgCIAEoAyJMCg1JbnB1dFdpdGhFY2hvEgwKBGRhdGEYASABKAwSEAoIZWNob19udW0YAiABKAQSGwoTY2xpZW50X3RpbWVzdGFtcF9tcxgDIAEoAyKEAgoPU1NQQ2FwYWJpbGl0aWVzEiAKGHN1cHBvcnRzX3ByZWRpY3RpdmVfZWNobxgBIAEoCBIdChVzdXBwb3J0c19kaWZmX3VwZGF0ZXMYAiABKAgSHgoWY29tcHJlc3Npb25fYWxnb3JpdGhtcxgDIAMoCRIYChBwcm90b2NvbF92ZXJzaW9uGAQgASgNEhoKDW1heF9kaWZmX3NpemUYBSABKA1IAIgBARIoChtwcmVmZXJyZWRfZnJhbWVfaW50ZXJ2YWxfbXMYBiABKA1IAYgBAUIQCg5fbWF4X2RpZmZfc2l6ZUIeChxfcHJlZmVycmVkX2ZyYW1lX2ludGVydmFsX21zIpwBCg5TU1BOZWdvdGlhdGlvbhIxCgxjYXBhYmlsaXRpZXMYASABKAsyGy5zZXNzaW9uLnYxLlNTUENhcGFiaWxpdGllcxISCgppc19yZXF1ZXN0GAIgASgIEjQKCm5lZ290aWF0ZWQYAyABKAsyGy5zZXNzaW9uLnYxLlNTUENhcGFiaWxpdGllc0gAiAEBQg0KC19uZWdvdGlhdGVkIrkCCg1UZXJtaW5hbFN0YXRlEhAKCHNlcXVlbmNlGAEgASgEEjIKCmRpbWVuc2lvbnMYAiABKAsyHi5zZXNzaW9uLnYxLlRlcm1pbmFsRGltZW5zaW9ucxInCgVsaW5lcxgDIAMoCzIYLnNlc3Npb24udjEuVGVybWluYWxMaW5lEioKBmN1cnNvchgEIAEoCzIaLnNlc3Npb24udjEuQ3Vyc29yUG9zaXRpb24SMwoKc2Nyb2xsYmFjaxgFIAEoCzIaLnNlc3Npb24udjEuU2Nyb2xsYmFja0luZm9IAIgBARI5Cgtjb21wcmVzc2lvbhgGIAEoCzIfLnNlc3Npb24udjEuQ29tcHJlc3Npb25NZXRhZGF0YUgBiAEBQg0KC19zY3JvbGxiYWNrQg4KDF9jb21wcmVzc2lvbiJjCgxUZXJtaW5hbExpbmUSDwoHY29udGVudBgBIAEoDBIzCgphdHRyaWJ1dGVzGAIgASgLMhouc2Vzc2lvbi52MS5MaW5lQXR0cmlidXRlc0gAiAEBQg0KC19hdHRyaWJ1dGVzIoYBCg5MaW5lQXR0cmlidXRlcxIQCghpc19lbXB0eRgBIAEoCBISCgphc2NpaV9vbmx5GAIgASgIEhUKCGVuY29kaW5nGAMgASgJSACIAQESGQoMcGF0dGVybl9oYXNoGAQgASgESAGIAQFCCwoJX2VuY29kaW5nQg8KDV9wYXR0ZXJuX2hhc2giUgoOU2Nyb2xsYmFja0luZm8SEwoLdG90YWxfbGluZXMYASABKAQSFQoNZmlyc3RfdmlzaWJsZRgCIAEoBBIUCgxsYXN0X3Zpc2libGUYAyABKAQi7QEKE0NvbXByZXNzaW9uTWV0YWRhdGESEQoJYWxnb3JpdGhtGAEgASgJEhoKDWRpY3Rpb25hcnlfaWQYAiABKAlIAIgBARIZChF1bmNvbXByZXNzZWRfc2l6ZRgDIAEoBBIXCg9jb21wcmVzc2VkX3NpemUYBCABKAQSGQoRY29tcHJlc3Npb25fcmF0aW8YBSABKAISNwoKZGljdGlvbmFyeRgGIAEoCzIeLnNlc3Npb24udjEuRGljdGlvbmFyeU1ldGFkYXRhSAGIAQFCEAoOX2RpY3Rpb25hcnlfaWRCDQoLX2RpY3Rpb25hcnkieQoSRGljdGlvbmFyeU1ldGFkYXRhEg0KBWxldmVsGAEgASgJEhUKDXBhdHRlcm5fY291bnQYAiABKAQSFQoNZWZmZWN0aXZlbmVzcxgDIAEoAhISCgp1cGRhdGVkX2F0GAQgASgDEhIKCnNpemVfYnl0ZXMYBSABKAQivwYKFFVzZXJJbnRlcmFjdGlvbkV2ZW50EhIKCnNlc3Npb25faWQYASABKAkSPgoEdHlwZRgCIAEoDjIwLnNlc3Npb24udjEuVXNlckludGVyYWN0aW9uRXZlbnQuSW50ZXJhY3Rpb25UeXBlEg8KB2NvbnRleHQYAyABKAkiwQUKD0ludGVyYWN0aW9uVHlwZRIgChxJTlRFUkFDVElPTl9UWVBFX1VOU1BFQ0lGSUVEEAASIwofSU5URVJBQ1RJT05fVFlQRV9URVJNSU5BTF9JTlBVVBABEiMKH0lOVEVSQUNUSU9OX1RZUEVfQVBQUk9WQUxfR0lWRU4QAhIkCiBJTlRFUkFDVElPTl9UWVBFX0FQUFJPVkFMX0RFTklFRBADEiUKIUlOVEVSQUNUSU9OX1RZUEVfQ09NTUFORF9FWEVDVVRFRBAEEiUKIUlOVEVSQUNUSU9OX1RZUEVfU0VTU0lPTl9BVFRBQ0hFRBAFEiUKIUlOVEVSQUNUSU9OX1RZUEVfU0VTU0lPTl9ERVRBQ0hFRBAGEi4KKklOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1BBTkVMX09QRU5FRBAHEi4KKklOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1BBTkVMX0NMT1NFRBAIEigKJElOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1ZJRVdFRBAJEisKJ0lOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX0RJU01JU1NFRBAKEi0KKUlOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX01BUktFRF9SRUFEEAsSMQotSU5URVJBQ1RJT05fVFlQRV9OT1RJRklDQVRJT05fTUFSS0VEX0FMTF9SRUFEEAwSKQolSU5URVJBQ1RJT05fVFlQRV9OT1RJRklDQVRJT05fUkVNT1ZFRBANEjEKLUlOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX0hJU1RPUllfQ0xFQVJFRBAOEjAKLElOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1NFU1NJT05fVklFV0VEEA8icwoYU2Vzc2lvbkFja25vd2xlZGdlZEV2ZW50EhIKCnNlc3Npb25faWQYASABKAkSMwoPYWNrbm93bGVkZ2VkX2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIOCgZyZWFzb24YAyABKAkigAEKFUFwcHJvdmFsUmVzcG9uc2VFdmVudBISCgpzZXNzaW9uX2lkGAEgASgJEhAKCGFwcHJvdmVkGAIgASgIEg8KB2NvbnRleHQYAyABKAkSMAoMcmVzcG9uZGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLHAgoQUmV2aWV3UXVldWVFdmVudBItCgl0aW1lc3RhbXAYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjsKCml0ZW1fYWRkZWQYAiABKAsyJS5zZXNzaW9uLnYxLlJldmlld1F1ZXVlSXRlbUFkZGVkRXZlbnRIABI/CgxpdGVtX3JlbW92ZWQYAyABKAsyJy5zZXNzaW9uLnYxLlJldmlld1F1ZXVlSXRlbVJlbW92ZWRFdmVudEgAEj8KDGl0ZW1fdXBkYXRlZBgEIAEoCzInLnNlc3Npb24udjEuUmV2aWV3UXVldWVJdGVtVXBkYXRlZEV2ZW50SAASPAoKc3RhdGlzdGljcxgFIAEoCzImLnNlc3Npb24udjEuUmV2aWV3UXVldWVTdGF0aXN0aWNzRXZlbnRIAEIHCgVldmVudCJnChlSZXZpZXdRdWV1ZUl0ZW1BZGRlZEV2ZW50EiQKBGl0ZW0YASABKAsyFi5zZXNzaW9uLnYxLlJldmlld0l0ZW0SDwoHdHJpZ2dlchgCIAEoCRITCgtpc19zbmFwc2hvdBgDIAEoCCJBChtSZXZpZXdRdWV1ZUl0ZW1SZW1vdmVkRXZlbnQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkibwobUmV2aWV3UXVldWVJdGVtVXBkYXRlZEV2ZW50EhIKCnNlc3Npb25faWQYASABKAkSJAoEaXRlbRgCIAEoCzIWLnNlc3Npb24udjEuUmV2aWV3SXRlbRIWCg51cGRhdGVkX2ZpZWxkcxgDIAMoCSLcAgoaUmV2aWV3UXVldWVTdGF0aXN0aWNzRXZlbnQSEwoLdG90YWxfaXRlbXMYASABKAUSSwoLYnlfcHJpb3JpdHkYAiADKAsyNi5zZXNzaW9uLnYxLlJldmlld1F1ZXVlU3RhdGlzdGljc0V2ZW50LkJ5UHJpb3JpdHlFbnRyeRJHCglieV9yZWFzb24YAyADKAsyNC5zZXNzaW9uLnYxLlJldmlld1F1ZXVlU3RhdGlzdGljc0V2ZW50LkJ5UmVhc29uRW50cnkSFgoOYXZlcmFnZV9hZ2VfbXMYBCABKAMSFwoPZXNjYWxhdGVkX2l0ZW1zGAUgAygJGjEKD0J5UHJpb3JpdHlFbnRyeRILCgNrZXkYASABKAUSDQoFdmFsdWUYAiABKAU6AjgBGi8KDUJ5UmVhc29uRW50cnkSCwoDa2V5GAEgASgFEg0KBXZhbHVlGAIgASgFOgI4ASKCAwoRTm90aWZpY2F0aW9uRXZlbnQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIUCgxzZXNzaW9uX25hbWUYAiABKAkSNwoRbm90aWZpY2F0aW9uX3R5cGUYAyABKA4yHC5zZXNzaW9uLnYxLk5vdGlmaWNhdGlvblR5cGUSMgoIcHJpb3JpdHkYBCABKA4yIC5zZXNzaW9uLnYxLk5vdGlmaWNhdGlvblByaW9yaXR5Eg0KBXRpdGxlGAUgASgJEg8KB21lc3NhZ2UYBiABKAkSPQoIbWV0YWRhdGEYByADKAsyKy5zZXNzaW9uLnYxLk5vdGlmaWNhdGlvbkV2ZW50Lk1ldGFkYXRhRW50cnkSLQoJdGltZXN0YW1wGAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIXCg9ub3RpZmljYXRpb25faWQYCSABKAkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQqsBCg5jb20uc2Vzc2lvbi52MUILRXZlbnRzUHJvdG9QAVpDZ2l0aHViLmNvbS90c3RhcGxlci9zdGFwbGVyLXNxdWFkL2dlbi9wcm90by9nby9zZXNzaW9uL3YxO3Nlc3Npb252MaICA1NYWKoCClNlc3Npb24uVjHKAgpTZXNzaW9uXFYx4gIWU2Vzc2lvblxWMVxHUEJNZXRhZGF0YeoCC1Nlc3Npb246OlYxYgZwcm90bzM", [file_google_protobuf_timestamp, file_session_v1_types]);
+  fileDesc("ChdzZXNzaW9uL3YxL2V2ZW50cy5wcm90bxIKc2Vzc2lvbi52MSKYBAoMU2Vzc2lvbkV2ZW50Ei0KCXRpbWVzdGFtcBgBIAEoCzIaLmdvb2dsZS5wcm90b2J1Zi5UaW1lc3RhbXASOgoPc2Vzc2lvbl9jcmVhdGVkGAIgASgLMh8uc2Vzc2lvbi52MS5TZXNzaW9uQ3JlYXRlZEV2ZW50SAASOgoPc2Vzc2lvbl91cGRhdGVkGAMgASgLMh8uc2Vzc2lvbi52MS5TZXNzaW9uVXBkYXRlZEV2ZW50SAASOgoPc2Vzc2lvbl9kZWxldGVkGAQgASgLMh8uc2Vzc2lvbi52MS5TZXNzaW9uRGVsZXRlZEV2ZW50SAASPAoQdXNlcl9pbnRlcmFjdGlvbhgGIAEoCzIgLnNlc3Npb24udjEuVXNlckludGVyYWN0aW9uRXZlbnRIABJEChRzZXNzaW9uX2Fja25vd2xlZGdlZBgHIAEoCzIkLnNlc3Npb24udjEuU2Vzc2lvbkFja25vd2xlZGdlZEV2ZW50SAASPgoRYXBwcm92YWxfcmVzcG9uc2UYCCABKAsyIS5zZXNzaW9uLnYxLkFwcHJvdmFsUmVzcG9uc2VFdmVudEgAEjUKDG5vdGlmaWNhdGlvbhgJIAEoCzIdLnNlc3Npb24udjEuTm90aWZpY2F0aW9uRXZlbnRIABILCgNzZXEYCiABKARCBwoFZXZlbnRKBAgFEAZSDnN0YXR1c19jaGFuZ2VkIjsKE1Nlc3Npb25DcmVhdGVkRXZlbnQSJAoHc2Vzc2lvbhgBIAEoCzITLnNlc3Npb24udjEuU2Vzc2lvbiKiAQoTU2Vzc2lvblVwZGF0ZWRFdmVudBIkCgdzZXNzaW9uGAEgASgLMhMuc2Vzc2lvbi52MS5TZXNzaW9uEhYKDnVwZGF0ZWRfZmllbGRzGAIgAygJEjMKD2RldGVjdGVkX3N0YXR1cxgDIAEoDjIaLnNlc3Npb24udjEuRGV0ZWN0ZWRTdGF0dXMSGAoQZGV0ZWN0ZWRfY29udGV4dBgEIAEoCSI5ChNTZXNzaW9uRGVsZXRlZEV2ZW50EhIKCnNlc3Npb25faWQYASABKAkSDgoGcmVhc29uGAIgASgJIoIHCgxUZXJtaW5hbERhdGESEgoKc2Vzc2lvbl9pZBgBIAEoCRIsCgZvdXRwdXQYAiABKAsyGi5zZXNzaW9uLnYxLlRlcm1pbmFsT3V0cHV0SAASKgoFaW5wdXQYAyABKAsyGS5zZXNzaW9uLnYxLlRlcm1pbmFsSW5wdXRIABIsCgZyZXNpemUYBCABKAsyGi5zZXNzaW9uLnYxLlRlcm1pbmFsUmVzaXplSAASKgoFZXJyb3IYBSABKAsyGS5zZXNzaW9uLnYxLlRlcm1pbmFsRXJyb3JIABI7ChJzY3JvbGxiYWNrX3JlcXVlc3QYBiABKAsyHS5zZXNzaW9uLnYxLlNjcm9sbGJhY2tSZXF1ZXN0SAASPQoTc2Nyb2xsYmFja19yZXNwb25zZRgHIAEoCzIeLnNlc3Npb24udjEuU2Nyb2xsYmFja1Jlc3BvbnNlSAASKgoFZGVsdGEYCCABKAsyGS5zZXNzaW9uLnYxLlRlcm1pbmFsRGVsdGFIABI+ChRjdXJyZW50X3BhbmVfcmVxdWVzdBgJIAEoCzIeLnNlc3Npb24udjEuQ3VycmVudFBhbmVSZXF1ZXN0SAASQAoVY3VycmVudF9wYW5lX3Jlc3BvbnNlGAogASgLMh8uc2Vzc2lvbi52MS5DdXJyZW50UGFuZVJlc3BvbnNlSAASLwoMZmxvd19jb250cm9sGAsgASgLMhcuc2Vzc2lvbi52MS5GbG93Q29udHJvbEgAEioKBXN0YXRlGAwgASgLMhkuc2Vzc2lvbi52MS5UZXJtaW5hbFN0YXRlSAASKAoEZGlmZhgNIAEoCzIYLnNlc3Npb24udjEuVGVybWluYWxEaWZmSAASLwoKaW5wdXRfZWNobxgOIAEoCzIZLnNlc3Npb24udjEuSW5wdXRXaXRoRWNob0gAEjUKD3NzcF9uZWdvdGlhdGlvbhgPIAEoCzIaLnNlc3Npb24udjEuU1NQTmVnb3RpYXRpb25IABI5ChFyZXNpemVfcXVpZXNjZW5jZRgQIAEoCzIcLnNlc3Npb24udjEuUmVzaXplUXVpZXNjZW5jZUgAEjwKE3NoZWxsX3N0YXR1c191cGRhdGUYEiABKAsyHS5zZXNzaW9uLnYxLlNoZWxsU3RhdHVzVXBkYXRlSAASEAoIc2hlbGxfaWQYESABKAlCBgoEZGF0YSJlChFTaGVsbFN0YXR1c1VwZGF0ZRIQCghzaGVsbF9pZBgBIAEoCRIrCgpuZXdfc3RhdHVzGAIgASgOMhcuc2Vzc2lvbi52MS5TaGVsbFN0YXR1cxIRCglleGl0X2NvZGUYAyABKAUiQAoQUmVzaXplUXVpZXNjZW5jZRIQCghyZXNpemluZxgBIAEoCBIMCgRjb2xzGAIgASgFEgwKBHJvd3MYAyABKAUiHgoOVGVybWluYWxPdXRwdXQSDAoEZGF0YRgBIAEoDCIdCg1UZXJtaW5hbElucHV0EgwKBGRhdGEYASABKAwiLAoOVGVybWluYWxSZXNpemUSDAoEcm93cxgBIAEoBRIMCgRjb2xzGAIgASgFIi4KDVRlcm1pbmFsRXJyb3ISDwoHbWVzc2FnZRgBIAEoCRIMCgRjb2RlGAIgASgJIkMKC0Zsb3dDb250cm9sEg4KBnBhdXNlZBgBIAEoCBIWCgl3YXRlcm1hcmsYAiABKARIAIgBAUIMCgpfd2F0ZXJtYXJrIjkKEVNjcm9sbGJhY2tSZXF1ZXN0EhUKDWZyb21fc2VxdWVuY2UYASABKAQSDQoFbGltaXQYAiABKAUimgEKElNjcm9sbGJhY2tSZXNwb25zZRIrCgZjaHVua3MYASADKAsyGy5zZXNzaW9uLnYxLlNjcm9sbGJhY2tDaHVuaxIQCghoYXNfbW9yZRgCIAEoCBITCgt0b3RhbF9saW5lcxgDIAEoBBIXCg9vbGRlc3Rfc2VxdWVuY2UYBCABKAQSFwoPbmV3ZXN0X3NlcXVlbmNlGAUgASgEIkcKD1Njcm9sbGJhY2tDaHVuaxIMCgRkYXRhGAEgASgMEhAKCHNlcXVlbmNlGAIgASgEEhQKDHRpbWVzdGFtcF9tcxgDIAEoAyLAAQoSQ3VycmVudFBhbmVSZXF1ZXN0Eg0KBWxpbmVzGAEgASgFEhcKD2luY2x1ZGVfZXNjYXBlcxgCIAEoCBIYCgt0YXJnZXRfY29scxgDIAEoBUgAiAEBEhgKC3RhcmdldF9yb3dzGAQgASgFSAGIAQESGwoOc3RyZWFtaW5nX21vZGUYBSABKAlIAogBAUIOCgxfdGFyZ2V0X2NvbHNCDgoMX3RhcmdldF9yb3dzQhEKD19zdHJlYW1pbmdfbW9kZSJzChNDdXJyZW50UGFuZVJlc3BvbnNlEg8KB2NvbnRlbnQYASABKAwSEAoIY3Vyc29yX3gYAiABKAUSEAoIY3Vyc29yX3kYAyABKAUSEgoKcGFuZV93aWR0aBgEIAEoBRITCgtwYW5lX2hlaWdodBgFIAEoBSLiAQoNVGVybWluYWxEZWx0YRISCgpmcm9tX3N0YXRlGAEgASgEEhAKCHRvX3N0YXRlGAIgASgEEiQKBWxpbmVzGAMgAygLMhUuc2Vzc2lvbi52MS5MaW5lRGVsdGESKgoGY3Vyc29yGAQgASgLMhouc2Vzc2lvbi52MS5DdXJzb3JQb3NpdGlvbhIRCglmdWxsX3N5bmMYBSABKAgSNwoKZGltZW5zaW9ucxgGIAEoCzIeLnNlc3Npb24udjEuVGVybWluYWxEaW1lbnNpb25zSACIAQFCDQoLX2RpbWVuc2lvbnMiwgEKCUxpbmVEZWx0YRITCgtsaW5lX251bWJlchgBIAEoDRIWCgxyZXBsYWNlX2xpbmUYAiABKAxIABIkCgRlZGl0GAMgASgLMhQuc2Vzc2lvbi52MS5MaW5lRWRpdEgAEhUKC2RlbGV0ZV9saW5lGAQgASgISAASKAoGaW5zZXJ0GAUgASgLMhYuc2Vzc2lvbi52MS5JbnNlcnRMaW5lSAASFAoKY2xlYXJfbGluZRgGIAEoCEgAQgsKCW9wZXJhdGlvbiI8CghMaW5lRWRpdBIRCglzdGFydF9jb2wYASABKA0SDwoHZW5kX2NvbBgCIAEoDRIMCgR0ZXh0GAMgASgMIi0KCkluc2VydExpbmUSDAoEdGV4dBgBIAEoDBIRCglhdF9jdXJzb3IYAiABKAgiOwoOQ3Vyc29yUG9zaXRpb24SCwoDcm93GAEgASgNEgsKA2NvbBgCIAEoDRIPCgd2aXNpYmxlGAMgASgIIjAKElRlcm1pbmFsRGltZW5zaW9ucxIMCgRyb3dzGAEgASgNEgwKBGNvbHMYAiABKA0ilwIKDFRlcm1pbmFsRGlmZhIVCg1mcm9tX3NlcXVlbmNlGAEgASgEEhMKC3RvX3NlcXVlbmNlGAIgASgEEhIKCmRpZmZfYnl0ZXMYAyABKAwSKgoIZWNob19hY2sYBCABKAsyEy5zZXNzaW9uLnYxLkVjaG9BY2tIAIgBARITCgtmdWxsX3JlZHJhdxgFIAEoCBIVCg1jaGFuZ2VkX2NlbGxzGAYgASgNEhcKD3VuY2hhbmdlZF9jZWxscxgHIAEoDRI5Cgtjb21wcmVzc2lvbhgIIAEoCzIfLnNlc3Npb24udjEuQ29tcHJlc3Npb25NZXRhZGF0YUgBiAEBQgsKCV9lY2hvX2Fja0IOCgxfY29tcHJlc3Npb24iPAoHRWNob0FjaxIUCgxlY2hvX2Fja19udW0YASABKAQSGwoTc2VydmVyX3RpbWVzdGFtcF9tcxgCIAEoAyJMCg1JbnB1dFdpdGhFY2hvEgwKBGRhdGEYASABKAwSEAoIZWNob19udW0YAiABKAQSGwoTY2xpZW50X3RpbWVzdGFtcF9tcxgDIAEoAyKEAgoPU1NQQ2FwYWJpbGl0aWVzEiAKGHN1cHBvcnRzX3ByZWRpY3RpdmVfZWNobxgBIAEoCBIdChVzdXBwb3J0c19kaWZmX3VwZGF0ZXMYAiABKAgSHgoWY29tcHJlc3Npb25fYWxnb3JpdGhtcxgDIAMoCRIYChBwcm90b2NvbF92ZXJzaW9uGAQgASgNEhoKDW1heF9kaWZmX3NpemUYBSABKA1IAIgBARIoChtwcmVmZXJyZWRfZnJhbWVfaW50ZXJ2YWxfbXMYBiABKA1IAYgBAUIQCg5fbWF4X2RpZmZfc2l6ZUIeChxfcHJlZmVycmVkX2ZyYW1lX2ludGVydmFsX21zIpwBCg5TU1BOZWdvdGlhdGlvbhIxCgxjYXBhYmlsaXRpZXMYASABKAsyGy5zZXNzaW9uLnYxLlNTUENhcGFiaWxpdGllcxISCgppc19yZXF1ZXN0GAIgASgIEjQKCm5lZ290aWF0ZWQYAyABKAsyGy5zZXNzaW9uLnYxLlNTUENhcGFiaWxpdGllc0gAiAEBQg0KC19uZWdvdGlhdGVkIrkCCg1UZXJtaW5hbFN0YXRlEhAKCHNlcXVlbmNlGAEgASgEEjIKCmRpbWVuc2lvbnMYAiABKAsyHi5zZXNzaW9uLnYxLlRlcm1pbmFsRGltZW5zaW9ucxInCgVsaW5lcxgDIAMoCzIYLnNlc3Npb24udjEuVGVybWluYWxMaW5lEioKBmN1cnNvchgEIAEoCzIaLnNlc3Npb24udjEuQ3Vyc29yUG9zaXRpb24SMwoKc2Nyb2xsYmFjaxgFIAEoCzIaLnNlc3Npb24udjEuU2Nyb2xsYmFja0luZm9IAIgBARI5Cgtjb21wcmVzc2lvbhgGIAEoCzIfLnNlc3Npb24udjEuQ29tcHJlc3Npb25NZXRhZGF0YUgBiAEBQg0KC19zY3JvbGxiYWNrQg4KDF9jb21wcmVzc2lvbiJjCgxUZXJtaW5hbExpbmUSDwoHY29udGVudBgBIAEoDBIzCgphdHRyaWJ1dGVzGAIgASgLMhouc2Vzc2lvbi52MS5MaW5lQXR0cmlidXRlc0gAiAEBQg0KC19hdHRyaWJ1dGVzIoYBCg5MaW5lQXR0cmlidXRlcxIQCghpc19lbXB0eRgBIAEoCBISCgphc2NpaV9vbmx5GAIgASgIEhUKCGVuY29kaW5nGAMgASgJSACIAQESGQoMcGF0dGVybl9oYXNoGAQgASgESAGIAQFCCwoJX2VuY29kaW5nQg8KDV9wYXR0ZXJuX2hhc2giUgoOU2Nyb2xsYmFja0luZm8SEwoLdG90YWxfbGluZXMYASABKAQSFQoNZmlyc3RfdmlzaWJsZRgCIAEoBBIUCgxsYXN0X3Zpc2libGUYAyABKAQi7QEKE0NvbXByZXNzaW9uTWV0YWRhdGESEQoJYWxnb3JpdGhtGAEgASgJEhoKDWRpY3Rpb25hcnlfaWQYAiABKAlIAIgBARIZChF1bmNvbXByZXNzZWRfc2l6ZRgDIAEoBBIXCg9jb21wcmVzc2VkX3NpemUYBCABKAQSGQoRY29tcHJlc3Npb25fcmF0aW8YBSABKAISNwoKZGljdGlvbmFyeRgGIAEoCzIeLnNlc3Npb24udjEuRGljdGlvbmFyeU1ldGFkYXRhSAGIAQFCEAoOX2RpY3Rpb25hcnlfaWRCDQoLX2RpY3Rpb25hcnkieQoSRGljdGlvbmFyeU1ldGFkYXRhEg0KBWxldmVsGAEgASgJEhUKDXBhdHRlcm5fY291bnQYAiABKAQSFQoNZWZmZWN0aXZlbmVzcxgDIAEoAhISCgp1cGRhdGVkX2F0GAQgASgDEhIKCnNpemVfYnl0ZXMYBSABKAQivwYKFFVzZXJJbnRlcmFjdGlvbkV2ZW50EhIKCnNlc3Npb25faWQYASABKAkSPgoEdHlwZRgCIAEoDjIwLnNlc3Npb24udjEuVXNlckludGVyYWN0aW9uRXZlbnQuSW50ZXJhY3Rpb25UeXBlEg8KB2NvbnRleHQYAyABKAkiwQUKD0ludGVyYWN0aW9uVHlwZRIgChxJTlRFUkFDVElPTl9UWVBFX1VOU1BFQ0lGSUVEEAASIwofSU5URVJBQ1RJT05fVFlQRV9URVJNSU5BTF9JTlBVVBABEiMKH0lOVEVSQUNUSU9OX1RZUEVfQVBQUk9WQUxfR0lWRU4QAhIkCiBJTlRFUkFDVElPTl9UWVBFX0FQUFJPVkFMX0RFTklFRBADEiUKIUlOVEVSQUNUSU9OX1RZUEVfQ09NTUFORF9FWEVDVVRFRBAEEiUKIUlOVEVSQUNUSU9OX1RZUEVfU0VTU0lPTl9BVFRBQ0hFRBAFEiUKIUlOVEVSQUNUSU9OX1RZUEVfU0VTU0lPTl9ERVRBQ0hFRBAGEi4KKklOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1BBTkVMX09QRU5FRBAHEi4KKklOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1BBTkVMX0NMT1NFRBAIEigKJElOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1ZJRVdFRBAJEisKJ0lOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX0RJU01JU1NFRBAKEi0KKUlOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX01BUktFRF9SRUFEEAsSMQotSU5URVJBQ1RJT05fVFlQRV9OT1RJRklDQVRJT05fTUFSS0VEX0FMTF9SRUFEEAwSKQolSU5URVJBQ1RJT05fVFlQRV9OT1RJRklDQVRJT05fUkVNT1ZFRBANEjEKLUlOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX0hJU1RPUllfQ0xFQVJFRBAOEjAKLElOVEVSQUNUSU9OX1RZUEVfTk9USUZJQ0FUSU9OX1NFU1NJT05fVklFV0VEEA8icwoYU2Vzc2lvbkFja25vd2xlZGdlZEV2ZW50EhIKCnNlc3Npb25faWQYASABKAkSMwoPYWNrbm93bGVkZ2VkX2F0GAIgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIOCgZyZWFzb24YAyABKAkigAEKFUFwcHJvdmFsUmVzcG9uc2VFdmVudBISCgpzZXNzaW9uX2lkGAEgASgJEhAKCGFwcHJvdmVkGAIgASgIEg8KB2NvbnRleHQYAyABKAkSMAoMcmVzcG9uZGVkX2F0GAQgASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcCLHAgoQUmV2aWV3UXVldWVFdmVudBItCgl0aW1lc3RhbXAYASABKAsyGi5nb29nbGUucHJvdG9idWYuVGltZXN0YW1wEjsKCml0ZW1fYWRkZWQYAiABKAsyJS5zZXNzaW9uLnYxLlJldmlld1F1ZXVlSXRlbUFkZGVkRXZlbnRIABI/CgxpdGVtX3JlbW92ZWQYAyABKAsyJy5zZXNzaW9uLnYxLlJldmlld1F1ZXVlSXRlbVJlbW92ZWRFdmVudEgAEj8KDGl0ZW1fdXBkYXRlZBgEIAEoCzInLnNlc3Npb24udjEuUmV2aWV3UXVldWVJdGVtVXBkYXRlZEV2ZW50SAASPAoKc3RhdGlzdGljcxgFIAEoCzImLnNlc3Npb24udjEuUmV2aWV3UXVldWVTdGF0aXN0aWNzRXZlbnRIAEIHCgVldmVudCJnChlSZXZpZXdRdWV1ZUl0ZW1BZGRlZEV2ZW50EiQKBGl0ZW0YASABKAsyFi5zZXNzaW9uLnYxLlJldmlld0l0ZW0SDwoHdHJpZ2dlchgCIAEoCRITCgtpc19zbmFwc2hvdBgDIAEoCCJBChtSZXZpZXdRdWV1ZUl0ZW1SZW1vdmVkRXZlbnQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIOCgZyZWFzb24YAiABKAkibwobUmV2aWV3UXVldWVJdGVtVXBkYXRlZEV2ZW50EhIKCnNlc3Npb25faWQYASABKAkSJAoEaXRlbRgCIAEoCzIWLnNlc3Npb24udjEuUmV2aWV3SXRlbRIWCg51cGRhdGVkX2ZpZWxkcxgDIAMoCSLcAgoaUmV2aWV3UXVldWVTdGF0aXN0aWNzRXZlbnQSEwoLdG90YWxfaXRlbXMYASABKAUSSwoLYnlfcHJpb3JpdHkYAiADKAsyNi5zZXNzaW9uLnYxLlJldmlld1F1ZXVlU3RhdGlzdGljc0V2ZW50LkJ5UHJpb3JpdHlFbnRyeRJHCglieV9yZWFzb24YAyADKAsyNC5zZXNzaW9uLnYxLlJldmlld1F1ZXVlU3RhdGlzdGljc0V2ZW50LkJ5UmVhc29uRW50cnkSFgoOYXZlcmFnZV9hZ2VfbXMYBCABKAMSFwoPZXNjYWxhdGVkX2l0ZW1zGAUgAygJGjEKD0J5UHJpb3JpdHlFbnRyeRILCgNrZXkYASABKAUSDQoFdmFsdWUYAiABKAU6AjgBGi8KDUJ5UmVhc29uRW50cnkSCwoDa2V5GAEgASgFEg0KBXZhbHVlGAIgASgFOgI4ASKCAwoRTm90aWZpY2F0aW9uRXZlbnQSEgoKc2Vzc2lvbl9pZBgBIAEoCRIUCgxzZXNzaW9uX25hbWUYAiABKAkSNwoRbm90aWZpY2F0aW9uX3R5cGUYAyABKA4yHC5zZXNzaW9uLnYxLk5vdGlmaWNhdGlvblR5cGUSMgoIcHJpb3JpdHkYBCABKA4yIC5zZXNzaW9uLnYxLk5vdGlmaWNhdGlvblByaW9yaXR5Eg0KBXRpdGxlGAUgASgJEg8KB21lc3NhZ2UYBiABKAkSPQoIbWV0YWRhdGEYByADKAsyKy5zZXNzaW9uLnYxLk5vdGlmaWNhdGlvbkV2ZW50Lk1ldGFkYXRhRW50cnkSLQoJdGltZXN0YW1wGAggASgLMhouZ29vZ2xlLnByb3RvYnVmLlRpbWVzdGFtcBIXCg9ub3RpZmljYXRpb25faWQYCSABKAkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQqsBCg5jb20uc2Vzc2lvbi52MUILRXZlbnRzUHJvdG9QAVpDZ2l0aHViLmNvbS90c3RhcGxlci9zdGFwbGVyLXNxdWFkL2dlbi9wcm90by9nby9zZXNzaW9uL3YxO3Nlc3Npb252MaICA1NYWKoCClNlc3Npb24uVjHKAgpTZXNzaW9uXFYx4gIWU2Vzc2lvblxWMVxHUEJNZXRhZGF0YeoCC1Nlc3Npb246OlYxYgZwcm90bzM", [file_google_protobuf_timestamp, file_session_v1_types]);
 
 /**
  * SessionEvent represents a real-time event about session state changes.
@@ -55,12 +55,8 @@ export type SessionEvent = Message<"session.v1.SessionEvent"> & {
     case: "sessionDeleted";
   } | {
     /**
-     * @generated from field: session.v1.SessionStatusChangedEvent status_changed = 5;
-     */
-    value: SessionStatusChangedEvent;
-    case: "statusChanged";
-  } | {
-    /**
+     * field 5 (status_changed / SessionStatusChangedEvent) removed in Epic 4
+     *
      * @generated from field: session.v1.UserInteractionEvent user_interaction = 6;
      */
     value: UserInteractionEvent;
@@ -139,6 +135,23 @@ export type SessionUpdatedEvent = Message<"session.v1.SessionUpdatedEvent"> & {
    * @generated from field: repeated string updated_fields = 2;
    */
   updatedFields: string[];
+
+  /**
+   * Fine-grained detected status at event publish time. Transitional shortcut for the
+   * migration period; populated when the detection layer has a registered controller.
+   * Deprecated once StatusBadge reads from session.detected_status directly (Epic 5).
+   *
+   * @generated from field: session.v1.DetectedStatus detected_status = 3;
+   */
+  detectedStatus: DetectedStatus;
+
+  /**
+   * Human-readable context string from the terminal pattern detector.
+   * Empty when detected_status is UNSPECIFIED.
+   *
+   * @generated from field: string detected_context = 4;
+   */
+  detectedContext: string;
 };
 
 /**
@@ -173,60 +186,6 @@ export type SessionDeletedEvent = Message<"session.v1.SessionDeletedEvent"> & {
  */
 export const SessionDeletedEventSchema: GenMessage<SessionDeletedEvent> = /*@__PURE__*/
   messageDesc(file_session_v1_events, 3);
-
-/**
- * SessionStatusChangedEvent is emitted when session status transitions
- *
- * @generated from message session.v1.SessionStatusChangedEvent
- */
-export type SessionStatusChangedEvent = Message<"session.v1.SessionStatusChangedEvent"> & {
-  /**
-   * @generated from field: string session_id = 1;
-   */
-  sessionId: string;
-
-  /**
-   * @generated from field: session.v1.SessionStatus old_status = 2;
-   */
-  oldStatus: SessionStatus;
-
-  /**
-   * @generated from field: session.v1.SessionStatus new_status = 3;
-   */
-  newStatus: SessionStatus;
-
-  /**
-   * Detected status from terminal pattern analysis (e.g. "StatusNeedsApproval", "StatusInputRequired").
-   * Populated when InstanceStatusManager has a registered controller for this session.
-   * Empty string when detection is unavailable or controller is inactive.
-   *
-   * @generated from field: optional string detected_status = 4;
-   */
-  detectedStatus?: string;
-
-  /**
-   * Human-readable context string from the terminal pattern detector
-   * (e.g. "Waiting for tool approval", "Tests failing: 3 of 12").
-   * Empty when detected_status is empty.
-   *
-   * @generated from field: optional string detected_context = 5;
-   */
-  detectedContext?: string;
-
-  /**
-   * Active-work state at the time of the status change.
-   *
-   * @generated from field: session.v1.WorkingState working_state = 6;
-   */
-  workingState: WorkingState;
-};
-
-/**
- * Describes the message session.v1.SessionStatusChangedEvent.
- * Use `create(SessionStatusChangedEventSchema)` to create a new message.
- */
-export const SessionStatusChangedEventSchema: GenMessage<SessionStatusChangedEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 4);
 
 /**
  * TerminalData represents terminal I/O for bidirectional streaming.
@@ -381,7 +340,7 @@ export type TerminalData = Message<"session.v1.TerminalData"> & {
  * Use `create(TerminalDataSchema)` to create a new message.
  */
 export const TerminalDataSchema: GenMessage<TerminalData> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 5);
+  messageDesc(file_session_v1_events, 4);
 
 /**
  * ShellStatusUpdate notifies the client that a custom shell's status has changed.
@@ -417,7 +376,7 @@ export type ShellStatusUpdate = Message<"session.v1.ShellStatusUpdate"> & {
  * Use `create(ShellStatusUpdateSchema)` to create a new message.
  */
 export const ShellStatusUpdateSchema: GenMessage<ShellStatusUpdate> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 6);
+  messageDesc(file_session_v1_events, 5);
 
 /**
  * ResizeQuiescence signals the client that the server is waiting for tmux to
@@ -455,7 +414,7 @@ export type ResizeQuiescence = Message<"session.v1.ResizeQuiescence"> & {
  * Use `create(ResizeQuiescenceSchema)` to create a new message.
  */
 export const ResizeQuiescenceSchema: GenMessage<ResizeQuiescence> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 7);
+  messageDesc(file_session_v1_events, 6);
 
 /**
  * TerminalOutput contains data from the terminal (server to client)
@@ -476,7 +435,7 @@ export type TerminalOutput = Message<"session.v1.TerminalOutput"> & {
  * Use `create(TerminalOutputSchema)` to create a new message.
  */
 export const TerminalOutputSchema: GenMessage<TerminalOutput> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 8);
+  messageDesc(file_session_v1_events, 7);
 
 /**
  * TerminalInput contains user input for the terminal (client to server)
@@ -497,7 +456,7 @@ export type TerminalInput = Message<"session.v1.TerminalInput"> & {
  * Use `create(TerminalInputSchema)` to create a new message.
  */
 export const TerminalInputSchema: GenMessage<TerminalInput> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 9);
+  messageDesc(file_session_v1_events, 8);
 
 /**
  * TerminalResize notifies of terminal dimension changes
@@ -521,7 +480,7 @@ export type TerminalResize = Message<"session.v1.TerminalResize"> & {
  * Use `create(TerminalResizeSchema)` to create a new message.
  */
 export const TerminalResizeSchema: GenMessage<TerminalResize> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 10);
+  messageDesc(file_session_v1_events, 9);
 
 /**
  * TerminalError indicates a terminal streaming error
@@ -547,7 +506,7 @@ export type TerminalError = Message<"session.v1.TerminalError"> & {
  * Use `create(TerminalErrorSchema)` to create a new message.
  */
 export const TerminalErrorSchema: GenMessage<TerminalError> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 11);
+  messageDesc(file_session_v1_events, 10);
 
 /**
  * FlowControl manages backpressure between client and server for terminal streaming.
@@ -592,7 +551,7 @@ export type FlowControl = Message<"session.v1.FlowControl"> & {
  * Use `create(FlowControlSchema)` to create a new message.
  */
 export const FlowControlSchema: GenMessage<FlowControl> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 12);
+  messageDesc(file_session_v1_events, 11);
 
 /**
  * ScrollbackRequest requests historical terminal scrollback
@@ -620,7 +579,7 @@ export type ScrollbackRequest = Message<"session.v1.ScrollbackRequest"> & {
  * Use `create(ScrollbackRequestSchema)` to create a new message.
  */
 export const ScrollbackRequestSchema: GenMessage<ScrollbackRequest> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 13);
+  messageDesc(file_session_v1_events, 12);
 
 /**
  * ScrollbackResponse contains historical terminal scrollback data
@@ -669,7 +628,7 @@ export type ScrollbackResponse = Message<"session.v1.ScrollbackResponse"> & {
  * Use `create(ScrollbackResponseSchema)` to create a new message.
  */
 export const ScrollbackResponseSchema: GenMessage<ScrollbackResponse> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 14);
+  messageDesc(file_session_v1_events, 13);
 
 /**
  * ScrollbackChunk represents a chunk of scrollback data
@@ -704,7 +663,7 @@ export type ScrollbackChunk = Message<"session.v1.ScrollbackChunk"> & {
  * Use `create(ScrollbackChunkSchema)` to create a new message.
  */
 export const ScrollbackChunkSchema: GenMessage<ScrollbackChunk> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 15);
+  messageDesc(file_session_v1_events, 14);
 
 /**
  * CurrentPaneRequest requests the current visible tmux pane content.
@@ -762,7 +721,7 @@ export type CurrentPaneRequest = Message<"session.v1.CurrentPaneRequest"> & {
  * Use `create(CurrentPaneRequestSchema)` to create a new message.
  */
 export const CurrentPaneRequestSchema: GenMessage<CurrentPaneRequest> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 16);
+  messageDesc(file_session_v1_events, 15);
 
 /**
  * CurrentPaneResponse contains the current visible tmux pane content
@@ -815,7 +774,7 @@ export type CurrentPaneResponse = Message<"session.v1.CurrentPaneResponse"> & {
  * Use `create(CurrentPaneResponseSchema)` to create a new message.
  */
 export const CurrentPaneResponseSchema: GenMessage<CurrentPaneResponse> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 17);
+  messageDesc(file_session_v1_events, 16);
 
 /**
  * TerminalDelta represents incremental terminal state changes.
@@ -876,7 +835,7 @@ export type TerminalDelta = Message<"session.v1.TerminalDelta"> & {
  * Use `create(TerminalDeltaSchema)` to create a new message.
  */
 export const TerminalDeltaSchema: GenMessage<TerminalDelta> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 18);
+  messageDesc(file_session_v1_events, 17);
 
 /**
  * LineDelta represents changes to a specific terminal line
@@ -944,7 +903,7 @@ export type LineDelta = Message<"session.v1.LineDelta"> & {
  * Use `create(LineDeltaSchema)` to create a new message.
  */
 export const LineDeltaSchema: GenMessage<LineDelta> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 19);
+  messageDesc(file_session_v1_events, 18);
 
 /**
  * LineEdit represents a character-level edit within a line
@@ -979,7 +938,7 @@ export type LineEdit = Message<"session.v1.LineEdit"> & {
  * Use `create(LineEditSchema)` to create a new message.
  */
 export const LineEditSchema: GenMessage<LineEdit> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 20);
+  messageDesc(file_session_v1_events, 19);
 
 /**
  * InsertLine represents insertion of a new line
@@ -1007,7 +966,7 @@ export type InsertLine = Message<"session.v1.InsertLine"> & {
  * Use `create(InsertLineSchema)` to create a new message.
  */
 export const InsertLineSchema: GenMessage<InsertLine> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 21);
+  messageDesc(file_session_v1_events, 20);
 
 /**
  * CursorPosition tracks terminal cursor location
@@ -1042,7 +1001,7 @@ export type CursorPosition = Message<"session.v1.CursorPosition"> & {
  * Use `create(CursorPositionSchema)` to create a new message.
  */
 export const CursorPositionSchema: GenMessage<CursorPosition> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 22);
+  messageDesc(file_session_v1_events, 21);
 
 /**
  * TerminalDimensions represents terminal size
@@ -1070,7 +1029,7 @@ export type TerminalDimensions = Message<"session.v1.TerminalDimensions"> & {
  * Use `create(TerminalDimensionsSchema)` to create a new message.
  */
 export const TerminalDimensionsSchema: GenMessage<TerminalDimensions> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 23);
+  messageDesc(file_session_v1_events, 22);
 
 /**
  * TerminalDiff represents minimal ANSI escape sequences to transform terminal state.
@@ -1153,7 +1112,7 @@ export type TerminalDiff = Message<"session.v1.TerminalDiff"> & {
  * Use `create(TerminalDiffSchema)` to create a new message.
  */
 export const TerminalDiffSchema: GenMessage<TerminalDiff> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 24);
+  messageDesc(file_session_v1_events, 23);
 
 /**
  * EchoAck confirms that the server has processed input up to a certain point.
@@ -1186,7 +1145,7 @@ export type EchoAck = Message<"session.v1.EchoAck"> & {
  * Use `create(EchoAckSchema)` to create a new message.
  */
 export const EchoAckSchema: GenMessage<EchoAck> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 25);
+  messageDesc(file_session_v1_events, 24);
 
 /**
  * InputWithEcho wraps user input with echo tracking for predictive typing.
@@ -1224,7 +1183,7 @@ export type InputWithEcho = Message<"session.v1.InputWithEcho"> & {
  * Use `create(InputWithEchoSchema)` to create a new message.
  */
 export const InputWithEchoSchema: GenMessage<InputWithEcho> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 26);
+  messageDesc(file_session_v1_events, 25);
 
 /**
  * SSPCapabilities is exchanged during connection setup for feature negotiation.
@@ -1282,7 +1241,7 @@ export type SSPCapabilities = Message<"session.v1.SSPCapabilities"> & {
  * Use `create(SSPCapabilitiesSchema)` to create a new message.
  */
 export const SSPCapabilitiesSchema: GenMessage<SSPCapabilities> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 27);
+  messageDesc(file_session_v1_events, 26);
 
 /**
  * SSPNegotiation is sent at connection start to negotiate SSP features.
@@ -1318,7 +1277,7 @@ export type SSPNegotiation = Message<"session.v1.SSPNegotiation"> & {
  * Use `create(SSPNegotiationSchema)` to create a new message.
  */
 export const SSPNegotiationSchema: GenMessage<SSPNegotiation> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 28);
+  messageDesc(file_session_v1_events, 27);
 
 /**
  * TerminalState represents complete terminal state using MOSH-style SSP.
@@ -1376,7 +1335,7 @@ export type TerminalState = Message<"session.v1.TerminalState"> & {
  * Use `create(TerminalStateSchema)` to create a new message.
  */
 export const TerminalStateSchema: GenMessage<TerminalState> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 29);
+  messageDesc(file_session_v1_events, 28);
 
 /**
  * TerminalLine represents a single line in the terminal buffer
@@ -1404,7 +1363,7 @@ export type TerminalLine = Message<"session.v1.TerminalLine"> & {
  * Use `create(TerminalLineSchema)` to create a new message.
  */
 export const TerminalLineSchema: GenMessage<TerminalLine> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 30);
+  messageDesc(file_session_v1_events, 29);
 
 /**
  * LineAttributes provide metadata for compression optimization
@@ -1446,7 +1405,7 @@ export type LineAttributes = Message<"session.v1.LineAttributes"> & {
  * Use `create(LineAttributesSchema)` to create a new message.
  */
 export const LineAttributesSchema: GenMessage<LineAttributes> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 31);
+  messageDesc(file_session_v1_events, 30);
 
 /**
  * ScrollbackInfo provides context about terminal scrollback
@@ -1481,7 +1440,7 @@ export type ScrollbackInfo = Message<"session.v1.ScrollbackInfo"> & {
  * Use `create(ScrollbackInfoSchema)` to create a new message.
  */
 export const ScrollbackInfoSchema: GenMessage<ScrollbackInfo> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 32);
+  messageDesc(file_session_v1_events, 31);
 
 /**
  * CompressionMetadata tracks LZMA compression and dictionary learning
@@ -1539,7 +1498,7 @@ export type CompressionMetadata = Message<"session.v1.CompressionMetadata"> & {
  * Use `create(CompressionMetadataSchema)` to create a new message.
  */
 export const CompressionMetadataSchema: GenMessage<CompressionMetadata> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 33);
+  messageDesc(file_session_v1_events, 32);
 
 /**
  * DictionaryMetadata tracks dynamic dictionary learning progress
@@ -1588,7 +1547,7 @@ export type DictionaryMetadata = Message<"session.v1.DictionaryMetadata"> & {
  * Use `create(DictionaryMetadataSchema)` to create a new message.
  */
 export const DictionaryMetadataSchema: GenMessage<DictionaryMetadata> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 34);
+  messageDesc(file_session_v1_events, 33);
 
 /**
  * UserInteractionEvent is emitted when user interacts with a session.
@@ -1624,7 +1583,7 @@ export type UserInteractionEvent = Message<"session.v1.UserInteractionEvent"> & 
  * Use `create(UserInteractionEventSchema)` to create a new message.
  */
 export const UserInteractionEventSchema: GenMessage<UserInteractionEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 35);
+  messageDesc(file_session_v1_events, 34);
 
 /**
  * Interaction types
@@ -1747,7 +1706,7 @@ export enum UserInteractionEvent_InteractionType {
  * Describes the enum session.v1.UserInteractionEvent.InteractionType.
  */
 export const UserInteractionEvent_InteractionTypeSchema: GenEnum<UserInteractionEvent_InteractionType> = /*@__PURE__*/
-  enumDesc(file_session_v1_events, 35, 0);
+  enumDesc(file_session_v1_events, 34, 0);
 
 /**
  * SessionAcknowledgedEvent is emitted when user acknowledges/skips a session.
@@ -1783,7 +1742,7 @@ export type SessionAcknowledgedEvent = Message<"session.v1.SessionAcknowledgedEv
  * Use `create(SessionAcknowledgedEventSchema)` to create a new message.
  */
 export const SessionAcknowledgedEventSchema: GenMessage<SessionAcknowledgedEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 36);
+  messageDesc(file_session_v1_events, 35);
 
 /**
  * ApprovalResponseEvent is emitted when user responds to approval dialog.
@@ -1826,7 +1785,7 @@ export type ApprovalResponseEvent = Message<"session.v1.ApprovalResponseEvent"> 
  * Use `create(ApprovalResponseEventSchema)` to create a new message.
  */
 export const ApprovalResponseEventSchema: GenMessage<ApprovalResponseEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 37);
+  messageDesc(file_session_v1_events, 36);
 
 /**
  * ReviewQueueEvent represents changes to the review queue.
@@ -1879,7 +1838,7 @@ export type ReviewQueueEvent = Message<"session.v1.ReviewQueueEvent"> & {
  * Use `create(ReviewQueueEventSchema)` to create a new message.
  */
 export const ReviewQueueEventSchema: GenMessage<ReviewQueueEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 38);
+  messageDesc(file_session_v1_events, 37);
 
 /**
  * ReviewQueueItemAddedEvent is emitted when item is added to queue
@@ -1919,7 +1878,7 @@ export type ReviewQueueItemAddedEvent = Message<"session.v1.ReviewQueueItemAdded
  * Use `create(ReviewQueueItemAddedEventSchema)` to create a new message.
  */
 export const ReviewQueueItemAddedEventSchema: GenMessage<ReviewQueueItemAddedEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 39);
+  messageDesc(file_session_v1_events, 38);
 
 /**
  * ReviewQueueItemRemovedEvent is emitted when item is removed from queue
@@ -1949,7 +1908,7 @@ export type ReviewQueueItemRemovedEvent = Message<"session.v1.ReviewQueueItemRem
  * Use `create(ReviewQueueItemRemovedEventSchema)` to create a new message.
  */
 export const ReviewQueueItemRemovedEventSchema: GenMessage<ReviewQueueItemRemovedEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 40);
+  messageDesc(file_session_v1_events, 39);
 
 /**
  * ReviewQueueItemUpdatedEvent is emitted when item properties change
@@ -1986,7 +1945,7 @@ export type ReviewQueueItemUpdatedEvent = Message<"session.v1.ReviewQueueItemUpd
  * Use `create(ReviewQueueItemUpdatedEventSchema)` to create a new message.
  */
 export const ReviewQueueItemUpdatedEventSchema: GenMessage<ReviewQueueItemUpdatedEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 41);
+  messageDesc(file_session_v1_events, 40);
 
 /**
  * ReviewQueueStatisticsEvent provides aggregate queue statistics
@@ -2035,7 +1994,7 @@ export type ReviewQueueStatisticsEvent = Message<"session.v1.ReviewQueueStatisti
  * Use `create(ReviewQueueStatisticsEventSchema)` to create a new message.
  */
 export const ReviewQueueStatisticsEventSchema: GenMessage<ReviewQueueStatisticsEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 42);
+  messageDesc(file_session_v1_events, 41);
 
 /**
  * NotificationEvent is emitted when a tmux session sends a notification.
@@ -2113,5 +2072,5 @@ export type NotificationEvent = Message<"session.v1.NotificationEvent"> & {
  * Use `create(NotificationEventSchema)` to create a new message.
  */
 export const NotificationEventSchema: GenMessage<NotificationEvent> = /*@__PURE__*/
-  messageDesc(file_session_v1_events, 43);
+  messageDesc(file_session_v1_events, 42);
 

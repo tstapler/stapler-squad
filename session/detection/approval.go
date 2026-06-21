@@ -449,6 +449,8 @@ func (ad *ApprovalDetector) GetStatistics() ApprovalStatistics {
 			stats.ToolUseApprovals++
 		case ApprovalConfirmation:
 			stats.ConfirmationApprovals++
+		case ApprovalUnknown:
+			// Unrecognized approval type — no dedicated counter
 		}
 	}
 

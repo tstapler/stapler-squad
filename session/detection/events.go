@@ -64,7 +64,7 @@ func (r *eventRing) recent(n int) []DetectionEvent {
 // categoryName maps a DetectedStatus to the string stored in DetectionEvent.MatchedCategory.
 func categoryName(s DetectedStatus) string {
 	switch s {
-	case StatusActive:
+	case StatusExecuting:
 		return "active"
 	case StatusProcessing:
 		return "processing"
@@ -84,7 +84,8 @@ func categoryName(s DetectedStatus) string {
 		return "ready"
 	case StatusWaitingForAgent:
 		return "waiting_for_agent"
-	default:
+	case StatusUnknown:
 		return "unknown"
 	}
+	return "unknown"
 }

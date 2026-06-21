@@ -16,12 +16,15 @@ message SessionEvent {
     SessionCreatedEvent session_created = 2;
     SessionUpdatedEvent session_updated = 3;
     SessionDeletedEvent session_deleted = 4;
-    SessionStatusChangedEvent status_changed = 5;
+    // field 5 (status_changed / SessionStatusChangedEvent) removed in Epic 4
     UserInteractionEvent user_interaction = 6;
     SessionAcknowledgedEvent session_acknowledged = 7;
     ApprovalResponseEvent approval_response = 8;
     NotificationEvent notification = 9;
   }
+
+  reserved 5;
+  reserved "status_changed";
 
   // Monotonically increasing sequence number assigned by the server EventBus.
   // Clients should track the highest seq they have received and pass it as
@@ -40,30 +43,19 @@ message SessionUpdatedEvent {
   Session session = 1;
   // Fields that were updated (for efficient client updates)
   repeated string updated_fields = 2;
+  // Fine-grained detected status at event publish time. Transitional shortcut for the
+  // migration period; populated when the detection layer has a registered controller.
+  // Deprecated once StatusBadge reads from session.detected_status directly (Epic 5).
+  DetectedStatus detected_status = 3;
+  // Human-readable context string from the terminal pattern detector.
+  // Empty when detected_status is UNSPECIFIED.
+  string detected_context = 4;
 }
 
 // SessionDeletedEvent is emitted when a session is deleted
 message SessionDeletedEvent {
   string session_id = 1;
   string reason = 2; // Optional deletion reason
-}
-
-// SessionStatusChangedEvent is emitted when session status transitions
-message SessionStatusChangedEvent {
-  string session_id = 1;
-  SessionStatus old_status = 2;
-  SessionStatus new_status = 3;
-  // Detected status from terminal pattern analysis (e.g. "StatusNeedsApproval", "StatusInputRequired").
-  // Populated when InstanceStatusManager has a registered controller for this session.
-  // Empty string when detection is unavailable or controller is inactive.
-  optional string detected_status = 4;
-  // Human-readable context string from the terminal pattern detector
-  // (e.g. "Waiting for tool approval", "Tests failing: 3 of 12").
-  // Empty when detected_status is empty.
-  optional string detected_context = 5;
-
-  // Active-work state at the time of the status change.
-  WorkingState working_state = 6;
 }
 
 // TerminalData represents terminal I/O for bidirectional streaming.

@@ -2,6 +2,7 @@ package events
 
 import (
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"time"
 )
 
@@ -15,8 +16,6 @@ const (
 	EventSessionUpdated EventType = "session.updated"
 	// EventSessionDeleted is emitted when a session is deleted
 	EventSessionDeleted EventType = "session.deleted"
-	// EventSessionStatusChanged is emitted when session status transitions
-	EventSessionStatusChanged EventType = "session.status_changed"
 	// EventUserInteraction is emitted when user interacts with a session
 	EventUserInteraction EventType = "session.user_interaction"
 	// EventSessionAcknowledged is emitted when user acknowledges a session
@@ -46,12 +45,14 @@ type Event struct {
 	OldStatus session.Status
 	// NewStatus for status change events
 	NewStatus session.Status
-	// DetectedStatus is the terminal-pattern-detected state from InstanceStatusManager
-	// (e.g. "StatusNeedsApproval"). Empty when no controller is active.
+	// DetectedStatus is kept for legacy compatibility; no longer serialized to wire.
 	DetectedStatus string
 	// DetectedContext is the human-readable context from the terminal detector
 	// (e.g. "Waiting for tool approval"). Empty when DetectedStatus is empty.
 	DetectedContext string
+	// DetectedStatusTyped is the typed DetectedStatus for SessionUpdatedEvent.
+	// Zero value (detection.StatusUnknown) means no detection data is available.
+	DetectedStatusTyped detection.DetectedStatus
 	// InteractionType for user interaction events
 	InteractionType string
 	// Approved for approval response events (true = approved, false = denied)
@@ -86,24 +87,32 @@ func NewSessionUpdatedEvent(sess *session.Instance, updatedFields []string) *Eve
 	}
 }
 
+// NewSessionUpdatedEventWithDetection creates a session update event that includes
+// typed detected-status information from the terminal detection layer.
+// Use this instead of NewSessionUpdatedEvent when the detection state is known
+// and should be propagated to frontend clients (e.g. the UpdateSession RPC path).
+func NewSessionUpdatedEventWithDetection(
+	sess *session.Instance,
+	updatedFields []string,
+	detectedStatus detection.DetectedStatus,
+	detectedContext string,
+) *Event {
+	return &Event{
+		Type:                EventSessionUpdated,
+		Timestamp:           time.Now(),
+		Session:             sess,
+		UpdatedFields:       updatedFields,
+		DetectedStatusTyped: detectedStatus,
+		DetectedContext:     detectedContext,
+	}
+}
+
 // NewSessionDeletedEvent creates an event for session deletion.
 func NewSessionDeletedEvent(sessionID string) *Event {
 	return &Event{
 		Type:      EventSessionDeleted,
 		Timestamp: time.Now(),
 		SessionID: sessionID,
-	}
-}
-
-// NewSessionStatusChangedEvent creates an event for status transitions.
-func NewSessionStatusChangedEvent(sess *session.Instance, oldStatus, newStatus session.Status) *Event {
-	return &Event{
-		Type:      EventSessionStatusChanged,
-		Timestamp: time.Now(),
-		Session:   sess,
-		SessionID: sess.GetStableID(),
-		OldStatus: oldStatus,
-		NewStatus: newStatus,
 	}
 }
 

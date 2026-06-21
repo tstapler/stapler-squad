@@ -11,6 +11,7 @@ import (
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 )
 
 // createTestStorage creates a test storage backed by a temporary SQLite database.
@@ -381,6 +382,104 @@ func TestDeleteSession_StorageDeletedBeforeResponse(t *testing.T) {
 	for _, d := range data {
 		assert.NotEqual(t, "timing-session", d.Title,
 			"session must be absent from storage the moment the RPC response is returned")
+	}
+}
+
+// --------------------------------------------------------------------------
+// Session exit — unexpected stop publishes SessionUpdatedEvent
+// --------------------------------------------------------------------------
+
+// TestSessionExitedPublisher_PublishesUpdatedEvent is a regression test for the bug
+// where a session marked as "Thinking…" remained visually stuck after the process
+// exited unexpectedly. Root cause: the PTY-EOF and reconcile-exit paths called
+// transitionTo(Stopped) and fireLifecycleEvent(EventExited) but never published a
+// SessionUpdatedEvent to the event bus, so the WatchSessions stream never notified
+// the frontend of the status change.
+//
+// This test verifies that wireSessionExitedPublisher, wired during session loading,
+// fires a SessionUpdatedEvent with a Stopped instance when EventExited is raised.
+func TestSessionExitedPublisher_PublishesUpdatedEvent(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	// Use Status=Paused so FromInstanceData marks the instance as started=true,
+	// matching what the real lifecycle does for an instance that was once Active.
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "thinking-session",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	// loadInstancesWithWiring wires the exit publisher onto each loaded instance.
+	instances, err := svc.loadInstancesWithWiring()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	inst := instances[0]
+
+	// Force the instance into Active status to simulate a live thinking session.
+	inst.ForceStatus(session.Active)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(ctx)
+
+	// Simulate an unexpected exit (PTY EOF / process crash).
+	inst.ForceStatus(session.Stopped)
+	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+
+	select {
+	case evt := <-ch:
+		assert.Equal(t, events.EventSessionUpdated, evt.Type,
+			"expected SessionUpdatedEvent after unexpected session exit")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SessionUpdatedEvent after session exit")
+	}
+}
+
+// TestSessionExitedPublisher_ClearsDetectedStatus verifies that the SessionUpdatedEvent
+// published on exit has DetectedStatus == StatusUnknown, i.e., detection is cleared.
+func TestSessionExitedPublisher_ClearsDetectedStatus(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "thinking-session-2",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	instances, err := svc.loadInstancesWithWiring()
+	require.NoError(t, err)
+	require.Len(t, instances, 1)
+	inst := instances[0]
+
+	inst.ForceStatus(session.Active)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch, _ := eventBus.Subscribe(ctx)
+
+	inst.ForceStatus(session.Stopped)
+	inst.FireLifecycleEventForTest(session.EventExited, "pty-eof")
+
+	select {
+	case evt := <-ch:
+		require.Equal(t, events.EventSessionUpdated, evt.Type,
+			"expected SessionUpdatedEvent after session exit")
+		assert.Equal(t, detection.StatusUnknown, evt.DetectedStatusTyped,
+			"detection should be cleared (StatusUnknown) on session exit")
+		assert.Empty(t, evt.DetectedContext,
+			"detected context should be empty on session exit")
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for SessionUpdatedEvent after session exit")
 	}
 }
 
@@ -913,4 +1012,78 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 	var connectErr *connect.Error
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
+}
+
+// --------------------------------------------------------------------------
+// DeleteSession + CancelSession ordering (F10)
+// --------------------------------------------------------------------------
+
+// TestDeleteSession_CancelsPendingApprovals verifies that DeleteSession cancels
+// all pending approvals for the session before removing it from storage.
+// This ensures approval goroutines can exit cleanly while the session still exists.
+func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	const sessionUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	testInstance := &session.Instance{
+		Title:     "approval-session",
+		UUID:      sessionUUID,
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInstance))
+
+	// Register a pending approval for this session
+	approvalStore := svc.GetApprovalStore()
+	approval := &PendingApproval{
+		ID:        "approval-001",
+		SessionID: sessionUUID,
+		ToolName:  "Bash",
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+	require.NoError(t, approvalStore.Create(approval))
+
+	// Verify approval exists before deletion
+	pendingBefore := approvalStore.GetBySession(sessionUUID)
+	require.Len(t, pendingBefore, 1, "approval must exist before deletion")
+
+	// Delete the session
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "approval-session",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	// Approval must be cancelled after deletion
+	pendingAfter := approvalStore.GetBySession(sessionUUID)
+	assert.Len(t, pendingAfter, 0, "pending approvals must be cleared after session deletion")
+}
+
+// TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop verifies that
+// DeleteSession succeeds gracefully when there are no pending approvals.
+func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "clean-session",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	// No pending approvals — DeleteSession must still succeed
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "clean-session",
+	}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Success)
 }

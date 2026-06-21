@@ -77,8 +77,8 @@ func TestOpencode_DetectActive_EscInterrupt(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			status := detector.Detect([]byte(tc.output))
-			if status != StatusActive {
-				t.Errorf("Detect(%q) returned %v, expected StatusActive", tc.output, status)
+			if status != StatusExecuting {
+				t.Errorf("Detect(%q) returned %v, expected StatusExecuting", tc.output, status)
 			}
 		})
 	}
@@ -125,8 +125,10 @@ func TestOpencode_DetectIdle_NoPrompts(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			status := detector.Detect([]byte(tc.output))
-			if status != StatusIdle && status != StatusReady {
-				t.Errorf("Detect(%q) returned %v, expected StatusIdle or StatusReady", tc.output, status)
+			// After Epic 2, the .* catch-all returns StatusUnknown (no badge); StatusReady
+			// is now only for explicit readline/shell prompt detection.
+			if status != StatusIdle && status != StatusUnknown {
+				t.Errorf("Detect(%q) returned %v, expected StatusIdle or StatusUnknown", tc.output, status)
 			}
 		})
 	}
@@ -150,8 +152,8 @@ func TestOpencode_DetectRealExamples(t *testing.T) {
 
 	t.Run("working_session_has_esc_interrupt", func(t *testing.T) {
 		status := detector.Detect([]byte(workingExample))
-		if status != StatusActive {
-			t.Errorf("Working example (with esc interrupt) returned %v, expected StatusActive", status)
+		if status != StatusExecuting {
+			t.Errorf("Working example (with esc interrupt) returned %v, expected StatusExecuting", status)
 		}
 	})
 

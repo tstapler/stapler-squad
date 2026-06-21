@@ -13,7 +13,7 @@ import React from "react";
 import { render, screen } from "@testing-library/react";
 import { SessionCard } from "../SessionCard";
 import type { Session } from "@/gen/session/v1/types_pb";
-import { SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
+import { SessionStatus, SubStatus, DetectedStatus } from "@/gen/session/v1/types_pb";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -126,7 +126,7 @@ describe("SessionCard — suppressApprovalSubStatus prop", () => {
     render(
       <SessionCard
         session={session}
-        detectedStatus="Needs Approval"
+        detectedStatus={DetectedStatus.NEEDS_APPROVAL}
         suppressApprovalSubStatus={true}
       />
     );
@@ -140,13 +140,13 @@ describe("SessionCard — suppressApprovalSubStatus prop", () => {
     render(
       <SessionCard
         session={session}
-        detectedStatus="Running Tests"
+        detectedStatus={DetectedStatus.EXECUTING}
         suppressApprovalSubStatus={true}
       />
     );
 
     // Non-approval detectedStatus should still be shown
-    expect(screen.getByText("Running Tests")).toBeInTheDocument();
+    expect(screen.getByText("Executing")).toBeInTheDocument();
   });
 
   it("T-UNIT-TS-022: SessionCard_should_showNeedsApprovalBadge_When_suppressApprovalSubStatusFalse", () => {

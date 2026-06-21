@@ -213,6 +213,47 @@ func TestOnItemAdded_EventBusBehavior_BUG001(t *testing.T) {
 	}
 }
 
+// TestReactiveQueueManager_EventSessionDeleted_RemovesFromQueue verifies that
+// publishing EventSessionDeleted removes the session from the review queue (UT-GO-03).
+func TestReactiveQueueManager_EventSessionDeleted_RemovesFromQueue(t *testing.T) {
+	mgr, poller, bus := newReactiveQueueTestSetup(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	go mgr.Start(ctx)
+
+	if err := testutil.WaitForCondition(func() bool {
+		return poller.IsRunning()
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Fatalf("manager failed to initialize: %v", err)
+	}
+	defer mgr.Stop()
+
+	// Add a session to the queue.
+	const sessionID = "delete-target-session"
+	mgr.queue.Add(&session.ReviewItem{
+		SessionID:  sessionID,
+		Reason:     session.ReasonInputRequired,
+		Priority:   session.PriorityMedium,
+		DetectedAt: time.Now(),
+	})
+
+	// Confirm it's in the queue.
+	if items := mgr.queue.List(); len(items) == 0 {
+		t.Fatal("expected item to be in queue before deletion")
+	}
+
+	// Publish EventSessionDeleted.
+	bus.Publish(events.NewSessionDeletedEvent(sessionID))
+
+	// Wait for the queue to be emptied.
+	if err := testutil.WaitForCondition(func() bool {
+		return len(mgr.queue.List()) == 0
+	}, testutil.FastWaitConfig()); err != nil {
+		t.Errorf("session was not removed from queue after EventSessionDeleted: queue len = %d", len(mgr.queue.List()))
+	}
+}
+
 // drainEvents drains all events from channel within timeout
 func drainEvents(ch <-chan *sessionv1.ReviewQueueEvent, timeout time.Duration) {
 	deadline := time.After(timeout)

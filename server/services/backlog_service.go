@@ -54,11 +54,6 @@ type itemSourceBackend interface {
 	UpdateItemSource(ctx context.Context, id string, update session.ItemSourceUpdate) (*session.ItemSourceData, error)
 }
 
-// maxTriageDuration is the wall-clock limit for a single triage session.
-// A session running longer than this is treated as hung and eligible for
-// tombstoning so a fresh triage can be triggered.
-const maxTriageDuration = 2 * time.Hour
-
 // BacklogService handles Backlog RPCs.
 type BacklogService struct {
 	storage           *session.Storage
@@ -72,10 +67,6 @@ type BacklogService struct {
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
 	worktreeMu sync.Mutex
-	// triggerInProgress prevents concurrent TriggerTriage calls on the same item
-	// from racing through the orphan-guard check-and-spawn sequence (TOCTOU).
-	// Stores item ID strings; value is always struct{}{}.
-	triggerInProgress sync.Map
 }
 
 // NewBacklogService creates a BacklogService with all optional dependencies.
@@ -223,7 +214,7 @@ func itemSessionToProto(is *ent.ItemSession) *sessionv1.ItemSession {
 	}
 	// Populate triage result when stored as JSON in ItemSession.TriageResult.
 	if is.TriageResult != "" {
-		var tr session.TriageResultPayload
+		var tr triageResultJSON
 		if jsonErr := json.Unmarshal([]byte(is.TriageResult), &tr); jsonErr != nil {
 			log.WarningLog.Printf("[itemSessionToProto] invalid triage_result JSON for session %s: %v", is.ID, jsonErr)
 		} else {
@@ -246,9 +237,29 @@ func itemSessionToProto(is *ent.ItemSession) *sessionv1.ItemSession {
 	return p
 }
 
-// session.TriageResultPayload is the canonical shape for triage results.
-// Both the MCP write path (tools_backlog.go) and the read path here use
-// session.TriageResultPayload / session.TriageSuggestion / session.TriageTask.
+// triageResultJSON is the canonical shape written by submitTriageResult and
+// read back by itemSessionToProto. Must stay in sync with tools_backlog.go —
+// do not use map[string]interface{}.
+type triageResultJSON struct {
+	Summary             string                 `json:"summary"`
+	Suggestions         []triageSuggestionJSON `json:"suggestions"`
+	ClarifyingQuestions []string               `json:"clarifying_questions,omitempty"`
+	Tasks               []triageTaskJSON       `json:"tasks,omitempty"`
+}
+
+// triageSuggestionJSON mirrors tools_backlog.go's triageSuggestion struct.
+// Kept separate to avoid cross-package coupling; field names must match.
+type triageSuggestionJSON struct {
+	Text      string `json:"text"`
+	Rationale string `json:"rationale"`
+}
+
+// triageTaskJSON mirrors tools_backlog.go's triageTask struct.
+type triageTaskJSON struct {
+	Text     string `json:"text"`
+	Estimate string `json:"estimate"`
+	Category string `json:"category"`
+}
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
 func backlogItemToProto(item *session.BacklogItemData) *sessionv1.BacklogItem {
@@ -1092,26 +1103,13 @@ func (s *BacklogService) TriggerTriage(
 			fmt.Errorf("set repo_path before triggering triage"))
 	}
 
-	// 3a. Per-item lock: prevents two concurrent TriggerTriage calls on the same item
-	// from both racing through the orphan-guard check-and-spawn sequence (TOCTOU).
-	if _, loaded := s.triggerInProgress.LoadOrStore(req.Msg.ItemId, struct{}{}); loaded {
-		return nil, connect.NewError(connect.CodeAlreadyExists,
-			fmt.Errorf("triage trigger already in progress for item %s", req.Msg.ItemId))
-	}
-	defer s.triggerInProgress.Delete(req.Msg.ItemId)
-
-	// 3b. Orphan-aware guard: if an open triage session exists, check whether it is
+	// 3a. Orphan-aware guard: if an open triage session exists, check whether it is
 	// genuinely still running. A session is orphaned (and safe to replace) when:
 	//   (a) the item has already advanced past "idea" (triage cycle completed), OR
-	//   (b) the session UUID is not live in memory (e.g. process died after a restart), OR
-	//   (c) the session has been running longer than maxTriageDuration (hung session).
+	//   (b) the session UUID is not live in memory (e.g. process died after a restart).
 	// Orphaned sessions are tombstoned so the re-trigger can proceed; only genuinely
 	// live sessions block with CodeAlreadyExists.
-	existingSessions, listErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
-	if listErr != nil {
-		return nil, connect.NewError(connect.CodeInternal,
-			fmt.Errorf("failed to list triage sessions for item %s: %w", req.Msg.ItemId, listErr))
-	}
+	existingSessions, _ := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
 	for _, is := range existingSessions {
 		if is.SessionRole != string(session.SessionRoleTriage) || is.EndedAt != nil {
 			continue
@@ -1121,8 +1119,7 @@ func (s *BacklogService) TriggerTriage(
 		neverStarted := is.StartedAt == nil
 		notLive := neverStarted || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
 		statusAdvanced := item.Status != string(session.BacklogStatusIdea)
-		timedOut := is.StartedAt != nil && time.Since(*is.StartedAt) > maxTriageDuration
-		if notLive || statusAdvanced || timedOut {
+		if notLive || statusAdvanced {
 			now := time.Now()
 			_ = s.storage.UpdateItemSessionEnded(ctx, is.ID.String(), now)
 			if s.sessionStopper != nil {
@@ -1134,7 +1131,7 @@ func (s *BacklogService) TriggerTriage(
 			fmt.Errorf("triage session already running for item %s", req.Msg.ItemId))
 	}
 
-	// 3c. If re-triggering on a "ready" item, move it back to "idea" so the UI
+	// 3b. If re-triggering on a "ready" item, move it back to "idea" so the UI
 	// correctly reflects that the item is under evaluation again.
 	if item.Status == string(session.BacklogStatusReady) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,

@@ -3,7 +3,6 @@ package services
 import (
 	"context"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -294,21 +293,6 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 //
 // Requires tmux to be installed; skipped automatically otherwise.
 func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
-	// This regression test exercises the tmux-available wiring path, which requires
-	// BOTH tmux and the launch program (claude) to be present. When claude is absent
-	// (e.g. CI), `tmux new-session ... claude` still returns 0 — the program-not-found
-	// failure happens inside the pane afterward — so instance.Start() returns nil and
-	// Status never becomes Stopped. That makes the runtime Stopped-skip below unreachable,
-	// and the test would spuriously fail at the deadline. Guard up front with the same
-	// exec.LookPath pattern used by the other tmux/claude integration tests
-	// (see session/mcp_integration_test.go).
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux not in PATH")
-	}
-	if _, err := exec.LookPath("claude"); err != nil {
-		t.Skip("claude not in PATH")
-	}
-
 	storage := createTestStorage(t)
 	bus := events.NewEventBus(16)
 	t.Cleanup(bus.Close)

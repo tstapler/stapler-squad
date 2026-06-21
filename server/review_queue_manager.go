@@ -135,6 +135,10 @@ func (rqm *ReactiveQueueManager) handleEvent(event *events.Event) {
 		rqm.handleSessionAcknowledged(event)
 	case events.EventApprovalResponse:
 		rqm.handleApprovalResponse(event)
+	case events.EventSessionDeleted:
+		sessionID := event.SessionID
+		rqm.queue.Remove(sessionID)
+		rqm.signalActivity()
 	}
 }
 

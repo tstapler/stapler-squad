@@ -10,11 +10,10 @@ type Subscriber = pkgevents.Subscriber
 
 // Constants
 const (
-	EventSessionCreated       = pkgevents.EventSessionCreated
-	EventSessionUpdated       = pkgevents.EventSessionUpdated
-	EventSessionDeleted       = pkgevents.EventSessionDeleted
-	EventSessionStatusChanged = pkgevents.EventSessionStatusChanged
-	EventUserInteraction      = pkgevents.EventUserInteraction
+	EventSessionCreated  = pkgevents.EventSessionCreated
+	EventSessionUpdated  = pkgevents.EventSessionUpdated
+	EventSessionDeleted  = pkgevents.EventSessionDeleted
+	EventUserInteraction = pkgevents.EventUserInteraction
 	EventSessionAcknowledged  = pkgevents.EventSessionAcknowledged
 	EventApprovalResponse     = pkgevents.EventApprovalResponse
 	EventNotification         = pkgevents.EventNotification
@@ -22,14 +21,14 @@ const (
 
 // Constructor functions (var allows assignment but is callable with identical syntax)
 var (
-	NewEventBus                  = pkgevents.NewEventBus
-	NewSubscriber                = pkgevents.NewSubscriber
-	NewSessionCreatedEvent       = pkgevents.NewSessionCreatedEvent
-	NewSessionUpdatedEvent       = pkgevents.NewSessionUpdatedEvent
-	NewSessionDeletedEvent       = pkgevents.NewSessionDeletedEvent
-	NewSessionStatusChangedEvent = pkgevents.NewSessionStatusChangedEvent
-	NewUserInteractionEvent      = pkgevents.NewUserInteractionEvent
-	NewSessionAcknowledgedEvent  = pkgevents.NewSessionAcknowledgedEvent
-	NewApprovalResponseEvent     = pkgevents.NewApprovalResponseEvent
-	NewNotificationEvent         = pkgevents.NewNotificationEvent
+	NewEventBus                         = pkgevents.NewEventBus
+	NewSubscriber                       = pkgevents.NewSubscriber
+	NewSessionCreatedEvent              = pkgevents.NewSessionCreatedEvent
+	NewSessionUpdatedEvent              = pkgevents.NewSessionUpdatedEvent
+	NewSessionUpdatedEventWithDetection = pkgevents.NewSessionUpdatedEventWithDetection
+	NewSessionDeletedEvent              = pkgevents.NewSessionDeletedEvent
+	NewUserInteractionEvent             = pkgevents.NewUserInteractionEvent
+	NewSessionAcknowledgedEvent         = pkgevents.NewSessionAcknowledgedEvent
+	NewApprovalResponseEvent            = pkgevents.NewApprovalResponseEvent
+	NewNotificationEvent                = pkgevents.NewNotificationEvent
 )

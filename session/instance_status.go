@@ -162,8 +162,8 @@ func (info InstanceStatusInfo) GetStatusDescription() string {
 		desc = "Ready"
 	case detection.StatusProcessing:
 		desc = "Processing"
-	case detection.StatusActive:
-		desc = "Active"
+	case detection.StatusExecuting:
+		desc = "Executing"
 	case detection.StatusIdle:
 		desc = "Idle"
 	case detection.StatusNeedsApproval:

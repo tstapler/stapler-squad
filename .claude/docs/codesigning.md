@@ -34,17 +34,12 @@ After `make install-service`, run:
 make verify-codesign
 ```
 
-Pass criteria (checked against `~/.stapler-squad/bin/stapler-squad`, the installed binary):
+Pass criteria:
 - `Authority=StaplerSquadDev` in the Code Signature section
 - `Identifier=com.stapler-squad` in the Code Signature section
-- DR section contains `anchor H"<cert-sha1>"` — cert-anchored, not `cdhash`
-- `Sealed Resources=none` — the install dir contains only the binary; no project files sealed
+- DR section contains `anchor H"<cert-sha1>"` or `anchor trusted` (cert-anchored, not `cdhash`)
+- `CFBundleIdentifier => "com.stapler-squad"` in the Embedded Info.plist section
 - `com.apple.security.automation.apple-events` in the Entitlements section
-
-**Note**: `make verify-codesign` checks the project-directory binary. To verify the installed binary:
-```bash
-codesign --verify --verbose ~/.stapler-squad/bin/stapler-squad
-```
 
 ## Exporting the cert for backup
 
@@ -101,10 +96,7 @@ The `make install-service` flow on macOS:
 
 1. `go build` with `CGO_LDFLAGS="-sectcreate __TEXT __info_plist Info.plist"` embeds the plist into the binary's `__TEXT/__info_plist` Mach-O section
 2. `otool` assertion verifies the plist was actually embedded (catches silent `CGO_ENABLED=0` failures)
-3. Binary is copied to `~/.stapler-squad/bin/stapler-squad` — a directory containing only the binary
-4. `codesign --sign "StaplerSquadDev"` signs the **copy at the install location** — this produces `Sealed Resources=none` because no other files exist there. Signing in the project directory (which has node_modules and source files) would seal hundreds of thousands of files, breaking the signature every time any file changed.
-5. `install-service.sh` verifies the signature, stops the old service, installs the plist (pointing to `~/.stapler-squad/bin/stapler-squad`), and starts the new service
-
-The LaunchAgent always runs `~/.stapler-squad/bin/stapler-squad`. The project-directory binary is a build artifact only — editing project files never affects the running service's signature.
+3. `codesign --sign "StaplerSquadDev" --entitlements entitlements.plist` signs the binary
+4. `install-service.sh` stops, installs, and restarts the LaunchAgent
 
 The `CFBundleIdentifier = com.stapler-squad` in the embedded plist causes TCC to track the app by bundle ID (`client_type=0`) rather than path+hash. The cert-anchored DR means the TCC row's `csreq` field matches every rebuild as long as the same cert is used.

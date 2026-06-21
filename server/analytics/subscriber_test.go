@@ -110,8 +110,17 @@ func TestSubscriber_StatusChanged(t *testing.T) {
 
 	StartAnalyticsSubscriber(ctx, bus, provider)
 
-	inst := &session.Instance{Title: "status-session"}
-	bus.Publish(events.NewSessionStatusChangedEvent(inst, session.Active, session.Stopped))
+	inst := &session.Instance{ID: "sess-status", Title: "status-session", Status: session.Active}
+
+	// First event: seeds lastStatusByID — no transition recorded.
+	bus.Publish(events.NewSessionUpdatedEvent(inst, []string{"status"}))
+
+	// Wait for first event to be processed before sending the second.
+	time.Sleep(30 * time.Millisecond)
+
+	// Second event: status changes Active → Stopped — transition should be recorded.
+	inst2 := &session.Instance{ID: "sess-status", Title: "status-session", Status: session.Stopped}
+	bus.Publish(events.NewSessionUpdatedEvent(inst2, []string{"status"}))
 
 	if !provider.waitForCount(1, 500*time.Millisecond) {
 		t.Fatal("timed out waiting for Record call")

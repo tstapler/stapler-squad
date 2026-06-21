@@ -1,6 +1,7 @@
 "use client";
 
-import { AttentionReason } from "@/gen/session/v1/types_pb";
+import { AttentionReason, DetectedStatus } from "@/gen/session/v1/types_pb";
+import { assertNever } from "@/lib/utils/assertNever";
 import * as styles from "./StatusBadge.css";
 
 type ReasonVariant = keyof typeof styles.reasonVariants;
@@ -35,46 +36,56 @@ export function getAttentionReasonInfo(reason: AttentionReason): StatusInfo {
   }
 }
 
-function getDetectedStatusInfo(status: string): StatusInfo {
+export function getDetectedStatusInfo(status: DetectedStatus): StatusInfo | null {
   switch (status) {
-    case "Ready":
+    case DetectedStatus.READY:
       return { label: "Ready", icon: "✅", variant: "complete" };
-    case "Processing":
+    case DetectedStatus.PROCESSING:
       return { label: "Processing", icon: "⚙️", variant: "processing" };
-    case "Needs Approval":
+    case DetectedStatus.NEEDS_APPROVAL:
       return { label: "Needs Approval", icon: "🔒", variant: "approval" };
-    case "Input Required":
+    case DetectedStatus.INPUT_REQUIRED:
       return { label: "Input Required", icon: "✏️", variant: "input" };
-    case "Error":
+    case DetectedStatus.ERROR:
       return { label: "Error", icon: "⚠️", variant: "error" };
-    case "Tests Failing":
+    case DetectedStatus.TESTS_FAILING:
       return { label: "Tests Failing", icon: "❌", variant: "testsFailing" };
-    case "Idle":
+    case DetectedStatus.IDLE:
       return { label: "Idle", icon: "⏰", variant: "idle" };
-    case "Active":
-      return { label: "Active", icon: "⚡", variant: "active" };
-    case "Success":
+    case DetectedStatus.EXECUTING:
+      return { label: "Executing", icon: "⚡", variant: "active" };
+    case DetectedStatus.SUCCESS:
       return { label: "Success", icon: "✅", variant: "complete" };
+    case DetectedStatus.WAITING_FOR_AGENT:
+      return { label: "Waiting for Agent", icon: "⏳", variant: "processing" };
+    case DetectedStatus.UNKNOWN:
+      return null;
+    case DetectedStatus.UNSPECIFIED:
+      return null;
     default:
-      return { label: status, icon: "●", variant: "unknown" };
+      return assertNever(status);
   }
 }
 
 interface StatusBadgeProps {
   reason?: AttentionReason;
-  detectedStatus?: string;
+  detectedStatus?: DetectedStatus;
   title?: string;
   context?: string;
 }
 
 export function StatusBadge({ reason, detectedStatus, title, context }: StatusBadgeProps) {
-  let info: StatusInfo;
+  let info: StatusInfo | null;
 
   if (reason !== undefined) {
     info = getAttentionReasonInfo(reason);
   } else if (detectedStatus !== undefined) {
     info = getDetectedStatusInfo(detectedStatus);
   } else {
+    return null;
+  }
+
+  if (info === null) {
     return null;
   }
 

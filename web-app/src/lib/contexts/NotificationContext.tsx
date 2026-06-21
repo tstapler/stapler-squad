@@ -10,6 +10,8 @@ import { useNotificationHistory } from "@/lib/hooks/useNotificationHistory";
 import { groupNotifications } from "@/lib/utils/notificationGrouping";
 import { mapNotificationType, mapPriority } from "@/lib/utils/notificationMapping";
 import { TOAST_STALE_MS, ACTIONABLE_TOAST_STALE_MS, isActionable } from "@/lib/notification-policy";
+import { createNotificationSyncChannel } from "@/lib/utils/broadcastChannel";
+import { markAcknowledged } from "@/lib/utils/notificationStorage";
 
 export type { NotificationData, NotificationHistoryItem };
 
@@ -240,6 +242,24 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     return () => clearInterval(interval);
   }, []);
 
+  // Cross-tab sync: when another tab dismisses a notification, reflect it locally.
+  useEffect(() => {
+    const syncChannel = createNotificationSyncChannel();
+    const unsubscribe = syncChannel.subscribe((message) => {
+      if (message.type === "NOTIFICATION_DISMISSED") {
+        const { notificationId } = message;
+        setNotifications((prev) => prev.filter((n) => n.id !== notificationId));
+        setNotificationHistory((prev) =>
+          prev.map((n) => (n.id === notificationId ? { ...n, isRead: true } : n))
+        );
+      }
+      // NOTIFICATION_ACKNOWLEDGED is intentionally not handled here.
+      // Cross-tab session acknowledgement is driven by the sessionAcknowledged
+      // event from the server stream (useSessionService), not BroadcastChannel.
+    });
+    return unsubscribe;
+  }, []);
+
   const togglePanel = useCallback(() => {
     setIsPanelOpen((prev) => {
       const newState = !prev;
@@ -270,7 +290,16 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const acknowledgeNotification = useCallback((id: string | string[]) => {
     const ids = Array.isArray(id) ? id : [id];
     const idSet = new Set(ids);
-    setNotifications((prev) => prev.filter((n) => !idSet.has(n.id)));
+    const syncChannel = createNotificationSyncChannel();
+    setNotifications((prev) => {
+      prev.forEach((n) => {
+        if (idSet.has(n.id)) {
+          syncChannel.broadcast({ type: "NOTIFICATION_DISMISSED", notificationId: n.id });
+          if (n.sessionId) markAcknowledged(n.sessionId);
+        }
+      });
+      return prev.filter((n) => !idSet.has(n.id));
+    });
     markAsRead(ids);
   }, [markAsRead]);
 

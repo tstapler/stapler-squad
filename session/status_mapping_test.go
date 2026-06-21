@@ -19,7 +19,7 @@ func TestAttentionReasonFromDetected(t *testing.T) {
 		{detection.StatusSuccess, ReasonTaskComplete},
 		{detection.StatusIdle, ReasonIdle},
 		// States that do not require attention
-		{detection.StatusActive, ""},
+		{detection.StatusExecuting, ""},
 		{detection.StatusProcessing, ""},
 		{detection.StatusReady, ""},
 		{detection.StatusUnknown, ""},
@@ -49,7 +49,7 @@ func TestStatusFromDetected(t *testing.T) {
 		{detection.StatusIdle, Active},
 		{detection.StatusSuccess, Active},
 		{detection.StatusProcessing, Active},
-		{detection.StatusActive, Active},
+		{detection.StatusExecuting, Active},
 		{detection.StatusNeedsApproval, Active},
 		{detection.StatusInputRequired, Active},
 		{detection.StatusError, Active},

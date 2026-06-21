@@ -3,6 +3,7 @@ version: "2"
 linters:
   enable:
     - depguard
+    - exhaustive
     - forbidigo
     - gochecknoglobals
     - ineffassign
@@ -14,6 +15,8 @@ linters:
   disable:
     - errcheck
   settings:
+    exhaustive:
+      default-signifies-exhaustive: false
     depguard:
       rules:
         no_server_in_core:
@@ -51,8 +54,39 @@ linters:
       - web-app
       - \.stapler-squad
       - \.claude-squad
-      - \.claude
     rules:
+      # exhaustive enforces DetectedStatus switch coverage in session/detection/ only.
+      # All other packages use iota types with intentional default: clauses.
+      - path: "^server/"
+        linters: [exhaustive]
+      - path: "^session/[^d]"
+        linters: [exhaustive]
+      - path: "^session/d[^e]"
+        linters: [exhaustive]
+      - path: "^session/de[^t]"
+        linters: [exhaustive]
+      - path: "^session/det[^e]"
+        linters: [exhaustive]
+      - path: "^session/dete[^c]"
+        linters: [exhaustive]
+      - path: "^main\\.go"
+        linters: [exhaustive]
+      - path: "^github/"
+        linters: [exhaustive]
+      - path: "^executor/"
+        linters: [exhaustive]
+      - path: "^cmd/"
+        linters: [exhaustive]
+      - path: "^pkg/"
+        linters: [exhaustive]
+      - path: "^daemon/"
+        linters: [exhaustive]
+      - path: "^telemetry/"
+        linters: [exhaustive]
+      - path: "^testutil/"
+        linters: [exhaustive]
+      - path: "^profiling/"
+        linters: [exhaustive]
       # infoplist_darwin.go uses import "C" to force CGO linking for macOS codesigning.
       # The CGO preamble comment causes a C compiler parse error when golangci-lint
       # runs typecheck without the macOS build flags. Suppress the typecheck issue.

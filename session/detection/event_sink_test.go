@@ -8,7 +8,7 @@ import (
 func TestDetectionEventSink_should_returnRecordedEvents_When_recordThenRecent(t *testing.T) {
 	var s DetectionEventSink
 	s.SetSessionID("test-session")
-	s.Record(StatusActive, "test_pattern", "some content")
+	s.Record(StatusExecuting, "test_pattern", "some content")
 
 	events := s.Recent(1)
 	if len(events) != 1 {
@@ -26,7 +26,7 @@ func TestDetectionEventSink_should_capAtRingSize_When_nExceedsCapacity(t *testin
 	var s DetectionEventSink
 	// Fill beyond EventRingCap
 	for i := 0; i < EventRingCap+100; i++ {
-		s.Record(StatusActive, "p", "content")
+		s.Record(StatusExecuting, "p", "content")
 	}
 	events := s.Recent(EventRingCap + 100)
 	if len(events) != EventRingCap {

@@ -126,6 +126,12 @@ func (i *Instance) fireLifecycleEvent(event LifecycleEvent, reason string) {
 	}
 }
 
+// FireLifecycleEventForTest is the exported version of fireLifecycleEvent, used
+// exclusively in cross-package tests that need to simulate an unexpected exit.
+func (i *Instance) FireLifecycleEventForTest(event LifecycleEvent, reason string) {
+	i.fireLifecycleEvent(event, reason)
+}
+
 // StopController stops and cleans up the ClaudeController for this instance.
 func (i *Instance) StopController() {
 	i.stateMutex.Lock()
