@@ -2,11 +2,15 @@ package services
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tstapler/stapler-squad/config"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 )
 
@@ -269,17 +273,36 @@ func TestListAliases_ReturnsEmptyList_WhenNoAliasesConfigured(t *testing.T) {
 // TestListAliases_ReturnsAllAliases_WhenConfigHasAliases verifies that ListAliases
 // returns all configured aliases with correct field mapping.
 func TestListAliases_ReturnsAllAliases_WhenConfigHasAliases(t *testing.T) {
+	// Write a config with known aliases into a temp directory and point
+	// STAPLER_SQUAD_TEST_DIR at it so config.LoadConfig() picks it up.
+	tmpDir := t.TempDir()
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", tmpDir)
+
+	cfg := &config.Config{}
+	cfg.SessionDefaults.Aliases = []config.AliasConfig{
+		{Name: "proj-a", Path: "/home/user/proj-a"},
+		{Name: "proj-b", Path: "/home/user/proj-b", Group: "work"},
+	}
+	cfgBytes, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgBytes, 0o600))
+
 	svc := NewDefaultsService()
 
-	// ListAliases reads from the global config; we verify the handler doesn't error
-	// and returns a valid response regardless of what aliases are configured.
 	req := connect.NewRequest(&sessionv1.ListAliasesRequest{})
 	resp, err := svc.ListAliases(context.Background(), req)
 
 	require.NoError(t, err)
 	require.NotNil(t, resp.Msg)
-	// Response must always have a non-nil Aliases slice (never nil, even if empty).
-	assert.NotNil(t, resp.Msg.Aliases)
+	require.NotNil(t, resp.Msg.Aliases)
+	require.Len(t, resp.Msg.Aliases, 2)
+
+	names := make([]string, len(resp.Msg.Aliases))
+	for i, a := range resp.Msg.Aliases {
+		names[i] = a.Name
+	}
+	assert.Contains(t, names, "proj-a")
+	assert.Contains(t, names, "proj-b")
 }
 
 // TestDeleteDirectoryRule_Success verifies that upserting a directory rule and then

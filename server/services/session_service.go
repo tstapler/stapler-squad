@@ -1028,9 +1028,11 @@ func (s *SessionService) CreateSession(
 		log.Info("[CreateSession] resolved to local path", "path", resolvedPath, "branch", branch)
 	}
 
+	// Load config once; used by both the one-off path and the defaults/alias path below.
+	cfg := config.LoadConfig()
+
 	// One-off session: generate a fresh directory and override resolvedPath.
 	if req.Msg.OneOff {
-		cfg := config.LoadConfig()
 		baseDir, err := cfg.OneOffBaseDirOrDefault()
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve one_off_base_dir: %w", err))
@@ -1049,7 +1051,6 @@ func (s *SessionService) CreateSession(
 	instanceEnvVars := make(map[string]string)
 	instanceCLIFlags := ""
 	if !req.Msg.SkipDefaults {
-		cfg := config.LoadConfig()
 		if req.Msg.AliasName != "" {
 			resolved, err := config.ResolveAlias(cfg, req.Msg.AliasName, req.Msg.Branch, req.Msg.Title, "")
 			if err != nil {

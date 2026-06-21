@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"testing"
 )
@@ -292,6 +293,9 @@ func TestResolveAlias_ReturnsError_WhenAliasNotFound(t *testing.T) {
 	_, err := ResolveAlias(cfg, "unknown", "", "", "")
 	if err == nil {
 		t.Error("expected error for unknown alias")
+	}
+	if !errors.Is(err, ErrAliasNotFound) {
+		t.Errorf("expected ErrAliasNotFound, got %v", err)
 	}
 }
 
