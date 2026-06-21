@@ -161,6 +161,55 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 
 // ─── U-GO-36: TestInstanceToProto_omitsGoalSummaryWhenNil ─────────────────────
 
+func TestStatusToProto_AllStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    session.Status
+		expected sessionv1.SessionStatus
+	}{
+		{"Active", session.Active, sessionv1.SessionStatus_SESSION_STATUS_ACTIVE},
+		{"Creating", session.Creating, sessionv1.SessionStatus_SESSION_STATUS_CREATING},
+		{"Paused", session.Paused, sessionv1.SessionStatus_SESSION_STATUS_PAUSED},
+		{"Stopped", session.Stopped, sessionv1.SessionStatus_SESSION_STATUS_STOPPED},
+		{"Hibernated", session.Hibernated, sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED},
+		{"Restoring", session.Restoring, sessionv1.SessionStatus_SESSION_STATUS_RESTORING},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := StatusToProto(tc.input)
+			if got != tc.expected {
+				t.Errorf("StatusToProto(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestProtoToStatus_AllStates(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    sessionv1.SessionStatus
+		expected session.Status
+	}{
+		{"Active", sessionv1.SessionStatus_SESSION_STATUS_ACTIVE, session.Active},
+		{"Creating", sessionv1.SessionStatus_SESSION_STATUS_CREATING, session.Creating},
+		{"Paused", sessionv1.SessionStatus_SESSION_STATUS_PAUSED, session.Paused},
+		{"Stopped", sessionv1.SessionStatus_SESSION_STATUS_STOPPED, session.Stopped},
+		{"Hibernated", sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED, session.Hibernated},
+		{"Restoring", sessionv1.SessionStatus_SESSION_STATUS_RESTORING, session.Restoring},
+		{"Unknown defaults to Creating", sessionv1.SessionStatus(99), session.Creating},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ProtoToStatus(tc.input)
+			if got != tc.expected {
+				t.Errorf("ProtoToStatus(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestInstanceToProto_omitsGoalSummaryWhenNil(t *testing.T) {
 	inst := &session.Instance{}
 	// SessionGoal is nil by default.

@@ -338,6 +338,8 @@ func ProtoToStatus(status sessionv1.SessionStatus) session.Status {
 		return session.Stopped
 	case sessionv1.SessionStatus_SESSION_STATUS_HIBERNATED:
 		return session.Hibernated
+	case sessionv1.SessionStatus_SESSION_STATUS_RESTORING:
+		return session.Restoring
 	default:
 		return session.Creating // Default to Creating for unknown statuses
 	}
