@@ -724,6 +724,7 @@ export function useSessionService(
         const sessionId = event.event.value.sessionId;
         dispatch(removeSession(sessionId));
         dispatch(removeReviewQueueItem(sessionId));
+        dispatch(removeDetectedStatus(sessionId));
         onSessionDeletedRef.current?.(sessionId);
         break;
       }

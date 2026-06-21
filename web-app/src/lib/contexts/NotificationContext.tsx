@@ -253,6 +253,9 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           prev.map((n) => (n.id === notificationId ? { ...n, isRead: true } : n))
         );
       }
+      // NOTIFICATION_ACKNOWLEDGED is intentionally not handled here.
+      // Cross-tab session acknowledgement is driven by the sessionAcknowledged
+      // event from the server stream (useSessionService), not BroadcastChannel.
     });
     return unsubscribe;
   }, []);
@@ -287,8 +290,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const acknowledgeNotification = useCallback((id: string | string[]) => {
     const ids = Array.isArray(id) ? id : [id];
     const idSet = new Set(ids);
+    const syncChannel = createNotificationSyncChannel();
     setNotifications((prev) => {
-      const syncChannel = createNotificationSyncChannel();
       prev.forEach((n) => {
         if (idSet.has(n.id)) {
           syncChannel.broadcast({ type: "NOTIFICATION_DISMISSED", notificationId: n.id });

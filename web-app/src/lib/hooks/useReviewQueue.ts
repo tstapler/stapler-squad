@@ -123,6 +123,11 @@ export function useReviewQueue(
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const lastUpdateRef = useRef<number>(Date.now());
+  // Stream reconnect state — shared between the WebSocket effect and the fallback poll.
+  // streamDeadRef is set when MAX_RETRIES are exhausted; the fallback poll clears it
+  // and triggers a reconnect after a successful REST fetch.
+  const streamDeadRef = useRef<boolean>(false);
+  const streamRetriesRef = useRef<number>(0);
 
   // Initialize ConnectRPC client — uses HTTP for unary, WebSocket for streaming Watch* RPCs
   useEffect(() => {
@@ -256,7 +261,7 @@ export function useReviewQueue(
           break;
 
         case "statistics":
-          // Statistics events are lightweight — handled by the fallback poll.
+          // Statistics events are currently not applied to the Redux store; the fallback poll refreshes the full queue.
           break;
 
         default:
@@ -278,7 +283,9 @@ export function useReviewQueue(
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
 
-    let retries = 0;
+    // Reset reconnect state when the effect re-runs (e.g. filter change).
+    streamDeadRef.current = false;
+    streamRetriesRef.current = 0;
     const MAX_RETRIES = 5;
 
     const connect = async () => {
@@ -300,7 +307,7 @@ export function useReviewQueue(
           handleReviewQueueEventRef.current?.(event);
         }
         // Clean close — reset retry counter
-        retries = 0;
+        streamRetriesRef.current = 0;
       } catch (err) {
         // Ignore abort errors (intentional cleanup)
         if (err instanceof Error && err.name === "AbortError") return;
@@ -308,25 +315,42 @@ export function useReviewQueue(
 
         console.error("WatchReviewQueue stream error:", err);
 
-        if (retries < MAX_RETRIES) {
-          const delay = Math.min(1000 * Math.pow(2, retries), 30000);
-          retries++;
-          setTimeout(connect, delay);
+        if (streamRetriesRef.current < MAX_RETRIES) {
+          const delay = Math.min(1000 * Math.pow(2, streamRetriesRef.current), 30000);
+          streamRetriesRef.current++;
+          setTimeout(() => {
+            // F5: Re-check the abort signal before reconnecting — the effect may
+            // have cleaned up (filter change, unmount) between the timer being
+            // scheduled and firing. Without this check the old closure's connect()
+            // would race against the new effect's connect() on the same signal.
+            if (signal.aborted) return;
+            void connect();
+          }, delay);
         } else {
-          // Exhausted retries — fallback polling will handle consistency
+          // Exhausted retries — fallback polling will handle consistency and
+          // attempt a reconnect after the next successful REST fetch (F4).
+          streamDeadRef.current = true;
           console.warn("WatchReviewQueue: max reconnect attempts reached, relying on fallback poll");
         }
       }
     };
 
+    // Expose reconnect for the fallback poll to call after a successful REST fetch
+    // when the stream has given up (streamDeadRef = true). The fallback poll resets
+    // streamDeadRef and streamRetriesRef before calling this.
+    streamReconnectRef.current = () => void connect();
+
     void connect();
 
     return () => {
+      streamReconnectRef.current = null;
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
         abortControllerRef.current = null;
       }
     };
+  // streamDeadRef, streamRetriesRef, and streamReconnectRef are stable refs — no need to list them.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useWebSocketPush, priorityFilter, reasonFilter]);
 
   // Keep a ref to the latest refresh so interval callbacks are always current
@@ -345,6 +369,10 @@ export function useReviewQueue(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty -- run once on mount
 
+  // Ref to a reconnect function that the WebSocket effect exposes for the
+  // fallback poll to call when the stream is dead and REST confirms reachability.
+  const streamReconnectRef = useRef<(() => void) | null>(null);
+
   // Setup fallback polling or legacy auto-refresh.
   // Intentionally excludes `refresh` from deps; uses refreshRef.current instead
   // so that filter changes (which change `refresh` identity) don't cause an
@@ -354,9 +382,21 @@ export function useReviewQueue(
     let interval: NodeJS.Timeout | null = null;
 
     if (useWebSocketPush) {
-      // Hybrid mode: Use longer fallback polling interval
-      interval = setInterval(() => {
-        refreshRef.current();
+      // Hybrid mode: Use longer fallback polling interval.
+      // After a successful REST fetch, if the stream has given up (streamDeadRef),
+      // reset retry state and invoke the reconnect thunk (F4).
+      interval = setInterval(async () => {
+        try {
+          await refreshRef.current();
+          // REST succeeded — if the stream is dead, attempt reconnect now.
+          if (streamDeadRef.current) {
+            streamDeadRef.current = false;
+            streamRetriesRef.current = 0;
+            streamReconnectRef.current?.();
+          }
+        } catch {
+          // fetch error — stream recovery deferred to next poll
+        }
       }, fallbackPollInterval);
     } else if (autoRefresh) {
       // Legacy mode: Use original refresh interval
@@ -370,6 +410,7 @@ export function useReviewQueue(
         clearInterval(interval);
       }
     };
+  // streamDeadRef, streamRetriesRef, streamReconnectRef are stable refs.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [useWebSocketPush, autoRefresh, refreshInterval, fallbackPollInterval]);
 

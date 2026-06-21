@@ -73,12 +73,14 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 		}
 
 	case events.EventUserInteraction:
-		// TODO: map event.InteractionType (string) to UserInteractionEvent_InteractionType enum
-		// when a full string→enum mapping is defined. Using UNSPECIFIED for now.
+		interactionType := sessionv1.UserInteractionEvent_INTERACTION_TYPE_UNSPECIFIED
+		if v, ok := sessionv1.UserInteractionEvent_InteractionType_value[event.InteractionType]; ok {
+			interactionType = sessionv1.UserInteractionEvent_InteractionType(v)
+		}
 		protoEvent.Event = &sessionv1.SessionEvent_UserInteraction{
 			UserInteraction: &sessionv1.UserInteractionEvent{
 				SessionId: event.SessionID,
-				Type:      sessionv1.UserInteractionEvent_INTERACTION_TYPE_UNSPECIFIED,
+				Type:      interactionType,
 				Context:   event.Context,
 			},
 		}

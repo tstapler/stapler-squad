@@ -1013,3 +1013,77 @@ func TestCreateSession_TitleAlreadyExists(t *testing.T) {
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeAlreadyExists, connectErr.Code())
 }
+
+// --------------------------------------------------------------------------
+// DeleteSession + CancelSession ordering (F10)
+// --------------------------------------------------------------------------
+
+// TestDeleteSession_CancelsPendingApprovals verifies that DeleteSession cancels
+// all pending approvals for the session before removing it from storage.
+// This ensures approval goroutines can exit cleanly while the session still exists.
+func TestDeleteSession_CancelsPendingApprovals(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	const sessionUUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+	testInstance := &session.Instance{
+		Title:     "approval-session",
+		UUID:      sessionUUID,
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, storage.AddInstance(testInstance))
+
+	// Register a pending approval for this session
+	approvalStore := svc.GetApprovalStore()
+	approval := &PendingApproval{
+		ID:        "approval-001",
+		SessionID: sessionUUID,
+		ToolName:  "Bash",
+		ExpiresAt: time.Now().Add(5 * time.Minute),
+	}
+	require.NoError(t, approvalStore.Create(approval))
+
+	// Verify approval exists before deletion
+	pendingBefore := approvalStore.GetBySession(sessionUUID)
+	require.Len(t, pendingBefore, 1, "approval must exist before deletion")
+
+	// Delete the session
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "approval-session",
+	}))
+	require.NoError(t, err)
+	require.True(t, resp.Msg.Success)
+
+	// Approval must be cancelled after deletion
+	pendingAfter := approvalStore.GetBySession(sessionUUID)
+	assert.Len(t, pendingAfter, 0, "pending approvals must be cleared after session deletion")
+}
+
+// TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop verifies that
+// DeleteSession succeeds gracefully when there are no pending approvals.
+func TestDeleteSession_CancelsPendingApprovals_NoApprovalsIsNoop(t *testing.T) {
+	storage := createTestStorage(t)
+	eventBus := events.NewEventBus(100)
+	svc := NewSessionService(storage, eventBus)
+
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "clean-session",
+		Path:      "/tmp/test",
+		Status:    session.Paused,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	// No pending approvals — DeleteSession must still succeed
+	resp, err := svc.DeleteSession(context.Background(), connect.NewRequest(&sessionv1.DeleteSessionRequest{
+		Id: "clean-session",
+	}))
+	require.NoError(t, err)
+	assert.True(t, resp.Msg.Success)
+}

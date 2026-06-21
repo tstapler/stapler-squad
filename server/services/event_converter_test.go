@@ -53,7 +53,7 @@ func TestConvertEventToProto_UserInteraction(t *testing.T) {
 		Type:            events.EventUserInteraction,
 		Timestamp:       ts,
 		SessionID:       "session-xyz",
-		InteractionType: "terminal_input",
+		InteractionType: "INTERACTION_TYPE_TERMINAL_INPUT",
 		Context:         "some context",
 	}
 
@@ -77,5 +77,33 @@ func TestConvertEventToProto_UserInteraction(t *testing.T) {
 	}
 	if inner.Context != "some context" {
 		t.Errorf("Context = %q, want %q", inner.Context, "some context")
+	}
+	if inner.Type != sessionv1.UserInteractionEvent_INTERACTION_TYPE_TERMINAL_INPUT {
+		t.Errorf("Type = %v, want INTERACTION_TYPE_TERMINAL_INPUT", inner.Type)
+	}
+}
+
+// TestConvertEventToProto_UserInteraction_UnknownType verifies that an unknown
+// InteractionType string falls back to UNSPECIFIED rather than panicking.
+func TestConvertEventToProto_UserInteraction_UnknownType(t *testing.T) {
+	event := &events.Event{
+		Type:            events.EventUserInteraction,
+		Timestamp:       time.Now(),
+		SessionID:       "session-xyz",
+		InteractionType: "not_a_real_type",
+		Context:         "ctx",
+	}
+
+	protoEvent := convertEventToProto(event)
+	if protoEvent == nil {
+		t.Fatal("expected non-nil protoEvent")
+	}
+
+	ui, ok := protoEvent.Event.(*sessionv1.SessionEvent_UserInteraction)
+	if !ok {
+		t.Fatalf("expected *SessionEvent_UserInteraction, got %T", protoEvent.Event)
+	}
+	if ui.UserInteraction.Type != sessionv1.UserInteractionEvent_INTERACTION_TYPE_UNSPECIFIED {
+		t.Errorf("unknown type should map to UNSPECIFIED, got %v", ui.UserInteraction.Type)
 	}
 }

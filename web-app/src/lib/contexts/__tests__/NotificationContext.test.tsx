@@ -28,6 +28,24 @@ const mockMarkAsRead = jest.fn().mockResolvedValue(undefined);
 const mockMarkAllAsRead = jest.fn().mockResolvedValue(undefined);
 const mockClearHistory = jest.fn().mockResolvedValue(undefined);
 
+// Capture the subscribe handler so tests can simulate cross-tab messages.
+let capturedSubscribeHandler: ((msg: any) => void) | null = null;
+let mockBroadcast = jest.fn();
+
+jest.mock("@/lib/utils/broadcastChannel", () => ({
+  createNotificationSyncChannel: () => ({
+    broadcast: mockBroadcast,
+    subscribe: (handler: (msg: any) => void) => {
+      capturedSubscribeHandler = handler;
+      return () => { capturedSubscribeHandler = null; };
+    },
+  }),
+}));
+
+jest.mock("@/lib/utils/notificationStorage", () => ({
+  markAcknowledged: jest.fn(),
+}));
+
 jest.mock("@/lib/hooks/useNotificationHistory", () => ({
   useNotificationHistory: () => ({
     notifications: [],
@@ -103,6 +121,8 @@ function makeReviewItem(reason: number, sessionId = "session-1"): ReviewItem {
 describe("NotificationContext", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    capturedSubscribeHandler = null;
+    mockBroadcast = jest.fn();
   });
 
   describe("addNotification", () => {
@@ -708,6 +728,98 @@ describe("NotificationContext", () => {
       });
 
       // Toast without metadata.approval_id is untouched
+      expect(result.current.notifications).toHaveLength(1);
+    });
+  });
+
+  // Cross-tab sync via BroadcastChannel (F9)
+  describe("cross-tab BroadcastChannel sync", () => {
+    it("removes toast when NOTIFICATION_DISMISSED arrives from another tab", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+      });
+      expect(result.current.notifications).toHaveLength(1);
+      const notificationId = result.current.notifications[0].id;
+
+      // Simulate another tab broadcasting a NOTIFICATION_DISMISSED message
+      act(() => {
+        capturedSubscribeHandler?.({ type: "NOTIFICATION_DISMISSED", notificationId });
+      });
+
+      expect(result.current.notifications).toHaveLength(0);
+    });
+
+    it("marks notification as read in history when NOTIFICATION_DISMISSED arrives", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+      });
+      const notificationId = result.current.notifications[0].id;
+
+      act(() => {
+        capturedSubscribeHandler?.({ type: "NOTIFICATION_DISMISSED", notificationId });
+      });
+
+      expect(result.current.notificationHistory).toHaveLength(1);
+      expect(result.current.notificationHistory[0].isRead).toBe(true);
+    });
+
+    it("does not affect other notifications when NOTIFICATION_DISMISSED targets a specific id", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+        result.current.addNotification(makeNotification({ sessionId: "s2" }));
+      });
+      expect(result.current.notifications).toHaveLength(2);
+      const firstId = result.current.notifications[0].id;
+
+      act(() => {
+        capturedSubscribeHandler?.({ type: "NOTIFICATION_DISMISSED", notificationId: firstId });
+      });
+
+      expect(result.current.notifications).toHaveLength(1);
+      expect(result.current.notifications[0].sessionId).toBe("s2");
+    });
+
+    it("acknowledgeNotification broadcasts NOTIFICATION_DISMISSED via the channel", () => {
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+      });
+      const notificationId = result.current.notifications[0].id;
+
+      act(() => {
+        result.current.acknowledgeNotification(notificationId);
+      });
+
+      expect(mockBroadcast).toHaveBeenCalledWith({
+        type: "NOTIFICATION_DISMISSED",
+        notificationId,
+      });
+    });
+
+    it("NOTIFICATION_ACKNOWLEDGED messages are intentionally not handled (server stream owns cross-tab ack)", () => {
+      // NOTIFICATION_ACKNOWLEDGED is in the NotificationSyncMessage union but has no
+      // handler in NotificationContext — cross-tab session acknowledgement is driven
+      // by the sessionAcknowledged event from the server stream, not BroadcastChannel.
+      const { result } = renderHook(() => useNotifications(), { wrapper });
+
+      act(() => {
+        result.current.addNotification(makeNotification({ sessionId: "s1" }));
+      });
+      expect(result.current.notifications).toHaveLength(1);
+
+      // Sending NOTIFICATION_ACKNOWLEDGED should be a no-op for active toasts
+      act(() => {
+        capturedSubscribeHandler?.({ type: "NOTIFICATION_ACKNOWLEDGED", sessionId: "s1" });
+      });
+
+      // Toast still present — NOTIFICATION_ACKNOWLEDGED has no handler
       expect(result.current.notifications).toHaveLength(1);
     });
   });
