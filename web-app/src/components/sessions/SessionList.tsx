@@ -975,6 +975,7 @@ export function SessionList({
                   </div>
                   </div>
                 ) : (
+                  <div role="listitem">
                   <SessionRow
                     session={item.session}
                     onClick={() => onSessionClick?.(item.session)}
@@ -997,6 +998,7 @@ export function SessionList({
                     suppressApprovalSubStatus={clearedSessions.has(item.session.id)}
                     visibleColumns={visibleColumns}
                   />
+                  </div>
                 )}
               </div>
             );
