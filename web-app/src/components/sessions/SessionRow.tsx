@@ -175,7 +175,10 @@ export function SessionRow({
         row,
         memMB > 500 ? rowMemoryPressure : "",
         isPaused ? rowPaused : "",
-        session.status === SessionStatus.ACTIVE && session.subStatus === SubStatus.PROCESSING ? rowActive : "",
+        session.status === SessionStatus.ACTIVE &&
+          (session.subStatus === SubStatus.PROCESSING || session.subStatus === SubStatus.WAITING_FOR_AGENT)
+          ? rowActive
+          : "",
       ].filter(Boolean).join(" ")}
       style={{ gridTemplateColumns: buildRowGridTemplate(visibleColumns) }}
       data-testid="session-row"

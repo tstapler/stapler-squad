@@ -1,6 +1,7 @@
 "use client";
 
 import { SubStatus } from "@/gen/session/v1/types_pb";
+import { assertNever } from "@/lib/utils/assertNever";
 import {
   chipNeedsApproval,
   chipInputRequired,
@@ -151,7 +152,9 @@ export function SubStatusChip({ subStatus }: SubStatusChipProps) {
       );
 
     case SubStatus.UNSPECIFIED:
+      return null;
     default:
+      assertNever(subStatus);
       return null;
   }
 }
