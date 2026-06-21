@@ -276,7 +276,7 @@ describe("dispatchOmnibarAction", () => {
       const deps = makeDeps();
       dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj", branch: "feat", label: "work" }, deps);
       expect(deps.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ aliasName: "myproj" })
+        expect.objectContaining({ aliasName: "myproj", branch: "feat" })
       );
     });
 
@@ -288,9 +288,13 @@ describe("dispatchOmnibarAction", () => {
       );
     });
 
-    it("dispatchOmnibarAction_should_notThrow_When_createAliasSessionActionDispatched", () => {
+    it("dispatchOmnibarAction_should_callCreateSession_When_minimalAliasAction", () => {
       const deps = makeDeps();
-      expect(() => dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj" }, deps)).not.toThrow();
+      dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj" }, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ aliasName: "myproj" })
+      );
+      expect(deps.close).toHaveBeenCalled();
     });
   });
 });

@@ -126,3 +126,25 @@ describe("AliasDetector", () => {
     expect(result?.metadata?.extraFlags).toBeUndefined();
   });
 });
+
+describe("AliasDetector (empty alias list)", () => {
+  let emptyDetector: AliasDetector;
+
+  beforeEach(() => {
+    emptyDetector = new AliasDetector([]);
+  });
+
+  it("AliasDetector_should_returnAliasBrowse_When_bareAtSignAndNoAliases", () => {
+    const result = emptyDetector.detect("@");
+    expect(result?.type).toBe(InputType.AliasBrowse);
+  });
+
+  it("AliasDetector_should_returnAliasNotFound_When_nameWithSpaceAndNoAliases", () => {
+    const result = emptyDetector.detect("@anything ");
+    expect(result?.type).toBe(InputType.AliasNotFound);
+  });
+
+  it("AliasDetector_should_returnNull_When_noAtPrefixAndNoAliases", () => {
+    expect(emptyDetector.detect("myproj")).toBeNull();
+  });
+});
