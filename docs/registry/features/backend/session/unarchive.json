@@ -1,11 +1,12 @@
 {
-  "id": "UnarchiveSession",
+  "id": "session:unarchive",
   "type": "backend",
   "service": "SessionService",
   "method": "UnarchiveSession",
   "protoFile": "proto/session/v1/session.proto",
-  "markerFound": false,
+  "markerFound": true,
+  "handlerFile": "server/services/session_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "lastModified": "2026-06-21T12:39:06.59282763-07:00"
 }
