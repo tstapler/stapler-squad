@@ -11,6 +11,9 @@ import { Detector } from "../detector";
 import { DetectionResult, InputType } from "../types";
 import type { AliasEntry } from "../../hooks/useAliases";
 
+/** Name-only form of the alias regex (without the leading "@"). */
+export const ALIAS_NAME_RE = /^[\w-]+$/;
+
 /**
  * AliasDetector matches the full alias grammar:
  *   @<name>[:<branch>][ <label text>][ --<extra-flags>]

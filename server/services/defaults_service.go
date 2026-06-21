@@ -2,7 +2,10 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/tstapler/stapler-squad/config"
@@ -12,6 +15,9 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// aliasNameRE validates alias names: letters, digits, hyphens, underscores only.
+var aliasNameRE = regexp.MustCompile(`^[\w-]+$`)
 
 // DefaultsService handles session defaults RPC methods.
 type DefaultsService struct{}
@@ -204,6 +210,108 @@ func (d *DefaultsService) UpsertDirectoryRule(
 	return connect.NewResponse(&sessionv1.UpsertDirectoryRuleResponse{
 		Rule: directoryRuleToProto(rule),
 	}), nil
+}
+
+// UpsertAlias creates or updates a named alias preset (matched by name).
+// NOTE: like all other config-write handlers, this follows the lock-free
+// load-modify-save pattern. Concurrent writes are last-write-wins — the accepted
+// project tradeoff; see DefaultsService for context.
+func (d *DefaultsService) UpsertAlias(
+	ctx context.Context,
+	req *connect.Request[sessionv1.UpsertAliasRequest],
+) (*connect.Response[sessionv1.UpsertAliasResponse], error) {
+	if req.Msg.Alias == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("alias is required"))
+	}
+	name := strings.TrimSpace(req.Msg.Alias.Name)
+	if name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("alias name is required"))
+	}
+	if !aliasNameRE.MatchString(name) {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("alias name %q must match ^[\\w-]+$ (letters, digits, hyphens, underscores only)", name))
+	}
+
+	cfg := config.LoadConfig()
+
+	alias := config.AliasConfig{
+		Name:        name,
+		Group:       req.Msg.Alias.Group,
+		Path:        req.Msg.Alias.Path,
+		Description: req.Msg.Alias.Description,
+		Profile:     req.Msg.Alias.Profile,
+		Program:     req.Msg.Alias.Program,
+		AutoYes:     req.Msg.Alias.AutoYes,
+		Tags:        req.Msg.Alias.Tags,
+		EnvVars:     req.Msg.Alias.EnvVars,
+		CLIFlags:    req.Msg.Alias.CliFlags,
+	}
+	if alias.EnvVars == nil {
+		alias.EnvVars = make(map[string]string)
+	}
+	if alias.Tags == nil {
+		alias.Tags = []string{}
+	}
+
+	// Slice-scan upsert: replace existing entry or append.
+	// Comparison is case-insensitive to enforce uniqueness across "MyProj" and "myproj".
+	// New names that differ only by case from an existing alias are treated as updates
+	// (overwrite-in-place), consistent with the client-side uniqueness check in AliasesManager.tsx.
+	found := false
+	for i, existing := range cfg.SessionDefaults.Aliases {
+		if strings.EqualFold(existing.Name, alias.Name) {
+			cfg.SessionDefaults.Aliases[i] = alias
+			found = true
+			break
+		}
+	}
+	if !found {
+		cfg.SessionDefaults.Aliases = append(cfg.SessionDefaults.Aliases, alias)
+	}
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("upserted alias", "name", alias.Name)
+	return connect.NewResponse(&sessionv1.UpsertAliasResponse{
+		Alias: aliasConfigToProto(alias),
+	}), nil
+}
+
+// DeleteAlias removes an alias preset by name.
+func (d *DefaultsService) DeleteAlias(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteAliasRequest],
+) (*connect.Response[sessionv1.DeleteAliasResponse], error) {
+	if req.Msg.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("alias name is required"))
+	}
+
+	cfg := config.LoadConfig()
+
+	found := false
+	// make a fresh slice so we don't mutate the original backing array (consistent with DeleteDirectoryRule).
+	filtered := make([]config.AliasConfig, 0, len(cfg.SessionDefaults.Aliases))
+	for _, a := range cfg.SessionDefaults.Aliases {
+		// Case-insensitive match: consistent with UpsertAlias which normalises names case-insensitively.
+		if strings.EqualFold(a.Name, req.Msg.Name) {
+			found = true
+		} else {
+			filtered = append(filtered, a)
+		}
+	}
+	if !found {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("alias %q not found", req.Msg.Name))
+	}
+	cfg.SessionDefaults.Aliases = filtered
+
+	if err := config.SaveConfig(cfg); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save config: %w", err))
+	}
+
+	log.Info("deleted alias", "name", req.Msg.Name)
+	return connect.NewResponse(&sessionv1.DeleteAliasResponse{}), nil
 }
 
 // ListAliases returns all configured aliases.

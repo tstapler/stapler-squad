@@ -3034,6 +3034,16 @@ func (s *SessionService) ListAliases(ctx context.Context, req *connect.Request[s
 	return s.defaultsSvc.ListAliases(ctx, req)
 }
 
+// UpsertAlias creates or updates a named alias preset.
+func (s *SessionService) UpsertAlias(ctx context.Context, req *connect.Request[sessionv1.UpsertAliasRequest]) (*connect.Response[sessionv1.UpsertAliasResponse], error) {
+	return s.defaultsSvc.UpsertAlias(ctx, req)
+}
+
+// DeleteAlias removes an alias preset by name.
+func (s *SessionService) DeleteAlias(ctx context.Context, req *connect.Request[sessionv1.DeleteAliasRequest]) (*connect.Response[sessionv1.DeleteAliasResponse], error) {
+	return s.defaultsSvc.DeleteAlias(ctx, req)
+}
+
 // SearchFiles performs a recursive name-substring search in a session's worktree.
 func (s *SessionService) SearchFiles(
 	ctx context.Context,

@@ -7,6 +7,7 @@ import * as Tabs from "@radix-ui/react-tabs";
 import { GlobalDefaultsForm } from "@/components/settings/GlobalDefaultsForm";
 import { ProfilesManager } from "@/components/settings/ProfilesManager";
 import { DirectoryRulesManager } from "@/components/settings/DirectoryRulesManager";
+import { AliasesManager } from "@/components/settings/AliasesManager";
 import { PushNotificationSettings } from "@/components/settings/PushNotificationSettings";
 import { ThemePicker } from "@/components/settings/ThemePicker";
 import { ConfigPageContent } from "@/app/config/ConfigPageContent";
@@ -56,6 +57,9 @@ function SettingsPageInner() {
             </section>
             <section className={styles.section}>
               <DirectoryRulesManager />
+            </section>
+            <section className={styles.section}>
+              <AliasesManager />
             </section>
             {/* Help subsection */}
             <section className={styles.section}>

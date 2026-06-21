@@ -381,6 +381,12 @@ service SessionService {
   // ListAliases returns all configured alias presets from config.json.
   rpc ListAliases(ListAliasesRequest) returns (ListAliasesResponse) {}
 
+  // UpsertAlias creates or updates a named alias preset (matched by name).
+  rpc UpsertAlias(UpsertAliasRequest) returns (UpsertAliasResponse) {}
+
+  // DeleteAlias removes an alias preset by name.
+  rpc DeleteAlias(DeleteAliasRequest) returns (DeleteAliasResponse) {}
+
   // ArchiveSession soft-archives a session by setting archived_at.
   // Archived sessions are excluded from the default session list.
   rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
@@ -1789,6 +1795,20 @@ message ListAliasesRequest {}
 message ListAliasesResponse {
   repeated AliasProto aliases = 1;
 }
+
+message UpsertAliasRequest {
+  AliasProto alias = 1;
+}
+
+message UpsertAliasResponse {
+  AliasProto alias = 1;
+}
+
+message DeleteAliasRequest {
+  string name = 1;
+}
+
+message DeleteAliasResponse {}
 
 message ListWorktreesRequest {
   // Absolute path to the git repository root. Supports ~ expansion.

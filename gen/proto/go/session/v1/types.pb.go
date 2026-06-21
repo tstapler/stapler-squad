@@ -180,6 +180,9 @@ const (
 	SessionStatus_SESSION_STATUS_STOPPED SessionStatus = 7
 	// Session has been hibernated (checkpoint written, tmux session killed).
 	SessionStatus_SESSION_STATUS_HIBERNATED SessionStatus = 8
+	// Session is being restored from a previous run (transient startup state).
+	// Never persisted to the database. Transitions to ACTIVE or CREATING on completion.
+	SessionStatus_SESSION_STATUS_RESTORING SessionStatus = 9
 )
 
 // Enum value maps for SessionStatus.
@@ -195,6 +198,7 @@ var (
 		6: "SESSION_STATUS_CREATING",
 		7: "SESSION_STATUS_STOPPED",
 		8: "SESSION_STATUS_HIBERNATED",
+		9: "SESSION_STATUS_RESTORING",
 	}
 	SessionStatus_value = map[string]int32{
 		"SESSION_STATUS_UNSPECIFIED":    0,
@@ -207,6 +211,7 @@ var (
 		"SESSION_STATUS_CREATING":       6,
 		"SESSION_STATUS_STOPPED":        7,
 		"SESSION_STATUS_HIBERNATED":     8,
+		"SESSION_STATUS_RESTORING":      9,
 	}
 )
 
@@ -6654,7 +6659,7 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x12CDP_STATUS_WAITING\x10\x01\x12\x18\n" +
 	"\x14CDP_STATUS_STREAMING\x10\x02\x12\x19\n" +
 	"\x15CDP_STATUS_NO_BROWSER\x10\x03\x12\x1a\n" +
-	"\x16CDP_STATUS_UNAVAILABLE\x10\x04*\xc6\x02\n" +
+	"\x16CDP_STATUS_UNAVAILABLE\x10\x04*\xe4\x02\n" +
 	"\rSessionStatus\x12\x1e\n" +
 	"\x1aSESSION_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15SESSION_STATUS_ACTIVE\x10\x01\x12\x1e\n" +
@@ -6665,7 +6670,8 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x1dSESSION_STATUS_NEEDS_APPROVAL\x10\x05\x1a\x02\b\x01\x12\x1b\n" +
 	"\x17SESSION_STATUS_CREATING\x10\x06\x12\x1a\n" +
 	"\x16SESSION_STATUS_STOPPED\x10\a\x12\x1d\n" +
-	"\x19SESSION_STATUS_HIBERNATED\x10\b\x1a\x02\x10\x01*\xa8\x01\n" +
+	"\x19SESSION_STATUS_HIBERNATED\x10\b\x12\x1c\n" +
+	"\x18SESSION_STATUS_RESTORING\x10\t\x1a\x02\x10\x01*\xa8\x01\n" +
 	"\vSessionType\x12\x1c\n" +
 	"\x18SESSION_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SESSION_TYPE_DIRECTORY\x10\x01\x12\x1d\n" +

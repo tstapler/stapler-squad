@@ -1,0 +1,18 @@
+{
+  "id": "alias:upsert",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "UpsertAlias",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": true,
+  "testIds": [
+    "TestUpsertAlias_NilAlias",
+    "TestUpsertAlias_EmptyName",
+    "TestUpsertAlias_InvalidName",
+    "TestUpsertAlias_CreatesAlias",
+    "TestUpsertAlias_UpdatesExistingAlias",
+    "TestUpsertAlias_CaseInsensitiveDuplicate"
+  ],
+  "lastModified": "2026-06-21T00:00:00Z"
+}

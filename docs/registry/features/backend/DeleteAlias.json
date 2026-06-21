@@ -1,0 +1,11 @@
+{
+  "id": "DeleteAlias",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "DeleteAlias",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-21T10:46:45.416400511-07:00"
+}
