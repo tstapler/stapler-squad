@@ -110,10 +110,9 @@ export interface OmnibarSessionData {
   gitHubRepo?: string;
   gitHubPRNumber?: number;
   // Session type and worktree
-  sessionType?: "directory" | "new_worktree" | "existing_worktree";
+  sessionType?: "directory" | "new_worktree" | "existing_worktree" | "one_off";
   existingWorktree?: string;
   workingDir?: string;
-  oneOff?: boolean;
   initialPrompt?: string;
   // New project mode: tells the context layer to use SESSION_TYPE_NEW_PROJECT
   isNewProject?: boolean;
@@ -954,10 +953,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           category: category.trim() || undefined,
           prompt: finalPrompt,
           autoYes,
-          sessionType: (isOneOff || isAutonomous) ? "directory" : sessionType,
+          sessionType: isAutonomous ? "directory" : sessionType,
           existingWorktree: (isOneOff || isAutonomous) ? undefined : (existingWorktree.trim() || undefined),
           workingDir: (isOneOff || isAutonomous) ? undefined : (workingDir.trim() || undefined),
-          oneOff: isOneOff ? true : undefined,
           autonomousMode: isAutonomous ? true : undefined,
           permissionMode: isAutonomous ? "auto" : undefined,
           // Only forward when relevant (non-existent path + opt-in checked).

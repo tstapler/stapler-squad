@@ -248,6 +248,7 @@ func (d *DefaultsService) UpsertAlias(
 		Tags:        req.Msg.Alias.Tags,
 		EnvVars:     req.Msg.Alias.EnvVars,
 		CLIFlags:    req.Msg.Alias.CliFlags,
+		SessionType: protoToAliasSessionType(req.Msg.Alias.SessionType),
 	}
 	if alias.EnvVars == nil {
 		alias.EnvVars = make(map[string]string)
@@ -344,6 +345,44 @@ func aliasConfigToProto(a config.AliasConfig) *sessionv1.AliasProto {
 		Tags:        a.Tags,
 		EnvVars:     a.EnvVars,
 		CliFlags:    a.CLIFlags,
+		SessionType: aliasSessionTypeToProto(a.SessionType),
+	}
+}
+
+// aliasSessionTypeToProto converts a config.SessionType to the proto enum.
+func aliasSessionTypeToProto(st config.SessionType) sessionv1.SessionType {
+	switch st {
+	case config.SessionTypeDirectory:
+		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
+	case config.SessionTypeNewWorktree:
+		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
+	case config.SessionTypeExistingWorktree:
+		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
+	case config.SessionTypeNewProject:
+		return sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT
+	case config.SessionTypeOneOff:
+		return sessionv1.SessionType_SESSION_TYPE_ONE_OFF
+	default:
+		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
+	}
+}
+
+// protoToAliasSessionType converts a proto SessionType enum to config.SessionType.
+// UNSPECIFIED maps to SessionTypeDefault (empty, uses default behavior).
+func protoToAliasSessionType(st sessionv1.SessionType) config.SessionType {
+	switch st {
+	case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
+		return config.SessionTypeDirectory
+	case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
+		return config.SessionTypeNewWorktree
+	case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
+		return config.SessionTypeExistingWorktree
+	case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
+		return config.SessionTypeNewProject
+	case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
+		return config.SessionTypeOneOff
+	default:
+		return config.SessionTypeDefault
 	}
 }
 

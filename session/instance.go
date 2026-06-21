@@ -376,35 +376,22 @@ const (
 	PauseReasonAutoResource   = "auto:resource"
 )
 
-type SessionType string
+// SessionType is an alias for config.SessionType so callers can use either package.
+type SessionType = config.SessionType
 
 const (
 	// SessionTypeDirectory creates a simple directory session without git worktree
-	SessionTypeDirectory SessionType = "directory"
+	SessionTypeDirectory = config.SessionTypeDirectory
 	// SessionTypeNewWorktree creates a new git worktree for the session
-	SessionTypeNewWorktree SessionType = "new_worktree"
+	SessionTypeNewWorktree = config.SessionTypeNewWorktree
 	// SessionTypeExistingWorktree uses an existing git worktree
-	SessionTypeExistingWorktree SessionType = "existing_worktree"
+	SessionTypeExistingWorktree = config.SessionTypeExistingWorktree
 	// SessionTypeNewProject creates a new directory, initializes a git repo with an
 	// initial commit, and opens the session. The directory need not exist beforehand.
-	SessionTypeNewProject SessionType = "new_project"
+	SessionTypeNewProject = config.SessionTypeNewProject
+	// SessionTypeOneOff generates a fresh temporary directory under one_off_base_dir.
+	SessionTypeOneOff = config.SessionTypeOneOff
 )
-
-// SessionTypeOneOff is the workflow session_type value that requests a one-off session.
-// It is a plain string (not a SessionType constant) because workflows store it as a
-// plain string field, and the backend maps it to OneOff=true at execution time.
-const SessionTypeOneOff = "one_off"
-
-// IsValid reports whether st is a recognized session type.
-func (st SessionType) IsValid() bool {
-	switch st {
-	case SessionTypeDirectory, SessionTypeNewWorktree, SessionTypeExistingWorktree,
-		SessionTypeNewProject:
-		return true
-	default:
-		return false
-	}
-}
 
 // Options for creating a new instance
 type InstanceOptions struct {

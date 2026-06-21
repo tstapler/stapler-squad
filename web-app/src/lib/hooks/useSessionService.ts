@@ -233,7 +233,6 @@ export function useSessionService(
           autoYes: request.autoYes,
           existingWorktree: request.existingWorktree,
           sessionType: request.sessionType,
-          oneOff: request.oneOff ?? false,
           createIfMissing: request.createIfMissing ?? false,
           initialPrompt: request.initialPrompt,
           autonomousMode: request.autonomousMode ?? false,

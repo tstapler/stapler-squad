@@ -492,9 +492,10 @@ message CreateSessionRequest {
   // If not specified, backend will infer from other fields (branch, existing_worktree).
   SessionType session_type = 13;
 
-  // Optional: If true, ignore the path field and generate a fresh directory
-  // under one_off_base_dir. The session title is still required.
-  bool one_off = 14;
+  // Deprecated: use session_type = SESSION_TYPE_ONE_OFF instead.
+  // Field 14 is reserved for backward compatibility; server ignores it.
+  reserved 14;
+  reserved "one_off";
 
   // Optional: Initial prompt to inject via CLAUDE.md (no size limit; shell-safe).
   string initial_prompt = 15;
@@ -1788,6 +1789,9 @@ message AliasProto {
   repeated string tags = 8;
   map<string, string> env_vars = 9;
   string cli_flags = 10;
+  // session_type overrides the default session creation mode for this alias.
+  // Unspecified means the default (directory) is used.
+  SessionType session_type = 11;
 }
 
 message ListAliasesRequest {}

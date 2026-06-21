@@ -153,7 +153,8 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 	prompt := strings.Join(parts, "\n\n")
 
 	title := fmt.Sprintf("%s — %s", wf.Name, time.Now().Format("2006-01-02 15:04"))
-	oneOff := wf.SessionType == session.SessionTypeOneOff
+
+	sessionType := sessionTypeToProto(session.SessionType(wf.SessionType))
 
 	// Append --model flag when a model is specified and the program is claude (or defaulting to claude).
 	program := wf.AgentType
@@ -169,7 +170,7 @@ func (s *Scheduler) FireNow(ctx context.Context, wf *ent.Workflow, arg string) (
 		Path:          wf.TargetDirectory,
 		Program:       program,
 		InitialPrompt: prompt,
-		OneOff:        oneOff,
+		SessionType:   sessionType,
 		WorkflowId:    wf.ID.String(),
 	})
 	resp, err := s.sessionSvc.CreateSession(ctx, req)
@@ -213,4 +214,22 @@ func ValidateCronExpression(expr string) error {
 	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
 	_, err := parser.Parse(expr)
 	return err
+}
+
+// sessionTypeToProto converts a session.SessionType string to the proto enum.
+func sessionTypeToProto(st session.SessionType) sessionv1.SessionType {
+	switch st {
+	case session.SessionTypeDirectory:
+		return sessionv1.SessionType_SESSION_TYPE_DIRECTORY
+	case session.SessionTypeNewWorktree:
+		return sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE
+	case session.SessionTypeExistingWorktree:
+		return sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE
+	case session.SessionTypeNewProject:
+		return sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT
+	case session.SessionTypeOneOff:
+		return sessionv1.SessionType_SESSION_TYPE_ONE_OFF
+	default:
+		return sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED
+	}
 }

@@ -1,6 +1,7 @@
 import { AliasDetector } from "./AliasDetector";
 import { InputType } from "../types";
 import type { AliasEntry } from "../../hooks/useAliases";
+import { SessionType } from "@/gen/session/v1/types_pb";
 
 const mockAliases: AliasEntry[] = [
   {
@@ -12,6 +13,7 @@ const mockAliases: AliasEntry[] = [
     program: "claude",
     autoYes: false,
     tags: [],
+    sessionType: SessionType.UNSPECIFIED,
   },
   {
     name: "quick",
@@ -22,6 +24,7 @@ const mockAliases: AliasEntry[] = [
     program: "claude",
     autoYes: false,
     tags: [],
+    sessionType: SessionType.UNSPECIFIED,
   },
 ];
 

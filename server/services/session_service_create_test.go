@@ -66,29 +66,12 @@ func TestResolveSessionType_UnspecifiedExistingWorktreeInfersExistingWorktree(t 
 	assert.Equal(t, session.SessionTypeExistingWorktree, resolveSessionType(msg, "feat/branch"))
 }
 
-func TestResolveSessionType_OneOffOverridesExplicitNewWorktree(t *testing.T) {
-	// one_off flag wins over any explicit SessionType.
+func TestResolveSessionType_OneOff_ReturnsSessionTypeOneOff(t *testing.T) {
+	// SESSION_TYPE_ONE_OFF maps to SessionTypeOneOff (caller converts to directory after path gen).
 	msg := &sessionv1.CreateSessionRequest{
-		SessionType: sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE,
-		OneOff:      true,
+		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, "some-branch"))
-}
-
-func TestResolveSessionType_OneOffOverridesExistingWorktree(t *testing.T) {
-	msg := &sessionv1.CreateSessionRequest{
-		SessionType:      sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE,
-		ExistingWorktree: "/worktree",
-		OneOff:           true,
-	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
-}
-
-func TestResolveSessionType_OneOffUnspecifiedIsDirectory(t *testing.T) {
-	msg := &sessionv1.CreateSessionRequest{
-		OneOff: true,
-	}
-	assert.Equal(t, session.SessionTypeDirectory, resolveSessionType(msg, ""))
+	assert.Equal(t, session.SessionTypeOneOff, resolveSessionType(msg, "some-branch"))
 }
 
 func TestResolveSessionType_UnknownExplicitTypeDefaultsToDirectory(t *testing.T) {
@@ -122,9 +105,8 @@ func TestCreateSession_EmptyPath_NonOneOff_ReturnsInvalidArgument(t *testing.T) 
 	svc := newCreateTestService(t, storage)
 
 	_, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:  "my-session",
-		Path:   "",
-		OneOff: false,
+		Title: "my-session",
+		Path:  "",
 	}))
 
 	require.Error(t, err)
@@ -143,9 +125,9 @@ func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	t.Setenv("HOME", baseDir)
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:  "scratch-session",
-		Path:   "",
-		OneOff: true,
+		Title:       "scratch-session",
+		Path:        "",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}))
 
 	if err != nil {
@@ -205,9 +187,9 @@ func TestCreateSession_OneOff_CreatesDirectoryInBaseDir(t *testing.T) {
 	expectedBase := filepath.Join(baseDir, "oneoff")
 
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:  "my-scratch",
-		Path:   "",
-		OneOff: true,
+		Title:       "my-scratch",
+		Path:        "",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}))
 	if err == nil {
 		destroyCreatedSession(t, svc, resp.Msg.Session.Id)
@@ -236,8 +218,8 @@ func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T)
 
 	for i, title := range []string{"session-a", "session-b"} {
 		resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-			Title:  title,
-			OneOff: true,
+			Title:       title,
+			SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 		}))
 		if err == nil {
 			destroyCreatedSession(t, svc, resp.Msg.Session.Id)
@@ -268,8 +250,8 @@ func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {
 	t.Setenv("HOME", bogusHome)
 
 	_, err = svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title:  "cant-make-dir",
-		OneOff: true,
+		Title:       "cant-make-dir",
+		SessionType: sessionv1.SessionType_SESSION_TYPE_ONE_OFF,
 	}))
 
 	require.Error(t, err)

@@ -2,11 +2,20 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { SessionService, type AliasProto } from "@/gen/session/v1/session_pb";
+import { SessionType } from "@/gen/session/v1/types_pb";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { getApiBaseUrl } from "@/lib/config";
 import { PROGRAMS } from "@/lib/constants/programs";
 import { ALIAS_NAME_RE } from "@/lib/omnibar/detectors/AliasDetector";
+
+const SESSION_TYPE_OPTIONS: Array<{ value: SessionType; label: string }> = [
+  { value: SessionType.UNSPECIFIED, label: "Default (directory)" },
+  { value: SessionType.DIRECTORY, label: "Directory" },
+  { value: SessionType.NEW_WORKTREE, label: "New Worktree" },
+  { value: SessionType.EXISTING_WORKTREE, label: "Existing Worktree" },
+  { value: SessionType.ONE_OFF, label: "One-off" },
+];
 import {
   container,
   heading,
@@ -60,6 +69,7 @@ interface AliasFormData {
   tagInput: string;
   envVars: EnvVar[];
   cliFlags: string;
+  sessionType: SessionType;
   showAdvanced: boolean;
 }
 
@@ -75,6 +85,7 @@ const emptyForm: AliasFormData = {
   tagInput: "",
   envVars: [],
   cliFlags: "",
+  sessionType: SessionType.UNSPECIFIED,
   showAdvanced: false,
 };
 
@@ -146,6 +157,7 @@ export function AliasesManager() {
       tagInput: "",
       envVars: envVarsList,
       cliFlags: alias.cliFlags,
+      sessionType: alias.sessionType,
       showAdvanced: hasAdvanced,
     });
     setNameError(null);
@@ -216,6 +228,7 @@ export function AliasesManager() {
           tags: form.tags,
           envVars: envVarsMap,
           cliFlags: form.cliFlags,
+          sessionType: form.sessionType,
         } as unknown as AliasProto,
       });
       if (successBannerTimerRef.current) clearTimeout(successBannerTimerRef.current);
@@ -329,6 +342,11 @@ export function AliasesManager() {
             {alias.group && <span className={aliasMeta}>Group: {alias.group}</span>}
             {alias.path && <span className={aliasMeta}>Path: {alias.path}</span>}
             {alias.program && <span className={aliasMeta}>Program: {alias.program}</span>}
+            {alias.sessionType !== SessionType.UNSPECIFIED && (
+              <span className={aliasMeta}>
+                Type: {SESSION_TYPE_OPTIONS.find((o) => o.value === alias.sessionType)?.label ?? ""}
+              </span>
+            )}
             {alias.autoYes && <span className={aliasMeta}>Auto-yes: on</span>}
             {alias.tags.length > 0 && <span className={aliasMeta}>Tags: {alias.tags.join(", ")}</span>}
           </div>
@@ -468,6 +486,25 @@ export function AliasesManager() {
                   {PROGRAMS.map((p) => (
                     <option key={p.value} value={p.value}>
                       {p.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Session Type */}
+              <div className={field}>
+                <label className={labelClass} htmlFor="alias-session-type">
+                  Session Type
+                </label>
+                <select
+                  id="alias-session-type"
+                  className={select}
+                  value={form.sessionType}
+                  onChange={(e) => setForm({ ...form, sessionType: Number(e.target.value) as SessionType })}
+                >
+                  {SESSION_TYPE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
                     </option>
                   ))}
                 </select>

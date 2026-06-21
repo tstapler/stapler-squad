@@ -35,17 +35,15 @@ export function dispatchOmnibarAction(
       deps.close();
       return;
     case "create_session": {
-      const isOneOff = action.sessionType === "one_off";
       const isAutonomous = action.sessionType === "autonomous";
       if (track) track({ name: "omnibar.create_session", category: "user_action", labels: { sessionType: action.sessionType } });
       void deps.createSession({
         title: action.title ?? "",
         path: action.path,
-        sessionType: (isOneOff || isAutonomous) ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree",
+        sessionType: isAutonomous ? undefined : action.sessionType as "directory" | "new_worktree" | "existing_worktree" | "one_off",
         branch: action.branch,
         program: action.program ?? "",
         autoYes: false,
-        oneOff: isOneOff ? true : undefined,
         autonomousMode: isAutonomous ? true : undefined,
         permissionMode: isAutonomous ? "auto" : undefined,
       });

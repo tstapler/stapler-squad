@@ -954,7 +954,7 @@ func (s *SessionService) CreateSession(
 	if req.Msg.Title == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
-	if !req.Msg.OneOff &&
+	if req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_ONE_OFF &&
 		req.Msg.AliasName == "" &&
 		req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
 		req.Msg.Path == "" {
@@ -1023,7 +1023,7 @@ func (s *SessionService) CreateSession(
 	cfg := config.LoadConfig()
 
 	// One-off session: generate a fresh directory and override resolvedPath.
-	if req.Msg.OneOff {
+	if req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_ONE_OFF {
 		baseDir, err := cfg.OneOffBaseDirOrDefault()
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve one_off_base_dir: %w", err))
@@ -1041,6 +1041,7 @@ func (s *SessionService) CreateSession(
 	autoYes := req.Msg.AutoYes
 	instanceEnvVars := make(map[string]string)
 	instanceCLIFlags := ""
+	aliasSessionType := config.SessionTypeDefault // session type from alias config (empty = no override)
 	if !req.Msg.SkipDefaults {
 		if req.Msg.AliasName != "" {
 			resolved, err := config.ResolveAlias(cfg, req.Msg.AliasName, req.Msg.Branch, req.Msg.Title, "")
@@ -1062,6 +1063,11 @@ func (s *SessionService) CreateSession(
 			instanceCLIFlags = resolved.CLIFlags
 			if resolvedPath == "" && resolved.Path != "" {
 				resolvedPath = resolved.Path
+			}
+			// Read session type directly from the alias config — it is an alias-specific
+			// property, not a cascading default, so it is not part of ResolvedDefaults.
+			if alias := config.FindAlias(cfg, req.Msg.AliasName); alias != nil {
+				aliasSessionType = alias.SessionType
 			}
 		} else {
 			workingDir := req.Msg.WorkingDir
@@ -1095,8 +1101,18 @@ func (s *SessionService) CreateSession(
 		}
 	}
 
-	// Determine session type - use explicit session_type if provided, otherwise infer from fields
+	// Determine session type - use explicit session_type if provided, otherwise infer from fields.
+	// If the session was created via alias and the alias specifies a session type,
+	// use it as the fallback when the request itself didn't set one.
 	sessionType := resolveSessionType(req.Msg, branch)
+	if aliasSessionType != config.SessionTypeDefault && req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
+		sessionType = aliasSessionType
+	}
+
+	// One-off sessions run as directory sessions — the path was already generated above.
+	if sessionType == session.SessionTypeOneOff {
+		sessionType = session.SessionTypeDirectory
+	}
 
 	// For resume sessions, force DIRECTORY type — we must not create a new worktree
 	// that would produce a different project path and break the --resume lookup.
@@ -1270,35 +1286,35 @@ func (s *SessionService) CreateSession(
 }
 
 // resolveSessionType maps a CreateSessionRequest + resolved branch to a session.SessionType.
-// Priority: one_off (always directory) > explicit session_type > inference from branch/existing_worktree.
+// Priority: explicit session_type > inference from branch/existing_worktree.
+// ONE_OFF is returned as SessionTypeOneOff; callers are responsible for converting it to
+// SessionTypeDirectory after the one-off directory has been generated.
 func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) session.SessionType {
-	var st session.SessionType
 	if msg.SessionType != sessionv1.SessionType_SESSION_TYPE_UNSPECIFIED {
 		switch msg.SessionType {
 		case sessionv1.SessionType_SESSION_TYPE_DIRECTORY:
-			st = session.SessionTypeDirectory
+			return session.SessionTypeDirectory
 		case sessionv1.SessionType_SESSION_TYPE_NEW_WORKTREE:
-			st = session.SessionTypeNewWorktree
+			return session.SessionTypeNewWorktree
 		case sessionv1.SessionType_SESSION_TYPE_EXISTING_WORKTREE:
-			st = session.SessionTypeExistingWorktree
+			return session.SessionTypeExistingWorktree
 		case sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT:
-			st = session.SessionTypeNewProject
+			return session.SessionTypeNewProject
+		case sessionv1.SessionType_SESSION_TYPE_ONE_OFF:
+			return session.SessionTypeOneOff
 		default:
-			st = session.SessionTypeDirectory
-		}
-	} else {
-		st = session.SessionTypeDirectory
-		if msg.ExistingWorktree != "" {
-			st = session.SessionTypeExistingWorktree
-		} else if branch != "" {
-			st = session.SessionTypeNewWorktree
+			return session.SessionTypeDirectory
 		}
 	}
-	if msg.OneOff {
-		st = session.SessionTypeDirectory
+	if msg.ExistingWorktree != "" {
+		return session.SessionTypeExistingWorktree
 	}
-	return st
+	if branch != "" {
+		return session.SessionTypeNewWorktree
+	}
+	return session.SessionTypeDirectory
 }
+
 
 // UpdateSession modifies session properties (pause/resume, category, title).
 // +api: session:update

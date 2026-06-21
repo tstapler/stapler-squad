@@ -65,7 +65,7 @@ describe("dispatchOmnibarAction", () => {
   });
 
   describe("create_session (one-off)", () => {
-    it("dispatchOmnibarAction_should_setOneOffTrue_When_sessionTypeIsOneOff", () => {
+    it("dispatchOmnibarAction_should_passOneOffSessionType_When_sessionTypeIsOneOff", () => {
       const deps = makeDeps();
       const action: OmnibarAction = {
         type: "create_session",
@@ -76,7 +76,7 @@ describe("dispatchOmnibarAction", () => {
       };
       dispatchOmnibarAction(action, deps);
       expect(deps.createSession).toHaveBeenCalledWith(
-        expect.objectContaining({ oneOff: true, sessionType: undefined })
+        expect.objectContaining({ sessionType: "one_off" })
       );
       expect(deps.close).toHaveBeenCalled();
     });

@@ -16,7 +16,7 @@ const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
   new_worktree: SessionType.NEW_WORKTREE,
   existing_worktree: SessionType.EXISTING_WORKTREE,
-  one_off: SessionType.DIRECTORY, // one-off is a directory session; type overridden server-side
+  one_off: SessionType.ONE_OFF,
   new_project: SessionType.NEW_PROJECT, // new-project mode: backend initializes git repo
   autonomous: SessionType.DIRECTORY, // autonomous reuses DIRECTORY; server handles autonomous flag
 };
@@ -197,7 +197,6 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         workingDir: data.workingDir,
         existingWorktree: data.existingWorktree,
         sessionType: effectiveSessionType,
-        oneOff: data.oneOff ?? false,
         createIfMissing: data.createIfMissing ?? false,
         initialPrompt: data.initialPrompt,
         autonomousMode: data.autonomousMode ?? false,

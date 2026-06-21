@@ -255,6 +255,8 @@ const (
 	SessionType_SESSION_TYPE_EXISTING_WORKTREE SessionType = 3
 	// Create a directory, run git init, and start a session in the new repo.
 	SessionType_SESSION_TYPE_NEW_PROJECT SessionType = 4
+	// Generate a fresh temporary directory under one_off_base_dir and start a directory session.
+	SessionType_SESSION_TYPE_ONE_OFF SessionType = 5
 )
 
 // Enum value maps for SessionType.
@@ -265,6 +267,7 @@ var (
 		2: "SESSION_TYPE_NEW_WORKTREE",
 		3: "SESSION_TYPE_EXISTING_WORKTREE",
 		4: "SESSION_TYPE_NEW_PROJECT",
+		5: "SESSION_TYPE_ONE_OFF",
 	}
 	SessionType_value = map[string]int32{
 		"SESSION_TYPE_UNSPECIFIED":       0,
@@ -272,6 +275,7 @@ var (
 		"SESSION_TYPE_NEW_WORKTREE":      2,
 		"SESSION_TYPE_EXISTING_WORKTREE": 3,
 		"SESSION_TYPE_NEW_PROJECT":       4,
+		"SESSION_TYPE_ONE_OFF":           5,
 	}
 )
 
@@ -6675,13 +6679,14 @@ const file_session_v1_types_proto_rawDesc = "" +
 	"\x17SESSION_STATUS_CREATING\x10\x06\x12\x1a\n" +
 	"\x16SESSION_STATUS_STOPPED\x10\a\x12\x1d\n" +
 	"\x19SESSION_STATUS_HIBERNATED\x10\b\x12\x1c\n" +
-	"\x18SESSION_STATUS_RESTORING\x10\t\x1a\x02\x10\x01*\xa8\x01\n" +
+	"\x18SESSION_STATUS_RESTORING\x10\t\x1a\x02\x10\x01*\xc2\x01\n" +
 	"\vSessionType\x12\x1c\n" +
 	"\x18SESSION_TYPE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16SESSION_TYPE_DIRECTORY\x10\x01\x12\x1d\n" +
 	"\x19SESSION_TYPE_NEW_WORKTREE\x10\x02\x12\"\n" +
 	"\x1eSESSION_TYPE_EXISTING_WORKTREE\x10\x03\x12\x1c\n" +
-	"\x18SESSION_TYPE_NEW_PROJECT\x10\x04*d\n" +
+	"\x18SESSION_TYPE_NEW_PROJECT\x10\x04\x12\x18\n" +
+	"\x14SESSION_TYPE_ONE_OFF\x10\x05*d\n" +
 	"\fInstanceType\x12\x1d\n" +
 	"\x19INSTANCE_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15INSTANCE_TYPE_MANAGED\x10\x01\x12\x1a\n" +

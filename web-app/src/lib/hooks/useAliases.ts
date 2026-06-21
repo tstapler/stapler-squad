@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { createClient } from "@connectrpc/connect";
 import { SessionService } from "@/gen/session/v1/session_pb";
+import { SessionType } from "@/gen/session/v1/types_pb";
 import { getConnectTransport } from "@/lib/api/transport";
 
 export interface AliasEntry {
@@ -14,6 +15,7 @@ export interface AliasEntry {
   program: string;
   autoYes: boolean;
   tags: string[];
+  sessionType: SessionType;
 }
 
 export function useAliases(): { aliases: AliasEntry[]; loading: boolean; error: Error | null; refetch: () => void } {
@@ -41,6 +43,7 @@ export function useAliases(): { aliases: AliasEntry[]; loading: boolean; error: 
               program: a.program,
               autoYes: a.autoYes,
               tags: [...(a.tags ?? [])],
+              sessionType: a.sessionType,
             }))
           );
         }
