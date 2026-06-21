@@ -33,6 +33,9 @@ const (
 	Stopped Status = 3
 	// Hibernated is the status when the instance has been checkpointed and the tmux session killed.
 	Hibernated Status = 4
+	// Restoring is the transient startup state when a hibernated session is being restored.
+	// Never persisted to the database — transitions to Active or Creating on completion.
+	Restoring Status = 5
 
 	// Deprecated: use Active.
 	Running = Active
@@ -55,6 +58,8 @@ func (s Status) String() string {
 		return "Stopped"
 	case Hibernated:
 		return "Hibernated"
+	case Restoring:
+		return "Restoring"
 	default:
 		return fmt.Sprintf("Status(%d)", int(s))
 	}

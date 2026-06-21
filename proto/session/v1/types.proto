@@ -320,6 +320,9 @@ enum SessionStatus {
   SESSION_STATUS_STOPPED = 7;
   // Session has been hibernated (checkpoint written, tmux session killed).
   SESSION_STATUS_HIBERNATED = 8;
+  // Session is being restored from a previous run (transient startup state).
+  // Never persisted to the database. Transitions to ACTIVE or CREATING on completion.
+  SESSION_STATUS_RESTORING = 9;
 }
 
 // SessionType determines the session workflow.
