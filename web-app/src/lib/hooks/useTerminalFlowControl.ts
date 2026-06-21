@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useCallback } from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { TerminalData, TerminalDataSchema, TerminalInput, TerminalInputSchema, TerminalResize, TerminalResizeSchema, ScrollbackRequest, ScrollbackRequestSchema, CurrentPaneRequest, CurrentPaneRequestSchema, FlowControl, FlowControlSchema, InputWithEcho, InputWithEchoSchema } from "@/gen/session/v1/events_pb";
 import { create } from "@bufbuild/protobuf";
 import { StateApplicator } from "@/lib/terminal/StateApplicator";
@@ -70,6 +70,17 @@ export function useTerminalFlowControl({
   const lastResizeTimeRef = useRef<number>(0);
   const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
+
+  // Cancel any pending deferred resize timer when the component unmounts to prevent
+  // the timer callback from firing against a torn-down component/connection.
+  useEffect(() => {
+    return () => {
+      if (pendingResizeTimerRef.current) {
+        clearTimeout(pendingResizeTimerRef.current);
+        pendingResizeTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // StateApplicator (lazy init) - kept in same hook as resync refs per Bug Risk 1
   const stateApplicatorRef = useRef<StateApplicator | null>(null);

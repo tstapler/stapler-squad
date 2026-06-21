@@ -676,6 +676,8 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     const wasConnected = previousConnectionStateRef.current;
     previousConnectionStateRef.current = isConnected;
 
+    let postConnectionResizeTimer: ReturnType<typeof setTimeout> | null = null;
+
     if (!wasConnected && isConnected) {
       if (metricsRef.current.connectedTime === null) {
         metricsRef.current.connectedTime = performance.now();
@@ -695,7 +697,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
       // own debounce) to be dropped. Waiting 250ms lets the container stabilise
       // first; by then the ResizeObserver has already sent the correct dims (or
       // nothing changed and we send here as a safety net).
-      setTimeout(() => {
+      postConnectionResizeTimer = setTimeout(() => {
         const settledSize = lastResizeRef.current;
         if (settledSize) {
           console.log(`[TerminalOutput] Post-connection resize sync (delayed): ${settledSize.cols}x${settledSize.rows}`);
@@ -715,6 +717,9 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     }
 
     return () => {
+      if (postConnectionResizeTimer) {
+        clearTimeout(postConnectionResizeTimer);
+      }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
