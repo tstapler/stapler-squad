@@ -378,6 +378,9 @@ service SessionService {
   // merging both with a small set of built-in Claude Code commands.
   rpc ListSlashCommands(ListSlashCommandsRequest) returns (ListSlashCommandsResponse) {}
 
+  // ListAliases returns all configured alias presets from config.json.
+  rpc ListAliases(ListAliasesRequest) returns (ListAliasesResponse) {}
+
   // ArchiveSession soft-archives a session by setting archived_at.
   // Archived sessions are excluded from the default session list.
   rpc ArchiveSession(ArchiveSessionRequest) returns (ArchiveSessionResponse) {}
@@ -526,6 +529,17 @@ message CreateSessionRequest {
   // workflow_id associates the new session with a workflow.
   // Set by the scheduler when firing a workflow; not intended for direct client use.
   string workflow_id = 24;
+
+  // env_vars are additional environment variables passed to the new session.
+  // Applied on top of any defaults-resolved env vars.
+  map<string, string> env_vars = 25;
+  // cli_flags are additional CLI flags appended to the program launch command.
+  // Applied on top of any defaults-resolved flags.
+  string cli_flags = 26;
+
+  // alias_name, when non-empty, resolves session defaults via the named alias preset.
+  // Path and profile are resolved from the alias config; path from req is used as override if non-empty.
+  string alias_name = 27;
 }
 
 message CreateSessionResponse {
@@ -1755,6 +1769,26 @@ message DeleteDirectoryRuleRequest {
 }
 
 message DeleteDirectoryRuleResponse {}
+
+// AliasProto represents a named session preset configured in config.json.
+message AliasProto {
+  string name = 1;
+  string group = 2;
+  string path = 3;
+  string description = 4;
+  string profile = 5;
+  string program = 6;
+  bool auto_yes = 7;
+  repeated string tags = 8;
+  map<string, string> env_vars = 9;
+  string cli_flags = 10;
+}
+
+message ListAliasesRequest {}
+
+message ListAliasesResponse {
+  repeated AliasProto aliases = 1;
+}
 
 message ListWorktreesRequest {
   // Absolute path to the git repository root. Supports ~ expansion.

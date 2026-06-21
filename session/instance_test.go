@@ -275,3 +275,35 @@ func TestMigrationOfCorruptedPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestNewInstance_PopulatesEnvVars_WhenPassedInOptions(t *testing.T) {
+	opts := InstanceOptions{
+		Title:       "test",
+		Path:        t.TempDir(),
+		SessionType: SessionTypeDirectory,
+		EnvVars:     map[string]string{"X": "1", "Y": "2"},
+	}
+	inst, err := NewInstance(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inst.EnvVars["X"] != "1" {
+		t.Errorf("expected EnvVars[X]=1, got %q", inst.EnvVars["X"])
+	}
+}
+
+func TestNewInstance_PopulatesCLIFlags_WhenPassedInOptions(t *testing.T) {
+	opts := InstanceOptions{
+		Title:       "test",
+		Path:        t.TempDir(),
+		SessionType: SessionTypeDirectory,
+		CLIFlags:    "--foo --bar",
+	}
+	inst, err := NewInstance(opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if inst.CLIFlags != "--foo --bar" {
+		t.Errorf("expected CLIFlags '--foo --bar', got %q", inst.CLIFlags)
+	}
+}

@@ -53,18 +53,9 @@ export class WorkflowDetector implements Detector {
     const wf = this.workflows.find((w) => w.slug.toLowerCase() === slug);
 
     if (!wf) {
-      // Unknown slug — return low-confidence match so omnibar shows "no workflow found".
-      return {
-        type: InputType.Workflow,
-        confidence: 0.4,
-        parsedValue: trimmed,
-        suggestedName: slug,
-        metadata: {
-          workflowFound: false,
-          slug,
-          workflowArg: arg,
-        },
-      };
+      // Unknown slug — return null so AliasDetector (priority 36) can claim @unknown input.
+      // WorkflowDetector only claims slugs that match known workflows.
+      return null;
     }
 
     // Known slug — interpolate prompt template if available.

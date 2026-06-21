@@ -106,6 +106,18 @@ export function dispatchOmnibarAction(
       deps.runWorkflow?.(action.workflowSlug, action.workflowArg);
       deps.close();
       return;
+    case "create_alias_session":
+      if (track) track({ name: "omnibar.create_alias_session", category: "user_action", labels: { aliasName: action.aliasName } });
+      void deps.createSession({
+        title: action.label?.trim() || action.aliasName,
+        path: "",
+        program: "",
+        autoYes: false,
+        aliasName: action.aliasName,
+        branch: action.branch,
+      });
+      deps.close();
+      return;
     // TypeScript exhaustiveness: adding a new OmnibarAction variant without a case → compile error ✅
   }
 }

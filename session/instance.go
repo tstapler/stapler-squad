@@ -274,6 +274,11 @@ type Instance struct {
 	// Empty for manually-created sessions.
 	WorkflowID string `json:"workflow_id,omitempty"`
 
+	// EnvVars are session-level environment variables injected at tmux session creation.
+	EnvVars map[string]string `json:"env_vars,omitempty"`
+	// CLIFlags are additional CLI flags appended to the program launch command.
+	CLIFlags string `json:"cli_flags,omitempty"`
+
 	// ArchivedAt is set when the session is archived. Nil means not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
 
@@ -484,6 +489,11 @@ type InstanceOptions struct {
 	// WorkflowID is the UUID of the Workflow that spawned this session.
 	// Set by the scheduler; empty for manually-created sessions.
 	WorkflowID string
+
+	// EnvVars are session-level environment variables injected at tmux session creation time.
+	EnvVars map[string]string
+	// CLIFlags are additional CLI flags appended to the program launch command.
+	CLIFlags string
 }
 
 func NewInstance(opts InstanceOptions) (*Instance, error) {
@@ -571,6 +581,8 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 		AutonomousMode:     opts.AutonomousMode,
 		// Directory creation on missing path (R2 confirmation flow)
 		CreateIfMissing: opts.CreateIfMissing,
+		EnvVars:         opts.EnvVars,
+		CLIFlags:        opts.CLIFlags,
 	}
 
 	// Initialize TagManager backed by the Instance.Tags slice

@@ -9,6 +9,8 @@ import { useAuth } from "@/lib/contexts/AuthContext";
 import { SessionType } from "@/gen/session/v1/types_pb";
 import { getDefaultRegistry } from "@/lib/omnibar/detector";
 import { WorkflowDetector, type WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
+import { useAliases } from "@/lib/hooks/useAliases";
+import { AliasDetector } from "@/lib/omnibar/detectors/AliasDetector";
 
 const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
@@ -84,6 +86,24 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
       workflowDetectorRef.current = null;
     };
   }, [workflowEntries]);
+
+  const { aliases } = useAliases();
+
+  // Dynamically register/unregister AliasDetector whenever the alias list changes.
+  const aliasDetectorRef = useRef<AliasDetector | null>(null);
+  useEffect(() => {
+    const registry = getDefaultRegistry();
+    if (aliasDetectorRef.current) {
+      registry.unregister(aliasDetectorRef.current);
+    }
+    const detector = new AliasDetector(aliases);
+    registry.register(detector);
+    aliasDetectorRef.current = detector;
+    return () => {
+      registry.unregister(detector);
+      aliasDetectorRef.current = null;
+    };
+  }, [aliases]);
 
   const open = useCallback(() => {
     setInitialMode("discovery");
@@ -182,6 +202,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         initialPrompt: data.initialPrompt,
         autonomousMode: data.autonomousMode ?? false,
         permissionMode: data.permissionMode ?? "",
+        aliasName: data.aliasName ?? "",
       });
 
       if (session) {

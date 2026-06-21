@@ -47,14 +47,11 @@ describe("WorkflowDetector", () => {
       expect(result!.metadata!.workflowFound).toBe(true);
     });
 
-    it("WorkflowDetector_should_returnConfidence04_When_slugUnknown", () => {
-      // T-UNIT-TS-104
+    it("WorkflowDetector_should_returnNull_When_slugUnknown", () => {
+      // T-UNIT-TS-104 — updated: unknown slugs return null so AliasDetector can claim them
       const d = makeDetector();
       const result = d.detect("@unknown-workflow");
-      expect(result).not.toBeNull();
-      expect(result!.type).toBe(InputType.Workflow);
-      expect(result!.confidence).toBe(0.4);
-      expect(result!.metadata!.workflowFound).toBe(false);
+      expect(result).toBeNull();
     });
 
     it("WorkflowDetector_should_extractArg_When_inputContainsArgAfterSlug", () => {
@@ -139,11 +136,11 @@ describe("WorkflowDetector", () => {
       expect(result!.suggestedName).toBe("Daily Standup");
     });
 
-    it("WorkflowDetector_should_setSuggestedNameToSlug_When_workflowNotFound", () => {
-      // T-UNIT-TS-115
+    it("WorkflowDetector_should_returnNull_When_workflowNotFound", () => {
+      // T-UNIT-TS-115 — updated: unknown slugs yield null (AliasDetector handles them)
       const d = makeDetector();
       const result = d.detect("@unknown");
-      expect(result!.suggestedName).toBe("unknown");
+      expect(result).toBeNull();
     });
   });
 

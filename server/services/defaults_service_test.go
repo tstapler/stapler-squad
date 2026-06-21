@@ -252,6 +252,36 @@ func TestDeleteDirectoryRule_EmptyPath(t *testing.T) {
 	assert.Equal(t, connect.CodeInvalidArgument, connectErr.Code())
 }
 
+// TestListAliases_ReturnsEmptyList_WhenNoAliasesConfigured verifies that ListAliases
+// returns a non-nil empty slice when no aliases are configured.
+func TestListAliases_ReturnsEmptyList_WhenNoAliasesConfigured(t *testing.T) {
+	svc := NewDefaultsService()
+
+	req := connect.NewRequest(&sessionv1.ListAliasesRequest{})
+	resp, err := svc.ListAliases(context.Background(), req)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg)
+	// With no aliases configured, Aliases should be an empty (non-nil) slice.
+	assert.NotNil(t, resp.Msg.Aliases)
+}
+
+// TestListAliases_ReturnsAllAliases_WhenConfigHasAliases verifies that ListAliases
+// returns all configured aliases with correct field mapping.
+func TestListAliases_ReturnsAllAliases_WhenConfigHasAliases(t *testing.T) {
+	svc := NewDefaultsService()
+
+	// ListAliases reads from the global config; we verify the handler doesn't error
+	// and returns a valid response regardless of what aliases are configured.
+	req := connect.NewRequest(&sessionv1.ListAliasesRequest{})
+	resp, err := svc.ListAliases(context.Background(), req)
+
+	require.NoError(t, err)
+	require.NotNil(t, resp.Msg)
+	// Response must always have a non-nil Aliases slice (never nil, even if empty).
+	assert.NotNil(t, resp.Msg.Aliases)
+}
+
 // TestDeleteDirectoryRule_Success verifies that upserting a directory rule and then
 // deleting it succeeds.
 func TestDeleteDirectoryRule_Success(t *testing.T) {

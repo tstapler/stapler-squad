@@ -16,6 +16,9 @@ export enum InputType {
   NewSession = "new_session",
   SpawnShell = "spawn_shell",
   Workflow = "workflow",
+  Alias = "alias",
+  AliasNotFound = "alias_not_found",
+  AliasBrowse = "alias_browse",
 }
 
 export interface InputTypeInfo {
@@ -84,6 +87,21 @@ export const INPUT_TYPE_INFO: Record<InputType, InputTypeInfo> = {
     label: "Workflow",
     icon: "⚡",
     description: "Quick workflow invocation",
+  },
+  [InputType.Alias]: {
+    label: "Alias",
+    icon: "@",
+    description: "Named session preset",
+  },
+  [InputType.AliasNotFound]: {
+    label: "Alias Not Found",
+    icon: "@",
+    description: "No alias with that name",
+  },
+  [InputType.AliasBrowse]: {
+    label: "Alias Browse",
+    icon: "@",
+    description: "Browse or filter aliases",
   },
 };
 

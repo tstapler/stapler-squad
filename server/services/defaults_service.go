@@ -206,6 +206,36 @@ func (d *DefaultsService) UpsertDirectoryRule(
 	}), nil
 }
 
+// ListAliases returns all configured aliases.
+func (d *DefaultsService) ListAliases(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListAliasesRequest],
+) (*connect.Response[sessionv1.ListAliasesResponse], error) {
+	cfg := config.LoadConfig()
+	aliases := make([]*sessionv1.AliasProto, 0, len(cfg.SessionDefaults.Aliases))
+	for _, a := range cfg.SessionDefaults.Aliases {
+		aliases = append(aliases, aliasConfigToProto(a))
+	}
+	return connect.NewResponse(&sessionv1.ListAliasesResponse{
+		Aliases: aliases,
+	}), nil
+}
+
+func aliasConfigToProto(a config.AliasConfig) *sessionv1.AliasProto {
+	return &sessionv1.AliasProto{
+		Name:        a.Name,
+		Group:       a.Group,
+		Path:        a.Path,
+		Description: a.Description,
+		Profile:     a.Profile,
+		Program:     a.Program,
+		AutoYes:     a.AutoYes,
+		Tags:        a.Tags,
+		EnvVars:     a.EnvVars,
+		CliFlags:    a.CLIFlags,
+	}
+}
+
 // DeleteDirectoryRule removes a directory rule by path.
 func (d *DefaultsService) DeleteDirectoryRule(
 	ctx context.Context,

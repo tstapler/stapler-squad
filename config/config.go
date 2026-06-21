@@ -409,6 +409,8 @@ type SessionDefaults struct {
 	Profiles map[string]ProfileDefaults `json:"profiles,omitempty"`
 	// DirectoryRules are path-based rules matched against the session's working directory.
 	DirectoryRules []DirectoryRule `json:"directory_rules,omitempty"`
+	// Aliases are named session presets invoked via @name in the omnibar.
+	Aliases []AliasConfig `json:"aliases,omitempty"`
 }
 
 // ProfileDefaults holds the configurable fields for a named profile.
@@ -432,6 +434,32 @@ type DirectoryRule struct {
 	Profile string `json:"profile,omitempty"`
 	// Overrides are field-level overrides applied after the profile (if any).
 	Overrides ProfileDefaults `json:"overrides,omitempty"`
+}
+
+// AliasConfig defines a named session preset invoked via @name in the omnibar.
+// Name must match ^[\w-]+$  (letters, digits, hyphens, underscores only).
+type AliasConfig struct {
+	// Name is the unique alias identifier (e.g. "myproj"). Must match ^[\w-]+$.
+	Name string `json:"name"`
+	// Group is an optional display group for palette organization.
+	Group string `json:"group,omitempty"`
+	// Path is the working directory for the session (supports ~/... expansion).
+	Path string `json:"path,omitempty"`
+	// Description is a human-readable summary shown in the palette.
+	Description string `json:"description,omitempty"`
+	// Profile is the named profile to apply when resolving defaults.
+	Profile string `json:"profile,omitempty"`
+	// Program overrides the default program (e.g. "aider").
+	Program string `json:"program,omitempty"`
+	// AutoYes auto-approves all prompts for this alias.
+	AutoYes bool `json:"auto_yes,omitempty"`
+	// Tags are pre-applied to sessions created from this alias.
+	Tags []string `json:"tags,omitempty"`
+	// EnvVars are environment variables set for sessions from this alias.
+	EnvVars map[string]string `json:"env_vars,omitempty"`
+	// CLIFlags are CLI flags appended to the program command for this alias.
+	// At session creation, invocation-time extraFlags are appended after these.
+	CLIFlags string `json:"cli_flags,omitempty"`
 }
 
 // DefaultConfig returns the default configuration
@@ -808,6 +836,9 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	}
 	if cfg.SessionDefaults.DirectoryRules == nil {
 		cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
+	}
+	if cfg.SessionDefaults.Aliases == nil {
+		cfg.SessionDefaults.Aliases = []AliasConfig{}
 	}
 	if cfg.ConfigVersion == 0 {
 		cfg.ConfigVersion = 1

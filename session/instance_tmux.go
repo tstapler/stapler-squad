@@ -85,6 +85,9 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) && isClaudeProgram {
 		program = fmt.Sprintf("%s %q", program, i.Prompt)
 	}
+	if i.CLIFlags != "" {
+		program = program + " " + i.CLIFlags
+	}
 	return program
 }
 
@@ -113,8 +116,17 @@ func (i *Instance) initTmuxSession() {
 	} else {
 		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
 	}
+	// Collect UUID sentinel and alias env vars into one SetExtraEnv call —
+	// SetExtraEnv is an assignment, so multiple calls overwrite each other.
+	var extraEnv []string
 	if i.UUID != "" {
-		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
+		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+i.UUID)
+	}
+	for k, v := range i.EnvVars {
+		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
+	}
+	if len(extraEnv) > 0 {
+		session.SetExtraEnv(extraEnv)
 	}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		tb.TmuxManager().SetSession(session)

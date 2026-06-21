@@ -31,6 +31,9 @@ import {
   shortcuts, shortcut, shortcutKey, completionError as completionErrorClass,
   pathIndicator, pathIndicatorValid, pathIndicatorInvalid, pathIndicatorLoading,
 } from "./Omnibar.css";
+import { AliasPalette } from "@/components/ui/AliasPalette";
+import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
+import { useAliases } from "@/lib/hooks/useAliases";
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -120,6 +123,7 @@ export interface OmnibarSessionData {
   autonomousMode?: boolean;
   // Permission mode passed to Claude Code (e.g. "auto" for autonomous sessions).
   permissionMode?: string;
+  aliasName?: string;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -168,6 +172,9 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setUIState((prev) => ({ ...prev, [key]: value })),
     []
   );
+
+  const [activeDropdown, setActiveDropdown] = useState<"alias" | "workflow" | "search" | null>(null);
+  const [aliasSuggestIndex, setAliasSuggestIndex] = useState(-1);
 
   // Submission state
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -301,6 +308,10 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   const { isAtCommand, suggestions: atSuggestions, complete: completeAtCommand } =
     useAtCommandSuggestions(input, workflows);
   const isAtDropdownVisible = isDiscoveryMode && isAtCommand;
+
+  const { aliases, error: aliasError } = useAliases();
+  const { isAliasBrowse, isAliasCompletion, filteredAliases, complete: completeAlias } = useAliasSuggestions(input, aliases);
+  const isAliasPaletteVisible = isDiscoveryMode && (isAliasBrowse || isAliasCompletion);
 
   // Session search query uses the debounced input so Fuse only runs after typing pauses.
   const sessionSearchQuery = useMemo(() => {
@@ -464,6 +475,16 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
     }
   }, [isAtCommand, setUIField]);
 
+  useEffect(() => {
+    if (isAliasPaletteVisible) {
+      setActiveDropdown("alias");
+    } else if (isAtDropdownVisible) {
+      setActiveDropdown("workflow");
+    } else {
+      setActiveDropdown(null);
+    }
+  }, [isAliasPaletteVisible, isAtDropdownVisible]);
+
   // On open: apply initialMode if provided
   useEffect(() => {
     if (isOpen && initialMode === "creation") {
@@ -540,6 +561,39 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // Handle keyboard shortcuts
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // Alias palette keyboard navigation
+      if (activeDropdown === "alias" && filteredAliases.length > 0) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setAliasSuggestIndex((i) => Math.min(i + 1, filteredAliases.length - 1));
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setAliasSuggestIndex((i) => Math.max(i - 1, -1));
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && aliasSuggestIndex >= 0)) {
+          e.preventDefault();
+          const idx = aliasSuggestIndex >= 0 ? aliasSuggestIndex : 0;
+          if (filteredAliases[idx]) {
+            setInput(completeAlias(filteredAliases[idx]));
+            setAliasSuggestIndex(-1);
+          }
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          if (input.length > 1) {
+            setInput("@");
+          } else {
+            setInput("");
+          }
+          setAliasSuggestIndex(-1);
+          return;
+        }
+      }
+
       // @command autocomplete (highest priority when visible)
       if (isAtDropdownVisible) {
         if (e.key === "ArrowDown") {
@@ -696,6 +750,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       atSuggestions,
       completeAtCommand,
       setUIField,
+      activeDropdown,
+      aliasSuggestIndex,
+      filteredAliases,
+      completeAlias,
+      input,
     ]
   );
 
@@ -753,7 +812,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
     if (!input.trim()) return false;
     if (!sessionName.trim()) return false;
-    if (!detection || detection.type === InputType.Unknown || detection.type === InputType.Command || detection.type === InputType.SessionSearch) return false;
+    if (!detection || detection.type === InputType.Unknown || detection.type === InputType.Command || detection.type === InputType.SessionSearch || detection.type === InputType.AliasNotFound || detection.type === InputType.AliasBrowse) return false;
+    if (detection.type === InputType.Alias) return true;
 
     // Validate session type specific requirements
     if (sessionType === "new_worktree") {
@@ -808,6 +868,35 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       const { slug, workflowArg } = detection.metadata as { slug: string; workflowArg: string };
       void onRunWorkflow?.(slug, workflowArg ?? "");
       onClose();
+      return;
+    }
+
+    // Alias invocation (@aliasname [...]) — create session with alias context.
+    if (detection?.type === InputType.Alias && detection.metadata?.aliasName) {
+      const { aliasName, branch: aliasBranch, label, extraFlags } = detection.metadata as {
+        aliasName: string;
+        branch?: string;
+        label?: string;
+        extraFlags?: string;
+      };
+      const sessionTitle = (label?.trim() || String(aliasName));
+      const sessionData: OmnibarSessionData = {
+        title: sessionTitle,
+        path: "",
+        program: "",
+        autoYes: false,
+        aliasName: String(aliasName),
+        branch: aliasBranch !== undefined ? String(aliasBranch) : undefined,
+      };
+      setIsSubmitting(true);
+      setError(null);
+      try {
+        await onCreateSession(sessionData);
+        onClose();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to create session");
+        setIsSubmitting(false);
+      }
       return;
     }
 
@@ -978,7 +1067,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
                 : sessionType === "autonomous"
                 ? "Session title (agent will run without human approval)…"
                 : isDiscoveryMode
-                ? "Jump to session or search repos..."
+                ? "Jump to session, @alias, or search repos..."
                 : "Enter path, GitHub URL, or owner/repo..."
             }
             value={input}
@@ -1045,6 +1134,19 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
           )}
         </div>
 
+        {isAliasPaletteVisible && (
+          <AliasPalette
+            aliases={filteredAliases}
+            input={input}
+            selectedIndex={aliasSuggestIndex}
+            onSelect={(alias) => {
+              setInput(completeAlias(alias));
+              setAliasSuggestIndex(-1);
+            }}
+            error={aliasError}
+          />
+        )}
+
         {/* @command autocomplete — shown in discovery mode while typing @slug */}
         {isAtDropdownVisible && (
           <AtCommandDropdown
@@ -1058,6 +1160,26 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             }}
           />
         )}
+
+        {detection?.type === InputType.Alias && detection.metadata && (() => {
+          const m = detection.metadata as Record<string, unknown>;
+          return (
+            <div role="status" aria-live="polite" data-testid="alias-resolution-chip">
+              <span>Alias resolved: @{String(m.aliasName)}</span>
+              {m.branch ? <span> :{String(m.branch)}</span> : null}
+              {m.label ? <span> · {String(m.label)}</span> : null}
+              {m.extraFlags ? <span> · {String(m.extraFlags)} (appended)</span> : null}
+            </div>
+          );
+        })()}
+        {detection?.type === InputType.AliasNotFound && (() => {
+          const m = detection.metadata as Record<string, unknown> | undefined;
+          return (
+            <div role="alert" aria-live="assertive" data-testid="alias-not-found">
+              No alias &apos;@{String(m?.slug)}&apos;
+            </div>
+          );
+        })()}
 
         {/* Discovery mode: session results + recent repos */}
         {isDiscoveryMode && !isAtDropdownVisible && (

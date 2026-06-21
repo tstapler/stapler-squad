@@ -10,6 +10,7 @@ export type OmnibarAction =
   | { type: "set_theme"; themeName: ThemeName }
   | { type: "spawn_shell"; sessionId?: string; workingDir?: string; shellCommand?: string }
   | { type: "auto_fix"; title: string; program?: string }
-  | { type: "run_workflow"; workflowSlug: string; workflowArg: string; label: string };
+  | { type: "run_workflow"; workflowSlug: string; workflowArg: string; label: string }
+  | { type: "create_alias_session"; aliasName: string; branch?: string; label?: string; extraFlags?: string };
 
 export type OmnibarActionType = OmnibarAction["type"];

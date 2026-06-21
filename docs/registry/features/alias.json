@@ -1,0 +1,9 @@
+{
+  "id": "alias:invoke",
+  "type": "frontend",
+  "description": "Named session preset invoked via @name in the omnibar",
+  "component": "Omnibar",
+  "filePath": "web-app/src/components/sessions/Omnibar.tsx",
+  "tested": false,
+  "testIds": []
+}

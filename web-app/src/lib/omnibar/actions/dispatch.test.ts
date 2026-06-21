@@ -270,4 +270,27 @@ describe("dispatchOmnibarAction", () => {
       expect(deps.close).toHaveBeenCalled();
     });
   });
+
+  describe("create_alias_session", () => {
+    it("dispatchOmnibarAction_should_callCreateSession_When_createAliasSessionAction", () => {
+      const deps = makeDeps();
+      dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj", branch: "feat", label: "work" }, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ aliasName: "myproj" })
+      );
+    });
+
+    it("dispatchOmnibarAction_should_passLabelAsTitle_When_createAliasSessionHasLabel", () => {
+      const deps = makeDeps();
+      dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj", label: "working on auth" }, deps);
+      expect(deps.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "working on auth" })
+      );
+    });
+
+    it("dispatchOmnibarAction_should_notThrow_When_createAliasSessionActionDispatched", () => {
+      const deps = makeDeps();
+      expect(() => dispatchOmnibarAction({ type: "create_alias_session", aliasName: "myproj" }, deps)).not.toThrow();
+    });
+  });
 });
