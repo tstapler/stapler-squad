@@ -68,6 +68,7 @@ export function useTerminalFlowControl({
   const waitingForPaneResponseRef = useRef(false);
   const lastResyncTimeRef = useRef<number>(0);
   const lastResizeTimeRef = useRef<number>(0);
+  const pendingResizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dimensionSyncRef = useRef<{ cols?: number; rows?: number }>({});
 
   // StateApplicator (lazy init) - kept in same hook as resync refs per Bug Risk 1
@@ -406,52 +407,68 @@ export function useTerminalFlowControl({
       return;
     }
 
+    // Cancel any previously deferred resize — we have newer dimensions now.
+    if (pendingResizeTimerRef.current) {
+      clearTimeout(pendingResizeTimerRef.current);
+      pendingResizeTimerRef.current = null;
+    }
+
     const now = Date.now();
     const timeSinceLastResize = now - lastResizeTimeRef.current;
     const THROTTLE_MS = 200;
 
-    if (timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
-      console.log(`[useTerminalFlowControl] Resize throttled (${timeSinceLastResize}ms since last, need ${THROTTLE_MS}ms)`);
-      return;
-    }
-
-    try {
-      console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
-      lastResizeTimeRef.current = now;
-      pushMessage(
-        create(TerminalDataSchema, {
-          sessionId,
-          data: {
-            case: "resize",
-            value: create(TerminalResizeSchema, { cols, rows }),
-          },
-        })
-      );
-
-      // After resizing, request fresh terminal content
-      setTimeout(() => {
-        if (!pushMessageRef.current || !isConnectedRef.current) return;
-
-        console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
+    // Inner send: stamps the timestamp, sends the resize RPC, then requests a
+    // fresh pane capture so xterm.js and tmux are guaranteed to agree on content.
+    const doSend = () => {
+      if (!pushMessageRef.current || !isConnectedRef.current) return;
+      lastResizeTimeRef.current = Date.now();
+      try {
+        console.log(`[useTerminalFlowControl] Sending resize to server: ${cols}x${rows}`);
         pushMessage(
           create(TerminalDataSchema, {
             sessionId,
-            data: {
-              case: "currentPaneRequest",
-              value: create(CurrentPaneRequestSchema, {
-                lines: 50,
-                includeEscapes: true,
-                targetCols: cols,
-                targetRows: rows,
-                streamingMode: streamingMode || "raw-compressed",
-              }),
-            },
+            data: { case: "resize", value: create(TerminalResizeSchema, { cols, rows }) },
           })
         );
-      }, 100);
-    } catch (err) {
-      handleError(err);
+
+        // After resizing, request fresh terminal content
+        setTimeout(() => {
+          if (!pushMessageRef.current || !isConnectedRef.current) return;
+          console.log(`[useTerminalFlowControl] Requesting fresh pane content after resize`);
+          pushMessage(
+            create(TerminalDataSchema, {
+              sessionId,
+              data: {
+                case: "currentPaneRequest",
+                value: create(CurrentPaneRequestSchema, {
+                  lines: 50,
+                  includeEscapes: true,
+                  targetCols: cols,
+                  targetRows: rows,
+                  streamingMode: streamingMode || "raw-compressed",
+                }),
+              },
+            })
+          );
+        }, 100);
+      } catch (err) {
+        handleError(err);
+      }
+    };
+
+    if (timeSinceLastResize < THROTTLE_MS && lastResizeTimeRef.current !== 0) {
+      // Defer instead of drop: schedule the trailing-edge send so the final
+      // settled size always reaches the server after rapid resize sequences.
+      const remaining = THROTTLE_MS - timeSinceLastResize;
+      console.log(`[useTerminalFlowControl] Resize deferred ${remaining}ms (${cols}x${rows})`);
+      pendingResizeTimerRef.current = setTimeout(() => {
+        pendingResizeTimerRef.current = null;
+        doSend();
+      }, remaining + 1);
+      return;
     }
+
+    doSend();
   }, [sessionId, streamingMode, pushMessage, pushMessageRef, isConnectedRef, handleError]);
 
   const requestScrollback = useCallback((fromSequence: number, limit: number) => {

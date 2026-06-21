@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	connect "connectrpc.com/connect"
@@ -21,6 +23,53 @@ func newIsolatedDefaultsService(t *testing.T) *DefaultsService {
 	t.Helper()
 	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
 	return NewDefaultsService()
+}
+
+// TestNewDefaultsServiceCalledOnlyViaHelper ensures no test in this file bypasses
+// the isolation helper by calling NewDefaultsService() directly.
+// Bare calls read/write the real user config dir, causing order-dependent failures.
+//
+// Pattern matched: lines that assign the result of NewDefaultsService() (i.e.
+// `:= NewDefaultsService()`), which is the only form a direct test call takes.
+// This excludes: the helper's own return statement, comment lines, and string
+// literals inside this function that happen to contain the text.
+func TestNewDefaultsServiceCalledOnlyViaHelper(t *testing.T) {
+	data, err := os.ReadFile("defaults_service_test.go")
+	require.NoError(t, err)
+
+	// inSelf tracks whether the scanner is inside this function's body, so that
+	// string literals referencing the pattern don't trigger a false positive.
+	inSelf := false
+	depth := 0
+
+	var violations []string
+	for i, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		if strings.Contains(line, "func TestNewDefaultsServiceCalledOnlyViaHelper(") {
+			inSelf = true
+		}
+		if inSelf {
+			depth += strings.Count(line, "{") - strings.Count(line, "}")
+			if depth <= 0 && inSelf {
+				inSelf = false
+			}
+			continue
+		}
+
+		// Only flag assignment-form calls: `svc := NewDefaultsService()`
+		if !strings.Contains(trimmed, ":= NewDefaultsService()") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		violations = append(violations, fmt.Sprintf("  line %d: %s", i+1, trimmed))
+	}
+	if len(violations) > 0 {
+		t.Errorf("bare NewDefaultsService() calls found — use newIsolatedDefaultsService(t) instead:\n%s",
+			strings.Join(violations, "\n"))
+	}
 }
 
 // TestGetSessionDefaults_ReturnsDefaults verifies that GetSessionDefaults returns a
@@ -282,10 +331,10 @@ func TestListAliases_ReturnsEmptyList_WhenNoAliasesConfigured(t *testing.T) {
 // TestListAliases_ReturnsAllAliases_WhenConfigHasAliases verifies that ListAliases
 // returns all configured aliases with correct field mapping.
 func TestListAliases_ReturnsAllAliases_WhenConfigHasAliases(t *testing.T) {
-	// Write a config with known aliases into a temp directory and point
-	// STAPLER_SQUAD_TEST_DIR at it so config.LoadConfig() picks it up.
-	tmpDir := t.TempDir()
-	t.Setenv("STAPLER_SQUAD_TEST_DIR", tmpDir)
+	// newIsolatedDefaultsService sets STAPLER_SQUAD_TEST_DIR to a fresh TempDir.
+	// Read the env var back to know where to write the pre-populated config file.
+	svc := newIsolatedDefaultsService(t)
+	tmpDir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
 
 	cfg := &config.Config{}
 	cfg.SessionDefaults.Aliases = []config.AliasConfig{
@@ -295,8 +344,6 @@ func TestListAliases_ReturnsAllAliases_WhenConfigHasAliases(t *testing.T) {
 	cfgBytes, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "config.json"), cfgBytes, 0o600))
-
-	svc := NewDefaultsService()
 
 	req := connect.NewRequest(&sessionv1.ListAliasesRequest{})
 	resp, err := svc.ListAliases(context.Background(), req)

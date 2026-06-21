@@ -689,11 +689,19 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         reconnectTimeoutRef.current = null;
       }
 
-      const currentSize = lastResizeRef.current;
-      if (currentSize) {
-        console.log(`[TerminalOutput] Post-connection resize sync: ${currentSize.cols}x${currentSize.rows}`);
-        resize(currentSize.cols, currentSize.rows);
-      }
+      // Delay the post-connection resize sync until after layout settles.
+      // Firing immediately would start the 200ms throttle clock at T+0, causing
+      // the ResizeObserver's settled-layout resize (arriving at T+150ms via its
+      // own debounce) to be dropped. Waiting 250ms lets the container stabilise
+      // first; by then the ResizeObserver has already sent the correct dims (or
+      // nothing changed and we send here as a safety net).
+      setTimeout(() => {
+        const settledSize = lastResizeRef.current;
+        if (settledSize) {
+          console.log(`[TerminalOutput] Post-connection resize sync (delayed): ${settledSize.cols}x${settledSize.rows}`);
+          resize(settledSize.cols, settledSize.rows);
+        }
+      }, 250);
     } else if (wasConnected && !isConnected) {
       console.log("[TerminalOutput] Connection lost, will attempt reconnection");
       // If connection drops while still loading, content won't arrive — clear the overlay

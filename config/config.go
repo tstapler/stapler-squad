@@ -514,6 +514,14 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		ResourcePressureThreshold: 85,
 		RetentionDays:             30,
 	}
+	// Initialize SessionDefaults maps so callers never encounter nil maps.
+	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
+	// must mirror them so the two code paths are equivalent.
+	cfg.SessionDefaults.Profiles = make(map[string]ProfileDefaults)
+	cfg.SessionDefaults.EnvVars = make(map[string]string)
+	cfg.SessionDefaults.Tags = []string{}
+	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
+	cfg.SessionDefaults.Aliases = []AliasConfig{}
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v
