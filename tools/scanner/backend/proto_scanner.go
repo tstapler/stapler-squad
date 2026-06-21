@@ -101,6 +101,10 @@ var methodToID = map[string]string{
 	"GetSessionDefaults":   "defaults:get",
 	"UpdateGlobalDefaults": "defaults:update-global",
 	"ResolveDefaults":      "defaults:resolve",
+	// Alias RPCs
+	"UpsertAlias": "alias:upsert",
+	"DeleteAlias": "alias:delete",
+	"ListAliases": "alias:list",
 	// Directory rules RPCs
 	"UpsertDirectoryRule": "directory-rule:upsert",
 	"DeleteDirectoryRule": "directory-rule:delete",
