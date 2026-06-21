@@ -124,6 +124,7 @@ export interface OmnibarSessionData {
   // Permission mode passed to Claude Code (e.g. "auto" for autonomous sessions).
   permissionMode?: string;
   aliasName?: string;
+  extraCliFlags?: string;
 }
 
 // Validates a project name: no path separators, null bytes, or leading/trailing spaces/dots.
@@ -887,6 +888,7 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         autoYes: false,
         aliasName: String(aliasName),
         branch: aliasBranch !== undefined ? String(aliasBranch) : undefined,
+        extraCliFlags: extraFlags !== undefined ? String(extraFlags) : undefined,
       };
       setIsSubmitting(true);
       setError(null);

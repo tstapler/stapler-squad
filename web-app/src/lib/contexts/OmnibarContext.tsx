@@ -203,6 +203,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         autonomousMode: data.autonomousMode ?? false,
         permissionMode: data.permissionMode ?? "",
         aliasName: data.aliasName ?? "",
+        cliFlags: data.extraCliFlags ?? "",
       });
 
       if (session) {
