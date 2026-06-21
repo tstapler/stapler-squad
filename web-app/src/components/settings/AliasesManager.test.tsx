@@ -123,6 +123,8 @@ describe("AliasesManager", () => {
         })
       );
     });
+    // After save, form is hidden and list is reloaded
+    expect(mockListAliases).toHaveBeenCalledTimes(2);
   });
 
   it("edit flow — pre-populates form and name is disabled", async () => {
@@ -160,6 +162,8 @@ describe("AliasesManager", () => {
         })
       );
     });
+    // After save, form is hidden and list is reloaded
+    expect(mockListAliases).toHaveBeenCalledTimes(2);
   });
 
   it("name validation — empty name shows inline error", async () => {
@@ -253,12 +257,11 @@ describe("AliasesManager", () => {
   });
 
   it("delete flow — auto-cancel after 3 seconds", async () => {
-    jest.useFakeTimers();
     render(<AliasesManager />);
-    await act(async () => {
-      await Promise.resolve(); // flush loadAliases
-    });
+    // Wait for the alias list to load with real timers before switching to fake
+    await waitFor(() => expect(screen.getByTestId("alias-delete-myproj")).toBeInTheDocument());
 
+    jest.useFakeTimers();
     fireEvent.click(screen.getByTestId("alias-delete-myproj"));
     expect(screen.getByTestId("alias-confirm-delete-myproj")).toBeInTheDocument();
 
@@ -327,5 +330,35 @@ describe("AliasesManager", () => {
     // Collapse
     fireEvent.click(advancedCheckbox);
     expect(screen.queryByRole("button", { name: "Add variable" })).not.toBeInTheDocument();
+  });
+
+  it("shows error when upsertAlias RPC fails", async () => {
+    mockListAliases.mockResolvedValue({ aliases: [] });
+    mockUpsertAlias.mockRejectedValueOnce(new Error("network error"));
+    render(<AliasesManager />);
+    await waitFor(() => screen.getByText("No aliases configured."));
+
+    fireEvent.click(screen.getByRole("button", { name: "New Alias" }));
+    fireEvent.change(screen.getByLabelText(/Name \*/), { target: { value: "newproj" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("alert").textContent).toMatch(/Failed to save alias/);
+  });
+
+  it("shows error when deleteAlias RPC fails", async () => {
+    mockDeleteAlias.mockRejectedValueOnce(new Error("network error"));
+    render(<AliasesManager />);
+    await waitFor(() => screen.getByText("@myproj"));
+
+    fireEvent.click(screen.getByTestId("alias-delete-myproj"));
+    fireEvent.click(screen.getByTestId("alias-confirm-delete-myproj"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("alert").textContent).toMatch(/Failed to delete alias/);
   });
 });
