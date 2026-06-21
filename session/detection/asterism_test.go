@@ -5,7 +5,7 @@ import (
 )
 
 // TestClaude_AsterismActive_SingleLine verifies that spinner-frame + Verb... lines are
-// classified as StatusActive across all known frame characters.
+// classified as StatusExecuting across all known frame characters.
 func TestClaude_AsterismActive_SingleLine(t *testing.T) {
 	sd := NewStatusDetector()
 	cases := []struct {
@@ -40,8 +40,8 @@ func TestClaude_AsterismActive_SingleLine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sd.Detect([]byte(tc.input))
-			if got != StatusActive && got != StatusProcessing {
-				t.Errorf("Detect(%q) = %s, want StatusActive or StatusProcessing", tc.input, got)
+			if got != StatusExecuting && got != StatusProcessing {
+				t.Errorf("Detect(%q) = %s, want StatusExecuting or StatusProcessing", tc.input, got)
 			}
 		})
 	}
@@ -56,8 +56,8 @@ func TestClaude_AsteriskActive_NoRegression(t *testing.T) {
 	}
 	for _, input := range cases {
 		got := sd.Detect([]byte(input))
-		if got != StatusActive && got != StatusProcessing {
-			t.Errorf("Detect(%q) = %s, want StatusActive (regression)", input, got)
+		if got != StatusExecuting && got != StatusProcessing {
+			t.Errorf("Detect(%q) = %s, want StatusExecuting (regression)", input, got)
 		}
 	}
 }
@@ -80,8 +80,8 @@ func TestClaude_SpinnerFrame_NoFalsePositive(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sd.Detect([]byte(tc.input))
-			if got == StatusActive {
-				t.Errorf("Detect(%q) = StatusActive, expected no match (false positive)", tc.input)
+			if got == StatusExecuting {
+				t.Errorf("Detect(%q) = StatusExecuting, expected no match (false positive)", tc.input)
 			}
 		})
 	}
@@ -112,8 +112,8 @@ func TestClaude_AsterismCompletion_NotActive(t *testing.T) {
 	}
 	for _, input := range cases {
 		got := sd.Detect([]byte(input))
-		if got == StatusActive {
-			t.Errorf("Detect(%q) = StatusActive, completion line must not be Active", input)
+		if got == StatusExecuting {
+			t.Errorf("Detect(%q) = StatusExecuting, completion line must not be Active", input)
 		}
 	}
 }

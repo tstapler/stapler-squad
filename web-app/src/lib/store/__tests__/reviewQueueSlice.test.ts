@@ -8,14 +8,19 @@ import reviewQueueReducer, {
   setLoading,
   setError,
   removeItem,
+  addItem,
+  updateItem,
   selectReviewQueue,
   selectReviewQueueItems,
   selectReviewQueueStats,
   selectReviewQueueLoading,
   selectReviewQueueError,
+  selectReviewQueueItemsWithLiveStatus,
 } from "../reviewQueueSlice";
-import { ReviewQueue, ReviewItem, ReviewItemSchema, ReviewQueueSchema } from "@/gen/session/v1/types_pb";
+import { ReviewQueue, ReviewItem, ReviewItemSchema, ReviewQueueSchema, DetectedStatus, SubStatus, WorkingState } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
+import { upsertSession } from "../sessionsSlice";
+import { Session, SessionSchema, SessionStatus } from "@/gen/session/v1/types_pb";
 
 function makeStore() {
   return configureStore({
@@ -168,6 +173,188 @@ describe("reviewQueueSlice", () => {
       store.dispatch(setReviewQueue(original));
       expect(selectReviewQueueItems(store.getState())).toHaveLength(2);
       expect(selectReviewQueueStats(store.getState()).totalItems).toBe(2);
+    });
+  });
+
+  // UT-TS-04 — addItem and updateItem reducers
+  describe("addItem (UT-TS-04)", () => {
+    it("Test A — inserts new item and updates totalItems", () => {
+      const store = makeStore();
+      store.dispatch(setReviewQueue(makeQueue([])));
+      store.dispatch(addItem(makeReviewItem("sess-new")));
+      const state = store.getState() as any;
+      expect(selectReviewQueueItems(state)).toHaveLength(1);
+      expect(selectReviewQueue(state)!.totalItems).toBe(1);
+    });
+
+    it("Test B — is idempotent: duplicate sessionId is not inserted", () => {
+      const store = makeStore();
+      store.dispatch(setReviewQueue(makeQueue([makeReviewItem("sess-1")])));
+      store.dispatch(addItem(makeReviewItem("sess-1")));
+      const state = store.getState() as any;
+      expect(selectReviewQueueItems(state)).toHaveLength(1);
+      expect(selectReviewQueue(state)!.totalItems).toBe(1);
+    });
+
+    it("is a no-op when queue is null", () => {
+      const store = makeStore();
+      expect(() => store.dispatch(addItem(makeReviewItem("sess-1")))).not.toThrow();
+      expect(selectReviewQueue(store.getState())).toBeNull();
+    });
+  });
+
+  describe("updateItem (UT-TS-04)", () => {
+    it("Test C — modifies existing item in-place", () => {
+      const store = makeStore();
+      store.dispatch(
+        setReviewQueue(
+          makeQueue([
+            create(ReviewItemSchema, { sessionId: "sess-1", subStatus: SubStatus.NEEDS_APPROVAL }),
+          ])
+        )
+      );
+      store.dispatch(
+        updateItem({ sessionId: "sess-1", updates: { subStatus: SubStatus.PROCESSING } })
+      );
+      const items = selectReviewQueueItems(store.getState() as any);
+      expect(items).toHaveLength(1);
+      expect(items[0].subStatus).toBe(SubStatus.PROCESSING);
+    });
+
+    it("Test D — is a no-op for nonexistent sessionId", () => {
+      const store = makeStore();
+      store.dispatch(setReviewQueue(makeQueue([makeReviewItem("sess-1")])));
+      expect(() =>
+        store.dispatch(
+          updateItem({ sessionId: "sess-nonexistent", updates: { subStatus: SubStatus.PROCESSING } })
+        )
+      ).not.toThrow();
+      expect(selectReviewQueueItems(store.getState() as any)).toHaveLength(1);
+    });
+
+    it("is a no-op when queue is null", () => {
+      const store = makeStore();
+      expect(() =>
+        store.dispatch(updateItem({ sessionId: "sess-1", updates: { subStatus: SubStatus.PROCESSING } }))
+      ).not.toThrow();
+      expect(selectReviewQueue(store.getState())).toBeNull();
+    });
+  });
+
+  // UT-TS-08 — selectReviewQueueItemsWithLiveStatus joins live session state
+  describe("selectReviewQueueItemsWithLiveStatus (UT-TS-08)", () => {
+    it("overrides workingState using live detectedStatus when session is in detectedStatusMap", () => {
+      const store = makeStore();
+      // Queue item has UNSPECIFIED subStatus and UNSPECIFIED workingState (stale)
+      store.dispatch(
+        setReviewQueue(
+          makeQueue([
+            create(ReviewItemSchema, {
+              sessionId: "sess-1",
+              subStatus: SubStatus.UNSPECIFIED,
+              workingState: WorkingState.UNSPECIFIED,
+            }),
+          ])
+        )
+      );
+      // Live session with EXECUTING detected status → should override to WorkingState.ACTIVE
+      store.dispatch(
+        upsertSession(
+          create(SessionSchema, {
+            id: "sess-1",
+            status: SessionStatus.ACTIVE,
+            detectedStatus: DetectedStatus.EXECUTING,
+          })
+        )
+      );
+      const state = store.getState() as any;
+      const result = selectReviewQueueItemsWithLiveStatus(state);
+      expect(result).toHaveLength(1);
+      expect(result[0].sessionId).toBe("sess-1");
+      // Live detectedStatus EXECUTING → WorkingState.ACTIVE
+      expect(result[0].workingState).toBe(WorkingState.ACTIVE);
+    });
+
+    it("returns item unchanged (identity) when session has no live detectedStatusMap entry", () => {
+      const store = makeStore();
+      const originalItem = create(ReviewItemSchema, {
+        sessionId: "sess-2",
+        subStatus: SubStatus.UNSPECIFIED,
+        workingState: WorkingState.UNSPECIFIED,
+      });
+      store.dispatch(setReviewQueue(makeQueue([originalItem])));
+      const state = store.getState() as any;
+      const result = selectReviewQueueItemsWithLiveStatus(state);
+      expect(result).toHaveLength(1);
+      // No live session entry — item is returned as-is
+      expect(result[0].sessionId).toBe("sess-2");
+      expect(result[0].workingState).toBe(WorkingState.UNSPECIFIED);
+    });
+
+    it("overrides workingState to ACTIVE when live detectedStatus is EXECUTING", () => {
+      const store = makeStore();
+      store.dispatch(
+        setReviewQueue(
+          makeQueue([
+            create(ReviewItemSchema, {
+              sessionId: "sess-3",
+              subStatus: SubStatus.UNSPECIFIED,
+              workingState: WorkingState.UNSPECIFIED,
+            }),
+          ])
+        )
+      );
+      // Inject a live detectedStatus via upsertSession (EXECUTING → WorkingState.ACTIVE)
+      store.dispatch(
+        upsertSession(
+          create(SessionSchema, {
+            id: "sess-3",
+            status: SessionStatus.ACTIVE,
+            detectedStatus: DetectedStatus.EXECUTING,
+          })
+        )
+      );
+      const state = store.getState() as any;
+      const result = selectReviewQueueItemsWithLiveStatus(state);
+      expect(result).toHaveLength(1);
+      expect(result[0].workingState).toBe(WorkingState.ACTIVE);
+    });
+
+    it("subStatus takes priority over live detectedStatus per deriveWorkingState logic", () => {
+      const store = makeStore();
+      // Item has NEEDS_APPROVAL subStatus (should map to PROCESSING regardless of detectedStatus)
+      store.dispatch(
+        setReviewQueue(
+          makeQueue([
+            create(ReviewItemSchema, {
+              sessionId: "sess-4",
+              subStatus: SubStatus.NEEDS_APPROVAL,
+              workingState: WorkingState.UNSPECIFIED,
+            }),
+          ])
+        )
+      );
+      // Even with EXECUTING detectedStatus, subStatus takes priority
+      store.dispatch(
+        upsertSession(
+          create(SessionSchema, {
+            id: "sess-4",
+            status: SessionStatus.ACTIVE,
+            detectedStatus: DetectedStatus.EXECUTING,
+          })
+        )
+      );
+      const state = store.getState() as any;
+      const result = selectReviewQueueItemsWithLiveStatus(state);
+      expect(result).toHaveLength(1);
+      // NEEDS_APPROVAL subStatus → PROCESSING (not ACTIVE from detectedStatus)
+      expect(result[0].workingState).toBe(WorkingState.PROCESSING);
+    });
+
+    it("returns empty array when queue is null", () => {
+      const store = makeStore();
+      const state = store.getState() as any;
+      expect(selectReviewQueueItemsWithLiveStatus(state)).toEqual([]);
     });
   });
 });

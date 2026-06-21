@@ -60,7 +60,7 @@ const SessionServiceContext = createContext<SessionServiceContextValue | null>(n
  */
 export function GlobalSessionServiceProvider({ children }: { children: React.ReactNode }) {
   const { authEnabled, authenticated, loading: authLoading } = useAuth();
-  const { refreshHistory, markAsReadBySessionId, removeToastByApprovalId } = useNotifications();
+  const { refreshHistory, markAsReadBySessionId, removeToastByApprovalId, removeToastBySessionId } = useNotifications();
   const router = useRouter();
 
   // Navigate to the session detail when user clicks "View" on a toast.
@@ -88,7 +88,13 @@ export function GlobalSessionServiceProvider({ children }: { children: React.Rea
       closeNativeNotification(notificationTag.tier1Review(sessionId));
       void refreshHistory();
     },
-    onSessionDeleted: markAsReadBySessionId,
+    onSessionDeleted: (sessionId: string) => {
+      // Mark notification history as read for the deleted session.
+      markAsReadBySessionId(sessionId);
+      // Remove any active approval toasts for the deleted session so stale
+      // Approve/Deny buttons are not shown after the session is gone.
+      removeToastBySessionId(sessionId);
+    },
   });
 
   return (

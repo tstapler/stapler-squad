@@ -161,6 +161,20 @@ func (i *Instance) GetDetectedStatus() detection.DetectedStatus {
 	return statusInfo.ClaudeStatus
 }
 
+// GetDetectedContext returns the human-readable context string from the terminal detection layer.
+// Returns an empty string when no controller is active or no context is available.
+func (i *Instance) GetDetectedContext() string {
+	mgr := i.GetStatusManager()
+	if mgr == nil {
+		return ""
+	}
+	statusInfo := mgr.GetStatus(i)
+	if !statusInfo.IsControllerActive {
+		return ""
+	}
+	return statusInfo.StatusContext
+}
+
 // Approve transitions the instance to Active (approval granted).
 // Returns an error if the current state does not allow this transition.
 func (i *Instance) Approve() error {

@@ -191,10 +191,8 @@ func (hl *HistoryLinker) ScanAll() {
 	copy(snapshot, hl.instances)
 	hl.mu.Unlock()
 
-	// One subprocess for all PIDs instead of N per-session calls.
-	batchedPIDs := batchPTYInfo("")
 	for _, inst := range snapshot {
-		hl.correlateSession(inst, true, batchedPIDs)
+		hl.correlateSession(inst, true)
 	}
 }
 
@@ -206,10 +204,8 @@ func (hl *HistoryLinker) scanAllSessions() {
 	copy(snapshot, hl.instances)
 	hl.mu.RUnlock()
 
-	// One subprocess for all PIDs instead of N per-session calls.
-	batchedPIDs := batchPTYInfo("")
 	for _, inst := range snapshot {
-		hl.correlateSession(inst, false, batchedPIDs)
+		hl.correlateSession(inst, false)
 	}
 }
 
@@ -222,10 +218,7 @@ func (hl *HistoryLinker) scanAllSessions() {
 // When force=true (fsnotify-triggered or startup scan), already-linked sessions are
 // re-checked so that UUID changes from /clear are detected and stored promptly. This
 // ensures cold restores use the correct --resume UUID rather than a stale pre-/clear one.
-//
-// batchedPIDs is the result of a single batchPTYInfo call shared across all sessions in
-// the current scan pass; pass nil to fall back to per-session GetPanePID().
-func (hl *HistoryLinker) correlateSession(inst *Instance, force bool, batchedPIDs map[string]paneEntry) {
+func (hl *HistoryLinker) correlateSession(inst *Instance, force bool) {
 	alreadyLinked := inst.HasClaudeSession()
 
 	// In non-force polling mode, skip already-linked sessions for performance.
@@ -250,19 +243,8 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool, batchedPID
 	var err error
 
 	// Fast path: inspect open files of the live tmux pane process.
-	// Use the batched PID (from a single batchPTYInfo call) when available to avoid a
-	// per-session subprocess spawn. Fall back to GetPanePID() for new/untracked sessions
-	// or when batchedPIDs is nil (tmux unavailable or called from a non-batch path).
-	var pid int32
-	if batchedPIDs != nil {
-		if entry, ok := batchedPIDs[inst.GetTmuxSessionName()]; ok {
-			pid = int32(entry.pid)
-		}
-	}
-	if pid == 0 {
-		pid, _ = inst.GetPanePID()
-	}
-	if pid != 0 {
+	pid, pidErr := inst.GetPanePID()
+	if pidErr == nil {
 		info, err = hl.detector.Detect(pid)
 		if err != nil {
 			log.Warn("HistoryLinker: detect error", "session", inst.Title, "pid", pid, "err", err)
@@ -272,7 +254,16 @@ func (hl *HistoryLinker) correlateSession(inst *Instance, force bool, batchedPID
 	// Fallback: scan the project directory by path (works after reboot / tmux kill).
 	// Use the effective root dir (worktree path for worktree sessions) so we look in
 	// the right ~/.claude/projects/ subdirectory, not the base repository path.
-	if info == nil {
+	//
+	// Skip this fallback for already-linked Paused or Hibernated sessions: the
+	// "most recently modified" heuristic is wrong when other sessions have run in
+	// the same directory after the pause, because their newer JSONL files would
+	// replace the correct stored UUID with a different session's conversation UUID.
+	// Active sessions still use the fallback so that /clear-triggered UUID changes
+	// (new conversation file created while the session is live) are detected promptly.
+	pathFallbackAllowed := !alreadyLinked ||
+		(inst.Status != Paused && inst.Status != Hibernated && inst.Status != Stopped)
+	if info == nil && pathFallbackAllowed {
 		if effectivePath := inst.GetEffectiveRootDir(); effectivePath != "" {
 			info, err = hl.detector.DetectByPath(effectivePath)
 			if err != nil {

@@ -17,7 +17,7 @@
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { ReviewQueuePanel } from "../ReviewQueuePanel";
-import { AttentionReason, Priority, SuggestionSource } from "@/gen/session/v1/types_pb";
+import { AttentionReason, Priority, SubStatus, SuggestionSource } from "@/gen/session/v1/types_pb";
 import type { ReviewItem } from "@/gen/session/v1/types_pb";
 
 // ---------------------------------------------------------------------------
@@ -276,7 +276,7 @@ function makeApprovalItem(overrides: Partial<ReviewItem> = {}): ReviewItem {
       tool_input_command: "git push origin main",
       tool_name: "Bash",
     },
-    workingState: 0,
+    subStatus: SubStatus.UNSPECIFIED,
     ...overrides,
   } as unknown as ReviewItem;
 }

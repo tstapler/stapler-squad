@@ -358,6 +358,7 @@ export type Session = Message<"session.v1.Session"> & {
   launchCommand: string;
 
   /**
+   * Deprecated: derived client-side via deriveWorkingState().
    * Active-work state for review queue filtering. Populated from IdleDetector state.
    *
    * @generated from field: session.v1.WorkingState working_state = 50;
@@ -485,6 +486,24 @@ export type Session = Message<"session.v1.Session"> & {
    * @generated from field: string autonomous_outcome = 67;
    */
   autonomousOutcome: string;
+
+  /**
+   * Fine-grained detected status from PTY output analysis.
+   * Only meaningful when status == SESSION_STATUS_ACTIVE.
+   * Maps to detection.DetectedStatus in Go.
+   *
+   * @generated from field: session.v1.DetectedStatus detected_status = 68;
+   */
+  detectedStatus: DetectedStatus;
+
+  /**
+   * Human-readable context string from the terminal pattern detector
+   * (e.g. "Waiting for tool approval", "Tests failing: 3 of 12").
+   * Empty when detected_status is UNSPECIFIED.
+   *
+   * @generated from field: string detected_context = 69;
+   */
+  detectedContext: string;
 };
 
 /**
@@ -1016,11 +1035,21 @@ export type ReviewItem = Message<"session.v1.ReviewItem"> & {
   branchDivergedFromBase: boolean;
 
   /**
+   * Deprecated: derived client-side via deriveWorkingState().
    * Active-work state for review queue filtering. Populated from IdleDetector state.
    *
    * @generated from field: session.v1.WorkingState working_state = 20;
    */
   workingState: WorkingState;
+
+  /**
+   * Fine-grained activity state derived from ClaudeStatus at the time the item
+   * was enqueued. Used by the frontend deriveWorkingState() utility to compute
+   * the effective WorkingState without relying on the deprecated working_state field.
+   *
+   * @generated from field: session.v1.SubStatus sub_status = 21;
+   */
+  subStatus: SubStatus;
 };
 
 /**
@@ -3315,6 +3344,81 @@ export const InstanceTypeSchema: GenEnum<InstanceType> = /*@__PURE__*/
   enumDesc(file_session_v1_types, 4);
 
 /**
+ * DetectedStatus represents the fine-grained activity state detected from PTY output analysis.
+ * Derived from terminal pattern matching in the detection layer; never stored in the database.
+ * Only meaningful when Session.status == SESSION_STATUS_ACTIVE.
+ *
+ * @generated from enum session.v1.DetectedStatus
+ */
+export enum DetectedStatus {
+  /**
+   * @generated from enum value: DETECTED_STATUS_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_IDLE = 1;
+   */
+  IDLE = 1,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_PROCESSING = 2;
+   */
+  PROCESSING = 2,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_EXECUTING = 3;
+   */
+  EXECUTING = 3,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_NEEDS_APPROVAL = 4;
+   */
+  NEEDS_APPROVAL = 4,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_INPUT_REQUIRED = 5;
+   */
+  INPUT_REQUIRED = 5,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_ERROR = 6;
+   */
+  ERROR = 6,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_TESTS_FAILING = 7;
+   */
+  TESTS_FAILING = 7,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_SUCCESS = 8;
+   */
+  SUCCESS = 8,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_UNKNOWN = 9;
+   */
+  UNKNOWN = 9,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_READY = 10;
+   */
+  READY = 10,
+
+  /**
+   * @generated from enum value: DETECTED_STATUS_WAITING_FOR_AGENT = 11;
+   */
+  WAITING_FOR_AGENT = 11,
+}
+
+/**
+ * Describes the enum session.v1.DetectedStatus.
+ */
+export const DetectedStatusSchema: GenEnum<DetectedStatus> = /*@__PURE__*/
+  enumDesc(file_session_v1_types, 5);
+
+/**
  * WorkingState represents the active-work status of a session for review queue filtering.
  * Populated from IdleDetector state; allows frontend to distinguish sessions that are
  * actively working from those waiting for user attention.
@@ -3360,7 +3464,7 @@ export enum WorkingState {
  * Describes the enum session.v1.WorkingState.
  */
 export const WorkingStateSchema: GenEnum<WorkingState> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 5);
+  enumDesc(file_session_v1_types, 6);
 
 /**
  * SubStatus provides fine-grained activity state for Active sessions.
@@ -3442,7 +3546,7 @@ export enum SubStatus {
  * Describes the enum session.v1.SubStatus.
  */
 export const SubStatusSchema: GenEnum<SubStatus> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 6);
+  enumDesc(file_session_v1_types, 7);
 
 /**
  * RateLimitState indicates whether the session is experiencing rate limiting.
@@ -3495,7 +3599,7 @@ export enum RateLimitState {
  * Describes the enum session.v1.RateLimitState.
  */
 export const RateLimitStateSchema: GenEnum<RateLimitState> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 7);
+  enumDesc(file_session_v1_types, 8);
 
 /**
  * Priority levels for review queue items (highest to lowest urgency).
@@ -3541,7 +3645,7 @@ export enum Priority {
  * Describes the enum session.v1.Priority.
  */
 export const PrioritySchema: GenEnum<Priority> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 8);
+  enumDesc(file_session_v1_types, 9);
 
 /**
  * AttentionReason indicates why a session needs user attention.
@@ -3629,7 +3733,7 @@ export enum AttentionReason {
  * Describes the enum session.v1.AttentionReason.
  */
 export const AttentionReasonSchema: GenEnum<AttentionReason> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 9);
+  enumDesc(file_session_v1_types, 10);
 
 /**
  * NotificationType categorizes the type of notification being sent.
@@ -3756,7 +3860,7 @@ export enum NotificationType {
  * Describes the enum session.v1.NotificationType.
  */
 export const NotificationTypeSchema: GenEnum<NotificationType> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 10);
+  enumDesc(file_session_v1_types, 11);
 
 /**
  * NotificationPriority determines UI treatment for notifications.
@@ -3803,7 +3907,7 @@ export enum NotificationPriority {
  * Describes the enum session.v1.NotificationPriority.
  */
 export const NotificationPrioritySchema: GenEnum<NotificationPriority> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 11);
+  enumDesc(file_session_v1_types, 12);
 
 /**
  * VCSType represents the type of version control system
@@ -3831,7 +3935,7 @@ export enum VCSType {
  * Describes the enum session.v1.VCSType.
  */
 export const VCSTypeSchema: GenEnum<VCSType> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 12);
+  enumDesc(file_session_v1_types, 13);
 
 /**
  * FileStatus represents the status of a file in version control
@@ -3889,7 +3993,7 @@ export enum FileStatus {
  * Describes the enum session.v1.FileStatus.
  */
 export const FileStatusSchema: GenEnum<FileStatus> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 13);
+  enumDesc(file_session_v1_types, 14);
 
 /**
  * WorkspaceSwitchType defines the type of workspace switch operation
@@ -3928,7 +4032,7 @@ export enum WorkspaceSwitchType {
  * Describes the enum session.v1.WorkspaceSwitchType.
  */
 export const WorkspaceSwitchTypeSchema: GenEnum<WorkspaceSwitchType> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 14);
+  enumDesc(file_session_v1_types, 15);
 
 /**
  * ChangeStrategy defines how to handle uncommitted changes during workspace switches
@@ -3967,7 +4071,7 @@ export enum ChangeStrategy {
  * Describes the enum session.v1.ChangeStrategy.
  */
 export const ChangeStrategySchema: GenEnum<ChangeStrategy> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 15);
+  enumDesc(file_session_v1_types, 16);
 
 /**
  * AutoDecision is the action the classifier takes for a matching rule.
@@ -4000,7 +4104,7 @@ export enum AutoDecision {
  * Describes the enum session.v1.AutoDecision.
  */
 export const AutoDecisionSchema: GenEnum<AutoDecision> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 16);
+  enumDesc(file_session_v1_types, 17);
 
 /**
  * ScanStatus indicates the result quality of the last unfinished-work scan.
@@ -4038,7 +4142,7 @@ export enum ScanStatus {
  * Describes the enum session.v1.ScanStatus.
  */
 export const ScanStatusSchema: GenEnum<ScanStatus> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 17);
+  enumDesc(file_session_v1_types, 18);
 
 /**
  * ShellStatus represents the lifecycle state of a custom shell.
@@ -4077,7 +4181,7 @@ export enum ShellStatus {
  * Describes the enum session.v1.ShellStatus.
  */
 export const ShellStatusSchema: GenEnum<ShellStatus> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 18);
+  enumDesc(file_session_v1_types, 19);
 
 /**
  * SuggestionSource identifies what data was used to generate a rule suggestion.
@@ -4110,5 +4214,5 @@ export enum SuggestionSource {
  * Describes the enum session.v1.SuggestionSource.
  */
 export const SuggestionSourceSchema: GenEnum<SuggestionSource> = /*@__PURE__*/
-  enumDesc(file_session_v1_types, 19);
+  enumDesc(file_session_v1_types, 20);
 

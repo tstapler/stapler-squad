@@ -20,7 +20,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/server/adapters"
-	serveranalytics "github.com/tstapler/stapler-squad/server/analytics"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/server/notifications"
 	"github.com/tstapler/stapler-squad/session"
@@ -132,10 +131,6 @@ type SessionService struct {
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
 	analyticsClient *ent.Client
-
-	// analyticsProvider is the analytics provider used for event recording.
-	// Populated asynchronously when the analytics DB opens; may remain nil in tests.
-	analyticsProvider serveranalytics.AnalyticsProvider
 
 	// memoryCacheReader provides per-session RSS and system memory percentage.
 	// Wired to the HibernationSweeper after startup. May be nil (fields default to 0).
@@ -318,6 +313,7 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		s.wireStatusChangeCallback(inst)
 		s.wireClaudeSessionIDCallback(inst)
 		s.wireAutoArchiveCallback(inst)
+		s.wireSessionExitedPublisher(inst)
 	}
 
 	return instances, nil
@@ -486,12 +482,6 @@ func (s *SessionService) SetAnalyticsClient(c *ent.Client) {
 	s.analyticsClient = c
 }
 
-// SetAnalyticsProvider wires the analytics provider. Called asynchronously once
-// the analytics DB opens; stores the provider for future use.
-func (s *SessionService) SetAnalyticsProvider(p serveranalytics.AnalyticsProvider) {
-	s.analyticsProvider = p
-}
-
 // maybeAutoMigrateToEnt checks whether state.json exists in the config directory and the
 // Ent repository is empty. If both conditions hold, it migrates all sessions from state.json
 // to Ent automatically. This is a one-shot migration: once data is in Ent the check is a no-op.
@@ -619,6 +609,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 	s.wireStatusChangeCallback(instance)
 	s.wireClaudeSessionIDCallback(instance)
 	s.wireAutoArchiveCallback(instance)
+	s.wireSessionExitedPublisher(instance)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
@@ -1164,6 +1155,7 @@ func (s *SessionService) CreateSession(
 		s.wireStatusChangeCallback(instance)
 		s.wireClaudeSessionIDCallback(instance)
 		s.wireAutoArchiveCallback(instance)
+		s.wireSessionExitedPublisher(instance)
 
 		instance.CreationProgress = "Starting session..."
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"creation_progress"}))
@@ -1303,7 +1295,6 @@ func (s *SessionService) UpdateSession(
 
 	// Track which fields are being updated for event publishing
 	var updatedFields []string
-	var oldStatus session.Status
 
 	// Handle title update (before status change so rename is atomic with resume)
 	if req.Msg.Title != nil && *req.Msg.Title != "" && *req.Msg.Title != instance.Title {
@@ -1417,7 +1408,6 @@ func (s *SessionService) UpdateSession(
 	// (save only happens after all changes succeed).
 	if req.Msg.Status != nil && *req.Msg.Status != sessionv1.SessionStatus_SESSION_STATUS_UNSPECIFIED {
 		targetStatus := adapters.ProtoToStatus(*req.Msg.Status)
-		oldStatus = instance.Status
 
 		if targetStatus == session.Paused && instance.Status != session.Paused {
 			// Set pause reason before transitioning — mirrors HibernateSession pattern.
@@ -1449,21 +1439,20 @@ func (s *SessionService) UpdateSession(
 
 	// Publish events based on what was updated
 	if len(updatedFields) > 0 {
-		// Check if status changed specifically
-		if oldStatus != instance.Status && oldStatus != 0 {
-			statusEvent := events.NewSessionStatusChangedEvent(instance, oldStatus, instance.Status)
-			// Augment with terminal-detected status when a controller is active for this session
-			if s.statusManager != nil {
-				statusInfo := s.statusManager.GetStatus(instance)
-				if statusInfo.IsControllerActive {
-					statusEvent.DetectedStatus = statusInfo.ClaudeStatus.String()
-					statusEvent.DetectedContext = statusInfo.StatusContext
-				}
+		// Publish general update event, including detection state when available.
+		if s.statusManager != nil {
+			statusInfo := s.statusManager.GetStatus(instance)
+			if statusInfo.IsControllerActive {
+				s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
+					instance, updatedFields,
+					statusInfo.ClaudeStatus, statusInfo.StatusContext,
+				))
+			} else {
+				s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
 			}
-			s.eventBus.Publish(statusEvent)
+		} else {
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
 		}
-		// Also publish general update event
-		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, updatedFields))
 	}
 
 	return connect.NewResponse(&sessionv1.UpdateSessionResponse{
@@ -1627,6 +1616,13 @@ func (s *SessionService) DeleteSession(
 				log.Warn("failed to cleanup session resources", "session", req.Msg.Id, "err", err)
 			}
 		}()
+	}
+
+	// Cancel any pending approvals BEFORE deleting from storage, so blocked
+	// approval-hook goroutines can exit cleanly while the session still exists.
+	// Non-fatal: log at warn and continue even if there are no pending approvals.
+	if cancelled := s.approvalStore.CancelSession(sessionUUID); len(cancelled) > 0 {
+		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
 	}
 
 	// Delete from storage using Title (the storage key), not the client-supplied ID which may be a UUID.
@@ -3589,6 +3585,34 @@ func (l *autoArchiveListener) OnLifecycleEvent(event session.LifecycleEvent, _ s
 	if event == session.EventExited {
 		go l.svc.maybeAutoArchive(l.inst)
 	}
+}
+
+// wireSessionExitedPublisher registers a lifecycle listener that publishes a
+// SessionUpdatedEvent whenever a session exits unexpectedly (PTY EOF, process
+// crash, reconcile). Without this, the frontend WatchSessions stream never
+// learns the session stopped, leaving the "Thinking…" chip visible indefinitely.
+func (s *SessionService) wireSessionExitedPublisher(inst *session.Instance) {
+	if inst == nil {
+		return
+	}
+	inst.RegisterLifecycleListener(&sessionExitedPublisher{svc: s, inst: inst})
+}
+
+// sessionExitedPublisher publishes a SessionUpdatedEvent and saves the instance
+// when a session exits so the frontend receives the updated Stopped status.
+type sessionExitedPublisher struct {
+	svc  *SessionService
+	inst *session.Instance
+}
+
+func (l *sessionExitedPublisher) OnLifecycleEvent(event session.LifecycleEvent, _ string) {
+	if event != session.EventExited {
+		return
+	}
+	go func() {
+		_ = l.svc.storage.SaveInstances([]*session.Instance{l.inst})
+		l.svc.eventBus.Publish(events.NewSessionUpdatedEvent(l.inst, []string{"status"}))
+	}()
 }
 
 // wireStatusChangeCallback registers a ReactiveQueueManager callback on inst so that

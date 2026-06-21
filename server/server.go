@@ -286,12 +286,10 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Note: SetExternalDiscovery is now called inside BuildRuntimeDeps.
 
-	// Start external session infrastructure.
-	// Wire the approval monitor before starting discovery so its callbacks are
-	// registered before the async ScanFromUserOptions goroutine can fire.
+	// Start external session infrastructure
+	deps.ExternalDiscovery.Start(5 * time.Second)
 	deps.ExternalApprovalMonitor.Start()
 	deps.ExternalApprovalMonitor.IntegrateWithDiscoveryTmux(deps.ExternalDiscovery, deps.TmuxStreamerManager)
-	deps.ExternalDiscovery.Start(5 * time.Second)
 
 	// Register ConnectRPC WebSocket handler (must come before unary handler)
 	wsHandler := services.NewConnectRPCWebSocketHandler(
@@ -522,44 +520,6 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.HandleFunc("POST /api/telemetry", telemetryHandler.HandleTelemetry)
 	log.Info("Registered telemetry handler at POST /api/telemetry")
 
-	// Late-bind analytics provider once the dedicated open goroutine populates the atomic pointer.
-	if deps.AnalyticsClientPtr != nil {
-		go func() {
-			for {
-				if ac := deps.AnalyticsClientPtr.Load(); ac != nil {
-					log.Info("analytics DB ready (async): upgrading to SQLite provider")
-					analyticsProvider := analytics.NewSQLiteAnalyticsProvider(ac)
-					analytics.StartRetentionEnforcer(serverCtx, ac,
-						cfg.AnalyticsMaxRowsOrDefault(), cfg.AnalyticsMaxAgeDaysOrDefault(), cfg.EscapeAnalyticsRetentionDays)
-					if cfg.EscapeAnalyticsCaptureLevel != "off" {
-						escapeWriter := analytics.NewEscapeEventBatchWriter(ac, cfg.EscapeAnalyticsMaxRowsPerSession)
-						go escapeWriter.Start(serverCtx)
-						pkganalytics.SetGlobalEscapeWriter(escapeWriter)
-						log.Info("Escape analytics batch writer started (async)",
-							"captureLevel", cfg.EscapeAnalyticsCaptureLevel,
-							"maxRowsPerSession", cfg.EscapeAnalyticsMaxRowsPerSession,
-						)
-					}
-					if deps.SessionService != nil {
-						deps.SessionService.SetAnalyticsClient(ac)
-						deps.SessionService.SetAnalyticsProvider(analyticsProvider)
-						log.Info("Wired analytics ent client into SessionService (async)")
-					}
-					if analyticsHandler != nil {
-						analyticsHandler.SetClient(ac)
-						log.Info("Upgraded analytics handler to SQLite provider (async)")
-					}
-					return
-				}
-				select {
-				case <-serverCtx.Done():
-					return
-				case <-time.After(500 * time.Millisecond):
-				}
-			}
-		}()
-	}
-
 	// Register raw file download endpoint.
 	// Uses the FileService inside SessionService to validate paths against
 	// the session worktree root (path traversal prevention).
@@ -586,12 +546,6 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Hibernation sweeper started",
 			"idle_timeout_minutes", cfg.Hibernation.IdleTimeoutMinutes)
 	}
-
-	// Start session health checker (detects Active sessions whose tmux session died
-	// and restarts them automatically after two consecutive missed checks).
-	healthChecker := session.NewSessionHealthChecker(deps.Storage)
-	go healthChecker.ScheduledHealthCheck(30*time.Second, serverCtx.Done())
-	log.Info("Session health checker started", "interval", "30s", "failure_threshold", 2)
 }
 
 // registerStaticRoutes mounts routes that are always registered regardless of

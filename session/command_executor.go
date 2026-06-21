@@ -49,7 +49,7 @@ func DefaultExecutionOptions() ExecutionOptions {
 		MaxOutputSize:       1024 * 1024, // 1MB
 		StatusCheckInterval: 100 * time.Millisecond,
 		TerminalStatuses: []detection.DetectedStatus{
-			detection.StatusReady,
+			detection.StatusIdle,
 			detection.StatusError,
 		},
 	}
@@ -378,7 +378,7 @@ func (ce *CommandExecutor) executeCommand(ctx context.Context, cmd *Command, res
 
 					// Check if terminal status reached
 					if ce.isTerminalStatus(opts, status) {
-						result.Success = (status == detection.StatusReady)
+						result.Success = (status == detection.StatusIdle)
 						result.EndTime = time.Now()
 						result.Output = string(outputBuffer)
 						result.FinalStatus = status

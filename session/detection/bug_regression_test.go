@@ -25,8 +25,8 @@ func TestBug1_IndentedSpinner(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sd.Detect([]byte(tc.input))
-			if got != StatusActive && got != StatusProcessing {
-				t.Errorf("Detect(%q) = %s, want StatusActive or StatusProcessing (indented spinner must be detected)",
+			if got != StatusExecuting && got != StatusProcessing {
+				t.Errorf("Detect(%q) = %s, want StatusExecuting or StatusProcessing (indented spinner must be detected)",
 					tc.input, got)
 			}
 		})
@@ -49,8 +49,8 @@ func TestBug1_IndentedSpinner_NoRegression(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sd.Detect([]byte(tc.input))
-			if got == StatusActive {
-				t.Errorf("Detect(%q) = StatusActive, expected no match (false positive for indented spinner)",
+			if got == StatusExecuting {
+				t.Errorf("Detect(%q) = StatusExecuting, expected no match (false positive for indented spinner)",
 					tc.input)
 			}
 		})
@@ -76,8 +76,8 @@ func TestBug1_CRCollapse_EscToInterrupt_Preserved(t *testing.T) {
 	lines := []string{crLine}
 
 	got := sd.DetectFromLines(lines)
-	if got != StatusActive {
-		t.Errorf("DetectFromLines with CR-overwritten esc-to-interrupt: got %s, want StatusActive\n"+
+	if got != StatusExecuting {
+		t.Errorf("DetectFromLines with CR-overwritten esc-to-interrupt: got %s, want StatusExecuting\n"+
 			"  Line: %q\n"+
 			"  The task-manager panel overwrites 'esc to interrupt' via \\r but the session IS active.",
 			got, crLine)
@@ -94,8 +94,8 @@ func TestBug1_CRCollapse_IdleStillIdle(t *testing.T) {
 	lines := []string{crLine}
 
 	got := sd.DetectFromLines(lines)
-	if got == StatusActive {
-		t.Errorf("DetectFromLines with CR-overwritten-by-idle: got StatusActive, want Idle/Ready\n"+
+	if got == StatusExecuting {
+		t.Errorf("DetectFromLines with CR-overwritten-by-idle: got StatusExecuting, want Idle/Ready\n"+
 			"  Line: %q\n"+
 			"  When 'esc to interrupt' is replaced by '? for shortcuts' the session IS idle.",
 			crLine)
@@ -104,7 +104,7 @@ func TestBug1_CRCollapse_IdleStillIdle(t *testing.T) {
 
 // TestBug1_FullContent_ActiveWithTaskManager verifies that DetectFromLines on the
 // full terminal content (spinner in task manager + esc to interrupt + old completion
-// line) correctly returns StatusActive by scanning bottom-up.
+// line) correctly returns StatusExecuting by scanning bottom-up.
 func TestBug1_FullContent_ActiveWithTaskManager(t *testing.T) {
 	sd := NewStatusDetector()
 
@@ -127,8 +127,8 @@ func TestBug1_FullContent_ActiveWithTaskManager(t *testing.T) {
 
 	lines := strings.Split(content, "\n")
 	got := sd.DetectFromLines(lines)
-	if got != StatusActive {
-		t.Errorf("DetectFromLines on active-with-task-manager content: got %s, want StatusActive\n"+
+	if got != StatusExecuting {
+		t.Errorf("DetectFromLines on active-with-task-manager content: got %s, want StatusExecuting\n"+
 			"  The session has an active spinner and esc-to-interrupt even though\n"+
 			"  a prior completion line (✻ Baked for X) is visible in the scrollback.",
 			got)
@@ -154,8 +154,8 @@ func TestBug1_WithContextFromLines_ActiveWithTaskManager(t *testing.T) {
 	}
 
 	got, _ := sd.DetectWithContextFromLines(lines)
-	if got != StatusActive {
-		t.Errorf("DetectWithContextFromLines on active-with-task-manager: got %s, want StatusActive",
+	if got != StatusExecuting {
+		t.Errorf("DetectWithContextFromLines on active-with-task-manager: got %s, want StatusExecuting",
 			got)
 	}
 }
@@ -171,8 +171,8 @@ func TestBug2_CursorForwardStripping_EscToInterrupt(t *testing.T) {
 	// each space is encoded as: \x1b[39m (reset fg) \x1b[1X (erase) \x1b[38;5;246m (color) \x1b[C (cursor right)
 	rawEscToInterrupt := "esc\x1b[39m\x1b[1X\x1b[38;5;246m\x1b[Cto\x1b[39m\x1b[1X\x1b[38;5;246m\x1b[Cinterrupt"
 	got := sd.Detect([]byte(rawEscToInterrupt))
-	if got != StatusActive {
-		t.Errorf("Detect(%q) = %s, want StatusActive\n"+
+	if got != StatusExecuting {
+		t.Errorf("Detect(%q) = %s, want StatusExecuting\n"+
 			"  Claude Code v2 encodes 'esc to interrupt' with \\x1b[C cursor-forward between words.\n"+
 			"  stripANSI must replace \\x1b[C with a space to preserve word boundaries.",
 			rawEscToInterrupt, got)
@@ -188,8 +188,8 @@ func TestBug2_CursorForwardStripping_ThinkingVerb(t *testing.T) {
 	// Raw spinner + \x1b[1X (erase) + color + \x1b[C + verb (as written by Claude Code v2)
 	rawSpinner := "✽\x1b[1X\x1b[38;5;180m\x1b[CTransmuting…"
 	got := sd.Detect([]byte(rawSpinner))
-	if got != StatusActive && got != StatusProcessing {
-		t.Errorf("Detect(%q) = %s, want StatusActive or StatusProcessing\n"+
+	if got != StatusExecuting && got != StatusProcessing {
+		t.Errorf("Detect(%q) = %s, want StatusExecuting or StatusProcessing\n"+
 			"  Claude Code v2 encodes the spinner line as 'CHAR\\x1b[C verb' (cursor-forward not space).\n"+
 			"  stripANSI must replace \\x1b[C with a space so the thinking-verb pattern fires.",
 			rawSpinner, got)
@@ -199,7 +199,7 @@ func TestBug2_CursorForwardStripping_ThinkingVerb(t *testing.T) {
 // TestBug2_AbsoluteCursorPositioning_NotFalsePositive guards against the regression
 // where idle sessions whose raw PTY tail contains tmux cursor-position sequences
 // (\x1b[ROW;COLH) — e.g. from the status bar time update — were falsely detected as
-// StatusActive via hasScreenOverwrite. Absolute cursor moves are NOT sufficient evidence
+// StatusExecuting via hasScreenOverwrite. Absolute cursor moves are NOT sufficient evidence
 // of an active spinner; real active sessions are distinguished by spinner verbs handled
 // by HasClaudeSpinnerActivity in GetCurrentStatus Cases A and B.
 func TestBug2_AbsoluteCursorPositioning_NotFalsePositive(t *testing.T) {
@@ -209,8 +209,8 @@ func TestBug2_AbsoluteCursorPositioning_NotFalsePositive(t *testing.T) {
 	// Without a spinner verb, this content is ambiguous — StatusUnknown is correct.
 	rawAbsCursor := "·······\x1b[33;107H│·····\x1b[34;107H│·····\x1b[35;107H│·····"
 	got := sd.Detect([]byte(rawAbsCursor))
-	if got == StatusActive || got == StatusProcessing {
-		t.Errorf("Detect(%q) = %s, want anything except StatusActive/StatusProcessing\n"+
+	if got == StatusExecuting || got == StatusProcessing {
+		t.Errorf("Detect(%q) = %s, want anything except StatusExecuting/StatusProcessing\n"+
 			"  Bare \\x1b[ROW;COLH cursor-position sequences (no spinner verb) must not trigger\n"+
 			"  false-positive Active detection; idle sessions with tmux status bar updates would\n"+
 			"  be permanently stuck as Active and never enter the review queue.",
@@ -284,8 +284,8 @@ func TestBug2_EscToCancel_NotActive(t *testing.T) {
 	// This is the footer line of a selection dialog
 	footer := "Enter to select · ↑/↓ to navigate · Esc to cancel"
 	got := sd.Detect([]byte(footer))
-	if got == StatusActive {
-		t.Errorf("Detect(%q) = StatusActive, but 'Esc to cancel' must NOT trigger esc_to_interrupt\n"+
+	if got == StatusExecuting {
+		t.Errorf("Detect(%q) = StatusExecuting, but 'Esc to cancel' must NOT trigger esc_to_interrupt\n"+
 			"  The pattern is case-sensitive (lowercase 'esc') to prevent dialog footers\n"+
 			"  from being mistaken for active operation interrupts.",
 			footer)
@@ -305,8 +305,8 @@ func TestCRCollapse_LastSegmentSuccessIsAuthoritative(t *testing.T) {
 	// Last segment (✻ Baked for 5s) overwrites the active indicator — session is done.
 	crLine := "esc to interrupt · ↓ to manage  ● main\r✻ Baked for 5s"
 	got := sd.DetectFromLines([]string{crLine})
-	if got == StatusActive {
-		t.Errorf("DetectFromLines(%q) = StatusActive, want Success/other\n"+
+	if got == StatusExecuting {
+		t.Errorf("DetectFromLines(%q) = StatusExecuting, want Success/other\n"+
 			"  The last CR segment (✻ Baked) is authoritative — session completed its turn.\n"+
 			"  An earlier Active segment must not override the later Success.",
 			crLine)
@@ -325,7 +325,7 @@ func TestMapStatusToIdleState_ExplicitCoverage(t *testing.T) {
 		skipMustNot bool
 		name        string
 	}{
-		{StatusActive, []IdleState{IdleStateActive}, IdleStateWaiting, false, "Active → IdleStateActive"},
+		{StatusExecuting, []IdleState{IdleStateActive}, IdleStateWaiting, false, "Active → IdleStateActive"},
 		{StatusProcessing, []IdleState{IdleStateActive}, IdleStateWaiting, false, "Processing → IdleStateActive"},
 		{StatusWaitingForAgent, []IdleState{IdleStateActive}, IdleStateWaiting, false, "WaitingForAgent → IdleStateActive"},
 		{StatusInputRequired, []IdleState{IdleStateWaiting}, 0, true, "InputRequired → IdleStateWaiting"},
@@ -498,8 +498,8 @@ func TestBug3_BoxDrawingSeparator_NotReadlineTyping(t *testing.T) {
 	// Detect() on the full block (path used by deprecated DetectState() / PTY buffer path).
 	// The ❯ ─────... separator line must not trigger readline_typing before Active patterns.
 	gotBlock := sd.Detect([]byte(fullContent))
-	if gotBlock != StatusActive {
-		t.Errorf("Detect() on full content with ❯ box-drawing separator: got %s, want StatusActive\n"+
+	if gotBlock != StatusExecuting {
+		t.Errorf("Detect() on full content with ❯ box-drawing separator: got %s, want StatusExecuting\n"+
 			"  ❯ followed by ─ (U+2500) is a UI separator, not user typing.\n"+
 			"  readlineTypingRegex must not match U+2500–U+257F box-drawing chars.",
 			gotBlock)
@@ -507,8 +507,8 @@ func TestBug3_BoxDrawingSeparator_NotReadlineTyping(t *testing.T) {
 
 	// DetectFromLines() (path used by DetectStateFromContent / tmux capture-pane).
 	gotLines := sd.DetectFromLines(lines)
-	if gotLines != StatusActive {
-		t.Errorf("DetectFromLines() on active session with ❯ box-drawing separator: got %s, want StatusActive",
+	if gotLines != StatusExecuting {
+		t.Errorf("DetectFromLines() on active session with ❯ box-drawing separator: got %s, want StatusExecuting",
 			gotLines)
 	}
 }
@@ -549,7 +549,7 @@ func TestBug3_BoxDrawingSeparator_ReadlineTypingStillWorks(t *testing.T) {
 }
 
 // TestBug_CursorBlockReplacingEsc verifies that "esc to interrupt" is detected as
-// StatusActive even when the terminal cursor sits at column 0, replacing the 'e'
+// StatusExecuting even when the terminal cursor sits at column 0, replacing the 'e'
 // with a half-block glyph in the tmux capture-pane output.
 //
 // Observed: tmux capture-pane renders the cursor position as a block character
@@ -573,8 +573,8 @@ func TestBug_CursorBlockReplacingEsc(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got := sd.Detect([]byte(tc.input))
-			if got != StatusActive {
-				t.Errorf("Detect(%q) = %s, want StatusActive\n"+
+			if got != StatusExecuting {
+				t.Errorf("Detect(%q) = %s, want StatusExecuting\n"+
 					"  'esc to interrupt' must be detected even when the 'e' is replaced\n"+
 					"  by a terminal cursor block character in the tmux capture output.",
 					tc.input, got)
@@ -634,7 +634,7 @@ func TestBug_ShellsStillRunning(t *testing.T) {
 }
 // TestBug_ThinkingWithStillThinkingSuffix documents that a Claude Code spinner line
 // with a "· still thinking" suffix in the duration annotation is still detected as
-// StatusActive, not silently dropped.
+// StatusExecuting, not silently dropped.
 //
 // Observed: Claude Code appends "· still thinking" to the duration when a turn has been
 // running unusually long (e.g. "✻ Imagining… (7m 5s · ↓ 21.4k tokens · still thinking)").
@@ -652,8 +652,8 @@ func TestBug_ThinkingWithStillThinkingSuffix(t *testing.T) {
 	}
 
 	got := sd.DetectFromLines(lines)
-	if got != StatusActive {
-		t.Errorf("DetectFromLines with '✻ Imagining… · still thinking' spinner: got %s, want StatusActive\n"+
+	if got != StatusExecuting {
+		t.Errorf("DetectFromLines with '✻ Imagining… · still thinking' spinner: got %s, want StatusExecuting\n"+
 			"  The session is actively thinking — spinner line and 'esc to interrupt' both indicate Active.\n"+
 			"  The '· still thinking' suffix on the spinner must not prevent Active detection.",
 			got)
@@ -797,9 +797,9 @@ func TestBug5_SpinnerVerbFallback_FilteredEmpty(t *testing.T) {
 // "✻ Waiting for N background agents to finish" was not detected as StatusWaitingForAgent
 // when the "esc to interrupt" status bar appeared on a line BELOW it in the terminal.
 //
-// Root cause: detectFromLines (bottom-up scan) found "esc to interrupt" → StatusActive on
+// Root cause: detectFromLines (bottom-up scan) found "esc to interrupt" → StatusExecuting on
 // the last line and returned immediately, never reaching the WaitingForAgent spinner line
-// further up. Fix: when StatusActive is found, store it as a candidate and keep scanning
+// further up. Fix: when StatusExecuting is found, store it as a candidate and keep scanning
 // upward so StatusWaitingForAgent (higher priority) can override it.
 //
 // Observed in the stelekit session: Claude Code had spawned 2 background research agents
@@ -851,7 +851,7 @@ func TestBug_WaitingForAgent_WithContextFromLines(t *testing.T) {
 
 // TestBug_WaitingForAgent_ActiveStillWinsWhenNoWaitingLine ensures the fix does not
 // regress the normal Active case: when there is NO WaitingForAgent line and only
-// "esc to interrupt" is visible, the result must still be StatusActive.
+// "esc to interrupt" is visible, the result must still be StatusExecuting.
 func TestBug_WaitingForAgent_ActiveStillWinsWhenNoWaitingLine(t *testing.T) {
 	sd := NewStatusDetector()
 
@@ -865,8 +865,8 @@ func TestBug_WaitingForAgent_ActiveStillWinsWhenNoWaitingLine(t *testing.T) {
 	}
 
 	got := sd.DetectFromLines(lines)
-	if got != StatusActive {
-		t.Errorf("DetectFromLines with active spinner + esc-to-interrupt (no WaitingForAgent line): got %s, want StatusActive",
+	if got != StatusExecuting {
+		t.Errorf("DetectFromLines with active spinner + esc-to-interrupt (no WaitingForAgent line): got %s, want StatusExecuting",
 			got)
 	}
 }

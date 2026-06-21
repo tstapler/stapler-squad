@@ -14,8 +14,10 @@ import sessionsReducer, {
   selectSessionsTotal,
   selectSessionsLoading,
   selectSessionsError,
+  selectDetectedStatusMap,
+  removeDetectedStatus,
 } from "../sessionsSlice";
-import { Session, SessionSchema } from "@/gen/session/v1/types_pb";
+import { Session, SessionSchema, SessionStatus, SubStatus, DetectedStatus } from "@/gen/session/v1/types_pb";
 import { create } from "@bufbuild/protobuf";
 
 function makeStore() {
@@ -297,6 +299,133 @@ describe("sessionsSlice", () => {
       expect(selectSessionById(state, "bystander")).toBeDefined();
       expect(selectSessionById(state, "newcomer")).toBeDefined();
       expect(selectSessionsTotal(state)).toBe(2);
+    });
+  });
+
+  // Tests for upsertSession syncing detectedStatusMap from proto fields.
+  // Replaces the old updateSessionStatus tests (that action was removed in Epic 5).
+  describe("upsertSession — detectedStatusMap sync from proto fields", () => {
+    function makeActiveSessionWithDetection(id: string, detectedStatus: DetectedStatus, detectedContext = ""): Session {
+      return create(SessionSchema, {
+        id,
+        title: `Session ${id}`,
+        status: SessionStatus.ACTIVE,
+        detectedStatus,
+        detectedContext,
+      });
+    }
+
+    it("clears detectedStatusMap when session status is not ACTIVE", () => {
+      const store = makeStore();
+      // First seed a detected status entry by upserting an ACTIVE session
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s1", DetectedStatus.EXECUTING, "running")));
+      expect(selectDetectedStatusMap(store.getState() as any)["s1"]).toBeDefined();
+
+      // Now upsert the same session as STOPPED
+      store.dispatch(upsertSession(create(SessionSchema, { id: "s1", status: SessionStatus.STOPPED })));
+
+      expect(selectDetectedStatusMap(store.getState() as any)["s1"]).toBeUndefined();
+    });
+
+    it("sets detectedStatusMap when session is ACTIVE with typed DetectedStatus.EXECUTING", () => {
+      const store = makeStore();
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s1", DetectedStatus.EXECUTING, "tool running")));
+
+      const detected = selectDetectedStatusMap(store.getState() as any)["s1"];
+      expect(detected?.detectedStatus).toBe(DetectedStatus.EXECUTING);
+      expect(detected?.detectedContext).toBe("tool running");
+    });
+
+    it("clears detectedStatusMap when session is ACTIVE with DetectedStatus.UNSPECIFIED", () => {
+      const store = makeStore();
+      // Seed a detected entry
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s1", DetectedStatus.PROCESSING)));
+      expect(selectDetectedStatusMap(store.getState() as any)["s1"]).toBeDefined();
+
+      // Upsert with UNSPECIFIED detection
+      store.dispatch(upsertSession(create(SessionSchema, {
+        id: "s1",
+        status: SessionStatus.ACTIVE,
+        detectedStatus: DetectedStatus.UNSPECIFIED,
+      })));
+
+      expect(selectDetectedStatusMap(store.getState() as any)["s1"]).toBeUndefined();
+    });
+
+    it("clears detectedStatusMap when session is PAUSED", () => {
+      const store = makeStore();
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s1", DetectedStatus.NEEDS_APPROVAL)));
+      expect(selectDetectedStatusMap(store.getState() as any)["s1"]).toBeDefined();
+
+      store.dispatch(upsertSession(create(SessionSchema, { id: "s1", status: SessionStatus.PAUSED })));
+
+      expect(selectDetectedStatusMap(store.getState() as any)["s1"]).toBeUndefined();
+    });
+
+    it("does not affect detectedStatusMap entries for other sessions", () => {
+      const store = makeStore();
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s1", DetectedStatus.EXECUTING)));
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s2", DetectedStatus.PROCESSING)));
+
+      // Stop s1 only
+      store.dispatch(upsertSession(create(SessionSchema, { id: "s1", status: SessionStatus.STOPPED })));
+
+      expect(selectDetectedStatusMap(store.getState() as any)["s1"]).toBeUndefined();
+      expect(selectDetectedStatusMap(store.getState() as any)["s2"]?.detectedStatus).toBe(DetectedStatus.PROCESSING);
+    });
+  });
+
+  // UT-TS-06: removeDetectedStatus reducer
+  describe("removeDetectedStatus", () => {
+    function makeActiveSessionWithDetection(id: string, detectedStatus: DetectedStatus, detectedContext = ""): Session {
+      return create(SessionSchema, {
+        id,
+        title: `Session ${id}`,
+        status: SessionStatus.ACTIVE,
+        detectedStatus,
+        detectedContext,
+      });
+    }
+
+    it("removes only the targeted session from detectedStatusMap, leaving others intact", () => {
+      const store = makeStore();
+      // Seed two detected status entries
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("abc", DetectedStatus.EXECUTING, "running")));
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("xyz", DetectedStatus.PROCESSING, "thinking")));
+
+      // Remove only "abc"
+      store.dispatch(removeDetectedStatus("abc"));
+
+      const map = selectDetectedStatusMap(store.getState() as any);
+      expect(map["abc"]).toBeUndefined();
+      expect(map["xyz"]?.detectedStatus).toBe(DetectedStatus.PROCESSING);
+    });
+
+    it("is a no-op for an id not present in detectedStatusMap", () => {
+      const store = makeStore();
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s1", DetectedStatus.EXECUTING)));
+
+      // Remove a non-existent entry
+      store.dispatch(removeDetectedStatus("ghost"));
+
+      const map = selectDetectedStatusMap(store.getState() as any);
+      expect(map["s1"]?.detectedStatus).toBe(DetectedStatus.EXECUTING);
+    });
+
+    it("does NOT modify any session entity in the store", () => {
+      const store = makeStore();
+      store.dispatch(upsertSession(makeActiveSessionWithDetection("s1", DetectedStatus.NEEDS_APPROVAL)));
+
+      const sessionBefore = selectSessionById(store.getState() as any, "s1");
+      expect(sessionBefore).toBeDefined();
+
+      store.dispatch(removeDetectedStatus("s1"));
+
+      // Session entity must still exist and be unmodified
+      const sessionAfter = selectSessionById(store.getState() as any, "s1");
+      expect(sessionAfter).toBeDefined();
+      expect(sessionAfter?.id).toBe("s1");
+      expect(selectSessionsTotal(store.getState())).toBe(1);
     });
   });
 });

@@ -29,14 +29,16 @@ func TestPatternSet_MatchLines_should_returnError_When_errorStringPresent(t *tes
 	}
 }
 
-func TestPatternSet_MatchLines_should_returnReady_When_noMatchAndCatchAll(t *testing.T) {
+func TestPatternSet_MatchLines_should_returnUnknown_When_noMatchAndCatchAll(t *testing.T) {
+	// After Epic 2, the .* catch-all in the Ready category returns StatusUnknown
+	// so that unrecognized output renders no badge (not "Ready").
 	ps, err := NewPatternSet(getDefaultPatterns())
 	if err != nil {
 		t.Fatal(err)
 	}
 	status, _, _ := ps.MatchLines("some generic output with no pattern match", nil)
-	if status != StatusReady {
-		t.Errorf("got status %v, want StatusReady (catch-all)", status)
+	if status != StatusUnknown {
+		t.Errorf("got status %v, want StatusUnknown (catch-all renders no badge)", status)
 	}
 }
 

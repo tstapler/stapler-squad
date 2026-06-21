@@ -38,7 +38,7 @@ export function BulkActions({
     return (
       <div role="toolbar" aria-label="Bulk session actions" className={container}>
         {feedback && <div className={feedbackClass} aria-hidden="true">{feedback}</div>}
-        <span role="note" className={count} style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
+        <span className={count} style={{ color: "var(--text-muted)", fontStyle: "italic" }}>
           Click sessions to select them
         </span>
         <button onClick={onClearSelection} className={clearButton} aria-label="Cancel select mode">
@@ -87,26 +87,12 @@ export function BulkActions({
         >
           <span aria-hidden="true">🏷️</span> Add Tag
         </button>
-        {/* S4-4: Group as project */}
+        {/* S4-4: Group as project — div instead of form to avoid invalid ARIA ownership inside role="toolbar" */}
         {onGroupAs && (
-          <form
+          <div
+            role="group"
             aria-label="Group selected sessions as project"
             style={{ display: "flex", gap: "4px", alignItems: "center" }}
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const name = groupAsValue.trim();
-              if (!name) return;
-              setGroupAsLoading(true);
-              setGroupAsError(null);
-              try {
-                await onGroupAs(name);
-                setGroupAsValue("");
-              } catch {
-                setGroupAsError("Failed to group — try again");
-              } finally {
-                setGroupAsLoading(false);
-              }
-            }}
           >
             <input
               type="text"
@@ -146,7 +132,7 @@ export function BulkActions({
               className={actionButton}
               disabled={groupAsLoading || !groupAsValue.trim()}
               aria-busy={groupAsLoading}
-              aria-label={groupAsLoading ? "Grouping sessions…" : groupAsValue.trim() ? `Group into project "${groupAsValue.trim()}"` : "Group selected sessions into project"}
+              aria-label={groupAsLoading ? "Grouping sessions…" : "Group selected sessions into project"}
               onClick={async () => {
                 const name = groupAsValue.trim();
                 if (!name || groupAsLoading) return;
@@ -169,7 +155,7 @@ export function BulkActions({
                 {groupAsError}
               </span>
             )}
-          </form>
+          </div>
         )}
         <button
           onClick={onDeleteAll}

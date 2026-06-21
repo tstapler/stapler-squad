@@ -124,10 +124,10 @@ func TestInstanceToProto_includesGoalSummaryWhenSet(t *testing.T) {
 // maps to SUB_STATUS_PROCESSING in the toProtoSubStatus switch.
 //
 // Note: toProtoSubStatus reads DetectedStatus via inst.GetDetectedStatus(), which
-// requires a running ClaudeController (not available in unit tests). The switch arm
-// is therefore validated via MapDetectedStatusToWorkingState, which contains the same
-// StatusWaitingForAgent mapping and IS exercisable without a controller. The non-Active
-// short-circuit path of toProtoSubStatus is also verified here.
+// requires a running ClaudeController (not available in unit tests). The non-Active
+// short-circuit path of toProtoSubStatus is verified here, and the StatusWaitingForAgent
+// mapping is verified via subStatusFromItem (review_queue_adapter.go), which shares
+// the same switch logic and is exercisable without a controller.
 func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 	// Verify the non-Active short-circuit: a non-Active instance always returns UNSPECIFIED.
 	inst := &session.Instance{Status: session.Paused}
@@ -136,18 +136,15 @@ func TestToProtoSubStatus_WaitingForAgent(t *testing.T) {
 		t.Errorf("toProtoSubStatus(Paused) = %v, want SUB_STATUS_UNSPECIFIED", got)
 	}
 
-	// Verify the StatusWaitingForAgent → PROCESSING mapping in the switch
-	// via MapDetectedStatusToWorkingState (same switch arm, no controller required).
-	// This confirms the case is present and not silently falling to default.
-	wantWorking := sessionv1.WorkingState_WORKING_STATE_ACTIVE
-	got2 := MapDetectedStatusToWorkingState(detection.StatusWaitingForAgent)
-	if got2 != wantWorking {
-		t.Errorf("MapDetectedStatusToWorkingState(StatusWaitingForAgent) = %v, want %v", got2, wantWorking)
+	// Verify the StatusWaitingForAgent → PROCESSING mapping via subStatusFromItem.
+	// WorkingState derivation is now done client-side; WaitingForAgent maps to
+	// SUB_STATUS_PROCESSING so the frontend deriveWorkingState() returns PROCESSING.
+	item := &session.ReviewItem{ClaudeStatus: detection.StatusWaitingForAgent}
+	gotSubStatus := subStatusFromItem(item)
+	if gotSubStatus != sessionv1.SubStatus_SUB_STATUS_PROCESSING {
+		t.Errorf("subStatusFromItem(StatusWaitingForAgent) = %v, want SUB_STATUS_PROCESSING", gotSubStatus)
 	}
 
-	// Verify the direct proto sub-status mapping (the same case that toProtoSubStatus uses).
-	// We test this via the switch table that MapDetectedStatusToWorkingState and
-	// toProtoSubStatus share: StatusWaitingForAgent must not map to UNSPECIFIED.
 	// A fresh Active instance with no controller returns StatusUnknown → UNSPECIFIED,
 	// confirming that any non-UNSPECIFIED result requires an explicit switch case.
 	activeNoCtrl := &session.Instance{Status: session.Active}

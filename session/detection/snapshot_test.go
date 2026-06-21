@@ -38,7 +38,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "claude_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "claude",
 		description: "Claude actively processing — visible 'esc to interrupt' or spinner",
 	},
@@ -58,7 +58,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "gemini_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "gemini",
 		description: "Gemini actively generating or running a tool",
 	},
@@ -88,7 +88,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "opencode_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "opencode",
 		description: "OpenCode actively processing a request",
 	},
@@ -102,7 +102,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "aider_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "aider",
 		description: "Aider actively editing or applying changes",
 	},
@@ -132,7 +132,7 @@ var snapshotTests = []snapshotTest{
 	// They guard against regressions in the numbered_option_selector pattern.
 	{
 		fixture:     "gradle_numbered_output.txt",
-		expected:    StatusUnknown, // or StatusActive/StatusProcessing — anything but StatusInputRequired
+		expected:    StatusUnknown, // or StatusExecuting/StatusProcessing — anything but StatusInputRequired
 		program:     "any",
 		description: "Gradle build output containing '> Run gradlew tasks...' — must NOT trigger InputRequired",
 	},
@@ -144,7 +144,7 @@ var snapshotTests = []snapshotTest{
 	},
 	{
 		fixture:     "claude_asterism_active.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "claude",
 		description: "Claude Code active with ✻ asterism spinner (✻ Perambulating... format)",
 	},
@@ -163,7 +163,7 @@ var snapshotTests = []snapshotTest{
 	// being overwritten via \r) is tested in bug_regression_test.go.
 	{
 		fixture:     "claude_active_task_manager.txt",
-		expected:    StatusActive,
+		expected:    StatusExecuting,
 		program:     "claude",
 		description: "Claude active with background task manager overlay — indented ✽ spinner (2 leading spaces) + esc to interrupt",
 	},

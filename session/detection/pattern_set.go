@@ -122,7 +122,7 @@ func (ps *PatternSet) matchLocked(text string, rawPTY []byte) (DetectedStatus, s
 	// Active
 	for i, regex := range ps.activeRegexes {
 		if regex.MatchString(text) {
-			return StatusActive, ps.patterns.Active[i].Name, ps.patterns.Active[i].Description
+			return StatusExecuting, ps.patterns.Active[i].Name, ps.patterns.Active[i].Description
 		}
 	}
 	// Processing
@@ -133,7 +133,7 @@ func (ps *PatternSet) matchLocked(text string, rawPTY []byte) (DetectedStatus, s
 	}
 	// Screen-overwrite fallback
 	if hasScreenOverwrite(rawPTY) {
-		return StatusActive, "screen_overwrite", "Screen overwrite — spinner actively redrawing"
+		return StatusExecuting, "screen_overwrite", "Screen overwrite — spinner actively redrawing"
 	}
 	// Idle
 	for i, regex := range ps.idleRegexes {
@@ -141,10 +141,10 @@ func (ps *PatternSet) matchLocked(text string, rawPTY []byte) (DetectedStatus, s
 			return StatusIdle, ps.patterns.Idle[i].Name, ps.patterns.Idle[i].Description
 		}
 	}
-	// Ready (catch-all — must be last)
+	// Ready (catch-all — must be last; returns StatusUnknown so the .* pattern renders no badge)
 	for i, regex := range ps.readyRegexes {
 		if regex.MatchString(text) {
-			return StatusReady, ps.patterns.Ready[i].Name, ps.patterns.Ready[i].Description
+			return StatusUnknown, ps.patterns.Ready[i].Name, ps.patterns.Ready[i].Description
 		}
 	}
 	return StatusUnknown, "<none>", ""

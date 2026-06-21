@@ -29,11 +29,11 @@ import {
   setLoading,
   setError,
   setConnectionState,
-  updateSessionStatus,
   selectAllSessions,
   selectSessionsLoading,
   selectSessionsError,
   selectConnectionState,
+  removeDetectedStatus,
 } from "@/lib/store/sessionsSlice";
 import { removeItem as removeReviewQueueItem } from "@/lib/store/reviewQueueSlice";
 
@@ -724,20 +724,8 @@ export function useSessionService(
         const sessionId = event.event.value.sessionId;
         dispatch(removeSession(sessionId));
         dispatch(removeReviewQueueItem(sessionId));
+        dispatch(removeDetectedStatus(sessionId));
         onSessionDeletedRef.current?.(sessionId);
-        break;
-      }
-      case "statusChanged": {
-        const { sessionId, newStatus, detectedStatus, detectedContext } = event.event.value;
-        // Dispatch into the reducer where state is always current.
-        // This avoids capturing `sessions` in the closure, which would force
-        // handleSessionEvent (and watchSessions) to reconnect on every change.
-        dispatch(updateSessionStatus({
-          sessionId,
-          newStatus,
-          detectedStatus: detectedStatus ?? undefined,
-          detectedContext: detectedContext ?? undefined,
-        }));
         break;
       }
       case "notification": {
@@ -752,8 +740,19 @@ export function useSessionService(
         // preemptively and refresh history to show the resolved badge.
         const approvalId = event.event.value.context ?? "";
         const sessionId = event.event.value.sessionId ?? "";
+        if (event.event.value.approved && sessionId) {
+          dispatch(removeDetectedStatus(sessionId));
+        }
         if (approvalId) {
           onApprovalResponseRef.current?.(approvalId, sessionId);
+        }
+        break;
+      }
+      case "sessionAcknowledged": {
+        const sessionId = event.event.value.sessionId ?? "";
+        if (sessionId) {
+          dispatch(removeDetectedStatus(sessionId));
+          dispatch(removeReviewQueueItem(sessionId));
         }
         break;
       }

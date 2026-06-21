@@ -689,8 +689,8 @@ func TestGetCurrentStatus_TailOnlyProcessed(t *testing.T) {
 	cc, _ := newControllerWithMock(body + tail)
 
 	status, _ := cc.GetCurrentStatus()
-	if status != detection.StatusActive {
-		t.Errorf("expected StatusActive from tail, got %v", status)
+	if status != detection.StatusExecuting {
+		t.Errorf("expected StatusExecuting from tail, got %v", status)
 	}
 }
 
@@ -833,8 +833,8 @@ func newControllerWithMockAndChannel(preview string) (*ClaudeController, *mockIn
 // TestClaudeController_StatusChangeListener_FiresOnStatusChange verifies that
 // the listener is invoked when a status transition is detected after an output signal.
 func TestClaudeController_StatusChangeListener_FiresOnStatusChange(t *testing.T) {
-	// Use content that produces a known status (StatusActive via "esc to interrupt").
-	preview := tmuxOutputSmall // contains "esc to interrupt" → StatusActive
+	// Use content that produces a known status (StatusExecuting via "esc to interrupt").
+	preview := tmuxOutputSmall // contains "esc to interrupt" → StatusExecuting
 	cc, _, ctx, cancel := newControllerWithMockAndChannel(preview)
 	defer cancel()
 

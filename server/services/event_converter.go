@@ -5,6 +5,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/adapters"
 	"github.com/tstapler/stapler-squad/server/events"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/detection"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -25,11 +26,18 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 		}
 
 	case events.EventSessionUpdated:
+		sessionUpdatedProto := &sessionv1.SessionUpdatedEvent{
+			Session:       adapters.InstanceToProto(event.Session, nil),
+			UpdatedFields: event.UpdatedFields,
+		}
+		// Populate detection fields when detection data is present.
+		// StatusUnknown (zero value) means "no detection data" — map it to UNSPECIFIED.
+		if event.DetectedStatusTyped != detection.StatusUnknown {
+			sessionUpdatedProto.DetectedStatus = detection.DetectedStatusToProto(event.DetectedStatusTyped)
+			sessionUpdatedProto.DetectedContext = event.DetectedContext
+		}
 		protoEvent.Event = &sessionv1.SessionEvent_SessionUpdated{
-			SessionUpdated: &sessionv1.SessionUpdatedEvent{
-				Session:       adapters.InstanceToProto(event.Session, nil),
-				UpdatedFields: event.UpdatedFields,
-			},
+			SessionUpdated: sessionUpdatedProto,
 		}
 
 	case events.EventSessionDeleted:
@@ -38,20 +46,6 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 				SessionId: event.SessionID,
 				Reason:    "", // Optional: could be populated from event context
 			},
-		}
-
-	case events.EventSessionStatusChanged:
-		statusChangedProto := &sessionv1.SessionStatusChangedEvent{
-			SessionId: event.SessionID,
-			OldStatus: adapters.StatusToProto(event.OldStatus),
-			NewStatus: adapters.StatusToProto(event.NewStatus),
-		}
-		if event.DetectedStatus != "" {
-			statusChangedProto.DetectedStatus = &event.DetectedStatus
-			statusChangedProto.DetectedContext = &event.DetectedContext
-		}
-		protoEvent.Event = &sessionv1.SessionEvent_StatusChanged{
-			StatusChanged: statusChangedProto,
 		}
 
 	case events.EventNotification:
@@ -66,6 +60,28 @@ func convertEventToProto(event *events.Event) *sessionv1.SessionEvent {
 				Metadata:         event.NotificationMetadata,
 				Timestamp:        timestamppb.New(event.Timestamp),
 				NotificationId:   event.NotificationID,
+			},
+		}
+
+	case events.EventSessionAcknowledged:
+		protoEvent.Event = &sessionv1.SessionEvent_SessionAcknowledged{
+			SessionAcknowledged: &sessionv1.SessionAcknowledgedEvent{
+				SessionId:      event.SessionID,
+				AcknowledgedAt: timestamppb.New(event.Timestamp),
+				Reason:         event.Context,
+			},
+		}
+
+	case events.EventUserInteraction:
+		interactionType := sessionv1.UserInteractionEvent_INTERACTION_TYPE_UNSPECIFIED
+		if v, ok := sessionv1.UserInteractionEvent_InteractionType_value[event.InteractionType]; ok {
+			interactionType = sessionv1.UserInteractionEvent_InteractionType(v)
+		}
+		protoEvent.Event = &sessionv1.SessionEvent_UserInteraction{
+			UserInteraction: &sessionv1.UserInteractionEvent{
+				SessionId: event.SessionID,
+				Type:      interactionType,
+				Context:   event.Context,
 			},
 		}
 

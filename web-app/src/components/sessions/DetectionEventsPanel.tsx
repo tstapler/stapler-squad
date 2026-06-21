@@ -20,7 +20,7 @@ const STATUS_INT_TO_GO: Record<number, string> = {
   5: "StatusError",
   6: "StatusTestsFailing",
   7: "StatusIdle",
-  8: "StatusActive",
+  8: "StatusExecuting",
   9: "StatusSuccess",
 };
 

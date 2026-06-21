@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -15,19 +14,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
-
-// isClaude reports whether the program command invokes the claude binary.
-// It checks each whitespace-delimited token's basename to avoid false positives
-// from env wrappers (e.g. "env -u VAR claude") and to reject similar names
-// like "claude-squad" or "myclaudeapp".
-func isClaude(program string) bool {
-	for _, token := range strings.Fields(program) {
-		if filepath.Base(token) == "claude" {
-			return true
-		}
-	}
-	return false
-}
 
 // pm returns the process manager, lazy-initializing with the default TmuxBackend if nil.
 // This mirrors the old embedded-struct behaviour where a zero-value TmuxProcessManager
@@ -52,13 +38,10 @@ func (i *Instance) GetTmuxSessionName() string {
 // in tmux, incorporating Claude session resume flags, MCP server URL, and prompt.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 	program := i.Program
-	// Evaluate once against the original program name before any flag mutation so
-	// later isClaude calls don't scan an ever-growing JSON-bloated command string.
-	isClaudeProgram := isClaude(program)
-	if claudeSessionID != "" && isClaudeProgram {
+	if claudeSessionID != "" && strings.Contains(program, "claude") {
 		program = fmt.Sprintf("%s --resume %s", program, claudeSessionID)
 	}
-	if i.MCPServerURL != "" && isClaudeProgram {
+	if i.MCPServerURL != "" && strings.Contains(program, "claude") {
 		var mcpFlag string
 		if i.UUID != "" {
 			mcpFlag = fmt.Sprintf(`--mcp-config '{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}'`, i.MCPServerURL, i.UUID)
@@ -67,22 +50,22 @@ func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
 		}
 		program = program + " " + mcpFlag
 	}
-	if i.AppendSystemPrompt != "" && isClaudeProgram {
+	if i.AppendSystemPrompt != "" && strings.Contains(program, "claude") {
 		program = fmt.Sprintf("%s --append-system-prompt %q", program, i.AppendSystemPrompt)
 	}
-	if i.AllowedTools != "" && isClaudeProgram {
+	if i.AllowedTools != "" && strings.Contains(program, "claude") {
 		program = fmt.Sprintf("%s --allowedTools %q", program, i.AllowedTools)
 	}
-	if i.PermissionMode != "" && isClaudeProgram {
+	if i.PermissionMode != "" && strings.Contains(program, "claude") {
 		program = fmt.Sprintf("%s --permission-mode %q", program, i.PermissionMode)
 	}
-	if i.AutoYes && isClaudeProgram {
+	if i.AutoYes && strings.Contains(program, "claude") {
 		program = program + " --dangerously-skip-permissions"
 	}
-	if i.OneShot && isClaudeProgram {
+	if i.OneShot && strings.Contains(program, "claude") {
 		program = program + " -p --output-format json"
 	}
-	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) && isClaudeProgram {
+	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) && strings.Contains(program, "claude") {
 		program = fmt.Sprintf("%s %q", program, i.Prompt)
 	}
 	return program

@@ -7,15 +7,30 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// workingStateFromItem derives the proto WorkingState for a ReviewItem.
-// Uses ClaudeStatus (DetectedStatus) when available because it can distinguish
-// ACTIVE from PROCESSING; falls back to IdleState for legacy items where
-// ClaudeStatus was not recorded.
-func workingStateFromItem(item *session.ReviewItem) sessionv1.WorkingState {
-	if item.ClaudeStatus != detection.StatusUnknown {
-		return MapDetectedStatusToWorkingState(item.ClaudeStatus)
+// subStatusFromItem derives the proto SubStatus for a ReviewItem from its ClaudeStatus.
+// This is the fine-grained activity state used by the frontend deriveWorkingState() utility.
+func subStatusFromItem(item *session.ReviewItem) sessionv1.SubStatus {
+	switch item.ClaudeStatus {
+	case detection.StatusProcessing, detection.StatusExecuting, detection.StatusWaitingForAgent:
+		return sessionv1.SubStatus_SUB_STATUS_PROCESSING
+	case detection.StatusNeedsApproval:
+		return sessionv1.SubStatus_SUB_STATUS_NEEDS_APPROVAL
+	case detection.StatusInputRequired:
+		return sessionv1.SubStatus_SUB_STATUS_INPUT_REQUIRED
+	case detection.StatusError:
+		return sessionv1.SubStatus_SUB_STATUS_ERROR
+	case detection.StatusTestsFailing:
+		return sessionv1.SubStatus_SUB_STATUS_TESTS_FAILING
+	case detection.StatusReady:
+		return sessionv1.SubStatus_SUB_STATUS_READY
+	case detection.StatusIdle:
+		return sessionv1.SubStatus_SUB_STATUS_IDLE
+	case detection.StatusSuccess:
+		return sessionv1.SubStatus_SUB_STATUS_SUCCESS
+	case detection.StatusUnknown:
+		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
-	return MapIdleStateToWorkingState(item.IdleState)
+	return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 }
 
 // ReviewItemToProto converts session.ReviewItem to proto ReviewItem.
@@ -55,7 +70,7 @@ func ReviewItemToProto(item *session.ReviewItem, extraMetadata map[string]string
 		Tags:         item.Tags,
 		Category:     item.Category,
 		LastActivity: timestamppb.New(item.LastActivity),
-		WorkingState: workingStateFromItem(item),
+		SubStatus:    subStatusFromItem(item),
 	}
 
 	// Add diff stats if available

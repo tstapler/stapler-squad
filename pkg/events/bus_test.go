@@ -304,11 +304,6 @@ func TestEventBusEventTypes(t *testing.T) {
 			event:     NewSessionDeletedEvent("test-id"),
 			eventType: EventSessionDeleted,
 		},
-		{
-			name:      "SessionStatusChanged",
-			event:     NewSessionStatusChangedEvent(testSession, session.Active, session.Paused),
-			eventType: EventSessionStatusChanged,
-		},
 	}
 
 	for _, tt := range tests {

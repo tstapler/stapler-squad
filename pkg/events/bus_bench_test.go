@@ -145,12 +145,6 @@ func BenchmarkEventCreation(b *testing.B) {
 		}
 	})
 
-	b.Run("SessionStatusChanged", func(b *testing.B) {
-		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
-			_ = NewSessionStatusChangedEvent(testSession, session.Active, session.Paused)
-		}
-	})
 }
 
 // BenchmarkEventBusEndToEnd benchmarks complete pub/sub cycle.

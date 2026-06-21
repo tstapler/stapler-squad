@@ -89,7 +89,7 @@ func shouldNotify(
 	newStatus session.Status,
 ) bool {
 	switch eventType {
-	case events.EventSessionStatusChanged:
+	case events.EventSessionUpdated:
 		return newStatus == session.Stopped
 	case events.EventNotification:
 		if priority >= priorityHigh {
@@ -108,7 +108,7 @@ func shouldNotify(
 // Returns (dn, true) when the event should be delivered; (zero, false) otherwise.
 func buildDeliveryNotification(event *events.Event) (DeliveryNotification, bool) {
 	switch event.Type {
-	case events.EventSessionStatusChanged:
+	case events.EventSessionUpdated:
 		return buildStatusChangeNotification(event)
 	case events.EventNotification:
 		return buildInlineNotification(event)
@@ -118,31 +118,18 @@ func buildDeliveryNotification(event *events.Event) (DeliveryNotification, bool)
 }
 
 func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, bool) {
-	if !shouldNotify(event.Type, 0, 0, event.NewStatus) {
-		return DeliveryNotification{}, false
-	}
-
 	sess := event.Session
-	var title, body, tag string
-	var data map[string]interface{}
-	requireInteraction := false
-	renotify := false
-
-	switch event.NewStatus {
-	case session.Stopped:
-		title = "Session Completed"
-		if sess != nil {
-			body = fmt.Sprintf("Session '%s' has completed", sess.Title)
-			tag = "session-completed-" + stableID(sess)
-			data = buildDataMap(sess, "SESSION_COMPLETE", false)
-		}
-		// NeedsApproval is no longer a lifecycle status — approval notifications
-		// are driven by the sub-status layer (Epic 3). No case needed here.
-	}
-
-	if title == "" || body == "" {
+	if sess == nil {
 		return DeliveryNotification{}, false
 	}
+	if sess.Status != session.Stopped {
+		return DeliveryNotification{}, false
+	}
+
+	title := "Session Completed"
+	body := fmt.Sprintf("Session '%s' has completed", sess.Title)
+	tag := "session-completed-" + stableID(sess)
+	data := buildDataMap(sess, "SESSION_COMPLETE", false)
 
 	return DeliveryNotification{
 		Title:              title,
@@ -150,8 +137,8 @@ func buildStatusChangeNotification(event *events.Event) (DeliveryNotification, b
 		Icon:               "/icons/icon-192.png",
 		Tag:                tag,
 		Data:               data,
-		RequireInteraction: requireInteraction,
-		Renotify:           renotify,
+		RequireInteraction: false,
+		Renotify:           false,
 	}, true
 }
 
@@ -192,7 +179,7 @@ func buildInlineNotification(event *events.Event) (DeliveryNotification, bool) {
 // session event type. Used by tests and helper callers.
 func buildNotificationForSession(sess *session.Instance, eventType events.EventType) DeliveryNotification {
 	switch eventType {
-	case events.EventSessionStatusChanged:
+	case events.EventSessionUpdated:
 		return buildApprovalNotification(sess)
 	default:
 		return buildCompletedNotification(sess)

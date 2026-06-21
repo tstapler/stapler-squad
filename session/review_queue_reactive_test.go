@@ -113,7 +113,7 @@ func TestReactiveQueueManager_ActiveSession_RemovedFromQueue(t *testing.T) {
 	statusProvider.statusByTitle[inst.Title] = InstanceStatusInfo{
 		BasicStatus:        Active,
 		IsControllerActive: true,
-		ClaudeStatus:       detection.StatusActive,
+		ClaudeStatus:       detection.StatusExecuting,
 		IdleState: detection.IdleStateInfo{
 			State: detection.IdleStateActive,
 		},

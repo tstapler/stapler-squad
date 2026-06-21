@@ -10,6 +10,7 @@ import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { ReviewQueueBadge } from "./ReviewQueueBadge";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { Priority, AttentionReason, ReviewItem, WorkingState, SuggestionSource } from "@/gen/session/v1/types_pb";
+import { deriveWorkingState } from "@/lib/utils/deriveWorkingState";
 import {
   panel,
   header,
@@ -177,17 +178,16 @@ export function ReviewQueuePanel({
   // Separate working sessions from waiting sessions for count display.
   const workingCount = useMemo(
     () =>
-      allItems.filter(
-        (item) =>
-          item.workingState === WorkingState.ACTIVE ||
-          item.workingState === WorkingState.PROCESSING
-      ).length,
+      allItems.filter((item) => {
+        const ws = deriveWorkingState(item);
+        return ws === WorkingState.ACTIVE || ws === WorkingState.PROCESSING;
+      }).length,
     [allItems]
   );
   const stuckCount = useMemo(
     () =>
       allItems.filter(
-        (item) => item.workingState === WorkingState.WAITING
+        (item) => deriveWorkingState(item) === WorkingState.WAITING
       ).length,
     [allItems]
   );
@@ -195,11 +195,10 @@ export function ReviewQueuePanel({
   // Apply client-side filtering to all live items, excluding actively-working sessions
   // so the queue only shows sessions that need user attention.
   const allFilteredItems = useMemo(() => {
-    let filtered = allItems.filter(
-      (item) =>
-        item.workingState !== WorkingState.ACTIVE &&
-        item.workingState !== WorkingState.PROCESSING
-    );
+    let filtered = allItems.filter((item) => {
+      const ws = deriveWorkingState(item);
+      return ws !== WorkingState.ACTIVE && ws !== WorkingState.PROCESSING;
+    });
     if (priorityFilter !== undefined) {
       filtered = filtered.filter((item) => item.priority === priorityFilter);
     }
@@ -406,7 +405,7 @@ export function ReviewQueuePanel({
             </span>
             {(workingCount > 0 || stuckCount > 0) && (
               <span className={stat} data-testid="working-state-counts">
-                {items.filter(i => i.workingState !== WorkingState.WAITING).length} waiting
+                {items.filter(i => deriveWorkingState(i) !== WorkingState.WAITING).length} waiting
                 {workingCount > 0 && ` · ${workingCount} working`}
                 {stuckCount > 0 && ` · ${stuckCount} stuck`}
               </span>
