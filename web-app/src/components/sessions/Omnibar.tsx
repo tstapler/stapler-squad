@@ -20,6 +20,7 @@ import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/Pa
 import { AtCommandDropdown } from "@/components/ui/AtCommandDropdown";
 import { useAtCommandSuggestions } from "@/lib/hooks/useAtCommandSuggestions";
 import type { WorkflowEntry } from "@/lib/omnibar/detectors/WorkflowDetector";
+import type { AliasMetadata } from "@/lib/omnibar/detectors/AliasDetector";
 import { OmnibarResultList, getResultListItemCount, getHighlightedItemId } from "./OmnibarResultList";
 import { OmnibarModeBadge } from "./OmnibarModeBadge";
 import { OmnibarCreationPanel, SESSION_TYPES } from "./OmnibarCreationPanel";
@@ -33,7 +34,7 @@ import {
 } from "./Omnibar.css";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
-import { useAliases, type AliasEntry } from "@/lib/hooks/useAliases";
+import { useAliases } from "@/lib/hooks/useAliases";
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -459,7 +460,8 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         // When an alias resolves, populate form fields from its configured defaults
         // so the user can see (and optionally adjust) what will be created.
         if (result.type === InputType.Alias) {
-          const alias = (result.metadata as { alias?: AliasEntry } | undefined)?.alias;
+          const aliasMeta = result.metadata as AliasMetadata | undefined;
+          const alias = aliasMeta?.alias;
           if (alias) {
             if (alias.program && (!programRef.current || programRef.current === lastSuggestedProgramRef.current)) {
               setFormField("program", alias.program);
@@ -469,6 +471,24 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
               setFormField("sessionType", protoSessionTypeToFormString(alias.sessionType));
             }
             setFormField("autoYes", alias.autoYes);
+          }
+          // Populate branch from @alias:branch syntax so the user can see/edit it.
+          if (aliasMeta?.branch && !branchRef.current) {
+            setBranch(aliasMeta.branch);
+          }
+          // If the user typed a label after the alias name (e.g. "@ssq my-feature"),
+          // use it as the session name so they can see and edit it before submitting.
+          // If the alias defines a name_prefix, prepend it (e.g. prefix "ssq-" → "ssq-my-feature").
+          const typedLabel = aliasMeta?.label;
+          const namePrefix = alias?.namePrefix ?? "";
+          if (typedLabel && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+            const suggested = namePrefix ? `${namePrefix}${typedLabel}` : typedLabel;
+            setSessionName(suggested);
+            lastSuggestedNameRef.current = suggested;
+          } else if (namePrefix && (!sessionNameRef.current || sessionNameRef.current === lastSuggestedNameRef.current)) {
+            // No label yet but prefix defined: show just the prefix so the user knows what to complete.
+            setSessionName(namePrefix);
+            lastSuggestedNameRef.current = namePrefix;
           }
         }
       } else {
@@ -915,21 +935,18 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
     // Alias invocation (@aliasname [...]) — create session with alias context.
     if (detection?.type === InputType.Alias && detection.metadata?.aliasName) {
-      const { aliasName, branch: aliasBranch, label, extraFlags } = detection.metadata as {
-        aliasName: string;
-        branch?: string;
-        label?: string;
-        extraFlags?: string;
-      };
-      const sessionTitle = (label?.trim() || String(aliasName));
+      const aliasMeta = detection.metadata as AliasMetadata;
+      const { aliasName, branch: aliasBranch, label, extraFlags } = aliasMeta;
+      const sessionTitle = sessionName.trim() || label?.trim() || String(aliasName);
       const sessionData: OmnibarSessionData = {
         title: sessionTitle,
         path: "",
         program: "",
         autoYes: false,
         aliasName: String(aliasName),
-        branch: aliasBranch !== undefined ? String(aliasBranch) : undefined,
+        branch: branch.trim() || (aliasBranch !== undefined ? String(aliasBranch) : undefined),
         extraCliFlags: extraFlags !== undefined ? String(extraFlags) : undefined,
+        sessionType: sessionType as "directory" | "new_worktree" | "existing_worktree" | "one_off",
       };
       setIsSubmitting(true);
       setError(null);
@@ -1291,12 +1308,17 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
               modeState.type === "creation_with_repo"
                 ? modeState.path
                 : detection?.type === InputType.Alias
-                ? ((detection.metadata as { alias?: AliasEntry } | undefined)?.alias?.path || undefined)
+                ? ((detection.metadata as AliasMetadata | undefined)?.alias?.path || undefined)
                 : undefined
             }
             uploadBaseUrl={uploadBaseUrl}
             onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
             pathDoesNotExist={pathDoesNotExist}
+            namePrefix={
+              detection?.type === InputType.Alias
+                ? ((detection.metadata as AliasMetadata | undefined)?.alias?.namePrefix ?? "")
+                : ""
+            }
           />
         )}
 

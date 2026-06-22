@@ -14,6 +14,7 @@ const mockAliases: AliasEntry[] = [
     autoYes: false,
     tags: [],
     sessionType: SessionType.UNSPECIFIED,
+    namePrefix: "",
   },
   {
     name: "quick",
@@ -25,6 +26,7 @@ const mockAliases: AliasEntry[] = [
     autoYes: false,
     tags: [],
     sessionType: SessionType.UNSPECIFIED,
+    namePrefix: "",
   },
 ];
 
@@ -127,6 +129,26 @@ describe("AliasDetector", () => {
     expect(result?.metadata?.branch).toBeUndefined();
     expect(result?.metadata?.label).toBeUndefined();
     expect(result?.metadata?.extraFlags).toBeUndefined();
+  });
+
+  // T-UNIT-TS-041: namePrefix must flow through the metadata when non-empty.
+  it("AliasDetector_should_includeNamePrefixInAliasMetadata_When_aliasHasNonEmptyNamePrefix", () => {
+    const aliasWithPrefix: AliasEntry = {
+      name: "prefixed",
+      group: "",
+      path: "/projects/prefixed",
+      description: "",
+      profile: "",
+      program: "claude",
+      autoYes: false,
+      tags: [],
+      sessionType: SessionType.UNSPECIFIED,
+      namePrefix: "proj-",
+    };
+    const detectorWithPrefix = new AliasDetector([...mockAliases, aliasWithPrefix]);
+    const result = detectorWithPrefix.detect("@prefixed ");
+    expect(result?.type).toBe(InputType.Alias);
+    expect(result?.metadata?.alias?.namePrefix).toBe("proj-");
   });
 });
 

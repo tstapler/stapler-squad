@@ -450,6 +450,31 @@ func stapleSquadTmuxName(title string) string {
 	return "staplersquad_" + sanitized
 }
 
+// expandTildePath replaces a leading ~ with the user's home directory.
+func expandTildePath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		} else {
+			log.Warn("expandTildePath: failed to resolve home directory", "err", err)
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			expanded := filepath.Join(home, path[2:])
+			// Guard against path traversal: reject any result that escapes the home directory.
+			if !strings.HasPrefix(expanded, home+string(filepath.Separator)) && expanded != home {
+				log.Warn("expandTildePath: path traversal rejected", "input", path)
+				return path
+			}
+			return expanded
+		} else {
+			log.Warn("expandTildePath: failed to resolve home directory", "err", err)
+		}
+	}
+	return path
+}
+
 // GetApprovalStore returns the approval store for wiring up the HTTP hook handler.
 func (s *SessionService) GetApprovalStore() *ApprovalStore {
 	return s.approvalStore
@@ -996,7 +1021,7 @@ func (s *SessionService) CreateSession(
 	}
 
 	// Resolve GitHub URLs to local paths (GOPATH-style: ~/.stapler-squad/repos/github.com/owner/repo)
-	resolvedPath := req.Msg.Path
+	resolvedPath := expandTildePath(req.Msg.Path)
 	branch := req.Msg.Branch
 	var gitHubRef *session.GitHubRef
 	var clonedRepoPath string
@@ -1062,7 +1087,7 @@ func (s *SessionService) CreateSession(
 			}
 			instanceCLIFlags = resolved.CLIFlags
 			if resolvedPath == "" && resolved.Path != "" {
-				resolvedPath = resolved.Path
+				resolvedPath = expandTildePath(resolved.Path)
 			}
 			// Read session type directly from the alias config — it is an alias-specific
 			// property, not a cascading default, so it is not part of ResolvedDefaults.

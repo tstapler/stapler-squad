@@ -34,6 +34,12 @@ describe("modeReducer", () => {
       const result = modeReducer(discoveryState, { kind: "detect", detection });
       expect(result).toEqual({ type: "creation", detection });
     });
+
+    it("modeReducer_should_returnCreation_When_detectAlias", () => {
+      const detection = makeDetection(InputType.Alias);
+      const result = modeReducer(discoveryState, { kind: "detect", detection });
+      expect(result).toEqual({ type: "creation", detection });
+    });
   });
 
   describe("open_creation_direct", () => {

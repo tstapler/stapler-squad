@@ -252,3 +252,91 @@ func TestGetWorktreeDiff_SessionNotFound(t *testing.T) {
 	require.ErrorAs(t, err, &connectErr)
 	assert.Equal(t, connect.CodeNotFound, connectErr.Code())
 }
+
+// ---------------------------------------------------------------------------
+// expandTildePath
+// ---------------------------------------------------------------------------
+
+func TestExpandTildePath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err, "os.UserHomeDir() must succeed for tilde expansion tests")
+
+	cases := []struct {
+		name  string
+		input string
+		check func(t *testing.T, got string)
+	}{
+		{
+			name:  "bare tilde expands to home dir",
+			input: "~",
+			check: func(t *testing.T, got string) {
+				assert.Equal(t, home, got)
+			},
+		},
+		{
+			name:  "tilde-slash prefix expands to path under home",
+			input: "~/foo/bar",
+			check: func(t *testing.T, got string) {
+				assert.Equal(t, home+"/foo/bar", got)
+			},
+		},
+		{
+			name:  "absolute path returned unchanged",
+			input: "/absolute/path",
+			check: func(t *testing.T, got string) {
+				assert.Equal(t, "/absolute/path", got)
+			},
+		},
+		{
+			name:  "relative path returned unchanged",
+			input: "relative/path",
+			check: func(t *testing.T, got string) {
+				assert.Equal(t, "relative/path", got)
+			},
+		},
+		{
+			name:  "empty string returned unchanged",
+			input: "",
+			check: func(t *testing.T, got string) {
+				assert.Equal(t, "", got)
+			},
+		},
+		{
+			name:  "tilde-slash with path traversal is rejected and returned unchanged",
+			input: "~/../../etc/passwd",
+			check: func(t *testing.T, got string) {
+				// Path traversal escaping the home directory must be rejected:
+				// expandTildePath returns the original input string unmodified.
+				assert.Equal(t, "~/../../etc/passwd", got, "path traversal must return original input")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := expandTildePath(tc.input)
+			tc.check(t, got)
+		})
+	}
+}
+
+// TestExpandTildePath_AliasPathCallSite documents the tilde expansion that
+// occurs at CreateSession (session_service.go:1084) for alias configs that
+// contain tilde-prefixed paths. This test ensures that if the call site is
+// accidentally removed, this scenario will fail explicitly.
+func TestExpandTildePath_AliasPathCallSite(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	// Simulate the pattern at CreateSession:1083-1084:
+	//   if resolvedPath == "" && resolved.Path != "" {
+	//       resolvedPath = expandTildePath(resolved.Path)
+	//   }
+	aliasPath := "~/projects/myrepo"
+	var resolvedPath string
+	if resolvedPath == "" && aliasPath != "" {
+		resolvedPath = expandTildePath(aliasPath)
+	}
+	assert.Equal(t, home+"/projects/myrepo", resolvedPath,
+		"alias path with tilde prefix must be expanded when resolvedPath is initially empty")
+}

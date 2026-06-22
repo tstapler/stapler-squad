@@ -8,6 +8,47 @@ import (
 	"unicode/utf8"
 )
 
+// TestShouldAnswerStartupDialog verifies the cooldown guard that prevents
+// re-sending "1\n" within 5 seconds of the first answer. This is the extracted
+// helper used in runSessionDriverWithPrompt.
+func TestShouldAnswerStartupDialog(t *testing.T) {
+	dialogOutput := `Quick safety check: Is this a project you created or one you trust?
+ 1. Yes, I trust this folder
+ 2. No, exit`
+
+	t.Run("returns true when dialog present and cooldown has not started", func(t *testing.T) {
+		var zeroTime time.Time
+		got := shouldAnswerStartupDialog(dialogOutput, zeroTime, 5*time.Second)
+		if !got {
+			t.Error("expected true for fresh dialog with zero lastAnsweredAt")
+		}
+	})
+
+	t.Run("returns false when within the cooldown window", func(t *testing.T) {
+		recent := time.Now()
+		got := shouldAnswerStartupDialog(dialogOutput, recent, 5*time.Second)
+		if got {
+			t.Error("expected false within cooldown window")
+		}
+	})
+
+	t.Run("returns true when cooldown has elapsed", func(t *testing.T) {
+		old := time.Now().Add(-10 * time.Second)
+		got := shouldAnswerStartupDialog(dialogOutput, old, 5*time.Second)
+		if !got {
+			t.Error("expected true after cooldown has elapsed")
+		}
+	})
+
+	t.Run("returns false for non-dialog output regardless of cooldown", func(t *testing.T) {
+		var zeroTime time.Time
+		got := shouldAnswerStartupDialog("> ", zeroTime, 5*time.Second)
+		if got {
+			t.Error("expected false for non-dialog output")
+		}
+	})
+}
+
 func TestIsStartupDialog(t *testing.T) {
 	cases := []struct {
 		name   string

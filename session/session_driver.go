@@ -122,6 +122,11 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	ticker := time.NewTicker(driverPollInterval)
 	defer ticker.Stop()
 
+	// Cooldown after answering a startup dialog: prevents the same tick-detected
+	// buffer from firing a second "1\n" before the terminal clears the dialog.
+	var lastDialogAnsweredAt time.Time
+	const dialogCooldown = 5 * time.Second
+
 	// No initial prompt configured — skip the send step; driver still handles
 	// startup dialogs, auto-approval, and monitoring.
 	sentInitial := initialPrompt == ""
@@ -200,13 +205,14 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// machine reaches NeedsApproval — e.g. the trust-folder safety check.
 		output, previewErr := inst.Preview()
 		if previewErr == nil && output != "" {
-			if isStartupDialog(output) {
+			if shouldAnswerStartupDialog(output, lastDialogAnsweredAt, dialogCooldown) {
 				if err := inst.SendKeys("1\n"); err != nil {
 					log.Warn("SessionDriver: failed to answer startup dialog",
 						"session", inst.Title,
 						"err", err,
 					)
 				} else {
+					lastDialogAnsweredAt = time.Now()
 					log.Info("SessionDriver: answered startup dialog",
 						"session", inst.Title,
 					)
@@ -504,6 +510,13 @@ func isStartupDialog(output string) bool {
 		// Must have a numbered option to select — avoids false positives on
 		// non-interactive output that merely mentions trust.
 		(strings.Contains(output, "1.") || strings.Contains(output, "❯ 1"))
+}
+
+// shouldAnswerStartupDialog returns true when the terminal output shows a startup
+// dialog and the cooldown since the last answer has elapsed. Extracted to make
+// the double-fire guard directly unit-testable.
+func shouldAnswerStartupDialog(output string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
+	return isStartupDialog(output) && time.Since(lastAnsweredAt) > cooldown
 }
 
 // parseJSONField extracts a string field value from a JSON blob.
