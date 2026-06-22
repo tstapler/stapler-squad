@@ -15,7 +15,7 @@ import { useWorktreeSuggestions } from "@/lib/hooks/useWorktreeSuggestions";
 import { useSessionSearch, type SessionSearchResult } from "@/lib/hooks/useSessionSearch";
 import { useAppSelector } from "@/lib/store";
 import { selectActiveSessionsSortedByUpdatedAt } from "@/lib/store/sessionsSlice";
-import { Session } from "@/gen/session/v1/types_pb";
+import { Session, SessionType } from "@/gen/session/v1/types_pb";
 import { PathCompletionDropdown, type CompletionEntry } from "@/components/ui/PathCompletionDropdown";
 import { AtCommandDropdown } from "@/components/ui/AtCommandDropdown";
 import { useAtCommandSuggestions } from "@/lib/hooks/useAtCommandSuggestions";
@@ -33,7 +33,7 @@ import {
 } from "./Omnibar.css";
 import { AliasPalette } from "@/components/ui/AliasPalette";
 import { useAliasSuggestions } from "@/lib/hooks/useAliasSuggestions";
-import { useAliases } from "@/lib/hooks/useAliases";
+import { useAliases, type AliasEntry } from "@/lib/hooks/useAliases";
 
 interface OmnibarProps {
   isOpen: boolean;
@@ -134,6 +134,16 @@ function isValidProjectName(name: string): boolean {
 
 const RESULT_LISTBOX_ID = "omnibar-result-listbox";
 
+function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessionType"] {
+  switch (st) {
+    case SessionType.DIRECTORY: return "directory";
+    case SessionType.NEW_WORKTREE: return "new_worktree";
+    case SessionType.EXISTING_WORKTREE: return "existing_worktree";
+    case SessionType.ONE_OFF: return "one_off";
+    default: return "new_worktree";
+  }
+}
+
 export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput, workflows = [] }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
@@ -223,8 +233,11 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
   // the effect (and resetting to discovery mode) when only form fields change.
   const sessionNameRef = useRef(sessionName);
   const branchRef = useRef(branch);
+  const programRef = useRef(program);
   useEffect(() => { sessionNameRef.current = sessionName; }, [sessionName]);
   useEffect(() => { branchRef.current = branch; }, [branch]);
+  useEffect(() => { programRef.current = program; }, [program]);
+  const lastSuggestedProgramRef = useRef<string>("");
 
   // API base URL for pre-session image uploads — uses shared helper for SSR/dev consistency.
   const uploadBaseUrl = getApiBaseUrl();
@@ -441,6 +454,22 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         // Auto-fill branch if detected
         if (result.branch && !branchRef.current) {
           setBranch(result.branch);
+        }
+
+        // When an alias resolves, populate form fields from its configured defaults
+        // so the user can see (and optionally adjust) what will be created.
+        if (result.type === InputType.Alias) {
+          const alias = (result.metadata as { alias?: AliasEntry } | undefined)?.alias;
+          if (alias) {
+            if (alias.program && (!programRef.current || programRef.current === lastSuggestedProgramRef.current)) {
+              setFormField("program", alias.program);
+              lastSuggestedProgramRef.current = alias.program;
+            }
+            if (alias.sessionType !== SessionType.UNSPECIFIED) {
+              setFormField("sessionType", protoSessionTypeToFormString(alias.sessionType));
+            }
+            setFormField("autoYes", alias.autoYes);
+          }
         }
       } else {
         setDetection(null);
@@ -731,8 +760,12 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
         } else {
           onClose();
         }
-      } else if (e.key === "Enter" && e.metaKey) {
-        // Cmd+Enter to submit — use ref to avoid declaration-order dependency.
+      } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        // Cmd+Enter (Mac) / Ctrl+Enter (Linux/Windows) to submit.
+        handleSubmitRef.current();
+      } else if (e.key === "Enter" && !isDiscoveryMode) {
+        // Plain Enter in creation mode submits when the form is ready.
+        // handleSubmit guards on canSubmit internally, so this is a no-op when the form is incomplete.
         handleSubmitRef.current();
       }
     },
@@ -1254,7 +1287,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
             error={error}
             showAdvanced={showAdvanced}
             onToggleAdvanced={() => setUIField("showAdvanced", !uiState.showAdvanced)}
-            path={modeState.type === "creation_with_repo" ? modeState.path : undefined}
+            path={
+              modeState.type === "creation_with_repo"
+                ? modeState.path
+                : detection?.type === InputType.Alias
+                ? ((detection.metadata as { alias?: AliasEntry } | undefined)?.alias?.path || undefined)
+                : undefined
+            }
             uploadBaseUrl={uploadBaseUrl}
             onAttachedImagesChange={(paths) => { attachedImagePathsRef.current = paths; }}
             pathDoesNotExist={pathDoesNotExist}
