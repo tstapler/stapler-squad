@@ -210,6 +210,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
       await triggerTriage(item.id);
       await load();
     } catch (e) {
+      console.error("[BacklogItemDetail] retrigger triage failed", e);
       setError(e instanceof Error ? e.message : "Triage re-trigger failed.");
     } finally {
       setActionLoading(false);

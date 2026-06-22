@@ -33,8 +33,7 @@ const maxHeadlessTriageTasks = 12
 
 // BuildHeadlessTriagePrompt constructs the JSON-output triage prompt for a backlog item.
 // artifactAbsPath is the absolute path where the LLM should write planning files.
-// slug is the URL-safe identifier derived from the item title.
-func BuildHeadlessTriagePrompt(item *BacklogItemData, artifactAbsPath, slug string) string {
+func BuildHeadlessTriagePrompt(item *BacklogItemData, artifactAbsPath string) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
@@ -85,7 +84,6 @@ After all files are written, output ONLY a JSON object (no other text before or 
 - Do NOT call submit_triage_result. Do NOT write any source code.
 `, researchDir, researchDir, researchDir, researchDir, artifactAbsPath, artifactAbsPath)
 
-	_ = slug
 	return sb.String()
 }
 

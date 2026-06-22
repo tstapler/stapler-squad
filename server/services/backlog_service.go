@@ -22,6 +22,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// headlessTriageUUIDPrefix is prepended to all synthetic ItemSession UUIDs created by the
+// headless triage path. The orphan guard uses this prefix to identify sessions that have no
+// live tmux process and can be safely tombstoned on re-trigger.
+const headlessTriageUUIDPrefix = "headless-triage-"
+
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
 	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
@@ -248,10 +253,19 @@ func itemSessionToProto(is *ent.ItemSession) *sessionv1.ItemSession {
 			for i, t := range tr.Tasks {
 				tasks[i] = &sessionv1.TriageTask{Text: t.Text, Estimate: t.Estimate, Category: t.Category}
 			}
+			// ClarifyingQuestions: MCP-submitted results store them as a top-level field.
+			// Headless triage embeds questions as suggestions with rationale="question".
+			// Derive from both sources so both paths populate the proto field correctly.
+			clarifying := tr.ClarifyingQuestions
+			for _, sg := range tr.Suggestions {
+				if sg.Rationale == "question" {
+					clarifying = append(clarifying, sg.Text)
+				}
+			}
 			p.TriageResult = &sessionv1.TriageResult{
 				Summary:             tr.Summary,
 				Suggestions:         suggs,
-				ClarifyingQuestions: tr.ClarifyingQuestions,
+				ClarifyingQuestions: clarifying,
 				Tasks:               tasks,
 			}
 		}
@@ -419,6 +433,8 @@ func (s *BacklogService) CreateBacklogItem(
 
 	triageTriggered := false
 	if !req.Msg.SkipTriage && created.RepoPath != "" && s.headlessPool != nil {
+		// 30s gates only the synchronous path (item lookup + ItemSession creation).
+		// The headless LLM call itself runs in a goroutine under shutdownCtx (30-min cap).
 		triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		_, triageErr := s.TriggerTriage(triageCtx,
@@ -1115,13 +1131,16 @@ func (s *BacklogService) TriggerTriage(
 	// 3a. Orphan-aware guard: if an open triage session exists, check whether it is
 	// genuinely still running. Headless sessions are always orphaned if not ended
 	// (no live tmux session to check) — tombstone them and allow re-trigger.
-	existingSessions, _ := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
+	existingSessions, listErr := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
+	if listErr != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list triage sessions: %w", listErr))
+	}
 	for _, is := range existingSessions {
 		if is.SessionRole != string(session.SessionRoleTriage) || is.EndedAt != nil {
 			continue
 		}
 		// Headless triage sessions have no live in-memory instance; treat as orphaned.
-		isHeadless := strings.HasPrefix(is.SessionUUID, "headless-triage-")
+		isHeadless := strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix)
 		notLive := isHeadless || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
 		statusAdvanced := item.Status != string(session.BacklogStatusIdea)
 		if notLive || statusAdvanced {
@@ -1158,10 +1177,10 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 7. Build triage prompt.
-	triagePrompt := session.BuildHeadlessTriagePrompt(item, artifactAbsPath, slug)
+	triagePrompt := session.BuildHeadlessTriagePrompt(item, artifactAbsPath)
 
 	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
-	triageSessionUUID := "headless-triage-" + uuid.New().String()
+	triageSessionUUID := headlessTriageUUIDPrefix + uuid.New().String()
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: triageSessionUUID,
@@ -1183,11 +1202,19 @@ func (s *BacklogService) TriggerTriage(
 		select {
 		case s.triageSem <- struct{}{}:
 		case <-s.shutdownCtx.Done():
-			now := time.Now()
-			_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+			// cleanupCtx is a separate context for DB writes that must complete even
+			// after shutdownCtx is cancelled. Passing shutdownCtx here would cause the
+			// write to fail immediately with context.Canceled.
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cleanupCancel()
+			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 			return
 		}
 		defer func() { <-s.triageSem }()
+
+		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful shutdown.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
 
 		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, 30*time.Minute)
 		defer cancel()
@@ -1198,40 +1225,42 @@ func (s *BacklogService) TriggerTriage(
 			triagePrompt,
 			headless.CallOptions{WorkDir: itemRepoPath},
 		)
-		now := time.Now()
 		if callErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s: %v", itemID, callErr)
-			_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 			return
 		}
 
 		result, parseErr := session.ParseHeadlessTriageResult(raw)
 		if parseErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s: %v", itemID, parseErr)
-			_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 			return
 		}
 
-		payloadJSON, _ := json.Marshal(result)
-		if updateErr := s.storage.UpdateItemSessionTriageResult(s.shutdownCtx, isID, string(payloadJSON)); updateErr != nil {
+		payloadJSON, marshalErr := json.Marshal(result)
+		if marshalErr != nil {
+			log.ErrorLog.Printf("[TriggerTriage] marshal triage result item=%s: %v", itemID, marshalErr)
+			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
+			return
+		}
+		if updateErr := s.storage.UpdateItemSessionTriageResult(cleanupCtx, isID, string(payloadJSON)); updateErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] persist triage result item=%s: %v", itemID, updateErr)
 		}
 
-		if artifactAbsPath != "" {
-			pap := artifactAbsPath
-			update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
-			if _, updateErr := s.storage.UpdateBacklogItem(s.shutdownCtx, itemID, update, nil); updateErr != nil {
-				log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
-			}
+		pap := artifactAbsPath
+		update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
+		if _, updateErr := s.storage.UpdateBacklogItem(cleanupCtx, itemID, update, nil); updateErr != nil {
+			log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
 		}
 
 		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
-		if _, transErr := s.storage.TransitionBacklogItemStatus(s.shutdownCtx, itemID,
+		if _, transErr := s.storage.TransitionBacklogItemStatus(cleanupCtx, itemID,
 			session.BacklogStatusReady, precondition); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
 		}
 
-		_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+		_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())
 		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s suggestions=%d tasks=%d",
 			itemID, len(result.Suggestions), len(result.Tasks))
 	}()

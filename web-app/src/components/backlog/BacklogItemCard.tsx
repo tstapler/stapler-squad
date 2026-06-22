@@ -1,6 +1,7 @@
 "use client";
 // +feature: backlog:item-card
 
+import { useCallback } from "react";
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemCard.css";
@@ -67,6 +68,7 @@ const PRIORITY_LABELS: Record<number, string> = {
 
 export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProps) {
   const actionSpec = getActionSpec(item);
+  const isTriageRunning = item.triageStatus === "running";
 
   const handleCardClick = (e: React.MouseEvent) => {
     // Don't open detail if the action button was clicked
@@ -80,6 +82,11 @@ export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProp
       onClick(item.id);
     }
   };
+
+  const handleCancelTriage = useCallback(
+    () => onAction("cancel_triage", item.id),
+    [onAction, item.id],
+  );
 
   return (
     <div
@@ -102,11 +109,11 @@ export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProp
         </span>
       </div>
 
-      {item.triageStatus === "running" && (
+      {isTriageRunning && (
         <TriageLoadingIndicator
           elapsedSeconds={0}
           context="list"
-          onCancel={() => onAction("cancel_triage", item.id)}
+          onCancel={handleCancelTriage}
           compact
         />
       )}
@@ -115,14 +122,13 @@ export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProp
         <AcSummary item={item} />
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
-          disabled={actionSpec.disabled || item.triageStatus === "running"}
-          aria-label={item.triageStatus === "running" ? "Triage in progress" : actionSpec.label}
-          title={item.triageStatus === "running" ? "Triage in progress" : undefined}
+          disabled={actionSpec.disabled || isTriageRunning}
+          aria-label={isTriageRunning ? "Triage in progress" : actionSpec.label}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (!actionSpec.disabled && !actionSpec.isDone && item.triageStatus !== "running") {
+            if (!actionSpec.disabled && !actionSpec.isDone && !isTriageRunning) {
               onAction(actionSpec.action, item.id);
             }
           }}

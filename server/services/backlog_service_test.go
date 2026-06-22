@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 
 // fakeHeadlessPool is a test stub implementing headless.PoolClient.
 type fakeHeadlessPool struct {
+	mu       sync.Mutex
 	response string
 	err      error
 	calls    []fakePoolCall
@@ -29,8 +31,25 @@ type fakePoolCall struct {
 }
 
 func (f *fakeHeadlessPool) CallBlockingWithOptions(_ context.Context, key headless.FeatureKey, _, _ string, opts headless.CallOptions) (string, error) {
+	f.mu.Lock()
 	f.calls = append(f.calls, fakePoolCall{key: key, workDir: opts.WorkDir})
+	f.mu.Unlock()
 	return f.response, f.err
+}
+
+func (f *fakeHeadlessPool) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.calls)
+}
+
+func (f *fakeHeadlessPool) firstCall() fakePoolCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return fakePoolCall{}
+	}
+	return f.calls[0]
 }
 
 // validTriageJSON returns a minimal valid triage result for use in success-path tests.
@@ -578,9 +597,9 @@ func TestTriggerTriage_Success(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after headless triage completes")
 
 	// Verify the pool was called with the right feature key and working directory.
-	require.Len(t, pool.calls, 1)
-	assert.Equal(t, headless.FeatureKeyTriage, pool.calls[0].key)
-	assert.Equal(t, repoPath, pool.calls[0].workDir)
+	require.Equal(t, 1, pool.callCount())
+	assert.Equal(t, headless.FeatureKeyTriage, pool.firstCall().key)
+	assert.Equal(t, repoPath, pool.firstCall().workDir)
 
 	// ItemSession should be ended.
 	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)

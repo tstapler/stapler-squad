@@ -358,6 +358,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("WorkflowScheduler started")
 	}
 
+	// Register BacklogService shutdown so in-flight triage goroutines are signalled
+	// to stop acquiring new semaphore slots and existing calls can complete cleanly.
+	if deps.BacklogService != nil {
+		srv.shutdownHooks = append(srv.shutdownHooks, deps.BacklogService.Shutdown)
+	}
+
 	// Start workflow session retention enforcer (hourly sweep).
 	// Requires both the session ent client and a workflow repository.
 	if deps.WorkflowRepo != nil && deps.Storage != nil {

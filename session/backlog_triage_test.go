@@ -57,19 +57,19 @@ func TestParseHeadlessTriageResult_EmptySuggestionsOK(t *testing.T) {
 
 func TestBuildHeadlessTriagePrompt_ContainsTitle(t *testing.T) {
 	item := &BacklogItemData{Title: "My Feature", ID: "abc-123"}
-	prompt := BuildHeadlessTriagePrompt(item, "/tmp/artifacts", "my-feature")
+	prompt := BuildHeadlessTriagePrompt(item, "/tmp/artifacts")
 	assert.Contains(t, prompt, "My Feature")
 }
 
 func TestBuildHeadlessTriagePrompt_ContainsArtifactPath(t *testing.T) {
 	item := &BacklogItemData{Title: "Test", ID: "id-1"}
-	prompt := BuildHeadlessTriagePrompt(item, "/repo/docs/tasks/test", "test")
+	prompt := BuildHeadlessTriagePrompt(item, "/repo/docs/tasks/test")
 	assert.Contains(t, prompt, "/repo/docs/tasks/test")
 }
 
 func TestBuildHeadlessTriagePrompt_InstructsJSONOutput(t *testing.T) {
 	item := &BacklogItemData{Title: "Test", ID: "id-1"}
-	prompt := BuildHeadlessTriagePrompt(item, "/tmp/art", "test")
+	prompt := BuildHeadlessTriagePrompt(item, "/tmp/art")
 	// Headless mode must instruct JSON output, not call an MCP tool.
 	assert.Contains(t, prompt, "output ONLY a JSON object",
 		"headless prompt must instruct JSON output mode")
@@ -83,12 +83,12 @@ func TestBuildHeadlessTriagePrompt_IncludesAcceptanceCriteria(t *testing.T) {
 		ID:                 "id-2",
 		AcceptanceCriteria: acJSON,
 	}
-	prompt := BuildHeadlessTriagePrompt(item, "/tmp", "ac-test")
+	prompt := BuildHeadlessTriagePrompt(item, "/tmp")
 	assert.Contains(t, prompt, "User can log in")
 }
 
 func TestBuildHeadlessTriagePrompt_NoAcSection_WhenEmpty(t *testing.T) {
 	item := &BacklogItemData{Title: "No AC", ID: "id-3"}
-	prompt := BuildHeadlessTriagePrompt(item, "/tmp", "no-ac")
+	prompt := BuildHeadlessTriagePrompt(item, "/tmp")
 	assert.NotContains(t, prompt, "Acceptance Criteria")
 }
