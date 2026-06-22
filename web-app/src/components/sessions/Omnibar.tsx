@@ -935,18 +935,27 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
 
     // Alias invocation (@aliasname [...]) — create session with alias context.
     if (detection?.type === InputType.Alias && detection.metadata?.aliasName) {
-      const aliasMeta = detection.metadata as AliasMetadata;
+      const aliasMeta = detection.metadata as unknown as AliasMetadata;
       const { aliasName, branch: aliasBranch, label, extraFlags } = aliasMeta;
       const sessionTitle = sessionName.trim() || label?.trim() || String(aliasName);
+      // Apply useTitleAsBranch for new_worktree alias sessions, same as the regular path.
+      let aliasFinalBranch = branch.trim() || (aliasBranch !== undefined ? String(aliasBranch) : "");
+      if (sessionType === "new_worktree" && useTitleAsBranch && !aliasFinalBranch) {
+        aliasFinalBranch = sessionTitle;
+      }
+      const firstPromptText = formState.firstPrompt?.trim() || undefined;
       const sessionData: OmnibarSessionData = {
         title: sessionTitle,
         path: "",
-        program: "",
-        autoYes: false,
+        program: program || "",
+        autoYes,
         aliasName: String(aliasName),
-        branch: branch.trim() || (aliasBranch !== undefined ? String(aliasBranch) : undefined),
+        branch: aliasFinalBranch || undefined,
         extraCliFlags: extraFlags !== undefined ? String(extraFlags) : undefined,
         sessionType: sessionType as "directory" | "new_worktree" | "existing_worktree" | "one_off",
+        workingDir: workingDir.trim() || undefined,
+        category: category.trim() || undefined,
+        initialPrompt: firstPromptText,
       };
       setIsSubmitting(true);
       setError(null);

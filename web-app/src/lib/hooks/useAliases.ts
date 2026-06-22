@@ -16,6 +16,7 @@ export interface AliasEntry {
   autoYes: boolean;
   tags: string[];
   sessionType: SessionType;
+  namePrefix: string;
 }
 
 export function useAliases(): { aliases: AliasEntry[]; loading: boolean; error: Error | null; refetch: () => void } {
@@ -44,6 +45,7 @@ export function useAliases(): { aliases: AliasEntry[]; loading: boolean; error: 
               autoYes: a.autoYes,
               tags: [...(a.tags ?? [])],
               sessionType: a.sessionType,
+              namePrefix: a.namePrefix,
             }))
           );
         }

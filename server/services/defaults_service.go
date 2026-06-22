@@ -249,6 +249,7 @@ func (d *DefaultsService) UpsertAlias(
 		EnvVars:     req.Msg.Alias.EnvVars,
 		CLIFlags:    req.Msg.Alias.CliFlags,
 		SessionType: protoToAliasSessionType(req.Msg.Alias.SessionType),
+		NamePrefix:  req.Msg.Alias.NamePrefix,
 	}
 	if alias.EnvVars == nil {
 		alias.EnvVars = make(map[string]string)
@@ -346,6 +347,7 @@ func aliasConfigToProto(a config.AliasConfig) *sessionv1.AliasProto {
 		EnvVars:     a.EnvVars,
 		CliFlags:    a.CLIFlags,
 		SessionType: aliasSessionTypeToProto(a.SessionType),
+		NamePrefix:  a.NamePrefix,
 	}
 }
 

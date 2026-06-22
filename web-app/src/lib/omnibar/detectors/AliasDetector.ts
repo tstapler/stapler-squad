@@ -11,6 +11,15 @@ import { Detector } from "../detector";
 import { DetectionResult, InputType } from "../types";
 import type { AliasEntry } from "../../hooks/useAliases";
 
+/** Shape of `DetectionResult.metadata` when `type === InputType.Alias`. */
+export interface AliasMetadata {
+  aliasName: string;
+  branch?: string;
+  label?: string;
+  extraFlags?: string;
+  alias: AliasEntry;
+}
+
 /** Name-only form of the alias regex (without the leading "@"). */
 export const ALIAS_NAME_RE = /^[\w-]+$/;
 

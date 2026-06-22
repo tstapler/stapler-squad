@@ -20,6 +20,7 @@ const CREATION_TYPES = new Set<InputType>([
   InputType.GitHubBranch,
   InputType.GitHubRepo,
   InputType.GitHubShorthand,
+  InputType.Alias,
 ]);
 
 export function modeReducer(

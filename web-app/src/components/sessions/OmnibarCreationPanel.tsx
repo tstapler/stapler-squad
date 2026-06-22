@@ -110,6 +110,8 @@ export interface OmnibarCreationPanelProps {
   onAttachedImagesChange?: (paths: string[]) => void;
   /** True when path completion has resolved and the typed path doesn't exist on disk. */
   pathDoesNotExist?: boolean;
+  /** Name prefix from alias detection (e.g. "ssq-"). Used to hint that the user should type a label after it. */
+  namePrefix?: string;
 }
 
 // Helper: file → base64 string (strips data URL prefix).
@@ -139,6 +141,7 @@ export function OmnibarCreationPanel({
   uploadBaseUrl = "/api",
   onAttachedImagesChange,
   pathDoesNotExist,
+  namePrefix = "",
 }: OmnibarCreationPanelProps) {
   const {
     sessionName, branch, program, category, autoYes,
@@ -407,6 +410,11 @@ export function OmnibarCreationPanel({
           {!sessionName && (
             <span className={hint} style={{ color: "var(--error)" }}>
               Session name is empty — type a name above or use &ldquo;name &gt; prompt&rdquo; syntax
+            </span>
+          )}
+          {namePrefix && sessionName === namePrefix && (
+            <span className={hint} style={{ color: "var(--warning)" }}>
+              Type a label after the prefix to complete the session name (e.g. &ldquo;{namePrefix}my-feature&rdquo;)
             </span>
           )}
           {firstPrompt && sessionName && (

@@ -1792,6 +1792,9 @@ message AliasProto {
   // session_type overrides the default session creation mode for this alias.
   // Unspecified means the default (directory) is used.
   SessionType session_type = 11;
+  // name_prefix is prepended to the user-supplied session label when naming sessions.
+  // For example, prefix "ssq-" + label "my-feature" → session name "ssq-my-feature".
+  string name_prefix = 12;
 }
 
 message ListAliasesRequest {}

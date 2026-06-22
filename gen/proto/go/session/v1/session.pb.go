@@ -8294,7 +8294,10 @@ type AliasProto struct {
 	CliFlags    string                 `protobuf:"bytes,10,opt,name=cli_flags,json=cliFlags,proto3" json:"cli_flags,omitempty"`
 	// session_type overrides the default session creation mode for this alias.
 	// Unspecified means the default (directory) is used.
-	SessionType   SessionType `protobuf:"varint,11,opt,name=session_type,json=sessionType,proto3,enum=session.v1.SessionType" json:"session_type,omitempty"`
+	SessionType SessionType `protobuf:"varint,11,opt,name=session_type,json=sessionType,proto3,enum=session.v1.SessionType" json:"session_type,omitempty"`
+	// name_prefix is prepended to the user-supplied session label when naming sessions.
+	// For example, prefix "ssq-" + label "my-feature" → session name "ssq-my-feature".
+	NamePrefix    string `protobuf:"bytes,12,opt,name=name_prefix,json=namePrefix,proto3" json:"name_prefix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -8404,6 +8407,13 @@ func (x *AliasProto) GetSessionType() SessionType {
 		return x.SessionType
 	}
 	return SessionType_SESSION_TYPE_UNSPECIFIED
+}
+
+func (x *AliasProto) GetNamePrefix() string {
+	if x != nil {
+		return x.NamePrefix
+	}
+	return ""
 }
 
 type ListAliasesRequest struct {
@@ -15069,7 +15079,7 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\x04rule\x18\x01 \x01(\v2\x1e.session.v1.DirectoryRuleProtoR\x04rule\"0\n" +
 	"\x1aDeleteDirectoryRuleRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\"\x1d\n" +
-	"\x1bDeleteDirectoryRuleResponse\"\xa4\x03\n" +
+	"\x1bDeleteDirectoryRuleResponse\"\xc5\x03\n" +
 	"\n" +
 	"AliasProto\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
@@ -15083,7 +15093,9 @@ const file_session_v1_session_proto_rawDesc = "" +
 	"\benv_vars\x18\t \x03(\v2#.session.v1.AliasProto.EnvVarsEntryR\aenvVars\x12\x1b\n" +
 	"\tcli_flags\x18\n" +
 	" \x01(\tR\bcliFlags\x12:\n" +
-	"\fsession_type\x18\v \x01(\x0e2\x17.session.v1.SessionTypeR\vsessionType\x1a:\n" +
+	"\fsession_type\x18\v \x01(\x0e2\x17.session.v1.SessionTypeR\vsessionType\x12\x1f\n" +
+	"\vname_prefix\x18\f \x01(\tR\n" +
+	"namePrefix\x1a:\n" +
 	"\fEnvVarsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x14\n" +

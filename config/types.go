@@ -197,4 +197,7 @@ type AliasConfig struct {
 	// SessionType overrides the session creation mode for this alias.
 	// SessionTypeDefault (empty) means use the default (directory session).
 	SessionType SessionType `json:"session_type,omitempty"`
+	// NamePrefix is prepended to the user-supplied session label when naming sessions.
+	// For example, prefix "ssq-" + label "my-feature" → session name "ssq-my-feature".
+	NamePrefix string `json:"name_prefix,omitempty"`
 }

@@ -148,7 +148,7 @@ describe("AliasDetector", () => {
     const detectorWithPrefix = new AliasDetector([...mockAliases, aliasWithPrefix]);
     const result = detectorWithPrefix.detect("@prefixed ");
     expect(result?.type).toBe(InputType.Alias);
-    expect(result?.metadata?.alias?.namePrefix).toBe("proj-");
+    expect((result?.metadata?.alias as { namePrefix?: string } | undefined)?.namePrefix).toBe("proj-");
   });
 });
 
