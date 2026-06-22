@@ -2,6 +2,7 @@
 // +feature: backlog:item-card
 
 import type { BacklogItem, BacklogItemStatus } from "@/lib/hooks/useBacklogService";
+import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import * as styles from "./BacklogItemCard.css";
 
 interface BacklogItemCardProps {
@@ -101,17 +102,27 @@ export function BacklogItemCard({ item, onAction, onClick }: BacklogItemCardProp
         </span>
       </div>
 
+      {item.triageStatus === "running" && (
+        <TriageLoadingIndicator
+          elapsedSeconds={0}
+          context="list"
+          onCancel={() => onAction("cancel_triage", item.id)}
+          compact
+        />
+      )}
+
       <div className={styles.cardFooter}>
         <AcSummary item={item} />
         <button
           className={`${styles.actionButton} ${actionSpec.isDone ? styles.actionButtonDone : ""}`}
-          disabled={actionSpec.disabled}
-          aria-label={actionSpec.label}
+          disabled={actionSpec.disabled || item.triageStatus === "running"}
+          aria-label={item.triageStatus === "running" ? "Triage in progress" : actionSpec.label}
+          title={item.triageStatus === "running" ? "Triage in progress" : undefined}
           data-action-button="true"
           data-testid={`backlog-action-${actionSpec.action}`}
           onClick={(e) => {
             e.stopPropagation();
-            if (!actionSpec.disabled && !actionSpec.isDone) {
+            if (!actionSpec.disabled && !actionSpec.isDone && item.triageStatus !== "running") {
               onAction(actionSpec.action, item.id);
             }
           }}

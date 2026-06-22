@@ -9,6 +9,7 @@ import { BacklogItemForm } from "./BacklogItemForm";
 import { AcCriteriaList } from "./AcCriteriaList";
 import { SessionMonitor } from "./SessionMonitor";
 import { GateVerdictBox } from "./GateVerdictBox";
+import { InlineError } from "./InlineError";
 import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
 import * as styles from "./BacklogItemDetail.css";
@@ -201,6 +202,19 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     // For now, just reload the item to reflect the current state
     await load();
   }, [load]);
+
+  const handleRetriggerTriage = useCallback(async () => {
+    if (!item) return;
+    setActionLoading(true);
+    try {
+      await triggerTriage(item.id);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Triage re-trigger failed.");
+    } finally {
+      setActionLoading(false);
+    }
+  }, [item, triggerTriage, load]);
 
   const handleApplyTriageSuggestions = useCallback(
     async (preApplyCriteria: AcCriterion[]) => {
@@ -517,9 +531,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         {/* Triage failed banner */}
         {item.triageStatus === "failed" && item.status === "idea" && (
           <div className={styles.section}>
-            <div role="alert" style={{ color: "var(--error)", fontSize: "0.875rem" }}>
-              Triage encountered an error. Trigger triage manually to retry.
-            </div>
+            <InlineError type="permanent" onRetry={handleRetriggerTriage} />
           </div>
         )}
 

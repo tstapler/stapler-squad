@@ -11,7 +11,32 @@ import (
 	"github.com/stretchr/testify/require"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/headless"
 )
+
+// ─── fakeHeadlessPool ─────────────────────────────────────────────────────────
+
+// fakeHeadlessPool is a test stub implementing headless.PoolClient.
+type fakeHeadlessPool struct {
+	response string
+	err      error
+	calls    []fakePoolCall
+}
+
+type fakePoolCall struct {
+	key     headless.FeatureKey
+	workDir string
+}
+
+func (f *fakeHeadlessPool) CallBlockingWithOptions(_ context.Context, key headless.FeatureKey, _, _ string, opts headless.CallOptions) (string, error) {
+	f.calls = append(f.calls, fakePoolCall{key: key, workDir: opts.WorkDir})
+	return f.response, f.err
+}
+
+// validTriageJSON returns a minimal valid triage result for use in success-path tests.
+func validTriageJSON() string {
+	return `{"summary":"test summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}`
+}
 
 // mockSessionCreator records CreateDirectorySession calls for inspection.
 type mockSessionCreator struct {
@@ -485,22 +510,184 @@ func (e *errSessionCreator) CreateDirectorySession(_ context.Context, _, _, _ st
 }
 
 // TestCreateBacklogItem_AutoTriggersTriageWhenRepoPathSet: when repo_path is set and
-// sessionCreator is present, CreateBacklogItem calls TriggerTriage. Because TriggerTriage
-// needs a real filesystem path for artifact creation, we verify the attempt is made
-// by using an errSessionCreator that rejects the spawn — auto-triage still fails
-// gracefully and TriageTriggered is false.
+// headlessPool is wired, CreateBacklogItem attempts TriggerTriage. With headlessPool nil
+// (default in newBacklogService), the guard skips auto-triage gracefully.
 func TestCreateBacklogItem_AutoTriggersTriageWhenRepoPathSet(t *testing.T) {
 	creator := &errSessionCreator{err: errors.New("no tmux in tests")}
 	svc := NewBacklogService(createTestStorage(t), creator, nil, nil)
-
-	// The auto-trigger code path is gated on: !SkipTriage && RepoPath != "" && sessionCreator != nil.
-	// TriggerTriage will reach MkdirAll on a real path and then try CreateDirectorySession.
+	// headlessPool is nil → auto-trigger guard skips triage; triage_triggered must be false.
 	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
 		Title:    "item triggers triage",
-		RepoPath: t.TempDir(), // real path so TriggerTriage can create artifact dir
+		RepoPath: t.TempDir(),
 	}))
-	require.NoError(t, err, "CreateBacklogItem must succeed even if auto-triage fails")
-	// Session spawn failed, so triage_triggered is false, but the item was created.
-	assert.False(t, resp.Msg.TriageTriggered, "triage_triggered should be false when session spawn errors")
+	require.NoError(t, err, "CreateBacklogItem must succeed even if auto-triage is skipped")
+	assert.False(t, resp.Msg.TriageTriggered, "triage_triggered should be false when headlessPool is nil")
 	assert.NotEmpty(t, resp.Msg.Item.Id, "item should still be created")
+}
+
+// ─── TriggerTriage ────────────────────────────────────────────────────────────
+
+// TestTriggerTriage_NilPool: returns CodeUnimplemented when no headless pool is wired.
+func TestTriggerTriage_NilPool(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "triage test",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr)
+	var connErr *connect.Error
+	require.ErrorAs(t, trigErr, &connErr)
+	assert.Equal(t, connect.CodeUnimplemented, connErr.Code())
+}
+
+// TestTriggerTriage_Success: headless pool returns valid JSON → item transitions to ready.
+func TestTriggerTriage_Success(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "headless triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: repoPath,
+	})
+	require.NoError(t, err)
+
+	resp, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+	assert.Equal(t, string(session.SessionRoleTriage), resp.Msg.ItemSession.SessionRole)
+
+	// Goroutine runs asynchronously — poll until item transitions to "ready".
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond, "item should transition to ready after headless triage completes")
+
+	// Verify the pool was called with the right feature key and working directory.
+	require.Len(t, pool.calls, 1)
+	assert.Equal(t, headless.FeatureKeyTriage, pool.calls[0].key)
+	assert.Equal(t, repoPath, pool.calls[0].workDir)
+
+	// ItemSession should be ended.
+	sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+	require.NoError(t, listErr)
+	require.Len(t, sessions, 1)
+	assert.NotNil(t, sessions[0].EndedAt, "triage item session should be marked ended on success")
+}
+
+// TestTriggerTriage_HeadlessPoolError: pool error → session ended, item stays idea.
+func TestTriggerTriage_HeadlessPoolError(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{err: errors.New("claude binary not found")}
+	svc := NewBacklogService(storage, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "error triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr, "TriggerTriage must return success synchronously even if headless call will fail")
+
+	// Poll until the goroutine finishes and marks the session ended.
+	require.Eventually(t, func() bool {
+		sessions, listErr := storage.ListItemSessions(t.Context(), item.ID)
+		return listErr == nil && len(sessions) > 0 && sessions[0].EndedAt != nil
+	}, 5*time.Second, 50*time.Millisecond, "session should be marked ended after headless error")
+
+	// Item must stay in idea status.
+	updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+	require.NoError(t, loadErr)
+	assert.Equal(t, string(session.BacklogStatusIdea), updated.Status)
+}
+
+// TestTriggerTriage_AlreadyExists_LiveSession: a live (non-headless) triage session blocks re-trigger.
+func TestTriggerTriage_AlreadyExists_LiveSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	stopper := &mockSessionStopper{liveUUIDs: map[string]bool{"live-triage-uuid": true}}
+	svc := NewBacklogService(storage, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+	svc.SetSessionStopper(stopper)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "blocked triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	// Create an open triage session that reports as live (non-headless UUID).
+	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "live-triage-uuid",
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, isErr)
+
+	_, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.Error(t, trigErr)
+	var connErr *connect.Error
+	require.ErrorAs(t, trigErr, &connErr)
+	assert.Equal(t, connect.CodeAlreadyExists, connErr.Code())
+}
+
+// TestTriggerTriage_OrphanedHeadlessSession: orphaned headless triage session is tombstoned and re-trigger succeeds.
+func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	svc := NewBacklogService(storage, nil, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	item, err := storage.CreateBacklogItem(t.Context(), session.BacklogItemData{
+		Title:    "orphan triage item",
+		Status:   string(session.BacklogStatusIdea),
+		Priority: 3,
+		RepoPath: t.TempDir(),
+	})
+	require.NoError(t, err)
+
+	// Inject a stale open headless triage session (simulates a server restart).
+	_, isErr := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      item.ID,
+		SessionUUID: "headless-triage-00000000-dead-beef-0000-000000000000",
+		SessionRole: string(session.SessionRoleTriage),
+	})
+	require.NoError(t, isErr)
+
+	// Re-trigger should succeed: orphan is tombstoned and a new session is created.
+	resp, trigErr := svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{
+		ItemId: item.ID,
+	}))
+	require.NoError(t, trigErr)
+	assert.NotEmpty(t, resp.Msg.ItemSession.Id)
+
+	// Wait for the new goroutine to complete and item to reach ready.
+	require.Eventually(t, func() bool {
+		updated, loadErr := storage.GetBacklogItem(t.Context(), item.ID)
+		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
+	}, 5*time.Second, 50*time.Millisecond)
 }

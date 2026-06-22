@@ -420,19 +420,6 @@ func findSessionTitleByUUID(store session.InstanceStore, uuid string) (string, e
 
 // --- submit_triage_result ---
 
-// triageSuggestion is a single suggestion entry for submit_triage_result.
-type triageSuggestion struct {
-	Text      string `json:"text"`
-	Rationale string `json:"rationale"`
-}
-
-// triageTask is a single implementation task entry for submit_triage_result.
-type triageTask struct {
-	Text     string `json:"text"`
-	Estimate string `json:"estimate"`
-	Category string `json:"category"`
-}
-
 func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
 	callerUUID, err := callerSessionUUID(ctx)
 	if err != nil {
@@ -467,7 +454,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse suggestions.
-	var suggestions []triageSuggestion
+	var suggestions []session.TriageSuggestion
 	if rawSuggestions, exists := args["suggestions"]; exists {
 		if arr, ok := rawSuggestions.([]interface{}); ok {
 			for i, rs := range arr {
@@ -475,7 +462,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var ts triageSuggestion
+				var ts session.TriageSuggestion
 				if err := json.Unmarshal(b, &ts); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("suggestion[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -485,7 +472,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 	}
 
 	// Parse tasks (optional).
-	var tasks []triageTask
+	var tasks []session.TriageTask
 	if rawTasks, exists := args["tasks"]; exists {
 		if arr, ok := rawTasks.([]interface{}); ok {
 			for i, rt := range arr {
@@ -493,7 +480,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 				if marshalErr != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: cannot marshal: %v", i, marshalErr), ""), nil
 				}
-				var tt triageTask
+				var tt session.TriageTask
 				if err := json.Unmarshal(b, &tt); err != nil {
 					return errResult(ErrInvalidArgument, fmt.Sprintf("task[%d]: invalid shape: %v", i, err), ""), nil
 				}
@@ -508,9 +495,9 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 	// Build triage result JSON payload using canonical struct (prevents schema drift).
 	type triageResultPayload struct {
-		Summary     string             `json:"summary"`
-		Suggestions []triageSuggestion `json:"suggestions"`
-		Tasks       []triageTask       `json:"tasks,omitempty"`
+		Summary     string                   `json:"summary"`
+		Suggestions []session.TriageSuggestion `json:"suggestions"`
+		Tasks       []session.TriageTask       `json:"tasks,omitempty"`
 	}
 	triagePayload := triageResultPayload{
 		Summary:     summary,

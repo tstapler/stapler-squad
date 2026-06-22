@@ -18,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	"github.com/tstapler/stapler-squad/session/headless"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -67,6 +68,12 @@ type BacklogService struct {
 	// concurrent SpawnSessionFromItem / AttachSessionToItem calls cannot produce
 	// a partially-written .claude/backlog-context.md.
 	worktreeMu sync.Mutex
+
+	// headless triage pool and concurrency controls.
+	headlessPool   headless.PoolClient
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	triageSem      chan struct{}
 }
 
 // NewBacklogService creates a BacklogService with all optional dependencies.
@@ -80,13 +87,28 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 	if engine == nil {
 		engine = session.NewDefaultWorkflowEngine()
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &BacklogService{
 		storage:        storage,
 		sourceBackend:  storage,
 		sessionCreator: creator,
 		cfg:            cfg,
 		engine:         engine,
+		shutdownCtx:    ctx,
+		shutdownCancel: cancel,
+		triageSem:      make(chan struct{}, 8),
 	}
+}
+
+// SetHeadlessPool wires the headless pool for autonomous triage calls.
+func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
+	s.headlessPool = pool
+}
+
+// Shutdown cancels the service's background context, unblocking any goroutines
+// waiting on the triage semaphore.
+func (s *BacklogService) Shutdown() {
+	s.shutdownCancel()
 }
 
 // SetSessionStopper wires the optional session stopper used to kill orphaned sessions on re-triage.
@@ -237,28 +259,14 @@ func itemSessionToProto(is *ent.ItemSession) *sessionv1.ItemSession {
 	return p
 }
 
-// triageResultJSON is the canonical shape written by submitTriageResult and
-// read back by itemSessionToProto. Must stay in sync with tools_backlog.go —
-// do not use map[string]interface{}.
+// triageResultJSON is the JSON shape stored by submit_triage_result and read back
+// by itemSessionToProto. Uses canonical session.TriageSuggestion / session.TriageTask
+// to keep the schema in sync across the MCP tool, headless path, and proto conversion.
 type triageResultJSON struct {
-	Summary             string                 `json:"summary"`
-	Suggestions         []triageSuggestionJSON `json:"suggestions"`
-	ClarifyingQuestions []string               `json:"clarifying_questions,omitempty"`
-	Tasks               []triageTaskJSON       `json:"tasks,omitempty"`
-}
-
-// triageSuggestionJSON mirrors tools_backlog.go's triageSuggestion struct.
-// Kept separate to avoid cross-package coupling; field names must match.
-type triageSuggestionJSON struct {
-	Text      string `json:"text"`
-	Rationale string `json:"rationale"`
-}
-
-// triageTaskJSON mirrors tools_backlog.go's triageTask struct.
-type triageTaskJSON struct {
-	Text     string `json:"text"`
-	Estimate string `json:"estimate"`
-	Category string `json:"category"`
+	Summary             string                    `json:"summary"`
+	Suggestions         []session.TriageSuggestion `json:"suggestions"`
+	ClarifyingQuestions []string                  `json:"clarifying_questions,omitempty"`
+	Tasks               []session.TriageTask       `json:"tasks,omitempty"`
 }
 
 // backlogItemToProto maps a BacklogItemData to the proto BacklogItem message.
@@ -410,7 +418,7 @@ func (s *BacklogService) CreateBacklogItem(
 	}
 
 	triageTriggered := false
-	if !req.Msg.SkipTriage && created.RepoPath != "" && s.sessionCreator != nil {
+	if !req.Msg.SkipTriage && created.RepoPath != "" && s.headlessPool != nil {
 		triageCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		_, triageErr := s.TriggerTriage(triageCtx,
@@ -1071,7 +1079,8 @@ func (s *BacklogService) AttachSessionToItem(
 	}), nil
 }
 
-// TriggerTriage kicks off a triage planning session for a backlog item.
+// TriggerTriage kicks off a headless triage planning call for a backlog item.
+// Returns immediately after creating an ItemSession; actual triage runs in a goroutine.
 // +api: backlog:trigger-triage
 func (s *BacklogService) TriggerTriage(
 	ctx context.Context,
@@ -1104,60 +1113,37 @@ func (s *BacklogService) TriggerTriage(
 	}
 
 	// 3a. Orphan-aware guard: if an open triage session exists, check whether it is
-	// genuinely still running. A session is orphaned (and safe to replace) when:
-	//   (a) the item has already advanced past "idea" (triage cycle completed), OR
-	//   (b) the session UUID is not live in memory (e.g. process died after a restart).
-	// Orphaned sessions are tombstoned so the re-trigger can proceed; only genuinely
-	// live sessions block with CodeAlreadyExists.
+	// genuinely still running. Headless sessions are always orphaned if not ended
+	// (no live tmux session to check) — tombstone them and allow re-trigger.
 	existingSessions, _ := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
 	for _, is := range existingSessions {
 		if is.SessionRole != string(session.SessionRoleTriage) || is.EndedAt != nil {
 			continue
 		}
-		// Open triage session found. Check if it's orphaned.
-		// started_at=NULL means the session was created but never confirmed running — always treat as orphaned.
-		neverStarted := is.StartedAt == nil
-		notLive := neverStarted || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
+		// Headless triage sessions have no live in-memory instance; treat as orphaned.
+		isHeadless := strings.HasPrefix(is.SessionUUID, "headless-triage-")
+		notLive := isHeadless || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
 		statusAdvanced := item.Status != string(session.BacklogStatusIdea)
 		if notLive || statusAdvanced {
 			now := time.Now()
 			_ = s.storage.UpdateItemSessionEnded(ctx, is.ID.String(), now)
-			if s.sessionStopper != nil {
-				_ = s.sessionStopper.StopSessionByUUID(ctx, is.SessionUUID)
-			}
 			continue
 		}
 		return nil, connect.NewError(connect.CodeAlreadyExists,
 			fmt.Errorf("triage session already running for item %s", req.Msg.ItemId))
 	}
 
-	// 3b. If re-triggering on a "ready" item, move it back to "idea" so the UI
-	// correctly reflects that the item is under evaluation again.
+	// 3b. If re-triggering on a "ready" item, move it back to "idea".
 	if item.Status == string(session.BacklogStatusReady) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, req.Msg.ItemId,
 			session.BacklogStatusIdea, nil); transErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] failed to reset status to idea: %v", transErr)
-			// Non-fatal — continue with triage spawn.
 		}
 	}
 
 	// 4. Build slug and artifact dir path.
 	slug := slugify(item.Title)
-	artifactRelPath := filepath.Join("docs", "tasks", slug)
-	artifactAbsPath := filepath.Join(item.RepoPath, artifactRelPath)
-
-	// 4.5 Kill any stale tmux session with the same deterministic name. The tmux
-	// session name is derived from the title ("triage:<slug>") and is reused across
-	// triggers. If the old session is still alive in tmux (e.g. the in-memory Instance
-	// was already removed after a server restart), TmuxSession.Start() will reattach
-	// to it instead of creating a fresh session — silently skipping the new
-	// --append-system-prompt injection. Killing by title before spawning ensures a
-	// clean slate.
-	if s.sessionStopper != nil {
-		if killErr := s.sessionStopper.KillTmuxSessionByTitle(ctx, "triage:"+slug); killErr != nil {
-			log.ErrorLog.Printf("[TriggerTriage] failed to kill stale tmux session: %v", killErr)
-		}
-	}
+	artifactAbsPath := filepath.Join(item.RepoPath, "docs", "tasks", slug)
 
 	// 5. Create artifact dir.
 	if mkErr := os.MkdirAll(artifactAbsPath, 0o755); mkErr != nil {
@@ -1165,32 +1151,20 @@ func (s *BacklogService) TriggerTriage(
 			fmt.Errorf("failed to create artifact dir %s: %w", artifactAbsPath, mkErr))
 	}
 
-	// 6. Require SessionCreator.
-	// degraded: sessionCreator unavailable — return CodeUnimplemented so callers can detect the gap.
-	if s.sessionCreator == nil {
+	// 6. Require headless pool.
+	if s.headlessPool == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented,
-			fmt.Errorf("SessionCreator not wired — contact admin"))
+			fmt.Errorf("headless pool not available — ensure claude binary is installed"))
 	}
 
-	// 7. Build triage prompt (use absolute path so agent submits a path os.Stat can verify).
-	triagePrompt := buildTriagePrompt(item, artifactAbsPath, slug)
+	// 7. Build triage prompt.
+	triagePrompt := session.BuildHeadlessTriagePrompt(item, artifactAbsPath, slug)
 
-	// 8. Spawn triage session — AutonomousDriver mode if available, oneShot fallback.
-	title := "triage:" + slug
-	useAutonomous := s.autonomousStarter != nil
-	inst, err := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, triagePrompt,
-		[]string{"backlog:triage"}, !useAutonomous /*oneShot*/, true /*hidden*/)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn triage session: %w", err))
-	}
-	if useAutonomous {
-		s.autonomousStarter.StartAutonomousDriverWithTimeout(inst, 5*time.Minute)
-	}
-
-	// 9. Create ItemSession with role=triage.
+	// 8. Create ItemSession synchronously before goroutine (prevents TOCTOU on orphan guard).
+	triageSessionUUID := "headless-triage-" + uuid.New().String()
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:      item.ID,
-		SessionUUID: inst.UUID,
+		SessionUUID: triageSessionUUID,
 		SessionRole: session.SessionRoleTriage,
 		AcSnapshot:  item.AcceptanceCriteria,
 	})
@@ -1198,86 +1172,73 @@ func (s *BacklogService) TriggerTriage(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create triage item session: %w", err))
 	}
 
-	log.InfoLog.Printf("[TriggerTriage] spawned triage session %s for item %s at %s", inst.UUID, item.ID, artifactAbsPath)
+	log.InfoLog.Printf("[TriggerTriage] headless triage started item=%s session=%s path=%s", item.ID, triageSessionUUID, artifactAbsPath)
+
+	// 9. Drive triage asynchronously so the RPC returns immediately.
+	itemID := item.ID
+	itemRepoPath := item.RepoPath
+	isID := is.ID.String()
+	go func() {
+		// Acquire concurrency semaphore (max 8 concurrent triage calls).
+		select {
+		case s.triageSem <- struct{}{}:
+		case <-s.shutdownCtx.Done():
+			now := time.Now()
+			_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+			return
+		}
+		defer func() { <-s.triageSem }()
+
+		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, 30*time.Minute)
+		defer cancel()
+
+		raw, callErr := s.headlessPool.CallBlockingWithOptions(triageCtx,
+			headless.FeatureKeyTriage,
+			headless.HeadlessTriageSystemPrompt(),
+			triagePrompt,
+			headless.CallOptions{WorkDir: itemRepoPath},
+		)
+		now := time.Now()
+		if callErr != nil {
+			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s: %v", itemID, callErr)
+			_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+			return
+		}
+
+		result, parseErr := session.ParseHeadlessTriageResult(raw)
+		if parseErr != nil {
+			log.ErrorLog.Printf("[TriggerTriage] parse result failed item=%s: %v", itemID, parseErr)
+			_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+			return
+		}
+
+		payloadJSON, _ := json.Marshal(result)
+		if updateErr := s.storage.UpdateItemSessionTriageResult(s.shutdownCtx, isID, string(payloadJSON)); updateErr != nil {
+			log.ErrorLog.Printf("[TriggerTriage] persist triage result item=%s: %v", itemID, updateErr)
+		}
+
+		if artifactAbsPath != "" {
+			pap := artifactAbsPath
+			update := session.BacklogItemUpdate{PlanArtifactsPath: &pap}
+			if _, updateErr := s.storage.UpdateBacklogItem(s.shutdownCtx, itemID, update, nil); updateErr != nil {
+				log.ErrorLog.Printf("[TriggerTriage] update plan_artifacts_path item=%s: %v", itemID, updateErr)
+			}
+		}
+
+		precondition := &session.BacklogItemPrecondition{ExpectedStatus: string(session.BacklogStatusIdea)}
+		if _, transErr := s.storage.TransitionBacklogItemStatus(s.shutdownCtx, itemID,
+			session.BacklogStatusReady, precondition); transErr != nil {
+			log.ErrorLog.Printf("[TriggerTriage] status transition idea→ready item=%s: %v", itemID, transErr)
+		}
+
+		_ = s.storage.UpdateItemSessionEnded(s.shutdownCtx, isID, now)
+		log.InfoLog.Printf("[TriggerTriage] headless triage complete item=%s suggestions=%d tasks=%d",
+			itemID, len(result.Suggestions), len(result.Tasks))
+	}()
 
 	return connect.NewResponse(&sessionv1.TriggerTriageResponse{
 		ItemSession: itemSessionToProto(is),
 	}), nil
-}
-
-// buildTriagePrompt builds the one-shot triage agent prompt.
-// artifactAbsPath is the absolute path to the artifact directory on disk.
-func buildTriagePrompt(item *session.BacklogItemData, artifactAbsPath, slug string) string {
-	var sb strings.Builder
-
-	sb.WriteString("You are a senior software architect performing pre-implementation triage.\n\n")
-	fmt.Fprintf(&sb, "# Backlog Item: %s\n\n", item.Title)
-	fmt.Fprintf(&sb, "item_id (pass this as item_id to submit_triage_result): %s\n\n", item.ID)
-	if item.Description != "" {
-		fmt.Fprintf(&sb, "## Description\n%s\n\n", item.Description)
-	}
-	if item.AcceptanceCriteria != "" {
-		criteria, _ := session.ParseAcCriteria(item.AcceptanceCriteria)
-		if len(criteria) > 0 {
-			sb.WriteString("## Acceptance Criteria\n")
-			for _, c := range criteria {
-				fmt.Fprintf(&sb, "%d. %s\n", c.Index, c.Text)
-			}
-			sb.WriteString("\n")
-		}
-	}
-
-	researchDir := artifactAbsPath + "/research"
-	fmt.Fprintf(&sb, `## Your Task
-
-Perform pre-implementation triage for this backlog item. Work in parallel:
-
-### Step 1 — Research (run 4 subagents in parallel)
-Each subagent writes one file:
-- %s/stack.md       — Technology choices, versions, compatibility
-- %s/features.md    — Similar existing features, patterns to reuse
-- %s/architecture.md — Proposed architecture, component boundaries
-- %s/pitfalls.md    — Known risks, gotchas, failure modes
-
-### Step 2 — Synthesis (after research completes)
-Write %s/plan.md containing:
-- Executive summary (2-3 sentences)
-- Implementation approach
-- Task breakdown with time estimates
-- Dependencies and blockers
-
-### Step 3 — Validation
-Write %s/validation.md containing:
-- Test plan mapping each acceptance criterion to a specific test
-- Edge cases and error scenarios
-
-### Step 4 — Submit
-After all files are written, call the submit_triage_result MCP tool with:
-- item_id: the backlog item UUID you were given
-- plan_artifact_path: %q
-- summary: a 2-3 sentence executive summary of your triage findings
-- suggestions: (optional) array of improvement suggestions, each with text and rationale
-- tasks: (optional) array of implementation tasks derived from plan.md, each with:
-    text: one-line task description
-    estimate: time estimate (e.g. "2h", "30m", "1d")
-    category: one of "backend", "frontend", "test", "infra", "docs"
-  Maximum 12 tasks. These will be shown to the operator as an interactive implementation checklist.
-
-### Step 5 — Clarifying Questions (optional)
-If the item description is ambiguous and you need specific information to
-produce quality acceptance criteria, include up to 3 clarifying questions
-in the suggestions array with rationale set to "question":
-  { "text": "What is the expected timeout behavior?", "rationale": "question" }
-If you have no questions, omit this step. Do not pause or wait for user input.
-
-This notifies the operator that triage is complete and ready for review.
-
-Do not modify any source code. Only write planning documents.
-`, researchDir, researchDir, researchDir, researchDir,
-		artifactAbsPath, artifactAbsPath, artifactAbsPath)
-
-	_ = slug // used in title, kept for clarity
-	return sb.String()
 }
 
 // SuggestNextItem recommends the highest-priority ready backlog item.

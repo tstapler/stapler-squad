@@ -755,6 +755,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogSvc := services.NewBacklogService(storage, sessionService, cfg, workflowEngine)
 	backlogSvc.SetSessionStopper(sessionService)
 	backlogSvc.SetAutonomousDriverStarter(sessionService)
+	if headlessPool != nil {
+		backlogSvc.SetHeadlessPool(headlessPool)
+	}
 	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 
