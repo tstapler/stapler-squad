@@ -309,8 +309,9 @@ func TestCreateSession_StatusManagerWiredBeforeDriver(t *testing.T) {
 	// handles the failure and sets Status=Stopped. A sync error here means a
 	// pre-goroutine validation failure (storage, config) which should never be silently skipped.
 	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
-		Title: "status-wiring-regression",
-		Path:  t.TempDir(),
+		Title:   "status-wiring-regression",
+		Path:    t.TempDir(),
+		Program: "claude",
 	}))
 	require.NoError(t, err)
 	t.Cleanup(func() { destroyCreatedSession(t, svc, resp.Msg.Session.Id) })
