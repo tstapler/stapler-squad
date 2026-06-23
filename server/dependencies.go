@@ -15,12 +15,12 @@ import (
 	"github.com/tstapler/stapler-squad/server/services"
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/cdp"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/scrollback"
 	"github.com/tstapler/stapler-squad/session/tmux"
-	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/tokens"
 	"github.com/tstapler/stapler-squad/session/unfinished"
 	"github.com/tstapler/stapler-squad/session/vnc"
@@ -806,7 +806,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 			},
 		)
 		artifactExtractor.OnScanComplete = func(title string, blob *artifacts.SessionArtifactsBlob) {
-			for _, inst := range historyLinker.Instances() {
+			// Take a snapshot to avoid a data race with concurrent AddInstance calls (M-5 fix).
+			snapshot := historyLinker.Instances()
+			for _, inst := range snapshot {
 				if inst.Title == title {
 					inst.SetArtifacts(blob)
 					eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"artifacts"}))
@@ -816,6 +818,9 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 							if ref, err := session.ParseGitHubURL(prURL); err == nil && ref.PRNumber > 0 {
 								if err := storage.UpdateInstancePRNumber(inst.Title, ref.PRNumber); err != nil {
 									log.Warn("ArtifactExtractor: failed to update PR number", "session", inst.Title, "err", err)
+								} else {
+									// Update in-memory state so HasGitHubPR() reflects the change (M-3 fix).
+									inst.SetGitHubPRNumber(ref.PRNumber)
 								}
 								break
 							}

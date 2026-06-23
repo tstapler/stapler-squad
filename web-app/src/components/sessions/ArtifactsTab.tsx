@@ -14,6 +14,9 @@ function parsePRDisplay(url: string): string {
   return m ? `${m[1]}#${m[2]}` : url;
 }
 
+// safeHref ensures only http/https URLs are used as link targets (N-5 fix).
+const safeHref = (url: string) => /^https?:\/\//i.test(url) ? url : "#";
+
 export function ArtifactsTab({ session }: ArtifactsTabProps) {
   const [urlsExpanded, setUrlsExpanded] = useState(false);
   const artifacts = session.artifacts;
@@ -50,7 +53,7 @@ export function ArtifactsTab({ session }: ArtifactsTabProps) {
             {artifacts.prUrls.map((url) => (
               <li key={url}>
                 <a
-                  href={url}
+                  href={safeHref(url)}
                   target="_blank"
                   rel="noopener noreferrer"
                   className={styles.link}
@@ -84,7 +87,7 @@ export function ArtifactsTab({ session }: ArtifactsTabProps) {
                 {artifacts.externalUrls.map((url) => (
                   <li key={url}>
                     <a
-                      href={url}
+                      href={safeHref(url)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className={styles.link}

@@ -331,18 +331,21 @@ func (s *Storage) LoadInstances() ([]*Instance, error) {
 
 	// Bulk-load stored artifact blobs so the first render shows cached artifacts
 	// without waiting for ArtifactExtractor's startup walk to complete.
-	if entClient := s.GetEntClient(); entClient != nil && len(instances) > 0 {
-		for _, inst := range instances {
-			if inst.Title == "" {
-				continue
-			}
-			raw, err := s.GetInstanceArtifacts(inst.Title)
-			if err != nil || raw == "" {
-				continue
-			}
-			var blob artifacts.SessionArtifactsBlob
-			if err := json.Unmarshal([]byte(raw), &blob); err == nil {
-				inst.Artifacts = &blob
+	// Single bulk query replaces N per-session queries (M-4 fix).
+	if s.GetEntClient() != nil && len(instances) > 0 {
+		allArtifacts, artifErr := s.GetAllInstanceArtifacts()
+		if artifErr != nil {
+			log.Warn("LoadInstances: failed to bulk-load artifacts", "err", artifErr)
+		} else {
+			for _, inst := range instances {
+				raw := allArtifacts[inst.Title]
+				if raw == "" {
+					continue
+				}
+				var blob artifacts.SessionArtifactsBlob
+				if err := json.Unmarshal([]byte(raw), &blob); err == nil {
+					inst.Artifacts = &blob
+				}
 			}
 		}
 	}
@@ -504,6 +507,16 @@ func (s *Storage) GetInstanceArtifacts(title string) (string, error) {
 		return "", nil
 	}
 	return repo.GetSessionArtifacts(context.Background(), title)
+}
+
+// GetAllInstanceArtifacts returns a map of title → raw artifacts JSON for all sessions
+// that have stored artifacts. Single bulk query (M-4 fix).
+func (s *Storage) GetAllInstanceArtifacts() (map[string]string, error) {
+	repo, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, nil
+	}
+	return repo.GetAllSessionArtifacts(context.Background())
 }
 
 // --- Session-first convenience methods (Task 2.5) ---

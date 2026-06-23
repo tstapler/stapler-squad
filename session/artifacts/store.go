@@ -29,6 +29,10 @@ type ArtifactExtractor struct {
 	offsetsMu sync.Mutex
 	offsets   map[string]int64
 
+	// titleMu serializes mergeAndPersist calls for the same session title,
+	// preventing lost-update races when multiple JSONL files belong to the same session.
+	titleMu sync.Map // key: title string, value: *sync.Mutex
+
 	// storeFn is called with (sessionTitle, jsonBlob) after each successful scan.
 	storeFn func(title, blob string) error
 	// readFn loads the existing stored blob for a session (for merge on scan).
@@ -143,18 +147,34 @@ func (ae *ArtifactExtractor) SeedOffsets(instances []InstanceInfo) {
 	}
 }
 
+// titleLock returns the per-title mutex for serializing mergeAndPersist calls.
+// Using sync.Map.LoadOrStore ensures a single *sync.Mutex is shared across all
+// concurrent callers for the same title (C-1 fix).
+func (ae *ArtifactExtractor) titleLock(title string) *sync.Mutex {
+	mu, _ := ae.titleMu.LoadOrStore(title, &sync.Mutex{})
+	return mu.(*sync.Mutex)
+}
+
 // mergeAndPersist LOADS the existing stored blob via readFn, merges new findings
 // with existing artifacts, enforces dedup and caps, then returns the merged blob.
 // This ensures prior scan results are never lost on overwrite.
+// Serialized per title via titleLock to prevent lost-update races (C-1).
 func (ae *ArtifactExtractor) mergeAndPersist(
 	title string,
 	newOffset int64,
 	newPRURLs, newCommitSHAs, newExternalURLs []string,
 	newCommands []CommandArtifact,
 ) *SessionArtifactsBlob {
+	mu := ae.titleLock(title)
+	mu.Lock()
+	defer mu.Unlock()
+
 	existing := &SessionArtifactsBlob{}
 	if raw, err := ae.readFn(title); err == nil && raw != "" {
-		_ = json.Unmarshal([]byte(raw), existing)
+		if umErr := json.Unmarshal([]byte(raw), existing); umErr != nil {
+			log.Warn("[ArtifactExtractor] existing blob corrupt, starting fresh", "session", title, "err", umErr)
+			existing = &SessionArtifactsBlob{}
+		}
 	}
 	mergedCmds := append(existing.Commands, newCommands...)
 	if len(mergedCmds) > maxCommands {

@@ -783,8 +783,17 @@ func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, 
 }
 
 // UpdateSessionArtifacts persists the JSON-encoded artifact blob for a session.
+// Wrapped in a transaction for correctness under concurrent writes (M-6 fix).
+// The per-title mutex in ArtifactExtractor (C-1) serializes calls at the application
+// layer; the transaction is belt-and-suspenders for correctness.
 func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string, blob string) error {
-	n, err := r.client.Session.Update().
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("UpdateSessionArtifacts: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	n, err := tx.Session.Update().
 		Where(session.Title(title)).
 		SetSessionArtifacts(blob).
 		Save(ctx)
@@ -794,7 +803,7 @@ func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string
 	if n == 0 {
 		return fmt.Errorf("session not found: %s", title)
 	}
-	return nil
+	return tx.Commit()
 }
 
 // GetSessionArtifacts loads the raw JSON artifact blob for a session.
@@ -808,6 +817,24 @@ func (r *EntRepository) GetSessionArtifacts(ctx context.Context, title string) (
 		return "", fmt.Errorf("GetSessionArtifacts: %w", err)
 	}
 	return sess.SessionArtifacts, nil
+}
+
+// GetAllSessionArtifacts returns a map of title → raw artifacts JSON for all sessions
+// that have a non-empty session_artifacts column. Single query replaces N per-session
+// queries in LoadInstances (M-4 fix).
+func (r *EntRepository) GetAllSessionArtifacts(ctx context.Context) (map[string]string, error) {
+	rows, err := r.client.Session.Query().
+		Where(session.SessionArtifactsNEQ("")).
+		Select(session.FieldTitle, session.FieldSessionArtifacts).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("GetAllSessionArtifacts: %w", err)
+	}
+	result := make(map[string]string, len(rows))
+	for _, row := range rows {
+		result[row.Title] = row.SessionArtifacts
+	}
+	return result, nil
 }
 
 // UpdateReviewQueueState efficiently updates only the review-queue interaction fields

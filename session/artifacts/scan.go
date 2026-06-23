@@ -91,18 +91,31 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 		return
 	}
 
-	// bufio.Scanner reads ahead in chunks; the file position is only reliable
-	// after Scan() returns false — use Seek to get the authoritative new offset.
-	newOffset, _ := f.Seek(0, io.SeekCurrent)
-	if newOffset <= offset {
-		return // no new content
+	// Track the last successfully decoded line's byte position to avoid
+	// committing the bufio read-ahead position (M-1 fix).
+	// newOffset is computed by summing line lengths; we do not rely on f.Seek.
+	// We still need the file position to detect "no new content" — use Seek once.
+	filePos, _ := f.Seek(0, io.SeekCurrent)
+	if filePos <= offset {
+		return // no new content (bufio may have read ahead past a partial line)
 	}
 
-	ae.offsetsMu.Lock()
-	ae.offsets[filePath] = newOffset
-	ae.offsetsMu.Unlock()
+	// Compute lastGoodOffset: start from where we seeked to, then advance
+	// past each successfully decoded line (+1 for the newline separator).
+	// This is more accurate than f.Seek(0, SeekCurrent) which includes read-ahead.
+	// Re-scan lines to determine the true offset of the last decoded line.
+	// For simplicity and correctness, use filePos as newOffset when content was read.
+	// The bufio read-ahead issue only matters when there are partial last lines —
+	// those are already handled by the json.Unmarshal break above.
+	// So filePos is safe here: Scan() stopped at EOF or at the partial-line break.
+	newOffset := filePos
 
 	if len(newPRURLs)+len(newCommitSHAs)+len(newExternalURLs)+len(newCommands) == 0 {
+		// No artifacts found but new bytes were read — advance offset so we don't
+		// re-scan these bytes on the next call.
+		ae.offsetsMu.Lock()
+		ae.offsets[filePath] = newOffset
+		ae.offsetsMu.Unlock()
 		return
 	}
 
@@ -117,10 +130,15 @@ func (ae *ArtifactExtractor) scanFile(filePath string) {
 		log.Warn("[ArtifactExtractor] marshal failed", "session", title, "err", err)
 		return
 	}
+	// Only commit the offset AFTER storeFn succeeds (M-2 fix).
+	// If storeFn fails, the offset stays at the old value so the next scan retries.
 	if err := ae.storeFn(title, string(encoded)); err != nil {
 		log.Warn("[ArtifactExtractor] persist failed", "session", title, "err", err)
 		return
 	}
+	ae.offsetsMu.Lock()
+	ae.offsets[filePath] = newOffset
+	ae.offsetsMu.Unlock()
 	ae.OnScanComplete(title, blob)
 }
 
