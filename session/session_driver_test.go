@@ -479,3 +479,56 @@ func TestParseClaudeSessionID_noSessionId(t *testing.T) {
 		t.Errorf("parseClaudeSessionID(%q) = %q, want empty string", output, got)
 	}
 }
+
+func TestScanTerminalForPRURL(t *testing.T) {
+	cases := []struct {
+		name        string
+		output      string
+		wantURL     string
+		wantPRNum   int
+	}{
+		{
+			name: "git push output with PR create link",
+			output: `remote: Create a pull request for 'feat/my-feature' on GitHub by visiting:
+remote:      https://github.com/tstapler/stapler-squad/pull/128
+remote:`,
+			wantURL:   "https://github.com/tstapler/stapler-squad/pull/128",
+			wantPRNum: 128,
+		},
+		{
+			name: "git push output with PR update link",
+			output: `To github.com:tstapler/stapler-squad.git
+   5353e50..abcd123  feat/my-feature -> feat/my-feature
+remote: https://github.com/tstapler/stapler-squad/pull/42`,
+			wantURL:   "https://github.com/tstapler/stapler-squad/pull/42",
+			wantPRNum: 42,
+		},
+		{
+			name:      "no PR URL in output",
+			output:    `remote: Resolving deltas: 100% (3/3), done.`,
+			wantURL:   "",
+			wantPRNum: 0,
+		},
+		{
+			name:      "empty output",
+			output:    "",
+			wantURL:   "",
+			wantPRNum: 0,
+		},
+		{
+			name:      "URL with trailing punctuation stripped",
+			output:    `See: https://github.com/tstapler/stapler-squad/pull/99.`,
+			wantURL:   "https://github.com/tstapler/stapler-squad/pull/99",
+			wantPRNum: 99,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotURL, gotNum := scanTerminalForPRURL(tc.output)
+			if gotURL != tc.wantURL || gotNum != tc.wantPRNum {
+				t.Errorf("scanTerminalForPRURL() = (%q, %d), want (%q, %d)",
+					gotURL, gotNum, tc.wantURL, tc.wantPRNum)
+			}
+		})
+	}
+}

@@ -230,6 +230,21 @@ func ArchivedAt(v time.Time) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldArchivedAt, v))
 }
 
+// GithubPrURL applies equality check predicate on the "github_pr_url" field. It's identical to GithubPrURLEQ.
+func GithubPrURL(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubPrURL, v))
+}
+
+// GithubPrNumber applies equality check predicate on the "github_pr_number" field. It's identical to GithubPrNumberEQ.
+func GithubPrNumber(v int) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubPrNumber, v))
+}
+
+// SessionArtifacts applies equality check predicate on the "session_artifacts" field. It's identical to SessionArtifactsEQ.
+func SessionArtifacts(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldSessionArtifacts, v))
+}
+
 // TitleEQ applies the EQ predicate on the "title" field.
 func TitleEQ(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldTitle, v))
@@ -2183,6 +2198,206 @@ func ArchivedAtIsNil() predicate.Session {
 // ArchivedAtNotNil applies the NotNil predicate on the "archived_at" field.
 func ArchivedAtNotNil() predicate.Session {
 	return predicate.Session(sql.FieldNotNull(FieldArchivedAt))
+}
+
+// GithubPrURLEQ applies the EQ predicate on the "github_pr_url" field.
+func GithubPrURLEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubPrURL, v))
+}
+
+// GithubPrURLNEQ applies the NEQ predicate on the "github_pr_url" field.
+func GithubPrURLNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldGithubPrURL, v))
+}
+
+// GithubPrURLIn applies the In predicate on the "github_pr_url" field.
+func GithubPrURLIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldGithubPrURL, vs...))
+}
+
+// GithubPrURLNotIn applies the NotIn predicate on the "github_pr_url" field.
+func GithubPrURLNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldGithubPrURL, vs...))
+}
+
+// GithubPrURLGT applies the GT predicate on the "github_pr_url" field.
+func GithubPrURLGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldGithubPrURL, v))
+}
+
+// GithubPrURLGTE applies the GTE predicate on the "github_pr_url" field.
+func GithubPrURLGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldGithubPrURL, v))
+}
+
+// GithubPrURLLT applies the LT predicate on the "github_pr_url" field.
+func GithubPrURLLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldGithubPrURL, v))
+}
+
+// GithubPrURLLTE applies the LTE predicate on the "github_pr_url" field.
+func GithubPrURLLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldGithubPrURL, v))
+}
+
+// GithubPrURLContains applies the Contains predicate on the "github_pr_url" field.
+func GithubPrURLContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldGithubPrURL, v))
+}
+
+// GithubPrURLHasPrefix applies the HasPrefix predicate on the "github_pr_url" field.
+func GithubPrURLHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldGithubPrURL, v))
+}
+
+// GithubPrURLHasSuffix applies the HasSuffix predicate on the "github_pr_url" field.
+func GithubPrURLHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldGithubPrURL, v))
+}
+
+// GithubPrURLIsNil applies the IsNil predicate on the "github_pr_url" field.
+func GithubPrURLIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldGithubPrURL))
+}
+
+// GithubPrURLNotNil applies the NotNil predicate on the "github_pr_url" field.
+func GithubPrURLNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldGithubPrURL))
+}
+
+// GithubPrURLEqualFold applies the EqualFold predicate on the "github_pr_url" field.
+func GithubPrURLEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldGithubPrURL, v))
+}
+
+// GithubPrURLContainsFold applies the ContainsFold predicate on the "github_pr_url" field.
+func GithubPrURLContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldGithubPrURL, v))
+}
+
+// GithubPrNumberEQ applies the EQ predicate on the "github_pr_number" field.
+func GithubPrNumberEQ(v int) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubPrNumber, v))
+}
+
+// GithubPrNumberNEQ applies the NEQ predicate on the "github_pr_number" field.
+func GithubPrNumberNEQ(v int) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldGithubPrNumber, v))
+}
+
+// GithubPrNumberIn applies the In predicate on the "github_pr_number" field.
+func GithubPrNumberIn(vs ...int) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldGithubPrNumber, vs...))
+}
+
+// GithubPrNumberNotIn applies the NotIn predicate on the "github_pr_number" field.
+func GithubPrNumberNotIn(vs ...int) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldGithubPrNumber, vs...))
+}
+
+// GithubPrNumberGT applies the GT predicate on the "github_pr_number" field.
+func GithubPrNumberGT(v int) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldGithubPrNumber, v))
+}
+
+// GithubPrNumberGTE applies the GTE predicate on the "github_pr_number" field.
+func GithubPrNumberGTE(v int) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldGithubPrNumber, v))
+}
+
+// GithubPrNumberLT applies the LT predicate on the "github_pr_number" field.
+func GithubPrNumberLT(v int) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldGithubPrNumber, v))
+}
+
+// GithubPrNumberLTE applies the LTE predicate on the "github_pr_number" field.
+func GithubPrNumberLTE(v int) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldGithubPrNumber, v))
+}
+
+// GithubPrNumberIsNil applies the IsNil predicate on the "github_pr_number" field.
+func GithubPrNumberIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldGithubPrNumber))
+}
+
+// GithubPrNumberNotNil applies the NotNil predicate on the "github_pr_number" field.
+func GithubPrNumberNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldGithubPrNumber))
+}
+
+// SessionArtifactsEQ applies the EQ predicate on the "session_artifacts" field.
+func SessionArtifactsEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsNEQ applies the NEQ predicate on the "session_artifacts" field.
+func SessionArtifactsNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsIn applies the In predicate on the "session_artifacts" field.
+func SessionArtifactsIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldSessionArtifacts, vs...))
+}
+
+// SessionArtifactsNotIn applies the NotIn predicate on the "session_artifacts" field.
+func SessionArtifactsNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldSessionArtifacts, vs...))
+}
+
+// SessionArtifactsGT applies the GT predicate on the "session_artifacts" field.
+func SessionArtifactsGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsGTE applies the GTE predicate on the "session_artifacts" field.
+func SessionArtifactsGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsLT applies the LT predicate on the "session_artifacts" field.
+func SessionArtifactsLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsLTE applies the LTE predicate on the "session_artifacts" field.
+func SessionArtifactsLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsContains applies the Contains predicate on the "session_artifacts" field.
+func SessionArtifactsContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsHasPrefix applies the HasPrefix predicate on the "session_artifacts" field.
+func SessionArtifactsHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsHasSuffix applies the HasSuffix predicate on the "session_artifacts" field.
+func SessionArtifactsHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsIsNil applies the IsNil predicate on the "session_artifacts" field.
+func SessionArtifactsIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldSessionArtifacts))
+}
+
+// SessionArtifactsNotNil applies the NotNil predicate on the "session_artifacts" field.
+func SessionArtifactsNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldSessionArtifacts))
+}
+
+// SessionArtifactsEqualFold applies the EqualFold predicate on the "session_artifacts" field.
+func SessionArtifactsEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldSessionArtifacts, v))
+}
+
+// SessionArtifactsContainsFold applies the ContainsFold predicate on the "session_artifacts" field.
+func SessionArtifactsContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldSessionArtifacts, v))
 }
 
 // HasWorktree applies the HasEdge predicate on the "worktree" edge.

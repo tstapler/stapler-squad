@@ -196,6 +196,12 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.Hidden {
 		sessionCreate.SetHidden(data.Hidden)
 	}
+	if data.GitHubPRURL != "" {
+		sessionCreate.SetGithubPrURL(data.GitHubPRURL)
+	}
+	if data.GitHubPRNumber > 0 {
+		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
 
 	// Link project if specified (look up by name)
 	if data.ProjectID != "" {
@@ -418,6 +424,12 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 		sessionUpdate.SetArchivedAt(*data.ArchivedAt)
 	} else {
 		sessionUpdate.ClearArchivedAt()
+	}
+	if data.GitHubPRURL != "" {
+		sessionUpdate.SetGithubPrURL(data.GitHubPRURL)
+	}
+	if data.GitHubPRNumber > 0 {
+		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
 	}
 
 	// Update project link (look up by name or clear if empty)
@@ -754,6 +766,50 @@ func (r *EntRepository) ListByTag(ctx context.Context, tagName string) ([]Instan
 	return result, nil
 }
 
+// UpdateGitHubPRNumber persists a discovered PR number for a session.
+// Called by PRStatusPoller when it auto-discovers a PR for a branch-based session.
+func (r *EntRepository) UpdateGitHubPRNumber(ctx context.Context, title string, prNumber int) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetGithubPrNumber(prNumber).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update github_pr_number: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// UpdateSessionArtifacts persists the JSON-encoded artifact blob for a session.
+func (r *EntRepository) UpdateSessionArtifacts(ctx context.Context, title string, blob string) error {
+	n, err := r.client.Session.Update().
+		Where(session.Title(title)).
+		SetSessionArtifacts(blob).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to update session_artifacts: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("session not found: %s", title)
+	}
+	return nil
+}
+
+// GetSessionArtifacts loads the raw JSON artifact blob for a session.
+// Returns ("", nil) if the session exists but has no artifacts stored yet.
+func (r *EntRepository) GetSessionArtifacts(ctx context.Context, title string) (string, error) {
+	sess, err := r.client.Session.Query().
+		Where(session.Title(title)).
+		Select(session.FieldSessionArtifacts).
+		Only(ctx)
+	if err != nil {
+		return "", fmt.Errorf("GetSessionArtifacts: %w", err)
+	}
+	return sess.SessionArtifacts, nil
+}
+
 // UpdateReviewQueueState efficiently updates only the review-queue interaction fields
 // for a session, avoiding the full read-modify-write cycle of updateFieldInRepo.
 func (r *EntRepository) UpdateReviewQueueState(ctx context.Context, title string, lastUserResponse, processingGraceUntil, lastPromptDetected time.Time, lastPromptSignature string) error {
@@ -939,6 +995,8 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data.PauseReason = sess.PauseReason
 	data.WorkflowID = sess.WorkflowID
 	data.ArchivedAt = sess.ArchivedAt
+	data.GitHubPRURL = sess.GithubPrURL
+	data.GitHubPRNumber = sess.GithubPrNumber
 
 	// Set session type
 	if sess.SessionType != "" {

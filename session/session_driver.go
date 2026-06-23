@@ -127,6 +127,11 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 	var lastDialogAnsweredAt time.Time
 	const dialogCooldown = 5 * time.Second
 
+	// Once a PR URL is found in terminal output we stop scanning.
+	// Pre-seed from the current in-memory state so we don't re-scan for sessions
+	// that already have a linked PR (e.g. created from a PR URL in the omnibar).
+	prURLLinked := inst.GitHubPRNumber > 0
+
 	// No initial prompt configured — skip the send step; driver still handles
 	// startup dialogs, auto-approval, and monitoring.
 	sentInitial := initialPrompt == ""
@@ -349,6 +354,22 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 				}
 			}
 		}
+
+		// Scan terminal output for a GitHub PR URL printed by git push.
+		// This auto-links the PR to the session so PRStatusPoller can track it
+		// without relying on branch-name discovery (which fails when the omnibar
+		// branch name differs from the PR head branch).
+		if sentInitial && !prURLLinked && inst.GitHubOwner != "" && previewErr == nil && output != "" {
+			if prURL, prNum := scanTerminalForPRURL(output); prURL != "" {
+				inst.stateMutex.Lock()
+				inst.GitHubPRURL = prURL
+				inst.GitHubPRNumber = prNum
+				inst.stateMutex.Unlock()
+				log.Info("SessionDriver: auto-linked PR from terminal push output",
+					"session", inst.Title, "pr", prNum, "url", prURL)
+				prURLLinked = true
+			}
+		}
 	}
 }
 
@@ -517,6 +538,28 @@ func isStartupDialog(output string) bool {
 // the double-fire guard directly unit-testable.
 func shouldAnswerStartupDialog(output string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
 	return isStartupDialog(output) && time.Since(lastAnsweredAt) > cooldown
+}
+
+// scanTerminalForPRURL searches terminal scrollback output for a GitHub PR URL
+// of the form https://github.com/owner/repo/pull/NNN (as printed by git push).
+// Returns ("", 0) if not found.
+func scanTerminalForPRURL(output string) (string, int) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	for i := len(lines) - 1; i >= 0 && i >= len(lines)-30; i-- {
+		line := strings.TrimSpace(lines[i])
+		if !strings.Contains(line, "github.com/") || !strings.Contains(line, "/pull/") {
+			continue
+		}
+		for _, word := range strings.Fields(line) {
+			word = strings.Trim(word, ".,;:\"'()")
+			if strings.Contains(word, "github.com/") && strings.Contains(word, "/pull/") {
+				if ref, err := ParseGitHubURL(word); err == nil && ref.PRNumber > 0 {
+					return word, ref.PRNumber
+				}
+			}
+		}
+	}
+	return "", 0
 }
 
 // parseJSONField extracts a string field value from a JSON blob.

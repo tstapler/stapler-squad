@@ -22,6 +22,7 @@ const TAB_LABELS: Record<SessionDetailTab, string> = {
   info: "Info",
   files: "Files",
   browser: "Browser",
+  artifacts: "Artifacts",
 };
 
 const TAB_FULL_LABELS: Record<SessionDetailTab, string> = {
@@ -32,6 +33,7 @@ const TAB_FULL_LABELS: Record<SessionDetailTab, string> = {
   info: "Session Info",
   files: "Files",
   browser: "Browser",
+  artifacts: "Artifacts",
 };
 
 const ALL_TABS: SessionDetailTab[] = ["terminal", "diff", "vcs", "logs", "info", "files", "browser"];

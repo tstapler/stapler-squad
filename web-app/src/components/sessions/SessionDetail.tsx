@@ -10,7 +10,7 @@ import { useAppSelector } from "@/lib/store";
 import { selectAllSessions } from "@/lib/store/sessionsSlice";
 import { SessionDetailView } from "./SessionDetailView";
 
-export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser";
+export type SessionDetailTab = "terminal" | "diff" | "vcs" | "logs" | "info" | "files" | "browser" | "artifacts";
 
 interface SessionDetailProps {
   session: Session;

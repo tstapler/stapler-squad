@@ -1340,7 +1340,6 @@ func resolveSessionType(msg *sessionv1.CreateSessionRequest, branch string) sess
 	return session.SessionTypeDirectory
 }
 
-
 // UpdateSession modifies session properties (pause/resume, category, title).
 // +api: session:update
 func (s *SessionService) UpdateSession(
@@ -1488,7 +1487,6 @@ func (s *SessionService) UpdateSession(
 			}
 		}
 	}
-
 
 	// Handle status change (pause/resume) LAST - after all metadata updates.
 	// This ensures that if Resume() fails, no partial metadata changes are persisted
@@ -3341,13 +3339,17 @@ func (s *SessionService) RunOneShot(
 	prURL := extractPRURL(outputStr)
 	branchDiverged := checkBranchDivergence(workDir)
 
-	// Persist the PR URL back to the session record so the GitHub badge appears.
+	// Persist the PR URL (and number) back to the session record so the GitHub badge appears
+	// and the PRStatusPoller can use the direct-number path instead of branch-name discovery.
 	if prURL != "" {
 		inst.GitHubPRURL = prURL
+		if ref, parseErr := session.ParseGitHubURL(prURL); parseErr == nil && ref.PRNumber > 0 {
+			inst.GitHubPRNumber = ref.PRNumber
+		}
 		if err := s.storage.SaveInstances(s.allInstances()); err != nil {
 			log.Warn("RunOneShot: failed to persist PR URL", "session", inst.Title, "err", err)
 		} else {
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"github_pr_url"}))
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"github_pr_url", "github_pr_number"}))
 		}
 	}
 

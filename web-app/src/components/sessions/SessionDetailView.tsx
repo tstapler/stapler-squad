@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
-import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe } from "lucide-react";
+import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package } from "lucide-react";
 import dynamic from "next/dynamic";
 import { Session, InstanceType, SessionStatus, SessionType } from "@/gen/session/v1/types_pb";
 import { DiffViewer } from "./DiffViewer";
@@ -12,6 +12,7 @@ import { WorkspaceSwitchModal } from "./WorkspaceSwitchModal";
 import { SessionLogsTab } from "./SessionLogsTab";
 import { FilesTab } from "./FilesTab";
 import { BrowserTab } from "./BrowserTab";
+import { ArtifactsTab } from "./ArtifactsTab";
 import { VNCStatus } from "@/gen/session/v1/types_pb";
 import { ActionBar } from "@/components/ui/ActionBar";
 import { useSessionActions } from "@/lib/hooks/useSessionActions";
@@ -265,6 +266,7 @@ export function SessionDetailView({
     { id: "logs", label: "Logs", icon: ScrollText },
     { id: "info", label: "Info", icon: Info },
     { id: "browser", label: "Browser", icon: Globe, disabled: !isBrowserAvailable },
+    { id: "artifacts", label: "Artifacts", icon: Package },
   ];
 
   const handleTabChange = (tabId: string) => {
@@ -1209,6 +1211,11 @@ export function SessionDetailView({
             {session.goal?.goalText && (
               <GoalPanel goal={session.goal} />
             )}
+          </div>
+        )}
+        {activeTab === "artifacts" && (
+          <div className={styles.tabContent} role="tabpanel" aria-labelledby="tab-artifacts">
+            <ArtifactsTab session={session} />
           </div>
         )}
       </div>

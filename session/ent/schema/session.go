@@ -109,6 +109,17 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			Comment("Set when the session is archived; nil = not archived."),
+		field.String("github_pr_url").
+			Optional().
+			Comment("Full URL to the GitHub PR associated with this session (e.g. https://github.com/owner/repo/pull/123)."),
+		field.Int("github_pr_number").
+			Optional().
+			Default(0).
+			Comment("GitHub PR number discovered by PRStatusPoller or extracted from push output. 0 = not yet discovered."),
+		field.String("session_artifacts").
+			Optional().
+			Default("").
+			Comment("JSON-encoded SessionArtifactsBlob: PRURLs, CommitSHAs, ExternalURLs, scan offset."),
 	}
 }
 

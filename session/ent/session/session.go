@@ -84,6 +84,12 @@ const (
 	FieldWorkflowID = "workflow_id"
 	// FieldArchivedAt holds the string denoting the archived_at field in the database.
 	FieldArchivedAt = "archived_at"
+	// FieldGithubPrURL holds the string denoting the github_pr_url field in the database.
+	FieldGithubPrURL = "github_pr_url"
+	// FieldGithubPrNumber holds the string denoting the github_pr_number field in the database.
+	FieldGithubPrNumber = "github_pr_number"
+	// FieldSessionArtifacts holds the string denoting the session_artifacts field in the database.
+	FieldSessionArtifacts = "session_artifacts"
 	// EdgeWorktree holds the string denoting the worktree edge name in mutations.
 	EdgeWorktree = "worktree"
 	// EdgeDiffStats holds the string denoting the diff_stats edge name in mutations.
@@ -185,6 +191,9 @@ var Columns = []string{
 	FieldPauseReason,
 	FieldWorkflowID,
 	FieldArchivedAt,
+	FieldGithubPrURL,
+	FieldGithubPrNumber,
+	FieldSessionArtifacts,
 }
 
 // ForeignKeys holds the SQL foreign-keys that are owned by the "sessions"
@@ -240,6 +249,10 @@ var (
 	DefaultOneShot bool
 	// DefaultHidden holds the default value on creation for the "hidden" field.
 	DefaultHidden bool
+	// DefaultGithubPrNumber holds the default value on creation for the "github_pr_number" field.
+	DefaultGithubPrNumber int
+	// DefaultSessionArtifacts holds the default value on creation for the "session_artifacts" field.
+	DefaultSessionArtifacts string
 )
 
 // OrderOption defines the ordering options for the Session queries.
@@ -423,6 +436,21 @@ func ByWorkflowID(opts ...sql.OrderTermOption) OrderOption {
 // ByArchivedAt orders the results by the archived_at field.
 func ByArchivedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldArchivedAt, opts...).ToFunc()
+}
+
+// ByGithubPrURL orders the results by the github_pr_url field.
+func ByGithubPrURL(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGithubPrURL, opts...).ToFunc()
+}
+
+// ByGithubPrNumber orders the results by the github_pr_number field.
+func ByGithubPrNumber(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGithubPrNumber, opts...).ToFunc()
+}
+
+// BySessionArtifacts orders the results by the session_artifacts field.
+func BySessionArtifacts(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSessionArtifacts, opts...).ToFunc()
 }
 
 // ByWorktreeField orders the results by worktree field.

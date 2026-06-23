@@ -228,6 +228,23 @@ message Session {
   // (e.g. "Waiting for tool approval", "Tests failing: 3 of 12").
   // Empty when detected_status is UNSPECIFIED.
   string detected_context = 69;
+
+  // Structured artifacts extracted from the session's JSONL conversation history.
+  // Populated asynchronously by ArtifactExtractor; nil until first scan completes.
+  SessionArtifacts artifacts = 70;
+}
+
+// SessionArtifacts holds structured artifacts extracted from the session's
+// Claude Code JSONL conversation history.
+message SessionArtifacts {
+  // GitHub PR URLs found in tool_result output (e.g. from gh pr create).
+  repeated string pr_urls = 1;
+  // Git commit SHAs (40-char) found in tool_result output.
+  repeated string commit_shas = 2;
+  // External URLs found in tool_result output (capped at 50 entries).
+  repeated string external_urls = 3;
+  // When the JSONL file was last successfully scanned.
+  google.protobuf.Timestamp last_scanned_at = 4;
 }
 
 // SessionGoalSummary summarizes the current goal and task state for a session.

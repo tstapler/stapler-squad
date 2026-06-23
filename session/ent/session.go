@@ -91,6 +91,12 @@ type Session struct {
 	WorkflowID string `json:"workflow_id,omitempty"`
 	// Set when the session is archived; nil = not archived.
 	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	// Full URL to the GitHub PR associated with this session (e.g. https://github.com/owner/repo/pull/123).
+	GithubPrURL string `json:"github_pr_url,omitempty"`
+	// GitHub PR number discovered by PRStatusPoller or extracted from push output. 0 = not yet discovered.
+	GithubPrNumber int `json:"github_pr_number,omitempty"`
+	// JSON-encoded SessionArtifactsBlob: PRURLs, CommitSHAs, ExternalURLs, scan offset.
+	SessionArtifacts string `json:"session_artifacts,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the SessionQuery when eager-loading is set.
 	Edges            SessionEdges `json:"edges"`
@@ -197,9 +203,9 @@ func (*Session) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case session.FieldAutoYes, session.FieldIsExpanded, session.FieldOneShot, session.FieldHidden:
 			values[i] = new(sql.NullBool)
-		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth:
+		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth, session.FieldGithubPrNumber:
 			values[i] = new(sql.NullInt64)
-		case session.FieldTitle, session.FieldUUID, session.FieldPath, session.FieldWorkingDir, session.FieldBranch, session.FieldPrompt, session.FieldProgram, session.FieldExistingWorktree, session.FieldCategory, session.FieldSessionType, session.FieldTmuxPrefix, session.FieldLastOutputSignature, session.FieldMcpServerURL, session.FieldInitialPrompt, session.FieldLastPromptSignature, session.FieldPauseReason, session.FieldWorkflowID:
+		case session.FieldTitle, session.FieldUUID, session.FieldPath, session.FieldWorkingDir, session.FieldBranch, session.FieldPrompt, session.FieldProgram, session.FieldExistingWorktree, session.FieldCategory, session.FieldSessionType, session.FieldTmuxPrefix, session.FieldLastOutputSignature, session.FieldMcpServerURL, session.FieldInitialPrompt, session.FieldLastPromptSignature, session.FieldPauseReason, session.FieldWorkflowID, session.FieldGithubPrURL, session.FieldSessionArtifacts:
 			values[i] = new(sql.NullString)
 		case session.FieldCreatedAt, session.FieldUpdatedAt, session.FieldLastTerminalUpdate, session.FieldLastMeaningfulOutput, session.FieldLastAddedToQueue, session.FieldLastViewed, session.FieldLastAcknowledged, session.FieldLastUserResponse, session.FieldProcessingGraceUntil, session.FieldLastPromptDetected, session.FieldArchivedAt:
 			values[i] = new(sql.NullTime)
@@ -445,6 +451,24 @@ func (_m *Session) assignValues(columns []string, values []any) error {
 				_m.ArchivedAt = new(time.Time)
 				*_m.ArchivedAt = value.Time
 			}
+		case session.FieldGithubPrURL:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field github_pr_url", values[i])
+			} else if value.Valid {
+				_m.GithubPrURL = value.String
+			}
+		case session.FieldGithubPrNumber:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field github_pr_number", values[i])
+			} else if value.Valid {
+				_m.GithubPrNumber = int(value.Int64)
+			}
+		case session.FieldSessionArtifacts:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field session_artifacts", values[i])
+			} else if value.Valid {
+				_m.SessionArtifacts = value.String
+			}
 		case session.ForeignKeys[0]:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
 				return fmt.Errorf("unexpected type %T for edge-field project_sessions", value)
@@ -645,6 +669,15 @@ func (_m *Session) String() string {
 		builder.WriteString("archived_at=")
 		builder.WriteString(v.Format(time.ANSIC))
 	}
+	builder.WriteString(", ")
+	builder.WriteString("github_pr_url=")
+	builder.WriteString(_m.GithubPrURL)
+	builder.WriteString(", ")
+	builder.WriteString("github_pr_number=")
+	builder.WriteString(fmt.Sprintf("%v", _m.GithubPrNumber))
+	builder.WriteString(", ")
+	builder.WriteString("session_artifacts=")
+	builder.WriteString(_m.SessionArtifacts)
 	builder.WriteByte(')')
 	return builder.String()
 }

@@ -579,6 +579,9 @@ var (
 		{Name: "pause_reason", Type: field.TypeString, Nullable: true},
 		{Name: "workflow_id", Type: field.TypeString, Nullable: true},
 		{Name: "archived_at", Type: field.TypeTime, Nullable: true},
+		{Name: "github_pr_url", Type: field.TypeString, Nullable: true},
+		{Name: "github_pr_number", Type: field.TypeInt, Nullable: true, Default: 0},
+		{Name: "session_artifacts", Type: field.TypeString, Nullable: true, Default: ""},
 		{Name: "project_sessions", Type: field.TypeInt, Nullable: true},
 	}
 	// SessionsTable holds the schema information for the "sessions" table.
@@ -589,7 +592,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sessions_projects_sessions",
-				Columns:    []*schema.Column{SessionsColumns[36]},
+				Columns:    []*schema.Column{SessionsColumns[39]},
 				RefColumns: []*schema.Column{ProjectsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},

@@ -1,0 +1,16 @@
+{
+  "id": "session-artifacts",
+  "type": "frontend",
+  "component": "ArtifactsTab",
+  "path": "web-app/src/components/sessions/ArtifactsTab.tsx",
+  "tested": true,
+  "testIds": [
+    "ArtifactsTab > ArtifactsTab_should_showEmptyState_When_artifactsIsNull",
+    "ArtifactsTab > ArtifactsTab_should_showNoArtifacts_When_artifactsIsEmptyArrays",
+    "ArtifactsTab > ArtifactsTab_should_renderPRLinks_When_artifactsHasPRURLs",
+    "ArtifactsTab > ArtifactsTab_should_truncateURLs_When_URLExceeds60Chars",
+    "ArtifactsTab > ArtifactsTab_should_renderCommitSHAs_When_artifactsHasCommits",
+    "session-artifacts > T-E2E-ARTIFACTS-001 Artifacts tab visible in session detail"
+  ],
+  "lastModified": "2026-06-22T00:00:00Z"
+}

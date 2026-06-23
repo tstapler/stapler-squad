@@ -488,6 +488,48 @@ func (_c *SessionCreate) SetNillableArchivedAt(v *time.Time) *SessionCreate {
 	return _c
 }
 
+// SetGithubPrURL sets the "github_pr_url" field.
+func (_c *SessionCreate) SetGithubPrURL(v string) *SessionCreate {
+	_c.mutation.SetGithubPrURL(v)
+	return _c
+}
+
+// SetNillableGithubPrURL sets the "github_pr_url" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableGithubPrURL(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetGithubPrURL(*v)
+	}
+	return _c
+}
+
+// SetGithubPrNumber sets the "github_pr_number" field.
+func (_c *SessionCreate) SetGithubPrNumber(v int) *SessionCreate {
+	_c.mutation.SetGithubPrNumber(v)
+	return _c
+}
+
+// SetNillableGithubPrNumber sets the "github_pr_number" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableGithubPrNumber(v *int) *SessionCreate {
+	if v != nil {
+		_c.SetGithubPrNumber(*v)
+	}
+	return _c
+}
+
+// SetSessionArtifacts sets the "session_artifacts" field.
+func (_c *SessionCreate) SetSessionArtifacts(v string) *SessionCreate {
+	_c.mutation.SetSessionArtifacts(v)
+	return _c
+}
+
+// SetNillableSessionArtifacts sets the "session_artifacts" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableSessionArtifacts(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetSessionArtifacts(*v)
+	}
+	return _c
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_c *SessionCreate) SetWorktreeID(id int) *SessionCreate {
 	_c.mutation.SetWorktreeID(id)
@@ -671,6 +713,14 @@ func (_c *SessionCreate) defaults() {
 	if _, ok := _c.mutation.Hidden(); !ok {
 		v := session.DefaultHidden
 		_c.mutation.SetHidden(v)
+	}
+	if _, ok := _c.mutation.GithubPrNumber(); !ok {
+		v := session.DefaultGithubPrNumber
+		_c.mutation.SetGithubPrNumber(v)
+	}
+	if _, ok := _c.mutation.SessionArtifacts(); !ok {
+		v := session.DefaultSessionArtifacts
+		_c.mutation.SetSessionArtifacts(v)
 	}
 }
 
@@ -887,6 +937,18 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ArchivedAt(); ok {
 		_spec.SetField(session.FieldArchivedAt, field.TypeTime, value)
 		_node.ArchivedAt = &value
+	}
+	if value, ok := _c.mutation.GithubPrURL(); ok {
+		_spec.SetField(session.FieldGithubPrURL, field.TypeString, value)
+		_node.GithubPrURL = value
+	}
+	if value, ok := _c.mutation.GithubPrNumber(); ok {
+		_spec.SetField(session.FieldGithubPrNumber, field.TypeInt, value)
+		_node.GithubPrNumber = value
+	}
+	if value, ok := _c.mutation.SessionArtifacts(); ok {
+		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)
+		_node.SessionArtifacts = value
 	}
 	if nodes := _c.mutation.WorktreeIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -1629,6 +1691,66 @@ func (u *SessionUpsert) ClearArchivedAt() *SessionUpsert {
 	return u
 }
 
+// SetGithubPrURL sets the "github_pr_url" field.
+func (u *SessionUpsert) SetGithubPrURL(v string) *SessionUpsert {
+	u.Set(session.FieldGithubPrURL, v)
+	return u
+}
+
+// UpdateGithubPrURL sets the "github_pr_url" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateGithubPrURL() *SessionUpsert {
+	u.SetExcluded(session.FieldGithubPrURL)
+	return u
+}
+
+// ClearGithubPrURL clears the value of the "github_pr_url" field.
+func (u *SessionUpsert) ClearGithubPrURL() *SessionUpsert {
+	u.SetNull(session.FieldGithubPrURL)
+	return u
+}
+
+// SetGithubPrNumber sets the "github_pr_number" field.
+func (u *SessionUpsert) SetGithubPrNumber(v int) *SessionUpsert {
+	u.Set(session.FieldGithubPrNumber, v)
+	return u
+}
+
+// UpdateGithubPrNumber sets the "github_pr_number" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateGithubPrNumber() *SessionUpsert {
+	u.SetExcluded(session.FieldGithubPrNumber)
+	return u
+}
+
+// AddGithubPrNumber adds v to the "github_pr_number" field.
+func (u *SessionUpsert) AddGithubPrNumber(v int) *SessionUpsert {
+	u.Add(session.FieldGithubPrNumber, v)
+	return u
+}
+
+// ClearGithubPrNumber clears the value of the "github_pr_number" field.
+func (u *SessionUpsert) ClearGithubPrNumber() *SessionUpsert {
+	u.SetNull(session.FieldGithubPrNumber)
+	return u
+}
+
+// SetSessionArtifacts sets the "session_artifacts" field.
+func (u *SessionUpsert) SetSessionArtifacts(v string) *SessionUpsert {
+	u.Set(session.FieldSessionArtifacts, v)
+	return u
+}
+
+// UpdateSessionArtifacts sets the "session_artifacts" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateSessionArtifacts() *SessionUpsert {
+	u.SetExcluded(session.FieldSessionArtifacts)
+	return u
+}
+
+// ClearSessionArtifacts clears the value of the "session_artifacts" field.
+func (u *SessionUpsert) ClearSessionArtifacts() *SessionUpsert {
+	u.SetNull(session.FieldSessionArtifacts)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -2343,6 +2465,76 @@ func (u *SessionUpsertOne) UpdateArchivedAt() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearArchivedAt() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearArchivedAt()
+	})
+}
+
+// SetGithubPrURL sets the "github_pr_url" field.
+func (u *SessionUpsertOne) SetGithubPrURL(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubPrURL(v)
+	})
+}
+
+// UpdateGithubPrURL sets the "github_pr_url" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateGithubPrURL() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubPrURL()
+	})
+}
+
+// ClearGithubPrURL clears the value of the "github_pr_url" field.
+func (u *SessionUpsertOne) ClearGithubPrURL() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubPrURL()
+	})
+}
+
+// SetGithubPrNumber sets the "github_pr_number" field.
+func (u *SessionUpsertOne) SetGithubPrNumber(v int) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubPrNumber(v)
+	})
+}
+
+// AddGithubPrNumber adds v to the "github_pr_number" field.
+func (u *SessionUpsertOne) AddGithubPrNumber(v int) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.AddGithubPrNumber(v)
+	})
+}
+
+// UpdateGithubPrNumber sets the "github_pr_number" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateGithubPrNumber() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubPrNumber()
+	})
+}
+
+// ClearGithubPrNumber clears the value of the "github_pr_number" field.
+func (u *SessionUpsertOne) ClearGithubPrNumber() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubPrNumber()
+	})
+}
+
+// SetSessionArtifacts sets the "session_artifacts" field.
+func (u *SessionUpsertOne) SetSessionArtifacts(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetSessionArtifacts(v)
+	})
+}
+
+// UpdateSessionArtifacts sets the "session_artifacts" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateSessionArtifacts() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateSessionArtifacts()
+	})
+}
+
+// ClearSessionArtifacts clears the value of the "session_artifacts" field.
+func (u *SessionUpsertOne) ClearSessionArtifacts() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearSessionArtifacts()
 	})
 }
 
@@ -3226,6 +3418,76 @@ func (u *SessionUpsertBulk) UpdateArchivedAt() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearArchivedAt() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearArchivedAt()
+	})
+}
+
+// SetGithubPrURL sets the "github_pr_url" field.
+func (u *SessionUpsertBulk) SetGithubPrURL(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubPrURL(v)
+	})
+}
+
+// UpdateGithubPrURL sets the "github_pr_url" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateGithubPrURL() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubPrURL()
+	})
+}
+
+// ClearGithubPrURL clears the value of the "github_pr_url" field.
+func (u *SessionUpsertBulk) ClearGithubPrURL() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubPrURL()
+	})
+}
+
+// SetGithubPrNumber sets the "github_pr_number" field.
+func (u *SessionUpsertBulk) SetGithubPrNumber(v int) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubPrNumber(v)
+	})
+}
+
+// AddGithubPrNumber adds v to the "github_pr_number" field.
+func (u *SessionUpsertBulk) AddGithubPrNumber(v int) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.AddGithubPrNumber(v)
+	})
+}
+
+// UpdateGithubPrNumber sets the "github_pr_number" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateGithubPrNumber() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubPrNumber()
+	})
+}
+
+// ClearGithubPrNumber clears the value of the "github_pr_number" field.
+func (u *SessionUpsertBulk) ClearGithubPrNumber() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubPrNumber()
+	})
+}
+
+// SetSessionArtifacts sets the "session_artifacts" field.
+func (u *SessionUpsertBulk) SetSessionArtifacts(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetSessionArtifacts(v)
+	})
+}
+
+// UpdateSessionArtifacts sets the "session_artifacts" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateSessionArtifacts() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateSessionArtifacts()
+	})
+}
+
+// ClearSessionArtifacts clears the value of the "session_artifacts" field.
+func (u *SessionUpsertBulk) ClearSessionArtifacts() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearSessionArtifacts()
 	})
 }
 

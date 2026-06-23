@@ -64,6 +64,17 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
 	}
 
+	// Convert artifact data if available
+	if inst.Artifacts != nil {
+		a := inst.Artifacts
+		protoSession.Artifacts = &sessionv1.SessionArtifacts{
+			PrUrls:        a.PRURLs,
+			CommitShas:    a.CommitSHAs,
+			ExternalUrls:  a.ExternalURLs,
+			LastScannedAt: timestamppb.New(a.LastScannedAt),
+		}
+	}
+
 	// Convert git worktree data if available
 	wt, err := inst.GetGitWorktree()
 	if err == nil && wt != nil {

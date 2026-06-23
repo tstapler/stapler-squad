@@ -675,6 +675,73 @@ func (_u *SessionUpdate) ClearArchivedAt() *SessionUpdate {
 	return _u
 }
 
+// SetGithubPrURL sets the "github_pr_url" field.
+func (_u *SessionUpdate) SetGithubPrURL(v string) *SessionUpdate {
+	_u.mutation.SetGithubPrURL(v)
+	return _u
+}
+
+// SetNillableGithubPrURL sets the "github_pr_url" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableGithubPrURL(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetGithubPrURL(*v)
+	}
+	return _u
+}
+
+// ClearGithubPrURL clears the value of the "github_pr_url" field.
+func (_u *SessionUpdate) ClearGithubPrURL() *SessionUpdate {
+	_u.mutation.ClearGithubPrURL()
+	return _u
+}
+
+// SetGithubPrNumber sets the "github_pr_number" field.
+func (_u *SessionUpdate) SetGithubPrNumber(v int) *SessionUpdate {
+	_u.mutation.ResetGithubPrNumber()
+	_u.mutation.SetGithubPrNumber(v)
+	return _u
+}
+
+// SetNillableGithubPrNumber sets the "github_pr_number" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableGithubPrNumber(v *int) *SessionUpdate {
+	if v != nil {
+		_u.SetGithubPrNumber(*v)
+	}
+	return _u
+}
+
+// AddGithubPrNumber adds value to the "github_pr_number" field.
+func (_u *SessionUpdate) AddGithubPrNumber(v int) *SessionUpdate {
+	_u.mutation.AddGithubPrNumber(v)
+	return _u
+}
+
+// ClearGithubPrNumber clears the value of the "github_pr_number" field.
+func (_u *SessionUpdate) ClearGithubPrNumber() *SessionUpdate {
+	_u.mutation.ClearGithubPrNumber()
+	return _u
+}
+
+// SetSessionArtifacts sets the "session_artifacts" field.
+func (_u *SessionUpdate) SetSessionArtifacts(v string) *SessionUpdate {
+	_u.mutation.SetSessionArtifacts(v)
+	return _u
+}
+
+// SetNillableSessionArtifacts sets the "session_artifacts" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableSessionArtifacts(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetSessionArtifacts(*v)
+	}
+	return _u
+}
+
+// ClearSessionArtifacts clears the value of the "session_artifacts" field.
+func (_u *SessionUpdate) ClearSessionArtifacts() *SessionUpdate {
+	_u.mutation.ClearSessionArtifacts()
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdate) SetWorktreeID(id int) *SessionUpdate {
 	_u.mutation.SetWorktreeID(id)
@@ -1141,6 +1208,27 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ArchivedAtCleared() {
 		_spec.ClearField(session.FieldArchivedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.GithubPrURL(); ok {
+		_spec.SetField(session.FieldGithubPrURL, field.TypeString, value)
+	}
+	if _u.mutation.GithubPrURLCleared() {
+		_spec.ClearField(session.FieldGithubPrURL, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubPrNumber(); ok {
+		_spec.SetField(session.FieldGithubPrNumber, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedGithubPrNumber(); ok {
+		_spec.AddField(session.FieldGithubPrNumber, field.TypeInt, value)
+	}
+	if _u.mutation.GithubPrNumberCleared() {
+		_spec.ClearField(session.FieldGithubPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.SessionArtifacts(); ok {
+		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)
+	}
+	if _u.mutation.SessionArtifactsCleared() {
+		_spec.ClearField(session.FieldSessionArtifacts, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -2052,6 +2140,73 @@ func (_u *SessionUpdateOne) ClearArchivedAt() *SessionUpdateOne {
 	return _u
 }
 
+// SetGithubPrURL sets the "github_pr_url" field.
+func (_u *SessionUpdateOne) SetGithubPrURL(v string) *SessionUpdateOne {
+	_u.mutation.SetGithubPrURL(v)
+	return _u
+}
+
+// SetNillableGithubPrURL sets the "github_pr_url" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableGithubPrURL(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetGithubPrURL(*v)
+	}
+	return _u
+}
+
+// ClearGithubPrURL clears the value of the "github_pr_url" field.
+func (_u *SessionUpdateOne) ClearGithubPrURL() *SessionUpdateOne {
+	_u.mutation.ClearGithubPrURL()
+	return _u
+}
+
+// SetGithubPrNumber sets the "github_pr_number" field.
+func (_u *SessionUpdateOne) SetGithubPrNumber(v int) *SessionUpdateOne {
+	_u.mutation.ResetGithubPrNumber()
+	_u.mutation.SetGithubPrNumber(v)
+	return _u
+}
+
+// SetNillableGithubPrNumber sets the "github_pr_number" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableGithubPrNumber(v *int) *SessionUpdateOne {
+	if v != nil {
+		_u.SetGithubPrNumber(*v)
+	}
+	return _u
+}
+
+// AddGithubPrNumber adds value to the "github_pr_number" field.
+func (_u *SessionUpdateOne) AddGithubPrNumber(v int) *SessionUpdateOne {
+	_u.mutation.AddGithubPrNumber(v)
+	return _u
+}
+
+// ClearGithubPrNumber clears the value of the "github_pr_number" field.
+func (_u *SessionUpdateOne) ClearGithubPrNumber() *SessionUpdateOne {
+	_u.mutation.ClearGithubPrNumber()
+	return _u
+}
+
+// SetSessionArtifacts sets the "session_artifacts" field.
+func (_u *SessionUpdateOne) SetSessionArtifacts(v string) *SessionUpdateOne {
+	_u.mutation.SetSessionArtifacts(v)
+	return _u
+}
+
+// SetNillableSessionArtifacts sets the "session_artifacts" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableSessionArtifacts(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetSessionArtifacts(*v)
+	}
+	return _u
+}
+
+// ClearSessionArtifacts clears the value of the "session_artifacts" field.
+func (_u *SessionUpdateOne) ClearSessionArtifacts() *SessionUpdateOne {
+	_u.mutation.ClearSessionArtifacts()
+	return _u
+}
+
 // SetWorktreeID sets the "worktree" edge to the Worktree entity by ID.
 func (_u *SessionUpdateOne) SetWorktreeID(id int) *SessionUpdateOne {
 	_u.mutation.SetWorktreeID(id)
@@ -2548,6 +2703,27 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if _u.mutation.ArchivedAtCleared() {
 		_spec.ClearField(session.FieldArchivedAt, field.TypeTime)
+	}
+	if value, ok := _u.mutation.GithubPrURL(); ok {
+		_spec.SetField(session.FieldGithubPrURL, field.TypeString, value)
+	}
+	if _u.mutation.GithubPrURLCleared() {
+		_spec.ClearField(session.FieldGithubPrURL, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubPrNumber(); ok {
+		_spec.SetField(session.FieldGithubPrNumber, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedGithubPrNumber(); ok {
+		_spec.AddField(session.FieldGithubPrNumber, field.TypeInt, value)
+	}
+	if _u.mutation.GithubPrNumberCleared() {
+		_spec.ClearField(session.FieldGithubPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.SessionArtifacts(); ok {
+		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)
+	}
+	if _u.mutation.SessionArtifactsCleared() {
+		_spec.ClearField(session.FieldSessionArtifacts, field.TypeString)
 	}
 	if _u.mutation.WorktreeCleared() {
 		edge := &sqlgraph.EdgeSpec{

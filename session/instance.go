@@ -16,6 +16,7 @@ import (
 	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/artifacts"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
@@ -365,6 +366,10 @@ type Instance struct {
 	// claudeSessionIDSavedCallback is called when SetClaudeConversationUUID stores a
 	// newly discovered session_id. Used by the service layer to trigger a storage save.
 	claudeSessionIDSavedCallback func()
+
+	// Artifacts holds structured artifacts extracted from the session's JSONL history.
+	// Populated asynchronously by ArtifactExtractor. Protected by stateMutex.
+	Artifacts *artifacts.SessionArtifactsBlob
 }
 
 // SessionType indicates the type of session workflow to use
@@ -435,6 +440,7 @@ type InstanceOptions struct {
 	GitHubRepo      string // Repository name
 	GitHubSourceRef string // Original URL/reference used to create session
 	ClonedRepoPath  string // Path where repo was cloned (if cloned)
+
 	// ResumeId is the Claude conversation ID to resume (from history browser).
 	// When set, the session will start with --resume <id> flag.
 	ResumeId string
@@ -632,6 +638,21 @@ func (i *Instance) GetSessionGoal() *SessionGoalData {
 		}
 	})
 	return result
+}
+
+// HasGitHubPR reports whether a GitHub PR has been associated with this session.
+// Safe for use from any goroutine; acquires stateMutex internally.
+func (i *Instance) HasGitHubPR() bool {
+	i.stateMutex.RLock()
+	defer i.stateMutex.RUnlock()
+	return i.GitHubPRNumber > 0
+}
+
+// SetArtifacts atomically updates the in-memory Artifacts cache.
+func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+	i.Artifacts = blob
 }
 
 // SetSessionGoalCached atomically updates the in-memory sessionGoal cache.
