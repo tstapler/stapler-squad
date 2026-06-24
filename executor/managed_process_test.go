@@ -457,6 +457,29 @@ func TestManagedProcess_Wait_nonZeroExit(t *testing.T) {
 	}
 }
 
+// T-UNIT-019: StartProcess_WithProcessDir_setsWorkingDirectory
+// Regression test: WithProcessDir must actually set cmd.Dir. Previously cfg.dir
+// was stored but never applied to cmd, so the subprocess ran in the parent's cwd.
+func TestStartProcess_WithProcessDir_setsWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p, err := StartProcess(context.Background(), "pwd", nil, WithProcessDir(dir))
+	if err != nil {
+		t.Fatalf("StartProcess failed: %v", err)
+	}
+	defer p.Stop() //nolint:errcheck
+
+	got, readErr := readAllWithStop(t, p.Stdout(), p, 5*time.Second)
+	if readErr != nil {
+		t.Fatalf("read stdout: %v", readErr)
+	}
+	want := strings.TrimSpace(dir)
+	if got := strings.TrimSpace(string(got)); got != want {
+		t.Errorf("subprocess cwd = %q, want %q", got, want)
+	}
+}
+
 // T-GUARD-004: ManagedProcess_Stop_afterWait_doesNotDeadlock
 // Regression test: calling Stop() after Wait() must not deadlock.
 // Previously, Stop() did an unbounded <-waitErr after <-done, but Wait() had

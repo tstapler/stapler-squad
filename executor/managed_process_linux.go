@@ -13,7 +13,11 @@ import "syscall"
 // Setsid creates a new session (strongest isolation; implies no controlling terminal).
 func buildSysProcAttr(cfg processConfig) *syscall.SysProcAttr {
 	attr := &syscall.SysProcAttr{}
-	if !cfg.noProcGroup {
+	if !cfg.noProcGroup && !cfg.setsid {
+		// Setpgid is implied by Setsid: setsid(2) automatically makes the caller
+		// the process group leader of a new process group. Setting Setpgid at the
+		// same time causes setpgid(0,0) to run on a session leader, which returns
+		// EPERM on Linux (POSIX forbids changing the PGID of a session leader).
 		attr.Setpgid = true
 	}
 	if cfg.setsid {

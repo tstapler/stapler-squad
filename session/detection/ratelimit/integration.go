@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -87,7 +88,7 @@ type PTYConsumer struct {
 	pollInterval time.Duration
 	mu           sync.Mutex
 	running      bool
-	stopCh       chan struct{}
+	cancelFn     context.CancelFunc
 	notifyCh     chan struct{}
 }
 
@@ -96,7 +97,6 @@ func NewPTYConsumer(buffer BufferReader, manager *Manager) *PTYConsumer {
 		buffer:       buffer,
 		manager:      manager,
 		pollInterval: 500 * time.Millisecond,
-		stopCh:       make(chan struct{}),
 		notifyCh:     make(chan struct{}, 1),
 	}
 }
@@ -119,8 +119,10 @@ func (pc *PTYConsumer) Start() {
 		return
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	pc.cancelFn = cancel
 	pc.running = true
-	go pc.pollLoop()
+	go pc.pollLoop(ctx)
 }
 
 func (pc *PTYConsumer) Stop() {
@@ -132,26 +134,19 @@ func (pc *PTYConsumer) Stop() {
 	}
 
 	pc.running = false
-	close(pc.stopCh)
-	pc.stopCh = make(chan struct{})
+	if pc.cancelFn != nil {
+		pc.cancelFn()
+		pc.cancelFn = nil
+	}
 }
 
-func (pc *PTYConsumer) pollLoop() {
-	// Capture stopCh at goroutine start while the mutex is still held by Start().
-	// Stop() reassigns pc.stopCh under the mutex; reading pc.stopCh directly inside
-	// the select loop creates a data race between the assignment and this read.
-	// Using a local snapshot is safe because Stop() closes the original channel
-	// (making this receive unblock) before reassigning.
-	pc.mu.Lock()
-	stopCh := pc.stopCh
-	pc.mu.Unlock()
-
+func (pc *PTYConsumer) pollLoop(ctx context.Context) {
 	heartbeat := time.NewTicker(5 * time.Second)
 	defer heartbeat.Stop()
 
 	for {
 		select {
-		case <-stopCh:
+		case <-ctx.Done():
 			return
 		case <-pc.notifyCh:
 			data := pc.buffer.GetRecentOutput(4096)

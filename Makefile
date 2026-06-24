@@ -468,6 +468,9 @@ test-triage-parser: proto-gen ## Phase 3: verify parser tolerates LLM preamble b
 test-triage-flow: proto-gen ## Phase 4: full flow — create, gate, set repoPath, trigger, verify
 	go test -v -tags=harness -run TestTriageHarness/FullFlow ./server/services/
 
+test-triage-real: proto-gen ## Run triage with a REAL Claude session (requires claude in PATH, ~30s)
+	go test -v -tags=harness -run TestTriageHarness_RealClaude ./server/services/ -timeout 5m
+
 coverage-integration: ensure-tools proto-gen ## Build instrumented binary, run integration tests, emit integration.out
 	@mkdir -p /tmp/covdata
 	go build -cover -o stapler-squad-cov .
