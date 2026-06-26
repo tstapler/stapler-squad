@@ -1428,8 +1428,18 @@ func (s *SessionService) UpdateSession(
 
 	// Handle program update
 	if req.Msg.Program != nil && *req.Msg.Program != "" && instance.Program != *req.Msg.Program {
-		instance.Program = *req.Msg.Program
+		oldProgram := instance.Program
+		newProgram := *req.Msg.Program
+		instance.Program = newProgram
 		updatedFields = append(updatedFields, "program")
+
+		// Port history if switching between Claude and Antigravity
+		if (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
+			((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude")) {
+			if err := session.PortSessionHistory(ctx, oldProgram, newProgram, instance); err != nil {
+				log.Error("[UpdateSession] failed to port session history during program switch", "session", instance.Title, "old", oldProgram, "new", newProgram, "err", err)
+			}
+		}
 
 		// If the session is running, restart it with the new program
 		if instance.Status == session.Active {
