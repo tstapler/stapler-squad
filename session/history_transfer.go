@@ -1,6 +1,7 @@
 package session
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -14,6 +15,291 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// ConversationID represents a validated Claude/Antigravity conversation UUID.
+type ConversationID string
+
+// ParseConversationID parses and validates a raw string as a ConversationID.
+func ParseConversationID(s string) (ConversationID, error) {
+	if !isValidUUID(s) {
+		return "", fmt.Errorf("invalid conversation ID format: %q", s)
+	}
+	return ConversationID(s), nil
+}
+
+// WorkspacePath represents a cleaned, resolved workspace root path.
+type WorkspacePath string
+
+// NewWorkspacePath resolves symlinks and cleans a path to guarantee a single canonical representation.
+func NewWorkspacePath(s string) (WorkspacePath, error) {
+	if s == "" {
+		return "", fmt.Errorf("workspace path cannot be empty")
+	}
+	resolved, err := filepath.EvalSymlinks(s)
+	if err != nil {
+		resolved = s
+	}
+	return WorkspacePath(filepath.Clean(resolved)), nil
+}
+
+// SkippedTurn represents a meta-turn or skipped turn.
+type SkippedTurn struct{}
+
+func (SkippedTurn) unifiedTurn() {}
+
+// UnifiedTurn represents a domain-level turn in the transcript.
+type UnifiedTurn interface {
+	unifiedTurn()
+}
+
+// UserMessage represents a turn initiated by the user.
+type UserMessage struct {
+	Content   string
+	Timestamp string
+}
+
+func (UserMessage) unifiedTurn() {}
+
+// AssistantMessage represents a turn responded by the assistant, including optional tool calls.
+type AssistantMessage struct {
+	Content   string
+	ToolCalls []UnifiedToolCall
+	Timestamp string
+}
+
+func (AssistantMessage) unifiedTurn() {}
+
+// UnifiedToolCall represents a generic tool execution in the transcript.
+type UnifiedToolCall struct {
+	Name string
+	Args map[string]interface{}
+}
+
+// ParseClaudeTurn parses a raw Claude JSONL line into a UnifiedTurn.
+func ParseClaudeTurn(line []byte) (UnifiedTurn, error) {
+	type RawClaudeTurn struct {
+		Type      string `json:"type"`
+		Timestamp string `json:"timestamp"`
+		Message   *struct {
+			Role    string      `json:"role"`
+			Content interface{} `json:"content"`
+		} `json:"message,omitempty"`
+	}
+
+	var raw RawClaudeTurn
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal Claude turn: %w", err)
+	}
+
+	switch raw.Type {
+	case "user":
+		if raw.Message == nil {
+			return nil, fmt.Errorf("user turn is missing message details")
+		}
+		contentStr := ""
+		if s, ok := raw.Message.Content.(string); ok {
+			contentStr = s
+		} else if contentList, ok := raw.Message.Content.([]interface{}); ok {
+			var parts []string
+			for _, c := range contentList {
+				if cMap, ok := c.(map[string]interface{}); ok {
+					switch cMap["type"] {
+					case "text":
+						if txt, ok := cMap["text"].(string); ok {
+							parts = append(parts, txt)
+						}
+					case "tool_result":
+						if content, ok := cMap["content"].(string); ok {
+							parts = append(parts, content)
+						}
+					}
+				}
+			}
+			contentStr = strings.Join(parts, "\n")
+		}
+		return UserMessage{
+			Content:   contentStr,
+			Timestamp: raw.Timestamp,
+		}, nil
+
+	case "assistant":
+		if raw.Message == nil {
+			return nil, fmt.Errorf("assistant turn is missing message details")
+		}
+		var textParts []string
+		var toolCalls []UnifiedToolCall
+
+		if contentList, ok := raw.Message.Content.([]interface{}); ok {
+			for _, c := range contentList {
+				if cMap, ok := c.(map[string]interface{}); ok {
+					cType := cMap["type"]
+					switch cType {
+					case "text":
+						if txt, ok := cMap["text"].(string); ok {
+							textParts = append(textParts, txt)
+						}
+					case "tool_use":
+						args, _ := cMap["input"].(map[string]interface{})
+						name, _ := cMap["name"].(string)
+						toolCalls = append(toolCalls, UnifiedToolCall{
+							Name: name,
+							Args: args,
+						})
+					}
+				}
+			}
+		}
+		return AssistantMessage{
+			Content:   strings.Join(textParts, "\n"),
+			ToolCalls: toolCalls,
+			Timestamp: raw.Timestamp,
+		}, nil
+
+	default:
+		// Skip other meta-events (queue-operation, last-prompt, attachment etc)
+		return SkippedTurn{}, nil
+	}
+}
+
+// ParseAgyStep parses a raw Antigravity JSONL line into a UnifiedTurn.
+func ParseAgyStep(line []byte) (UnifiedTurn, error) {
+	type RawAgyStep struct {
+		StepIndex int    `json:"step_index"`
+		Source    string `json:"source"`
+		Type      string `json:"type"`
+		Status    string `json:"status"`
+		CreatedAt string `json:"created_at"`
+		Content   string `json:"content"`
+		ToolCalls []struct {
+			Name string                 `json:"name"`
+			Args map[string]interface{} `json:"args"`
+		} `json:"tool_calls"`
+	}
+
+	var raw RawAgyStep
+	if err := json.Unmarshal(line, &raw); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal Antigravity step: %w", err)
+	}
+
+	switch raw.Type {
+	case "USER_INPUT":
+		return UserMessage{
+			Content:   raw.Content,
+			Timestamp: raw.CreatedAt,
+		}, nil
+	case "PLANNER_RESPONSE":
+		var toolCalls []UnifiedToolCall
+		for _, tc := range raw.ToolCalls {
+			toolCalls = append(toolCalls, UnifiedToolCall{
+				Name: tc.Name,
+				Args: tc.Args,
+			})
+		}
+		return AssistantMessage{
+			Content:   raw.Content,
+			ToolCalls: toolCalls,
+			Timestamp: raw.CreatedAt,
+		}, nil
+	default:
+		return SkippedTurn{}, nil // Ignore other step types
+	}
+}
+
+// MarshalTurnToClaude converts a UnifiedTurn into Claude JSONL format.
+func MarshalTurnToClaude(turn UnifiedTurn, sessionId string, cwd string, parentUuid string, turnUuid string) ([]byte, error) {
+	switch t := turn.(type) {
+	case UserMessage:
+		m := map[string]interface{}{
+			"parentUuid":  nilIfEmptyInterface(parentUuid),
+			"isSidechain": false,
+			"type":        "user",
+			"message": map[string]interface{}{
+				"role":    "user",
+				"content": t.Content,
+			},
+			"uuid":      turnUuid,
+			"timestamp": t.Timestamp,
+			"sessionId": sessionId,
+			"cwd":       cwd,
+		}
+		return json.Marshal(m)
+	case AssistantMessage:
+		var content []map[string]interface{}
+		if t.Content != "" {
+			content = append(content, map[string]interface{}{
+				"type": "text",
+				"text": t.Content,
+			})
+		}
+		for _, tc := range t.ToolCalls {
+			content = append(content, map[string]interface{}{
+				"type":  "tool_use",
+				"name":  tc.Name,
+				"input": tc.Args,
+			})
+		}
+		m := map[string]interface{}{
+			"parentUuid":  nilIfEmptyInterface(parentUuid),
+			"isSidechain": false,
+			"type":        "assistant",
+			"message": map[string]interface{}{
+				"role":    "assistant",
+				"content": content,
+			},
+			"uuid":      turnUuid,
+			"timestamp": t.Timestamp,
+			"sessionId": sessionId,
+			"cwd":       cwd,
+		}
+		return json.Marshal(m)
+	default:
+		return nil, fmt.Errorf("unsupported turn type: %T", turn)
+	}
+}
+
+type AgyStepOut struct {
+	StepIndex int                      `json:"step_index"`
+	Source    string                   `json:"source"`
+	Type      string                   `json:"type"`
+	Status    string                   `json:"status"`
+	CreatedAt string                   `json:"created_at"`
+	Content   string                   `json:"content,omitempty"`
+	ToolCalls []map[string]interface{} `json:"tool_calls,omitempty"`
+}
+
+// MarshalTurnToAgy converts a UnifiedTurn into Antigravity JSONL step format.
+func MarshalTurnToAgy(turn UnifiedTurn, stepIdx int) (AgyStepOut, error) {
+	switch t := turn.(type) {
+	case UserMessage:
+		return AgyStepOut{
+			StepIndex: stepIdx,
+			Source:    "USER_EXPLICIT",
+			Type:      "USER_INPUT",
+			Status:    "DONE",
+			CreatedAt: t.Timestamp,
+			Content:   t.Content,
+		}, nil
+	case AssistantMessage:
+		var toolCalls []map[string]interface{}
+		for _, tc := range t.ToolCalls {
+			toolCalls = append(toolCalls, map[string]interface{}{
+				"name": tc.Name,
+				"args": tc.Args,
+			})
+		}
+		return AgyStepOut{
+			StepIndex: stepIdx,
+			Source:    "MODEL",
+			Type:      "PLANNER_RESPONSE",
+			Status:    "DONE",
+			CreatedAt: t.Timestamp,
+			Content:   t.Content,
+			ToolCalls: toolCalls,
+		}, nil
+	default:
+		return AgyStepOut{}, fmt.Errorf("unsupported turn type: %T", turn)
+	}
+}
 
 // PortSessionHistory translates and syncs history between Claude Code and Antigravity CLI.
 func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *Instance) error {
@@ -33,15 +319,21 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 
 func portClaudeToAgy(i *Instance) error {
 	// 1. Get Claude Session ID
-	uuid := i.GetClaudeConversationUUID()
-	if uuid == "" {
+	uuidStr := i.GetClaudeConversationUUID()
+	if uuidStr == "" {
 		// Try to extract it
 		i.tryExtractConversationUUID()
-		uuid = i.GetClaudeConversationUUID()
+		uuidStr = i.GetClaudeConversationUUID()
 	}
-	if uuid == "" {
+	if uuidStr == "" {
 		log.Info("no claude conversation UUID found to port", "session", i.Title)
 		return nil
+	}
+
+	// Parse boundary input to a verified domain type
+	uuid, err := ParseConversationID(uuidStr)
+	if err != nil {
+		return err
 	}
 
 	home, err := os.UserHomeDir()
@@ -52,11 +344,11 @@ func portClaudeToAgy(i *Instance) error {
 	// 2. Find Claude JSONL file
 	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
 	var claudeLogPath string
-	err = filepath.Walk(claudeProjectsDir, func(path string, info os.FileInfo, err error) error {
+	_ = filepath.Walk(claudeProjectsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil
 		}
-		if !info.IsDir() && info.Name() == uuid+".jsonl" {
+		if !info.IsDir() && info.Name() == string(uuid)+".jsonl" {
 			claudeLogPath = path
 			return fmt.Errorf("found") // Use error to break early
 		}
@@ -68,95 +360,40 @@ func portClaudeToAgy(i *Instance) error {
 		return nil
 	}
 
-	// 3. Parse Claude JSONL and translate turns
+	// 3. Parse Claude JSONL into UnifiedTurns
 	file, err := os.Open(claudeLogPath)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	decoder := json.NewDecoder(file)
-	type ClaudeTurn struct {
-		Type      string `json:"type"`
-		Timestamp string `json:"timestamp"`
-		Message   struct {
-			Role    string      `json:"role"`
-			Content interface{} `json:"content"`
-		} `json:"message"`
-	}
-
-	type AgyStep struct {
-		StepIndex int           `json:"step_index"`
-		Source    string        `json:"source"`
-		Type      string        `json:"type"`
-		Status    string        `json:"status"`
-		CreatedAt string        `json:"created_at"`
-		Content   string        `json:"content,omitempty"`
-		ToolCalls []interface{} `json:"tool_calls,omitempty"`
-	}
-
-	var agySteps []AgyStep
-	stepIdx := 0
-
+	var unifiedTurns []UnifiedTurn
+	reader := bufio.NewReader(file)
 	for {
-		var turn ClaudeTurn
-		if err := decoder.Decode(&turn); err == io.EOF {
-			break
-		} else if err != nil {
-			continue
+		lineBytes, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("failed to read Claude JSONL log: %w", err)
 		}
 
-		if turn.Type == "user" {
-			contentStr := ""
-			if s, ok := turn.Message.Content.(string); ok {
-				contentStr = s
-			}
-			agySteps = append(agySteps, AgyStep{
-				StepIndex: stepIdx,
-				Source:    "USER_EXPLICIT",
-				Type:      "USER_INPUT",
-				Status:    "DONE",
-				CreatedAt: turn.Timestamp,
-				Content:   contentStr,
-			})
-			stepIdx++
-		} else if turn.Type == "assistant" {
-			textStr := ""
-			var toolCalls []interface{}
-
-			if contentList, ok := turn.Message.Content.([]interface{}); ok {
-				for _, c := range contentList {
-					if cMap, ok := c.(map[string]interface{}); ok {
-						cType := cMap["type"]
-						if cType == "text" {
-							if txt, ok := cMap["text"].(string); ok {
-								textStr = txt
-							}
-						} else if cType == "tool_use" {
-							toolCalls = append(toolCalls, map[string]interface{}{
-								"name": cMap["name"],
-								"args": cMap["input"],
-							})
-						}
-					}
+		lineStr := strings.TrimSpace(string(lineBytes))
+		if lineStr != "" {
+			turn, err := ParseClaudeTurn([]byte(lineStr))
+			if err != nil {
+				log.Warn("skipping invalid jsonl line in Claude transcript", "err", err)
+			} else if turn != nil {
+				if _, ok := turn.(SkippedTurn); !ok {
+					unifiedTurns = append(unifiedTurns, turn)
 				}
 			}
+		}
 
-			agySteps = append(agySteps, AgyStep{
-				StepIndex: stepIdx,
-				Source:    "MODEL",
-				Type:      "PLANNER_RESPONSE",
-				Status:    "DONE",
-				CreatedAt: turn.Timestamp,
-				Content:   textStr,
-				ToolCalls: toolCalls,
-			})
-			stepIdx++
+		if err == io.EOF {
+			break
 		}
 	}
 
 	// 4. Create Antigravity brain dir and write transcript files
-	agyBrainDir := filepath.Join(home, ".gemini", "antigravity-cli", "brain", uuid, ".system_generated", "logs")
+	agyBrainDir := filepath.Join(home, ".gemini", "antigravity-cli", "brain", string(uuid), ".system_generated", "logs")
 	if err := os.MkdirAll(agyBrainDir, 0700); err != nil {
 		return err
 	}
@@ -169,8 +406,13 @@ func portClaudeToAgy(i *Instance) error {
 		if err != nil {
 			return err
 		}
-		for _, step := range agySteps {
-			data, err := json.Marshal(step)
+		for idx, turn := range unifiedTurns {
+			agyStep, err := MarshalTurnToAgy(turn, idx)
+			if err != nil {
+				f.Close()
+				return err
+			}
+			data, err := json.Marshal(agyStep)
 			if err != nil {
 				f.Close()
 				return err
@@ -185,9 +427,9 @@ func portClaudeToAgy(i *Instance) error {
 	agyHistoryPath := filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl")
 	historyEntry := map[string]interface{}{
 		"display":        fmt.Sprintf("Ported from Claude: %s", i.Title),
-		"timestamp":      time.Now().UnixNano() / int64(time.Millisecond),
+		"timestamp":      time.Now().UnixMilli(),
 		"workspace":      i.GetWorkingDirectory(),
-		"conversationId": uuid,
+		"conversationId": string(uuid),
 	}
 	historyData, err := json.Marshal(historyEntry)
 	if err == nil {
@@ -200,7 +442,7 @@ func portClaudeToAgy(i *Instance) error {
 	}
 
 	// 6. Create SQLite DB
-	dbPath := filepath.Join(home, ".gemini", "antigravity-cli", "conversations", uuid+".db")
+	dbPath := filepath.Join(home, ".gemini", "antigravity-cli", "conversations", string(uuid)+".db")
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0700); err != nil {
 		return err
 	}
@@ -239,20 +481,31 @@ func portClaudeToAgy(i *Instance) error {
 		}
 	}
 
+	// Begin transaction
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	// Insert meta
-	if _, err := db.Exec(`INSERT OR REPLACE INTO trajectory_meta (trajectory_id, cascade_id, trajectory_type, source) VALUES (?, ?, 0, 0);`, uuid, uuid); err != nil {
+	if _, err := tx.Exec(`INSERT OR REPLACE INTO trajectory_meta (trajectory_id, cascade_id, trajectory_type, source) VALUES (?, ?, 0, 0);`, string(uuid), string(uuid)); err != nil {
 		return err
 	}
 
 	// Insert steps (simple placeholder steps so SQLite is structurally valid)
-	for _, step := range agySteps {
+	for idx, turn := range unifiedTurns {
 		stepType := 15 // PLANNER_RESPONSE
-		if step.Type == "USER_INPUT" {
+		if _, ok := turn.(UserMessage); ok {
 			stepType = 14
 		}
-		if _, err := db.Exec(`INSERT OR REPLACE INTO steps (idx, step_type, status, has_subtrajectory) VALUES (?, ?, 3, 0);`, step.StepIndex, stepType); err != nil {
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO steps (idx, step_type, status, has_subtrajectory) VALUES (?, ?, 3, 0);`, idx, stepType); err != nil {
 			return err
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 
 	log.Info("ported session history from Claude to Antigravity", "uuid", uuid, "session", i.Title)
@@ -266,17 +519,16 @@ func portAgyToClaude(i *Instance) error {
 	}
 
 	// 1. Locate Agy Session ID
-	// Since we are running in a workspace/worktree, let's search ~/.gemini/antigravity-cli/history.jsonl
-	// for the workspace and retrieve the most recent conversationId.
 	agyHistoryPath := filepath.Join(home, ".gemini", "antigravity-cli", "history.jsonl")
 	if _, err := os.Stat(agyHistoryPath); os.IsNotExist(err) {
 		log.Info("no antigravity history file found to port from", "session", i.Title)
 		return nil
 	}
 
-	workspace := i.GetWorkingDirectory()
-	if workspace == "" {
-		return fmt.Errorf("workspace path empty")
+	workspaceStr := i.GetWorkingDirectory()
+	workspace, err := NewWorkspacePath(workspaceStr)
+	if err != nil {
+		return err
 	}
 
 	// Read history.jsonl
@@ -285,7 +537,7 @@ func portAgyToClaude(i *Instance) error {
 		return err
 	}
 
-	var uuid string
+	var uuid ConversationID
 	lines := strings.Split(string(data), "\n")
 	for idx := len(lines) - 1; idx >= 0; idx-- {
 		line := strings.TrimSpace(lines[idx])
@@ -294,10 +546,15 @@ func portAgyToClaude(i *Instance) error {
 		}
 		var entry map[string]interface{}
 		if err := json.Unmarshal([]byte(line), &entry); err == nil {
-			if entry["workspace"] == workspace {
+			entryWorkspaceStr, _ := entry["workspace"].(string)
+			entryWorkspace, err := NewWorkspacePath(entryWorkspaceStr)
+			if err == nil && entryWorkspace == workspace {
 				if convID, ok := entry["conversationId"].(string); ok && convID != "" {
-					uuid = convID
-					break
+					parsedUUID, err := ParseConversationID(convID)
+					if err == nil {
+						uuid = parsedUUID
+						break
+					}
 				}
 			}
 		}
@@ -309,10 +566,9 @@ func portAgyToClaude(i *Instance) error {
 	}
 
 	// 2. Open Antigravity JSONL
-	agyLogPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", uuid, ".system_generated", "logs", "transcript_full.jsonl")
+	agyLogPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", string(uuid), ".system_generated", "logs", "transcript_full.jsonl")
 	if _, err := os.Stat(agyLogPath); os.IsNotExist(err) {
-		// try non-full fallback
-		agyLogPath = filepath.Join(home, ".gemini", "antigravity-cli", "brain", uuid, ".system_generated", "logs", "transcript.jsonl")
+		agyLogPath = filepath.Join(home, ".gemini", "antigravity-cli", "brain", string(uuid), ".system_generated", "logs", "transcript.jsonl")
 		if _, err := os.Stat(agyLogPath); os.IsNotExist(err) {
 			log.Warn("antigravity log file not found", "uuid", uuid)
 			return nil
@@ -325,102 +581,55 @@ func portAgyToClaude(i *Instance) error {
 	}
 	defer file.Close()
 
-	type AgyStep struct {
-		StepIndex int    `json:"step_index"`
-		Source    string `json:"source"`
-		Type      string `json:"type"`
-		Status    string `json:"status"`
-		CreatedAt string `json:"created_at"`
-		Content   string `json:"content"`
-		ToolCalls []struct {
-			Name string                 `json:"name"`
-			Args map[string]interface{} `json:"args"`
-		} `json:"tool_calls"`
-	}
-
-	decoder := json.NewDecoder(file)
-	var claudeTurns []map[string]interface{}
-	parentUUID := ""
-
+	var unifiedTurns []UnifiedTurn
+	reader := bufio.NewReader(file)
 	for {
-		var step AgyStep
-		if err := decoder.Decode(&step); err == io.EOF {
-			break
-		} else if err != nil {
-			continue
+		lineBytes, err := reader.ReadBytes('\n')
+		if err != nil && err != io.EOF {
+			return fmt.Errorf("failed to read Antigravity JSONL log: %w", err)
 		}
 
-		turnUUID := fmt.Sprintf("%s-%d", uuid, step.StepIndex)
-
-		if step.Type == "USER_INPUT" {
-			claudeTurns = append(claudeTurns, map[string]interface{}{
-				"parentUuid":  nilIfEmpty(parentUUID),
-				"isSidechain": false,
-				"type":        "user",
-				"message": map[string]interface{}{
-					"role":    "user",
-					"content": step.Content,
-				},
-				"uuid":      turnUUID,
-				"timestamp": step.CreatedAt,
-				"sessionId": uuid,
-				"cwd":       workspace,
-			})
-			parentUUID = turnUUID
-		} else if step.Type == "PLANNER_RESPONSE" {
-			var content []map[string]interface{}
-			if step.Content != "" {
-				content = append(content, map[string]interface{}{
-					"type": "text",
-					"text": step.Content,
-				})
+		lineStr := strings.TrimSpace(string(lineBytes))
+		if lineStr != "" {
+			turn, err := ParseAgyStep([]byte(lineStr))
+			if err != nil {
+				log.Warn("skipping invalid jsonl line in Antigravity transcript", "err", err)
+			} else if turn != nil {
+				if _, ok := turn.(SkippedTurn); !ok {
+					unifiedTurns = append(unifiedTurns, turn)
+				}
 			}
-			for _, tc := range step.ToolCalls {
-				content = append(content, map[string]interface{}{
-					"type":  "tool_use",
-					"name":  tc.Name,
-					"input": tc.Args,
-				})
-			}
+		}
 
-			claudeTurns = append(claudeTurns, map[string]interface{}{
-				"parentUuid":  nilIfEmpty(parentUUID),
-				"isSidechain": false,
-				"type":        "assistant",
-				"message": map[string]interface{}{
-					"role":    "assistant",
-					"content": content,
-				},
-				"uuid":      turnUUID,
-				"timestamp": step.CreatedAt,
-				"sessionId": uuid,
-				"cwd":       workspace,
-			})
-			parentUUID = turnUUID
+		if err == io.EOF {
+			break
 		}
 	}
 
 	// 3. Write Claude project transcript
-	sanitizedPath := sanitizeProjectCwd(workspace)
-	claudeProjectDir := filepath.Join(home, ".claude", "projects", sanitizedPath+"-session")
+	projectDir := ClaudeProjectDirName(string(workspace))
+	claudeProjectDir := filepath.Join(home, ".claude", "projects", projectDir)
 	if err := os.MkdirAll(claudeProjectDir, 0700); err != nil {
 		return err
 	}
 
-	claudeLogPath := filepath.Join(claudeProjectDir, uuid+".jsonl")
+	claudeLogPath := filepath.Join(claudeProjectDir, string(uuid)+".jsonl")
 	f, err := os.Create(claudeLogPath)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	for _, turn := range claudeTurns {
-		data, err := json.Marshal(turn)
+	parentUUID := ""
+	for idx, turn := range unifiedTurns {
+		turnUUID := fmt.Sprintf("%s-%d", string(uuid), idx)
+		data, err := MarshalTurnToClaude(turn, string(uuid), string(workspace), parentUUID, turnUUID)
 		if err != nil {
 			return err
 		}
 		f.Write(data)
 		f.Write([]byte("\n"))
+		parentUUID = turnUUID
 	}
 
 	// 4. Append to Claude history.jsonl
@@ -428,9 +637,9 @@ func portAgyToClaude(i *Instance) error {
 	historyEntry := map[string]interface{}{
 		"display":        fmt.Sprintf("Ported from Antigravity: %s", i.Title),
 		"pastedContents": map[string]interface{}{},
-		"timestamp":      time.Now().UnixNano() / int64(time.Millisecond),
-		"project":        workspace,
-		"sessionId":      uuid,
+		"timestamp":      time.Now().UnixMilli(),
+		"project":        string(workspace),
+		"sessionId":      string(uuid),
 	}
 	historyData, err := json.Marshal(historyEntry)
 	if err == nil {
@@ -442,30 +651,32 @@ func portAgyToClaude(i *Instance) error {
 		}
 	}
 
-	// 5. Update the instance's Claude session data so it resumes
+	// 5. Update the instance's Claude session data under mutex lock and trigger persistence
+	i.stateMutex.Lock()
 	if i.claudeSession == nil {
 		i.claudeSession = &ClaudeSessionData{}
 	}
-	i.claudeSession.ConversationUUID = uuid
+	i.claudeSession.ConversationUUID = string(uuid)
 	i.claudeSession.ProjectName = i.Title
 	i.claudeSession.LastAttached = time.Now()
 	if i.claudeSession.Metadata == nil {
 		i.claudeSession.Metadata = make(map[string]string)
 	}
-	i.claudeSession.Metadata["working_dir"] = workspace
+	i.claudeSession.Metadata["working_dir"] = string(workspace)
+	cb := i.claudeSessionIDSavedCallback
+	i.stateMutex.Unlock()
+
+	if cb != nil {
+		cb()
+	}
 
 	log.Info("ported session history from Antigravity to Claude", "uuid", uuid, "session", i.Title)
 	return nil
 }
 
-func sanitizeProjectCwd(workspace string) string {
-	var sb strings.Builder
-	for _, r := range workspace {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
-			sb.WriteRune(r)
-		} else {
-			sb.WriteRune('-')
-		}
+func nilIfEmptyInterface(s string) interface{} {
+	if s == "" {
+		return nil
 	}
-	return strings.Trim(sb.String(), "-")
+	return s
 }

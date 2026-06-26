@@ -22,8 +22,8 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	uuid := "550e8400-e29b-41d4-a716-446655440000"
 	workspace := "/home/test/myproject"
 
-	// Create Claude projects directory and mock transcript
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", "home-test-myproject-session")
+	// Create Claude projects directory and mock transcript using ClaudeProjectDirName
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
 	err := os.MkdirAll(claudeProjectDir, 0700)
 	if err != nil {
 		t.Fatalf("failed to create claude projects dir: %v", err)
@@ -58,6 +58,20 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 						"type":  "tool_use",
 						"name":  "run_command",
 						"input": map[string]interface{}{"command": "ls"},
+					},
+				},
+			},
+		},
+		{
+			"type":      "user",
+			"timestamp": "2026-06-25T20:02:00Z",
+			"message": map[string]interface{}{
+				"role":    "user",
+				"content": []interface{}{
+					map[string]interface{}{
+						"type":        "tool_result",
+						"tool_use_id": "toolu_xxx",
+						"content":     "file contents here",
 					},
 				},
 			},
@@ -116,8 +130,8 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 		steps = append(steps, step)
 	}
 
-	if len(steps) != 2 {
-		t.Fatalf("expected 2 steps, got %d", len(steps))
+	if len(steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(steps))
 	}
 
 	if steps[0]["type"] != "USER_INPUT" || steps[0]["content"] != "hello world" {
@@ -125,6 +139,9 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	}
 	if steps[1]["type"] != "PLANNER_RESPONSE" || steps[1]["content"] != "hi there" {
 		t.Errorf("step 1 incorrect: %v", steps[1])
+	}
+	if steps[2]["type"] != "USER_INPUT" || steps[2]["content"] != "file contents here" {
+		t.Errorf("step 2 incorrect: %v", steps[2])
 	}
 
 	// 2. Check history entry
@@ -160,8 +177,8 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to query steps table: %v", err)
 	}
-	if count != 2 {
-		t.Errorf("expected 2 rows in steps table, got %d", count)
+	if count != 3 {
+		t.Errorf("expected 3 rows in steps table, got %d", count)
 	}
 
 	var stepType int
@@ -268,7 +285,7 @@ func TestPortSessionHistory_AgyToClaude(t *testing.T) {
 
 	// Assertions
 	// 1. Check Claude transcript file
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", "home-test-myproject-session")
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
 	claudeLogPath := filepath.Join(claudeProjectDir, uuid+".jsonl")
 	if _, err := os.Stat(claudeLogPath); os.IsNotExist(err) {
 		t.Fatalf("claude log file does not exist at %s", claudeLogPath)
@@ -438,9 +455,10 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 		}
 	}
 
+	workspace := "/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/stapler-squad-transfer_18bc8392fbd12153"
 	inst := &Instance{
 		Title: "live-port-test-agy",
-		Path:  "/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/stapler-squad-transfer_18bc8392fbd12153",
+		Path:  workspace,
 	}
 
 	err = PortSessionHistory(context.Background(), "agy", "claude", inst)
@@ -448,8 +466,8 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 		t.Fatalf("failed to port live session: %v", err)
 	}
 
-	// Assert Claude transcript is written
-	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", "home-tstapler--stapler-squad-workspaces-d685c4b1a423cca3-worktrees-stapler-squad-transfer_18bc8392fbd12153-session")
+	// Assert Claude transcript is written using ClaudeProjectDirName
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
 	claudeLogPath := filepath.Join(claudeProjectDir, liveSessionUUID+".jsonl")
 
 	if _, err := os.Stat(claudeLogPath); os.IsNotExist(err) {
@@ -478,4 +496,3 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 		t.Errorf("expected turns to be populated")
 	}
 }
-
