@@ -5,7 +5,9 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -37,19 +39,25 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 		convUUID = i.claudeSession.ConversationUUID
 	}
 
-	// Count lines in history file for accurate fork truncation later.
+	// Count non-empty lines in history file for accurate fork truncation later.
+	// Uses bufio.NewReader instead of bufio.Scanner to avoid the 64 KB
+	// MaxScanTokenSize limit — Claude tool results and image blocks can exceed it.
 	var convLineCount uint64
 	if i.HistoryFilePath != "" {
 		if f, err := os.Open(i.HistoryFilePath); err == nil {
 			defer f.Close()
-			sc := bufio.NewScanner(f)
-			for sc.Scan() {
-				if len(sc.Bytes()) > 0 {
+			reader := bufio.NewReader(f)
+			for {
+				line, readErr := reader.ReadBytes('\n')
+				if len(bytes.TrimSpace(line)) > 0 {
 					convLineCount++
 				}
-			}
-			if scanErr := sc.Err(); scanErr != nil {
-				log.Warn("createcheckpoint: error scanning history file", "err", scanErr)
+				if readErr != nil {
+					if readErr != io.EOF {
+						log.Warn("createcheckpoint: error reading history file", "err", readErr)
+					}
+					break
+				}
 			}
 		}
 	}

@@ -496,3 +496,98 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 		t.Errorf("expected turns to be populated")
 	}
 }
+
+// TestPortClaudeToAgy_SchemaMatchesRealDB verifies that the SQLite database
+// produced by portClaudeToAgy has all tables and indexes present in real
+// Antigravity conversation databases (verified from live .db files).
+// Without the full schema, Antigravity may fail on first open.
+func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
+	tempHome := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tempHome)
+	defer os.Setenv("HOME", origHome)
+
+	uuid := "aa0e8400-e29b-41d4-a716-446655440000"
+	workspace := "/home/test/schemaproject"
+
+	// Write a minimal Claude JSONL fixture.
+	claudeProjectDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(workspace))
+	if err := os.MkdirAll(claudeProjectDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	claudeLogPath := filepath.Join(claudeProjectDir, uuid+".jsonl")
+	f, err := os.Create(claudeLogPath)
+	if err != nil {
+		t.Fatalf("create log: %v", err)
+	}
+	turns := []map[string]interface{}{
+		{"type": "user", "timestamp": "2026-01-01T00:00:00Z",
+			"message": map[string]interface{}{"role": "user", "content": "hi"}},
+	}
+	enc := json.NewEncoder(f)
+	for _, turn := range turns {
+		_ = enc.Encode(turn)
+	}
+	f.Close()
+
+	// Run the port.
+	inst := &Instance{
+		Title:          "schema-test-session",
+		WorkingDir:     workspace,
+		claudeSession:  &ClaudeSessionData{ConversationUUID: uuid},
+		HistoryFilePath: claudeLogPath,
+	}
+	if err := portClaudeToAgy(inst); err != nil {
+		t.Fatalf("portClaudeToAgy: %v", err)
+	}
+
+	// Open the produced DB and inspect sqlite_master.
+	dbPath := filepath.Join(tempHome, ".gemini", "antigravity-cli", "conversations", uuid+".db")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT type, name FROM sqlite_master WHERE type IN ('table','index') ORDER BY type, name`)
+	if err != nil {
+		t.Fatalf("query sqlite_master: %v", err)
+	}
+	defer rows.Close()
+
+	type schemaObj struct{ typ, name string }
+	var got []schemaObj
+	for rows.Next() {
+		var o schemaObj
+		if err := rows.Scan(&o.typ, &o.name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, o)
+	}
+
+	// These must all be present — verified from real Antigravity .db files.
+	required := []schemaObj{
+		{"index", "idx_steps_status"},
+		{"index", "idx_steps_step_type"},
+		{"table", "battle_mode_infos"},
+		{"table", "executor_metadata"},
+		{"table", "gen_metadata"},
+		{"table", "parent_references"},
+		{"table", "steps"},
+		{"table", "trajectory_meta"},
+		{"table", "trajectory_metadata_blob"},
+	}
+
+	gotMap := make(map[string]bool)
+	for _, o := range got {
+		gotMap[o.typ+":"+o.name] = true
+	}
+
+	for _, req := range required {
+		key := req.typ + ":" + req.name
+		if !gotMap[key] {
+			t.Errorf("missing %s %q in produced SQLite schema", req.typ, req.name)
+		}
+	}
+	t.Logf("Schema OK: found %d objects (%v)", len(got), got)
+}

@@ -453,7 +453,9 @@ func portClaudeToAgy(i *Instance) error {
 	}
 	defer db.Close()
 
-	// Create tables
+	// Create tables and indexes matching the real Antigravity DB schema exactly.
+	// Verified against live .db files — all 7 tables and both indexes must exist
+	// before Antigravity opens the database, otherwise it may fail migrations.
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS trajectory_meta (
 			trajectory_id TEXT PRIMARY KEY,
@@ -463,16 +465,43 @@ func portClaudeToAgy(i *Instance) error {
 		);`,
 		`CREATE TABLE IF NOT EXISTS steps (
 			idx INTEGER PRIMARY KEY,
-			step_type INTEGER DEFAULT 0,
-			status INTEGER DEFAULT 0,
-			has_subtrajectory INTEGER DEFAULT 0,
+			step_type INTEGER NOT NULL DEFAULT 0,
+			status INTEGER NOT NULL DEFAULT 0,
+			has_subtrajectory NUMERIC NOT NULL DEFAULT false,
 			metadata BLOB,
 			error_details BLOB,
 			permissions BLOB,
 			task_details BLOB,
 			render_info BLOB,
 			step_payload BLOB,
-			step_format INTEGER DEFAULT 0
+			step_format INTEGER NOT NULL DEFAULT 0
+		);`,
+		// Indexes — critical for step_type and status queries (e.g. "all USER_INPUT steps").
+		// Without these every search is a full table scan.
+		`CREATE INDEX IF NOT EXISTS idx_steps_status    ON steps(status);`,
+		`CREATE INDEX IF NOT EXISTS idx_steps_step_type ON steps(step_type);`,
+		// Supporting tables — Antigravity expects these to be present on open.
+		`CREATE TABLE IF NOT EXISTS gen_metadata (
+			idx  INTEGER PRIMARY KEY,
+			data BLOB,
+			size INTEGER NOT NULL DEFAULT 0
+		);`,
+		`CREATE TABLE IF NOT EXISTS executor_metadata (
+			idx  INTEGER PRIMARY KEY,
+			data BLOB
+		);`,
+		`CREATE TABLE IF NOT EXISTS parent_references (
+			idx  INTEGER PRIMARY KEY,
+			data BLOB
+		);`,
+		`CREATE TABLE IF NOT EXISTS trajectory_metadata_blob (
+			id   TEXT DEFAULT "main",
+			data BLOB,
+			PRIMARY KEY (id)
+		);`,
+		`CREATE TABLE IF NOT EXISTS battle_mode_infos (
+			idx  INTEGER PRIMARY KEY,
+			data BLOB
 		);`,
 	}
 	for _, q := range queries {
