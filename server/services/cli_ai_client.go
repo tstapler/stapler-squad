@@ -114,7 +114,7 @@ func NewBestAvailableAIClient(anthropicAPIKey string, specs []CLIAgentSpec) (AIC
 		}
 	}
 	if anthropicAPIKey != "" {
-		if c, err := NewAnthropicAIClient(anthropicAPIKey); err == nil {
+		if c, err := NewAnthropicAIClientFromKey(anthropicAPIKey); err == nil {
 			return c, "anthropic-api"
 		}
 	}
