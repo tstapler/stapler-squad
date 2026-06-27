@@ -403,6 +403,9 @@ service SessionService {
   // failed — specifically: Stopped sessions with no meaningful terminal output.
   // Returns the count of sessions that were archived.
   rpc DeleteWorkflowFailedSessions(DeleteWorkflowFailedSessionsRequest) returns (DeleteWorkflowFailedSessionsResponse) {}
+
+  // GetProviderLimits returns the rate limit and usage details for a session.
+  rpc GetProviderLimits(GetProviderLimitsRequest) returns (GetProviderLimitsResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -2494,3 +2497,31 @@ message DeleteWorkflowFailedSessionsResponse {
   // Number of sessions that were archived (soft-deleted).
   int32 deleted_count = 1;
 }
+
+message GetProviderLimitsRequest {
+  string session_id = 1; // session title/id
+}
+
+message ProviderLimitsProto {
+  string provider = 1;
+  string model = 2;
+  int32 requests_limit = 3;
+  int32 requests_remaining = 4;
+  google.protobuf.Timestamp requests_reset = 5;
+  int32 tokens_limit = 6;
+  int32 tokens_remaining = 7;
+  google.protobuf.Timestamp tokens_reset = 8;
+  int32 context_tokens_used = 9;
+  int32 context_tokens_max = 10;
+  int32 session_input_tokens = 11;
+  int32 session_output_tokens = 12;
+  double estimated_cost_usd = 13;
+  bool available = 14;
+  string last_error_code = 15;
+  google.protobuf.Timestamp fetched_at = 16;
+}
+
+message GetProviderLimitsResponse {
+  ProviderLimitsProto limits = 1;
+}
+

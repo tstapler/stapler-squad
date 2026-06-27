@@ -19,9 +19,10 @@ const (
 // It accepts a Credential rather than a raw API key string so that both
 // API-key users and Claude subscription (OAuth) users are supported.
 type AnthropicAIClient struct {
-	cred   Credential
-	client *http.Client
-	model  string
+	cred              Credential
+	client            *http.Client
+	model             string
+	OnResponseHeaders func(http.Header)
 }
 
 // NewAnthropicAIClient creates an AnthropicAIClient from a resolved Credential.
@@ -117,6 +118,10 @@ func (c *AnthropicAIClient) Complete(ctx context.Context, systemPrompt, userProm
 		return "", fmt.Errorf("anthropic: request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if c.OnResponseHeaders != nil {
+		c.OnResponseHeaders(resp.Header)
+	}
 
 	var apiResp anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {

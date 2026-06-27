@@ -140,7 +140,7 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 	if steps[1]["type"] != "PLANNER_RESPONSE" || steps[1]["content"] != "hi there" {
 		t.Errorf("step 1 incorrect: %v", steps[1])
 	}
-	if steps[2]["type"] != "USER_INPUT" || steps[2]["content"] != "file contents here" {
+	if steps[2]["type"] != "RUN_COMMAND" || steps[2]["content"] != "file contents here" {
 		t.Errorf("step 2 incorrect: %v", steps[2])
 	}
 

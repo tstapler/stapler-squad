@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -128,6 +130,9 @@ type SessionService struct {
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
+
+	// capacityMonitor tracks rate limits and triggers transitions.
+	capacityMonitor *CapacityMonitor
 
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
@@ -254,6 +259,33 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	}
 	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
 
+	// Initialize capacity monitor.
+	var capCfg config.CapacityConfig
+	if dir, err := config.GetConfigDir(); err == nil {
+		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
+			capCfg = c.Capacity
+		}
+	}
+	capCfg = capCfg.CapacityConfigOrDefault()
+
+	var directCfg config.Config
+	if dir, err := config.GetConfigDir(); err == nil {
+		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
+			directCfg = *c
+		}
+	}
+	credChain := NewDefaultChain(&directCfg)
+
+	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
+	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
+	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+
+	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
+		anthropicClient.OnResponseHeaders = func(h http.Header) {
+			capacityMonitor.UpdateFromResponseHeaders("anthropic", h)
+		}
+	}
+
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
@@ -276,7 +308,11 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 		defaultsSvc:       NewDefaultsService(),
 		projectSvc:        NewProjectService(concStorage),
 		promptStore:       newPromptStore(),
+		capacityMonitor:   capacityMonitor,
 	}
+	capacityMonitor.sessionSwitcher = svc
+	capacityMonitor.poller = svc
+
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
@@ -673,6 +709,9 @@ func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 // Must be called once during server startup, before any sessions are created.
 func (s *SessionService) SetLifecycleContext(ctx context.Context) {
 	s.lifecycleCtx = ctx
+	if s.capacityMonitor != nil {
+		go s.capacityMonitor.Start(ctx)
+	}
 }
 
 // driverCtx returns the lifecycle context, falling back to Background() if not set.
@@ -4345,4 +4384,130 @@ func (s *SessionService) ReapPausedTmuxSessions() {
 				"session", inst.Title, "err", err)
 		}
 	}
+}
+
+// GetProviderLimits returns the rate limit and usage details for a session.
+func (s *SessionService) GetProviderLimits(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetProviderLimitsRequest],
+) (*connect.Response[sessionv1.GetProviderLimitsResponse], error) {
+	if req.Msg.SessionId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+
+	inst := s.findInstance(req.Msg.SessionId)
+	if inst == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
+	}
+
+	provider := "anthropic"
+	program := strings.ToLower(inst.Program)
+	if strings.Contains(program, "agy") || strings.Contains(program, "antigravity") || strings.Contains(program, "gemini") {
+		provider = "google"
+	} else if strings.Contains(program, "openai") || strings.Contains(program, "opencode") {
+		provider = "openai"
+	}
+
+	var limits ProviderLimits
+	var found bool
+	if s.capacityMonitor != nil {
+		limits, found = s.capacityMonitor.GetSessionLimits(inst.Title)
+		if !found {
+			s.capacityMonitor.mu.RLock()
+			globalLimits := s.capacityMonitor.current[provider]
+			client, ok := s.capacityMonitor.clients[provider]
+			s.capacityMonitor.mu.RUnlock()
+
+			limits = globalLimits
+			limits.Provider = provider
+			limits.Model = inst.Program
+			if ok {
+				limits.ContextTokensMax = client.ModelContextWindow(inst.Program)
+			}
+		}
+	} else {
+		limits = ProviderLimits{
+			Provider:  provider,
+			Model:     inst.Program,
+			Available: true,
+		}
+	}
+
+	protoLimits := &sessionv1.ProviderLimitsProto{
+		Provider:            limits.Provider,
+		Model:               limits.Model,
+		RequestsLimit:       int32(limits.RequestsLimit),
+		RequestsRemaining:   int32(limits.RequestsRemaining),
+		TokensLimit:         int32(limits.TokensLimit),
+		TokensRemaining:     int32(limits.TokensRemaining),
+		ContextTokensUsed:   int32(limits.ContextTokensUsed),
+		ContextTokensMax:    int32(limits.ContextTokensMax),
+		SessionInputTokens:  int32(limits.SessionInputTokens),
+		SessionOutputTokens: int32(limits.SessionOutputTokens),
+		EstimatedCostUsd:    limits.EstimatedCostUSD,
+		Available:           limits.Available,
+		LastErrorCode:       limits.LastErrorCode,
+	}
+
+	if !limits.RequestsReset.IsZero() {
+		protoLimits.RequestsReset = timestamppb.New(limits.RequestsReset)
+	}
+	if !limits.TokensReset.IsZero() {
+		protoLimits.TokensReset = timestamppb.New(limits.TokensReset)
+	}
+	if !limits.FetchedAt.IsZero() {
+		protoLimits.FetchedAt = timestamppb.New(limits.FetchedAt)
+	}
+
+	return connect.NewResponse(&sessionv1.GetProviderLimitsResponse{
+		Limits: protoLimits,
+	}), nil
+}
+
+// UpdateSessionProgram handles switching programs for a session, doing the history porting, DB save, and PTY restart.
+func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID string, newProgram string) error {
+	inst := s.findInstance(sessionID)
+	if inst == nil {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	if inst.Program == newProgram {
+		return nil
+	}
+
+	oldProgram := inst.Program
+	inst.Program = newProgram
+
+	if (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
+		((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude")) {
+		if err := session.PortSessionHistory(ctx, oldProgram, newProgram, inst); err != nil {
+			log.Error("failed to port session history during program switch in auto-transition", "session", inst.Title, "err", err)
+		}
+	}
+
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		log.Error("failed to save instance program update in auto-transition", "session", inst.Title, "err", err)
+	}
+
+	if inst.Status == session.Active {
+		if err := inst.Restart(true); err != nil {
+			return fmt.Errorf("failed to restart session: %w", err)
+		}
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
+
+	return nil
+}
+
+// SetTokenStoreReader wires the global parsed token store into the capacity monitor.
+func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
+	if s.capacityMonitor != nil {
+		s.capacityMonitor.tokenStore = store
+	}
+}
+
+// GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.
+func (s *SessionService) GetInstances() []*session.Instance {
+	return s.allInstances()
 }

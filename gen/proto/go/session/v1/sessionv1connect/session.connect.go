@@ -354,6 +354,9 @@ const (
 	// SessionServiceDeleteWorkflowFailedSessionsProcedure is the fully-qualified name of the
 	// SessionService's DeleteWorkflowFailedSessions RPC.
 	SessionServiceDeleteWorkflowFailedSessionsProcedure = "/session.v1.SessionService/DeleteWorkflowFailedSessions"
+	// SessionServiceGetProviderLimitsProcedure is the fully-qualified name of the SessionService's
+	// GetProviderLimits RPC.
+	SessionServiceGetProviderLimitsProcedure = "/session.v1.SessionService/GetProviderLimits"
 )
 
 // SessionServiceClient is a client for the session.v1.SessionService service.
@@ -636,6 +639,8 @@ type SessionServiceClient interface {
 	// failed — specifically: Stopped sessions with no meaningful terminal output.
 	// Returns the count of sessions that were archived.
 	DeleteWorkflowFailedSessions(context.Context, *connect.Request[v1.DeleteWorkflowFailedSessionsRequest]) (*connect.Response[v1.DeleteWorkflowFailedSessionsResponse], error)
+	// GetProviderLimits returns the rate limit and usage details for a session.
+	GetProviderLimits(context.Context, *connect.Request[v1.GetProviderLimitsRequest]) (*connect.Response[v1.GetProviderLimitsResponse], error)
 }
 
 // NewSessionServiceClient constructs a client for the session.v1.SessionService service. By
@@ -1297,6 +1302,12 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("DeleteWorkflowFailedSessions")),
 			connect.WithClientOptions(opts...),
 		),
+		getProviderLimits: connect.NewClient[v1.GetProviderLimitsRequest, v1.GetProviderLimitsResponse](
+			httpClient,
+			baseURL+SessionServiceGetProviderLimitsProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetProviderLimits")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -1410,6 +1421,7 @@ type sessionServiceClient struct {
 	unarchiveSession             *connect.Client[v1.UnarchiveSessionRequest, v1.UnarchiveSessionResponse]
 	archiveWorkflowSessions      *connect.Client[v1.ArchiveWorkflowSessionsRequest, v1.ArchiveWorkflowSessionsResponse]
 	deleteWorkflowFailedSessions *connect.Client[v1.DeleteWorkflowFailedSessionsRequest, v1.DeleteWorkflowFailedSessionsResponse]
+	getProviderLimits            *connect.Client[v1.GetProviderLimitsRequest, v1.GetProviderLimitsResponse]
 }
 
 // ListSessions calls session.v1.SessionService.ListSessions.
@@ -1952,6 +1964,11 @@ func (c *sessionServiceClient) DeleteWorkflowFailedSessions(ctx context.Context,
 	return c.deleteWorkflowFailedSessions.CallUnary(ctx, req)
 }
 
+// GetProviderLimits calls session.v1.SessionService.GetProviderLimits.
+func (c *sessionServiceClient) GetProviderLimits(ctx context.Context, req *connect.Request[v1.GetProviderLimitsRequest]) (*connect.Response[v1.GetProviderLimitsResponse], error) {
+	return c.getProviderLimits.CallUnary(ctx, req)
+}
+
 // SessionServiceHandler is an implementation of the session.v1.SessionService service.
 type SessionServiceHandler interface {
 	// ListSessions returns all sessions with optional filtering.
@@ -2232,6 +2249,8 @@ type SessionServiceHandler interface {
 	// failed — specifically: Stopped sessions with no meaningful terminal output.
 	// Returns the count of sessions that were archived.
 	DeleteWorkflowFailedSessions(context.Context, *connect.Request[v1.DeleteWorkflowFailedSessionsRequest]) (*connect.Response[v1.DeleteWorkflowFailedSessionsResponse], error)
+	// GetProviderLimits returns the rate limit and usage details for a session.
+	GetProviderLimits(context.Context, *connect.Request[v1.GetProviderLimitsRequest]) (*connect.Response[v1.GetProviderLimitsResponse], error)
 }
 
 // NewSessionServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -2889,6 +2908,12 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		connect.WithSchema(sessionServiceMethods.ByName("DeleteWorkflowFailedSessions")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sessionServiceGetProviderLimitsHandler := connect.NewUnaryHandler(
+		SessionServiceGetProviderLimitsProcedure,
+		svc.GetProviderLimits,
+		connect.WithSchema(sessionServiceMethods.ByName("GetProviderLimits")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.SessionService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionServiceListSessionsProcedure:
@@ -3107,6 +3132,8 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceArchiveWorkflowSessionsHandler.ServeHTTP(w, r)
 		case SessionServiceDeleteWorkflowFailedSessionsProcedure:
 			sessionServiceDeleteWorkflowFailedSessionsHandler.ServeHTTP(w, r)
+		case SessionServiceGetProviderLimitsProcedure:
+			sessionServiceGetProviderLimitsHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -3546,4 +3573,8 @@ func (UnimplementedSessionServiceHandler) ArchiveWorkflowSessions(context.Contex
 
 func (UnimplementedSessionServiceHandler) DeleteWorkflowFailedSessions(context.Context, *connect.Request[v1.DeleteWorkflowFailedSessionsRequest]) (*connect.Response[v1.DeleteWorkflowFailedSessionsResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.DeleteWorkflowFailedSessions is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetProviderLimits(context.Context, *connect.Request[v1.GetProviderLimitsRequest]) (*connect.Response[v1.GetProviderLimitsResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetProviderLimits is not implemented"))
 }

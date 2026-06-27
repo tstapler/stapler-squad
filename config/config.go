@@ -228,6 +228,8 @@ type Config struct {
 	FeatureFlags map[string]bool `json:"feature_flags,omitempty"`
 	// Hibernation holds configuration for the session hibernation feature.
 	Hibernation HibernationConfig `json:"hibernation,omitempty"`
+	// Capacity holds configuration for the provider capacity monitoring and transition feature.
+	Capacity CapacityConfig `json:"capacity,omitempty"`
 
 	// Escape analytics configuration
 
@@ -314,6 +316,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 		ResourcePressureThreshold: 85,
 		RetentionDays:             30,
 	}
+	cfg.Capacity = CapacityConfig{}.CapacityConfigOrDefault()
 	// Initialize SessionDefaults maps so callers never encounter nil maps.
 	// LoadConfigFromPath applies the same guards after JSON decode; DefaultConfig
 	// must mirror them so the two code paths are equivalent.
@@ -686,6 +689,8 @@ func LoadConfigFromPath(path string) (*Config, error) {
 	// Unmarshaling produces a zero Config with no executor; initialize it now
 	// so GetClaudeCommand / GetAvailablePrograms don't panic on nil executor.
 	cfg.executor = newTimeoutCommandExecutor(5 * time.Second)
+
+	cfg.Capacity = cfg.Capacity.CapacityConfigOrDefault()
 
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
