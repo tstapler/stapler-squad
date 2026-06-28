@@ -109,7 +109,7 @@ func TestAnthropicAIClient_Complete_APIKey_SetsXApiKeyHeader(t *testing.T) {
 		cred:  Credential{Provider: "anthropic", APIKey: "test-api-key", Source: "test"},
 		model: anthropicModel,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
 			Transport: &singleURLTransport{target: srv.URL, inner: http.DefaultTransport},
 		},
 	}
@@ -138,7 +138,7 @@ func TestAnthropicAIClient_Complete_OAuthToken_SetsBearerHeader(t *testing.T) {
 		cred:  Credential{Provider: "anthropic", BearerToken: "oauth-token-abc", Source: "cli_oauth"},
 		model: anthropicModel,
 		client: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout:   10 * time.Second,
 			Transport: &singleURLTransport{target: srv.URL, inner: http.DefaultTransport},
 		},
 	}
@@ -204,7 +204,7 @@ func TestClaudeOAuthCredentialSource_ValidToken(t *testing.T) {
 	require.NoError(t, os.MkdirAll(claudeDir, 0700))
 
 	// Write a credentials file with a non-expired token.
-	expiryMs := time.Now().Add(1*time.Hour).UnixMilli()
+	expiryMs := time.Now().Add(1 * time.Hour).UnixMilli()
 	creds := map[string]interface{}{
 		"claudeAiOauth": map[string]interface{}{
 			"accessToken":  "claude-bearer-token",
@@ -265,7 +265,7 @@ func TestAgyCredentialSource_ValidAgyOAuthToken(t *testing.T) {
 	geminiDir := filepath.Join(home, ".gemini")
 	require.NoError(t, os.MkdirAll(geminiDir, 0700))
 
-	expiryMs := time.Now().Add(1*time.Hour).UnixMilli()
+	expiryMs := time.Now().Add(1 * time.Hour).UnixMilli()
 	creds := geminiOAuthCreds{
 		AccessToken:  "gemini-access-token",
 		RefreshToken: "gemini-refresh-token",

@@ -9,8 +9,8 @@ import (
 // ProviderLimits represents a snapshot of the rate limit and usage state for a provider/model.
 // All integer values should be -1 if they are unknown or not supported by the provider.
 type ProviderLimits struct {
-	Provider string    `json:"provider"` // "anthropic", "google", "openai"
-	Model    string    `json:"model"`
+	Provider string `json:"provider"` // "anthropic", "google", "openai"
+	Model    string `json:"model"`
 
 	// Rate limits for requests
 	RequestsLimit     int       `json:"requests_limit"`

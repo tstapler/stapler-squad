@@ -66,7 +66,7 @@ func TestPortSessionHistory_ClaudeToAgy(t *testing.T) {
 			"type":      "user",
 			"timestamp": "2026-06-25T20:02:00Z",
 			"message": map[string]interface{}{
-				"role":    "user",
+				"role": "user",
 				"content": []interface{}{
 					map[string]interface{}{
 						"type":        "tool_result",
@@ -407,12 +407,25 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 		t.Skip("cannot get user home directory")
 	}
 
-	liveSessionUUID := "ffcbbc7d-8d41-41f5-9698-b7caa032ddc5"
-	liveLogPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", liveSessionUUID, ".system_generated", "logs", "transcript.jsonl")
-
-	if _, err := os.Stat(liveLogPath); os.IsNotExist(err) {
-		t.Skipf("live session log file not found at %s — skipping live integration check", liveLogPath)
+	// Find a session ID dynamically in ~/.gemini/antigravity-cli/brain/
+	dirs, err := os.ReadDir(filepath.Join(home, ".gemini", "antigravity-cli", "brain"))
+	if err != nil {
+		t.Skip("no brain dir found")
 	}
+	var liveSessionUUID string
+	for _, d := range dirs {
+		if d.IsDir() {
+			p := filepath.Join(home, ".gemini", "antigravity-cli", "brain", d.Name(), ".system_generated", "logs", "transcript.jsonl")
+			if _, err := os.Stat(p); err == nil {
+				liveSessionUUID = d.Name()
+				break
+			}
+		}
+	}
+	if liveSessionUUID == "" {
+		t.Skip("no live session with transcript.jsonl found")
+	}
+	liveLogPath := filepath.Join(home, ".gemini", "antigravity-cli", "brain", liveSessionUUID, ".system_generated", "logs", "transcript.jsonl")
 
 	// Create temp home to output Claude files during porting
 	tempHome := t.TempDir()
@@ -459,6 +472,9 @@ func TestPortSessionHistory_LiveAgy(t *testing.T) {
 	inst := &Instance{
 		Title: "live-port-test-agy",
 		Path:  workspace,
+		claudeSession: &ClaudeSessionData{
+			ConversationUUID: liveSessionUUID,
+		},
 	}
 
 	err = PortSessionHistory(context.Background(), "agy", "claude", inst)
@@ -532,9 +548,9 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 
 	// Run the port.
 	inst := &Instance{
-		Title:          "schema-test-session",
-		WorkingDir:     workspace,
-		claudeSession:  &ClaudeSessionData{ConversationUUID: uuid},
+		Title:           "schema-test-session",
+		WorkingDir:      workspace,
+		claudeSession:   &ClaudeSessionData{ConversationUUID: uuid},
 		HistoryFilePath: claudeLogPath,
 	}
 	if err := portClaudeToAgy(inst); err != nil {

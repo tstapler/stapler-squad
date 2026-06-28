@@ -277,9 +277,9 @@ func itemSessionToProto(is *ent.ItemSession) *sessionv1.ItemSession {
 // by itemSessionToProto. Uses canonical session.TriageSuggestion / session.TriageTask
 // to keep the schema in sync across the MCP tool, headless path, and proto conversion.
 type triageResultJSON struct {
-	Summary             string                    `json:"summary"`
+	Summary             string                     `json:"summary"`
 	Suggestions         []session.TriageSuggestion `json:"suggestions"`
-	ClarifyingQuestions []string                  `json:"clarifying_questions,omitempty"`
+	ClarifyingQuestions []string                   `json:"clarifying_questions,omitempty"`
 	Tasks               []session.TriageTask       `json:"tasks,omitempty"`
 }
 

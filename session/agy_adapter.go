@@ -144,6 +144,10 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 					for _, tc := range raw.ToolCalls {
 						blocks = append(blocks, NewToolUseBlock(tc.ID, tc.Name, tc.Args))
 					}
+					if len(blocks) == 0 {
+						// Skip empty planner responses that have no text and no tool calls.
+						continue
+					}
 					turn := CanonicalTurn{
 						Role:      RoleAssistant,
 						Blocks:    blocks,

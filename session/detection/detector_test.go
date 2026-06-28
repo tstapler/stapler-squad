@@ -130,9 +130,9 @@ func TestStatusDetector_DetectWaitingForAgent(t *testing.T) {
 func TestStatusDetector_DetectWaitingForAgent_NegativeCases(t *testing.T) {
 	sd := NewStatusDetector()
 	noMatch := []string{
-		"Waiting for 1 background agent to finish",      // missing bullet prefix
-		"✻ Waiting for background agents to finish",     // missing digit
-		"✻ waiting for 1 background agent to finish",    // lowercase W
+		"Waiting for 1 background agent to finish",   // missing bullet prefix
+		"✻ Waiting for background agents to finish",  // missing digit
+		"✻ waiting for 1 background agent to finish", // lowercase W
 	}
 	for _, input := range noMatch {
 		got := sd.Detect([]byte(input))

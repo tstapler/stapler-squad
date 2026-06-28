@@ -264,4 +264,3 @@ func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
 	}
 	return out
 }
-

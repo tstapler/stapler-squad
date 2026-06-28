@@ -98,10 +98,10 @@ func TestCapacityMonitor_PollAndEvaluate(t *testing.T) {
 	}
 
 	cfg := config.CapacityConfig{
-		TransitionMode:        config.TransitionModeManual,
-		ContextWindowWarnPct:  0.80,
-		ContextWindowAutoPct:  0.90,
-		PollIntervalSeconds:   60,
+		TransitionMode:         config.TransitionModeManual,
+		ContextWindowWarnPct:   0.80,
+		ContextWindowAutoPct:   0.90,
+		PollIntervalSeconds:    60,
 		RateLimitWarnRemaining: 5,
 		ProviderPriority: []config.ProviderPriority{
 			{CLI: "claude", Model: "claude-3-5-sonnet"},
@@ -190,10 +190,10 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 	}
 
 	cfg := config.CapacityConfig{
-		TransitionMode:        config.TransitionModeAuto,
-		ContextWindowWarnPct:  0.80,
-		ContextWindowAutoPct:  0.90,
-		PollIntervalSeconds:   60,
+		TransitionMode:         config.TransitionModeAuto,
+		ContextWindowWarnPct:   0.80,
+		ContextWindowAutoPct:   0.90,
+		PollIntervalSeconds:    60,
 		RateLimitWarnRemaining: 5,
 		ProviderPriority: []config.ProviderPriority{
 			{CLI: "claude", Model: "claude-3-5-sonnet"},
@@ -249,10 +249,10 @@ func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
 	}
 
 	cfg := config.CapacityConfig{
-		TransitionMode:        config.TransitionModeManual,
-		ContextWindowWarnPct:  0.80,
-		ContextWindowAutoPct:  0.90,
-		PollIntervalSeconds:   60,
+		TransitionMode:         config.TransitionModeManual,
+		ContextWindowWarnPct:   0.80,
+		ContextWindowAutoPct:   0.90,
+		PollIntervalSeconds:    60,
 		RateLimitWarnRemaining: 5,
 	}
 

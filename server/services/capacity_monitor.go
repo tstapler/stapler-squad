@@ -30,7 +30,7 @@ type CapacityMonitor struct {
 	mu              sync.RWMutex
 	current         map[string]ProviderLimits
 	sessionLimits   map[string]ProviderLimits // keyed by session title
-	lastWarningTime map[string]time.Time       // keyed by session title to rate-limit events
+	lastWarningTime map[string]time.Time      // keyed by session title to rate-limit events
 }
 
 type InstancePoller interface {

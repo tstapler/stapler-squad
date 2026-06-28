@@ -495,7 +495,7 @@ func (h *backlogHandlers) submitTriageResult(ctx context.Context, req mcpgo.Call
 
 	// Build triage result JSON payload using canonical struct (prevents schema drift).
 	type triageResultPayload struct {
-		Summary     string                   `json:"summary"`
+		Summary     string                     `json:"summary"`
 		Suggestions []session.TriageSuggestion `json:"suggestions"`
 		Tasks       []session.TriageTask       `json:"tasks,omitempty"`
 	}

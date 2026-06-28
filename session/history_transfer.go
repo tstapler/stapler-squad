@@ -154,12 +154,15 @@ type UnifiedTurn interface {
 }
 
 type SkippedTurn struct{}
+
 func (SkippedTurn) unifiedTurn() {}
 
 type shimUserMessage struct{}
+
 func (shimUserMessage) unifiedTurn() {}
 
 type shimAssistantMessage struct{}
+
 func (shimAssistantMessage) unifiedTurn() {}
 
 func ParseClaudeTurn(line []byte) (UnifiedTurn, error) {
