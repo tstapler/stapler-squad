@@ -17,6 +17,7 @@ import {
   categoryBadge, subSectionTitle, filterInput, addRuleLink,
   coverageGapHeader, coverageGapHigh, coverageGapMed, coverageGapLow,
   coverageGapTitleRow, coverageGapIcon, coverageGapTitle, coverageGapBadge, coverageGapDesc,
+  suggestRuleButton, rowActions, rowGeneratingText,
 } from "./ApprovalAnalyticsPanel.css";
 
 // ── helpers ───────────────────────────────────────────────────────────────────
