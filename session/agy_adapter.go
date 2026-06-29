@@ -268,8 +268,14 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 				f.Close()
 				return err
 			}
-			f.Write(data)
-			f.Write([]byte("\n"))
+			if _, werr := f.Write(data); werr != nil {
+				f.Close()
+				return fmt.Errorf("failed to write step to %s: %w", p, werr)
+			}
+			if _, werr := f.Write([]byte("\n")); werr != nil {
+				f.Close()
+				return fmt.Errorf("failed to write newline to %s: %w", p, werr)
+			}
 		}
 		f.Close()
 	}

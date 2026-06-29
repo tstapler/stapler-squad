@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -127,50 +126,6 @@ func (c *AnthropicLimitsClient) UpdateFromResponseHeaders(h http.Header, current
 	out.Model = c.model
 	out.FetchedAt = time.Now()
 
-	parseIntHeader := func(key string) int {
-		val := h.Get(key)
-		if val == "" {
-			return -1
-		}
-		num, err := strconv.Atoi(val)
-		if err != nil {
-			return -1
-		}
-		return num
-	}
-
-	parseTimeHeader := func(key string) time.Time {
-		val := h.Get(key)
-		if val == "" {
-			return time.Time{}
-		}
-
-		// Try parsing as ISO 8601/RFC3339 timestamp.
-		if t, err := time.Parse(time.RFC3339, val); err == nil {
-			return t
-		}
-		if t, err := time.Parse("2006-01-02T15:04:05Z", val); err == nil {
-			return t
-		}
-
-		// Try parsing as floating-point seconds.
-		if secs, err := strconv.ParseFloat(val, 64); err == nil {
-			return time.Now().Add(time.Duration(secs * float64(time.Second)))
-		}
-
-		// Try parsing as duration.
-		if d, err := time.ParseDuration(val); err == nil {
-			return time.Now().Add(d)
-		}
-
-		// Try parsing as integer seconds.
-		if secs, err := strconv.Atoi(val); err == nil {
-			return time.Now().Add(time.Duration(secs) * time.Second)
-		}
-
-		return time.Time{}
-	}
-
 	// Standard Anthropic headers:
 	// anthropic-ratelimit-requests-limit: 50
 	// anthropic-ratelimit-requests-remaining: 49
@@ -178,44 +133,44 @@ func (c *AnthropicLimitsClient) UpdateFromResponseHeaders(h http.Header, current
 	// anthropic-ratelimit-tokens-limit: 100000
 	// anthropic-ratelimit-tokens-remaining: 99900
 	// anthropic-ratelimit-tokens-reset: 2024-01-01T00:00:00Z
-	if reqLimit := parseIntHeader("anthropic-ratelimit-requests-limit"); reqLimit != -1 {
+	if reqLimit := parseIntHeader(h, "anthropic-ratelimit-requests-limit"); reqLimit != -1 {
 		out.RequestsLimit = reqLimit
 	}
-	if reqRem := parseIntHeader("anthropic-ratelimit-requests-remaining"); reqRem != -1 {
+	if reqRem := parseIntHeader(h, "anthropic-ratelimit-requests-remaining"); reqRem != -1 {
 		out.RequestsRemaining = reqRem
 	}
-	if reqReset := parseTimeHeader("anthropic-ratelimit-requests-reset"); !reqReset.IsZero() {
+	if reqReset := parseTimeHeader(h, "anthropic-ratelimit-requests-reset"); !reqReset.IsZero() {
 		out.RequestsReset = reqReset
 	}
 
-	if tokLimit := parseIntHeader("anthropic-ratelimit-tokens-limit"); tokLimit != -1 {
+	if tokLimit := parseIntHeader(h, "anthropic-ratelimit-tokens-limit"); tokLimit != -1 {
 		out.TokensLimit = tokLimit
 	}
-	if tokRem := parseIntHeader("anthropic-ratelimit-tokens-remaining"); tokRem != -1 {
+	if tokRem := parseIntHeader(h, "anthropic-ratelimit-tokens-remaining"); tokRem != -1 {
 		out.TokensRemaining = tokRem
 	}
-	if tokReset := parseTimeHeader("anthropic-ratelimit-tokens-reset"); !tokReset.IsZero() {
+	if tokReset := parseTimeHeader(h, "anthropic-ratelimit-tokens-reset"); !tokReset.IsZero() {
 		out.TokensReset = tokReset
 	}
 
 	// Also support input/output token headers if present.
-	if inLimit := parseIntHeader("anthropic-ratelimit-input-tokens-limit"); inLimit != -1 {
+	if inLimit := parseIntHeader(h, "anthropic-ratelimit-input-tokens-limit"); inLimit != -1 {
 		out.InputTokensLimit = inLimit
 	}
-	if inRem := parseIntHeader("anthropic-ratelimit-input-tokens-remaining"); inRem != -1 {
+	if inRem := parseIntHeader(h, "anthropic-ratelimit-input-tokens-remaining"); inRem != -1 {
 		out.InputTokensRemaining = inRem
 	}
-	if inReset := parseTimeHeader("anthropic-ratelimit-input-tokens-reset"); !inReset.IsZero() {
+	if inReset := parseTimeHeader(h, "anthropic-ratelimit-input-tokens-reset"); !inReset.IsZero() {
 		out.InputTokensReset = inReset
 	}
 
-	if outLimit := parseIntHeader("anthropic-ratelimit-output-tokens-limit"); outLimit != -1 {
+	if outLimit := parseIntHeader(h, "anthropic-ratelimit-output-tokens-limit"); outLimit != -1 {
 		out.OutputTokensLimit = outLimit
 	}
-	if outRem := parseIntHeader("anthropic-ratelimit-output-tokens-remaining"); outRem != -1 {
+	if outRem := parseIntHeader(h, "anthropic-ratelimit-output-tokens-remaining"); outRem != -1 {
 		out.OutputTokensRemaining = outRem
 	}
-	if outReset := parseTimeHeader("anthropic-ratelimit-output-tokens-reset"); !outReset.IsZero() {
+	if outReset := parseTimeHeader(h, "anthropic-ratelimit-output-tokens-reset"); !outReset.IsZero() {
 		out.OutputTokensReset = outReset
 	}
 

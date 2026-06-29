@@ -90,10 +90,22 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				"workspace":      workspace,
 				"conversationId": uuidStr,
 			}
-			historyData, _ := json.Marshal(historyEntry)
+			historyData, marshalErr := json.Marshal(historyEntry)
+			if marshalErr != nil {
+				log.Warn("PortSessionHistory: failed to marshal agy history entry", "error", marshalErr)
+				return marshalErr
+			}
 			if f, err := os.OpenFile(agyHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-				f.Write(historyData)
-				f.Write([]byte("\n"))
+				if _, werr := f.Write(historyData); werr != nil {
+					f.Close()
+					log.Warn("PortSessionHistory: failed to write agy history data", "error", werr)
+					return werr
+				}
+				if _, werr := f.Write([]byte("\n")); werr != nil {
+					f.Close()
+					log.Warn("PortSessionHistory: failed to write agy history newline", "error", werr)
+					return werr
+				}
 				f.Close()
 			}
 		}
@@ -108,10 +120,22 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 				"project":        workspace,
 				"sessionId":      uuidStr,
 			}
-			historyData, _ := json.Marshal(historyEntry)
+			historyData, marshalErr := json.Marshal(historyEntry)
+			if marshalErr != nil {
+				log.Warn("PortSessionHistory: failed to marshal claude history entry", "error", marshalErr)
+				return marshalErr
+			}
 			if hf, err := os.OpenFile(claudeHistoryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644); err == nil {
-				hf.Write(historyData)
-				hf.Write([]byte("\n"))
+				if _, werr := hf.Write(historyData); werr != nil {
+					hf.Close()
+					log.Warn("PortSessionHistory: failed to write claude history data", "error", werr)
+					return werr
+				}
+				if _, werr := hf.Write([]byte("\n")); werr != nil {
+					hf.Close()
+					log.Warn("PortSessionHistory: failed to write claude history newline", "error", werr)
+					return werr
+				}
 				hf.Close()
 			}
 		}
@@ -147,42 +171,4 @@ func portClaudeToAgy(i *Instance) error {
 
 func portAgyToClaude(i *Instance) error {
 	return PortSessionHistory(context.Background(), "agy", "claude", i)
-}
-
-type UnifiedTurn interface {
-	unifiedTurn()
-}
-
-type SkippedTurn struct{}
-
-func (SkippedTurn) unifiedTurn() {}
-
-type shimUserMessage struct{}
-
-func (shimUserMessage) unifiedTurn() {}
-
-type shimAssistantMessage struct{}
-
-func (shimAssistantMessage) unifiedTurn() {}
-
-func ParseClaudeTurn(line []byte) (UnifiedTurn, error) {
-	var raw struct {
-		Type    string `json:"type"`
-		Message *struct {
-			Role string `json:"role"`
-		} `json:"message"`
-	}
-	if err := json.Unmarshal(line, &raw); err != nil {
-		return nil, err
-	}
-	if raw.Message == nil {
-		return SkippedTurn{}, nil
-	}
-	if raw.Type == "user" {
-		return shimUserMessage{}, nil
-	}
-	if raw.Type == "assistant" {
-		return shimAssistantMessage{}, nil
-	}
-	return SkippedTurn{}, nil
 }

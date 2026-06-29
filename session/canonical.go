@@ -93,6 +93,8 @@ func (b CanonicalBlock) Validate() error {
 		if b.Text != "" || b.ToolArgs != nil {
 			return fmt.Errorf("tool result block cannot have text or tool use arguments populated")
 		}
+	case BlockKindImage:
+		return fmt.Errorf("image blocks not yet supported")
 	}
 	return nil
 }

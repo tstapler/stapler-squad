@@ -342,8 +342,10 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 	os.Setenv("HOME", tempHome)
 	defer os.Setenv("HOME", origHome)
 
-	// Copy the real log file into the expected temp path
-	tempProjectsDir := filepath.Join(tempHome, ".claude", "projects", liveProjPath)
+	// inst.Path determines the Claude project dir via ClaudeProjectDirName.
+	// Copy the live file into the path the adapter will compute so it can be found.
+	instWorkspacePath := "/home/tstapler/Programming/stapler-squad"
+	tempProjectsDir := filepath.Join(tempHome, ".claude", "projects", ClaudeProjectDirName(instWorkspacePath))
 	if err := os.MkdirAll(tempProjectsDir, 0700); err != nil {
 		t.Fatalf("failed to create temp projects dir: %v", err)
 	}
@@ -367,7 +369,7 @@ func TestPortSessionHistory_LiveClaude(t *testing.T) {
 
 	inst := &Instance{
 		Title: "live-port-test",
-		Path:  "/home/tstapler/Programming/stapler-squad",
+		Path:  instWorkspacePath,
 		claudeSession: &ClaudeSessionData{
 			ConversationUUID: liveSessionUUID,
 		},

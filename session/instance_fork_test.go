@@ -146,7 +146,7 @@ func TestForkFromCheckpoint_EmptyNewTitle_ReturnsError(t *testing.T) {
 
 // TestForkFromCheckpoint_ForkedFileHasCorrectContent verifies that the JSONL file
 // produced by ForkFromCheckpoint contains exactly the lines captured at checkpoint
-// time and that every line is valid JSON parseable by ParseClaudeTurn.
+// time and that every line is valid JSON with a non-nil message field.
 // This is the critical end-to-end test that was previously missing.
 func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 	configDir := t.TempDir()
@@ -191,13 +191,11 @@ func TestForkFromCheckpoint_ForkedFileHasCorrectContent(t *testing.T) {
 	lines := splitNonEmpty(string(data))
 	assert.Equal(t, 6, len(lines), "forked file should have exactly 6 lines (checkpoint ConvLineCount)")
 
-	// Every line must be valid JSON parseable by ParseClaudeTurn.
+	// Every line must be valid JSON with a non-nil message field (real user/assistant turn).
 	for i, line := range lines {
-		turn, err := ParseClaudeTurn([]byte(line))
-		require.NoError(t, err, "line %d must be parseable by ParseClaudeTurn", i)
-		require.NotNil(t, turn, "line %d must produce a non-nil turn", i)
-		_, isSkipped := turn.(SkippedTurn)
-		assert.False(t, isSkipped, "line %d should not be a SkippedTurn (it's a real user/assistant turn)", i)
+		var raw rawClaudeTurn
+		require.NoError(t, json.Unmarshal([]byte(line), &raw), "line %d must be valid JSON", i)
+		assert.NotNil(t, raw.Message, "line %d should not be a skipped turn (it's a real user/assistant turn)", i)
 	}
 }
 

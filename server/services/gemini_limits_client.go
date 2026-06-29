@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -91,6 +90,17 @@ func (c *GeminiLimitsClient) QueryLimits(ctx context.Context) (ProviderLimits, e
 	}
 	defer resp.Body.Close()
 
+	// Read the entire body before acquiring the lock.  resp.Body is a
+	// streaming HTTP socket; decoding it while holding the mutex would block
+	// all concurrent QueryLimits callers for the duration of the network read.
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	// Parse model metadata JSON from the pre-read buffer (success path only).
+	var modelMeta struct {
+		InputTokenLimit int `json:"inputTokenLimit"`
+	}
+	_ = json.Unmarshal(bodyBytes, &modelMeta)
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -99,18 +109,13 @@ func (c *GeminiLimitsClient) QueryLimits(ctx context.Context) (ProviderLimits, e
 	if resp.StatusCode != http.StatusOK {
 		c.cached.Available = false
 		c.cached.LastErrorCode = fmt.Sprintf("status_%d", resp.StatusCode)
-		body, _ := io.ReadAll(resp.Body)
-		return c.cached, fmt.Errorf("gemini limits API returned status %d: %s", resp.StatusCode, string(body))
+		return c.cached, fmt.Errorf("gemini limits API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	c.cached.Available = true
 	c.cached.LastErrorCode = ""
 
-	// Parse model metadata JSON.
-	var modelMeta struct {
-		InputTokenLimit int `json:"inputTokenLimit"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&modelMeta); err == nil && modelMeta.InputTokenLimit > 0 {
+	if modelMeta.InputTokenLimit > 0 {
 		c.cached.ContextTokensMax = modelMeta.InputTokenLimit
 	} else {
 		c.cached.ContextTokensMax = c.ModelContextWindow(c.model)
@@ -196,42 +201,6 @@ func (c *GeminiLimitsClient) UpdateFromResponseHeaders(h http.Header, current Pr
 	out.Model = c.model
 	out.FetchedAt = time.Now()
 
-	parseIntHeader := func(key string) int {
-		val := h.Get(key)
-		if val == "" {
-			return -1
-		}
-		num, err := strconv.Atoi(val)
-		if err != nil {
-			return -1
-		}
-		return num
-	}
-
-	parseTimeHeader := func(key string) time.Time {
-		val := h.Get(key)
-		if val == "" {
-			return time.Time{}
-		}
-
-		// Try parsing as ISO 8601/RFC3339 timestamp.
-		if t, err := time.Parse(time.RFC3339, val); err == nil {
-			return t
-		}
-
-		// Try parsing as duration.
-		if d, err := time.ParseDuration(val); err == nil {
-			return time.Now().Add(d)
-		}
-
-		// Try parsing as integer seconds.
-		if secs, err := strconv.Atoi(val); err == nil {
-			return time.Now().Add(time.Duration(secs) * time.Second)
-		}
-
-		return time.Time{}
-	}
-
 	// Gemini rate limit headers:
 	// x-ratelimit-limit-requests
 	// x-ratelimit-remaining-requests
@@ -239,23 +208,23 @@ func (c *GeminiLimitsClient) UpdateFromResponseHeaders(h http.Header, current Pr
 	// x-ratelimit-limit-tokens
 	// x-ratelimit-remaining-tokens
 	// x-ratelimit-reset-tokens
-	if reqLimit := parseIntHeader("x-ratelimit-limit-requests"); reqLimit != -1 {
+	if reqLimit := parseIntHeader(h, "x-ratelimit-limit-requests"); reqLimit != -1 {
 		out.RequestsLimit = reqLimit
 	}
-	if reqRem := parseIntHeader("x-ratelimit-remaining-requests"); reqRem != -1 {
+	if reqRem := parseIntHeader(h, "x-ratelimit-remaining-requests"); reqRem != -1 {
 		out.RequestsRemaining = reqRem
 	}
-	if reqReset := parseTimeHeader("x-ratelimit-reset-requests"); !reqReset.IsZero() {
+	if reqReset := parseTimeHeader(h, "x-ratelimit-reset-requests"); !reqReset.IsZero() {
 		out.RequestsReset = reqReset
 	}
 
-	if tokLimit := parseIntHeader("x-ratelimit-limit-tokens"); tokLimit != -1 {
+	if tokLimit := parseIntHeader(h, "x-ratelimit-limit-tokens"); tokLimit != -1 {
 		out.TokensLimit = tokLimit
 	}
-	if tokRem := parseIntHeader("x-ratelimit-remaining-tokens"); tokRem != -1 {
+	if tokRem := parseIntHeader(h, "x-ratelimit-remaining-tokens"); tokRem != -1 {
 		out.TokensRemaining = tokRem
 	}
-	if tokReset := parseTimeHeader("x-ratelimit-reset-tokens"); !tokReset.IsZero() {
+	if tokReset := parseTimeHeader(h, "x-ratelimit-reset-tokens"); !tokReset.IsZero() {
 		out.TokensReset = tokReset
 	}
 

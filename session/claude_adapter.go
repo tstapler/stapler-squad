@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type ClaudeAdapter struct{}
@@ -67,21 +69,11 @@ func (a *ClaudeAdapter) Import(ctx context.Context, inst *Instance) ([]Canonical
 		return nil, err
 	}
 
+	workspace := inst.GetWorkingDirectory()
 	claudeProjectsDir := filepath.Join(home, ".claude", "projects")
-	var claudeLogPath string
-	_ = filepath.Walk(claudeProjectsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !info.IsDir() && info.Name() == uuidStr+".jsonl" {
-			claudeLogPath = path
-			return fmt.Errorf("found")
-		}
-		return nil
-	})
-
-	if claudeLogPath == "" {
-		return nil, fmt.Errorf("claude transcript file not found for UUID %s", uuidStr)
+	claudeLogPath := filepath.Join(claudeProjectsDir, ClaudeProjectDirName(workspace), uuidStr+".jsonl")
+	if _, err := os.Stat(claudeLogPath); err != nil {
+		return nil, fmt.Errorf("claude transcript file not found for UUID %s: %w", uuidStr, err)
 	}
 
 	file, err := os.Open(claudeLogPath)
@@ -191,7 +183,7 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 
 	parentUUID := ""
 	for _, turn := range turns {
-		turnUUID := fmt.Sprintf("%s-%d", uuidStr, turn.TurnIndex)
+		turnUUID := uuid.New().String()
 		var parentVal *string
 		if parentUUID != "" {
 			parentVal = &parentUUID
@@ -226,6 +218,8 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 					"content":     block.ToolResultContent,
 					"is_error":    block.ToolResultIsError,
 				})
+			case BlockKindImage:
+				return fmt.Errorf("image blocks not yet supported")
 			}
 		}
 
@@ -255,8 +249,12 @@ func (a *ClaudeAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst 
 		if err != nil {
 			return err
 		}
-		f.Write(data)
-		f.Write([]byte("\n"))
+		if _, err := f.Write(data); err != nil {
+			return fmt.Errorf("failed to write turn to claude transcript: %w", err)
+		}
+		if _, err := f.Write([]byte("\n")); err != nil {
+			return fmt.Errorf("failed to write newline to claude transcript: %w", err)
+		}
 		parentUUID = turnUUID
 	}
 

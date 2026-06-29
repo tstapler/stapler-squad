@@ -3,8 +3,61 @@ package services
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 )
+
+// parseIntHeader parses an HTTP header value as an integer.
+// Returns -1 if the header is absent or cannot be parsed as an integer.
+func parseIntHeader(h http.Header, key string) int {
+	val := h.Get(key)
+	if val == "" {
+		return -1
+	}
+	num, err := strconv.Atoi(val)
+	if err != nil {
+		return -1
+	}
+	return num
+}
+
+// parseTimeHeader parses an HTTP header value as a time.Time.
+// Handles (in order): RFC3339 datetime strings, "2006-01-02T15:04:05Z" UTC
+// datetime strings, floating-point second duration strings (e.g. "1.5" → now
+// + 1.5 s), Go duration strings (e.g. "500ms"), and plain integer-second
+// duration strings.  Returns time.Time{} if the header is absent or cannot
+// be parsed.
+func parseTimeHeader(h http.Header, key string) time.Time {
+	val := h.Get(key)
+	if val == "" {
+		return time.Time{}
+	}
+
+	// Try parsing as ISO 8601/RFC3339 timestamp.
+	if t, err := time.Parse(time.RFC3339, val); err == nil {
+		return t
+	}
+	if t, err := time.Parse("2006-01-02T15:04:05Z", val); err == nil {
+		return t
+	}
+
+	// Try parsing as floating-point seconds (e.g. "1.5" → now + 1.5 s).
+	if secs, err := strconv.ParseFloat(val, 64); err == nil {
+		return time.Now().Add(time.Duration(secs * float64(time.Second)))
+	}
+
+	// Try parsing as a Go duration string (e.g. "500ms", "2m30s").
+	if d, err := time.ParseDuration(val); err == nil {
+		return time.Now().Add(d)
+	}
+
+	// Try parsing as plain integer seconds.
+	if secs, err := strconv.Atoi(val); err == nil {
+		return time.Now().Add(time.Duration(secs) * time.Second)
+	}
+
+	return time.Time{}
+}
 
 // ProviderLimits represents a snapshot of the rate limit and usage state for a provider/model.
 // All integer values should be -1 if they are unknown or not supported by the provider.
