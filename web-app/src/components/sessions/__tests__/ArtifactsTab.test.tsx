@@ -1,7 +1,9 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { create } from "@bufbuild/protobuf";
 import { ArtifactsTab } from "../ArtifactsTab";
 import type { Session } from "@/gen/session/v1/types_pb";
+import { SessionArtifactsSchema } from "@/gen/session/v1/types_pb";
 
 // Build a minimal Session-like object for testing — avoids importing full protobuf runtime.
 function makeSession(artifacts?: Session["artifacts"]): Session {
@@ -17,7 +19,7 @@ describe("ArtifactsTab", () => {
   it("ArtifactsTab_should_showNoArtifacts_When_artifactsIsEmptyArrays", () => {
     render(
       <ArtifactsTab
-        session={makeSession({ prUrls: [], commitShas: [], externalUrls: [] })}
+        session={makeSession(create(SessionArtifactsSchema, { prUrls: [], commitShas: [], externalUrls: [] }))}
       />
     );
     expect(screen.getByText(/No artifacts found/)).toBeInTheDocument();
@@ -26,11 +28,11 @@ describe("ArtifactsTab", () => {
   it("ArtifactsTab_should_renderPRLinks_When_artifactsHasPRURLs", () => {
     render(
       <ArtifactsTab
-        session={makeSession({
+        session={makeSession(create(SessionArtifactsSchema, {
           prUrls: ["https://github.com/owner/repo/pull/42"],
           commitShas: [],
           externalUrls: [],
-        })}
+        }))}
       />
     );
     expect(screen.getByText("owner/repo#42")).toBeInTheDocument();
@@ -43,11 +45,11 @@ describe("ArtifactsTab", () => {
     const longURL = "https://example.com/" + "a".repeat(60);
     render(
       <ArtifactsTab
-        session={makeSession({
+        session={makeSession(create(SessionArtifactsSchema, {
           prUrls: [],
           commitShas: [],
           externalUrls: [longURL],
-        })}
+        }))}
       />
     );
     // External URLs are behind a disclosure toggle — click to expand.
@@ -61,11 +63,11 @@ describe("ArtifactsTab", () => {
   it("ArtifactsTab_should_addSecurityAttrsToExternalLinks", () => {
     render(
       <ArtifactsTab
-        session={makeSession({
+        session={makeSession(create(SessionArtifactsSchema, {
           prUrls: ["https://github.com/owner/repo/pull/42"],
           commitShas: [],
           externalUrls: [],
-        })}
+        }))}
       />
     );
     const link = screen.getByRole("link", { name: "owner/repo#42" });
@@ -76,14 +78,14 @@ describe("ArtifactsTab", () => {
   it("ArtifactsTab_should_renderMultiplePRLinks", () => {
     render(
       <ArtifactsTab
-        session={makeSession({
+        session={makeSession(create(SessionArtifactsSchema, {
           prUrls: [
             "https://github.com/owner/repo/pull/1",
             "https://github.com/owner/repo/pull/2",
           ],
           commitShas: [],
           externalUrls: [],
-        })}
+        }))}
       />
     );
     expect(screen.getByText("owner/repo#1")).toBeInTheDocument();
@@ -94,11 +96,11 @@ describe("ArtifactsTab", () => {
     // A URL without /pull/ should render as-is (parsePRDisplay returns the raw URL)
     render(
       <ArtifactsTab
-        session={makeSession({
+        session={makeSession(create(SessionArtifactsSchema, {
           prUrls: ["https://github.com/owner/repo/issues/5"],
           commitShas: [],
           externalUrls: [],
-        })}
+        }))}
       />
     );
     // parsePRDisplay returns the raw URL when it can't parse as a PR URL
@@ -109,11 +111,11 @@ describe("ArtifactsTab", () => {
     const sha = "abc123def456abc123def456abc123def456abc1";
     render(
       <ArtifactsTab
-        session={makeSession({
+        session={makeSession(create(SessionArtifactsSchema, {
           prUrls: [],
           commitShas: [sha],
           externalUrls: [],
-        })}
+        }))}
       />
     );
     // Renders the shortened 7-char prefix in a <code> element.
