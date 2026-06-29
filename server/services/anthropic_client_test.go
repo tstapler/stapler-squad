@@ -173,6 +173,11 @@ func TestEnvVarCredentialSource_Google_PrimaryVar(t *testing.T) {
 }
 
 func TestEnvVarCredentialSource_Google_FallbackVar(t *testing.T) {
+	if prev, existed := os.LookupEnv("GEMINI_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("GEMINI_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("GEMINI_API_KEY") })
+	}
 	os.Unsetenv("GEMINI_API_KEY")
 	t.Setenv("GOOGLE_API_KEY", "google-key-abc")
 	src := &EnvVarCredentialSource{}
@@ -184,6 +189,11 @@ func TestEnvVarCredentialSource_Google_FallbackVar(t *testing.T) {
 }
 
 func TestEnvVarCredentialSource_Missing_ReturnsFalse(t *testing.T) {
+	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("ANTHROPIC_API_KEY") })
+	}
 	os.Unsetenv("ANTHROPIC_API_KEY")
 	src := &EnvVarCredentialSource{}
 	_, ok, err := src.Resolve(context.Background(), "anthropic")
@@ -363,6 +373,11 @@ func TestCredentialChain_EnvVarWinsOverOAuth(t *testing.T) {
 }
 
 func TestCredentialChain_FallsBackToOAuth_WhenEnvMissing(t *testing.T) {
+	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("ANTHROPIC_API_KEY") })
+	}
 	os.Unsetenv("ANTHROPIC_API_KEY")
 
 	home := t.TempDir()
@@ -387,6 +402,11 @@ func TestCredentialChain_FallsBackToOAuth_WhenEnvMissing(t *testing.T) {
 }
 
 func TestCredentialChain_NothingAvailable_ReturnsError(t *testing.T) {
+	if prev, existed := os.LookupEnv("ANTHROPIC_API_KEY"); existed {
+		t.Cleanup(func() { os.Setenv("ANTHROPIC_API_KEY", prev) })
+	} else {
+		t.Cleanup(func() { os.Unsetenv("ANTHROPIC_API_KEY") })
+	}
 	os.Unsetenv("ANTHROPIC_API_KEY")
 	chain := NewChain(
 		&EnvVarCredentialSource{},

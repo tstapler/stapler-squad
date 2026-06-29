@@ -549,6 +549,7 @@ func TestPortClaudeToAgy_SchemaMatchesRealDB(t *testing.T) {
 	// Run the port.
 	inst := &Instance{
 		Title:           "schema-test-session",
+		Path:            workspace,
 		WorkingDir:      workspace,
 		claudeSession:   &ClaudeSessionData{ConversationUUID: uuid},
 		HistoryFilePath: claudeLogPath,

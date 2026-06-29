@@ -216,10 +216,9 @@ func TestCapacityMonitor_AutoTransition(t *testing.T) {
 	monitor.poll(context.Background())
 
 	// Wait for background auto-transition goroutine to complete
-	time.Sleep(100 * time.Millisecond)
-
-	// Switcher should have been called to switch to agy
-	assert.Equal(t, "agy", switcher.GetTarget("test-session-auto"))
+	require.Eventually(t, func() bool {
+		return switcher.GetTarget("test-session-auto") == "agy"
+	}, 2*time.Second, 10*time.Millisecond, "expected switcher to have target 'agy' for test-session-auto")
 }
 
 func TestCapacityMonitor_RateLimitWarning(t *testing.T) {
