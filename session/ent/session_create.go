@@ -160,6 +160,20 @@ func (_c *SessionCreate) SetNillableAutoYes(v *bool) *SessionCreate {
 	return _c
 }
 
+// SetAutonomousMode sets the "autonomous_mode" field.
+func (_c *SessionCreate) SetAutonomousMode(v bool) *SessionCreate {
+	_c.mutation.SetAutonomousMode(v)
+	return _c
+}
+
+// SetNillableAutonomousMode sets the "autonomous_mode" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableAutonomousMode(v *bool) *SessionCreate {
+	if v != nil {
+		_c.SetAutonomousMode(*v)
+	}
+	return _c
+}
+
 // SetPrompt sets the "prompt" field.
 func (_c *SessionCreate) SetPrompt(v string) *SessionCreate {
 	_c.mutation.SetPrompt(v)
@@ -702,6 +716,10 @@ func (_c *SessionCreate) defaults() {
 		v := session.DefaultAutoYes
 		_c.mutation.SetAutoYes(v)
 	}
+	if _, ok := _c.mutation.AutonomousMode(); !ok {
+		v := session.DefaultAutonomousMode
+		_c.mutation.SetAutonomousMode(v)
+	}
 	if _, ok := _c.mutation.IsExpanded(); !ok {
 		v := session.DefaultIsExpanded
 		_c.mutation.SetIsExpanded(v)
@@ -753,6 +771,9 @@ func (_c *SessionCreate) check() error {
 	}
 	if _, ok := _c.mutation.AutoYes(); !ok {
 		return &ValidationError{Name: "auto_yes", err: errors.New(`ent: missing required field "Session.auto_yes"`)}
+	}
+	if _, ok := _c.mutation.AutonomousMode(); !ok {
+		return &ValidationError{Name: "autonomous_mode", err: errors.New(`ent: missing required field "Session.autonomous_mode"`)}
 	}
 	if _, ok := _c.mutation.Program(); !ok {
 		return &ValidationError{Name: "program", err: errors.New(`ent: missing required field "Session.program"`)}
@@ -841,6 +862,10 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.AutoYes(); ok {
 		_spec.SetField(session.FieldAutoYes, field.TypeBool, value)
 		_node.AutoYes = value
+	}
+	if value, ok := _c.mutation.AutonomousMode(); ok {
+		_spec.SetField(session.FieldAutonomousMode, field.TypeBool, value)
+		_node.AutonomousMode = value
 	}
 	if value, ok := _c.mutation.Prompt(); ok {
 		_spec.SetField(session.FieldPrompt, field.TypeString, value)
@@ -1280,6 +1305,18 @@ func (u *SessionUpsert) SetAutoYes(v bool) *SessionUpsert {
 // UpdateAutoYes sets the "auto_yes" field to the value that was provided on create.
 func (u *SessionUpsert) UpdateAutoYes() *SessionUpsert {
 	u.SetExcluded(session.FieldAutoYes)
+	return u
+}
+
+// SetAutonomousMode sets the "autonomous_mode" field.
+func (u *SessionUpsert) SetAutonomousMode(v bool) *SessionUpsert {
+	u.Set(session.FieldAutonomousMode, v)
+	return u
+}
+
+// UpdateAutonomousMode sets the "autonomous_mode" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateAutonomousMode() *SessionUpsert {
+	u.SetExcluded(session.FieldAutonomousMode)
 	return u
 }
 
@@ -1989,6 +2026,20 @@ func (u *SessionUpsertOne) SetAutoYes(v bool) *SessionUpsertOne {
 func (u *SessionUpsertOne) UpdateAutoYes() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.UpdateAutoYes()
+	})
+}
+
+// SetAutonomousMode sets the "autonomous_mode" field.
+func (u *SessionUpsertOne) SetAutonomousMode(v bool) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetAutonomousMode(v)
+	})
+}
+
+// UpdateAutonomousMode sets the "autonomous_mode" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateAutonomousMode() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateAutonomousMode()
 	})
 }
 
@@ -2942,6 +2993,20 @@ func (u *SessionUpsertBulk) SetAutoYes(v bool) *SessionUpsertBulk {
 func (u *SessionUpsertBulk) UpdateAutoYes() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.UpdateAutoYes()
+	})
+}
+
+// SetAutonomousMode sets the "autonomous_mode" field.
+func (u *SessionUpsertBulk) SetAutonomousMode(v bool) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetAutonomousMode(v)
+	})
+}
+
+// UpdateAutonomousMode sets the "autonomous_mode" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateAutonomousMode() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateAutonomousMode()
 	})
 }
 

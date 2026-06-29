@@ -122,10 +122,22 @@ export const breadcrumbLink = style({
   },
 });
 
-export const content = style({
-  display: "flex",
-  flex: 1,
-  overflow: "hidden",
+
+export const content = recipe({
+  base: {
+    display: "flex",
+    flex: 1,
+    overflow: "hidden",
+  },
+  variants: {
+    fileOpen: {
+      true: {},
+      false: {},
+    },
+  },
+  defaultVariants: {
+    fileOpen: false,
+  },
 });
 
 export const sidebar = style({
@@ -135,6 +147,24 @@ export const sidebar = style({
   flexShrink: 0,
   display: "flex",
   flexDirection: "column",
+  selectors: {
+    [`${content({ fileOpen: true })} &`]: {
+      "@media": {
+        "screen and (max-width: 768px)": {
+          display: "none",
+        },
+      },
+    },
+    [`${content({ fileOpen: false })} &`]: {
+      "@media": {
+        "screen and (max-width: 768px)": {
+          display: "flex",
+          width: "100%",
+          borderRight: "none",
+        },
+      },
+    },
+  },
 });
 
 export const sidebarEmpty = style({
@@ -207,6 +237,22 @@ export const viewer = style({
   overflow: "hidden",
   display: "flex",
   flexDirection: "column",
+  selectors: {
+    [`${content({ fileOpen: true })} &`]: {
+      "@media": {
+        "screen and (max-width: 768px)": {
+          display: "flex",
+        },
+      },
+    },
+    [`${content({ fileOpen: false })} &`]: {
+      "@media": {
+        "screen and (max-width: 768px)": {
+          display: "none",
+        },
+      },
+    },
+  },
 });
 
 export const viewerEmpty = style({
@@ -304,3 +350,6 @@ export const viewerHint = style({
   fontSize: vars.fontSize.xs,
   color: vars.color.textMuted,
 });
+
+
+

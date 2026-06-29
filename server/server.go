@@ -344,8 +344,17 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	}
 
 	// Register BacklogService handler.
+	// The feature-flag interceptor is added on top of the standard options so that
+	// all BacklogService RPCs return CodeNotFound when the "backlog" flag is off.
+	// isEnabled re-reads config on every request so flag changes take effect immediately.
 	if deps.BacklogService != nil {
-		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, ConnectOptions(deps.ErrorRegistry)...)
+		blOpts := append(
+			ConnectOptions(deps.ErrorRegistry),
+			connect.WithInterceptors(interceptors.NewFeatureFlagInterceptor("backlog", func() bool {
+				return config.LoadConfig().GetFeatureFlag("backlog")
+			})),
+		)
+		blPath, blHandler := sessionv1connect.NewBacklogServiceHandler(deps.BacklogService, blOpts...)
 		blAPIPath := "/api" + blPath
 		srv.RegisterConnectHandler(blAPIPath, http.StripPrefix("/api", blHandler))
 		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)

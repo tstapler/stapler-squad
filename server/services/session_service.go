@@ -1677,7 +1677,7 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
-	instances, err := s.storage.LoadInstances()
+	instances, err := s.loadInstancesWithWiring()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
@@ -1702,6 +1702,14 @@ func (s *SessionService) ResumeHibernatedSession(
 	instances[instanceIndex] = instance
 	if err := s.storage.SaveInstances(instances); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
+	}
+
+	if s.reviewQueuePoller != nil {
+		s.reviewQueuePoller.AddInstance(instance)
+	}
+
+	if instance.AutonomousMode && s.headlessPool != nil {
+		s.StartAutonomousDriverForInstance(instance)
 	}
 
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
@@ -2861,13 +2869,56 @@ func (s *SessionService) ForkSession(
 	respProto := adapters.InstanceToProto(newInst, s.workflowNames())
 
 	go func() {
+		// Wire callbacks before starting so rate-limit and status-change events fire.
+		s.wireRateLimitCallbacks(newInst)
+		s.wireStatusChangeCallback(newInst)
+		s.wireClaudeSessionIDCallback(newInst)
+		s.wireAutoArchiveCallback(newInst)
+		s.wireSessionExitedPublisher(newInst)
+
+		// Start the session (initializes tmux + worktree/checkpoint restoration).
 		if startErr := newInst.Start(true); startErr != nil {
 			log.Warn("ForkSession: failed to start forked session", "session", newInst.Title, "err", startErr)
 			newInst.Status = session.Stopped
 			if saveErr := s.storage.SaveInstances(s.allInstances()); saveErr != nil {
 				log.Warn("ForkSession: failed to persist Stopped status", "session", newInst.Title, "err", saveErr)
 			}
+			s.eventBus.Publish(events.NewSessionUpdatedEvent(newInst, []string{"status"}))
+			return
 		}
+
+		// Inject Claude Code HTTP hook config for remote approval from the web UI.
+		if err := InjectHookConfig(newInst.GetEffectiveRootDir(), newInst.Title); err != nil {
+			log.Warn("ForkSession: failed to inject hook config", "session", newInst.Title, "err", err)
+		}
+
+		if s.backlogLifecycleListener != nil {
+			s.backlogLifecycleListener.WireToInstance(newInst)
+		}
+
+		// Wire status manager and start controller.
+		if s.statusManager != nil {
+			newInst.SetStatusManager(s.statusManager)
+			if ctrlErr := newInst.StartController(); ctrlErr != nil {
+				log.Warn("ForkSession: failed to start controller after wiring", "session", newInst.Title, "err", ctrlErr)
+			}
+		}
+
+		// Start session driver so the session can receive its initial prompts/inputs.
+		session.StartSessionDriver(newInst, newInst.GetEffectiveRootDir())
+
+		if newInst.AutonomousMode && s.headlessPool != nil {
+			driver := session.NewAutonomousDriver(newInst, s.headlessPool, newInst.Prompt, 0)
+			driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
+			if driverErr := driver.Start(s.driverCtx()); driverErr != nil {
+				log.Warn("ForkSession: failed to start autonomous driver", "session", newInst.Title, "err", driverErr)
+			} else {
+				s.registerDriver(newInst.Title, driver)
+			}
+		}
+
+		_ = s.storage.SaveInstances(s.allInstances())
+		s.eventBus.Publish(events.NewSessionUpdatedEvent(newInst, []string{"status"}))
 	}()
 
 	s.eventBus.Publish(events.NewSessionCreatedEvent(newInst))

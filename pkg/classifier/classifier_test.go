@@ -2419,10 +2419,10 @@ func TestClassify_Rtk_WrapperTransparency(t *testing.T) {
 		{"rtk git push origin main", Escalate, "seed-escalate-git-push"},
 		// sudo wraps rtk wraps git status — two recursive-eval levels
 		{"sudo rtk git status", AutoAllow, "seed-allow-git-read"},
-		// bare rtk with no subcommand → no inner command → escalate
-		{"rtk", Escalate, ""},
-		// rtk gain → inner "gain" has no rule → escalate
-		{"rtk gain", Escalate, ""},
+		// bare rtk with no subcommand → allowed by rtk/agy metadata rule
+		{"rtk", AutoAllow, "seed-allow-bash-rtk-agy"},
+		// rtk gain → allowed by rtk/agy metadata rule
+		{"rtk gain", AutoAllow, "seed-allow-bash-rtk-agy"},
 		// rtk proxy is a pass-through sub-mode; "proxy" token is skipped
 		{"rtk proxy git status", AutoAllow, "seed-allow-git-read"},
 		{"rtk proxy git push", Escalate, "seed-escalate-git-push"},

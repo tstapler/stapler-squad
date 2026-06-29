@@ -202,6 +202,7 @@ function HomeContent() {
     const duplicateId = searchParams.get("duplicate");
     const worktreePath = searchParams.get("worktree");
     const worktreeBranch = searchParams.get("branch");
+    const title = searchParams.get("title");
 
     if (newParam === "true") {
       router.replace("/", { scroll: false });
@@ -217,7 +218,10 @@ function HomeContent() {
     } else if (worktreePath) {
       router.replace("/", { scroll: false });
       // Pass path@branch so the PathWithBranch detector pre-fills both fields
-      openOmnibar(worktreeBranch ? `${worktreePath}@${worktreeBranch}` : worktreePath);
+      openOmnibar(
+        worktreeBranch ? `${worktreePath}@${worktreeBranch}` : worktreePath,
+        title || undefined
+      );
     }
   }, [searchParams, getSession, openOmnibar, router, track]);
 

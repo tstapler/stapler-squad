@@ -62,6 +62,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
 		GithubCheckConclusion: inst.GitHubCheckConclusion,
 		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
+		LaunchCommand:         inst.LaunchCommand,
 	}
 
 	// Convert artifact data if available

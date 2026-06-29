@@ -1507,6 +1507,23 @@ func SeedRules() []Rule {
 			Source:    "seed",
 		},
 		{
+			// rtk and agy are CLI tools for token optimization and project control.
+			// Safe read-only / info commands (e.g. gain, discover, version) are allowed.
+			ID:       "seed-allow-bash-rtk-agy",
+			Name:     "Allow rtk and agy analytics and metadata commands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"rtk", "agy"},
+				Subcommands: []string{"gain", "discover", "version", ""},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "rtk/agy metadata and analytics operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
 			// Known uv subcommands; compound analysis still enforces safety on piped/chained commands.
 			ID:       "seed-allow-bash-uv",
 			Name:     "Allow uv package manager subcommands",

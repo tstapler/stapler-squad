@@ -111,7 +111,14 @@ func (i *Instance) resumeFromHibernation(ctx context.Context) {
 		i.stateMutex.Unlock()
 		return
 	}
-
+	// Start the controller and session driver
+	if i.controllerManager.GetStatusManager() != nil {
+		if err := i.StartController(); err != nil {
+			log.Warn("hibernation resume: failed to start controller",
+				"session", i.Title, "err", err)
+		}
+	}
+	StartSessionDriver(i, i.GetEffectiveRootDir())
 	// Clean up checkpoint files
 	cfg := appconfig.LoadConfig()
 	checkpointDir, err := cfg.HibernationCheckpointDirOrDefault()

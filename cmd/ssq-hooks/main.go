@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
@@ -59,14 +60,15 @@ func printUsage() {
 
 func handleCheck() {
 	checkCmd := flag.NewFlagSet("check", flag.ExitOnError)
-	dbPath := checkCmd.String("db", getDefaultDBPath(), "Path to SQLite database")
-	geminiMode := checkCmd.Bool("gemini", false, "Translate Gemini/agy TOOL_INPUT payload (exit-code output)")
+	dbPath := checkCmd.String("db", "", "Path to SQLite database (defaults to workspace-specific database)")
+	geminiMode := checkCmd.Bool("gemini", false, "Translate Gemini TOOL_INPUT payload (exit-code output)")
+	agyMode := checkCmd.Bool("antigravity", false, "Translate Antigravity TOOL_INPUT payload (hooks.json format)")
 	checkCmd.Parse(os.Args[2:]) //nolint:errcheck
 
 	var payload classifier.PermissionRequestPayload
-	if *geminiMode {
+	if *geminiMode || *agyMode {
 		payload = parseGeminiPayload()
-		// Gemini payload typically lacks cwd; fall back to process working directory.
+		// Gemini/agy payload typically lacks cwd; fall back to process working directory.
 		if payload.Cwd == "" {
 			payload.Cwd, _ = os.Getwd()
 		}
@@ -83,7 +85,12 @@ func handleCheck() {
 		}
 	}
 
-	storage := loadStorage(*dbPath)
+	storagePath := *dbPath
+	if storagePath == "" {
+		storagePath = getDBPathForCwd(payload.Cwd)
+	}
+
+	storage := loadStorage(storagePath)
 	defer storage.Close()
 
 	c := loadClassifier(storage)
@@ -95,6 +102,8 @@ func handleCheck() {
 
 	if *geminiMode {
 		writeGeminiHookDecision(result)
+	} else if *agyMode {
+		writeAntigravityHookDecision(result)
 	} else {
 		writeHookDecision(result)
 	}
@@ -172,13 +181,44 @@ func writeGeminiHookDecision(result classifier.ClassificationResult) {
 	}
 }
 
+// writeAntigravityHookDecision communicates the classification result to Antigravity CLI via stdout JSON.
+func writeAntigravityHookDecision(result classifier.ClassificationResult) {
+	type agyOutput struct {
+		Decision   string `json:"decision"`
+		DenyReason string `json:"deny_reason,omitempty"`
+		AllowTool  *bool  `json:"allow_tool,omitempty"`
+	}
+	var output agyOutput
+	switch result.Decision {
+	case classifier.AutoAllow:
+		output.Decision = "allow"
+		t := true
+		output.AllowTool = &t
+	case classifier.AutoDeny:
+		output.Decision = "deny"
+		f := false
+		output.AllowTool = &f
+		reason := result.Reason
+		if result.Alternative != "" {
+			reason += " " + result.Alternative
+		}
+		output.DenyReason = reason
+	default:
+		output.Decision = "ask"
+	}
+	json.NewEncoder(os.Stdout).Encode(output)
+	// Antigravity hook scripts must always exit with 0 (even on deny).
+	os.Exit(0)
+}
+
 // parseGeminiPayload reads the Gemini/agy $TOOL_INPUT JSON from stdin
 // and translates it to a PermissionRequestPayload.
 //
 // Supported schemas:
 //
 //	Variant A (Gemini CLI open-source): {"name": "run_shell_command", "args": {"command": "..."}}
-//	Variant B (Claude-compatible):      {"tool_name": "Bash", "tool_input": {"command": "..."}}
+//	Variant B (Claude-compatible):      {"tool_name": "...", "tool_input": {...}}
+//	Variant C (Antigravity toolCall):   {"toolCall": {"name": "...", "args": {...}}, "cwd": "..."}
 //
 // Falls back gracefully to PermissionRequestPayload{ToolName: "Unknown"} on any
 // parse error or unrecognized schema — results in Escalate (not crash, not false-allow).
@@ -192,7 +232,11 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 	if os.Getenv("STAPLER_DEBUG") == "1" {
 		fmt.Fprintf(os.Stderr, "SSQ-Hooks [debug] raw $TOOL_INPUT: %s\n", string(raw))
 	}
-	// GeminiToolPayload covers both known schema variants.
+	type ToolCall struct {
+		Name string                 `json:"name"`
+		Args map[string]interface{} `json:"args"`
+	}
+	// GeminiToolPayload covers both known schema variants and Antigravity toolCall.
 	// Zero values for absent fields allow detecting which variant is present.
 	type GeminiToolPayload struct {
 		// Variant A: {"name": "run_shell_command", "args": {"command": "..."}}
@@ -201,46 +245,78 @@ func parseGeminiPayload() classifier.PermissionRequestPayload {
 		// Variant B: {"tool_name": "...", "tool_input": {...}}
 		ToolName  string                 `json:"tool_name"`
 		ToolInput map[string]interface{} `json:"tool_input"`
+		// Variant C (Antigravity toolCall): {"toolCall": {"name": "...", "args": {...}}, "workspacePaths": [...]}
+		ToolCall       *ToolCall `json:"toolCall,omitempty"`
+		WorkspacePaths []string  `json:"workspacePaths,omitempty"`
+		// Context fields
+		Cwd string `json:"cwd"`
 	}
 	var p GeminiToolPayload
 	if err := json.Unmarshal(raw, &p); err != nil {
-		fmt.Fprintf(os.Stderr, "SSQ-Hooks: failed to parse Gemini payload: %v\n", err)
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks: failed to parse Gemini/Antigravity payload: %v\n", err)
 		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
 	}
-	// Prefer Variant B (Claude-compatible) if present.
-	if p.ToolName != "" {
-		payload := classifier.PermissionRequestPayload{
-			ToolName:  p.ToolName,
-			ToolInput: p.ToolInput,
-		}
-		// P-7: pass-through user-input tool (equivalent of AskUserQuestion guard)
-		if strings.EqualFold(payload.ToolName, "ask_for_user_input") {
-			os.Exit(0)
-		}
-		return payload
+
+	var toolName string
+	var toolInput map[string]interface{}
+
+	if p.ToolCall != nil {
+		toolName = p.ToolCall.Name
+		toolInput = p.ToolCall.Args
+	} else if p.ToolName != "" {
+		toolName = p.ToolName
+		toolInput = p.ToolInput
+	} else if p.Name != "" {
+		toolName = p.Name
+		toolInput = p.Args
 	}
-	// Fall back to Variant A: name + args.
-	if p.Name == "" {
-		// Neither variant matched: unknown schema.
-		fmt.Fprintf(os.Stderr, "SSQ-Hooks: unrecognized Gemini payload schema (no 'name' or 'tool_name' field)\n")
+
+	if toolName == "" {
+		fmt.Fprintf(os.Stderr, "SSQ-Hooks: unrecognized Gemini/Antigravity payload schema (no tool name field)\n")
 		return classifier.PermissionRequestPayload{ToolName: "Unknown"}
 	}
-	toolName := p.Name
-	// Normalize Gemini tool names to classifier-expected names.
-	switch strings.ToLower(toolName) {
-	case "run_shell_command", "execute_bash", "run_bash_command":
-		toolName = "Bash"
-	case "read_file", "read_many_files":
-		toolName = "Read"
-	case "write_file":
-		toolName = "Write"
-	case "ask_for_user_input":
-		// P-7: pass-through user-input tool (equivalent of AskUserQuestion guard)
+
+	// P-7: pass-through user-input tool (equivalent of AskUserQuestion guard)
+	if strings.EqualFold(toolName, "ask_for_user_input") || strings.EqualFold(toolName, "ask_user_question") {
 		os.Exit(0)
 	}
+
+	// Normalize tool names to classifier-expected names.
+	switch strings.ToLower(toolName) {
+	case "run_shell_command", "execute_bash", "run_bash_command", "run_command", "bash":
+		toolName = "Bash"
+		// Antigravity sends args with "CommandLine" (capital C) instead of "command" — normalize.
+		if toolInput != nil {
+			if v, ok := toolInput["CommandLine"]; ok {
+				if _, hasCmd := toolInput["command"]; !hasCmd {
+					toolInput["command"] = v
+				}
+			}
+			// Pull Cwd from args if not already set at the top level.
+			if p.Cwd == "" {
+				if v, ok := toolInput["Cwd"]; ok {
+					if s, ok := v.(string); ok {
+						p.Cwd = s
+					}
+				}
+			}
+		}
+	case "read_file", "read_many_files", "read":
+		toolName = "Read"
+	case "write_file", "write":
+		toolName = "Write"
+	}
+
+	// Prefer explicit cwd; fall back to first workspacePath.
+	cwd := p.Cwd
+	if cwd == "" && len(p.WorkspacePaths) > 0 {
+		cwd = p.WorkspacePaths[0]
+	}
+
 	return classifier.PermissionRequestPayload{
 		ToolName:  toolName,
-		ToolInput: p.Args,
+		ToolInput: toolInput,
+		Cwd:       cwd,
 	}
 }
 
@@ -796,15 +872,92 @@ func installAgy() {
 		os.Exit(1)
 	}
 	fmt.Printf("Installed binary: %s\n", destBin)
-	// 2. Patch ~/.gemini/antigravity-cli/settings.json.
-	settingsPath := filepath.Join(home, ".gemini", "antigravity-cli", "settings.json")
-	hookCmd := destBin + " check --gemini"
-	if err := patchBeforeToolHook(settingsPath, hookCmd); err != nil {
-		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", settingsPath, err)
-		os.Exit(1)
+	// 2. Patch ~/.gemini/config/hooks.json (authoritative global path) and ~/.gemini/antigravity-cli/hooks.json (fallback).
+	hooksPaths := []string{
+		filepath.Join(home, ".gemini", "config", "hooks.json"),
+		filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json"),
 	}
-	fmt.Printf("Updated hook:     %s\n", settingsPath)
+	for _, hooksPath := range hooksPaths {
+		if err := patchAntigravityHooks(hooksPath, destBin); err != nil {
+			fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", hooksPath, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Updated hook:     %s\n", hooksPath)
+	}
 	fmt.Println("Done. Restart agy for the hook to take effect.")
+}
+
+// patchAntigravityHooks patches ~/.gemini/antigravity-cli/hooks.json to register the ssq-hooks check command.
+func patchAntigravityHooks(hooksPath, binPath string) error {
+	hookCmd := binPath + " check --antigravity"
+
+	// Read existing settings (create minimal file if absent).
+	raw, err := os.ReadFile(hooksPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		raw = []byte("{}")
+	}
+
+	var hooksData map[string]interface{}
+	if err := json.Unmarshal(raw, &hooksData); err != nil {
+		return fmt.Errorf("parsing %s: %w", hooksPath, err)
+	}
+
+	// Build the new/updated hook structure.
+	newHookConfig := map[string]interface{}{
+		"enabled": true,
+		"PreToolUse": []interface{}{
+			map[string]interface{}{
+				"matcher": "*",
+				"hooks": []interface{}{
+					map[string]interface{}{
+						"type":    "command",
+						"command": hookCmd,
+						"timeout": 10,
+					},
+				},
+			},
+		},
+	}
+
+	// Check if the hook is already present and matches.
+	if existing, ok := hooksData["stapler-squad"]; ok {
+		if existingMap, ok := existing.(map[string]interface{}); ok {
+			if preToolUse, ok := existingMap["PreToolUse"].([]interface{}); ok && len(preToolUse) > 0 {
+				if firstEntry, ok := preToolUse[0].(map[string]interface{}); ok {
+					if innerHooks, ok := firstEntry["hooks"].([]interface{}); ok && len(innerHooks) > 0 {
+						if hookObj, ok := innerHooks[0].(map[string]interface{}); ok {
+							if cmd, _ := hookObj["command"].(string); cmd == hookCmd {
+								fmt.Println("Antigravity hook already present, nothing to do.")
+								return nil
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Update or insert the hook.
+	hooksData["stapler-squad"] = newHookConfig
+
+	out, err := json.MarshalIndent(hooksData, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(hooksPath), 0700); err != nil {
+		return err
+	}
+
+	// Atomic write
+	tmpPath := hooksPath + ".tmp"
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, hooksPath)
 }
 
 func installOpenCode() {
@@ -1050,6 +1203,19 @@ func installServiceMacOS(home, binPath, logDir, envPath string, uninstall bool) 
 }
 
 func getDefaultDBPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".stapler-squad", "sessions.db")
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".stapler-squad", "sessions.db")
+	}
+	return filepath.Join(configDir, "sessions.db")
+}
+
+func getDBPathForCwd(cwd string) string {
+	configDir, err := config.GetConfigDirForDir(cwd)
+	if err != nil {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, ".stapler-squad", "sessions.db")
+	}
+	return filepath.Join(configDir, "sessions.db")
 }

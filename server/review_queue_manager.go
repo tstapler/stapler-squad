@@ -136,10 +136,18 @@ func (rqm *ReactiveQueueManager) handleEvent(event *events.Event) {
 	case events.EventApprovalResponse:
 		rqm.handleApprovalResponse(event)
 	case events.EventSessionDeleted:
-		sessionID := event.SessionID
-		rqm.queue.Remove(sessionID)
+		rqm.queue.Remove(rqm.resolveQueueKey(event.SessionID))
 		rqm.signalActivity()
 	}
+}
+
+// resolveQueueKey converts a session identifier (UUID or Title) to the queue key
+// (Title). Queue items are keyed by inst.Title; events arrive with UUID.
+func (rqm *ReactiveQueueManager) resolveQueueKey(id string) string {
+	if inst := rqm.poller.FindInstance(id); inst != nil {
+		return inst.Title
+	}
+	return id // fallback: already a Title, or instance no longer loaded
 }
 
 // Stop stops the reactive queue manager.
@@ -218,8 +226,8 @@ func (rqm *ReactiveQueueManager) handleSessionAcknowledged(event *events.Event) 
 
 	log.Info("ReactiveQueueManager session acknowledged, removing from queue", "session", sessionID)
 
-	// Immediate removal from queue
-	removed := rqm.queue.Remove(sessionID)
+	// Immediate removal from queue — event SessionID may be a UUID; resolve to Title.
+	removed := rqm.queue.Remove(rqm.resolveQueueKey(sessionID))
 	if removed {
 		log.Debug("ReactiveQueueManager session removed from queue", "session", sessionID)
 	}
@@ -243,8 +251,8 @@ func (rqm *ReactiveQueueManager) handleApprovalResponse(event *events.Event) {
 		}
 	}
 
-	// Immediate removal from queue
-	rqm.queue.Remove(sessionID)
+	// Immediate removal from queue — event SessionID may be a UUID; resolve to Title.
+	rqm.queue.Remove(rqm.resolveQueueKey(sessionID))
 
 	// Snap the poll loop back to fast interval so any follow-up prompts surface quickly.
 	rqm.signalActivity()

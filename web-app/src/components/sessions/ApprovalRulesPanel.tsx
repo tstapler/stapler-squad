@@ -94,8 +94,52 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
   const [templateSeed, setTemplateSeed] = useState<RuleTemplate | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
 
-  // Auto-open builder if prefill is provided
-  const effectivePrefill = prefill ?? null;
+  // Track which form fields the user has manually edited (not overwritten by AI pre-fill).
+  const touchedFieldsRef = useRef<Set<keyof RuleFormState>>(new Set());
+
+  // ── URL param pre-fill (from analytics "Add rule →" links) ───────────────
+  // Runs once on mount (client only). Reads window.location.search directly to
+  // avoid useSearchParams + Suspense complications in the static export.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tool = params.get("tool");
+    const program = params.get("program");
+    const subcommand = params.get("subcommand");
+    if (!tool && !program) return;
+
+    const prefill: Partial<RuleFormState> = {};
+    if (tool) {
+      prefill.toolName = tool;
+      prefill.name = `Allow ${tool}`;
+    } else if (program) {
+      // Escape regex metacharacters so values like "docker-compose" or "node.js"
+      // produce valid patterns. Use (?:^|\s) / (?:\s|$) word boundaries because
+      // \b does not match at hyphen boundaries.
+      const esc = escapeRegex(program);
+      prefill.toolName = "Bash";
+      if (subcommand) {
+        const escSub = escapeRegex(subcommand);
+        prefill.commandPattern = `(?:^|\\s)${esc}(?:\\s|$).*(?:^|\\s)${escSub}(?:\\s|$)`;
+        prefill.name = `Allow ${program} ${subcommand}`;
+      } else {
+        prefill.commandPattern = `(?:^|\\s)${esc}(?:\\s|$)`;
+        prefill.name = `Allow ${program}`;
+      }
+    }
+
+    setShowForm(true);
+    setForm({ ...emptyForm, ...prefill });
+    setFormError(null);
+    setAiPrefilled(false);
+    setCmdSampleValue("");
+    touchedFieldsRef.current = new Set();
+    cmdGenClear();
+
+    setTimeout(() => {
+      formSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 100);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── filter ────────────────────────────────────────────────────────────────
 

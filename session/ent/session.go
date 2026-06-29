@@ -43,6 +43,8 @@ type Session struct {
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 	// AutoYes holds the value of the "auto_yes" field.
 	AutoYes bool `json:"auto_yes,omitempty"`
+	// Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation.
+	AutonomousMode bool `json:"autonomous_mode,omitempty"`
 	// Prompt holds the value of the "prompt" field.
 	Prompt string `json:"prompt,omitempty"`
 	// Program holds the value of the "program" field.
@@ -201,7 +203,7 @@ func (*Session) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case session.FieldAutoYes, session.FieldIsExpanded, session.FieldOneShot, session.FieldHidden:
+		case session.FieldAutoYes, session.FieldAutonomousMode, session.FieldIsExpanded, session.FieldOneShot, session.FieldHidden:
 			values[i] = new(sql.NullBool)
 		case session.FieldID, session.FieldStatus, session.FieldHeight, session.FieldWidth, session.FieldGithubPrNumber:
 			values[i] = new(sql.NullInt64)
@@ -297,6 +299,12 @@ func (_m *Session) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field auto_yes", values[i])
 			} else if value.Valid {
 				_m.AutoYes = value.Bool
+			}
+		case session.FieldAutonomousMode:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field autonomous_mode", values[i])
+			} else if value.Valid {
+				_m.AutonomousMode = value.Bool
 			}
 		case session.FieldPrompt:
 			if value, ok := values[i].(*sql.NullString); !ok {
@@ -579,6 +587,9 @@ func (_m *Session) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("auto_yes=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AutoYes))
+	builder.WriteString(", ")
+	builder.WriteString("autonomous_mode=")
+	builder.WriteString(fmt.Sprintf("%v", _m.AutonomousMode))
 	builder.WriteString(", ")
 	builder.WriteString("prompt=")
 	builder.WriteString(_m.Prompt)

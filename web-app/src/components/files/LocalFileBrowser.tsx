@@ -14,6 +14,7 @@ import {
   ArrowUp,
   ExternalLink,
   FolderOpen,
+  X,
 } from "lucide-react";
 import * as styles from "./LocalFileBrowser.css";
 
@@ -105,9 +106,10 @@ interface ViewerToolbarProps {
   name: string;
   url: string;
   openLabel?: string;
+  onClose?: () => void;
 }
 
-function ViewerToolbar({ name, url, openLabel = "Open in new tab" }: ViewerToolbarProps) {
+function ViewerToolbar({ name, url, openLabel = "Open in new tab", onClose }: ViewerToolbarProps) {
   const handleOpen = () => window.open(url, "_blank", "noopener");
   return (
     <div className={styles.viewerToolbar}>
@@ -115,15 +117,21 @@ function ViewerToolbar({ name, url, openLabel = "Open in new tab" }: ViewerToolb
       <button onClick={handleOpen} className={styles.externalButton} title={openLabel}>
         <ExternalLink size={14} />
       </button>
+      {onClose && (
+        <button onClick={onClose} className={styles.externalButton} title="Close file viewer">
+          <X size={14} />
+        </button>
+      )}
     </div>
   );
 }
 
 interface FileViewerProps {
   entry: FileEntry;
+  onClose: () => void;
 }
 
-function FileViewer({ entry }: FileViewerProps) {
+function FileViewer({ entry, onClose }: FileViewerProps) {
   const [textContent, setTextContent] = useState<string | null>(null);
   const [textError, setTextError] = useState<string | null>(null);
   const url = serveUrl(entry.path);
@@ -159,7 +167,7 @@ function FileViewer({ entry }: FileViewerProps) {
     case "html":
       return (
         <div className={styles.viewerWrapper}>
-          <ViewerToolbar name={entry.name} url={url} />
+          <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
           <iframe
             src={url}
             className={styles.viewerFrame}
@@ -173,7 +181,7 @@ function FileViewer({ entry }: FileViewerProps) {
     case "image":
       return (
         <div className={styles.viewerWrapper}>
-          <ViewerToolbar name={entry.name} url={url} />
+          <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
           {/* img tag sandboxes SVG — scripts in SVG don't execute in <img> context */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src={url} alt={entry.name} className={styles.viewerImage} />
@@ -183,7 +191,7 @@ function FileViewer({ entry }: FileViewerProps) {
     case "pdf":
       return (
         <div className={styles.viewerWrapper}>
-          <ViewerToolbar name={entry.name} url={url} />
+          <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
           <iframe
             src={url}
             className={styles.viewerFrame}
@@ -196,9 +204,7 @@ function FileViewer({ entry }: FileViewerProps) {
     case "video":
       return (
         <div className={styles.viewerWrapper}>
-          <div className={styles.viewerToolbar}>
-            <span className={styles.viewerLabel}>{entry.name}</span>
-          </div>
+          <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
           {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
           <video controls src={url} className={styles.viewerVideo} />
         </div>
@@ -206,30 +212,43 @@ function FileViewer({ entry }: FileViewerProps) {
 
     case "text":
       if (textError) {
-        return <div className={styles.viewerEmpty}>Failed to load: {textError}</div>;
+        return (
+          <div className={styles.viewerWrapper}>
+            <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
+            <div className={styles.viewerEmpty}>Failed to load: {textError}</div>
+          </div>
+        );
       }
       if (textContent === null) {
-        return <div className={styles.viewerEmpty}>Loading…</div>;
+        return (
+          <div className={styles.viewerWrapper}>
+            <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
+            <div className={styles.viewerEmpty}>Loading…</div>
+          </div>
+        );
       }
       return (
         <div className={styles.viewerWrapper}>
-          <ViewerToolbar name={entry.name} url={url} openLabel="Open raw" />
+          <ViewerToolbar name={entry.name} url={url} openLabel="Open raw" onClose={onClose} />
           <pre className={styles.viewerText}>{textContent}</pre>
         </div>
       );
 
     default:
       return (
-        <div className={styles.viewerEmpty}>
-          <File size={32} />
-          <span>{entry.name}</span>
-          <span className={styles.viewerHint}>{formatSize(entry.size)} — binary file</span>
-          <button
-            onClick={() => window.open(url, "_blank", "noopener")}
-            className={styles.externalButton}
-          >
-            Open / Download <ExternalLink size={14} />
-          </button>
+        <div className={styles.viewerWrapper}>
+          <ViewerToolbar name={entry.name} url={url} onClose={onClose} />
+          <div className={styles.viewerEmpty}>
+            <File size={32} />
+            <span>{entry.name}</span>
+            <span className={styles.viewerHint}>{formatSize(entry.size)} — binary file</span>
+            <button
+              onClick={() => window.open(url, "_blank", "noopener")}
+              className={styles.externalButton}
+            >
+              Open / Download <ExternalLink size={14} />
+            </button>
+          </div>
         </div>
       );
   }
@@ -342,7 +361,7 @@ export function LocalFileBrowser() {
         </nav>
       </div>
 
-      <div className={styles.content}>
+      <div className={styles.content({ fileOpen: !!selectedEntry })}>
         <aside className={styles.sidebar}>
           {loading && <div className={styles.sidebarEmpty}>Loading…</div>}
           {listError && <div className={styles.sidebarEmpty}>{listError}</div>}
@@ -381,7 +400,7 @@ export function LocalFileBrowser() {
 
         <div className={styles.viewer}>
           {selectedEntry ? (
-            <FileViewer entry={selectedEntry} />
+            <FileViewer entry={selectedEntry} onClose={() => setSelectedEntry(null)} />
           ) : (
             <div className={styles.viewerEmpty}>
               <FolderOpen size={40} />

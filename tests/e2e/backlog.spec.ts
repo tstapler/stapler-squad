@@ -13,6 +13,24 @@ import { BacklogPage } from './pages/BacklogPage';
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 test.describe('Backlog', () => {
+  // Enable the backlog feature flag before any test in this suite runs, and
+  // restore it to disabled afterwards.  The flag defaults to off, so without
+  // this the layout guard redirects to "/" and every test would fail on the
+  // waitForSelector('[data-testid="backlog-page"]') assertion.
+  test.beforeAll(async ({ request }) => {
+    await request.post(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { name: 'backlog', enabled: true },
+    });
+  });
+
+  test.afterAll(async ({ request }) => {
+    await request.post(`${BASE_URL}/api/session.v1.SessionService/UpdateFeatureFlag`, {
+      headers: { 'Content-Type': 'application/json' },
+      data: { name: 'backlog', enabled: false },
+    });
+  });
+
   test.beforeEach(async ({ page }) => {
     await page.goto(`${BASE_URL}/backlog`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid="backlog-page"]', { timeout: 15000 });

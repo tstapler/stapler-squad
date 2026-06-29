@@ -47,6 +47,7 @@ interface OmnibarProps {
   onRunWorkflow?: (slug: string, arg: string) => Promise<void>;
   initialMode?: "discovery" | "creation";
   initialInput?: string;
+  initialTitle?: string;
   /** Available workflows for @slug autocomplete. */
   workflows?: WorkflowEntry[];
 }
@@ -146,7 +147,7 @@ function protoSessionTypeToFormString(st: SessionType): OmnibarFormState["sessio
   }
 }
 
-export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput, workflows = [] }: OmnibarProps) {
+export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession, onNavigateToSessionInNewPane, onSpawnShell, onRunWorkflow, initialMode, initialInput, initialTitle, workflows = [] }: OmnibarProps) {
   const router = useRouter();
   const { setTheme } = useTheme();
 
@@ -562,6 +563,13 @@ export function Omnibar({ isOpen, onClose, onCreateSession, onNavigateToSession,
       setInput(initialInput);
     }
   }, [isOpen, initialInput]);
+
+  // On open: pre-populate sessionName if initialTitle is provided
+  useEffect(() => {
+    if (isOpen && initialTitle) {
+      setSessionName(initialTitle);
+    }
+  }, [isOpen, initialTitle, setSessionName]);
 
   // Session result selection handlers
   const handleSessionSelect = useCallback(

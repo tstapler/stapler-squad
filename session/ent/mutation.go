@@ -14887,6 +14887,7 @@ type SessionMutation struct {
 	created_at             *time.Time
 	updated_at             *time.Time
 	auto_yes               *bool
+	autonomous_mode        *bool
 	prompt                 *string
 	program                *string
 	existing_worktree      *string
@@ -15557,6 +15558,42 @@ func (m *SessionMutation) OldAutoYes(ctx context.Context) (v bool, err error) {
 // ResetAutoYes resets all changes to the "auto_yes" field.
 func (m *SessionMutation) ResetAutoYes() {
 	m.auto_yes = nil
+}
+
+// SetAutonomousMode sets the "autonomous_mode" field.
+func (m *SessionMutation) SetAutonomousMode(b bool) {
+	m.autonomous_mode = &b
+}
+
+// AutonomousMode returns the value of the "autonomous_mode" field in the mutation.
+func (m *SessionMutation) AutonomousMode() (r bool, exists bool) {
+	v := m.autonomous_mode
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAutonomousMode returns the old "autonomous_mode" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldAutonomousMode(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAutonomousMode is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAutonomousMode requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAutonomousMode: %w", err)
+	}
+	return oldValue.AutonomousMode, nil
+}
+
+// ResetAutonomousMode resets all changes to the "autonomous_mode" field.
+func (m *SessionMutation) ResetAutonomousMode() {
+	m.autonomous_mode = nil
 }
 
 // SetPrompt sets the "prompt" field.
@@ -17203,7 +17240,7 @@ func (m *SessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionMutation) Fields() []string {
-	fields := make([]string, 0, 38)
+	fields := make([]string, 0, 39)
 	if m.title != nil {
 		fields = append(fields, session.FieldTitle)
 	}
@@ -17236,6 +17273,9 @@ func (m *SessionMutation) Fields() []string {
 	}
 	if m.auto_yes != nil {
 		fields = append(fields, session.FieldAutoYes)
+	}
+	if m.autonomous_mode != nil {
+		fields = append(fields, session.FieldAutonomousMode)
 	}
 	if m.prompt != nil {
 		fields = append(fields, session.FieldPrompt)
@@ -17348,6 +17388,8 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.UpdatedAt()
 	case session.FieldAutoYes:
 		return m.AutoYes()
+	case session.FieldAutonomousMode:
+		return m.AutonomousMode()
 	case session.FieldPrompt:
 		return m.Prompt()
 	case session.FieldProgram:
@@ -17433,6 +17475,8 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldUpdatedAt(ctx)
 	case session.FieldAutoYes:
 		return m.OldAutoYes(ctx)
+	case session.FieldAutonomousMode:
+		return m.OldAutonomousMode(ctx)
 	case session.FieldPrompt:
 		return m.OldPrompt(ctx)
 	case session.FieldProgram:
@@ -17572,6 +17616,13 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAutoYes(v)
+		return nil
+	case session.FieldAutonomousMode:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAutonomousMode(v)
 		return nil
 	case session.FieldPrompt:
 		v, ok := value.(string)
@@ -18065,6 +18116,9 @@ func (m *SessionMutation) ResetField(name string) error {
 		return nil
 	case session.FieldAutoYes:
 		m.ResetAutoYes()
+		return nil
+	case session.FieldAutonomousMode:
+		m.ResetAutonomousMode()
 		return nil
 	case session.FieldPrompt:
 		m.ResetPrompt()

@@ -382,28 +382,32 @@ func init() {
 	sessionDescAutoYes := sessionFields[10].Descriptor()
 	// session.DefaultAutoYes holds the default value on creation for the auto_yes field.
 	session.DefaultAutoYes = sessionDescAutoYes.Default.(bool)
+	// sessionDescAutonomousMode is the schema descriptor for autonomous_mode field.
+	sessionDescAutonomousMode := sessionFields[11].Descriptor()
+	// session.DefaultAutonomousMode holds the default value on creation for the autonomous_mode field.
+	session.DefaultAutonomousMode = sessionDescAutonomousMode.Default.(bool)
 	// sessionDescProgram is the schema descriptor for program field.
-	sessionDescProgram := sessionFields[12].Descriptor()
+	sessionDescProgram := sessionFields[13].Descriptor()
 	// session.ProgramValidator is a validator for the "program" field. It is called by the builders before save.
 	session.ProgramValidator = sessionDescProgram.Validators[0].(func(string) error)
 	// sessionDescIsExpanded is the schema descriptor for is_expanded field.
-	sessionDescIsExpanded := sessionFields[15].Descriptor()
+	sessionDescIsExpanded := sessionFields[16].Descriptor()
 	// session.DefaultIsExpanded holds the default value on creation for the is_expanded field.
 	session.DefaultIsExpanded = sessionDescIsExpanded.Default.(bool)
 	// sessionDescOneShot is the schema descriptor for one_shot field.
-	sessionDescOneShot := sessionFields[26].Descriptor()
+	sessionDescOneShot := sessionFields[27].Descriptor()
 	// session.DefaultOneShot holds the default value on creation for the one_shot field.
 	session.DefaultOneShot = sessionDescOneShot.Default.(bool)
 	// sessionDescHidden is the schema descriptor for hidden field.
-	sessionDescHidden := sessionFields[31].Descriptor()
+	sessionDescHidden := sessionFields[32].Descriptor()
 	// session.DefaultHidden holds the default value on creation for the hidden field.
 	session.DefaultHidden = sessionDescHidden.Default.(bool)
 	// sessionDescGithubPrNumber is the schema descriptor for github_pr_number field.
-	sessionDescGithubPrNumber := sessionFields[36].Descriptor()
+	sessionDescGithubPrNumber := sessionFields[37].Descriptor()
 	// session.DefaultGithubPrNumber holds the default value on creation for the github_pr_number field.
 	session.DefaultGithubPrNumber = sessionDescGithubPrNumber.Default.(int)
 	// sessionDescSessionArtifacts is the schema descriptor for session_artifacts field.
-	sessionDescSessionArtifacts := sessionFields[37].Descriptor()
+	sessionDescSessionArtifacts := sessionFields[38].Descriptor()
 	// session.DefaultSessionArtifacts holds the default value on creation for the session_artifacts field.
 	session.DefaultSessionArtifacts = sessionDescSessionArtifacts.Default.(string)
 	sessiongoalFields := schema.SessionGoal{}.Fields()

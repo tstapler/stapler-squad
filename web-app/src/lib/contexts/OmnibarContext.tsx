@@ -25,7 +25,7 @@ interface OmnibarContextValue {
   isOpen: boolean;
   open: () => void;
   openInCreationMode: () => void;
-  openOmnibar: (initialInput?: string) => void;
+  openOmnibar: (initialInput?: string, initialTitle?: string) => void;
   close: () => void;
   toggle: () => void;
 }
@@ -48,6 +48,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [initialMode, setInitialMode] = useState<"discovery" | "creation">("discovery");
   const [initialInput, setInitialInput] = useState<string | undefined>(undefined);
+  const [initialTitle, setInitialTitle] = useState<string | undefined>(undefined);
   const router = useRouter();
   const { authEnabled, authenticated, loading: authLoading } = useAuth();
   const { createSession, spawnShell, runWorkflow: runWorkflowRPC } = useSessionService({
@@ -108,21 +109,25 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
   const open = useCallback(() => {
     setInitialMode("discovery");
     setInitialInput(undefined);
+    setInitialTitle(undefined);
     setIsOpen(true);
   }, []);
   const openInCreationMode = useCallback(() => {
     setInitialMode("creation");
     setInitialInput(undefined);
+    setInitialTitle(undefined);
     setIsOpen(true);
   }, []);
-  const openOmnibar = useCallback((inputValue?: string) => {
+  const openOmnibar = useCallback((inputValue?: string, titleValue?: string) => {
     setInitialMode(inputValue ? "creation" : "discovery");
     setInitialInput(inputValue);
+    setInitialTitle(titleValue);
     setIsOpen(true);
   }, []);
   const close = useCallback(() => {
     setIsOpen(false);
     setInitialInput(undefined);
+    setInitialTitle(undefined);
   }, []);
   const toggle = useCallback(() => setIsOpen((prev) => !prev), []);
 
@@ -268,6 +273,7 @@ export function OmnibarProvider({ children }: OmnibarProviderProps) {
         onRunWorkflow={handleRunWorkflow}
         initialMode={initialMode}
         initialInput={initialInput}
+        initialTitle={initialTitle}
         workflows={workflowEntries}
       />
     </OmnibarContext.Provider>

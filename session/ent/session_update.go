@@ -219,6 +219,20 @@ func (_u *SessionUpdate) SetNillableAutoYes(v *bool) *SessionUpdate {
 	return _u
 }
 
+// SetAutonomousMode sets the "autonomous_mode" field.
+func (_u *SessionUpdate) SetAutonomousMode(v bool) *SessionUpdate {
+	_u.mutation.SetAutonomousMode(v)
+	return _u
+}
+
+// SetNillableAutonomousMode sets the "autonomous_mode" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableAutonomousMode(v *bool) *SessionUpdate {
+	if v != nil {
+		_u.SetAutonomousMode(*v)
+	}
+	return _u
+}
+
 // SetPrompt sets the "prompt" field.
 func (_u *SessionUpdate) SetPrompt(v string) *SessionUpdate {
 	_u.mutation.SetPrompt(v)
@@ -1077,6 +1091,9 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AutoYes(); ok {
 		_spec.SetField(session.FieldAutoYes, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AutonomousMode(); ok {
+		_spec.SetField(session.FieldAutonomousMode, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.Prompt(); ok {
 		_spec.SetField(session.FieldPrompt, field.TypeString, value)
 	}
@@ -1680,6 +1697,20 @@ func (_u *SessionUpdateOne) SetAutoYes(v bool) *SessionUpdateOne {
 func (_u *SessionUpdateOne) SetNillableAutoYes(v *bool) *SessionUpdateOne {
 	if v != nil {
 		_u.SetAutoYes(*v)
+	}
+	return _u
+}
+
+// SetAutonomousMode sets the "autonomous_mode" field.
+func (_u *SessionUpdateOne) SetAutonomousMode(v bool) *SessionUpdateOne {
+	_u.mutation.SetAutonomousMode(v)
+	return _u
+}
+
+// SetNillableAutonomousMode sets the "autonomous_mode" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableAutonomousMode(v *bool) *SessionUpdateOne {
+	if v != nil {
+		_u.SetAutonomousMode(*v)
 	}
 	return _u
 }
@@ -2571,6 +2602,9 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if value, ok := _u.mutation.AutoYes(); ok {
 		_spec.SetField(session.FieldAutoYes, field.TypeBool, value)
+	}
+	if value, ok := _u.mutation.AutonomousMode(); ok {
+		_spec.SetField(session.FieldAutonomousMode, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Prompt(); ok {
 		_spec.SetField(session.FieldPrompt, field.TypeString, value)

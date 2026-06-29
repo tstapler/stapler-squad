@@ -2,7 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Columns2, Rows2, LayoutList, X } from "lucide-react";
+import { Columns2, Rows2, LayoutList, X, Maximize2 } from "lucide-react";
 import type { Session } from "@/gen/session/v1/types_pb";
 import { usePaneReducer } from "@/lib/pane/usePaneReducer";
 import { usePaneShortcuts } from "@/lib/pane/usePaneShortcuts";
@@ -11,6 +11,7 @@ import type { SplitDirection } from "@/lib/pane/paneTypes";
 import { PaneSplitRenderer } from "./PaneSplitRenderer";
 import { PaneContext } from "./PaneContext";
 import { useViewport } from "@/components/providers/ViewportProvider";
+import { SessionPeekModal } from "@/components/sessions/SessionPeekModal";
 import {
   pickerActionBar,
   pickerActionButton,
@@ -54,6 +55,7 @@ export function PaneTilingContainer({
 
   const [pickerPendingSession, setPickerPendingSession] = useState<Session | null>(null);
   const pickerBarRef = useRef<HTMLDivElement>(null);
+  const [peekSession, setPeekSession] = useState<Session | null>(null);
   // Mobile-only: bottom sheet picker state (replaces overlay when on narrow screens)
   const [mobilePickerSession, setMobilePickerSession] = useState<Session | null>(null);
   const [mobilePickerPanes, setMobilePickerPanes] = useState<{ id: string; label: string; letter: string }[]>([]);
@@ -146,6 +148,12 @@ export function PaneTilingContainer({
         return;
       }
       const upper = e.key.toUpperCase();
+      if (upper === "M") {
+        e.stopPropagation();
+        setPeekSession(pickerPendingSession);
+        cancelPicker();
+        return;
+      }
       if (upper === "V") {
         e.stopPropagation();
         dispatch({ type: "SPLIT_AND_ASSIGN_SESSION", paneId: state.focusedPaneId, sessionId: pickerPendingSession.id, tab: "terminal", direction: "vertical" });
@@ -281,6 +289,18 @@ export function PaneTilingContainer({
             )}
             <button
               className={pickerActionButton}
+              onClick={() => {
+                setPeekSession(pickerPendingSession);
+                cancelPicker();
+              }}
+              title="Open in a floating modal without changing pane layout"
+            >
+              <Maximize2 size={14} />
+              Open in Modal
+              <span className={pickerActionKbd}>M</span>
+            </button>
+            <button
+              className={pickerActionButton}
               onClick={cancelPicker}
               title="Cancel (Esc)"
             >
@@ -289,6 +309,12 @@ export function PaneTilingContainer({
               <span className={pickerActionKbd}>Esc</span>
             </button>
           </div>
+        )}
+        {peekSession && (
+          <SessionPeekModal
+            session={peekSession}
+            onClose={() => setPeekSession(null)}
+          />
         )}
       </div>
 

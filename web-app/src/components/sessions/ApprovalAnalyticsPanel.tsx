@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState } from "react";
 import { buildPrefillHref } from "@/lib/ruleBuilderPrefill";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { DailyBucketProto, SubcommandStatProto } from "@/gen/session/v1/types_pb";
+import { ProgramDetailPanel } from "./ProgramDetailPanel";
 import {
   panel, header, titleRow, title, subtitle, refreshButton,
   windowSelector, windowBtn, windowBtnActive,
@@ -66,6 +67,7 @@ const WINDOW_OPTIONS = [
  */
 export function ApprovalAnalyticsPanel() {
   const [windowDays, setWindowDays] = useState(7);
+  const [selectedProgram, setSelectedProgram] = useState<string | null>(null);
   const { summary, dailyBuckets, loading, error, refresh } = useApprovalAnalytics({ windowDays });
 
   const total = summary?.totalDecisions ?? 0;
@@ -403,21 +405,80 @@ export function ApprovalAnalyticsPanel() {
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.topUncoveredPrograms.map((p) => (
-                      <tr key={p.programName} className={row}>
-                        <td className={td}><code className={toolName}>{p.programName}</code></td>
-                        <td className={td}><span className={categoryBadge}>{p.category}</span></td>
-                        <td className={`${td} ${tdRight}`}>{p.count}</td>
-                        <td className={`${td} ${tdBar}`}>
-                          <Bar value={p.count} max={summary.topUncoveredPrograms[0]?.count ?? 1} className={barGap} />
-                        </td>
-                        <td className={td}>
-                          <a href={buildPrefillHref({ programs: [p.programName] })} className={addRuleLink} title={`Add a rule for ${p.programName}`}>
-                            Add rule →
-                          </a>
-                        </td>
-                      </tr>
-                    ))}
+                    {summary.topUncoveredPrograms.map((p) => {
+                      const isDrillOpen = selectedProgram === p.programName;
+                      return (
+                        <React.Fragment key={p.programName}>
+                          <tr
+                            className={row}
+                            style={{ cursor: "pointer" }}
+                            tabIndex={0}
+                            role="button"
+                            aria-expanded={isDrillOpen}
+                            aria-label={`${p.programName} — click to ${isDrillOpen ? "collapse" : "expand"} details`}
+                            onClick={() =>
+                              setSelectedProgram(isDrillOpen ? null : p.programName)
+                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setSelectedProgram(isDrillOpen ? null : p.programName);
+                              }
+                            }}
+                          >
+                            <td className={td}><code className={toolName}>{p.programName}</code></td>
+                            <td className={td}><span className={categoryBadge}>{p.category}</span></td>
+                            <td className={`${td} ${tdRight}`}>{p.count}</td>
+                            <td className={`${td} ${tdBar}`}>
+                              <Bar value={p.count} max={summary.topUncoveredPrograms[0]?.count ?? 1} className={barGap} />
+                            </td>
+                            <td className={td}>
+                              <div className={rowActions}>
+                                {isGenerating ? (
+                                  <span className={rowGeneratingText}>Generating…</span>
+                                ) : (
+                                  <button
+                                    className={suggestRuleButton}
+                                    data-testid={`suggest-rule-program-${p.programName}`}
+                                    disabled={generateLoading}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setActiveRowKey(`program:${p.programName}`);
+                                      void generate({
+                                        source: SuggestionSource.ANALYTICS_GAPS,
+                                        programNameFilter: p.programName,
+                                        windowDays,
+                                      });
+                                    }}
+                                  >
+                                    Suggest Rule
+                                  </button>
+                                )}
+                                <a
+                                  href="/rules"
+                                  className={addRuleManualLink}
+                                  title="Add a rule manually"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  or add manually →
+                                </a>
+                              </div>
+                            </td>
+                          </tr>
+                          {isDrillOpen && (
+                            <tr>
+                              <td colSpan={5} onClick={(e) => e.stopPropagation()}>
+                                <ProgramDetailPanel
+                                  program={p.programName}
+                                  windowDays={windowDays}
+                                  onClose={() => setSelectedProgram(null)}
+                                />
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

@@ -45,6 +45,9 @@ func (Session) Fields() []ent.Field {
 			UpdateDefault(time.Now),
 		field.Bool("auto_yes").
 			Default(false),
+		field.Bool("autonomous_mode").
+			Default(false).
+			Comment("Crew autonomy mode — when true, the Fixer injects correction prompts without user confirmation."),
 		field.String("prompt").
 			Optional(),
 		field.String("program").
