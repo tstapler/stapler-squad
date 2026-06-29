@@ -15,11 +15,16 @@ This project has two complementary frontend registries for omnibar capabilities.
 ```typescript
 export type OmnibarAction =
   | { type: "navigate_session"; sessionId: string; label: string }
-  | { type: "create_session"; path: string; sessionType: string; ... }
-  | { type: "clone_session"; ... }
+  | { type: "create_session"; path: string; sessionType: string; branch?: string; program?: string; title?: string }
+  | { type: "clone_session"; sourceSessionId: string; sourcePath: string; sourceProgram: string; label: string }
   | { type: "pause_session"; sessionId: string; label: string }
   | { type: "resume_session"; sessionId: string; label: string }
-  | { type: "delete_session"; sessionId: string; label: string };
+  | { type: "delete_session"; sessionId: string; label: string }
+  | { type: "set_theme"; themeName: ThemeName }
+  | { type: "spawn_shell"; sessionId?: string; workingDir?: string; shellCommand?: string }
+  | { type: "auto_fix"; title: string; program?: string }
+  | { type: "run_workflow"; workflowSlug: string; workflowArg: string; label: string }
+  | { type: "create_alias_session"; aliasName: string; branch?: string; label?: string; extraFlags?: string };
 ```
 
 `dispatch.ts` routes each action via an exhaustive `switch`. TypeScript's type system **prevents compilation** if a union variant has no case — this is the architectural guard against silent omissions.
@@ -104,20 +109,23 @@ export class DetectorRegistry {
 }
 ```
 
-`createDefaultRegistry()` is the single authoritative list of all registered detectors, in priority order:
+`createDefaultRegistry()` is the authoritative list of statically-registered detectors. Two additional detectors are registered **dynamically** via `OmnibarContext.tsx` effects because they depend on runtime data (aliases, workflows). All detectors sorted by priority — lower number = checked first.
 
-| Priority | Detector | Matches |
-|---|---|---|
-| 10 | `GitHubPRDetector` | `https://github.com/.../pull/N` |
-| 20 | `GitHubBranchDetector` | `https://github.com/.../tree/branch` |
-| 30 | `GitHubRepoDetector` | `https://github.com/owner/repo` |
-| 35 | `NewSessionDetector` | `new:<path>` shorthand |
-| 40 | `GitHubShorthandDetector` | `owner/repo` shorthand |
-| 50 | `PathWithBranchDetector` | `/path:branch` |
-| 100 | `LocalPathDetector` | `/absolute/path` or `~/path` |
-| 200 | `SessionSearchDetector` | everything else (search fallback) |
+| Priority | Detector | Matches | Registered |
+|---|---|---|---|
+| 5 | `CommandDetector` | `>command` VS Code-style prefix | `createDefaultRegistry()` |
+| 10 | `GitHubPRDetector` | `https://github.com/.../pull/N` | `createDefaultRegistry()` |
+| 20 | `GitHubBranchDetector` | `https://github.com/.../tree/branch` | `createDefaultRegistry()` |
+| 25 | `WorkflowDetector` | `@workflow-slug` | dynamic — `OmnibarContext.tsx` effect |
+| 30 | `GitHubRepoDetector` | `https://github.com/owner/repo` | `createDefaultRegistry()` |
+| 35 | `NewSessionDetector` | `new:<path>` shorthand | `createDefaultRegistry()` |
+| 36 | `AliasDetector` | `@alias-name` | dynamic — `OmnibarContext.tsx` effect |
+| 40 | `GitHubShorthandDetector` | `owner/repo` shorthand | `createDefaultRegistry()` |
+| 50 | `PathWithBranchDetector` | `/path:branch` | `createDefaultRegistry()` |
+| 100 | `LocalPathDetector` | `/absolute/path` or `~/path` | `createDefaultRegistry()` |
+| 200 | `SessionSearchDetector` | everything else (search fallback) | `createDefaultRegistry()` |
 
-Lower priority number = checked first.
+**Dynamic detectors** (`WorkflowDetector`, `AliasDetector`) require runtime-fetched data and are registered/unregistered in `OmnibarContext.tsx` effects, NOT in `createDefaultRegistry()`. Add a data-driven detector there, not in `detector.ts`.
 
 ### When to add a new detector
 

@@ -13,11 +13,13 @@ enum SessionType {
   SESSION_TYPE_DIRECTORY = 1;
   SESSION_TYPE_NEW_WORKTREE = 2;
   SESSION_TYPE_EXISTING_WORKTREE = 3;
-  // Add here if the mode has a distinct type
+  SESSION_TYPE_ONE_OFF = 4;       // added 2026-04
+  SESSION_TYPE_NEW_PROJECT = 5;   // added 2026-05
+  // Add next value here if the mode has a distinct type
 }
 ```
 
-> **One-off exception**: one-off reuses `SESSION_TYPE_DIRECTORY` and uses a separate `bool one_off` flag instead of a new enum value. Use this pattern when the backend session type is shared but behavior is driven by additional request parameters.
+> **`autonomous` exception**: autonomous mode reuses `SESSION_TYPE_DIRECTORY` and uses a separate `bool autonomous_mode` flag instead of a new enum value. Use this pattern when the backend session type is shared but behavior is driven by additional request parameters.
 
 ---
 
@@ -31,7 +33,7 @@ message CreateSessionRequest {
 }
 ```
 
-Run `make generate-proto` after any proto change. This regenerates:
+Run `make proto-gen` after any proto change. This regenerates:
 - `session/gen/session/v1/*.go` (Go bindings)
 - `web-app/src/gen/session/v1/*_pb.ts` (TypeScript bindings)
 
@@ -94,7 +96,7 @@ Add the new mode's string identifier to the `sessionType` union in `OmnibarFormS
 
 ```ts
 type OmnibarFormState = {
-  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off";
+  sessionType: "directory" | "new_worktree" | "existing_worktree" | "one_off" | "new_project" | "autonomous";
   // ...
 }
 ```
@@ -109,10 +111,12 @@ Add an entry to `SESSION_TYPES` and any mode-specific hint text or hidden/shown 
 
 ```ts
 const SESSION_TYPES = [
-  { value: "new_worktree", label: "New Worktree" },
-  { value: "directory", label: "Directory" },
-  { value: "existing_worktree", label: "Use Worktree" },
-  { value: "one_off", label: "One-off" },
+  { value: "new_worktree", label: "New branch (isolated)" },
+  { value: "directory", label: "Existing folder" },
+  { value: "existing_worktree", label: "Existing branch" },
+  { value: "one_off", label: "Temporary (no git)" },
+  { value: "new_project", label: "New Project" },
+  { value: "autonomous", label: "Fix Autonomously (Beta)" },
 ] as const;
 ```
 
@@ -128,7 +132,9 @@ const sessionTypeMap: Record<string, SessionType> = {
   directory: SessionType.DIRECTORY,
   new_worktree: SessionType.NEW_WORKTREE,
   existing_worktree: SessionType.EXISTING_WORKTREE,
-  one_off: SessionType.DIRECTORY, // reuses DIRECTORY; server handles the distinction
+  one_off: SessionType.ONE_OFF,
+  new_project: SessionType.NEW_PROJECT,
+  autonomous: SessionType.DIRECTORY, // reuses DIRECTORY; server handles via autonomous_mode flag
 };
 ```
 
@@ -150,7 +156,7 @@ Copy this checklist into the PR description when adding a new mode:
 
 - [ ] `proto/session/v1/types.proto` — new enum value (or reuse existing + flag)
 - [ ] `proto/session/v1/session.proto` — new request field(s) if needed
-- [ ] `make generate-proto` — regenerated bindings
+- [ ] `make proto-gen` — regenerated bindings
 - [ ] `server/services/session_service.go` — path guard, switch case, mode logic
 - [ ] `session/instance.go` — new `SessionType` constant (if lifecycle differs)
 - [ ] `web-app/src/components/sessions/Omnibar.tsx` — type union, canSubmit, handleSubmit

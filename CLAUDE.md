@@ -156,7 +156,7 @@ Releases are not automatic — release-please opens a "Release PR"; merge when r
 ### New Web UI Features
 1. Create React components in `web-app/src/components/`
 2. Add ConnectRPC endpoints in `server/services/`
-3. Update protobuf definitions in `proto/session/v1/` if needed → `make generate-proto`
+3. Update protobuf definitions in `proto/session/v1/` if needed → `make proto-gen`
 4. Test with `make install-service`
 
 ### New Omnibar Capabilities
@@ -171,7 +171,7 @@ Two registries must stay in sync — see `.claude/rules/feature-testing-registry
 3. Update web UI filter components
 
 ### New API Endpoints
-1. Define RPC in `proto/session/v1/session.proto` → `make generate-proto`
+1. Define RPC in `proto/session/v1/session.proto` → `make proto-gen`
 2. Implement handler in `server/services/`, register in `server/server.go`
 
 ### Modifying the ent ORM Schema
@@ -242,3 +242,6 @@ make e2e-lighthouse
 | Omnibar feature testing registry | `.claude/rules/feature-testing-registry.md` |
 | Session creation mode registry (7 touchpoints) | `.claude/rules/session-creation-registry.md` |
 | systemd user service (restart, logs, D-Bus issues) | `.claude/rules/systemd-user-service.md` |
+| ent ORM schema generation (`--feature sql/upsert`) | `.claude/rules/ent-schema-generation.md` |
+| Go double-checked locking pattern | `.claude/rules/go-double-checked-locking.md` |
+| E2E test conventions (annotation, locators, no waitForTimeout) | `.claude/rules/e2e-test-conventions.md` |
