@@ -246,9 +246,10 @@ func (a *AgyAdapter) Export(ctx context.Context, turns []CanonicalTurn, inst *In
 				step.Type = "PLANNER_RESPONSE"
 				var textBlocks []string
 				for _, block := range turn.Blocks {
-					if block.Kind == BlockKindText {
+					switch block.Kind {
+					case BlockKindText:
 						textBlocks = append(textBlocks, block.Text)
-					} else if block.Kind == BlockKindToolUse {
+					case BlockKindToolUse:
 						step.ToolCalls = append(step.ToolCalls, struct {
 							Name string          `json:"name"`
 							Args json.RawMessage `json:"args"`

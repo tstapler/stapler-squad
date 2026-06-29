@@ -180,7 +180,8 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 	var input, output int64
 	var contextUsed int
 
-	if provider == "anthropic" {
+	switch provider {
+	case "anthropic":
 		if parseRes := m.tokenStore.GetByUUID(uuid); parseRes != nil {
 			input = parseRes.TotalInput
 			output = parseRes.TotalOutput
@@ -188,7 +189,7 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 				contextUsed = int(parseRes.TurnTimeline[len(parseRes.TurnTimeline)-1].Input)
 			}
 		}
-	} else if provider == "google" {
+	case "google":
 		var err error
 		input, output, contextUsed, err = m.queryGeminiUsageFromDB(uuid)
 		if err != nil {
@@ -256,7 +257,7 @@ func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *ses
 	// Determine transition target.
 	var nextCLI, nextModel string
 	for _, target := range m.config.ProviderPriority {
-		if strings.ToLower(target.CLI) != strings.ToLower(inst.Program) {
+		if !strings.EqualFold(target.CLI, inst.Program) {
 			nextCLI = target.CLI
 			nextModel = target.Model
 			break

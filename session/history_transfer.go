@@ -168,7 +168,3 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 func portClaudeToAgy(i *Instance) error {
 	return PortSessionHistory(context.Background(), "claude", "agy", i)
 }
-
-func portAgyToClaude(i *Instance) error {
-	return PortSessionHistory(context.Background(), "agy", "claude", i)
-}
