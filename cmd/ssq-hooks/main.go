@@ -20,6 +20,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -438,6 +439,12 @@ func loadStorage(path string) *session.Storage {
 
 func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	c := classifier.NewRuleBasedClassifier()
+
+	// Load user-specific rules from ~/.config/ssq-hooks/user-rules.yaml (if present).
+	home, _ := os.UserHomeDir()
+	userRulesPath := filepath.Join(home, ".config", "ssq-hooks", "user-rules.yaml")
+	c.AddRules(loadUserRulesFile(userRulesPath))
+
 	rules, err := storage.AllRules(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to load rules from DB: %v\n", err)
@@ -1218,4 +1225,105 @@ func getDBPathForCwd(cwd string) string {
 		return filepath.Join(home, ".stapler-squad", "sessions.db")
 	}
 	return filepath.Join(configDir, "sessions.db")
+}
+
+// userRulesFile is the YAML format for ~/.config/ssq-hooks/user-rules.yaml.
+// Use this file for personal rules that are not generally applicable to all users.
+type userRulesFile struct {
+	Rules []userRule `yaml:"rules"`
+}
+
+type userRule struct {
+	ID                 string   `yaml:"id"`
+	Name               string   `yaml:"name"`
+	ToolName           string   `yaml:"tool_name"`
+	Programs           []string `yaml:"programs"`
+	Subcommands        []string `yaml:"subcommands"`
+	BlockedSubcommands []string `yaml:"blocked_subcommands"`
+	RequiredFlags      []string `yaml:"required_flags"`
+	ForbiddenFlags     []string `yaml:"forbidden_flags"`
+	CommandPattern     string   `yaml:"command_pattern"`
+	Decision           string   `yaml:"decision"`    // "allow", "escalate", "deny"
+	RiskLevel          string   `yaml:"risk_level"`  // "low", "medium", "high", "critical"
+	Reason             string   `yaml:"reason"`
+	Alternative        string   `yaml:"alternative"`
+	Priority           int      `yaml:"priority"`
+	Enabled            bool     `yaml:"enabled"`
+}
+
+func (r userRule) toClassifierRule() (classifier.Rule, error) {
+	decisionMap := map[string]classifier.ClassificationDecision{
+		"allow":   classifier.AutoAllow,
+		"escalate": classifier.Escalate,
+		"deny":    classifier.AutoDeny,
+	}
+	riskMap := map[string]classifier.RiskLevel{
+		"low":      classifier.RiskLow,
+		"medium":   classifier.RiskMedium,
+		"high":     classifier.RiskHigh,
+		"critical": classifier.RiskCritical,
+	}
+	decision, ok := decisionMap[r.Decision]
+	if !ok {
+		return classifier.Rule{}, fmt.Errorf("unknown decision %q in rule %s", r.Decision, r.ID)
+	}
+	risk := riskMap[r.RiskLevel] // defaults to RiskLow if unset
+
+	cr := classifier.Rule{
+		ID:          r.ID,
+		Name:        r.Name,
+		ToolName:    r.ToolName,
+		Decision:    decision,
+		RiskLevel:   risk,
+		Reason:      r.Reason,
+		Alternative: r.Alternative,
+		Priority:    r.Priority,
+		Enabled:     r.Enabled,
+		Source:      "user",
+	}
+	if len(r.Programs)+len(r.Subcommands)+len(r.BlockedSubcommands)+len(r.RequiredFlags)+len(r.ForbiddenFlags) > 0 {
+		cr.Criteria = &classifier.CommandCriteria{
+			Programs:           r.Programs,
+			Subcommands:        r.Subcommands,
+			BlockedSubcommands: r.BlockedSubcommands,
+			RequiredFlags:      r.RequiredFlags,
+			ForbiddenFlags:     r.ForbiddenFlags,
+		}
+	}
+	if r.CommandPattern != "" {
+		compiled, err := regexp.Compile(r.CommandPattern)
+		if err != nil {
+			return classifier.Rule{}, fmt.Errorf("invalid command_pattern in rule %s: %w", r.ID, err)
+		}
+		cr.CommandPattern = compiled
+	}
+	return cr, nil
+}
+
+// loadUserRulesFile reads user-specific rules from a YAML file.
+// Returns nil silently if the file does not exist.
+func loadUserRulesFile(path string) []classifier.Rule {
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not read user rules file %s: %v\n", path, err)
+		return nil
+	}
+	var f userRulesFile
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not parse user rules file %s: %v\n", path, err)
+		return nil
+	}
+	var rules []classifier.Rule
+	for _, r := range f.Rules {
+		cr, err := r.toClassifierRule()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skipping invalid user rule: %v\n", err)
+			continue
+		}
+		rules = append(rules, cr)
+	}
+	return rules
 }

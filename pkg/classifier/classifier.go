@@ -2472,41 +2472,6 @@ func SeedRules() []Rule {
 			Enabled:   true,
 			Source:    "seed",
 		},
-		{
-			// proextract is the user's own Rust binary for 3D point-cloud and texture
-			// processing (pipeline, texture subcommands). It reads/writes local files
-			// in the project working directory and poses no external risk.
-			ID:       "seed-allow-bash-proextract",
-			Name:     "Allow proextract (local point-cloud processing binary)",
-			ToolName: "Bash",
-			Criteria: &CommandCriteria{
-				Programs: []string{"proextract"},
-			},
-			Decision:  AutoAllow,
-			RiskLevel: RiskLow,
-			Reason:    "proextract is a local Rust binary for point-cloud and texture processing; it has no network or system side effects.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
-		},
-		{
-			// sshpass provides non-interactive SSH password authentication, typically used
-			// for embedded/IoT devices where key-based auth is unavailable (e.g. dev boards).
-			// The password is supplied inline; no interactive prompt is triggered.
-			ID:       "seed-allow-bash-sshpass",
-			Name:     "Allow sshpass (non-interactive SSH password auth)",
-			ToolName: "Bash",
-			Criteria: &CommandCriteria{
-				Programs: []string{"sshpass"},
-			},
-			Decision:  AutoAllow,
-			RiskLevel: RiskLow,
-			Reason:    "sshpass is used for embedded/IoT device SSH access where key-based auth is unavailable.",
-			Priority:  100,
-			Enabled:   true,
-			Source:    "seed",
-		},
-
 		// ══════════════════════════════════════════════════════════════════════════
 		// Escalate targeted (Priority 60) — more specific than catch-all; provides
 		// actionable alternatives for known patterns that benefit from guidance.
