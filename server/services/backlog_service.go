@@ -1270,6 +1270,37 @@ func (s *BacklogService) TriggerTriage(
 	}), nil
 }
 
+// CancelTriage stops a running triage session for a backlog item.
+// +api: backlog:cancel-triage
+func (s *BacklogService) CancelTriage(
+	ctx context.Context,
+	req *connect.Request[sessionv1.CancelTriageRequest],
+) (*connect.Response[sessionv1.CancelTriageResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	existingSessions, err := s.storage.ListItemSessions(ctx, req.Msg.ItemId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list sessions: %w", err))
+	}
+
+	cancelled := false
+	now := time.Now()
+	for _, is := range existingSessions {
+		if is.SessionRole != string(session.SessionRoleTriage) || is.EndedAt != nil {
+			continue
+		}
+		if s.sessionStopper != nil {
+			_ = s.sessionStopper.StopSessionByUUID(ctx, is.SessionUUID)
+		}
+		_ = s.storage.UpdateItemSessionEnded(ctx, is.ID.String(), now)
+		cancelled = true
+	}
+
+	return connect.NewResponse(&sessionv1.CancelTriageResponse{Cancelled: cancelled}), nil
+}
+
 // SuggestNextItem recommends the highest-priority ready backlog item.
 // +api: backlog:suggest-next
 func (s *BacklogService) SuggestNextItem(

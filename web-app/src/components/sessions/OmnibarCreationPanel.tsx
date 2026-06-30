@@ -419,7 +419,7 @@ export function OmnibarCreationPanel({
           )}
           {firstPrompt && sessionName && (
             <span className={hint}>
-              Session name: <strong>{sessionName}</strong> · First prompt will be injected automatically
+              Session name: <strong>{sessionName}</strong> · First prompt will be typed into the session terminal automatically
             </span>
           )}
         </div>

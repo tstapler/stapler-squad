@@ -406,6 +406,16 @@ service SessionService {
 
   // GetProviderLimits returns the rate limit and usage details for a session.
   rpc GetProviderLimits(GetProviderLimitsRequest) returns (GetProviderLimitsResponse) {}
+
+  // GetHookStatus reports whether the global Claude Code hooks (rule enforcement
+  // and notifications) are installed in ~/.claude/settings.json.
+  // +api: hooks:status
+  rpc GetHookStatus(GetHookStatusRequest) returns (GetHookStatusResponse) {}
+
+  // InstallHooks installs the requested global Claude Code hooks into
+  // ~/.claude/settings.json. Idempotent per hook.
+  // +api: hooks:install
+  rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -2112,6 +2122,33 @@ message GetFeatureFlagsRequest {}
 
 message GetFeatureFlagsResponse {
   repeated FeatureFlag flags = 1;
+}
+
+message GetHookStatusRequest {}
+
+message GetHookStatusResponse {
+  // Whether the PreToolUse rule-enforcement hook (ssq-hooks check) is installed globally.
+  bool rules_installed = 1;
+  // Whether the Notification/Stop notification hooks (ssq-hook-handler) are installed globally.
+  bool notifications_installed = 2;
+  // True when the ssq-hooks binary is available to install the rules hook.
+  bool rules_available = 3;
+  // True when the ssq-hook-handler is available to install the notification hooks.
+  bool notifications_available = 4;
+}
+
+message InstallHooksRequest {
+  // Install the PreToolUse rule-enforcement hook.
+  bool install_rules = 1;
+  // Install the Notification/Stop notification hooks.
+  bool install_notifications = 2;
+}
+
+message InstallHooksResponse {
+  // Hook status after the install attempt.
+  GetHookStatusResponse status = 1;
+  // Human-readable per-hook result messages (e.g. a manual fallback command when a binary is missing).
+  repeated string messages = 2;
 }
 
 message UpdateFeatureFlagRequest {

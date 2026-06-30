@@ -28,6 +28,12 @@ import (
 
 const ProgramClaude = "claude"
 
+// capturePaneSem limits concurrent tmux capture-pane subprocesses to avoid
+// contention on the circuit breaker lock and OS process table pressure.
+// A global semaphore of 8 is sufficient for typical fan-out; callers that use
+// the control-mode fast path bypass this semaphore entirely.
+var capturePaneSem = make(chan struct{}, 8)
+
 const ProgramAider = "aider"
 const ProgramGemini = "gemini"
 
@@ -1749,7 +1755,9 @@ func (t *TmuxSession) CapturePaneContent() (string, error) {
 
 	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
+	capturePaneSem <- struct{}{}
 	output, err := t.cmdExec.Output(cmd)
+	<-capturePaneSem
 	if err != nil {
 		recordFailure(time.Now())
 		// Invalidate cache so TmuxAlive() returns false on the next call without
@@ -1778,7 +1786,9 @@ func (t *TmuxSession) CapturePaneContentRaw() (string, error) {
 
 	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-t", t.sanitizedName)
 	recordSpawn(time.Now())
+	capturePaneSem <- struct{}{}
 	output, err := t.cmdExec.Output(cmd)
+	<-capturePaneSem
 	if err != nil {
 		recordFailure(time.Now())
 		t.invalidateExistsCache()
@@ -1803,7 +1813,9 @@ func (t *TmuxSession) CapturePaneContentWithOptions(start, end string) (string, 
 	}
 
 	cmd := t.buildTmuxCommand("capture-pane", "-p", "-e", "-J", "-S", start, "-E", end, "-t", t.sanitizedName)
+	capturePaneSem <- struct{}{}
 	output, err := t.cmdExec.Output(cmd)
+	<-capturePaneSem
 	if err != nil {
 		return "", fmt.Errorf("failed to capture tmux pane content with options: %v", err)
 	}

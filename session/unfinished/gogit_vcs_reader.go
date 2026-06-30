@@ -48,6 +48,22 @@ type diffStatEntry struct {
 	expiry time.Time
 }
 
+type aheadBehindEntry struct {
+	ahead  int
+	behind int
+	expiry time.Time
+}
+
+type commitMessagesEntry struct {
+	msgs   []string
+	expiry time.Time
+}
+
+type reachableSetEntry struct {
+	set    map[plumbing.Hash]bool
+	expiry time.Time
+}
+
 // repoCacheMaxEntries is the maximum number of repositories held in repoCache
 // before eviction runs. Sized for typical multi-repo workspaces; adjust higher
 // only if scanning > 100 repos simultaneously.
@@ -122,6 +138,20 @@ type GoGitVCSReader struct {
 	// Values are diffStatEntry (stored by value; no mutation after Store).
 	// Races on a cache miss are benign: last writer wins; both compute the same value.
 	diffStatCache sync.Map // map[string]diffStatEntry
+
+	// aheadBehindCache caches AheadBehind results keyed by worktreePath+"\x00"+base.
+	// Eliminates packfile-reader lock contention on repeated calls within TTL.
+	aheadBehindCache sync.Map // map[string]aheadBehindEntry
+
+	// commitMessagesCache caches CommitMessages results keyed by worktreePath+"\x00"+base.
+	// Eliminates packfile-reader lock contention on repeated commit log walks.
+	commitMessagesCache sync.Map // map[string]commitMessagesEntry
+
+	// reachableSetCache caches reachableSet results keyed by baseHash.
+	// The reachable set for a given base ref is expensive (O(N) commit walk) and
+	// changes rarely; a 30s TTL matches diffStatCacheTTL and eliminates the
+	// mutex-held walk that was the #1 hotspot (47.4B cycles, 38 events).
+	reachableSetCache sync.Map // map[plumbing.Hash]reachableSetEntry
 }
 
 var _ VCSReader = (*GoGitVCSReader)(nil)
@@ -394,74 +424,111 @@ func hasUntrackedFilesRec(root, dir string, indexed map[string]bool) (bool, erro
 // then count commits between each tip and the merge base. This bounds the
 // walk to the diverged portion of history rather than the full reachable set.
 func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error) {
+	cacheKey := worktreePath + "\x00" + base
+	if v, ok := g.aheadBehindCache.Load(cacheKey); ok {
+		if e := v.(aheadBehindEntry); time.Now().Before(e.expiry) {
+			return e.ahead, e.behind, nil
+		}
+	}
+
 	entry, err := g.openRepoEntry(worktreePath)
 	if err != nil {
 		return 0, 0, fmt.Errorf("open repo %s: %w", worktreePath, err)
 	}
+
+	// Lock scope: covers the snapshot phase (Head/resolveRef) AND the BFS/count
+	// phases (findMergeBase, countCommitsTo). go-git's packfile reader is not
+	// goroutine-safe; the scanner runs 4 concurrent workers sharing a single queue,
+	// so the same repo can be processed by two workers simultaneously. The lock must
+	// therefore cover every repo.CommitObject call, not just the snapshot phase.
+	// It is released before the final sync.Map Store, which is already goroutine-safe.
+	// The mutex is NOT deferred so we can release it before the cache Store.
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
 	repo := entry.repo
 
 	headRef, err := repo.Head()
 	if err != nil {
+		entry.mu.Unlock()
 		return 0, 0, fmt.Errorf("head: %w", err)
 	}
 
 	baseHash, err := resolveRef(repo, base)
 	if err != nil {
+		entry.mu.Unlock()
 		return 0, 0, fmt.Errorf("resolve base %q: %w", base, err)
 	}
 
 	if headRef.Hash() == baseHash {
+		entry.mu.Unlock()
+		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{expiry: time.Now().Add(diffStatCacheTTL)})
 		return 0, 0, nil
 	}
 
 	mb, err := findMergeBase(repo, headRef.Hash(), baseHash)
 	if err != nil {
+		entry.mu.Unlock()
 		return 0, 0, fmt.Errorf("merge base: %w", err)
 	}
 
 	ahead, err := countCommitsTo(repo, headRef.Hash(), mb)
 	if err != nil {
+		entry.mu.Unlock()
 		return 0, 0, err
 	}
 	behind, err := countCommitsTo(repo, baseHash, mb)
 	if err != nil {
+		entry.mu.Unlock()
 		return 0, 0, err
 	}
+	entry.mu.Unlock()
+	g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, expiry: time.Now().Add(diffStatCacheTTL)})
 	return ahead, behind, nil
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
+	cacheKey := fmt.Sprintf("%s\x00%s\x00%d", worktreePath, base, max)
+	if v, ok := g.commitMessagesCache.Load(cacheKey); ok {
+		if e := v.(commitMessagesEntry); time.Now().Before(e.expiry) {
+			return e.msgs, nil
+		}
+	}
+
 	entry, err := g.openRepoEntry(worktreePath)
 	if err != nil {
 		return nil, err
 	}
+
+	// Phase 1: snapshot HEAD and base as plain hash values under a brief lock.
+	// These are cheap reference-store reads; holding the lock only here avoids
+	// keeping it across the far more expensive graph walks below.
 	entry.mu.Lock()
-	defer entry.mu.Unlock()
-	repo := entry.repo
-
-	headRef, err := repo.Head()
+	headRef, err := entry.repo.Head()
+	if err != nil {
+		entry.mu.Unlock()
+		return nil, err
+	}
+	headHash := headRef.Hash() // plumbing.Hash is a plain [20]byte value type
+	baseHash, err := resolveRef(entry.repo, base)
+	entry.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
 
-	baseHash, err := resolveRef(repo, base)
+	// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
+	// only on a cache miss, so repeated calls within the TTL window skip the
+	// O(N) walk entirely and return the cached map without touching the mutex.
+	baseReachable, err := g.cachedReachableSet(entry, baseHash)
 	if err != nil {
 		return nil, err
 	}
 
-	// Collect commits reachable from HEAD but not from base.
-	baseReachable, err := reachableSet(repo, baseHash)
+	// Phase 3: log walk from HEAD. go-git's packfile reader requires the lock.
+	entry.mu.Lock()
+	iter, err := entry.repo.Log(&git.LogOptions{From: headHash})
 	if err != nil {
+		entry.mu.Unlock()
 		return nil, err
 	}
-
-	iter, err := repo.Log(&git.LogOptions{From: headRef.Hash()})
-	if err != nil {
-		return nil, err
-	}
-	defer iter.Close()
 
 	var msgs []string
 	err = iter.ForEach(func(c *object.Commit) error {
@@ -474,7 +541,34 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 		}
 		return nil
 	})
+	iter.Close()
+	entry.mu.Unlock()
+
+	if err == nil {
+		g.commitMessagesCache.Store(cacheKey, commitMessagesEntry{msgs: msgs, expiry: time.Now().Add(diffStatCacheTTL)})
+	}
 	return msgs, err
+}
+
+// cachedReachableSet returns the set of all commits reachable from baseHash,
+// using reachableSetCache to avoid repeating the O(N) walk within the TTL window.
+// On a cache miss it acquires entry.mu, runs the walk, then releases the lock.
+// The returned map must not be mutated by callers.
+func (g *GoGitVCSReader) cachedReachableSet(entry *cachedRepo, baseHash plumbing.Hash) (map[plumbing.Hash]bool, error) {
+	if v, ok := g.reachableSetCache.Load(baseHash); ok {
+		if e := v.(reachableSetEntry); time.Now().Before(e.expiry) {
+			return e.set, nil
+		}
+	}
+
+	entry.mu.Lock()
+	set, err := reachableSet(entry.repo, baseHash)
+	entry.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	g.reachableSetCache.Store(baseHash, reachableSetEntry{set: set, expiry: time.Now().Add(diffStatCacheTTL)})
+	return set, nil
 }
 
 // DiffShortstat returns changed-file and line counts for the given worktree.
@@ -621,50 +715,79 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 			}
 			continue
 		}
-		if info.Size() != int64(m.size) ||
-			!info.ModTime().Truncate(time.Second).Equal(m.modifiedAt.Truncate(time.Second)) {
+		sizeDiffers := info.Size() != int64(m.size)
+		mtimeDiffers := !info.ModTime().Truncate(time.Second).Equal(m.modifiedAt.Truncate(time.Second))
+		if sizeDiffers || mtimeDiffers {
+			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
+			continue
+		}
+
+		// Racy-clean case: size matches the index entry AND the working-tree
+		// mtime (truncated to second) equals the index entry's recorded mtime.
+		// stat alone cannot prove the file is unchanged — a file rewritten with
+		// identical size within the same wall-clock second as the index update
+		// looks clean by stat but may differ in content (the classic "racy git"
+		// problem). Fall back to a content hash comparison, exactly as git does.
+		if info.Size() > maxUntrackedFileSize {
+			// Too large to hash within the cap; conservatively treat as changed
+			// rather than reading it into memory, consistent with how large
+			// modified tracked files are handled elsewhere (applyDiff skips the
+			// read but still counts the file via readFileIfSmall returning false).
+			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
+			continue
+		}
+		wtData, ok := readFileIfSmall(wtPath)
+		if !ok {
+			// Unreadable or raced past the cap; treat as changed conservatively.
+			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
+			continue
+		}
+		if plumbing.ComputeHash(plumbing.BlobObject, wtData) != m.indexHash {
 			unstagedTargets = append(unstagedTargets, changeTarget{m.name, m.indexHash, false})
 		}
 	}
 
-	// ── Phase 3: process each changed file inline — one blob at a time ───────
-	// Loading a blob → reading working-tree file → computing diff → discarding,
-	// before loading the next blob, keeps peak live memory proportional to the
-	// largest single changed file rather than the sum of all changed-file blobs.
-	var d DiffStat
-
-	readBlob := func(hash plumbing.Hash) []byte {
-		if hash == (plumbing.Hash{}) {
-			return nil
+	// ── Phase 3: batch-read all needed blobs under a single lock hold ────────
+	// Collecting all hashes first and reading them in one critical section
+	// eliminates the N lock-acquire/release cycles (one per changed file) that
+	// was the #2 mutex hotspot: 9.87B cycles, 1641 events in pprof profiling.
+	// Peak memory is bounded by the sum of changed-file blobs (M << N typical),
+	// which is acceptable since blobs > maxUntrackedFileSize are still skipped.
+	allTargets := append(stagedTargets, unstagedTargets...) //nolint:gocritic // intentional ephemeral append
+	blobMap := make(map[plumbing.Hash][]byte, len(allTargets))
+	entry.mu.Lock()
+	for _, t := range allTargets {
+		if t.headHash == (plumbing.Hash{}) {
+			continue
 		}
-		// Hold the lock only long enough to open the blob reader from the ODB;
-		// the actual decompression I/O runs outside the lock so parallel workers
-		// on different worktrees of the same repo don't serialize on disk reads.
-		entry.mu.Lock()
-		blob, berr := entry.repo.BlobObject(hash)
+		if _, already := blobMap[t.headHash]; already {
+			continue
+		}
+		blob, berr := entry.repo.BlobObject(t.headHash)
 		if berr != nil {
-			entry.mu.Unlock()
-			return nil
+			continue
 		}
 		// Skip blobs larger than maxUntrackedFileSize to avoid reading large
 		// binaries or auto-generated files (e.g. package-lock.json, JARs).
 		if blob.Size > maxUntrackedFileSize {
-			entry.mu.Unlock()
-			return nil
+			continue
 		}
 		r, rerr := blob.Reader()
-		entry.mu.Unlock()
 		if rerr != nil {
-			return nil
+			continue
 		}
-		data, _ := io.ReadAll(r)
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(r)
 		_ = r.Close()
-		return data
+		blobMap[t.headHash] = bytes.Clone(buf.Bytes())
 	}
+	entry.mu.Unlock()
+
+	var d DiffStat
 
 	applyDiff := func(t changeTarget) {
 		d.Files++
-		headData := readBlob(t.headHash)
+		headData := blobMap[t.headHash] // nil for zero hash or skipped blobs
 		if t.isDeleted {
 			d.Deletions += countBytesLines(headData)
 			return
@@ -677,7 +800,6 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 		ins, del := linesDiffBytes(headData, wtData)
 		d.Insertions += ins
 		d.Deletions += del
-		// headData and wtData are freed after this call returns.
 	}
 
 	for _, t := range stagedTargets {

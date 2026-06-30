@@ -684,3 +684,50 @@ func TestDoesSessionExist_NilRegistry(t *testing.T) {
 	require.True(t, result)
 	require.True(t, execCalled, "exec list-sessions should be called when registry is nil")
 }
+
+// TestCapturePaneSemaphore verifies that the capturePaneSem semaphore caps
+// concurrent CapturePaneContent subprocess executions to at most 8.
+func TestCapturePaneSemaphore(t *testing.T) {
+	const goroutines = 20
+	const maxConcurrent = 8
+
+	var mu sync.Mutex
+	inflight := 0
+	maxSeen := 0
+
+	cmdExec := MockCmdExec{
+		OutputFunc: func(cmd *exec.Cmd) ([]byte, error) {
+			mu.Lock()
+			inflight++
+			if inflight > maxSeen {
+				maxSeen = inflight
+			}
+			mu.Unlock()
+
+			// Hold the "subprocess" briefly so concurrency builds up.
+			time.Sleep(10 * time.Millisecond)
+
+			mu.Lock()
+			inflight--
+			mu.Unlock()
+			return []byte("pane content"), nil
+		},
+		RunFunc:            func(cmd *exec.Cmd) error { return nil },
+		CombinedOutputFunc: func(cmd *exec.Cmd) ([]byte, error) { return []byte(""), nil },
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			session := newTmuxSession(fmt.Sprintf("sem-test-%d", i), "echo", NewMockPtyFactory(t), cmdExec, TmuxPrefix)
+			_, _ = session.CapturePaneContent()
+		}(i)
+	}
+	wg.Wait()
+
+	require.LessOrEqual(t, maxSeen, maxConcurrent,
+		"concurrent capture-pane subprocesses (%d) exceeded semaphore limit (%d)", maxSeen, maxConcurrent)
+	require.Greater(t, maxSeen, 0, "at least one subprocess should have executed")
+}

@@ -130,9 +130,10 @@ type ghCommentResponse struct {
 	Line int    `json:"line,omitempty"`
 }
 
-// CheckGHAuth checks if GitHub CLI is installed and authenticated.
-// Results are cached for 5 minutes. Concurrent callers that trigger a refresh
-// share a single subprocess invocation via singleflight.
+// CheckGHAuth verifies GitHub authentication via GET /user using the native HTTP
+// client. No subprocess is invoked — avoids forkExec lock contention.
+// Results are cached for 5 minutes. Concurrent callers share a single inflight
+// call via singleflight.
 func CheckGHAuth() error {
 	// Fast path: return cached result if still fresh.
 	if v := ghAuthState.Load(); v != nil {
@@ -141,22 +142,35 @@ func CheckGHAuth() error {
 		}
 	}
 
-	// Slow path: at most one goroutine runs the subprocess; others wait and
-	// reuse the result.
+	// Slow path: at most one goroutine calls the API; others wait and reuse the result.
 	res, err, _ := ghAuthGroup.Do("auth", func() (interface{}, error) {
-		var authErr error
+		authCheckCtx, authCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer authCheckCancel()
 
-		// Check if gh is installed.
-		if _, lookErr := exec.LookPath("gh"); lookErr != nil {
-			authErr = fmt.Errorf("GitHub CLI (gh) is not installed. Please install it: https://cli.github.com/")
-		} else {
-			// Check if gh is authenticated.
-			authCheckCtx, authCheckCancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer authCheckCancel()
-			cmd := safeexec.CommandContext(authCheckCtx, "gh", "auth", "status")
-			if runErr := cmd.Run(); runErr != nil {
-				authErr = fmt.Errorf("GitHub CLI is not authenticated. Please run 'gh auth login' first")
-			}
+		req, buildErr := newGHRequest(authCheckCtx, "user")
+		if buildErr != nil {
+			authErr := fmt.Errorf("GitHub auth check: failed to build request: %w", buildErr)
+			ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
+			return authErr, nil
+		}
+
+		resp, doErr := ghHTTPClient.Do(req)
+		if doErr != nil {
+			authErr := fmt.Errorf("GitHub auth check: request failed: %w", doErr)
+			ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
+			return authErr, nil
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+
+		var authErr error
+		switch resp.StatusCode {
+		case http.StatusOK:
+			// authenticated — no error
+		case http.StatusUnauthorized, http.StatusForbidden:
+			authErr = fmt.Errorf("GitHub is not authenticated (HTTP %d). Set GITHUB_TOKEN or run 'gh auth login'", resp.StatusCode)
+		default:
+			authErr = fmt.Errorf("GitHub auth check: unexpected status %d", resp.StatusCode)
 		}
 
 		ghAuthState.Store(authResult{err: authErr, expiry: time.Now().Add(ghAuthTTL)})
@@ -173,6 +187,39 @@ func CheckGHAuth() error {
 		return res.(error)
 	}
 	return nil
+}
+
+// GetCurrentUserLogin returns the GitHub login of the authenticated user via
+// GET /user. Returns an empty string (not an error) when unauthenticated so
+// callers can degrade gracefully.
+func GetCurrentUserLogin(ctx context.Context) (string, error) {
+	req, err := newGHRequest(ctx, "user")
+	if err != nil {
+		return "", fmt.Errorf("build /user request: %w", err)
+	}
+
+	resp, err := ghHTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("/user request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return "", fmt.Errorf("/user: unexpected status %d", resp.StatusCode)
+	}
+
+	var u struct {
+		Login string `json:"login"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&u); err != nil {
+		return "", fmt.Errorf("decode /user response: %w", err)
+	}
+	return u.Login, nil
 }
 
 // GetPRInfo fetches metadata for a pull request including review and CI status.
@@ -596,6 +643,21 @@ func GetRemoteURL(repoPath string) (string, error) {
 	}
 
 	return strings.TrimSpace(string(output)), nil
+}
+
+// GetOwnerRepoFromRemote returns the GitHub owner and repo name for a local
+// git repository by reading the origin remote URL and parsing it.
+// Returns empty strings (not an error) when the remote is not a GitHub URL.
+func GetOwnerRepoFromRemote(repoPath string) (owner, repo string, err error) {
+	remoteURL, err := GetRemoteURL(repoPath)
+	if err != nil {
+		return "", "", err
+	}
+	ref, parseErr := ParseGitHubRef(remoteURL)
+	if parseErr != nil {
+		return "", "", nil // not a GitHub URL — callers degrade gracefully
+	}
+	return ref.Owner, ref.Repo, nil
 }
 
 // GeneratePRPrompt generates a context prompt from PR information

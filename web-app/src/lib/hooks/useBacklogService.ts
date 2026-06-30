@@ -287,6 +287,7 @@ interface UseBacklogServiceReturn {
   ) => Promise<BacklogItem | null>;
   spawnSessionFromItem: (id: string, options?: { autonomous?: boolean }) => Promise<{ sessionUuid: string } | null>;
   triggerTriage: (id: string) => Promise<{ itemSessionId: string } | null>;
+  cancelTriage: (id: string) => Promise<boolean>;
   approvePlan: (id: string) => Promise<BacklogItem | null>;
   overrideVerdict: (id: string, overrideReason: string, toStatus?: string) => Promise<boolean>;
   triggerReReview: (id: string) => Promise<boolean>;
@@ -474,6 +475,18 @@ export function useBacklogService(): UseBacklogServiceReturn {
     []
   );
 
+  const cancelTriage = useCallback(async (id: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    try {
+      const resp = await clientRef.current.cancelTriage({ itemId: id });
+      return resp.cancelled;
+    } catch (err) {
+      console.error("[useBacklogService] cancelTriage:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      return false;
+    }
+  }, []);
+
   const approvePlan = useCallback(async (id: string): Promise<BacklogItem | null> => {
     if (!clientRef.current) return null;
     try {
@@ -530,6 +543,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       transitionStatus,
       spawnSessionFromItem,
       triggerTriage,
+      cancelTriage,
       approvePlan,
       overrideVerdict,
       triggerReReview,

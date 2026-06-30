@@ -1344,6 +1344,12 @@ message UnfinishedWorktree {
   bool is_dismissed  = 18;
   bool is_snoozed    = 19;
   repeated string session_ids = 20; // UUIDs of active sessions covering this worktree path
+
+  // GitHub PR enrichment (populated from session PR state when sessions cover this worktree).
+  int32  github_pr_number   = 21; // 0 when no PR found
+  string github_pr_url      = 22;
+  string github_pr_state    = 23; // "open" / "closed" / "merged" / ""
+  string github_pr_priority = 24; // from PRStatusPoller (no_pr / needs_review / approved / etc.)
 }
 
 // UnfinishedWorkConfig holds user-configurable source settings.
@@ -1428,4 +1434,26 @@ message SuggestedRuleProto {
   // Conflict detection results (computed server-side, heuristic — may overlap).
   repeated string shadowed_by_rule_ids  = 14; // IDs of higher-priority rules that may fire first
   repeated string shadows_rule_ids      = 15; // IDs of lower-priority rules this may suppress
+}
+
+// UserPR represents an open (or recently closed) pull request authored by the
+// authenticated GitHub user. Served by GitHubUserService.
+message UserPR {
+  string owner             = 1;
+  string repo              = 2;
+  int32  number            = 3;
+  string title             = 4;
+  string html_url          = 5;
+  string state             = 6;  // "OPEN" / "CLOSED" / "MERGED"
+  string head_ref          = 7;
+  string base_ref          = 8;
+  bool   is_draft          = 9;
+  string check_conclusion  = 10; // "success" / "failure" / "pending" / ""
+  int32  approved_count    = 11;
+  int32  changes_req_count = 12;
+  google.protobuf.Timestamp updated_at          = 13;
+  google.protobuf.Timestamp closed_at           = 14;
+  google.protobuf.Timestamp merged_at           = 15;
+  repeated string           session_ids          = 16; // local sessions checked out on this branch
+  string                    local_worktree_path  = 17; // local worktree path, if any
 }

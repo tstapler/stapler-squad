@@ -29,6 +29,8 @@ interface SubStatusChipProps {
  * Direct callers (e.g. detail headers) may still render IDLE/READY chips.
  */
 export function SubStatusChip({ subStatus }: SubStatusChipProps) {
+  // Guard against undefined subStatus (e.g. when session proto field is not set)
+  if (subStatus === undefined || subStatus === null) return null;
   switch (subStatus) {
     case SubStatus.WAITING_FOR_AGENT:
       return (

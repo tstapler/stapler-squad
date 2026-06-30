@@ -344,23 +344,24 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
     try {
       terminal.open(containerRef.current);
 
-      // Attach contextmenu listener after terminal.open() — terminal.element is guaranteed non-null here.
-      // Capture the element reference for cleanup to ensure add/remove operate on the same node.
-      const termElement = terminal.element!;
-
+      // Attach contextmenu listener after terminal.open() — terminal.element is non-null after open().
+      // Guard against null (can occur in test environments where open() is mocked as no-op).
+      const termElement = terminal.element;
       const handleContextMenu = (e: MouseEvent) => {
         e.preventDefault(); // always suppress browser native menu
         if (isMouseTracking(terminal)) return; // let PTY handle right-click via VT sequences
         setContextMenuState({ x: e.clientX, y: e.clientY });
       };
-      termElement.addEventListener('contextmenu', handleContextMenu);
+      if (termElement) {
+        termElement.addEventListener('contextmenu', handleContextMenu);
+      }
 
       // Custom key handler — a single handler for all shortcuts (attaching multiple replaces).
       // All key intercepts must be here. No cleanup needed; tied to terminal instance lifecycle.
       // iOS note: navigator.clipboard.writeText may fail in keydown because keydown events may
       // not carry the same user-gesture trust as pointer events. iOS users don't have Ctrl+C
       // hardware — they use the floating Copy button (onPointerDown path) instead.
-      terminal.attachCustomKeyEventHandler((event: KeyboardEvent): boolean => {
+      terminal.attachCustomKeyEventHandler?.((event: KeyboardEvent): boolean => {
         if (event.type !== 'keydown') return true;
 
         const isCopyShortcut = (event.ctrlKey || event.metaKey) && event.key === 'c';
@@ -462,7 +463,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
 
       // Cleanup includes contextmenu listener removal
       const cleanupContextMenu = () => {
-        termElement.removeEventListener('contextmenu', handleContextMenu);
+        if (termElement) termElement.removeEventListener('contextmenu', handleContextMenu);
       };
 
       // Setup event handlers using refs to avoid recreating terminal
@@ -522,12 +523,12 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         updateScrollbar(terminal);
       });
 
-      const scrollDisposable = terminal.onScroll(() => updateScrollbar(terminal));
+      const scrollDisposable = terminal.onScroll?.(() => updateScrollbar(terminal));
       // onWriteParsed fires after each chunk of data is rendered. When the user has
       // scrolled up into history and new output arrives, onScroll doesn't fire (the
       // viewport position didn't change) but the buffer grew, so thumb proportions
       // go stale. Updating here keeps the thumb correctly sized while streaming.
-      const writeParsedDisposable = terminal.onWriteParsed(() => updateScrollbar(terminal));
+      const writeParsedDisposable = terminal.onWriteParsed?.(() => updateScrollbar(terminal));
 
       // CRITICAL: Store refs BEFORE triggering callbacks
       // This ensures terminalRef is available when parent component calls getTerminal()
@@ -788,11 +789,11 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
         }
         cleanupContextMenu();
         resizeObserver.disconnect();
-        dataDisposable.dispose();
-        selectionDisposable.dispose();
-        resizeDisposable.dispose();
-        scrollDisposable.dispose();
-        writeParsedDisposable.dispose();
+        dataDisposable?.dispose();
+        selectionDisposable?.dispose();
+        resizeDisposable?.dispose();
+        scrollDisposable?.dispose();
+        writeParsedDisposable?.dispose();
         handleCleanupFns.forEach(fn => fn());
         terminal.dispose();
         terminalRef.current = null;
@@ -827,6 +828,7 @@ export const XtermTerminal = forwardRef<XtermTerminalHandle, XtermTerminalProps>
   // This provides automatic theme switching when no explicit theme prop is given
   useEffect(() => {
     if (typeof window === "undefined" || themeProp !== undefined) return;
+    if (typeof window.matchMedia !== "function") return;
 
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = (e: MediaQueryListEvent) => {

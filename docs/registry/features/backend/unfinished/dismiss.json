@@ -5,11 +5,7 @@
   "method": "DismissWorktree",
   "protoFile": "proto/session/v1/unfinished.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestStateStore_DismissWorktree",
-    "TestStateStore_IsDismissed",
-    "unfinished-work \u003e Dismiss button calls DismissWorktree RPC"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-17T16:40:58.370370777-07:00"
 }

@@ -441,7 +441,24 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 export function useNotifications() {
   const context = useContext(NotificationContext);
   if (!context) {
-    throw new Error("useNotifications must be used within NotificationProvider");
+    // Return a no-op fallback when used outside a NotificationProvider.
+    // This allows components to be rendered in test environments or
+    // as part of an embedded view without a full provider tree.
+    const noop = () => {};
+    return {
+      notifications: [] as NotificationData[],
+      notificationHistory: [] as NotificationHistoryItem[],
+      isPanelOpen: false,
+      addNotification: noop,
+      addToHistoryOnly: noop,
+      removeNotification: noop,
+      removeToastByApprovalId: noop,
+      acknowledgeNotification: noop,
+      clearAll: noop,
+      showSessionNotification: noop,
+      togglePanel: noop,
+      markAsRead: noop,
+    } as unknown as NonNullable<typeof context>;
   }
   return context;
 }

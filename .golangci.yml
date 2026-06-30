@@ -50,6 +50,7 @@ linters:
       exclude-godoc-examples: true
   exclusions:
     paths:
+      - "^\\.\\."
       - session/tmux/tmux_windows
       - web-app
       - \.stapler-squad

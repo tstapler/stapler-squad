@@ -687,13 +687,13 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
               {/* Group 5: Destructive */}
               {(hasGroup1 || hasGroup2 || hasGroup3 || hasGroup4) && hasGroup5 && menuSeparator}
-              {/* UX-003: Clear Conversation with danger style + confirmation */}
+              {/* UX-003: Clear Conversation — calls handler directly without confirmation dialog */}
               {onClearConversationState && (
                 <button
                   ref={clearConversationTriggerRef}
                   role="menuitem"
                   className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
-                  onClick={(e) => { e.stopPropagation(); close(); setIsClearConversationConfirmOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); close(); void onClearConversationState(session.id); }}
                   aria-label={`Clear conversation state for session ${session.title}`}
                 >
                   <span aria-hidden="true">🗑️</span> Clear Conversation

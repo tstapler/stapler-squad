@@ -70,6 +70,43 @@ func (s *UnfinishedWorkService) sessionPathIndex() map[string][]string {
 	return index
 }
 
+// worktreePRInfo holds the best available PR information for an unfinished worktree,
+// derived from active session instances whose Path matches the worktree path.
+type worktreePRInfo struct {
+	Number   int
+	URL      string
+	State    string
+	Priority string
+}
+
+// instancePRIndex builds a worktreePath → worktreePRInfo map from session instances
+// that have GitHub PR data from the PRStatusPoller.
+func (s *UnfinishedWorkService) instancePRIndex() map[string]worktreePRInfo {
+	if s.storage == nil {
+		return map[string]worktreePRInfo{}
+	}
+	instances, err := s.storage.LoadInstances()
+	if err != nil {
+		return map[string]worktreePRInfo{}
+	}
+	index := make(map[string]worktreePRInfo, len(instances))
+	for _, inst := range instances {
+		if inst.Path == "" || inst.GitHubPRNumber == 0 {
+			continue
+		}
+		// Prefer the first (or best-priority) PR we find for a given path.
+		if _, exists := index[inst.Path]; !exists {
+			index[inst.Path] = worktreePRInfo{
+				Number:   inst.GitHubPRNumber,
+				URL:      inst.GitHubPRURL,
+				State:    inst.GitHubPRState,
+				Priority: inst.GitHubPRPriority,
+			}
+		}
+	}
+	return index
+}
+
 // ListUnfinishedWork returns the current snapshot of all unfinished worktrees.
 func (s *UnfinishedWorkService) ListUnfinishedWork(
 	_ context.Context,
@@ -77,10 +114,11 @@ func (s *UnfinishedWorkService) ListUnfinishedWork(
 ) (*connect.Response[sessionv1.ListUnfinishedWorkResponse], error) {
 	results := s.scanner.GetAllResults()
 	pathIndex := s.sessionPathIndex()
+	prIndex := s.instancePRIndex()
 	worktrees := make([]*sessionv1.UnfinishedWorktree, 0, len(results))
 	for _, r := range results {
 		r.SessionIDs = pathIndex[r.WorktreePath]
-		worktrees = append(worktrees, scanResultToProto(r))
+		worktrees = append(worktrees, scanResultToProto(r, prIndex[r.WorktreePath]))
 	}
 	return connect.NewResponse(&sessionv1.ListUnfinishedWorkResponse{
 		Worktrees: worktrees,
@@ -98,11 +136,12 @@ func (s *UnfinishedWorkService) WatchUnfinishedWork(
 	// 1. Send initial snapshot.
 	results := s.scanner.GetAllResults()
 	pathIndex := s.sessionPathIndex()
+	prIndex := s.instancePRIndex()
 	for _, r := range results {
 		r.SessionIDs = pathIndex[r.WorktreePath]
 		evt := &sessionv1.UnfinishedWorkEvent{
 			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeUpdated{
-				WorktreeUpdated: scanResultToProto(r),
+				WorktreeUpdated: scanResultToProto(r, prIndex[r.WorktreePath]),
 			},
 		}
 		if err := stream.Send(evt); err != nil {
@@ -148,9 +187,10 @@ func (s *UnfinishedWorkService) convertUnfinishedEvent(evt *events.Event) *sessi
 			return nil
 		}
 		r.SessionIDs = s.sessionPathIndex()[r.WorktreePath]
+		prInfo := s.instancePRIndex()[r.WorktreePath]
 		return &sessionv1.UnfinishedWorkEvent{
 			Payload: &sessionv1.UnfinishedWorkEvent_WorktreeUpdated{
-				WorktreeUpdated: scanResultToProto(r),
+				WorktreeUpdated: scanResultToProto(r, prInfo),
 			},
 		}
 	case unfinished.EventUnfinishedWorkRemoved:
@@ -504,7 +544,7 @@ func (s *UnfinishedWorkService) UpdateUnfinishedWorkConfig(
 
 // --- helpers ---
 
-func scanResultToProto(r unfinished.ScanResult) *sessionv1.UnfinishedWorktree {
+func scanResultToProto(r unfinished.ScanResult, pr worktreePRInfo) *sessionv1.UnfinishedWorktree {
 	wt := &sessionv1.UnfinishedWorktree{
 		RepoPath:            r.RepoPath,
 		Branch:              r.Branch,
@@ -521,6 +561,10 @@ func scanResultToProto(r unfinished.ScanResult) *sessionv1.UnfinishedWorktree {
 		AheadCommitMessages: r.AheadMessages,
 		IsDismissed:         r.Status == unfinished.ScanResultStatusError, // used below
 		SessionIds:          r.SessionIDs,
+		GithubPrNumber:      int32(pr.Number),
+		GithubPrUrl:         pr.URL,
+		GithubPrState:       pr.State,
+		GithubPrPriority:    pr.Priority,
 	}
 
 	// Correct the is_dismissed field (ScanResult doesn't carry this).

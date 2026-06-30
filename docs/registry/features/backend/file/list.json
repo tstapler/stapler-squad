@@ -5,14 +5,7 @@
   "method": "ListFiles",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestListFiles_NotFound",
-    "TestListFiles_DirectoriesFirst",
-    "TestListFiles_GitignoreFiltering",
-    "TestListFiles_HardSkipDirs",
-    "TestListFiles_NodeCap",
-    "TestListFiles_PathTraversalRejected"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
 }

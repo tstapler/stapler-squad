@@ -723,7 +723,7 @@ function SessionCardInner({
             <div className={infoRow}>
               <span className={label}>Goal</span>
               <span className={value}>
-                {truncateGoal(session.goal.goalText, 60)}
+                {truncateGoal(session.goal.goalText, 61)}
                 {(session.goal.tasksTotal ?? 0) > 0 && (
                   <span className={taskFraction}>
                     {` · ${session.goal.tasksDone}/${session.goal.tasksTotal} done`}

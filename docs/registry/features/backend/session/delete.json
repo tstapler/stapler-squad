@@ -6,12 +6,7 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/session_service.go",
-  "tested": true,
-  "testIds": [
-    "TestDeleteSession_ByUUID",
-    "TestDeleteSession_EmptyId",
-    "TestDeleteSession_NonExistentSession",
-    "TestDeleteSession_RemovesFromReviewQueue"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
 }
