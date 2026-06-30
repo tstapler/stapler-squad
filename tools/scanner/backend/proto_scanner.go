@@ -191,6 +191,8 @@ var methodToID = map[string]string{
 	"ListUserPRs":       "github-user:list-prs",
 	"WatchUserPRs":      "github-user:watch-prs",
 	"GetGitHubAuthState": "github-user:get-auth-state",
+	// Provider limits RPCs
+	"GetProviderLimits": "session:get-provider-limits",
 }
 
 // rpcPattern matches lines like:   rpc MethodName(  (indented or not)
