@@ -1,0 +1,11 @@
+{
+  "id": "GetProviderLimits",
+  "type": "backend",
+  "service": "SessionService",
+  "method": "GetProviderLimits",
+  "protoFile": "proto/session/v1/session.proto",
+  "markerFound": false,
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T18:17:58.02240476-07:00"
+}

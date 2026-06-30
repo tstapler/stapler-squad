@@ -30,40 +30,10 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 		return nil, fmt.Errorf("cannot create checkpoint on unstarted instance '%s'", i.Title)
 	}
 
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
-
-	// Collect git SHA — gracefully empty if no worktree.
-	gitSHA, _ := i.gitManager.GetCurrentCommitSHA()
-
-	// Conversation UUID — empty if not yet linked.
-	convUUID := ""
-	if i.claudeSession != nil {
-		convUUID = i.claudeSession.ConversationUUID
-	}
-
-	// Count non-empty lines in history file for accurate fork truncation later.
-	// Uses bufio.NewReader instead of bufio.Scanner to avoid the 64 KB
-	// MaxScanTokenSize limit — Claude tool results and image blocks can exceed it.
-	var convLineCount uint64
-	if i.HistoryFilePath != "" {
-		if f, err := os.Open(i.HistoryFilePath); err == nil {
-			defer f.Close()
-			reader := bufio.NewReader(f)
-			for {
-				line, readErr := reader.ReadBytes('\n')
-				if len(bytes.TrimSpace(line)) > 0 {
-					convLineCount++
-				}
-				if readErr != nil {
-					if readErr != io.EOF {
-						log.Warn("createcheckpoint: error reading history file", "err", readErr)
-					}
-					break
-				}
-			}
-		}
-	}
+	// Perform I/O-heavy adapter import BEFORE acquiring the write lock.
+	// Import calls GetClaudeConversationUUID (stateMutex.RLock) internally; calling
+	// it while we already hold stateMutex.Lock() would be a recursive non-reentrant
+	// lock acquisition and causes a deadlock detected by linkdata/deadlock.
 	cpID := newCheckpointID()
 	var canonicalTurnIndex int
 	var canonicalPath string
@@ -94,6 +64,41 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 						f.Close()
 						canonicalPath = cpPath
 					}
+				}
+			}
+		}
+	}
+
+	i.stateMutex.Lock()
+	defer i.stateMutex.Unlock()
+
+	// Collect git SHA — gracefully empty if no worktree.
+	gitSHA, _ := i.gitManager.GetCurrentCommitSHA()
+
+	// Conversation UUID — empty if not yet linked.
+	convUUID := ""
+	if i.claudeSession != nil {
+		convUUID = i.claudeSession.ConversationUUID
+	}
+
+	// Count non-empty lines in history file for accurate fork truncation later.
+	// Uses bufio.NewReader instead of bufio.Scanner to avoid the 64 KB
+	// MaxScanTokenSize limit — Claude tool results and image blocks can exceed it.
+	var convLineCount uint64
+	if i.HistoryFilePath != "" {
+		if f, err := os.Open(i.HistoryFilePath); err == nil {
+			defer f.Close()
+			reader := bufio.NewReader(f)
+			for {
+				line, readErr := reader.ReadBytes('\n')
+				if len(bytes.TrimSpace(line)) > 0 {
+					convLineCount++
+				}
+				if readErr != nil {
+					if readErr != io.EOF {
+						log.Warn("createcheckpoint: error reading history file", "err", readErr)
+					}
+					break
 				}
 			}
 		}

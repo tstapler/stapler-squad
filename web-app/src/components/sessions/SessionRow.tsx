@@ -202,7 +202,6 @@ export function SessionRow({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}`}
-      aria-selected={isSelected}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
