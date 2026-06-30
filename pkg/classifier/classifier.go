@@ -1193,9 +1193,10 @@ func SeedRules() []Rule {
 		},
 		{
 			// bazel run executes an arbitrary compiled binary — unlike build/test which only
-			// compile, run hands control to the output binary. Review the target before running.
+			// compile, run hands control to the output binary.
+			// bazel shutdown kills the build daemon, dropping all build caches.
 			ID:       "seed-escalate-bazel-run",
-			Name:     "Escalate bazel run (executes a built binary)",
+			Name:     "Escalate bazel run and shutdown",
 			ToolName: "Bash",
 			Criteria: &CommandCriteria{
 				Programs:    []string{"bazel"},
@@ -1203,8 +1204,8 @@ func SeedRules() []Rule {
 			},
 			Decision:    Escalate,
 			RiskLevel:   RiskMedium,
-			Reason:      "bazel run executes an arbitrary compiled binary; confirm the target before proceeding.",
-			Alternative: "Use bazel build <target> first to inspect what will be built, then bazel run.",
+			Reason:      "bazel run executes an arbitrary compiled binary; bazel shutdown kills the build daemon and drops all caches.",
+			Alternative: "Use bazel build <target> to inspect what will be built before running it.",
 			Priority:    500,
 			Enabled:     true,
 			Source:      "seed",

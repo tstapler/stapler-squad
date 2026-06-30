@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -1247,8 +1248,8 @@ type userRule struct {
 	RiskLevel          string   `yaml:"risk_level"`  // "low", "medium", "high", "critical"
 	Reason             string   `yaml:"reason"`
 	Alternative        string   `yaml:"alternative"`
-	Priority           int      `yaml:"priority"`
-	Enabled            bool     `yaml:"enabled"`
+	Priority           int   `yaml:"priority"`
+	Enabled            *bool `yaml:"enabled"` // nil means enabled; false disables explicitly
 }
 
 func (r userRule) toClassifierRule() (classifier.Rule, error) {
@@ -1278,7 +1279,7 @@ func (r userRule) toClassifierRule() (classifier.Rule, error) {
 		Reason:      r.Reason,
 		Alternative: r.Alternative,
 		Priority:    r.Priority,
-		Enabled:     r.Enabled,
+		Enabled:     r.Enabled == nil || *r.Enabled, // nil → enabled by default
 		Source:      "user",
 	}
 	if len(r.Programs)+len(r.Subcommands)+len(r.BlockedSubcommands)+len(r.RequiredFlags)+len(r.ForbiddenFlags) > 0 {
@@ -1304,7 +1305,7 @@ func (r userRule) toClassifierRule() (classifier.Rule, error) {
 // Returns nil silently if the file does not exist.
 func loadUserRulesFile(path string) []classifier.Rule {
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
