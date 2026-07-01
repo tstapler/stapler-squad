@@ -1,10 +1,16 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { create } from "@bufbuild/protobuf";
 import { ArtifactsTab } from "../ArtifactsTab";
+import { SessionArtifactsSchema } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
-// Build a minimal Session-like object for testing — avoids importing full protobuf runtime.
-function makeSession(artifacts?: Session["artifacts"]): Session {
+type ArtifactsInit = Parameters<typeof create<typeof SessionArtifactsSchema>>[1];
+
+function makeSession(artifactsFields?: ArtifactsInit): Session {
+  const artifacts = artifactsFields != null
+    ? create(SessionArtifactsSchema, artifactsFields)
+    : undefined;
   return { artifacts } as unknown as Session;
 }
 
