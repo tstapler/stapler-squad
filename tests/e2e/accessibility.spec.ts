@@ -13,13 +13,17 @@ import AxeBuilder from '@axe-core/playwright';
 const BASE_URL = process.env.TEST_SERVER_URL || 'http://localhost:8544';
 
 test.describe('Accessibility (WCAG 2.1 AA)', () => {
+  // Axe scans are CPU-heavy; give each test 2 minutes to avoid browser-crash flakes.
+  test.setTimeout(120_000);
+
   test('IT-5.1: Main page has no critical or serious accessibility violations', async ({ page }) => {
     // Disable animations so Axe sees final rendered state, not mid-animation opacity
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
+    await page.goto(BASE_URL, { waitUntil: 'load' });
 
-    // Wait for the app to load
-    await page.waitForSelector('body', { timeout: 15000 });
+    // Wait for network to settle so the app is fully rendered before scanning.
+    // This prevents mid-render browser crashes when axe fires under SwiftShader.
+    await page.waitForLoadState('networkidle', { timeout: 30_000 });
 
     // Run axe analysis
     const results = await new AxeBuilder({ page })
@@ -44,8 +48,8 @@ test.describe('Accessibility (WCAG 2.1 AA)', () => {
 
   test('IT-5.1: Secondary routes are accessible', async ({ page }) => {
     // Navigate to review queue page
-    await page.goto(`${BASE_URL}/review-queue`, { waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('body', { timeout: 15000 });
+    await page.goto(`${BASE_URL}/review-queue`, { waitUntil: 'load' });
+    await page.waitForLoadState('networkidle', { timeout: 30_000 });
 
     const results = await new AxeBuilder({ page })
       .exclude('pre, [class*="terminal"], [class*="Terminal"]')
