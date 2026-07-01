@@ -78,6 +78,19 @@ func (m *mockSessionStopper) KillTmuxSessionByTitle(_ context.Context, _ string)
 	return nil
 }
 
+// fakeAutonomousDriverStarter records StartAutonomousDriverForInstance calls for inspection.
+type fakeAutonomousDriverStarter struct {
+	calls []*session.Instance
+}
+
+func (f *fakeAutonomousDriverStarter) StartAutonomousDriverForInstance(inst *session.Instance) {
+	f.calls = append(f.calls, inst)
+}
+
+func (f *fakeAutonomousDriverStarter) StartAutonomousDriverWithTimeout(inst *session.Instance, _ time.Duration) {
+	f.calls = append(f.calls, inst)
+}
+
 type mockCreateCall struct {
 	title   string
 	path    string
@@ -285,6 +298,8 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	creator := &mockSessionCreator{}
 	svc := NewBacklogService(storage, creator, nil, nil)
 	svc.SetHeadlessPool(pool)
+	starter := &fakeAutonomousDriverStarter{}
+	svc.SetAutonomousDriverStarter(starter)
 
 	repoPath := t.TempDir()
 	const description = "Build the zzyzx widget integration end to end"
@@ -330,13 +345,17 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	require.True(t, approveResp.Msg.Item.PlanApproved)
 
 	// 4. Spawn the execution session (real SpawnSessionFromItem, real
-	// BuildTokenBudgetedPrompt). Autonomous=true is safe with no autonomousStarter
-	// wired — SpawnSessionFromItem no-ops the driver start when it's nil.
+	// BuildTokenBudgetedPrompt). Autonomous=true with a wired autonomousStarter
+	// exercises the autonomous-driver-start code path (asserted in step 4a below).
 	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
 		ItemId:     itemID,
 		Autonomous: true,
 	}))
 	require.NoError(t, err)
+
+	// 4a. The autonomous driver start hook must actually fire when Autonomous=true
+	// and an autonomousStarter is wired.
+	require.Len(t, starter.calls, 1)
 
 	// 5. The real, load-bearing assertion: the prompt that reached the session
 	// creation boundary contains the item's actual content, not a placeholder.

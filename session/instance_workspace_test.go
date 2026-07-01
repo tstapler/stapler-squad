@@ -154,10 +154,6 @@ func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
 // "no vcs detected, falling back to simple directory change"), which is the first
 // of the three call sites that used to deadlock.
 func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test that starts a (mocked) tmux session")
-	}
-
 	instance, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
 		WithSessionType(SessionTypeDirectory).
 		Build()
