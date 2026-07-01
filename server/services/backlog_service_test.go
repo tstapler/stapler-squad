@@ -91,7 +91,10 @@ func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, pa
 	if m.err != nil {
 		return nil, m.err
 	}
-	return &session.Instance{Title: title}, nil
+	// Path must round-trip: SpawnSessionFromItem writes slash commands and a
+	// context file to inst.Path. An empty Path here makes those writes land in
+	// the test process's working directory instead of a sandbox.
+	return &session.Instance{Title: title, Path: path}, nil
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
