@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useShortcut } from "@/lib/shortcuts/useShortcut";
 import type { LucideIcon } from "lucide-react";
 import { Terminal, GitCompare, GitBranch, FolderOpen, ScrollText, Info, Globe, Package } from "lucide-react";
@@ -175,6 +175,10 @@ export function SessionDetailView({
   const availablePrograms = useAvailablePrograms();
   const [isEditingProgram, setIsEditingProgram] = useState(false);
   const [programValue, setProgramValue] = useState(session.program || "");
+  // Re-sync when server pushes an update (WatchSessions), but only while not actively editing.
+  React.useEffect(() => {
+    if (!isEditingProgram) setProgramValue(session.program || "");
+  }, [session.program, isEditingProgram]);
   const [isEditingWorkingDir, setIsEditingWorkingDir] = useState(false);
   const [workingDirValue, setWorkingDirValue] = useState(session.workingDir || "");
   // Action sheet state

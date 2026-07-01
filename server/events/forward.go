@@ -10,13 +10,13 @@ type Subscriber = pkgevents.Subscriber
 
 // Constants
 const (
-	EventSessionCreated  = pkgevents.EventSessionCreated
-	EventSessionUpdated  = pkgevents.EventSessionUpdated
-	EventSessionDeleted  = pkgevents.EventSessionDeleted
-	EventUserInteraction = pkgevents.EventUserInteraction
-	EventSessionAcknowledged  = pkgevents.EventSessionAcknowledged
-	EventApprovalResponse     = pkgevents.EventApprovalResponse
-	EventNotification         = pkgevents.EventNotification
+	EventSessionCreated      = pkgevents.EventSessionCreated
+	EventSessionUpdated      = pkgevents.EventSessionUpdated
+	EventSessionDeleted      = pkgevents.EventSessionDeleted
+	EventUserInteraction     = pkgevents.EventUserInteraction
+	EventSessionAcknowledged = pkgevents.EventSessionAcknowledged
+	EventApprovalResponse    = pkgevents.EventApprovalResponse
+	EventNotification        = pkgevents.EventNotification
 )
 
 // Constructor functions (var allows assignment but is callable with identical syntax)

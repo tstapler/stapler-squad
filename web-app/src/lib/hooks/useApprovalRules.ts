@@ -11,6 +11,8 @@ import {
   UpsertApprovalRuleRequestSchema,
   DeleteApprovalRuleRequest,
   DeleteApprovalRuleRequestSchema,
+  BulkUpsertRulesRequestSchema,
+  BulkUpsertRulesResponse,
 } from "@/gen/session/v1/session_pb";
 import { create } from "@bufbuild/protobuf";
 import { getConnectTransport } from "@/lib/api/transport";
@@ -24,6 +26,7 @@ interface UseApprovalRulesReturn {
   loading: boolean;
   error: Error | null;
   upsertRule: (rule: Partial<ApprovalRuleProto> & { id: string }) => Promise<void>;
+  bulkUpsertRules: (rules: Array<Partial<ApprovalRuleProto> & { id: string }>) => Promise<BulkUpsertRulesResponse>;
   deleteRule: (id: string) => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -114,6 +117,43 @@ export function useApprovalRules(
     [refresh]
   );
 
+  const bulkUpsertRules = useCallback(
+    async (rulesData: Array<Partial<ApprovalRuleProto> & { id: string }>): Promise<BulkUpsertRulesResponse> => {
+      if (!clientRef.current) return { created: 0, updated: 0, skipped: 0, errors: [] } as unknown as BulkUpsertRulesResponse;
+      const protos = rulesData.map((ruleData) =>
+        create(ApprovalRuleProtoSchema, {
+          id: ruleData.id,
+          name: ruleData.name ?? "",
+          toolName: ruleData.toolName ?? "",
+          toolPattern: ruleData.toolPattern ?? "",
+          toolCategory: ruleData.toolCategory ?? "",
+          commandPattern: ruleData.commandPattern ?? "",
+          filePattern: ruleData.filePattern ?? "",
+          programs: ruleData.programs ?? [],
+          subcommands: ruleData.subcommands ?? [],
+          blockedSubcommands: ruleData.blockedSubcommands ?? [],
+          requiredFlags: ruleData.requiredFlags ?? [],
+          forbiddenFlags: ruleData.forbiddenFlags ?? [],
+          requiredFlagPrefixes: ruleData.requiredFlagPrefixes ?? [],
+          pythonModes: ruleData.pythonModes ?? [],
+          safePythonImportsOnly: ruleData.safePythonImportsOnly ?? false,
+          decision: ruleData.decision ?? AutoDecision.ESCALATE,
+          riskLevel: ruleData.riskLevel ?? "",
+          reason: ruleData.reason ?? "",
+          alternative: ruleData.alternative ?? "",
+          priority: ruleData.priority ?? 10,
+          enabled: ruleData.enabled ?? true,
+          source: "user",
+        })
+      );
+      const req = create(BulkUpsertRulesRequestSchema, { rules: protos, overwriteDuplicates: false });
+      const resp = await clientRef.current.bulkUpsertRules(req);
+      await refresh();
+      return resp;
+    },
+    [refresh]
+  );
+
   const deleteRule = useCallback(
     async (id: string) => {
       if (!clientRef.current) return;
@@ -125,5 +165,5 @@ export function useApprovalRules(
     []
   );
 
-  return { rules, loading, error, upsertRule, deleteRule, refresh };
+  return { rules, loading, error, upsertRule, bulkUpsertRules, deleteRule, refresh };
 }

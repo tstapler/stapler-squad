@@ -201,3 +201,66 @@ type AliasConfig struct {
 	// For example, prefix "ssq-" + label "my-feature" → session name "ssq-my-feature".
 	NamePrefix string `json:"name_prefix,omitempty"`
 }
+
+// TransitionMode controls how the system responds when capacity thresholds are crossed.
+type TransitionMode string
+
+const (
+	// TransitionModeManual displays a suggestion banner; the user must click to switch.
+	TransitionModeManual TransitionMode = "manual"
+	// TransitionModeAuto automatically transitions sessions without user interaction.
+	TransitionModeAuto TransitionMode = "auto"
+	// TransitionModeNotify shows a warning notification without offering transition UI.
+	TransitionModeNotify TransitionMode = "notify"
+)
+
+// ProviderPriority defines a prioritized CLI and model target for transitions.
+type ProviderPriority struct {
+	CLI   string `json:"cli"`
+	Model string `json:"model"`
+}
+
+// CapacityConfig holds configuration for the provider capacity monitoring and transition feature.
+type CapacityConfig struct {
+	// TransitionMode controls auto vs manual transition. Default: "manual".
+	TransitionMode TransitionMode `json:"transition_mode,omitempty"`
+	// ContextWindowWarnPct is the context usage percentage to trigger a warning. Default: 0.75.
+	ContextWindowWarnPct float64 `json:"context_window_warn_pct,omitempty"`
+	// ContextWindowAutoPct is the context usage percentage to trigger auto-transition (in auto mode). Default: 0.90.
+	ContextWindowAutoPct float64 `json:"context_window_auto_pct,omitempty"`
+	// RateLimitWarnRemaining triggers a warning when remaining requests fall below this. Default: 10.
+	RateLimitWarnRemaining int `json:"rate_limit_warn_remaining,omitempty"`
+	// CostBudgetUSD is the accumulated USD cost limit. 0 means no limit. Default: 0.
+	CostBudgetUSD float64 `json:"cost_budget_usd,omitempty"`
+	// PollIntervalSeconds controls limit API querying frequency. Default: 60.
+	PollIntervalSeconds int `json:"poll_interval_seconds,omitempty"`
+	// ProviderPriority lists fallback providers in order of preference.
+	ProviderPriority []ProviderPriority `json:"provider_priority,omitempty"`
+}
+
+// CapacityConfigOrDefault returns a CapacityConfig with standard defaults applied to zero fields.
+func (c CapacityConfig) CapacityConfigOrDefault() CapacityConfig {
+	out := c
+	if out.TransitionMode == "" {
+		out.TransitionMode = TransitionModeManual
+	}
+	if out.ContextWindowWarnPct <= 0 {
+		out.ContextWindowWarnPct = 0.75
+	}
+	if out.ContextWindowAutoPct <= 0 {
+		out.ContextWindowAutoPct = 0.90
+	}
+	if out.RateLimitWarnRemaining <= 0 {
+		out.RateLimitWarnRemaining = 10
+	}
+	if out.PollIntervalSeconds <= 0 {
+		out.PollIntervalSeconds = 60
+	}
+	if len(out.ProviderPriority) == 0 {
+		out.ProviderPriority = []ProviderPriority{
+			{CLI: "agy", Model: "gemini-2.0-flash"},
+			{CLI: "claude", Model: "claude-3-5-sonnet-20241022"},
+		}
+	}
+	return out
+}

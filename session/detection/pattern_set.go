@@ -13,16 +13,16 @@ type PatternSet struct {
 
 	patterns StatusPatterns
 
-	readyRegexes            []*regexp.Regexp
-	processingRegexes       []*regexp.Regexp
-	needsApprovalRegexes    []*regexp.Regexp
-	inputRequiredRegexes    []*regexp.Regexp
-	errorRegexes            []*regexp.Regexp
-	testsFailingRegexes     []*regexp.Regexp
-	idleRegexes             []*regexp.Regexp
-	activeRegexes           []*regexp.Regexp
-	successRegexes          []*regexp.Regexp
-	waitingForAgentRegexes  []*regexp.Regexp
+	readyRegexes           []*regexp.Regexp
+	processingRegexes      []*regexp.Regexp
+	needsApprovalRegexes   []*regexp.Regexp
+	inputRequiredRegexes   []*regexp.Regexp
+	errorRegexes           []*regexp.Regexp
+	testsFailingRegexes    []*regexp.Regexp
+	idleRegexes            []*regexp.Regexp
+	activeRegexes          []*regexp.Regexp
+	successRegexes         []*regexp.Regexp
+	waitingForAgentRegexes []*regexp.Regexp
 }
 
 // NewPatternSet compiles all patterns in p. Returns an error if any regex is invalid.

@@ -9,6 +9,7 @@ import { SubStatusChip } from "./SubStatusChip";
 import { GitHubBadge } from "./GitHubBadge";
 import { TagEditor } from "./TagEditor";
 import { useTerminalSnapshot } from "@/lib/hooks/useTerminalSnapshot";
+import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { DetectionEventsPanel } from "./DetectionEventsPanel";
 import { SessionActionsOverflow } from "./SessionActionsOverflow";
 import { formatPauseReason } from "@/lib/sessions/formatPauseReason";
@@ -140,6 +141,7 @@ function SessionCardInner({
   detectedContext,
   suppressApprovalSubStatus = false,
 }: SessionCardProps) {
+  const sessionActions = useSessionActions(session.id);
   const [isTagEditorOpen, setIsTagEditorOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isInlineEditing, setIsInlineEditing] = useState(false);
@@ -723,7 +725,7 @@ function SessionCardInner({
             <div className={infoRow}>
               <span className={label}>Goal</span>
               <span className={value}>
-                {truncateGoal(session.goal.goalText, 60)}
+                {truncateGoal(session.goal.goalText, 61)}
                 {(session.goal.tasksTotal ?? 0) > 0 && (
                   <span className={taskFraction}>
                     {` · ${session.goal.tasksDone}/${session.goal.tasksTotal} done`}
@@ -836,6 +838,7 @@ function SessionCardInner({
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}
+          onChangeProgram={(_id, program) => { void sessionActions.update({ program }); }}
         />
       </div>
     </div>

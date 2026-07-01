@@ -4,6 +4,11 @@ export interface RuleBuilderPrefill {
   toolName?: string;
   toolCategory?: string;
   suggestedDecision?: number;
+  commandPattern?: string;
+  /** When set, seeds the rule name directly (bypasses auto-name computation). */
+  initialName?: string;
+  /** When true, indicates that fields were filled by an AI suggestion — shows the ai-generated-badge. */
+  isAiGenerated?: boolean;
 }
 
 export function encodePrefill(payload: RuleBuilderPrefill): string {

@@ -3,7 +3,7 @@
  */
 
 import { StateApplicator } from './StateApplicator';
-import { TerminalState, TerminalStateSchema, TerminalLine, TerminalLineSchema, CursorPosition, CursorPositionSchema, TerminalDimensions, TerminalDimensionsSchema, LineAttributes, LineAttributesSchema } from '@/gen/session/v1/events_pb';
+import { TerminalState, TerminalStateSchema, TerminalLine, TerminalLineSchema, CursorPosition, CursorPositionSchema, TerminalDimensions, TerminalDimensionsSchema, LineAttributes, LineAttributesSchema, TerminalDiff, TerminalDiffSchema } from '@/gen/session/v1/events_pb';
 import { create } from "@bufbuild/protobuf";
 
 // Mock requestAnimationFrame to queue callbacks and flush them on demand in tests.
@@ -268,6 +268,39 @@ describe('StateApplicator', () => {
       expect(stateApplicator.hasAppliedSequence(BigInt(3))).toBe(true); // Older
       expect(stateApplicator.hasAppliedSequence(BigInt(5))).toBe(true); // Current
       expect(stateApplicator.hasAppliedSequence(BigInt(7))).toBe(false); // Future
+    });
+  });
+
+  describe('multi-byte UTF-8 across diffs', () => {
+    it('StateApplicator_should_notEmitReplacementChar_When_multiByteSplitAcrossDiffs', () => {
+      // "é" is U+00E9, encoded as 0xC3 0xA9 in UTF-8.
+      // Split the two bytes across two consecutive TerminalDiff messages.
+      // With { stream: true }, the decoder holds the first byte until the next
+      // chunk arrives, emitting the full character instead of U+FFFD.
+
+      const diff1 = create(TerminalDiffSchema, {
+        fromSequence: BigInt(0),
+        toSequence: BigInt(1),
+        diffBytes: new Uint8Array([0xc3]), // first byte of "é"
+        changedCells: 1,
+      });
+
+      const diff2 = create(TerminalDiffSchema, {
+        fromSequence: BigInt(1),
+        toSequence: BigInt(2),
+        diffBytes: new Uint8Array([0xa9]), // second byte of "é"
+        changedCells: 0,
+      });
+
+      stateApplicator.applyDiff(diff1);
+      flushAnimationFrames(); // advance currentSequence to 1 before applying diff2
+
+      stateApplicator.applyDiff(diff2);
+      flushAnimationFrames();
+
+      const written = mockTerminal.getWrittenData().join('');
+      expect(written).not.toContain('�');
+      expect(written).toContain('é');
     });
   });
 });

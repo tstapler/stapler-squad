@@ -403,6 +403,19 @@ service SessionService {
   // failed — specifically: Stopped sessions with no meaningful terminal output.
   // Returns the count of sessions that were archived.
   rpc DeleteWorkflowFailedSessions(DeleteWorkflowFailedSessionsRequest) returns (DeleteWorkflowFailedSessionsResponse) {}
+
+  // GetProviderLimits returns the rate limit and usage details for a session.
+  rpc GetProviderLimits(GetProviderLimitsRequest) returns (GetProviderLimitsResponse) {}
+
+  // GetHookStatus reports whether the global Claude Code hooks (rule enforcement
+  // and notifications) are installed in ~/.claude/settings.json.
+  // +api: hooks:status
+  rpc GetHookStatus(GetHookStatusRequest) returns (GetHookStatusResponse) {}
+
+  // InstallHooks installs the requested global Claude Code hooks into
+  // ~/.claude/settings.json. Idempotent per hook.
+  // +api: hooks:install
+  rpc InstallHooks(InstallHooksRequest) returns (InstallHooksResponse) {}
 }
 
 // ListSessionsRequest allows filtering sessions by various criteria.
@@ -2111,6 +2124,33 @@ message GetFeatureFlagsResponse {
   repeated FeatureFlag flags = 1;
 }
 
+message GetHookStatusRequest {}
+
+message GetHookStatusResponse {
+  // Whether the PreToolUse rule-enforcement hook (ssq-hooks check) is installed globally.
+  bool rules_installed = 1;
+  // Whether the Notification/Stop notification hooks (ssq-hook-handler) are installed globally.
+  bool notifications_installed = 2;
+  // True when the ssq-hooks binary is available to install the rules hook.
+  bool rules_available = 3;
+  // True when the ssq-hook-handler is available to install the notification hooks.
+  bool notifications_available = 4;
+}
+
+message InstallHooksRequest {
+  // Install the PreToolUse rule-enforcement hook.
+  bool install_rules = 1;
+  // Install the Notification/Stop notification hooks.
+  bool install_notifications = 2;
+}
+
+message InstallHooksResponse {
+  // Hook status after the install attempt.
+  GetHookStatusResponse status = 1;
+  // Human-readable per-hook result messages (e.g. a manual fallback command when a binary is missing).
+  repeated string messages = 2;
+}
+
 message UpdateFeatureFlagRequest {
   // The feature name to update (e.g. "backlog").
   string name = 1;
@@ -2494,3 +2534,31 @@ message DeleteWorkflowFailedSessionsResponse {
   // Number of sessions that were archived (soft-deleted).
   int32 deleted_count = 1;
 }
+
+message GetProviderLimitsRequest {
+  string session_id = 1; // session title/id
+}
+
+message ProviderLimitsProto {
+  string provider = 1;
+  string model = 2;
+  int32 requests_limit = 3;
+  int32 requests_remaining = 4;
+  google.protobuf.Timestamp requests_reset = 5;
+  int32 tokens_limit = 6;
+  int32 tokens_remaining = 7;
+  google.protobuf.Timestamp tokens_reset = 8;
+  int32 context_tokens_used = 9;
+  int32 context_tokens_max = 10;
+  int32 session_input_tokens = 11;
+  int32 session_output_tokens = 12;
+  double estimated_cost_usd = 13;
+  bool available = 14;
+  string last_error_code = 15;
+  google.protobuf.Timestamp fetched_at = 16;
+}
+
+message GetProviderLimitsResponse {
+  ProviderLimitsProto limits = 1;
+}
+

@@ -1,12 +1,12 @@
 {
-  "id": "backlog:spawn-session-autonomous",
+  "id": "backlog:cancel-triage",
   "type": "backend",
   "service": "BacklogService",
-  "method": "SpawnSessionFromItem (autonomous=true)",
+  "method": "CancelTriage",
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
   "handlerFile": "server/services/backlog_service.go",
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-06-09T00:00:00Z"
+  "lastModified": "2026-06-26T08:55:46.608260153-07:00"
 }

@@ -16,22 +16,53 @@ const (
 )
 
 // AnthropicAIClient implements AIClient using the Anthropic Messages API.
+// It accepts a Credential rather than a raw API key string so that both
+// API-key users and Claude subscription (OAuth) users are supported.
 type AnthropicAIClient struct {
-	apiKey string
-	client *http.Client
-	model  string
+	cred              Credential
+	client            *http.Client
+	model             string
+	OnResponseHeaders func(http.Header)
 }
 
-// NewAnthropicAIClient creates an AnthropicAIClient. Returns an error if apiKey is empty.
-func NewAnthropicAIClient(apiKey string) (*AnthropicAIClient, error) {
-	if apiKey == "" {
-		return nil, fmt.Errorf("AnthropicAIClient: apiKey must not be empty")
+// NewAnthropicAIClient creates an AnthropicAIClient from a resolved Credential.
+// Returns an error if the credential is not valid for Anthropic.
+func NewAnthropicAIClient(cred Credential) (*AnthropicAIClient, error) {
+	if !cred.IsValid() {
+		return nil, fmt.Errorf("AnthropicAIClient: credential is empty (source: %q)", cred.Source)
 	}
 	return &AnthropicAIClient{
-		apiKey: apiKey,
+		cred:   cred,
 		model:  anthropicModel,
 		client: &http.Client{Timeout: 30 * time.Second},
 	}, nil
+}
+
+// NewAnthropicAIClientFromKey is a convenience constructor for callers that
+// already have a raw API key string (e.g. tests, legacy wiring).
+// Prefer NewAnthropicAIClient + CredentialChain for new code.
+func NewAnthropicAIClientFromKey(apiKey string) (*AnthropicAIClient, error) {
+	if apiKey == "" {
+		return nil, fmt.Errorf("AnthropicAIClient: apiKey must not be empty")
+	}
+	return NewAnthropicAIClient(Credential{
+		Provider: "anthropic",
+		APIKey:   apiKey,
+		Source:   "direct_key",
+	})
+}
+
+// authHeaders sets the appropriate authentication headers on req.
+// Anthropic accepts two auth styles:
+//   - API key users:        x-api-key: <key>
+//   - Subscription (OAuth): Authorization: Bearer <token>
+func (c *AnthropicAIClient) authHeaders(req *http.Request) {
+	req.Header.Set("anthropic-version", anthropicVersion)
+	req.Header.Set("Content-Type", "application/json")
+	key, val, _ := c.cred.AnthropicAuthHeader()
+	if key != "" {
+		req.Header.Set(key, val)
+	}
 }
 
 // anthropicRequest is the JSON body sent to the Anthropic Messages API.
@@ -80,15 +111,17 @@ func (c *AnthropicAIClient) Complete(ctx context.Context, systemPrompt, userProm
 	if err != nil {
 		return "", fmt.Errorf("anthropic: create request: %w", err)
 	}
-	httpReq.Header.Set("x-api-key", c.apiKey)
-	httpReq.Header.Set("anthropic-version", anthropicVersion)
-	httpReq.Header.Set("Content-Type", "application/json")
+	c.authHeaders(httpReq)
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
 		return "", fmt.Errorf("anthropic: request failed: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if c.OnResponseHeaders != nil {
+		c.OnResponseHeaders(resp.Header)
+	}
 
 	var apiResp anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {

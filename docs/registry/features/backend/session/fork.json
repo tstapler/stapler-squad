@@ -5,15 +5,7 @@
   "method": "ForkSession",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestForkSession_Success",
-    "TestForkSession_MissingSessionID",
-    "TestForkSession_MissingNewTitle",
-    "TestForkSession_SessionNotFound",
-    "TestForkSession_DuplicateTitle",
-    "TestForkSession_MissingCheckpointID",
-    "TestForkSession_CheckpointNotFound"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
 }

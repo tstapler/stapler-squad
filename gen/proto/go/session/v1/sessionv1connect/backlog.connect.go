@@ -60,6 +60,9 @@ const (
 	// BacklogServiceTriggerTriageProcedure is the fully-qualified name of the BacklogService's
 	// TriggerTriage RPC.
 	BacklogServiceTriggerTriageProcedure = "/session.v1.BacklogService/TriggerTriage"
+	// BacklogServiceCancelTriageProcedure is the fully-qualified name of the BacklogService's
+	// CancelTriage RPC.
+	BacklogServiceCancelTriageProcedure = "/session.v1.BacklogService/CancelTriage"
 	// BacklogServiceApprovePlanProcedure is the fully-qualified name of the BacklogService's
 	// ApprovePlan RPC.
 	BacklogServiceApprovePlanProcedure = "/session.v1.BacklogService/ApprovePlan"
@@ -112,6 +115,8 @@ type BacklogServiceClient interface {
 	AttachSessionToItem(context.Context, *connect.Request[v1.AttachSessionToItemRequest]) (*connect.Response[v1.AttachSessionToItemResponse], error)
 	// TriggerTriage kicks off a triage session for a backlog item.
 	TriggerTriage(context.Context, *connect.Request[v1.TriggerTriageRequest]) (*connect.Response[v1.TriggerTriageResponse], error)
+	// CancelTriage stops a running triage session for a backlog item.
+	CancelTriage(context.Context, *connect.Request[v1.CancelTriageRequest]) (*connect.Response[v1.CancelTriageResponse], error)
 	// ApprovePlan marks the planning artifacts for an item as approved.
 	ApprovePlan(context.Context, *connect.Request[v1.ApprovePlanRequest]) (*connect.Response[v1.ApprovePlanResponse], error)
 	// SuggestNextItem recommends the highest-priority actionable backlog item.
@@ -199,6 +204,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("TriggerTriage")),
 			connect.WithClientOptions(opts...),
 		),
+		cancelTriage: connect.NewClient[v1.CancelTriageRequest, v1.CancelTriageResponse](
+			httpClient,
+			baseURL+BacklogServiceCancelTriageProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("CancelTriage")),
+			connect.WithClientOptions(opts...),
+		),
 		approvePlan: connect.NewClient[v1.ApprovePlanRequest, v1.ApprovePlanResponse](
 			httpClient,
 			baseURL+BacklogServiceApprovePlanProcedure,
@@ -273,6 +284,7 @@ type backlogServiceClient struct {
 	spawnSessionFromItem        *connect.Client[v1.SpawnSessionFromItemRequest, v1.SpawnSessionFromItemResponse]
 	attachSessionToItem         *connect.Client[v1.AttachSessionToItemRequest, v1.AttachSessionToItemResponse]
 	triggerTriage               *connect.Client[v1.TriggerTriageRequest, v1.TriggerTriageResponse]
+	cancelTriage                *connect.Client[v1.CancelTriageRequest, v1.CancelTriageResponse]
 	approvePlan                 *connect.Client[v1.ApprovePlanRequest, v1.ApprovePlanResponse]
 	suggestNextItem             *connect.Client[v1.SuggestNextItemRequest, v1.SuggestNextItemResponse]
 	overrideVerdict             *connect.Client[v1.OverrideVerdictRequest, v1.OverrideVerdictResponse]
@@ -328,6 +340,11 @@ func (c *backlogServiceClient) AttachSessionToItem(ctx context.Context, req *con
 // TriggerTriage calls session.v1.BacklogService.TriggerTriage.
 func (c *backlogServiceClient) TriggerTriage(ctx context.Context, req *connect.Request[v1.TriggerTriageRequest]) (*connect.Response[v1.TriggerTriageResponse], error) {
 	return c.triggerTriage.CallUnary(ctx, req)
+}
+
+// CancelTriage calls session.v1.BacklogService.CancelTriage.
+func (c *backlogServiceClient) CancelTriage(ctx context.Context, req *connect.Request[v1.CancelTriageRequest]) (*connect.Response[v1.CancelTriageResponse], error) {
+	return c.cancelTriage.CallUnary(ctx, req)
 }
 
 // ApprovePlan calls session.v1.BacklogService.ApprovePlan.
@@ -400,6 +417,8 @@ type BacklogServiceHandler interface {
 	AttachSessionToItem(context.Context, *connect.Request[v1.AttachSessionToItemRequest]) (*connect.Response[v1.AttachSessionToItemResponse], error)
 	// TriggerTriage kicks off a triage session for a backlog item.
 	TriggerTriage(context.Context, *connect.Request[v1.TriggerTriageRequest]) (*connect.Response[v1.TriggerTriageResponse], error)
+	// CancelTriage stops a running triage session for a backlog item.
+	CancelTriage(context.Context, *connect.Request[v1.CancelTriageRequest]) (*connect.Response[v1.CancelTriageResponse], error)
 	// ApprovePlan marks the planning artifacts for an item as approved.
 	ApprovePlan(context.Context, *connect.Request[v1.ApprovePlanRequest]) (*connect.Response[v1.ApprovePlanResponse], error)
 	// SuggestNextItem recommends the highest-priority actionable backlog item.
@@ -483,6 +502,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("TriggerTriage")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceCancelTriageHandler := connect.NewUnaryHandler(
+		BacklogServiceCancelTriageProcedure,
+		svc.CancelTriage,
+		connect.WithSchema(backlogServiceMethods.ByName("CancelTriage")),
+		connect.WithHandlerOptions(opts...),
+	)
 	backlogServiceApprovePlanHandler := connect.NewUnaryHandler(
 		BacklogServiceApprovePlanProcedure,
 		svc.ApprovePlan,
@@ -563,6 +588,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceAttachSessionToItemHandler.ServeHTTP(w, r)
 		case BacklogServiceTriggerTriageProcedure:
 			backlogServiceTriggerTriageHandler.ServeHTTP(w, r)
+		case BacklogServiceCancelTriageProcedure:
+			backlogServiceCancelTriageHandler.ServeHTTP(w, r)
 		case BacklogServiceApprovePlanProcedure:
 			backlogServiceApprovePlanHandler.ServeHTTP(w, r)
 		case BacklogServiceSuggestNextItemProcedure:
@@ -626,6 +653,10 @@ func (UnimplementedBacklogServiceHandler) AttachSessionToItem(context.Context, *
 
 func (UnimplementedBacklogServiceHandler) TriggerTriage(context.Context, *connect.Request[v1.TriggerTriageRequest]) (*connect.Response[v1.TriggerTriageResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.TriggerTriage is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) CancelTriage(context.Context, *connect.Request[v1.CancelTriageRequest]) (*connect.Response[v1.CancelTriageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.CancelTriage is not implemented"))
 }
 
 func (UnimplementedBacklogServiceHandler) ApprovePlan(context.Context, *connect.Request[v1.ApprovePlanRequest]) (*connect.Response[v1.ApprovePlanResponse], error) {

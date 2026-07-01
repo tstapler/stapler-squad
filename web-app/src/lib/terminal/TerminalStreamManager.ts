@@ -36,7 +36,7 @@ const CHUNK_SIZE = 16384;      // 16KB chunks
 const CHUNK_DELAY_MS = 0;      // Yield to event loop between chunks
 
 /**
- * RedrawThrottler - Coalesces rapid full-screen redraws to max 10 FPS.
+ * RedrawThrottler - Coalesces rapid full-screen redraws to max 30 FPS.
  *
  * Claude performs complete screen redraws at 12-25 FPS, causing visible flicker.
  * This throttler holds rapid redraws and flushes the latest one at a capped rate.
@@ -44,7 +44,7 @@ const CHUNK_DELAY_MS = 0;      // Yield to event loop between chunks
 class RedrawThrottler {
   private pendingRedraw: string | null = null;
   private throttleTimer: ReturnType<typeof setTimeout> | null = null;
-  private readonly throttleMs = 100; // 10 FPS max
+  private readonly throttleMs = 33; // ~30fps; coalesces burst full-screen redraws
   private onFlush: (data: string) => void;
 
   constructor(onFlush: (data: string) => void) {
@@ -52,8 +52,13 @@ class RedrawThrottler {
   }
 
   process(chunk: string): string | null {
-    // Detect full redraw pattern (cursor up at start)
-    const isFullRedraw = /^\x1b\[\d+A/.test(chunk);
+    // Detect genuine full-screen redraws: cursor-up followed immediately by an erase sequence.
+    // NOTE: \x1b[H (cursor-home) is intentionally excluded - it is also emitted during
+    // incremental Ink-style renders and must not be classified as a full redraw.
+    // Scoping the check to the first 32 bytes avoids false positives in large output chunks.
+    const isFullRedraw = /^\x1b\[\d+A(?:\x1b\[2K|\x1b\[J)/.test(
+      chunk.substring(0, 32)
+    );
 
     if (!isFullRedraw) {
       this.flushPending();

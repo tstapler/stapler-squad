@@ -307,6 +307,37 @@ export const sessionRow = style({
   fontSize: vars.fontSize.sm,
 });
 
+export const sessionLink = style({
+  display: "flex",
+  alignItems: "center",
+  gap: vars.space["3"],
+  flex: 1,
+  minWidth: 0,
+  textDecoration: "none",
+  color: "inherit",
+});
+
+export const sessionDeleteBtn = style({
+  display: "inline-flex",
+  alignItems: "center",
+  padding: `2px ${vars.space["2"]}`,
+  borderRadius: vars.radii.sm,
+  border: `1px solid ${vars.color.errorDark}`,
+  background: vars.color.errorBg,
+  color: vars.color.error,
+  cursor: "pointer",
+  fontSize: vars.fontSize.xs,
+  fontWeight: vars.fontWeight.medium,
+  flexShrink: 0,
+  ":hover": {
+    borderColor: vars.color.error,
+  },
+  ":disabled": {
+    opacity: 0.5,
+    cursor: "not-allowed",
+  },
+});
+
 export const sessionId = style({
   fontFamily: vars.font.mono,
   color: vars.color.textSecondary,

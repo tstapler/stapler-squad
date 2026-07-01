@@ -34,6 +34,10 @@ export const SESSION_TYPES = [
 
 type SessionTypeValue = (typeof SESSION_TYPES)[number]["value"];
 
+const PRIMARY_TYPES = SESSION_TYPES.slice(0, 2).concat([SESSION_TYPES[3]]); // new_worktree, directory, one_off
+const ADVANCED_TYPES = [SESSION_TYPES[2], SESSION_TYPES[4], SESSION_TYPES[5]]; // existing_worktree, new_project, autonomous
+const ADVANCED_VALUES = new Set<string>(ADVANCED_TYPES.map((t) => t.value));
+
 // Radio options for the "Open as" sub-selector inside New Project mode.
 const NEW_PROJECT_OPEN_AS = [
   { value: "new_worktree", label: "New Worktree" },
@@ -46,19 +50,23 @@ interface SessionTypeRadioGroupProps {
 }
 
 function SessionTypeRadioGroup({ value, onChange }: SessionTypeRadioGroupProps) {
-  const currentIndex = SESSION_TYPES.findIndex((t) => t.value === value);
+  // Expand advanced section automatically if the current selection is an advanced type
+  const [advancedOpen, setAdvancedOpen] = useState(() => ADVANCED_VALUES.has(value));
+
+  const visibleTypes = advancedOpen ? [...PRIMARY_TYPES, ...ADVANCED_TYPES] : PRIMARY_TYPES;
+  const currentIndex = visibleTypes.findIndex((t) => t.value === value);
   const hasSelection = currentIndex !== -1;
 
   function handleKeyDown(e: KeyboardEvent) {
     const fromIndex = hasSelection ? currentIndex : 0;
     if (e.key === "ArrowRight" || e.key === "ArrowDown") {
       e.preventDefault();
-      const next = (fromIndex + 1) % SESSION_TYPES.length;
-      onChange(SESSION_TYPES[next].value);
+      const next = (fromIndex + 1) % visibleTypes.length;
+      onChange(visibleTypes[next].value);
     } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
       e.preventDefault();
-      const prev = (fromIndex - 1 + SESSION_TYPES.length) % SESSION_TYPES.length;
-      onChange(SESSION_TYPES[prev].value);
+      const prev = (fromIndex - 1 + visibleTypes.length) % visibleTypes.length;
+      onChange(visibleTypes[prev].value);
     }
   }
 
@@ -69,12 +77,37 @@ function SessionTypeRadioGroup({ value, onChange }: SessionTypeRadioGroupProps) 
       className={styles.radioGroup}
       onKeyDown={handleKeyDown}
     >
-      {SESSION_TYPES.map((type, idx) => (
+      {PRIMARY_TYPES.map((type, idx) => (
         <button
           key={type.value}
           role="radio"
           aria-checked={value === type.value}
           tabIndex={value === type.value ? 0 : (!hasSelection && idx === 0 ? 0 : -1)}
+          type="button"
+          onClick={() => onChange(type.value)}
+          className={[styles.radioBtn, value === type.value ? styles.radioBtnActive : ""]
+            .filter(Boolean)
+            .join(" ")}
+        >
+          {type.label}
+        </button>
+      ))}
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-expanded={advancedOpen}
+        onClick={() => setAdvancedOpen((o) => !o)}
+        className={styles.radioBtn}
+        style={{ opacity: 0.65, fontSize: "0.75em" }}
+      >
+        {advancedOpen ? "▴ Less" : "▾ More"}
+      </button>
+      {advancedOpen && ADVANCED_TYPES.map((type) => (
+        <button
+          key={type.value}
+          role="radio"
+          aria-checked={value === type.value}
+          tabIndex={value === type.value ? 0 : -1}
           type="button"
           onClick={() => onChange(type.value)}
           className={[styles.radioBtn, value === type.value ? styles.radioBtnActive : ""]
@@ -419,7 +452,7 @@ export function OmnibarCreationPanel({
           )}
           {firstPrompt && sessionName && (
             <span className={hint}>
-              Session name: <strong>{sessionName}</strong> · First prompt will be injected automatically
+              Session name: <strong>{sessionName}</strong> · First prompt will be typed into the session terminal automatically
             </span>
           )}
         </div>

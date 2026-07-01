@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +15,39 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// programKind is a sealed sum type over the kinds of launchable programs.
+// Holding a claudeProgram is proof that isClaude() returned true — downstream
+// code needs no further guards. Parse once at the boundary, trust internally.
+type programKind interface{ sealedProgramKind() }
+
+type claudeProgram struct{ base string }
+type plainProgram struct{ cmd string }
+
+func (claudeProgram) sealedProgramKind() {}
+func (plainProgram) sealedProgramKind()  {}
+
+// classifyProgram parses a raw program string into its kind.
+// Call this once; pass the result where program type matters.
+func classifyProgram(program string) programKind {
+	if isClaude(program) {
+		return claudeProgram{base: program}
+	}
+	return plainProgram{cmd: program}
+}
+
+// isClaude reports whether the program command invokes the claude binary.
+// It checks each whitespace-delimited token's basename to avoid false positives
+// from env wrappers (e.g. "env -u VAR claude") and to reject similar names
+// like "claude-squad" or "myclaudeapp".
+func isClaude(program string) bool {
+	for _, token := range strings.Fields(program) {
+		if filepath.Base(token) == "claude" {
+			return true
+		}
+	}
+	return false
+}
 
 // pm returns the process manager, lazy-initializing with the default TmuxBackend if nil.
 // This mirrors the old embedded-struct behaviour where a zero-value TmuxProcessManager
@@ -35,43 +69,62 @@ func (i *Instance) GetTmuxSessionName() string {
 }
 
 // buildLaunchCommand constructs the final command string used to launch the program
-// in tmux, incorporating Claude session resume flags, MCP server URL, and prompt.
+// in tmux. It parses the program once into a programKind sum type and delegates:
+// non-claude programs are returned unchanged; claude programs get flag injection.
 func (i *Instance) buildLaunchCommand(claudeSessionID string) string {
-	program := i.Program
-	if claudeSessionID != "" && strings.Contains(program, "claude") {
-		program = fmt.Sprintf("%s --resume %s", program, claudeSessionID)
-	}
-	if i.MCPServerURL != "" && strings.Contains(program, "claude") {
-		var mcpFlag string
-		if i.UUID != "" {
-			mcpFlag = fmt.Sprintf(`--mcp-config '{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}'`, i.MCPServerURL, i.UUID)
-		} else {
-			mcpFlag = fmt.Sprintf(`--mcp-config '{"mcpServers":{"stapler-squad":{"type":"http","url":%q}}}'`, i.MCPServerURL)
-		}
-		program = program + " " + mcpFlag
-	}
-	if i.AppendSystemPrompt != "" && strings.Contains(program, "claude") {
-		program = fmt.Sprintf("%s --append-system-prompt %q", program, i.AppendSystemPrompt)
-	}
-	if i.AllowedTools != "" && strings.Contains(program, "claude") {
-		program = fmt.Sprintf("%s --allowedTools %q", program, i.AllowedTools)
-	}
-	if i.PermissionMode != "" && strings.Contains(program, "claude") {
-		program = fmt.Sprintf("%s --permission-mode %q", program, i.PermissionMode)
-	}
-	if i.AutoYes && strings.Contains(program, "claude") {
-		program = program + " --dangerously-skip-permissions"
-	}
-	if i.OneShot && strings.Contains(program, "claude") {
-		program = program + " -p --output-format json"
-	}
-	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) && strings.Contains(program, "claude") {
-		program = fmt.Sprintf("%s %q", program, i.Prompt)
+	var cmd string
+	switch p := classifyProgram(i.Program).(type) {
+	case claudeProgram:
+		cmd = i.buildClaudeCommand(p.base, claudeSessionID)
+	case plainProgram:
+		cmd = p.cmd
+	default:
+		panic(fmt.Sprintf("unknown programKind %T", p))
 	}
 	if i.CLIFlags != "" {
-		program = program + " " + i.CLIFlags
+		cmd = cmd + " " + i.CLIFlags
 	}
-	return program
+	return cmd
+}
+
+// buildClaudeCommand assembles the full claude invocation with all instance flags.
+// It is only called when the program is proven to be claude (via programKind),
+// so no isClaude guards are needed here.
+func (i *Instance) buildClaudeCommand(base, claudeSessionID string) string {
+	parts := []string{base}
+	if claudeSessionID != "" {
+		parts = append(parts, "--resume", claudeSessionID)
+	}
+	if i.MCPServerURL != "" {
+		parts = append(parts, i.claudeMCPConfigFlag())
+	}
+	if i.AppendSystemPrompt != "" {
+		parts = append(parts, "--append-system-prompt", fmt.Sprintf("%q", i.AppendSystemPrompt))
+	}
+	if i.AllowedTools != "" {
+		parts = append(parts, "--allowedTools", fmt.Sprintf("%q", i.AllowedTools))
+	}
+	if i.PermissionMode != "" {
+		parts = append(parts, "--permission-mode", fmt.Sprintf("%q", i.PermissionMode))
+	}
+	if i.AutoYes {
+		parts = append(parts, "--dangerously-skip-permissions")
+	}
+	if i.OneShot {
+		parts = append(parts, "-p", "--output-format", "json")
+	}
+	if i.Prompt != "" && (claudeSessionID == "" || i.OneShot) {
+		parts = append(parts, fmt.Sprintf("%q", i.Prompt))
+	}
+	return strings.Join(parts, " ")
+}
+
+// claudeMCPConfigFlag returns the --mcp-config flag string for this instance.
+func (i *Instance) claudeMCPConfigFlag() string {
+	if i.UUID != "" {
+		return fmt.Sprintf(`--mcp-config '{"mcpServers":{"stapler-squad":{"type":"http","url":%q,"headers":{"X-Stapler-Session-UUID":%q}}}}'`, i.MCPServerURL, i.UUID)
+	}
+	return fmt.Sprintf(`--mcp-config '{"mcpServers":{"stapler-squad":{"type":"http","url":%q}}}'`, i.MCPServerURL)
 }
 
 // initTmuxSession creates (or reuses) the tmux.TmuxSession object without starting it.
@@ -99,17 +152,8 @@ func (i *Instance) initTmuxSession() {
 	} else {
 		session = tmux.NewTmuxSessionWithPrefix(i.Title, enrichedProgram, tmuxPrefix)
 	}
-	// Collect UUID sentinel and alias env vars into one SetExtraEnv call —
-	// SetExtraEnv is an assignment, so multiple calls overwrite each other.
-	var extraEnv []string
 	if i.UUID != "" {
-		extraEnv = append(extraEnv, "STAPLER_SESSION_UUID="+i.UUID)
-	}
-	for k, v := range i.EnvVars {
-		extraEnv = append(extraEnv, fmt.Sprintf("%s=%s", k, v))
-	}
-	if len(extraEnv) > 0 {
-		session.SetExtraEnv(extraEnv)
+		session.SetExtraEnv([]string{"STAPLER_SESSION_UUID=" + i.UUID})
 	}
 	if tb, ok := i.processManager.(*TmuxBackend); ok {
 		tb.TmuxManager().SetSession(session)

@@ -1,17 +1,24 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"context"
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/linkdata/deadlock"
 	"github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 )
+
+// pollerAuthResult is an immutable snapshot of the auth check state.
+// Stored in PRStatusPoller.authState (atomic.Value) so readers are lock-free.
+type pollerAuthResult struct {
+	ok        bool
+	checkedAt time.Time
+}
 
 // PRStatusPollerConfig contains configuration for the PR status poller.
 type PRStatusPollerConfig struct {
@@ -52,9 +59,8 @@ type PRStatusPoller struct {
 	// Intended for EventBus notification; injected from the server layer.
 	onUpdated func(*Instance)
 
-	// Cached auth check state.
-	authOK        bool
-	authCheckedAt time.Time
+	// authState stores pollerAuthResult atomically; readers are lock-free.
+	authState atomic.Value //nolint:exhaustruct
 
 	// Pause polling when rate limited.
 	rateLimitedUntil time.Time
@@ -91,6 +97,16 @@ func (p *PRStatusPoller) SetInstances(instances []*Instance) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.instances = instances
+}
+
+// GetInstances returns a defensive copy of the currently monitored instances.
+// Callers must not modify the returned slice elements.
+func (p *PRStatusPoller) GetInstances() []*Instance {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	out := make([]*Instance, len(p.instances))
+	copy(out, p.instances)
+	return out
 }
 
 // AddInstance adds a single instance to monitor.
@@ -232,27 +248,22 @@ func (p *PRStatusPoller) checkAllSessions() {
 }
 
 // isAuthOK returns true if gh auth check passes, using a time-based cache.
+// Auth state is stored in an atomic.Value so this read path is lock-free.
 func (p *PRStatusPoller) isAuthOK() bool {
-	p.mu.RLock()
-	cached := p.authOK && time.Since(p.authCheckedAt) < p.config.AuthCacheDuration
-	p.mu.RUnlock()
-	if cached {
-		return true
+	// Fast path: cached result still fresh (lock-free read).
+	if v := p.authState.Load(); v != nil {
+		if r := v.(pollerAuthResult); time.Since(r.checkedAt) < p.config.AuthCacheDuration {
+			return r.ok
+		}
 	}
 
 	if err := github.CheckGHAuth(); err != nil {
 		log.Warn("PR status poller: github auth unavailable", "err", err)
-		p.mu.Lock()
-		p.authOK = false
-		p.authCheckedAt = time.Now()
-		p.mu.Unlock()
+		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return false
 	}
 
-	p.mu.Lock()
-	p.authOK = true
-	p.authCheckedAt = time.Now()
-	p.mu.Unlock()
+	p.authState.Store(pollerAuthResult{ok: true, checkedAt: time.Now()})
 	return true
 }
 
@@ -336,10 +347,7 @@ func (p *PRStatusPoller) handleFetchError(err error) bool {
 	}
 	if strings.Contains(msg, "401") || strings.Contains(msg, "Unauthorized") {
 		log.Warn("PR status poller: github auth error, invalidating auth cache")
-		p.mu.Lock()
-		p.authOK = false
-		p.authCheckedAt = time.Now()
-		p.mu.Unlock()
+		p.authState.Store(pollerAuthResult{ok: false, checkedAt: time.Now()})
 		return true
 	}
 	return false

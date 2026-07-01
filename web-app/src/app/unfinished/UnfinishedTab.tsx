@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { createClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
 import { UnfinishedWorktree } from "@/gen/session/v1/types_pb";
@@ -13,6 +13,7 @@ import { create } from "@bufbuild/protobuf";
 import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 import { useUnfinishedWork } from "@/lib/hooks/useUnfinishedWork";
 import { UnfinishedRepoGroup } from "@/components/unfinished/UnfinishedRepoGroup";
+import { GitHubPRsSection } from "@/components/unfinished/GitHubPRsSection";
 import * as styles from "./UnfinishedTab.css";
 
 type FilterType = "all" | "uncommitted" | "ahead" | "behind";
@@ -26,11 +27,15 @@ export function UnfinishedTab() {
   const [filter, setFilter] = useState<FilterType>("all");
   const [secondsAgo, setSecondsAgo] = useState(0);
 
-  const transport = createConnectTransport({
-    baseUrl: getApiBaseUrl(),
-    interceptors: [createAuthInterceptor()],
-  });
-  const client = createClient(UnfinishedWorkService, transport);
+  const transport = useMemo(
+    () =>
+      createConnectTransport({
+        baseUrl: getApiBaseUrl(),
+        interceptors: [createAuthInterceptor()],
+      }),
+    []
+  );
+  const client = useMemo(() => createClient(UnfinishedWorkService, transport), [transport]);
 
   // Update "last scanned N seconds ago" counter every second
   useEffect(() => {
@@ -136,6 +141,9 @@ export function UnfinishedTab() {
           </button>
         ))}
       </div>
+
+      {/* GitHub PRs */}
+      <GitHubPRsSection />
 
       {/* Repo groups */}
       {groups.size === 0 ? (

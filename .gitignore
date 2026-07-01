@@ -6,6 +6,7 @@ stapler-squad.prev
 claude-squad
 claude-mux
 ssq-hooks
+_CodeSignature/
 **.DS_Store
 cs
 stapler-squad-test

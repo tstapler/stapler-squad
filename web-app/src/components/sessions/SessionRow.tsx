@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef } from "react";
+import { useSessionActions } from "@/lib/hooks/useSessionActions";
 import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
@@ -149,6 +150,7 @@ export function SessionRow({
   onToggleSelect,
 }: SessionRowProps) {
   const overflowRef = useRef<SessionActionsOverflowHandle>(null);
+  const sessionActions = useSessionActions(session.id);
 
   const dotStatus = getStatusDotValue(session.status);
   const isPaused = session.status === SessionStatus.PAUSED;
@@ -202,7 +204,6 @@ export function SessionRow({
       onKeyDown={handleKeyDown}
       tabIndex={0}
       aria-label={`Session ${session.title}, status: ${getStatusDotLabel(dotStatus)}, program: ${session.program}${session.path ? `, path: ${abbreviatePath(session.path)}` : ""}`}
-      aria-selected={isSelected}
     >
       {/* Checkbox cell — always in DOM to keep the reserved grid column occupied */}
       <div
@@ -383,6 +384,7 @@ export function SessionRow({
           onSteerAutonomousSession={onSteerAutonomousSession}
           onClearConversationState={onClearConversationState}
           onUpdateTags={onUpdateTags}
+          onChangeProgram={(_id, program) => { void sessionActions.update({ program }); }}
         />
       </span>
     </div>

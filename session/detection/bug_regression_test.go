@@ -632,6 +632,7 @@ func TestBug_ShellsStillRunning(t *testing.T) {
 		})
 	}
 }
+
 // TestBug_ThinkingWithStillThinkingSuffix documents that a Claude Code spinner line
 // with a "· still thinking" suffix in the duration annotation is still detected as
 // StatusExecuting, not silently dropped.
@@ -665,10 +666,11 @@ func TestBug_ThinkingWithStillThinkingSuffix(t *testing.T) {
 // typed text instead of a regular ASCII space.
 //
 // Root cause (found via live-session exploration 2026-06-15):
-//   Claude Code inserts U+00A0 (NBSP,  ) between the ❯ cursor and the user's typed
-//   text. The old readlineTypingRegex used [ \t]+ which only matches ASCII whitespace,
-//   so "❯ what else can we clean up" did NOT fire readline_typing. The scan then
-//   fell through to find "✻ Baked for 32s" in scrollback → incorrectly StatusSuccess.
+//
+//	Claude Code inserts U+00A0 (NBSP,  ) between the ❯ cursor and the user's typed
+//	text. The old readlineTypingRegex used [ \t]+ which only matches ASCII whitespace,
+//	so "❯ what else can we clean up" did NOT fire readline_typing. The scan then
+//	fell through to find "✻ Baked for 32s" in scrollback → incorrectly StatusSuccess.
 //
 // Observed in three live sessions:
 //   - staplersquad_Slowing: "❯ what else can we clean up" + ✻ Baked for 32s
@@ -879,7 +881,7 @@ func TestBug_WaitingForAgent_SuccessDoesNotOverrideActive(t *testing.T) {
 	sd := NewStatusDetector()
 
 	lines := []string{
-		"✻ Baked for 5s",          // stale completion from a prior turn
+		"✻ Baked for 5s", // stale completion from a prior turn
 		"",
 		"● Running new task...",
 		"  esc to interrupt · ↓ to manage  ● main",
@@ -887,8 +889,8 @@ func TestBug_WaitingForAgent_SuccessDoesNotOverrideActive(t *testing.T) {
 
 	got := sd.DetectFromLines(lines)
 	if got == StatusSuccess {
-		t.Errorf("DetectFromLines: stale '✻ Baked for 5s' above 'esc to interrupt' returned StatusSuccess\n"+
-			"  Once Active is found on a later line, earlier Success lines must be ignored.\n"+
+		t.Errorf("DetectFromLines: stale '✻ Baked for 5s' above 'esc to interrupt' returned StatusSuccess\n" +
+			"  Once Active is found on a later line, earlier Success lines must be ignored.\n" +
 			"  The session is actively running — 'esc to interrupt' is authoritative.")
 	}
 }
@@ -912,8 +914,8 @@ func TestBug4_AcceptEditsPattern(t *testing.T) {
 
 	got := sd.DetectFromLines(lines)
 	if got == StatusSuccess {
-		t.Errorf("DetectFromLines with ⏵⏵ accept-edits bar + completion in scrollback: got StatusSuccess, want StatusIdle\n"+
-			"  ⏵⏵ accept edits on must be recognized as an idle state so the stale ✻ completion\n"+
+		t.Errorf("DetectFromLines with ⏵⏵ accept-edits bar + completion in scrollback: got StatusSuccess, want StatusIdle\n" +
+			"  ⏵⏵ accept edits on must be recognized as an idle state so the stale ✻ completion\n" +
 			"  in scrollback does not make the session appear as Success (which means 'done, no action needed').")
 	}
 	if got != StatusIdle {

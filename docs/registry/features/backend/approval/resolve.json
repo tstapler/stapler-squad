@@ -5,15 +5,7 @@
   "method": "ResolveApproval",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestApprovalFlow_Allow",
-    "TestApprovalFlow_Deny",
-    "TestApprovalFlow_Timeout",
-    "TestApprovalFlow_MethodNotAllowed",
-    "TestApprovalFlow_ParseError",
-    "TestApprovalFlow_SessionIDFromHeader",
-    "TestApprovalFlow_AskUserQuestion_DeferToNativeDialog"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
@@ -17,6 +18,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/search"
 	"github.com/tstapler/stapler-squad/session/vc"
 	"github.com/tstapler/stapler-squad/telemetry"
+	"golang.org/x/sync/singleflight"
 
 	"connectrpc.com/connect"
 	"go.opentelemetry.io/otel/attribute"
@@ -61,29 +63,32 @@ type historyBranchEntry struct {
 	expiresAt time.Time
 }
 
+// historySnapshot is an immutable COW record stored in atomic.Value.
+type historySnapshot struct {
+	cache *session.ClaudeSessionHistory
+	at    time.Time
+}
+
 // SearchService handles all Claude history and full-text search RPC methods.
 //
 // It owns the history cache and search engine state that were previously
 // scattered across SessionService.
 //
-// Bug note: historyCacheMu protects the history cache fields from concurrent
-// access. Without this, concurrent ListClaudeHistory calls would race on cache
-// refresh (previously unprotected on SessionService).
+// Concurrency model: atomic.Value (COW) + singleflight for the history cache;
+// sync.Map for the per-path branch cache. No mutexes held across I/O.
 type SearchService struct {
 	searchEngine     *search.SearchEngine
 	snippetGenerator *search.SnippetGenerator
 
-	historyCacheMu   sync.RWMutex
-	historyCache     *session.ClaudeSessionHistory
-	historyCacheTime time.Time
-	historyCacheTTL  time.Duration
+	historyCacheTTL time.Duration
+	historySnap     atomic.Value       // stores *historySnapshot; nil before first load
+	historyGroup    singleflight.Group //nolint:exhaustruct
 
 	// getInstances is wired after construction so ListClaudeHistory can
 	// cross-reference live sessions for session_status enrichment.
 	getInstances func() []*session.Instance
 
-	branchCacheMu  sync.RWMutex
-	branchCache    map[string]historyBranchEntry
+	branchCache    sync.Map // map[string]*historyBranchEntry  keyed by projectPath
 	branchCacheTTL time.Duration
 }
 
@@ -94,11 +99,10 @@ func NewSearchService(
 	historyCacheTTL time.Duration,
 ) *SearchService {
 	return &SearchService{
-		searchEngine:     searchEngine,
+		searchEngine:    searchEngine,
 		snippetGenerator: snippetGenerator,
-		historyCacheTTL:  historyCacheTTL,
-		branchCache:      make(map[string]historyBranchEntry),
-		branchCacheTTL:   60 * time.Second,
+		historyCacheTTL: historyCacheTTL,
+		branchCacheTTL:  60 * time.Second,
 	}
 }
 
@@ -110,18 +114,18 @@ func (ss *SearchService) SetInstanceProvider(fn func() []*session.Instance) {
 
 // cachedBranch returns the current git branch for projectPath, caching the
 // result for branchCacheTTL (60 s). Returns "" on error or detached HEAD.
+// Uses sync.Map for lock-free concurrent reads; git is invoked outside any lock.
 func (ss *SearchService) cachedBranch(projectPath string) string {
 	if projectPath == "" {
 		return ""
 	}
 	now := time.Now()
 
-	ss.branchCacheMu.RLock()
-	if e, ok := ss.branchCache[projectPath]; ok && now.Before(e.expiresAt) {
-		ss.branchCacheMu.RUnlock()
-		return e.branch
+	if v, ok := ss.branchCache.Load(projectPath); ok {
+		if e := v.(*historyBranchEntry); now.Before(e.expiresAt) {
+			return e.branch
+		}
 	}
-	ss.branchCacheMu.RUnlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -134,9 +138,7 @@ func (ss *SearchService) cachedBranch(projectPath string) string {
 		}
 	}
 
-	ss.branchCacheMu.Lock()
-	ss.branchCache[projectPath] = historyBranchEntry{branch: branch, expiresAt: now.Add(ss.branchCacheTTL)}
-	ss.branchCacheMu.Unlock()
+	ss.branchCache.Store(projectPath, &historyBranchEntry{branch: branch, expiresAt: now.Add(ss.branchCacheTTL)})
 	return branch
 }
 
@@ -156,61 +158,66 @@ func (ss *SearchService) liveSessionStatus(conversationID string) sessionv1.Sess
 }
 
 // getOrRefreshHistoryCache returns the cached history or refreshes it if stale.
+// Fast-path reads are lock-free (atomic.Value Load). Concurrent refreshes are
+// coalesced via singleflight so at most one disk scan runs at a time.
 func (ss *SearchService) getOrRefreshHistoryCache(ctx context.Context) (*session.ClaudeSessionHistory, error) {
 	ctx, span := telemetry.StartSpan(ctx, "SearchService.getOrRefreshHistoryCache")
 	defer span.End()
 
 	now := time.Now()
 
-	// Fast path: check with read lock first.
-	ss.historyCacheMu.RLock()
-	if ss.historyCache != nil && now.Sub(ss.historyCacheTime) < ss.historyCacheTTL {
-		cached := ss.historyCache
-		span.SetAttributes(
-			attribute.Bool("cache.hit", true),
-			attribute.Int("history.entry_count", cached.Count()),
-		)
-		ss.historyCacheMu.RUnlock()
-		return cached, nil
-	}
-	ss.historyCacheMu.RUnlock()
-
-	// Cache is stale or doesn't exist — refresh with write lock.
-	ss.historyCacheMu.Lock()
-	defer ss.historyCacheMu.Unlock()
-
-	// Double-check after acquiring write lock (another goroutine may have refreshed).
-	if ss.historyCache != nil && now.Sub(ss.historyCacheTime) < ss.historyCacheTTL {
-		span.SetAttributes(attribute.Bool("cache.hit", true))
-		return ss.historyCache, nil
+	// Fast path: atomic load — no lock.
+	if v := ss.historySnap.Load(); v != nil {
+		snap := v.(*historySnapshot)
+		if now.Sub(snap.at) < ss.historyCacheTTL {
+			span.SetAttributes(
+				attribute.Bool("cache.hit", true),
+				attribute.Int("history.entry_count", snap.cache.Count()),
+			)
+			return snap.cache, nil
+		}
 	}
 
+	// Slow path: coalesce concurrent refreshes with singleflight.
 	span.SetAttributes(attribute.Bool("cache.hit", false))
-
-	_, loadSpan := telemetry.StartSpan(ctx, "SearchService.loadHistoryFromDisk")
-	loadStart := time.Now()
-
-	hist, err := session.NewClaudeSessionHistoryFromClaudeDir()
-
-	loadDuration := time.Since(loadStart)
-	loadSpan.SetAttributes(attribute.Int64("load.duration_ms", loadDuration.Milliseconds()))
-	if err != nil {
-		loadSpan.RecordError(err)
-		loadSpan.End()
-		return nil, fmt.Errorf("failed to create history manager: %w", err)
+	type result struct {
+		hist *session.ClaudeSessionHistory
 	}
-	loadSpan.SetAttributes(attribute.Int("history.entry_count", hist.Count()))
-	loadSpan.End()
+	v, err, _ := ss.historyGroup.Do("refresh", func() (interface{}, error) {
+		// Re-check after winning the coalesce race — another goroutine may have
+		// stored a fresh snapshot while we were waiting.
+		if sv := ss.historySnap.Load(); sv != nil {
+			snap := sv.(*historySnapshot)
+			if now.Sub(snap.at) < ss.historyCacheTTL {
+				return result{hist: snap.cache}, nil
+			}
+		}
 
-	ss.historyCache = hist
-	ss.historyCacheTime = now
+		_, loadSpan := telemetry.StartSpan(ctx, "SearchService.loadHistoryFromDisk")
+		loadStart := time.Now()
+		hist, loadErr := session.NewClaudeSessionHistoryFromClaudeDir()
+		loadDuration := time.Since(loadStart)
+		loadSpan.SetAttributes(attribute.Int64("load.duration_ms", loadDuration.Milliseconds()))
+		if loadErr != nil {
+			loadSpan.RecordError(loadErr)
+			loadSpan.End()
+			return nil, fmt.Errorf("failed to create history manager: %w", loadErr)
+		}
+		loadSpan.SetAttributes(attribute.Int("history.entry_count", hist.Count()))
+		loadSpan.End()
 
+		ss.historySnap.Store(&historySnapshot{cache: hist, at: now})
+		log.Info("history cache refreshed", "entries", hist.Count(), "duration", time.Since(now))
+		return result{hist: hist}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	hist := v.(result).hist
 	span.SetAttributes(
 		attribute.Int("history.entry_count", hist.Count()),
 		attribute.Int64("cache.refresh_duration_ms", time.Since(now).Milliseconds()),
 	)
-
-	log.Info("history cache refreshed", "entries", hist.Count(), "duration", time.Since(now))
 	return hist, nil
 }
 

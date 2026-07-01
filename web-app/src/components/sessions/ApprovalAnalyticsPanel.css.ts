@@ -21,6 +21,8 @@ export const titleRow = style({
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
+  gap: 12,
+  flexWrap: "wrap",
 });
 
 export const title = style({
@@ -332,6 +334,52 @@ export const categoryBadge = style({
   whiteSpace: "nowrap",
 });
 
+export const twoColGrid = style({
+  display: "flex",
+  gap: 16,
+  alignItems: "flex-start",
+});
+
+export const twoColCell = style({
+  flex: "1 1 0",
+  minWidth: 0,
+});
+
+// Stacked composition bar (allow/deny/manual segments, no track background)
+export const stackedBarTrack = style({
+  display: "flex",
+  height: 8,
+  borderRadius: 4,
+  overflow: "hidden",
+  background: vars.color.panelBgSecondary,
+  minWidth: 80,
+  width: "100%",
+});
+
+export const stackedAllow = style({ background: vars.color.success, height: "100%" });
+export const stackedDeny  = style({ background: vars.color.error,   height: "100%" });
+export const stackedManual = style({ background: vars.color.warning, height: "100%" });
+
+// Compact gap badge shown inline in the section title
+export const gapBadgeHigh = style({
+  fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+  background: vars.color.warningBg, color: vars.color.warning,
+  border: `1px solid ${vars.color.warning}`, verticalAlign: "middle", marginLeft: 8,
+});
+export const gapBadgeMed = style({
+  fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+  background: vars.color.warningBg, color: vars.color.warning,
+  border: `1px solid ${vars.color.warning}`, verticalAlign: "middle", marginLeft: 8,
+});
+export const gapBadgeLow = style({
+  fontSize: 12, fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+  background: vars.color.successBg, color: vars.color.success,
+  border: `1px solid ${vars.color.success}`, verticalAlign: "middle", marginLeft: 8,
+});
+export const gapBadgeDesc = style({
+  fontSize: 12, color: vars.color.textSecondary, marginLeft: 6, verticalAlign: "middle",
+});
+
 export const subSectionTitle = style({
   margin: "14px 0 8px",
   fontSize: 13,
@@ -499,4 +547,150 @@ export const inlineErrorText = style({
   fontSize: 12,
   color: vars.color.errorText,
   padding: "6px 12px",
+});
+
+// ── Bulk rule selection + review ──────────────────────────────────────────────
+
+export const checkboxTh = style({
+  width: 32,
+  padding: "6px 0 6px 10px",
+  textAlign: "center",
+});
+
+export const checkboxTd = style({
+  width: 32,
+  padding: "0 0 0 10px",
+  textAlign: "center",
+  verticalAlign: "middle",
+});
+
+export const bulkActionBar = style({
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "8px 12px",
+  marginBottom: 8,
+  background: vars.color.panelBgSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 8,
+  fontSize: 13,
+  color: vars.color.textSecondary,
+});
+
+export const bulkActionCount = style({
+  fontWeight: 600,
+  color: vars.color.textPrimary,
+});
+
+export const bulkAddBtn = style({
+  fontSize: 12,
+  fontWeight: 500,
+  color: vars.color.primaryText,
+  background: vars.color.primary,
+  border: "none",
+  borderRadius: 5,
+  padding: "4px 12px",
+  cursor: "pointer",
+  transition: "background 0.15s ease",
+  selectors: {
+    "&:hover": { background: vars.color.primaryHover },
+  },
+});
+
+export const bulkClearBtn = style({
+  fontSize: 12,
+  fontWeight: 500,
+  color: vars.color.textSecondary,
+  background: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 5,
+  padding: "4px 10px",
+  cursor: "pointer",
+  selectors: {
+    "&:hover": { color: vars.color.textPrimary },
+  },
+});
+
+export const bulkReviewPanel = style({
+  marginBottom: 12,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 8,
+  overflow: "hidden",
+});
+
+export const bulkReviewHeader = style({
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  padding: "10px 14px",
+  background: vars.color.panelBgSecondary,
+  borderBottom: `1px solid ${vars.color.borderColor}`,
+  fontSize: 13,
+  fontWeight: 600,
+  color: vars.color.textPrimary,
+});
+
+export const bulkReviewActions = style({
+  display: "flex",
+  gap: 8,
+  alignItems: "center",
+});
+
+export const bulkSaveBtn = style({
+  fontSize: 13,
+  fontWeight: 500,
+  color: vars.color.primaryText,
+  background: vars.color.primary,
+  border: "none",
+  borderRadius: 5,
+  padding: "5px 14px",
+  cursor: "pointer",
+  transition: "background 0.15s ease",
+  selectors: {
+    "&:hover:not(:disabled)": { background: vars.color.primaryHover },
+    "&:disabled": { opacity: 0.6, cursor: "default" },
+  },
+});
+
+export const bulkDiscardBtn = style({
+  fontSize: 13,
+  fontWeight: 400,
+  color: vars.color.textSecondary,
+  background: "transparent",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 5,
+  padding: "5px 12px",
+  cursor: "pointer",
+  selectors: {
+    "&:hover": { color: vars.color.textPrimary },
+  },
+});
+
+export const bulkResultMsg = style({
+  fontSize: 12,
+  color: vars.color.success,
+  marginRight: 4,
+});
+
+export const decisionSelect = style({
+  fontSize: 12,
+  color: vars.color.textPrimary,
+  background: vars.color.panelBgSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 4,
+  padding: "3px 6px",
+  cursor: "pointer",
+});
+
+export const removeEntryBtn = style({
+  fontSize: 12,
+  color: vars.color.textSecondary,
+  background: "transparent",
+  border: "none",
+  padding: "2px 6px",
+  cursor: "pointer",
+  borderRadius: 3,
+  selectors: {
+    "&:hover": { color: vars.color.error },
+  },
 });

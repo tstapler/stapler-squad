@@ -7,11 +7,7 @@
   "httpPath": "/api/sessions/{id}/cdp-stream",
   "markerFound": true,
   "handlerFile": "server/services/cdp_stream_handler.go",
-  "tested": true,
-  "testIds": [
-    "TestCDPStreamHandler_MissingSessionID_Returns400",
-    "TestCDPStreamHandler_UnknownSessionID_Returns404",
-    "TestCDPStreamHandler_CDPPortZero_Returns503"
-  ],
-  "lastModified": "2026-06-13T14:32:30.632373117-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-17T16:40:58.38295977-07:00"
 }

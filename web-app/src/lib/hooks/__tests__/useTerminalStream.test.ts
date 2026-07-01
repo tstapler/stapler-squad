@@ -161,9 +161,24 @@ function makeResizeQuiescenceMsg(resizing: boolean) {
   return { data: { case: 'resizeQuiescence', value: { resizing } } };
 }
 
-function makeOutputMsg() {
+function makeOutputMsg(data?: Uint8Array) {
   return {
-    data: { case: 'output', value: { data: new TextEncoder().encode('hello') } },
+    data: { case: 'output', value: { data: data ?? new TextEncoder().encode('hello') } },
+  };
+}
+
+function makeScrollbackResponseMsg(chunks: Uint8Array[]) {
+  return {
+    data: {
+      case: 'scrollbackResponse',
+      value: {
+        chunks: chunks.map((d) => ({ data: d })),
+        hasMore: false,
+        oldestSequence: BigInt(0),
+        newestSequence: BigInt(0),
+        totalLines: BigInt(0),
+      },
+    },
   };
 }
 
@@ -304,6 +319,71 @@ describe('useTerminalStream — ResizeQuiescence state machine', () => {
     // End the stream — hook's finally block sets DISCONNECTED
     await act(async () => { stream.end(); });
     await waitFor(() => { expect(result.current.terminalState).toBe('DISCONNECTED'); });
+  });
+});
+
+describe('useTerminalStream — scrollback decoder isolation', () => {
+  beforeEach(() => {
+    jest.spyOn(console, 'log').mockImplementation(() => {});
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    jest.spyOn(console, 'debug').mockImplementation(() => {});
+    jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStreamTerminal.mockReset();
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  // -------------------------------------------------------------------------
+  // Test: dedicated scrollback decoder does not corrupt live stream
+  //
+  // Scenario: a 3-byte UTF-8 sequence (€ = 0xE2 0x82 0xAC) is split across
+  // two live output chunks.  Between the two halves, a scrollbackResponse
+  // is delivered.  Because scrollbackDecoderRef is separate from
+  // textDecoderRef, the in-flight state of textDecoderRef must survive
+  // unchanged and the second live chunk must produce "€" with no replacement
+  // characters (U+FFFD).
+  // -------------------------------------------------------------------------
+  it('useTerminalStream_should_notCorruptLiveStream_When_scrollbackDecodedBetweenLiveChunks', async () => {
+    const stream = makePushStream<object>();
+    mockStreamTerminal.mockReturnValue(stream.iterable);
+
+    const liveOutputChunks: string[] = [];
+    const onOutput = (text: string) => { liveOutputChunks.push(text); };
+
+    renderHook(() => useTerminalStream({ ...BASE_OPTIONS, onOutput }));
+
+    // 3-byte UTF-8 for € = 0xE2 0x82 0xAC — split: first byte, then last two
+    const firstHalf = new Uint8Array([0xe2]);
+    const secondHalf = new Uint8Array([0x82, 0xac]);
+
+    // Interleaved scrollback data — a lone continuation byte.
+    // Without decoder isolation, this stray byte would corrupt the live stream's in-flight
+    // 0xe2 state (first byte of €), producing U+FFFD on the next live chunk instead of €.
+    // With proper isolation the live textDecoderRef is unaffected.
+    const scrollbackBytes = new Uint8Array([0x82]);
+
+    // Send first half of live multi-byte sequence
+    await act(async () => { stream.push(makeOutputMsg(firstHalf)); });
+    // Insert a scrollback response between the two live halves
+    await act(async () => { stream.push(makeScrollbackResponseMsg([scrollbackBytes])); });
+    // Send the completing bytes of the live sequence
+    await act(async () => { stream.push(makeOutputMsg(secondHalf)); });
+
+    stream.end();
+
+    // Wait briefly for processing
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    // Concatenate all live output
+    const liveOutput = liveOutputChunks.join('');
+
+    // The live stream must contain the euro sign and no replacement characters
+    expect(liveOutput).toContain('€');
+    expect(liveOutput).not.toContain('�');
   });
 });
 
