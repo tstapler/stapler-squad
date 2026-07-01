@@ -1304,11 +1304,6 @@ func (s *SessionService) CreateSession(
 			return
 		}
 
-		// Inject the PermissionRequest hook so approval requests go through the rule engine.
-		if err := InjectHooksConfig(instanceRootDir, instanceTitle, nil); err != nil {
-			log.Warn("[CreateSession] hook injection failed", "session", instanceTitle, "err", err)
-		}
-
 		// Clear progress message now that we are Active.
 		instance.CreationProgress = ""
 
@@ -2553,11 +2548,6 @@ func (s *SessionService) RestartSession(
 	if err := instance.Restart(req.Msg.PreserveOutput); err != nil {
 		log.Error("[RestartSession] failed to restart session", "session", instance.Title, "err", err)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session: %w", err))
-	}
-
-	// (Re-)inject the PermissionRequest hook so approval requests go through the rule engine.
-	if err := InjectHooksConfig(instance.GetEffectiveRootDir(), instance.Title, nil); err != nil {
-		log.Warn("[RestartSession] hook injection failed", "session", instance.Title, "err", err)
 	}
 
 	// Persist the updated instance state.
