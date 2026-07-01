@@ -443,9 +443,9 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	c := classifier.NewRuleBasedClassifier()
 
 	// Load user-specific rules from ~/.config/ssq-hooks/user-rules.yaml (if present).
-	home, _ := os.UserHomeDir()
-	userRulesPath := filepath.Join(home, ".config", "ssq-hooks", "user-rules.yaml")
-	c.AddRules(loadUserRulesFile(userRulesPath))
+	if home, err := os.UserHomeDir(); err == nil {
+		c.AddRules(loadUserRulesFile(filepath.Join(home, ".config", "ssq-hooks", "user-rules.yaml")))
+	}
 
 	rules, err := storage.AllRules(context.Background())
 	if err != nil {
@@ -1189,7 +1189,16 @@ func (r userRule) toClassifierRule() (classifier.Rule, error) {
 	if !ok {
 		return classifier.Rule{}, fmt.Errorf("unknown decision %q in rule %s", r.Decision, r.ID)
 	}
-	risk := riskMap[r.RiskLevel] // defaults to RiskLow if unset
+	var risk classifier.RiskLevel
+	if r.RiskLevel == "" {
+		risk = classifier.RiskLow
+	} else {
+		var ok bool
+		risk, ok = riskMap[r.RiskLevel]
+		if !ok {
+			return classifier.Rule{}, fmt.Errorf("unknown risk_level %q in rule %s", r.RiskLevel, r.ID)
+		}
+	}
 
 	cr := classifier.Rule{
 		ID:          r.ID,

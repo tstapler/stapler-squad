@@ -3055,8 +3055,8 @@ func TestSentinel_PythonHeredoc(t *testing.T) {
 	}
 	for _, cmd := range heredocCmds {
 		result := c.Classify(bashPayload(cmd), ctx)
-		if result.Decision == AutoAllow {
-			t.Errorf("python3 heredoc %q: expected non-AutoAllow (stdin body unanalysable), got AutoAllow (rule=%s)", cmd, result.RuleID)
+		if result.Decision != Escalate {
+			t.Errorf("python3 heredoc %q: expected Escalate (stdin body unanalysable), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
 		}
 	}
 }
@@ -3090,8 +3090,8 @@ func TestSentinel_CatPipePythonStdlib_KnownLimitation(t *testing.T) {
 	for _, cmd := range cmds {
 		result := c.Classify(bashPayload(cmd), ctx)
 		// Escalates today (not AutoAllow) — document this as the known current behaviour.
-		if result.Decision == AutoAllow {
-			t.Errorf("cat|python3 compound %q: expected Escalate (known limitation), got AutoAllow (rule=%s) — the engine was fixed! Update this sentinel.", cmd, result.RuleID)
+		if result.Decision != Escalate {
+			t.Errorf("cat|python3 compound %q: expected Escalate (known limitation), got %v (rule=%s) — the engine was fixed! Update this sentinel.", cmd, result.Decision, result.RuleID)
 		}
 	}
 }
@@ -3149,8 +3149,8 @@ func TestSentinel_BazelRunEscalates(t *testing.T) {
 	}
 	for _, cmd := range cmds {
 		result := c.Classify(bashPayload(cmd), ctx)
-		if result.Decision == AutoAllow {
-			t.Errorf("bazel run %q: expected non-AutoAllow (executes binary), got AutoAllow (rule=%s)", cmd, result.RuleID)
+		if result.Decision != Escalate {
+			t.Errorf("bazel run %q: expected Escalate (executes binary), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
 		}
 	}
 }
@@ -3225,8 +3225,8 @@ func TestSentinel_FirebaseDeployEscalates(t *testing.T) {
 	}
 	for _, cmd := range cmds {
 		result := c.Classify(bashPayload(cmd), ctx)
-		if result.Decision == AutoAllow {
-			t.Errorf("firebase deploy %q: expected non-AutoAllow (publishes to live infra), got AutoAllow (rule=%s)", cmd, result.RuleID)
+		if result.Decision != Escalate {
+			t.Errorf("firebase deploy %q: expected Escalate (publishes to live infra), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
 		}
 	}
 }
@@ -3262,8 +3262,8 @@ func TestSentinel_PulumiUpEscalates(t *testing.T) {
 	}
 	for _, cmd := range cmds {
 		result := c.Classify(bashPayload(cmd), ctx)
-		if result.Decision == AutoAllow {
-			t.Errorf("pulumi up/destroy %q: expected non-AutoAllow (modifies cloud infra), got AutoAllow (rule=%s)", cmd, result.RuleID)
+		if result.Decision != Escalate {
+			t.Errorf("pulumi up/destroy %q: expected Escalate (modifies cloud infra), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
 		}
 	}
 }

@@ -2419,7 +2419,7 @@ func SeedRules() []Rule {
 		{
 			// bazel build/test/query/mod/info/fetch/clean are standard build-system operations
 			// used in CI and local development. They do not execute the built artifacts.
-			// `bazel run` executes an arbitrary binary and is escalated at priority 60.
+			// `bazel run` executes an arbitrary binary and is escalated at priority 500.
 			ID:       "seed-allow-bash-bazel-build",
 			Name:     "Allow bazel build, test, query, and inspection commands",
 			ToolName: "Bash",
@@ -2457,7 +2457,7 @@ func SeedRules() []Rule {
 		{
 			// pulumi config, preview, stack, and about are safe read-only or local-state
 			// operations. `pulumi up`, `destroy`, and `cancel` mutate real infrastructure
-			// and are escalated at priority 60.
+			// and are escalated at priority 500.
 			ID:       "seed-allow-bash-pulumi-read",
 			Name:     "Allow pulumi config, preview, and stack inspection",
 			ToolName: "Bash",

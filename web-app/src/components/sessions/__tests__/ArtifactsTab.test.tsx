@@ -1,11 +1,11 @@
 import React from "react";
 import { render, screen, fireEvent } from "@testing-library/react";
-import { create } from "@bufbuild/protobuf";
+import { create, type MessageInitShape } from "@bufbuild/protobuf";
 import { ArtifactsTab } from "../ArtifactsTab";
 import { SessionArtifactsSchema } from "@/gen/session/v1/types_pb";
 import type { Session } from "@/gen/session/v1/types_pb";
 
-type ArtifactsInit = Parameters<typeof create<typeof SessionArtifactsSchema>>[1];
+type ArtifactsInit = MessageInitShape<typeof SessionArtifactsSchema>;
 
 function makeSession(artifactsFields?: ArtifactsInit): Session {
   const artifacts = artifactsFields != null
