@@ -259,6 +259,98 @@ func TestApprovePlan_HappyPath_SetsPlanApprovedAndTimestamp(t *testing.T) {
 	assert.NotNil(t, approveResp.Msg.Item.PlanApprovedAt)
 }
 
+// ─── Full lifecycle (audit regression test) ──────────────────────────────────
+
+// TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent exercises
+// the real production path — CreateBacklogItem → TriggerTriage (real headless call,
+// real ParseHeadlessTriageResult, real idea→ready transition) → ApprovePlan →
+// SpawnSessionFromItem (real BuildTokenBudgetedPrompt) — faking only the two
+// external process boundaries (the LLM call and the tmux/claude subprocess).
+//
+// This was written to verify a cross-platform-audit finding (project_plans/
+// backlog-cross-platform-audit/gaps-and-risks.md #1): that AutonomousDriver's
+// inst.Prompt/inst.InitialPrompt mismatch (ADR-022) breaks the execution phase's
+// prompt delivery. It does not — CreateDirectorySession stores the real prompt in
+// inst.Prompt, and buildClaudeCommand includes it as a CLI arg on first launch
+// (claudeSessionID == ""), so session_driver.go's InitialPrompt-typing step
+// correctly no-ops (see session_driver.go:135 "No initial prompt configured").
+// This test locks in that the real item content — not a generic fallback —
+// reaches the session-creation boundary.
+func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *testing.T) {
+	storage := createTestStorage(t)
+	pool := &fakeHeadlessPool{response: validTriageJSON()}
+	creator := &mockSessionCreator{}
+	svc := NewBacklogService(storage, creator, nil, nil)
+	svc.SetHeadlessPool(pool)
+
+	repoPath := t.TempDir()
+	const description = "Build the zzyzx widget integration end to end"
+	const acText = "widget renders correctly on load"
+
+	// 1. Create item (real code, status starts at "idea"). SkipTriage=true so we
+	// control the TriggerTriage call explicitly below instead of racing the
+	// auto-triage goroutine CreateBacklogItem would otherwise kick off.
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:       "zzyzx widget",
+		Description: description,
+		RepoPath:    repoPath,
+		SkipTriage:  true,
+		AcceptanceCriteria: []*sessionv1.AcCriterion{
+			{Index: 0, Text: acText, Status: "pending"},
+		},
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	// 2. Trigger real triage. TriggerTriage returns immediately; the parse +
+	// persist + idea→ready transition happens in a goroutine (see
+	// backlog_service.go TriggerTriage), so poll for the real transition.
+	_, err = svc.TriggerTriage(t.Context(), connect.NewRequest(&sessionv1.TriggerTriageRequest{ItemId: itemID}))
+	require.NoError(t, err)
+
+	var readyItem *sessionv1.BacklogItem
+	require.Eventually(t, func() bool {
+		getResp, getErr := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+		if getErr != nil || getResp.Msg.Item.Status != "ready" {
+			return false
+		}
+		readyItem = getResp.Msg.Item
+		return true
+	}, 2*time.Second, 10*time.Millisecond, "item should reach 'ready' after real headless triage completes")
+
+	require.Equal(t, 1, pool.callCount(), "TriggerTriage should have made exactly one real headless call")
+	require.NotEmpty(t, readyItem.PlanArtifactsPath, "TriggerTriage should persist plan_artifacts_path")
+
+	// 3. Approve the plan (real ApprovePlan handler).
+	approveResp, err := svc.ApprovePlan(t.Context(), connect.NewRequest(&sessionv1.ApprovePlanRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	require.True(t, approveResp.Msg.Item.PlanApproved)
+
+	// 4. Spawn the execution session (real SpawnSessionFromItem, real
+	// BuildTokenBudgetedPrompt). Autonomous=true is safe with no autonomousStarter
+	// wired — SpawnSessionFromItem no-ops the driver start when it's nil.
+	_, err = svc.SpawnSessionFromItem(t.Context(), connect.NewRequest(&sessionv1.SpawnSessionFromItemRequest{
+		ItemId:     itemID,
+		Autonomous: true,
+	}))
+	require.NoError(t, err)
+
+	// 5. The real, load-bearing assertion: the prompt that reached the session
+	// creation boundary contains the item's actual content, not a placeholder.
+	require.Len(t, creator.calls, 1)
+	capturedPrompt := creator.calls[0].prompt
+	assert.Contains(t, capturedPrompt, description, "spawned session prompt should carry the real item description")
+	assert.Contains(t, capturedPrompt, acText, "spawned session prompt should carry the real acceptance criteria")
+	assert.Contains(t, capturedPrompt, "plan.md", "spawned session prompt should point at the approved plan artifacts")
+	assert.NotContains(t, capturedPrompt, "Please proceed with the task described in your instructions",
+		"spawned session prompt must not be the generic AutonomousDriver fallback")
+
+	// 6. Item should have advanced to in_progress after spawn.
+	finalResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
+	require.NoError(t, err)
+	assert.Equal(t, "in_progress", finalResp.Msg.Item.Status)
+}
+
 // ─── TriggerReReview ──────────────────────────────────────────────────────
 
 // UT-040a: TriggerReReview on item not in review status → CodeFailedPrecondition
