@@ -157,6 +157,22 @@ func (sl *SyncLoop) decryptConfigToken(raw string) (string, error) {
 	return string(decrypted), nil
 }
 
+// SyncByID looks up an ItemSource by ID and syncs it, regardless of its
+// Enabled flag — unlike the periodic loop (runAllSources), which only syncs
+// enabled sources, this is for an explicit manual/on-demand trigger where the
+// caller already decided to sync this specific source.
+func (sl *SyncLoop) SyncByID(ctx context.Context, sourceID string) error {
+	er, ok := sl.storage.repo.(*EntRepository)
+	if !ok {
+		return fmt.Errorf("SyncByID: storage backend does not support ent operations")
+	}
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("SyncByID: %w", err)
+	}
+	return sl.SyncOne(ctx, entSrc)
+}
+
 // SyncOne fetches and upserts items for a single ItemSource.
 func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 	plugin, ok := sl.registry.Get(source.PluginID)

@@ -6,11 +6,13 @@ import (
 	"strings"
 	"time"
 
+	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 )
 
 // --- converters ---
@@ -444,6 +446,23 @@ func (r *EntRepository) UpdateItemSourceSync(ctx context.Context, id string, cur
 		return fmt.Errorf("failed to update sync state for item source %s: %w", id, err)
 	}
 	return nil
+}
+
+// ListSourceSyncEvents returns sync history events for an item source, most
+// recent first.
+func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]*ent.SourceSyncEvent, error) {
+	parsedID, err := uuid.Parse(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source id %q: %w", sourceID, err)
+	}
+	events, err := r.client.SourceSyncEvent.Query().
+		Where(sourcesyncevent.HasSourceWith(itemsource.ID(parsedID))).
+		Order(sourcesyncevent.ByStartedAt(sql.OrderDesc())).
+		All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list sync events for source %s: %w", sourceID, err)
+	}
+	return events, nil
 }
 
 // CreateSourceSyncEvent records a completed sync run for an ItemSource.

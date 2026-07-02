@@ -19,6 +19,7 @@ export const routes = {
   settingsUnfinished: "/settings/unfinished",
   insights: "/insights",
   settingsFeatures: "/settings/features",
+  settingsBacklogSources: "/settings/backlog-sources",
   backlog: "/backlog",
   backlogBoard: "/backlog/board",
   workflows: "/workflows",

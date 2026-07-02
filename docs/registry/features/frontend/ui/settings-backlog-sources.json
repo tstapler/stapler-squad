@@ -1,0 +1,19 @@
+{
+  "id": "settings-backlog-sources",
+  "type": "frontend",
+  "component": "BacklogSourcesSettings",
+  "path": "web-app/src/components/settings/BacklogSourcesSettings.tsx",
+  "markerLine": 0,
+  "tested": true,
+  "testIds": [
+    "BacklogSourcesSettings renders source list after load",
+    "BacklogSourcesSettings shows empty state when no sources",
+    "BacklogSourcesSettings add button is disabled until required fields are filled",
+    "BacklogSourcesSettings calls createItemSource with the correct payload on submit",
+    "BacklogSourcesSettings toggles enabled state via updateItemSource",
+    "BacklogSourcesSettings calls deleteItemSource when remove is clicked",
+    "BacklogSourcesSettings calls triggerSync when Sync now is clicked",
+    "BacklogSourcesSettings fetches and renders sync history on View history click"
+  ],
+  "lastModified": "2026-07-02T00:00:00Z"
+}

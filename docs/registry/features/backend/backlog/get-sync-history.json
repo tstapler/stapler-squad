@@ -6,7 +6,11 @@
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
   "handlerFile": "server/services/backlog_service.go",
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": true,
+  "testIds": [
+    "TestGetSyncHistory_ReturnsInvalidArgumentWhenSourceIDEmpty",
+    "TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns",
+    "TestTriggerSync_SucceedsAndCreatesItems"
+  ],
+  "lastModified": "2026-07-02T00:00:00-07:00"
 }

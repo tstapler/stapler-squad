@@ -65,7 +65,7 @@ func (g *GitHubIssuesPlugin) Fetch(ctx context.Context, config PluginConfig, cur
 		return nil, cursor, fmt.Errorf("github_issues: owner and repo are required in config")
 	}
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubIssuesPerPage)
+	url := fmt.Sprintf("%s/repos/%s/%s/issues?state=open&per_page=%d", githubAPIBaseURL, cfg.Owner, cfg.Repo, githubIssuesPerPage)
 	if cursor != "" {
 		url += "&since=" + cursor
 	}

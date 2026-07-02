@@ -892,3 +892,134 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 		return loadErr == nil && updated.Status == string(session.BacklogStatusReady)
 	}, 5*time.Second, 50*time.Millisecond)
 }
+
+// ─── TriggerSync / GetSyncHistory ──────────────────────────────────────────────
+
+// fakeSourcePlugin is a minimal session.ItemSourcePlugin stub for TriggerSync tests.
+type fakeSourcePlugin struct {
+	items    []session.ExternalItem
+	fetchErr error
+}
+
+func (f *fakeSourcePlugin) PluginID() string { return "fake_source" }
+
+func (f *fakeSourcePlugin) Fetch(_ context.Context, _ session.PluginConfig, cursor string) ([]session.ExternalItem, string, error) {
+	if f.fetchErr != nil {
+		return nil, cursor, f.fetchErr
+	}
+	return f.items, cursor, nil
+}
+
+func (f *fakeSourcePlugin) MapToBacklogItem(item session.ExternalItem, sourceID string) session.BacklogItemData {
+	return session.BacklogItemData{
+		Title:      item.Title,
+		Status:     string(session.BacklogStatusIdea),
+		ExternalID: item.ExternalID,
+		SourceID:   sourceID,
+	}
+}
+
+func TestTriggerSync_ReturnsUnimplementedWithoutPluginRegistry(t *testing.T) {
+	svc := newBacklogService(t)
+	_, err := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{SourceId: "any"}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeUnimplemented, connErr.Code())
+}
+
+func TestTriggerSync_ReturnsInvalidArgumentWhenSourceIDEmpty(t *testing.T) {
+	svc := newBacklogService(t)
+	svc.SetPluginRegistry(session.NewPluginRegistry())
+	_, err := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{SourceId: ""}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
+}
+
+func TestTriggerSync_ReturnsNotFoundForMissingSource(t *testing.T) {
+	svc := newBacklogService(t)
+	registry := session.NewPluginRegistry()
+	registry.Register(&fakeSourcePlugin{})
+	svc.SetPluginRegistry(registry)
+
+	_, err := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{
+		SourceId: "00000000-0000-0000-0000-000000000000",
+	}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeNotFound, connErr.Code())
+}
+
+func TestTriggerSync_SucceedsAndCreatesItems(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+	registry := session.NewPluginRegistry()
+	plugin := &fakeSourcePlugin{items: []session.ExternalItem{{ExternalID: "e1", Title: "Synced Item"}}}
+	registry.Register(plugin)
+	svc.SetPluginRegistry(registry)
+
+	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+		PluginID:    plugin.PluginID(),
+		DisplayName: "Fake Source",
+		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	_, syncErr := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{SourceId: src.ID}))
+	require.NoError(t, syncErr)
+
+	historyResp, histErr := svc.GetSyncHistory(t.Context(), connect.NewRequest(&sessionv1.GetSyncHistoryRequest{SourceId: src.ID}))
+	require.NoError(t, histErr)
+	require.Len(t, historyResp.Msg.Events, 1)
+	assert.Equal(t, int32(1), historyResp.Msg.Events[0].ItemsCreated)
+}
+
+func TestTriggerSync_PropagatesFetchError(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+	registry := session.NewPluginRegistry()
+	plugin := &fakeSourcePlugin{fetchErr: errors.New("upstream boom")}
+	registry.Register(plugin)
+	svc.SetPluginRegistry(registry)
+
+	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+		PluginID:    plugin.PluginID(),
+		DisplayName: "Fake Source",
+		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	_, syncErr := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{SourceId: src.ID}))
+	require.Error(t, syncErr)
+	var connErr *connect.Error
+	require.ErrorAs(t, syncErr, &connErr)
+	assert.Equal(t, connect.CodeInternal, connErr.Code())
+}
+
+func TestGetSyncHistory_ReturnsInvalidArgumentWhenSourceIDEmpty(t *testing.T) {
+	svc := newBacklogService(t)
+	_, err := svc.GetSyncHistory(t.Context(), connect.NewRequest(&sessionv1.GetSyncHistoryRequest{SourceId: ""}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
+}
+
+func TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+
+	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+		PluginID:    "fake_source",
+		DisplayName: "Never Synced",
+		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	resp, histErr := svc.GetSyncHistory(t.Context(), connect.NewRequest(&sessionv1.GetSyncHistoryRequest{SourceId: src.ID}))
+	require.NoError(t, histErr)
+	assert.Empty(t, resp.Msg.Events)
+}

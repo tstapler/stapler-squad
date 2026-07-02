@@ -61,6 +61,11 @@ function SettingsPageInner() {
             <section className={styles.section}>
               <AliasesManager />
             </section>
+            <section className={styles.section}>
+              <Link href={routes.settingsBacklogSources} className={styles.helpLink}>
+                Backlog Sources (GitHub sync) →
+              </Link>
+            </section>
             {/* Help subsection */}
             <section className={styles.section}>
               <div className={styles.helpSection}>

@@ -96,6 +96,12 @@ type BacklogService struct {
 	// by the time these persistence calls ran and every successful triage
 	// silently failed to ever mark the item ready.
 	triageCleanupTimeout time.Duration
+
+	// pluginRegistry and syncKeyFunc back TriggerSync / GetSyncHistory. Both are
+	// optional: if pluginRegistry is nil, TriggerSync degrades to CodeUnimplemented
+	// the same way sessionCreator-dependent RPCs degrade when unwired.
+	pluginRegistry *session.PluginRegistry
+	syncKeyFunc    func() ([]byte, error)
 }
 
 // NewBacklogService creates a BacklogService with all optional dependencies.
@@ -133,6 +139,18 @@ func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 // on the default.
 func (s *BacklogService) SetTriageCleanupTimeout(d time.Duration) {
 	s.triageCleanupTimeout = d
+}
+
+// SetPluginRegistry wires the item-source plugin registry, enabling TriggerSync.
+func (s *BacklogService) SetPluginRegistry(registry *session.PluginRegistry) {
+	s.pluginRegistry = registry
+}
+
+// SetSyncKeyFunc wires the encryption key provider used to decrypt item source
+// tokens during a manual sync. May be left nil if no sources use encrypted
+// tokens; SyncByID degrades gracefully (see session.SyncLoop.decryptConfigToken).
+func (s *BacklogService) SetSyncKeyFunc(keyFunc func() ([]byte, error)) {
+	s.syncKeyFunc = keyFunc
 }
 
 // Shutdown cancels the service's background context, unblocking any goroutines
@@ -390,6 +408,23 @@ func itemSourceToProto(src *session.ItemSourceData) *sessionv1.ItemSource {
 	}
 	if src.LastSyncedAt != nil {
 		p.LastSyncedAt = timestamppb.New(*src.LastSyncedAt)
+	}
+	return p
+}
+
+// sourceSyncEventToProto converts an ent.SourceSyncEvent to its proto representation.
+func sourceSyncEventToProto(ev *ent.SourceSyncEvent) *sessionv1.SourceSyncEvent {
+	p := &sessionv1.SourceSyncEvent{
+		Id:           ev.ID.String(),
+		StartedAt:    timestamppb.New(ev.StartedAt),
+		ItemsCreated: int32(ev.ItemsCreated),
+		ItemsUpdated: int32(ev.ItemsUpdated),
+		ItemsSkipped: int32(ev.ItemsSkipped),
+		ItemsErrored: int32(ev.ItemsErrored),
+		ErrorMessage: ev.ErrorMessage,
+	}
+	if ev.FinishedAt != nil {
+		p.FinishedAt = timestamppb.New(*ev.FinishedAt)
 	}
 	return p
 }
@@ -1616,20 +1651,65 @@ Do not modify the code. Only write the review verdict.
 	}), nil
 }
 
-// TriggerSync initiates a sync run for an external item source.
+// TriggerSync initiates a synchronous, on-demand sync run for an external item
+// source, regardless of its Enabled flag. Runs inline (not backgrounded like
+// TriggerTriage) because a single external-API fetch is expected to complete
+// in seconds, not the 7-15 minutes a headless LLM triage call takes.
 // +api: backlog:trigger-sync
 func (s *BacklogService) TriggerSync(
-	_ context.Context,
-	_ *connect.Request[sessionv1.TriggerSyncRequest],
+	ctx context.Context,
+	req *connect.Request[sessionv1.TriggerSyncRequest],
 ) (*connect.Response[sessionv1.TriggerSyncResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("TriggerSync not yet implemented"))
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if s.pluginRegistry == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("sync not configured — no plugin registry wired"))
+	}
+	if req.Msg.SourceId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("source_id is required"))
+	}
+
+	var sl *session.SyncLoop
+	if s.syncKeyFunc != nil {
+		sl = session.NewSyncLoopWithKeyProvider(s.storage, s.pluginRegistry, s.syncKeyFunc)
+	} else {
+		sl = session.NewSyncLoop(s.storage, s.pluginRegistry)
+	}
+
+	if err := sl.SyncByID(ctx, req.Msg.SourceId); err != nil {
+		if errors.Is(err, session.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("sync failed: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.TriggerSyncResponse{}), nil
 }
 
-// GetSyncHistory returns the sync event history for an item source.
+// GetSyncHistory returns the sync event history for an item source, most
+// recent first.
 // +api: backlog:get-sync-history
 func (s *BacklogService) GetSyncHistory(
-	_ context.Context,
-	_ *connect.Request[sessionv1.GetSyncHistoryRequest],
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetSyncHistoryRequest],
 ) (*connect.Response[sessionv1.GetSyncHistoryResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("GetSyncHistory not yet implemented"))
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+	if req.Msg.SourceId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("source_id is required"))
+	}
+
+	events, err := s.storage.ListSourceSyncEvents(ctx, req.Msg.SourceId)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list sync history: %w", err))
+	}
+
+	protoEvents := make([]*sessionv1.SourceSyncEvent, 0, len(events))
+	for _, ev := range events {
+		protoEvents = append(protoEvents, sourceSyncEventToProto(ev))
+	}
+
+	return connect.NewResponse(&sessionv1.GetSyncHistoryResponse{Events: protoEvents}), nil
 }
