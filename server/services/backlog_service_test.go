@@ -392,15 +392,20 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 // forever. This test simulates that exact shape (LLM call slower than the
 // cleanup budget) at test-friendly timescales.
 func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
+	// triageCleanupTimeout is reduced but kept generous enough (2s) that the real
+	// SQLite writes below can't flake under CI load or a busy test machine — the
+	// bug being tested is about ORDERING (timeout starts before vs. after the
+	// slow call), not about needing a tiny timeout, so there's no reason to cut
+	// this closer to the wire.
 	origTimeout := triageCleanupTimeout
-	triageCleanupTimeout = 200 * time.Millisecond
+	triageCleanupTimeout = 2 * time.Second
 	defer func() { triageCleanupTimeout = origTimeout }()
 
 	storage := createTestStorage(t)
 	// delay outlasts triageCleanupTimeout — this is what the old code got wrong:
 	// a cleanupCtx created before this delay would already be expired by the
 	// time it's used afterward.
-	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 500 * time.Millisecond}
+	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 3 * time.Second}
 	svc := NewBacklogService(storage, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
 
@@ -424,7 +429,7 @@ func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
 		}
 		readyItem = getResp.Msg.Item
 		return true
-	}, 2*time.Second, 10*time.Millisecond,
+	}, 6*time.Second, 10*time.Millisecond,
 		"item must reach 'ready' even though the LLM call outlasted triageCleanupTimeout — "+
 			"with the pre-fix ordering this would time out here because every persistence "+
 			"write after the slow call would fail with context deadline exceeded")
