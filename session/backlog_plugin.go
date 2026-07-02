@@ -2,9 +2,6 @@ package session
 
 import "context"
 
-// githubAPIBaseURL is overridden in tests to point at an httptest server.
-var githubAPIBaseURL = "https://api.github.com"
-
 // ItemSourcePlugin is the interface all external source integrations must implement.
 type ItemSourcePlugin interface {
 	// PluginID returns the unique identifier for this plugin (e.g., "github_issues").

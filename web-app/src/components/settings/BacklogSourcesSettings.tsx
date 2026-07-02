@@ -146,7 +146,8 @@ export function BacklogSourcesSettings() {
                   <button
                     className={styles.smallBtn}
                     onClick={() => handleSyncNow(source)}
-                    disabled={syncingId === source.id}
+                    disabled={syncingId === source.id || !source.enabled}
+                    title={!source.enabled ? "Enable this source to sync it" : undefined}
                   >
                     {syncingId === source.id ? "Syncing…" : "Sync now"}
                   </button>

@@ -897,13 +897,15 @@ func TestTriggerTriage_OrphanedHeadlessSession(t *testing.T) {
 
 // fakeSourcePlugin is a minimal session.ItemSourcePlugin stub for TriggerSync tests.
 type fakeSourcePlugin struct {
-	items    []session.ExternalItem
-	fetchErr error
+	items      []session.ExternalItem
+	fetchErr   error
+	lastConfig session.PluginConfig
 }
 
 func (f *fakeSourcePlugin) PluginID() string { return "fake_source" }
 
-func (f *fakeSourcePlugin) Fetch(_ context.Context, _ session.PluginConfig, cursor string) ([]session.ExternalItem, string, error) {
+func (f *fakeSourcePlugin) Fetch(_ context.Context, cfg session.PluginConfig, cursor string) ([]session.ExternalItem, string, error) {
+	f.lastConfig = cfg
 	if f.fetchErr != nil {
 		return nil, cursor, f.fetchErr
 	}
@@ -975,6 +977,40 @@ func TestTriggerSync_SucceedsAndCreatesItems(t *testing.T) {
 	require.NoError(t, histErr)
 	require.Len(t, historyResp.Msg.Events, 1)
 	assert.Equal(t, int32(1), historyResp.Msg.Events[0].ItemsCreated)
+}
+
+// TestTriggerSync_DecryptsTokenThroughServiceLayer exercises the
+// SetSyncKeyFunc wiring end-to-end through the RPC handler — the unit-level
+// SyncLoop tests in session/backlog_sync_test.go cover decryption but bypass
+// BacklogService.TriggerSync entirely, so a regression in this wiring
+// (wrong key func, or the branch removed) wouldn't be caught without this.
+func TestTriggerSync_DecryptsTokenThroughServiceLayer(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+	registry := session.NewPluginRegistry()
+	plugin := &fakeSourcePlugin{}
+	registry.Register(plugin)
+	svc.SetPluginRegistry(registry)
+
+	key := make([]byte, 32)
+	svc.SetSyncKeyFunc(func() ([]byte, error) { return key, nil })
+
+	encToken, err := session.EncryptToken(key, "plaintext-token")
+	require.NoError(t, err)
+
+	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+		PluginID:    plugin.PluginID(),
+		DisplayName: "Encrypted Source",
+		Enabled:     true,
+		Config:      `{"encrypted":true,"token":"` + encToken + `"}`,
+	})
+	require.NoError(t, err)
+
+	_, syncErr := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{SourceId: src.ID}))
+	require.NoError(t, syncErr)
+
+	assert.Contains(t, plugin.lastConfig.Raw, "plaintext-token")
+	assert.NotContains(t, plugin.lastConfig.Raw, "encrypted")
 }
 
 func TestTriggerSync_PropagatesFetchError(t *testing.T) {

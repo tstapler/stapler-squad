@@ -11,6 +11,7 @@
     "BacklogSourcesSettings add button is disabled until required fields are filled",
     "BacklogSourcesSettings calls createItemSource with the correct payload on submit",
     "BacklogSourcesSettings toggles enabled state via updateItemSource",
+    "BacklogSourcesSettings shows an error message when createItemSource fails",
     "BacklogSourcesSettings calls deleteItemSource when remove is clicked",
     "BacklogSourcesSettings calls triggerSync when Sync now is clicked",
     "BacklogSourcesSettings fetches and renders sync history on View history click"

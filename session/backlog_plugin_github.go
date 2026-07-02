@@ -12,6 +12,12 @@ import (
 
 const githubIssuesPerPage = 50
 
+// githubAPIBaseURL is overridden in tests (session/backlog_plugin_github_test.go)
+// to point at an httptest server; shared by both the Issues and PRs plugins.
+// Tests that mutate it must not run with t.Parallel() — it's package-level
+// mutable state with no synchronization.
+var githubAPIBaseURL = "https://api.github.com"
+
 // githubPluginConfig holds the decoded config for the GitHub Issues plugin.
 type githubPluginConfig struct {
 	Owner            string         `json:"owner"`

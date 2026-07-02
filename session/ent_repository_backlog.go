@@ -417,10 +417,17 @@ func (r *EntRepository) GetItemSourceByID(ctx context.Context, id string) (*ent.
 	return src, nil
 }
 
-// GetBacklogItemByExternalID retrieves a BacklogItem by its external_id, or nil if not found.
-func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, externalID string) (*ent.BacklogItem, error) {
+// GetBacklogItemByExternalID retrieves a BacklogItem by its external_id, scoped
+// to sourceID. External IDs (e.g. GitHub issue/PR numbers) are only unique
+// within their source, not globally — two different repos can both have an
+// issue #1, so this must never match across sources.
+func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, sourceID, externalID string) (*ent.BacklogItem, error) {
+	parsedSourceID, err := uuid.Parse(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid source id %q: %v", ErrNotFound, sourceID, err)
+	}
 	item, err := r.client.BacklogItem.Query().
-		Where(backlogitem.ExternalID(externalID)).
+		Where(backlogitem.ExternalID(externalID), backlogitem.HasSourceWith(itemsource.ID(parsedSourceID))).
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -448,8 +455,13 @@ func (r *EntRepository) UpdateItemSourceSync(ctx context.Context, id string, cur
 	return nil
 }
 
+// maxSourceSyncEventsHistory caps how many sync history rows a single
+// GetSyncHistory call returns, so a long-lived, frequently-synced source
+// doesn't grow into an unbounded response.
+const maxSourceSyncEventsHistory = 200
+
 // ListSourceSyncEvents returns sync history events for an item source, most
-// recent first.
+// recent first, capped at maxSourceSyncEventsHistory rows.
 func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]*ent.SourceSyncEvent, error) {
 	parsedID, err := uuid.Parse(sourceID)
 	if err != nil {
@@ -458,6 +470,7 @@ func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID strin
 	events, err := r.client.SourceSyncEvent.Query().
 		Where(sourcesyncevent.HasSourceWith(itemsource.ID(parsedID))).
 		Order(sourcesyncevent.ByStartedAt(sql.OrderDesc())).
+		Limit(maxSourceSyncEventsHistory).
 		All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list sync events for source %s: %w", sourceID, err)
@@ -465,8 +478,11 @@ func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID strin
 	return events, nil
 }
 
-// CreateSourceSyncEvent records a completed sync run for an ItemSource.
-func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID string, cursorAfter string, created, updated, skipped int, finishedAt time.Time) error {
+// CreateSourceSyncEvent records a completed (or failed) sync run for an
+// ItemSource. errMsg should be non-empty only when the sync run failed
+// outright (e.g. the plugin's Fetch call errored); errored counts per-item
+// failures within an otherwise-successful fetch.
+func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID string, cursorAfter string, created, updated, skipped, errored int, errMsg string, startedAt, finishedAt time.Time) error {
 	parsedID, err := uuid.Parse(sourceID)
 	if err != nil {
 		return fmt.Errorf("invalid source id %q: %w", sourceID, err)
@@ -486,8 +502,13 @@ func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID stri
 		SetItemsCreated(created).
 		SetItemsUpdated(updated).
 		SetItemsSkipped(skipped).
+		SetItemsErrored(errored).
+		SetStartedAt(startedAt).
 		SetFinishedAt(finishedAt).
 		SetSourceID(parsedID)
+	if errMsg != "" {
+		c.SetErrorMessage(errMsg)
+	}
 	if cursorAfter != "" {
 		c.SetCursorAfter(cursorAfter)
 	}

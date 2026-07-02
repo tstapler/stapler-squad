@@ -33,6 +33,13 @@ const headlessTriageUUIDPrefix = "headless-triage-"
 // for why this needed to become configurable rather than a global.
 const defaultTriageCleanupTimeout = 10 * time.Second
 
+// defaultTriggerSyncTimeout bounds a single manual TriggerSync RPC call. The
+// GitHub PRs plugin issues one extra HTTP call per open PR (for CI status), so
+// this is generous relative to the "seconds, not minutes" expectation for a
+// single page of items — without it, a slow/rate-limited GitHub response would
+// block the RPC handler for however long the client's transport allows.
+const defaultTriggerSyncTimeout = 2 * time.Minute
+
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
 	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
@@ -1677,7 +1684,10 @@ func (s *BacklogService) TriggerSync(
 		sl = session.NewSyncLoop(s.storage, s.pluginRegistry)
 	}
 
-	if err := sl.SyncByID(ctx, req.Msg.SourceId); err != nil {
+	syncCtx, cancel := context.WithTimeout(ctx, defaultTriggerSyncTimeout)
+	defer cancel()
+
+	if err := sl.SyncByID(syncCtx, req.Msg.SourceId); err != nil {
 		if errors.Is(err, session.ErrNotFound) {
 			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("item source %q not found", req.Msg.SourceId))
 		}

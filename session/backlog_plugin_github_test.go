@@ -117,8 +117,8 @@ func TestGitHubPRsPlugin_Fetch_ReturnsEmptyWhenTokenMissing(t *testing.T) {
 
 func TestGitHubPRsPlugin_Fetch_ParsesPRsWithReviewRequestedAndCILabels(t *testing.T) {
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/acme/widgets/pulls":
+		switch r.URL.Path {
+		case "/repos/acme/widgets/pulls":
 			w.Write([]byte(`[{
 				"number": 7,
 				"title": "Add feature",
@@ -127,7 +127,7 @@ func TestGitHubPRsPlugin_Fetch_ParsesPRsWithReviewRequestedAndCILabels(t *testin
 				"head": {"sha": "deadbeef"},
 				"requested_reviewers": [{"login": "reviewer1"}]
 			}]`))
-		case r.URL.Path == "/repos/acme/widgets/commits/deadbeef/check-runs":
+		case "/repos/acme/widgets/commits/deadbeef/check-runs":
 			w.Write([]byte(`{"check_runs":[{"conclusion":"failure"}]}`))
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)

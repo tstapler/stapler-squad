@@ -82,7 +82,7 @@ func TestSyncOne_CreatesNewItemsFromPlugin(t *testing.T) {
 	err = sl.SyncOne(ctx, entSrc)
 	require.NoError(t, err)
 
-	item1, err := er.GetBacklogItemByExternalID(ctx, "ext-1")
+	item1, err := er.GetBacklogItemByExternalID(ctx, sourceID, "ext-1")
 	require.NoError(t, err)
 	require.Equal(t, "Item One", item1.Title)
 
@@ -113,6 +113,7 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 		Priority:    1,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  "ext-1",
+		SourceID:    sourceID,
 	})
 	require.NoError(t, err)
 
@@ -131,6 +132,12 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "Local Title", refetched.Title, "user-modified title must not be overwritten")
 	require.Equal(t, 5, refetched.Priority, "priority was not user-modified, so remote wins")
+
+	events, err := er.ListSourceSyncEvents(ctx, sourceID)
+	require.NoError(t, err)
+	require.Equal(t, 1, events[0].ItemsUpdated)
+	require.Equal(t, 0, events[0].ItemsCreated)
+	require.Equal(t, 0, events[0].ItemsSkipped)
 }
 
 // SyncOne only skips an existing item when every syncable field (title,
@@ -154,6 +161,7 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 		Priority:    2,
 		Status:      string(BacklogStatusIdea),
 		ExternalID:  "ext-1",
+		SourceID:    sourceID,
 	})
 	require.NoError(t, err)
 
@@ -240,6 +248,53 @@ func TestSyncOne_FetchErrorPropagates(t *testing.T) {
 
 	err = sl.SyncOne(ctx, entSrc)
 	require.Error(t, err)
+
+	// A failed fetch must still leave a trace in sync history — otherwise the
+	// failure vanishes silently instead of surfacing in GetSyncHistory.
+	events, err := er.ListSourceSyncEvents(ctx, sourceID)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, 1, events[0].ItemsErrored)
+	require.Contains(t, events[0].ErrorMessage, "boom")
+}
+
+// Two different sources can both have items numbered e.g. "1" (GitHub issue/PR
+// numbers are per-repo, not globally unique). Syncing source B must not match
+// against — and overwrite — an item that actually belongs to source A.
+func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	registry := NewPluginRegistry()
+	pluginA := &fakeSyncPlugin{id: "fake-a", items: []ExternalItem{{ExternalID: "1", Title: "Repo A Issue 1"}}}
+	pluginB := &fakeSyncPlugin{id: "fake-b", items: []ExternalItem{{ExternalID: "1", Title: "Repo B Issue 1"}}}
+	registry.Register(pluginA)
+	registry.Register(pluginB)
+	sl := NewSyncLoop(storage, registry)
+
+	srcA, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-a", DisplayName: "Repo A", Enabled: true})
+	require.NoError(t, err)
+	srcB, err := storage.CreateItemSource(ctx, ItemSourceData{PluginID: "fake-b", DisplayName: "Repo B", Enabled: true})
+	require.NoError(t, err)
+
+	require.NoError(t, sl.SyncByID(ctx, srcA.ID))
+	require.NoError(t, sl.SyncByID(ctx, srcB.ID))
+
+	er := storage.repo.(*EntRepository)
+	itemA, err := er.GetBacklogItemByExternalID(ctx, srcA.ID, "1")
+	require.NoError(t, err)
+	require.Equal(t, "Repo A Issue 1", itemA.Title)
+
+	itemB, err := er.GetBacklogItemByExternalID(ctx, srcB.ID, "1")
+	require.NoError(t, err)
+	require.Equal(t, "Repo B Issue 1", itemB.Title)
+
+	require.NotEqual(t, itemA.ID, itemB.ID, "sources with colliding external_id must produce distinct backlog items")
+
+	eventsA, err := er.ListSourceSyncEvents(ctx, srcA.ID)
+	require.NoError(t, err)
+	require.Equal(t, 1, eventsA[0].ItemsCreated, "source B's sync must not count as an update to source A's item")
 }
 
 func TestSyncByID_SyncsEvenWhenSourceDisabled(t *testing.T) {

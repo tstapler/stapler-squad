@@ -132,6 +132,22 @@ describe("BacklogSourcesSettings", () => {
     });
   });
 
+  it("shows an error message when createItemSource fails", async () => {
+    mockCreateItemSource.mockRejectedValue(new Error("token invalid"));
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText("Display name (e.g. My Repo Issues)"), {
+      target: { value: "Widgets Issues" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Owner (e.g. acme)"), { target: { value: "acme" } });
+    fireEvent.change(screen.getByPlaceholderText("Repo (e.g. widgets)"), { target: { value: "widgets" } });
+    fireEvent.change(screen.getByPlaceholderText("GitHub personal access token"), { target: { value: "tok123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Source" }));
+
+    expect(await screen.findByText("token invalid")).toBeInTheDocument();
+  });
+
   it("toggles enabled state via updateItemSource", async () => {
     render(<BacklogSourcesSettings />);
     await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
