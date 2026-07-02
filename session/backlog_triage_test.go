@@ -78,6 +78,55 @@ func TestParseHeadlessTriageResult_NoJSON(t *testing.T) {
 	assert.Contains(t, err.Error(), "ParseHeadlessTriageResult")
 }
 
+// TestParseHeadlessTriageResult_StrayBraceInPreamble is a regression test for the
+// audit finding in project_plans/backlog-cross-platform-audit/gaps-and-risks.md #5:
+// the old first-`{`/last-`}` scan spans across an unrelated illustrative brace in
+// prose and the real JSON object, producing an unparseable concatenated blob. Real
+// models sometimes describe their output format before emitting it, e.g. "the
+// result looks like {"example":"schema"}" — this must not break parsing of the real
+// object that follows.
+func TestParseHeadlessTriageResult_StrayBraceInPreamble(t *testing.T) {
+	raw := `I've finished the triage. For reference, a sample response looks like {"example":"schema"}.
+
+` + `{"summary":"the real summary","suggestions":[{"text":"s","rationale":"r"}],"tasks":[]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "the real summary", result.Summary)
+}
+
+// TestParseHeadlessTriageResult_MultipleStrayBracesPickLast verifies the parser
+// prefers the LAST balanced JSON object when multiple valid-looking candidates are
+// present, matching the prompt's instruction to emit the real result last.
+func TestParseHeadlessTriageResult_MultipleStrayBracesPickLast(t *testing.T) {
+	raw := `First I considered {"summary":"decoy one"} but discarded it.
+Then {"summary":"decoy two","suggestions":[]} also didn't fit.
+Final answer: {"summary":"real one","suggestions":[]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "real one", result.Summary)
+}
+
+// TestParseHeadlessTriageResult_BraceInsideStringLiteralIgnored verifies that a
+// brace character embedded inside a JSON string value does not confuse the
+// balanced-scan depth counter.
+func TestParseHeadlessTriageResult_BraceInsideStringLiteralIgnored(t *testing.T) {
+	raw := `{"summary":"config looks like { nested }","suggestions":[]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "config looks like { nested }", result.Summary)
+}
+
+// TestParseHeadlessTriageResult_UnbalancedPreambleBrace verifies parsing still
+// succeeds when the preamble contains an unbalanced single brace (e.g. a smiley
+// or stray character) rather than a complete decoy object.
+func TestParseHeadlessTriageResult_UnbalancedPreambleBrace(t *testing.T) {
+	raw := `Here's a stray closing brace: } — ignore that.
+{"summary":"still parses","suggestions":[]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "still parses", result.Summary)
+}
+
 // ─── BuildHeadlessTriagePrompt ────────────────────────────────────────────────
 
 func TestBuildHeadlessTriagePrompt_ContainsTitle(t *testing.T) {

@@ -77,14 +77,23 @@ explicit `test.fixme` at line 426 for a feature ("SuggestNextItem") with no UI b
 autonomous path). **Bottom line: nobody — human or CI — has actually watched this feature run
 a real task start-to-finish before today's audit.**
 
-## 5. Known-fragile triage JSON parser, never given a fallback
+## 5. ~~Known-fragile triage JSON parser~~ — FIXED
 
-`session/backlog_triage.go:95` locates JSON in the model's triage output via
-`strings.Index`/`strings.LastIndex` brace-scanning. The triage prompt has the model write
-research files containing prose/code (which itself can contain `{`/`}`) before emitting JSON,
-so the scan can span two blocks and fail to unmarshal. This was flagged as a CONCERN in the
-e2e-hardening adversarial review and never given a fallback (e.g. schema-constrained output,
-fenced-block extraction). Live latent bug, not historical.
+`session/backlog_triage.go`'s `ParseHeadlessTriageResult` located JSON in the model's triage
+output via `strings.Index`/`strings.LastIndex` brace-scanning — a naive first-`{`/last-`}` scan.
+If the response contained any unrelated brace before the real JSON (e.g. the model illustrating
+its output format with "the result looks like `{"example":"schema"}`"), the scan spanned both
+blocks and produced an unparseable concatenated blob. This was flagged as a CONCERN in the
+e2e-hardening adversarial review and never given a fallback.
+
+**Fix**: replaced the naive scan with `extractTopLevelJSONObjects`, a balanced-brace scanner
+that respects string literals (so braces inside quoted JSON values don't affect depth) and
+returns every top-level `{...}` span in order. `ParseHeadlessTriageResult` now tries candidates
+from the *last* backwards — matching the prompt's instruction to emit the real result last —
+and returns the first one that unmarshals cleanly, correctly skipping any earlier decoy object.
+Four new regression tests cover: a stray brace in preamble, multiple valid-looking decoy objects
+before the real one, a brace inside a string literal, and an unbalanced stray brace. All 12
+parser tests (8 existing + 4 new) pass; no other test regressed.
 
 ## 6. Linux install path is more fragile than macOS for finding `claude`/`tmux`/`git`
 
@@ -134,9 +143,9 @@ but it means the plan docs overstate what was actually delivered — don't trust
    deliberately doesn't cover.
 3. Decide deliberately on #3 (GitHub sync): finish it or explicitly cut it and remove the
    half-built RPC surface — right now it's neither shipped nor absent.
-4. Harden #5 (triage JSON parsing) with a fenced-block extraction fallback — the brace-scan is
-   still unverified against adversarial preambles (only benign preamble cases are tested;
-   see `session/backlog_triage_test.go`).
+4. ~~Harden #5 (triage JSON parsing)~~ — **done**: replaced the naive brace-scan with a
+   balanced-brace, string-literal-aware scanner in `session/backlog_triage.go`; 4 new
+   adversarial regression tests in `session/backlog_triage_test.go`.
 5. Linux PATH robustness (#6) — cheap, worth doing opportunistically.
 6. If #1-#5 don't explain it, the next real test to write is one that actually exercises a
    live tmux session + live `claude` process (like the existing `harness`-tagged test, but

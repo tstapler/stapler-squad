@@ -87,14 +87,68 @@ After all files are written, output ONLY a JSON object (no other text before or 
 	return sb.String()
 }
 
+// extractTopLevelJSONObjects scans raw for every balanced, top-level `{...}` span,
+// respecting string literals (so a `{` or `}` inside a quoted JSON string does not
+// affect brace depth) and returned in the order they appear in raw.
+//
+// This is more robust than a naive first-`{`/last-`}` scan: if the model's response
+// contains an unrelated brace in prose before the real JSON (e.g. an illustrative
+// "{example}" snippet), first/last indexing spans across both and produces a
+// concatenated, unparseable blob. Balanced scanning instead yields one candidate
+// per brace-delimited span, letting the caller try each independently.
+func extractTopLevelJSONObjects(raw string) []string {
+	var candidates []string
+	var inString, escaped bool
+	depth := 0
+	start := -1
+
+	for i, r := range raw {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case r == '\\':
+				escaped = true
+			case r == '"':
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '{':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case '}':
+			if depth > 0 {
+				depth--
+				if depth == 0 && start != -1 {
+					candidates = append(candidates, raw[start:i+len("}")])
+					start = -1
+				}
+			}
+		}
+	}
+	return candidates
+}
+
 // ParseHeadlessTriageResult unmarshals an LLM JSON response into HeadlessTriageResult.
-// Tolerates preamble text before the JSON block (e.g. "Here is the result:\n\n{...}").
-// Uses brace-scan to find the JSON object rather than requiring the output to start with `{`.
+// Tolerates preamble text before the JSON block (e.g. "Here is the result:\n\n{...}")
+// and stray unrelated braces earlier in the response (e.g. an illustrative snippet).
+//
+// The triage prompt instructs the model to emit the JSON object last, so candidates
+// are tried from the end of the response backwards — the first candidate (i.e. the
+// last brace-delimited span in raw) that unmarshals cleanly wins. This correctly
+// skips over any earlier decoy object that happens to also be syntactically valid
+// JSON but isn't the real result.
+//
 // Caps tasks at maxHeadlessTriageTasks.
 func ParseHeadlessTriageResult(raw string) (HeadlessTriageResult, error) {
-	start := strings.Index(raw, "{")
-	end := strings.LastIndex(raw, "}")
-	if start == -1 || end <= start {
+	candidates := extractTopLevelJSONObjects(raw)
+	if len(candidates) == 0 {
 		preview := raw
 		if len(preview) > 200 {
 			preview = preview[:200] + "..."
@@ -102,16 +156,22 @@ func ParseHeadlessTriageResult(raw string) (HeadlessTriageResult, error) {
 		return HeadlessTriageResult{}, fmt.Errorf("ParseHeadlessTriageResult: no JSON object found in output (raw: %q)", preview)
 	}
 
-	var result HeadlessTriageResult
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &result); err != nil {
-		preview := raw
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
+	var lastErr error
+	for i := len(candidates) - 1; i >= 0; i-- {
+		var result HeadlessTriageResult
+		if err := json.Unmarshal([]byte(candidates[i]), &result); err != nil {
+			lastErr = err
+			continue
 		}
-		return HeadlessTriageResult{}, fmt.Errorf("ParseHeadlessTriageResult: JSON parse error: %w (raw: %q)", err, preview)
+		if len(result.Tasks) > maxHeadlessTriageTasks {
+			result.Tasks = result.Tasks[:maxHeadlessTriageTasks]
+		}
+		return result, nil
 	}
-	if len(result.Tasks) > maxHeadlessTriageTasks {
-		result.Tasks = result.Tasks[:maxHeadlessTriageTasks]
+
+	preview := raw
+	if len(preview) > 200 {
+		preview = preview[:200] + "..."
 	}
-	return result, nil
+	return HeadlessTriageResult{}, fmt.Errorf("ParseHeadlessTriageResult: JSON parse error: %w (raw: %q)", lastErr, preview)
 }
