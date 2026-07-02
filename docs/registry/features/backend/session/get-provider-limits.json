@@ -1,11 +1,11 @@
 {
-  "id": "program:analytics",
+  "id": "session:get-provider-limits",
   "type": "backend",
   "service": "SessionService",
-  "method": "GetProgramAnalytics",
+  "method": "GetProviderLimits",
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": false,
   "tested": false,
   "testIds": [],
-  "lastModified": "2026-05-20T00:00:00Z"
+  "lastModified": "2026-06-29T22:23:30.184724179-07:00"
 }

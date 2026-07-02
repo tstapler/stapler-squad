@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
 	"github.com/tstapler/stapler-squad/session/search"
+	"github.com/tstapler/stapler-squad/session/tokens"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -128,6 +130,9 @@ type SessionService struct {
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
+
+	// capacityMonitor tracks rate limits and triggers transitions.
+	capacityMonitor *CapacityMonitor
 
 	// analyticsClient is the ent client for the analytics database (escape events, etc.).
 	// May be nil when escape analytics is disabled or in tests that don't need it.
@@ -254,6 +259,33 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	}
 	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
 
+	// Initialize capacity monitor.
+	var capCfg config.CapacityConfig
+	if dir, err := config.GetConfigDir(); err == nil {
+		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
+			capCfg = c.Capacity
+		}
+	}
+	capCfg = capCfg.CapacityConfigOrDefault()
+
+	var directCfg config.Config
+	if dir, err := config.GetConfigDir(); err == nil {
+		if c, err := config.LoadConfigFromPath(filepath.Join(dir, "config.json")); err == nil {
+			directCfg = *c
+		}
+	}
+	credChain := NewDefaultChain(&directCfg)
+
+	capacityMonitor := NewCapacityMonitor(capCfg, eventBus, nil, nil, nil)
+	capacityMonitor.RegisterClient("anthropic", NewAnthropicLimitsClient(credChain, ""))
+	capacityMonitor.RegisterClient("google", NewGeminiLimitsClient(credChain, ""))
+
+	if anthropicClient, ok := aiClientImpl.(*AnthropicAIClient); ok {
+		anthropicClient.OnResponseHeaders = func(h http.Header) {
+			capacityMonitor.UpdateFromResponseHeaders("anthropic", h)
+		}
+	}
+
 	workspaceSvc := NewWorkspaceService(concStorage, eventBus)
 
 	svc := &SessionService{
@@ -276,7 +308,11 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 		defaultsSvc:       NewDefaultsService(),
 		projectSvc:        NewProjectService(concStorage),
 		promptStore:       newPromptStore(),
+		capacityMonitor:   capacityMonitor,
 	}
+	capacityMonitor.sessionSwitcher = svc
+	capacityMonitor.poller = svc
+
 	// Wire the fast-path live-instance lookup so WorkspaceService read-only RPCs
 	// (GetVCSStatus, GetWorkspaceInfo, ListWorkspaceTargets) bypass LoadInstances.
 	workspaceSvc.SetLiveFinder(svc)
@@ -673,6 +709,9 @@ func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 // Must be called once during server startup, before any sessions are created.
 func (s *SessionService) SetLifecycleContext(ctx context.Context) {
 	s.lifecycleCtx = ctx
+	if s.capacityMonitor != nil {
+		go s.capacityMonitor.Start(ctx)
+	}
 }
 
 // driverCtx returns the lifecycle context, falling back to Background() if not set.
@@ -1101,11 +1140,6 @@ func (s *SessionService) CreateSession(
 			if alias := config.FindAlias(cfg, req.Msg.AliasName); alias != nil {
 				aliasSessionType = alias.SessionType
 			}
-			// Read session type directly from the alias config — it is an alias-specific
-			// property, not a cascading default, so it is not part of ResolvedDefaults.
-			if alias := config.FindAlias(cfg, req.Msg.AliasName); alias != nil {
-				aliasSessionType = alias.SessionType
-			}
 		} else {
 			workingDir := req.Msg.WorkingDir
 			if workingDir == "" {
@@ -1426,16 +1460,37 @@ func (s *SessionService) UpdateSession(
 		updatedFields = append(updatedFields, "tags")
 	}
 
-	// Handle program update
-	if req.Msg.Program != nil && *req.Msg.Program != "" && instance.Program != *req.Msg.Program {
-		instance.Program = *req.Msg.Program
-		updatedFields = append(updatedFields, "program")
+	// Handle program update. Empty string means "System default" — resolve to the
+	// configured default so the DB NotEmpty constraint is satisfied.
+	if req.Msg.Program != nil {
+		oldProgram := instance.Program
+		newProgram := *req.Msg.Program
+		if newProgram == "" {
+			newProgram = config.LoadConfig().DefaultProgram
+		}
+		if instance.Program != newProgram {
+			instance.Program = newProgram
+			updatedFields = append(updatedFields, "program")
 
-		// If the session is running, restart it with the new program
-		if instance.Status == session.Active {
-			if err := instance.Restart(true); err != nil {
-				log.Error("[UpdateSession] failed to restart session after program change", "session", instance.Title, "err", err)
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after program change: %w", err))
+			// Port history if switching between Claude and Antigravity
+			if (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
+				((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude")) {
+				if err := session.PortSessionHistory(ctx, oldProgram, newProgram, instance); err != nil {
+					log.Error("[UpdateSession] failed to port session history during program switch", "session", instance.Title, "old", oldProgram, "new", newProgram, "err", err)
+				}
+			}
+
+			// If the session is running, restart it with the new program.
+			// Save before restarting so the new program is persisted even if Restart fails.
+			if instance.Status == session.Active {
+				instances[instanceIndex] = instance
+				if saveErr := s.storage.SaveInstances(instances); saveErr != nil {
+					log.Warn("[UpdateSession] failed to pre-save before program restart", "session", instance.Title, "err", saveErr)
+				}
+				if err := instance.Restart(true); err != nil {
+					log.Error("[UpdateSession] failed to restart session after program change", "session", instance.Title, "err", err)
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to restart session after program change: %w", err))
+				}
 			}
 		}
 	}
@@ -1628,7 +1683,7 @@ func (s *SessionService) ResumeHibernatedSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session id is required"))
 	}
 
-	instances, err := s.loadInstancesWithWiring()
+	instances, err := s.storage.LoadInstances()
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
 	}
@@ -1653,14 +1708,6 @@ func (s *SessionService) ResumeHibernatedSession(
 	instances[instanceIndex] = instance
 	if err := s.storage.SaveInstances(instances); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
-	}
-
-	if s.reviewQueuePoller != nil {
-		s.reviewQueuePoller.AddInstance(instance)
-	}
-
-	if instance.AutonomousMode && s.headlessPool != nil {
-		s.StartAutonomousDriverForInstance(instance)
 	}
 
 	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status"}))
@@ -1731,6 +1778,13 @@ func (s *SessionService) DeleteSession(
 				log.Warn("failed to kill tmux session for non-live instance", "session", req.Msg.Id, "err", err)
 			}
 		}()
+	}
+
+	// Cancel any pending approvals BEFORE deleting from storage, so blocked
+	// approval-hook goroutines can exit cleanly while the session still exists.
+	// Non-fatal: log at warn and continue even if there are no pending approvals.
+	if cancelled := s.approvalStore.CancelSession(sessionUUID); len(cancelled) > 0 {
+		log.Warn("cancelled pending approvals for deleted session", "session", req.Msg.Id, "count", len(cancelled))
 	}
 
 	// Cancel any pending approvals BEFORE deleting from storage, so blocked
@@ -2820,56 +2874,13 @@ func (s *SessionService) ForkSession(
 	respProto := adapters.InstanceToProto(newInst, s.workflowNames())
 
 	go func() {
-		// Wire callbacks before starting so rate-limit and status-change events fire.
-		s.wireRateLimitCallbacks(newInst)
-		s.wireStatusChangeCallback(newInst)
-		s.wireClaudeSessionIDCallback(newInst)
-		s.wireAutoArchiveCallback(newInst)
-		s.wireSessionExitedPublisher(newInst)
-
-		// Start the session (initializes tmux + worktree/checkpoint restoration).
 		if startErr := newInst.Start(true); startErr != nil {
 			log.Warn("ForkSession: failed to start forked session", "session", newInst.Title, "err", startErr)
 			newInst.Status = session.Stopped
 			if saveErr := s.storage.SaveInstances(s.allInstances()); saveErr != nil {
 				log.Warn("ForkSession: failed to persist Stopped status", "session", newInst.Title, "err", saveErr)
 			}
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(newInst, []string{"status"}))
-			return
 		}
-
-		// Inject Claude Code HTTP hook config for remote approval from the web UI.
-		if err := InjectHookConfig(newInst.GetEffectiveRootDir(), newInst.Title); err != nil {
-			log.Warn("ForkSession: failed to inject hook config", "session", newInst.Title, "err", err)
-		}
-
-		if s.backlogLifecycleListener != nil {
-			s.backlogLifecycleListener.WireToInstance(newInst)
-		}
-
-		// Wire status manager and start controller.
-		if s.statusManager != nil {
-			newInst.SetStatusManager(s.statusManager)
-			if ctrlErr := newInst.StartController(); ctrlErr != nil {
-				log.Warn("ForkSession: failed to start controller after wiring", "session", newInst.Title, "err", ctrlErr)
-			}
-		}
-
-		// Start session driver so the session can receive its initial prompts/inputs.
-		session.StartSessionDriver(newInst, newInst.GetEffectiveRootDir())
-
-		if newInst.AutonomousMode && s.headlessPool != nil {
-			driver := session.NewAutonomousDriver(newInst, s.headlessPool, newInst.Prompt, 0)
-			driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
-			if driverErr := driver.Start(s.driverCtx()); driverErr != nil {
-				log.Warn("ForkSession: failed to start autonomous driver", "session", newInst.Title, "err", driverErr)
-			} else {
-				s.registerDriver(newInst.Title, driver)
-			}
-		}
-
-		_ = s.storage.SaveInstances(s.allInstances())
-		s.eventBus.Publish(events.NewSessionUpdatedEvent(newInst, []string{"status"}))
 	}()
 
 	s.eventBus.Publish(events.NewSessionCreatedEvent(newInst))
@@ -4386,4 +4397,130 @@ func (s *SessionService) ReapPausedTmuxSessions() {
 				"session", inst.Title, "err", err)
 		}
 	}
+}
+
+// GetProviderLimits returns the rate limit and usage details for a session.
+func (s *SessionService) GetProviderLimits(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetProviderLimitsRequest],
+) (*connect.Response[sessionv1.GetProviderLimitsResponse], error) {
+	if req.Msg.SessionId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
+	}
+
+	inst := s.findInstance(req.Msg.SessionId)
+	if inst == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
+	}
+
+	provider := "anthropic"
+	program := strings.ToLower(inst.Program)
+	if strings.Contains(program, "agy") || strings.Contains(program, "antigravity") || strings.Contains(program, "gemini") {
+		provider = "google"
+	} else if strings.Contains(program, "openai") || strings.Contains(program, "opencode") {
+		provider = "openai"
+	}
+
+	var limits ProviderLimits
+	var found bool
+	if s.capacityMonitor != nil {
+		limits, found = s.capacityMonitor.GetSessionLimits(inst.Title)
+		if !found {
+			s.capacityMonitor.mu.RLock()
+			globalLimits := s.capacityMonitor.current[provider]
+			client, ok := s.capacityMonitor.clients[provider]
+			s.capacityMonitor.mu.RUnlock()
+
+			limits = globalLimits
+			limits.Provider = provider
+			limits.Model = inst.Program
+			if ok {
+				limits.ContextTokensMax = client.ModelContextWindow(inst.Program)
+			}
+		}
+	} else {
+		limits = ProviderLimits{
+			Provider:  provider,
+			Model:     inst.Program,
+			Available: true,
+		}
+	}
+
+	protoLimits := &sessionv1.ProviderLimitsProto{
+		Provider:            limits.Provider,
+		Model:               limits.Model,
+		RequestsLimit:       int32(limits.RequestsLimit),
+		RequestsRemaining:   int32(limits.RequestsRemaining),
+		TokensLimit:         int32(limits.TokensLimit),
+		TokensRemaining:     int32(limits.TokensRemaining),
+		ContextTokensUsed:   int32(limits.ContextTokensUsed),
+		ContextTokensMax:    int32(limits.ContextTokensMax),
+		SessionInputTokens:  int32(limits.SessionInputTokens),
+		SessionOutputTokens: int32(limits.SessionOutputTokens),
+		EstimatedCostUsd:    limits.EstimatedCostUSD,
+		Available:           limits.Available,
+		LastErrorCode:       limits.LastErrorCode,
+	}
+
+	if !limits.RequestsReset.IsZero() {
+		protoLimits.RequestsReset = timestamppb.New(limits.RequestsReset)
+	}
+	if !limits.TokensReset.IsZero() {
+		protoLimits.TokensReset = timestamppb.New(limits.TokensReset)
+	}
+	if !limits.FetchedAt.IsZero() {
+		protoLimits.FetchedAt = timestamppb.New(limits.FetchedAt)
+	}
+
+	return connect.NewResponse(&sessionv1.GetProviderLimitsResponse{
+		Limits: protoLimits,
+	}), nil
+}
+
+// UpdateSessionProgram handles switching programs for a session, doing the history porting, DB save, and PTY restart.
+func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID string, newProgram string) error {
+	inst := s.findInstance(sessionID)
+	if inst == nil {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	if inst.Program == newProgram {
+		return nil
+	}
+
+	oldProgram := inst.Program
+	inst.Program = newProgram
+
+	if (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
+		((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude")) {
+		if err := session.PortSessionHistory(ctx, oldProgram, newProgram, inst); err != nil {
+			log.Error("failed to port session history during program switch in auto-transition", "session", inst.Title, "err", err)
+		}
+	}
+
+	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
+		log.Error("failed to save instance program update in auto-transition", "session", inst.Title, "err", err)
+	}
+
+	if inst.Status == session.Active {
+		if err := inst.Restart(true); err != nil {
+			return fmt.Errorf("failed to restart session: %w", err)
+		}
+	}
+
+	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))
+
+	return nil
+}
+
+// SetTokenStoreReader wires the global parsed token store into the capacity monitor.
+func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
+	if s.capacityMonitor != nil {
+		s.capacityMonitor.tokenStore = store
+	}
+}
+
+// GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.
+func (s *SessionService) GetInstances() []*session.Instance {
+	return s.allInstances()
 }

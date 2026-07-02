@@ -907,8 +907,11 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 			return setupErr
 		}
 	}
-	i.stateMutex.Unlock()
+	// started must be set while still holding stateMutex: every reader of this
+	// field (instance_tmux.go, instance_terminal.go, instance_workspace.go, etc.)
+	// takes stateMutex first, so writing it after Unlock() is a data race.
 	i.started = true
+	i.stateMutex.Unlock()
 	i.fireLifecycleEvent(EventStarted, "")
 
 	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.

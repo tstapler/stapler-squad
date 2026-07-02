@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"connectrpc.com/connect"
-	"github.com/tstapler/stapler-squad/server/events"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
+	"github.com/tstapler/stapler-squad/server/events"
 )
 
 // TestCreateSession_PathGuard_AliasNameBypassesPathRequired verifies that when

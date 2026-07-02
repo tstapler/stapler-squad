@@ -2753,7 +2753,7 @@ func TestClassify_ShellExpansion_PathStripped(t *testing.T) {
 		{"${HOME}/bin/git status", AutoAllow},
 		{"$VIRTUAL_ENV/bin/pip install -r requirements.txt", AutoAllow}, // pip install is allowed
 		// Path-stripped to program with no AutoAllow rule → Escalate
-		{"$GOPATH/bin/golangci-lint run ./...", Escalate},
+		{"$GOPATH/bin/unknown-custom-linter run ./...", Escalate},
 	}
 	for _, tc := range cases {
 		r := c.Classify(bashPayload(tc.cmd), ctx)
@@ -3032,5 +3032,238 @@ func TestClassify_ResultSource_PopulatedFromRule(t *testing.T) {
 	// Seed rules have Source == "seed"
 	if result.Source != "seed" {
 		t.Errorf("expected Source=%q for seed rule, got %q", "seed", result.Source)
+	}
+}
+
+// ── Sentinel tests: complex real-world approval patterns ──────────────────────
+// These test cases are derived from actual commands observed in the analytics DB.
+// They verify the engine's behaviour on the compound/DSL patterns that account
+// for the majority of unmatched escalations.
+
+// TestSentinel_PythonHeredoc verifies that `python3 << 'PYEOF' ... PYEOF`
+// (stdin-redirect form) escalates.  The heredoc body is not visible to the
+// rules engine, so the command falls through to the default escalate — this is
+// the CORRECT behaviour: stdin-redirect python cannot be analysed safely inline.
+func TestSentinel_PythonHeredoc(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	heredocCmds := []string{
+		"python3 << 'PYEOF'\nimport re, os\ndef fix_file(path): pass\nPYEOF",
+		"python3 <<'PYEOF'\nimport json\nwith open('/tmp/foo') as f: pass\nPYEOF",
+		"python3 << EOF\nimport subprocess\nsubprocess.run(['id'])\nEOF",
+	}
+	for _, cmd := range heredocCmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != Escalate {
+			t.Errorf("python3 heredoc %q: expected Escalate (stdin body unanalysable), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
+	}
+}
+
+// TestSentinel_CatPipePythonStdlib documents a known engine limitation:
+// `cat file | python3 -c "import json,sys; ..."` currently ESCALATES even
+// when the python3 side uses only safe stdlib imports.
+//
+// Root cause: ExtractAllCommands strips the quoting around the -c argument
+// when building sub.Raw. When classifySingle re-parses sub.Raw, the
+// semicolons and parentheses inside the former quoted string are no longer
+// quoted, so the shell AST sees them as statement separators and subshells,
+// destroying the Args structure that detectPythonMode and ParsePythonCommand
+// depend on. The python3 sub-command ends up with empty args → mode="" →
+// no PythonMode rule matches → escalates.
+//
+// This is a gap in compound/pipeline classification, not a security decision.
+// The fix would require preserving the original ParsedCommand across the
+// classifyCompound→classifySingle boundary instead of re-parsing sub.Raw.
+func TestSentinel_CatPipePythonStdlib_KnownLimitation(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	// These escalate today due to the quote-stripping re-parse issue described above.
+	// When the engine is fixed, these should become AutoAllow.
+	cmds := []string{
+		`cat /etc/hosts | python3 -c "import sys; print(sys.stdin.read())"`,
+		`cat package.json | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['version'])"`,
+		`cat data.json | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin), indent=2))"`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		// Escalates today (not AutoAllow) — document this as the known current behaviour.
+		if result.Decision != Escalate {
+			t.Errorf("cat|python3 compound %q: expected Escalate (known limitation), got %v (rule=%s) — the engine was fixed! Update this sentinel.", cmd, result.Decision, result.RuleID)
+		}
+	}
+}
+
+// TestSentinel_CatPipePythonNonStdlib verifies that piping through python3 -c
+// with non-stdlib imports escalates.
+func TestSentinel_CatPipePythonNonStdlib(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`cat data.json | python3 -c "import requests; print(requests.get('http://x.com').text)"`,
+		`cat file | python3 -c "import os; os.system('id')"`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision == AutoAllow {
+			t.Errorf("cat|python3 non-stdlib cmd %q: expected non-AutoAllow, got AutoAllow (rule=%s)", cmd, result.RuleID)
+		}
+	}
+}
+
+// TestSentinel_BashPlusBazel verifies that compound commands combining bash
+// utilities with bazel build/test are auto-allowed when all parts are safe.
+func TestSentinel_BashPlusBazel(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`bazel mod graph 2>&1 | head -40`,
+		`bazel build //... && golangci-lint run`,
+		`bazel test //... 2>&1 | grep FAIL`,
+		// NOTE: `bazel query 'deps(//...)'` omitted — the shell-quoted arg loses its
+		// quoting in sub.Raw, causing re-parse to interpret `(//...)` as a subshell
+		// expression and escalate. Same root cause as TestSentinel_CatPipePythonStdlib_KnownLimitation.
+		`bazel query //... | wc -l`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("bazel compound %q: expected AutoAllow, got %v (rule=%s reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+// TestSentinel_BazelRunEscalates verifies that `bazel run` escalates even
+// when combined with safe commands.
+func TestSentinel_BazelRunEscalates(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`bazel run //cmd/server`,
+		`bazel run //tools/migrate -- --dry-run`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != Escalate {
+			t.Errorf("bazel run %q: expected Escalate (executes binary), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
+	}
+}
+
+// TestSentinel_JournalctlAndZcat verifies read-only log inspection tools
+// are auto-allowed, both standalone and in pipelines.
+func TestSentinel_JournalctlAndZcat(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`journalctl -u tailscaled --since "today" -n 50`,
+		`journalctl -u tailscaled --since "today" -n 80 | grep -iE "dns|error"`,
+		`journalctl --user -u stapler-squad -n 50 --no-pager`,
+		`zcat ~/.stapler-squad/logs/app.log.gz | grep "timed out"`,
+		`zcat /var/log/syslog.gz | grep -i "error" | tail -20`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("log inspection %q: expected AutoAllow, got %v (rule=%s reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+// TestSentinel_SleepAndAdbLogcat verifies that compound patterns using sleep
+// plus adb logcat (common in mobile CI scripts) are auto-allowed.
+func TestSentinel_SleepAndAdbLogcat(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`sleep 5 && adb logcat -d | grep -E "Benchmark|READY"`,
+		`adb logcat -d -t "2026-05-12 16:25:00.000" | grep -v wpa_supplicant`,
+		`adb devices && adb shell getprop ro.build.version.release`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("sleep+adb compound %q: expected AutoAllow, got %v (rule=%s reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+// TestSentinel_FirebaseReadAllowed verifies read-only firebase commands pass.
+func TestSentinel_FirebaseReadAllowed(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`firebase projects:list --json`,
+		`firebase functions:list`,
+		`firebase functions:log --limit 50`,
+		`firebase use my-project`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("firebase read %q: expected AutoAllow, got %v (rule=%s reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+// TestSentinel_FirebaseDeployEscalates verifies that firebase deploy escalates.
+func TestSentinel_FirebaseDeployEscalates(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`firebase deploy --only firestore:rules --project my-proj`,
+		`firebase deploy`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != Escalate {
+			t.Errorf("firebase deploy %q: expected Escalate (publishes to live infra), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
+	}
+}
+
+// TestSentinel_PulumiPreviewAllowed verifies pulumi read/preview ops pass.
+func TestSentinel_PulumiPreviewAllowed(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`PULUMI_CONFIG_PASSPHRASE="" pulumi config set projectId my-app --stack dev`,
+		`pulumi preview --stack dev`,
+		`pulumi stack ls`,
+		`pulumi about`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != AutoAllow {
+			t.Errorf("pulumi read %q: expected AutoAllow, got %v (rule=%s reason=%s)", cmd, result.Decision, result.RuleID, result.Reason)
+		}
+	}
+}
+
+// TestSentinel_PulumiUpEscalates verifies that pulumi up/destroy escalates.
+func TestSentinel_PulumiUpEscalates(t *testing.T) {
+	c := NewRuleBasedClassifier()
+	ctx := ClassificationContext{}
+
+	cmds := []string{
+		`pulumi up --stack dev`,
+		`PULUMI_CONFIG_PASSPHRASE="" pulumi up --yes`,
+		`pulumi destroy --stack dev`,
+	}
+	for _, cmd := range cmds {
+		result := c.Classify(bashPayload(cmd), ctx)
+		if result.Decision != Escalate {
+			t.Errorf("pulumi up/destroy %q: expected Escalate (modifies cloud infra), got %v (rule=%s)", cmd, result.Decision, result.RuleID)
+		}
 	}
 }

@@ -56,6 +56,7 @@ type SkillActivation struct {
 // Defined as an interface so test fakes can be injected without constructing a real store.
 type TokenStoreReader interface {
 	GetAll() []*ParseResult
+	GetByUUID(uuid string) *ParseResult
 	IsLoading() bool
 	Subscribe() <-chan struct{}
 	Unsubscribe(ch <-chan struct{})

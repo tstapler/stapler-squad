@@ -12,9 +12,9 @@ import (
 // analyticsSubscriber holds subscriber state including per-session last-known status
 // for detecting transitions from EventSessionUpdated (which has no old_status field).
 type analyticsSubscriber struct {
-	provider        AnalyticsProvider
-	mu              sync.Mutex
-	lastStatusByID  map[string]session.Status
+	provider       AnalyticsProvider
+	mu             sync.Mutex
+	lastStatusByID map[string]session.Status
 }
 
 func newAnalyticsSubscriber(provider AnalyticsProvider) *analyticsSubscriber {

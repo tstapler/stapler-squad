@@ -5,7 +5,11 @@ export function useAvailablePrograms(): ProgramOption[] {
   const [programs, setPrograms] = useState<ProgramOption[]>(PROGRAMS);
 
   useEffect(() => {
-    fetch("/api/server-info")
+    // Guard against environments (e.g. tests) where fetch may not be configured
+    if (typeof fetch !== "function") return;
+    const fetchResult = fetch("/api/server-info");
+    if (!fetchResult || typeof fetchResult.then !== "function") return;
+    fetchResult
       .then((r) => r.json())
       .then((data: { programs?: string[] }) => {
         if (!Array.isArray(data.programs)) return;

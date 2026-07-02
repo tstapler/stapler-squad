@@ -54,3 +54,64 @@ if (typeof globalThis.ResizeObserver === "undefined") {
     disconnect() {}
   };
 }
+
+// window.matchMedia is not available in jsdom. Provide a minimal stub.
+// Tests that need specific match values can override via jest.spyOn or Object.defineProperty.
+if (typeof window !== "undefined" && typeof window.matchMedia === "undefined") {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    configurable: true,
+    value: jest.fn().mockImplementation((query) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: jest.fn(),
+      removeListener: jest.fn(),
+      addEventListener: jest.fn(),
+      removeEventListener: jest.fn(),
+      dispatchEvent: jest.fn(),
+    })),
+  });
+}
+
+// next/navigation is not available in the jsdom test environment.
+// Tests that import components using useRouter or usePathname from next/navigation
+// will fail without this stub. Individual tests can override via jest.mock().
+jest.mock("next/navigation", () => ({
+  useRouter: jest.fn(() => ({ push: jest.fn(), replace: jest.fn(), back: jest.fn(), forward: jest.fn() })),
+  usePathname: jest.fn(() => "/"),
+  useSearchParams: jest.fn(() => new URLSearchParams()),
+  useParams: jest.fn(() => ({})),
+}), { virtual: true });
+
+// @xterm/addon-serialize calls HTMLCanvasElement.prototype.getContext at module load time,
+// which jsdom does not implement. Stub it globally to prevent the canvas error and keep
+// xterm tests isolated. Individual test files that need SerializeAddon behavior can override.
+jest.mock("@xterm/addon-serialize", () => ({
+  SerializeAddon: class SerializeAddon {
+    serialize() { return ""; }
+    serializeRows() { return ""; }
+    serializeRowRange() { return ""; }
+    activate() {}
+    dispose() {}
+  },
+}));
+
+// useSlashCommands makes a ConnectRPC network call (via fetch) on mount.
+// Stub it globally to prevent unexpected fetch calls in tests that assert
+// exact fetch call counts (e.g. image-upload tests).
+jest.mock("@/lib/hooks/useSlashCommands", () => ({
+  useSlashCommands: () => ({ commands: [], isLoading: false }),
+}));
+
+// useAvailablePrograms fetches /api/server-info on mount. In test environments
+// this extra fetch call interferes with tests that assert exact fetch call counts
+// (e.g. image-upload tests). Stub the hook globally to return the static PROGRAMS
+// list without performing any network requests. Tests that specifically need to
+// exercise program-loading behavior should override this mock locally.
+jest.mock("@/lib/hooks/useAvailablePrograms", () => ({
+  useAvailablePrograms: () => {
+    const { PROGRAMS } = require("@/lib/constants/programs");
+    return PROGRAMS;
+  },
+}));

@@ -167,9 +167,10 @@ export function QuickOpenPalette({
 
   // Scroll active item into view
   useEffect(() => {
-    resultRefs.current[activeIndex]?.scrollIntoView({
-      block: "nearest",
-    });
+    const el = resultRefs.current[activeIndex];
+    if (el && typeof el.scrollIntoView === "function") {
+      el.scrollIntoView({ block: "nearest" });
+    }
   }, [activeIndex]);
 
   const handleKeyDown = useCallback(

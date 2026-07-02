@@ -6,11 +6,7 @@
   "protoFile": "proto/session/v1/backlog.proto",
   "markerFound": true,
   "handlerFile": "server/services/backlog_service.go",
-  "tested": true,
-  "testIds": [
-    "TestCreateBacklogItem_Success",
-    "TestCreateBacklogItem_EmptyTitle",
-    "TestCreateBacklogItem_NilStorage"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T08:55:46.608260153-07:00"
 }

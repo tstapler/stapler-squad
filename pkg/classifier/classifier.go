@@ -1191,6 +1191,62 @@ func SeedRules() []Rule {
 			Enabled:        true,
 			Source:         "seed",
 		},
+		{
+			// bazel run executes an arbitrary compiled binary — unlike build/test which only
+			// compile, run hands control to the output binary.
+			// bazel shutdown kills the build daemon, dropping all build caches.
+			ID:       "seed-escalate-bazel-run",
+			Name:     "Escalate bazel run and shutdown",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"bazel"},
+				Subcommands: []string{"run", "shutdown"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskMedium,
+			Reason:      "bazel run executes an arbitrary compiled binary; bazel shutdown kills the build daemon and drops all caches.",
+			Alternative: "Use bazel build <target> to inspect what will be built before running it.",
+			Priority:    500,
+			Enabled:     true,
+			Source:      "seed",
+		},
+		{
+			// firebase deploy publishes code and config to live Firebase infrastructure.
+			// firebase serve starts a local dev server. Both require review before proceeding.
+			// Uses CommandPattern regex because firebase subcommands contain colons (e.g.
+			// "functions:delete") which isSubcommandLike() rejects, making Criteria.Subcommands
+			// unable to match them. This rule fires at priority 500 (before the allow rule at 100).
+			ID:       "seed-escalate-firebase-deploy",
+			Name:     "Escalate firebase deploy, serve, and destructive commands",
+			ToolName: "Bash",
+			//nolint:commandpattern firebase uses colon-namespaced subcommands that isSubcommandLike rejects
+			CommandPattern: regexp.MustCompile(`\bfirebase\s+(deploy|serve|init|functions:delete|login\b|logout\b)`),
+			Decision:       Escalate,
+			RiskLevel:      RiskHigh,
+			Reason:         "firebase deploy publishes to live infrastructure and should be reviewed before proceeding.",
+			Alternative:    "Run 'firebase projects:list' and confirm the active project with 'firebase use' before deploying.",
+			Priority:       500,
+			Enabled:        true,
+			Source:         "seed",
+		},
+		{
+			// pulumi up deploys or updates real cloud infrastructure.
+			// pulumi destroy removes it. Both are irreversible without backup/state management.
+			ID:       "seed-escalate-pulumi-deploy",
+			Name:     "Escalate pulumi up and destroy",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"pulumi"},
+				Subcommands: []string{"up", "destroy", "cancel", "import", "refresh"},
+			},
+			Decision:    Escalate,
+			RiskLevel:   RiskHigh,
+			Reason:      "pulumi up/destroy modifies or removes real cloud infrastructure and must be reviewed.",
+			Alternative: "Run 'pulumi preview' first to see what changes would be applied before running 'pulumi up'.",
+			Priority:    500,
+			Enabled:     true,
+			Source:      "seed",
+		},
 
 		// ══════════════════════════════════════════════════════════════════════════
 		// AutoAllow (Priority 101/100) — standard development operations
@@ -2311,7 +2367,112 @@ func SeedRules() []Rule {
 			Enabled:   true,
 			Source:    "seed",
 		},
-
+		{
+			// zcat/gzcat reads compressed files to stdout — equivalent to cat but for .gz files.
+			// Purely read-only; no state is modified.
+			ID:       "seed-allow-bash-zcat",
+			Name:     "Allow zcat/gzcat (compressed file reader)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"zcat", "gzcat"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "zcat/gzcat decompresses files to stdout without modifying any state.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// journalctl reads the systemd journal — a read-only log inspection tool.
+			// Common usage: journalctl -u <service> --since "today" -n 50
+			ID:       "seed-allow-bash-journalctl",
+			Name:     "Allow journalctl (systemd log reader)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"journalctl"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "journalctl is a read-only log inspection tool; it does not modify journal state.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// golangci-lint runs Go linters against the current project. It is always
+			// read-only — it reports issues but never modifies files (use --fix for that,
+			// which is a distinct and deliberate action).
+			ID:       "seed-allow-bash-golangci-lint",
+			Name:     "Allow golangci-lint (Go linter)",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"golangci-lint"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "golangci-lint is a read-only static analysis tool for Go projects.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// bazel build/test/query/mod/info/fetch/clean are standard build-system operations
+			// used in CI and local development. They do not execute the built artifacts.
+			// `bazel run` executes an arbitrary binary and is escalated at priority 500.
+			ID:       "seed-allow-bash-bazel-build",
+			Name:     "Allow bazel build, test, query, and inspection commands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:    []string{"bazel"},
+				Subcommands: []string{"build", "test", "query", "cquery", "aquery", "mod", "info", "fetch", "version", "help", "config", "dump", "analyze-profile", "clean", "coverage", "mobile-install"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "bazel build/test/query/mod/info are standard CI build operations that do not execute output binaries.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// firebase CLI commands. Most subcommands (projects:list, functions:list, etc.)
+			// are read-only inspection. The dangerous subcommands (deploy, serve, init) are
+			// caught at priority 500 before this rule fires.
+			// NOTE: Firebase uses colon-namespaced subcommands (e.g. "projects:list") which
+			// isSubcommandLike() rejects. Subcommand-based matching is therefore not used here;
+			// the priority-500 escalate rule catches the dangerous subcommands via regex instead.
+			ID:       "seed-allow-bash-firebase",
+			Name:     "Allow firebase commands",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs: []string{"firebase"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "firebase CLI commands are generally read-only inspection operations.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
+		{
+			// pulumi config, preview, stack, and about are safe read-only or local-state
+			// operations. `pulumi up`, `destroy`, and `cancel` mutate real infrastructure
+			// and are escalated at priority 500.
+			ID:       "seed-allow-bash-pulumi-read",
+			Name:     "Allow pulumi config, preview, and stack inspection",
+			ToolName: "Bash",
+			Criteria: &CommandCriteria{
+				Programs:           []string{"pulumi"},
+				Subcommands:        []string{"config", "preview", "stack", "about", "version", "plugin", "state", "whoami", "help", "new", "login"},
+				BlockedSubcommands: []string{"up", "destroy", "cancel", "import", "refresh", "logout"},
+			},
+			Decision:  AutoAllow,
+			RiskLevel: RiskLow,
+			Reason:    "pulumi config/preview/stack are local-state or dry-run operations that do not modify cloud infrastructure.",
+			Priority:  100,
+			Enabled:   true,
+			Source:    "seed",
+		},
 		// ══════════════════════════════════════════════════════════════════════════
 		// Escalate targeted (Priority 60) — more specific than catch-all; provides
 		// actionable alternatives for known patterns that benefit from guidance.

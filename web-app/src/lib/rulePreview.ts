@@ -127,6 +127,61 @@ const EXAMPLE_BANK: string[] = [
   "kubectl get pods", "terraform plan",
 ];
 
+export interface SubcommandStat {
+  programName: string;
+  subcommand: string;
+  count: number;
+}
+
+export interface CoverageResult {
+  covered: number;
+  total: number;
+  uncoveredSubcommands: string[]; // subcommands from real data not covered by criteria
+}
+
+/**
+ * Given criteria and real command stats, compute how many real decisions the rule
+ * would cover, and which subcommands are not yet covered.
+ */
+export function computeCoverage(criteria: RuleCriteria, stats: SubcommandStat[]): CoverageResult {
+  if (criteria.programs.length === 0 || stats.length === 0) {
+    return { covered: 0, total: 0, uncoveredSubcommands: [] };
+  }
+
+  let covered = 0;
+  let total = 0;
+  const uncoveredSubcommands: string[] = [];
+
+  for (const stat of stats) {
+    // Only consider stats whose program matches the criteria
+    if (!matchesProgram(criteria.programs, stat.programName)) continue;
+    total += stat.count;
+
+    // Build a synthetic command string to test against full criteria
+    const synthetic = stat.subcommand
+      ? `${stat.programName} ${stat.subcommand}`
+      : stat.programName;
+    if (matchesCriteria(criteria, synthetic)) {
+      covered += stat.count;
+    } else if (
+      criteria.subcommands.length > 0 &&
+      stat.subcommand &&
+      !uncoveredSubcommands.includes(stat.subcommand)
+    ) {
+      uncoveredSubcommands.push(stat.subcommand);
+    }
+  }
+
+  // Sort uncovered by frequency (most common first) using original stats
+  uncoveredSubcommands.sort((a, b) => {
+    const ca = stats.find((s) => s.subcommand === a)?.count ?? 0;
+    const cb = stats.find((s) => s.subcommand === b)?.count ?? 0;
+    return cb - ca;
+  });
+
+  return { covered, total, uncoveredSubcommands: uncoveredSubcommands.slice(0, 8) };
+}
+
 export function computePreview(criteria: RuleCriteria): PreviewResult {
   const hasAnyCriteria =
     criteria.programs.length > 0 ||

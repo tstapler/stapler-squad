@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -18,8 +19,10 @@ import (
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/internal/claudehooks"
 	"github.com/tstapler/stapler-squad/pkg/classifier"
 	"github.com/tstapler/stapler-squad/session"
+	"gopkg.in/yaml.v3"
 )
 
 func main() {
@@ -438,6 +441,12 @@ func loadStorage(path string) *session.Storage {
 
 func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	c := classifier.NewRuleBasedClassifier()
+
+	// Load user-specific rules from ~/.config/ssq-hooks/user-rules.yaml (if present).
+	if home, err := os.UserHomeDir(); err == nil {
+		c.AddRules(loadUserRulesFile(filepath.Join(home, ".config", "ssq-hooks", "user-rules.yaml")))
+	}
+
 	rules, err := storage.AllRules(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to load rules from DB: %v\n", err)
@@ -632,7 +641,7 @@ func installClaude() {
 
 	// 2. Patch ~/.claude/settings.json.
 	settingsPath := filepath.Join(home, ".claude", "settings.json")
-	if err := patchClaudeSettings(settingsPath, destBin); err != nil {
+	if err := claudehooks.InstallRules(settingsPath, destBin); err != nil {
 		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", settingsPath, err)
 		os.Exit(1)
 	}
@@ -664,86 +673,6 @@ func copyBinary(src, dst string) error {
 		return err
 	}
 	return os.Rename(tmp, dst)
-}
-
-// patchClaudeSettings adds the ssq-hooks PreToolUse entry to settingsPath.
-// The hook entry is prepended to the PreToolUse array so it runs before other
-// hooks (e.g. rtk-rewrite). Idempotent: no-ops if the entry already exists.
-func patchClaudeSettings(settingsPath, binPath string) error {
-	hookCmd := binPath + " check"
-
-	// Read existing settings (create minimal file if absent).
-	raw, err := os.ReadFile(settingsPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return err
-		}
-		raw = []byte("{}")
-	}
-
-	var settings map[string]interface{}
-	if err := json.Unmarshal(raw, &settings); err != nil {
-		return fmt.Errorf("parsing %s: %w", settingsPath, err)
-	}
-
-	// Navigate to hooks.PreToolUse, creating intermediate maps as needed.
-	if existing, ok := settings["hooks"]; ok {
-		if _, ok := existing.(map[string]interface{}); !ok {
-			return fmt.Errorf("parsing %s: \"hooks\" field is not an object", settingsPath)
-		}
-	}
-	hooks, _ := settings["hooks"].(map[string]interface{})
-	if hooks == nil {
-		hooks = map[string]interface{}{}
-		settings["hooks"] = hooks
-	}
-	if existing, ok := hooks["PreToolUse"]; ok {
-		if _, ok := existing.([]interface{}); !ok {
-			return fmt.Errorf("parsing %s: hooks.\"PreToolUse\" field is not an array", settingsPath)
-		}
-	}
-	preToolUse, _ := hooks["PreToolUse"].([]interface{})
-
-	// Check if the hook is already present (idempotency).
-	for _, entry := range preToolUse {
-		m, ok := entry.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		hookList, _ := m["hooks"].([]interface{})
-		for _, h := range hookList {
-			hm, ok := h.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if cmd, _ := hm["command"].(string); cmd == hookCmd {
-				fmt.Println("Hook already present, nothing to do.")
-				return nil
-			}
-		}
-	}
-
-	// Prepend the ssq-hooks entry so it gets first say.
-	newEntry := map[string]interface{}{
-		"matcher": ".*",
-		"hooks": []interface{}{
-			map[string]interface{}{
-				"type":    "command",
-				"command": hookCmd,
-			},
-		},
-	}
-	hooks["PreToolUse"] = append([]interface{}{newEntry}, preToolUse...)
-
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return err
-	}
-	// Ensure parent directory exists (e.g. ~/.claude/ may not exist yet).
-	if err := os.MkdirAll(filepath.Dir(settingsPath), 0700); err != nil {
-		return err
-	}
-	return os.WriteFile(settingsPath, append(out, '\n'), 0644)
 }
 
 // patchBeforeToolHook patches any Gemini-family settings file (flat JSON) to set
@@ -1218,4 +1147,114 @@ func getDBPathForCwd(cwd string) string {
 		return filepath.Join(home, ".stapler-squad", "sessions.db")
 	}
 	return filepath.Join(configDir, "sessions.db")
+}
+
+// userRulesFile is the YAML format for ~/.config/ssq-hooks/user-rules.yaml.
+// Use this file for personal rules that are not generally applicable to all users.
+type userRulesFile struct {
+	Rules []userRule `yaml:"rules"`
+}
+
+type userRule struct {
+	ID                 string   `yaml:"id"`
+	Name               string   `yaml:"name"`
+	ToolName           string   `yaml:"tool_name"`
+	Programs           []string `yaml:"programs"`
+	Subcommands        []string `yaml:"subcommands"`
+	BlockedSubcommands []string `yaml:"blocked_subcommands"`
+	RequiredFlags      []string `yaml:"required_flags"`
+	ForbiddenFlags     []string `yaml:"forbidden_flags"`
+	CommandPattern     string   `yaml:"command_pattern"`
+	Decision           string   `yaml:"decision"`    // "allow", "escalate", "deny"
+	RiskLevel          string   `yaml:"risk_level"`  // "low", "medium", "high", "critical"
+	Reason             string   `yaml:"reason"`
+	Alternative        string   `yaml:"alternative"`
+	Priority           int   `yaml:"priority"`
+	Enabled            *bool `yaml:"enabled"` // nil means enabled; false disables explicitly
+}
+
+func (r userRule) toClassifierRule() (classifier.Rule, error) {
+	decisionMap := map[string]classifier.ClassificationDecision{
+		"allow":   classifier.AutoAllow,
+		"escalate": classifier.Escalate,
+		"deny":    classifier.AutoDeny,
+	}
+	riskMap := map[string]classifier.RiskLevel{
+		"low":      classifier.RiskLow,
+		"medium":   classifier.RiskMedium,
+		"high":     classifier.RiskHigh,
+		"critical": classifier.RiskCritical,
+	}
+	decision, ok := decisionMap[r.Decision]
+	if !ok {
+		return classifier.Rule{}, fmt.Errorf("unknown decision %q in rule %s", r.Decision, r.ID)
+	}
+	var risk classifier.RiskLevel
+	if r.RiskLevel == "" {
+		risk = classifier.RiskLow
+	} else {
+		var ok bool
+		risk, ok = riskMap[r.RiskLevel]
+		if !ok {
+			return classifier.Rule{}, fmt.Errorf("unknown risk_level %q in rule %s", r.RiskLevel, r.ID)
+		}
+	}
+
+	cr := classifier.Rule{
+		ID:          r.ID,
+		Name:        r.Name,
+		ToolName:    r.ToolName,
+		Decision:    decision,
+		RiskLevel:   risk,
+		Reason:      r.Reason,
+		Alternative: r.Alternative,
+		Priority:    r.Priority,
+		Enabled:     r.Enabled == nil || *r.Enabled, // nil → enabled by default
+		Source:      "user",
+	}
+	if len(r.Programs)+len(r.Subcommands)+len(r.BlockedSubcommands)+len(r.RequiredFlags)+len(r.ForbiddenFlags) > 0 {
+		cr.Criteria = &classifier.CommandCriteria{
+			Programs:           r.Programs,
+			Subcommands:        r.Subcommands,
+			BlockedSubcommands: r.BlockedSubcommands,
+			RequiredFlags:      r.RequiredFlags,
+			ForbiddenFlags:     r.ForbiddenFlags,
+		}
+	}
+	if r.CommandPattern != "" {
+		compiled, err := regexp.Compile(r.CommandPattern)
+		if err != nil {
+			return classifier.Rule{}, fmt.Errorf("invalid command_pattern in rule %s: %w", r.ID, err)
+		}
+		cr.CommandPattern = compiled
+	}
+	return cr, nil
+}
+
+// loadUserRulesFile reads user-specific rules from a YAML file.
+// Returns nil silently if the file does not exist.
+func loadUserRulesFile(path string) []classifier.Rule {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not read user rules file %s: %v\n", path, err)
+		return nil
+	}
+	var f userRulesFile
+	if err := yaml.Unmarshal(data, &f); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not parse user rules file %s: %v\n", path, err)
+		return nil
+	}
+	var rules []classifier.Rule
+	for _, r := range f.Rules {
+		cr, err := r.toClassifierRule()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: skipping invalid user rule: %v\n", err)
+			continue
+		}
+		rules = append(rules, cr)
+	}
+	return rules
 }

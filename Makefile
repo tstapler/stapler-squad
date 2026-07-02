@@ -72,6 +72,10 @@ registry-generate-backend: ## Scan proto+markers → write per-feature files und
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/unfinished.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/backlog.proto server/services/ $(BACKEND_FEATURES_DIR)
 	@./$(BACKEND_SCANNER_BIN) proto/session/v1/insights.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@./$(BACKEND_SCANNER_BIN) proto/session/v1/github_user.proto server/services/ $(BACKEND_FEATURES_DIR)
+	@# Generation is additive; prune files whose RPC no longer exists so the
+	@# committed set stays in sync with the proto (avoids registry-validation drift).
+	@bash tools/scanner/prune-stale-backend.sh $(BACKEND_FEATURES_DIR)
 	@echo "✅ Backend per-feature files written to $(BACKEND_FEATURES_DIR)/"
 
 registry-generate-frontend: ## Generate frontend feature registry from React component markers
@@ -201,6 +205,9 @@ install: ensure-tools ## Install stapler-squad locally
 	go install .
 	mkdir -p ~/.local/bin
 	go build -o ~/.local/bin/ssq-hooks ./cmd/ssq-hooks/
+	@# Stable path for the notification hook handler so the server can register
+	@# it during onboarding (InstallHooks RPC). See internal/claudehooks.
+	install -m 0755 scripts/ssq-hook-handler ~/.local/bin/ssq-hook-handler
 
 build-mux: ensure-tools ## Build the claude-mux PTY multiplexer binary
 	@echo "Building claude-mux..."
@@ -367,7 +374,9 @@ proto-gen: ensure-tools web-app/node_modules/.modules.yaml ## Generate Go and Ty
 	@echo "Checking if proto files need regeneration..."
 	@if [ ! -f $(PROTO_STAMP) ] \
 	   || [ "$$(find proto -name '*.proto' -newer $(PROTO_STAMP) -print -quit)" ] \
-	   || [ web-app/node_modules/.bin/protoc-gen-es -nt $(PROTO_STAMP) ]; then \
+	   || [ web-app/node_modules/.bin/protoc-gen-es -nt $(PROTO_STAMP) ] \
+	   || [ ! -f gen/proto/go/session/v1/session.pb.go ] \
+	   || [ ! -f web-app/src/gen/session/v1/session_pb.ts ]; then \
 		echo "Generating protocol buffer code..."; \
 		buf generate proto; \
 		echo "✅ Code generation complete"; \

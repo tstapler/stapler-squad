@@ -144,6 +144,10 @@ export const primaryActionWrapper = style({
     "(prefers-reduced-motion: no-preference)": {
       transition: vars.transition.fast,
     },
+    // Touch devices have no hover — always show primary action
+    "(hover: none)": {
+      opacity: 1,
+    },
   },
   selectors: {
     [`${row}:hover &`]: {
@@ -170,6 +174,13 @@ export const inlineActionButton = style({
   cursor: "pointer",
   whiteSpace: "nowrap",
   lineHeight: 1.5,
+  "@media": {
+    // Ensure 44px minimum touch target on coarse-pointer devices (WCAG 2.5.5)
+    "(pointer: coarse)": {
+      padding: "10px 14px",
+      minHeight: 44,
+    },
+  },
   ":hover": {
     background: vars.color.hoverBackground,
     borderColor: vars.color.borderHover,

@@ -30,6 +30,7 @@ export class StateApplicator {
   private terminal: Terminal;
   private currentSequence: bigint = BigInt(0);
   private textDecoder: TextDecoder = new TextDecoder();
+  private lineDecoder: TextDecoder = new TextDecoder();
   private lastAppliedState: TerminalState | null = null;
   private isApplyingState: boolean = false; // Flag to prevent scroll event handling during state application
 
@@ -228,7 +229,7 @@ export class StateApplicator {
       // Write diff bytes directly to terminal
       // These are pre-computed ANSI escape sequences from the server
       if (diff.diffBytes && diff.diffBytes.length > 0) {
-        const diffStr = this.textDecoder.decode(diff.diffBytes);
+        const diffStr = this.textDecoder.decode(diff.diffBytes, { stream: true });
         this.terminal.write(diffStr);
 
         console.log(
@@ -473,7 +474,10 @@ export class StateApplicator {
       }
 
       // Decode raw content (preserves ANSI escape sequences for styling)
-      const lineText = this.textDecoder.decode(line.content);
+      // Use lineDecoder (separate from the streaming textDecoder). {stream:true} handles the edge
+      // case where server-side encoding splits a multibyte character across line.content bytes;
+      // lineDecoder is reset() in resetSequence() so stale state never persists across reconnects.
+      const lineText = this.lineDecoder.decode(line.content, { stream: true });
       const previousLine = this.previousLines.get(i);
 
       // Only update if line changed
@@ -606,11 +610,11 @@ export class StateApplicator {
     this.terminal.write(moveCursorTo(clampedRow + 1, clampedCol + 1));
 
     // Handle cursor visibility AFTER positioning to prevent flicker
-    // Cursor was hidden in applyCompleteState(), now restore correct visibility
+    // Cursor was hidden in applyIncrementalState(), now restore correct visibility
     if (cursor.visible) {
       this.terminal.write(CURSOR_SHOW);
     }
-    // If cursor should be hidden, it's already hidden from applyCompleteState()
+    // If cursor should be hidden, it's already hidden from applyIncrementalState()
   }
 
   /**
@@ -629,6 +633,14 @@ export class StateApplicator {
     this.currentSequence = BigInt(0);
     this.lastAppliedState = null;
 
+    // Cancel any pending status-line debounce timer so it cannot fire stale content
+    // into the fresh terminal session after a reconnect.
+    if (this.statusLineDebounceTimer !== null) {
+      clearTimeout(this.statusLineDebounceTimer);
+      this.statusLineDebounceTimer = null;
+    }
+    this.statusLineBuffer.clear();
+
     // Clear incremental diff caches
     this.previousLines.clear();
     this.previousDimensions = null;
@@ -642,7 +654,18 @@ export class StateApplicator {
     this.pendingDiff = null;
     this.lastFrameTime = 0;
 
+    this.reset();
+
     console.log('[StateApplicator] Sequence tracking and caches reset to initial state');
+  }
+
+  /**
+   * Reset TextDecoders to flush any incomplete multi-byte character state.
+   * Called internally on reconnect/error so dangling bytes do not corrupt the next decoded chunk.
+   */
+  private reset(): void {
+    this.textDecoder = new TextDecoder();
+    this.lineDecoder = new TextDecoder();
   }
 
   /**

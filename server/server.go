@@ -151,6 +151,19 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("UnfinishedWork scanner started")
 	}
 
+	// Start WorktreePRPoller: enriches worktrees-without-sessions with GitHub PR data.
+	if deps.WorktreePRPoller != nil {
+		deps.WorktreePRPoller.Start(serverCtx)
+		log.Info("WorktreePRPoller started")
+	}
+
+	// Start UserPRCache: background refresh of all open PRs authored by the
+	// authenticated GitHub user (used by the GitHub Work Continuity feature).
+	if deps.UserPRCache != nil {
+		deps.UserPRCache.Start(serverCtx)
+		log.Info("UserPRCache started")
+	}
+
 	// Register shutdown hook: capture pane working dirs and persist instance
 	// state so cold restore can find the right directory on next start.
 	// Uses HistoryLinker.Instances() (not the startup snapshot) so externally
@@ -343,6 +356,14 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.Info("Registered InsightsService handler", "path", insightsAPIPath)
 	}
 
+	// Register GitHubUserService handler (GitHub Work Continuity feature).
+	if deps.GitHubUserService != nil {
+		ghPath, ghHandler := sessionv1connect.NewGitHubUserServiceHandler(deps.GitHubUserService, ConnectOptions(deps.ErrorRegistry)...)
+		ghAPIPath := "/api" + ghPath
+		srv.RegisterConnectHandler(ghAPIPath, http.StripPrefix("/api", ghHandler))
+		log.Info("Registered GitHubUserService handler", "path", ghAPIPath)
+	}
+
 	// Register BacklogService handler.
 	// The feature-flag interceptor is added on top of the standard options so that
 	// all BacklogService RPCs return CodeNotFound when the "backlog" flag is off.
@@ -360,6 +381,12 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 		log.InfoLog.Printf("Registered BacklogService handler at %s", blAPIPath)
 	}
 
+	// Start UserPRCache and register GitHubUserService handler.
+	if deps.UserPRCache != nil {
+		deps.UserPRCache.Start(serverCtx)
+		srv.shutdownHooks = append(srv.shutdownHooks, deps.UserPRCache.Stop)
+		log.Info("UserPRCache started")
+	}
 	// Start WorkflowScheduler (nil guard: disabled when workflow repo is unavailable).
 	if deps.WorkflowScheduler != nil {
 		deps.WorkflowScheduler.Start(serverCtx)

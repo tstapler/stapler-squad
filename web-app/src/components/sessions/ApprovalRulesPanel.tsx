@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
@@ -31,11 +31,6 @@ import {
 } from "./ApprovalRulesPanel.css";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-/** Escape all regex metacharacters in a literal string for safe interpolation into patterns. */
-function escapeRegex(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
 
 function decisionLabel(d: AutoDecision): string {
   switch (d) {
@@ -94,12 +89,13 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
   const [templateSeed, setTemplateSeed] = useState<RuleTemplate | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
 
-  // Track which form fields the user has manually edited (not overwritten by AI pre-fill).
-  const touchedFieldsRef = useRef<Set<keyof RuleFormState>>(new Set());
-
   // ── URL param pre-fill (from analytics "Add rule →" links) ───────────────
   // Runs once on mount (client only). Reads window.location.search directly to
   // avoid useSearchParams + Suspense complications in the static export.
+  const [urlPrefill, setUrlPrefill] = useState<RuleBuilderPrefill | null>(null);
+  // Ref for the form section so we can scroll to it after URL-param pre-fill.
+  const formSectionRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tool = params.get("tool");
@@ -107,39 +103,25 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     const subcommand = params.get("subcommand");
     if (!tool && !program) return;
 
-    const prefill: Partial<RuleFormState> = {};
+    const fill: RuleBuilderPrefill = {};
     if (tool) {
-      prefill.toolName = tool;
-      prefill.name = `Allow ${tool}`;
+      fill.toolName = tool;
     } else if (program) {
-      // Escape regex metacharacters so values like "docker-compose" or "node.js"
-      // produce valid patterns. Use (?:^|\s) / (?:\s|$) word boundaries because
-      // \b does not match at hyphen boundaries.
-      const esc = escapeRegex(program);
-      prefill.toolName = "Bash";
-      if (subcommand) {
-        const escSub = escapeRegex(subcommand);
-        prefill.commandPattern = `(?:^|\\s)${esc}(?:\\s|$).*(?:^|\\s)${escSub}(?:\\s|$)`;
-        prefill.name = `Allow ${program} ${subcommand}`;
-      } else {
-        prefill.commandPattern = `(?:^|\\s)${esc}(?:\\s|$)`;
-        prefill.name = `Allow ${program}`;
-      }
+      fill.toolName = "Bash";
+      fill.programs = [program];
+      if (subcommand) fill.subcommands = [subcommand];
     }
 
-    setShowForm(true);
-    setForm({ ...emptyForm, ...prefill });
-    setFormError(null);
-    setAiPrefilled(false);
-    setCmdSampleValue("");
-    touchedFieldsRef.current = new Set();
-    cmdGenClear();
+    setUrlPrefill(fill);
+    setShowBuilder(true);
 
     setTimeout(() => {
       formSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 100);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const effectivePrefill = prefill ?? urlPrefill;
 
   // ── filter ────────────────────────────────────────────────────────────────
 
@@ -524,7 +506,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       </button>
 
       {/* ── Rule Builder ── */}
-      <div className={formSection} id="rule-builder">
+      <div className={formSection} id="rule-builder" ref={formSectionRef}>
         {!showBuilder ? (
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
             <button className={addButton} onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}>
@@ -545,6 +527,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
             templateSeed={templateSeed}
             onSave={handleSave}
             onCancel={handleCancel}
+            subcommandStats={summary?.commandSubcommandStats ?? []}
           />
         )}
       </div>

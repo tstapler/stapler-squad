@@ -2,6 +2,7 @@ package session
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -135,4 +136,53 @@ func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
 		"extraction must be attempted when claudeSession is nil")
 	// claudeSession remains nil because tmux was not running.
 	assert.Nil(t, inst.claudeSession)
+}
+
+// TestSwitchWorkspace_DoesNotDeadlockOnStartCall is a regression test for a
+// reentrant-lock self-deadlock: SwitchWorkspace used to hold i.stateMutex.Lock()
+// across its entire body, including its calls to i.Start(false). Start() itself
+// acquires i.stateMutex.Lock() (instance.go, in the Active-status transition near
+// the end of start()). sync.RWMutex/deadlock.RWMutex is not reentrant, so calling
+// Start() while still holding the lock deadlocks the calling goroutine forever.
+//
+// This is a deadlock, not a data race — go test -race will NOT catch it. The test
+// instead runs SwitchWorkspace in a goroutine and asserts it returns within a
+// generous bound; pre-fix, this test would hang until the suite's own timeout.
+//
+// The instance has no VCS in its temp directory, so VCS detection fails and
+// SwitchWorkspace takes the SessionTypeDirectory fallback path (instance_workspace.go,
+// "no vcs detected, falling back to simple directory change"), which is the first
+// of the three call sites that used to deadlock.
+func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
+	instance, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
+		WithSessionType(SessionTypeDirectory).
+		Build()
+	require.NoError(t, err)
+	if cleanup != nil {
+		defer func() { _ = cleanup() }()
+	}
+
+	// Simulate an already-running session so SwitchWorkspace's guard passes.
+	instance.started = true
+	instance.Status = Active
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// Result/error are not asserted: the temp dir has no VCS, so this may
+		// well return an error. The only thing this test verifies is that the
+		// call returns at all instead of deadlocking.
+		_, _ = instance.SwitchWorkspace(WorkspaceSwitchRequest{
+			Type:   SwitchTypeRevision,
+			Target: "some-branch",
+		})
+	}()
+
+	select {
+	case <-done:
+		// Returned without deadlocking - the fix holds.
+	case <-time.After(10 * time.Second):
+		t.Fatal("SwitchWorkspace did not return within 10s - likely reentrant " +
+			"stateMutex deadlock via Start() (see instance_workspace.go)")
+	}
 }

@@ -5,18 +5,7 @@
   "method": "GetInsightsSummary",
   "protoFile": "proto/session/v1/insights.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestGetInsightsSummary_EmptyStore",
-    "TestGetInsightsSummary_Aggregation",
-    "TestGetInsightsSummary_TimeFilter",
-    "TestGetInsightsSummary_ModelFilter",
-    "TestGetInsightsSummary_OrphanFilter",
-    "TestGetInsightsSummary_DailyRollup",
-    "TestGetInsightsSummary_ModelBreakdown",
-    "TestGetInsightsSummary_SortByCostDesc",
-    "TestGetInsightsSummary_Pagination",
-    "TestGetInsightsSummary_CacheHitRate"
-  ],
-  "lastModified": "2026-06-21T12:39:06.59282763-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-17T16:40:58.369884702-07:00"
 }

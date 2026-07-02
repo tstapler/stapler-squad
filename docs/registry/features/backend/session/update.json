@@ -6,14 +6,7 @@
   "protoFile": "proto/session/v1/session.proto",
   "markerFound": true,
   "handlerFile": "server/services/session_service.go",
-  "tested": true,
-  "testIds": [
-    "TestUpdateSession_MissingID",
-    "TestUpdateSession_NotFound",
-    "TestUpdateSession_TagsUpdate",
-    "TestUpdateSession_TagsUpdate_Replaces",
-    "TestUpdateSession_TitleConflict",
-    "TestUpdateSession_HandlerOrdering_MetadataBeforeStatus"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-26T08:55:46.608811477-07:00"
 }

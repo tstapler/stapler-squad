@@ -83,7 +83,20 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 	}
 
 	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	// unlocked tracks whether the lock has already been released early (see below).
+	// Start() acquires stateMutex itself during its Active-status transition, so it
+	// must never be called while this function still holds the lock - sync.RWMutex/deadlock.RWMutex is not
+	// reentrant and a nested Lock() on the same goroutine deadlocks forever. unlock() is
+	// idempotent so it's safe to call both explicitly (before each Start() call below)
+	// and again via this defer on every other return path.
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			unlocked = true
+			i.stateMutex.Unlock()
+		}
+	}
+	defer unlock()
 
 	result := &WorkspaceSwitchResult{}
 
@@ -145,6 +158,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 			i.started = false
 
 			log.Info("restarting session in new directory", "path", repoPath)
+			unlock() // Start() acquires stateMutex itself - must not be held here.
 			if err := i.Start(false); err != nil {
 				result.Error = fmt.Errorf("failed to restart session: %w", err)
 				return result, result.Error
@@ -194,6 +208,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 	if switchErr != nil {
 		// Try to recover by restarting at original location
 		log.Warn("switch failed, attempting recovery", "err", switchErr)
+		unlock() // Start() acquires stateMutex itself - must not be held here.
 		if err := i.Start(false); err != nil {
 			log.Error("recovery failed", "err", err)
 		}
@@ -203,6 +218,7 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 
 	// 7. Restart Claude (ClaudeCommandBuilder adds --resume automatically)
 	log.Info("restarting session with claude --resume")
+	unlock() // Start() acquires stateMutex itself - must not be held here.
 	if err := i.Start(false); err != nil {
 		result.Error = fmt.Errorf("failed to restart session: %w", err)
 		return result, result.Error

@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package session.v1;
+
+import "session/v1/types.proto";
+
+option go_package = "github.com/tstapler/stapler-squad/gen/proto/go/session/v1";
+
+// GitHubUserService provides access to the authenticated user's GitHub pull
+// requests across all repos. Data is served from the in-process UserPRCache
+// (which polls the GitHub GraphQL API in the background). No subprocess calls.
+service GitHubUserService {
+  // ListUserPRs returns all open PRs authored by the authenticated user,
+  // annotated with any matching local session IDs and worktree paths.
+  // Returns an empty list with auth_state.available=false when unauthenticated.
+  rpc ListUserPRs(ListUserPRsRequest) returns (ListUserPRsResponse) {}
+
+  // WatchUserPRs streams UserPREvent messages whenever the UserPRCache
+  // refreshes. The first event always contains a full snapshot.
+  rpc WatchUserPRs(WatchUserPRsRequest) returns (stream UserPREvent) {}
+
+  // GetGitHubAuthState returns current auth availability and username.
+  // Used by the frontend to show/hide the GitHub PRs section and render
+  // the auth banner when the user has not authenticated.
+  rpc GetGitHubAuthState(GetGitHubAuthStateRequest) returns (GetGitHubAuthStateResponse) {}
+}
+
+// GitHubAuthState describes the current GitHub authentication status.
+message GitHubAuthState {
+  bool   available     = 1; // true when a token is present and /user returned 200
+  string username      = 2; // GitHub login, empty when available=false
+  string error_message = 3; // human-readable reason when available=false
+}
+
+message ListUserPRsRequest {}
+
+message ListUserPRsResponse {
+  repeated UserPR    prs        = 1;
+  GitHubAuthState    auth_state = 2;
+}
+
+message WatchUserPRsRequest {}
+
+message UserPREvent {
+  // event_type is "snapshot", "added", "updated", or "removed".
+  string          event_type = 1;
+  repeated UserPR prs        = 2; // full list for "snapshot"; changed PRs otherwise
+  GitHubAuthState auth_state = 3;
+}
+
+message GetGitHubAuthStateRequest {}
+
+message GetGitHubAuthStateResponse {
+  GitHubAuthState auth_state = 1;
+}

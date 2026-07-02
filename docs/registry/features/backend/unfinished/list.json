@@ -5,13 +5,7 @@
   "method": "ListUnfinishedWork",
   "protoFile": "proto/session/v1/unfinished.proto",
   "markerFound": false,
-  "tested": true,
-  "testIds": [
-    "TestScanner_ScanWorktrees",
-    "TestScanner_CircuitBreaker",
-    "TestScanner_FilterDismissed",
-    "unfinished-work \u003e page loads with title and filter controls",
-    "unfinished-work \u003e shows empty state when no worktrees found"
-  ],
-  "lastModified": "2026-06-13T14:32:30.592373288-07:00"
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-06-17T16:40:58.370370777-07:00"
 }

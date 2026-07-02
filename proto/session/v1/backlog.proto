@@ -346,6 +346,9 @@ service BacklogService {
   // TriggerTriage kicks off a triage session for a backlog item.
   rpc TriggerTriage(TriggerTriageRequest) returns (TriggerTriageResponse) {}
 
+  // CancelTriage stops a running triage session for a backlog item.
+  rpc CancelTriage(CancelTriageRequest) returns (CancelTriageResponse) {}
+
   // ApprovePlan marks the planning artifacts for an item as approved.
   rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse) {}
 
@@ -375,4 +378,12 @@ service BacklogService {
 
   // GetSyncHistory returns the sync event history for an item source.
   rpc GetSyncHistory(GetSyncHistoryRequest) returns (GetSyncHistoryResponse) {}
+}
+
+message CancelTriageRequest {
+  string item_id = 1;
+}
+
+message CancelTriageResponse {
+  bool cancelled = 1;
 }

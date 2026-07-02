@@ -20,13 +20,13 @@ const (
 	StatusReady
 	StatusProcessing
 	StatusNeedsApproval
-	StatusInputRequired    // Explicit user input prompts (questions, "enter X:", etc.)
+	StatusInputRequired // Explicit user input prompts (questions, "enter X:", etc.)
 	StatusError
-	StatusTestsFailing     // Tests are failing
-	StatusIdle             // Waiting for user input (INSERT mode, command prompt, etc.)
-	StatusExecuting        // Actively executing commands (shows "esc to interrupt")
-	StatusSuccess          // Task completed successfully
-	StatusWaitingForAgent  // Waiting for one or more background agents to finish
+	StatusTestsFailing    // Tests are failing
+	StatusIdle            // Waiting for user input (INSERT mode, command prompt, etc.)
+	StatusExecuting       // Actively executing commands (shows "esc to interrupt")
+	StatusSuccess         // Task completed successfully
+	StatusWaitingForAgent // Waiting for one or more background agents to finish
 )
 
 // StatusPattern represents a regex pattern for detecting a specific status.

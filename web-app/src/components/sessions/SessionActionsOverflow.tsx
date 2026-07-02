@@ -7,6 +7,7 @@ import type { Session, CheckpointProto } from "@/gen/session/v1/types_pb";
 import { SessionStatus } from "@/gen/session/v1/types_pb";
 import { TagEditor } from "./TagEditor";
 import { useFocusTrap } from "@/lib/hooks/useFocusTrap";
+import { useAvailablePrograms } from "@/lib/hooks/useAvailablePrograms";
 import {
   desktopActions,
   overflowContainer,
@@ -60,6 +61,8 @@ export interface SessionActionsOverflowProps {
   onRenameRequest?: () => void;
   /** Trigger workspace switch in parent (SessionDetail-specific) */
   onWorkspaceSwitchRequest?: () => void;
+  /** Save a new program for the session. Empty string = system default. */
+  onChangeProgram?: (sessionId: string, program: string) => Promise<void> | void;
 }
 
 const menuSeparator = (
@@ -88,6 +91,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   onUpdateTags,
   onRenameRequest,
   onWorkspaceSwitchRequest,
+  onChangeProgram,
 }: SessionActionsOverflowProps, ref) {
   const isPaused = session.status === SessionStatus.PAUSED;
   const isReady = session.status === SessionStatus.NEEDS_APPROVAL;
@@ -115,6 +119,10 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
   const [isSteerOpen, setIsSteerOpen] = useState(false);
   const [steerMessage, setSteerMessage] = useState("");
   const [isClearConversationConfirmOpen, setIsClearConversationConfirmOpen] = useState(false);
+  const [isProgramPickerOpen, setIsProgramPickerOpen] = useState(false);
+  const [programPickerValue, setProgramPickerValue] = useState(session.program || "");
+  const [isSavingProgram, setIsSavingProgram] = useState(false);
+  const availablePrograms = useAvailablePrograms();
 
   const overflowContainerRef = useRef<HTMLDivElement>(null);
   const overflowButtonRef = useRef<HTMLButtonElement>(null);
@@ -234,7 +242,7 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
     (isHibernated && onResumeFromHibernation)
   );
   const hasGroup2 = !!(onRunOneShot || onCreateCheckpoint);
-  const hasGroup3 = !!(onRenameRequest || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
+  const hasGroup3 = !!(onRenameRequest || onChangeProgram || onClone || onOpenInNewPane || onUpdateTags || onNewWorkspace || onWorkspaceSwitchRequest);
   const hasGroup4 = !!(onSetRateLimitEnabled || onToggleAutonomousMode);
   const hasGroup5 = !!(onClearConversationState || (onRestart && !isCreating) || onDelete);
 
@@ -602,6 +610,14 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
                   <span aria-hidden="true">✏️</span> Rename
                 </button>
               )}
+              {onChangeProgram && (
+                <button role="menuitem" className={overflowMenuItem}
+                  onClick={(e) => { e.stopPropagation(); setProgramPickerValue(session.program || ""); setIsProgramPickerOpen(true); }}
+                  aria-label={`Change program for session ${session.title}`}
+                >
+                  <span aria-hidden="true">⚙️</span> Change Program
+                </button>
+              )}
               {onClone && (
                 <button role="menuitem" className={overflowMenuItem}
                   onClick={(e) => { e.stopPropagation(); close(); onClone(); }}
@@ -687,13 +703,13 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
 
               {/* Group 5: Destructive */}
               {(hasGroup1 || hasGroup2 || hasGroup3 || hasGroup4) && hasGroup5 && menuSeparator}
-              {/* UX-003: Clear Conversation with danger style + confirmation */}
+              {/* UX-003: Clear Conversation — calls handler directly without confirmation dialog */}
               {onClearConversationState && (
                 <button
                   ref={clearConversationTriggerRef}
                   role="menuitem"
                   className={`${overflowMenuItem} ${overflowMenuItemDanger}`}
-                  onClick={(e) => { e.stopPropagation(); close(); setIsClearConversationConfirmOpen(true); }}
+                  onClick={(e) => { e.stopPropagation(); close(); void onClearConversationState(session.id); }}
                   aria-label={`Clear conversation state for session ${session.title}`}
                 >
                   <span aria-hidden="true">🗑️</span> Clear Conversation
@@ -725,6 +741,66 @@ export const SessionActionsOverflow = forwardRef<SessionActionsOverflowHandle, S
           )}
         </div>
       </div>
+
+      {/* ── Program picker dialog ── */}
+      {isProgramPickerOpen && createPortal(
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Change program"
+          style={{
+            position: "fixed", inset: 0, zIndex: 9999,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            background: "rgba(0,0,0,0.5)",
+          }}
+          onClick={(e) => { if (e.target === e.currentTarget) setIsProgramPickerOpen(false); }}
+        >
+          <div className={confirmDialog} style={{ minWidth: 300 }} onClick={(e) => e.stopPropagation()}>
+            <div className={dialogContent}>
+              <strong>Change Program</strong>
+              <p style={{ fontSize: 13, margin: "8px 0 4px", color: "var(--text-secondary)" }}>
+                Select a program for <em>{session.title}</em>.
+                {session.status === 3 /* ACTIVE */ && " The session will restart."}
+              </p>
+              <select
+                value={programPickerValue}
+                onChange={(e) => setProgramPickerValue(e.target.value)}
+                style={{
+                  width: "100%", padding: "6px 8px", fontSize: 13,
+                  background: "var(--card-background)", color: "var(--text-primary)",
+                  border: "1px solid var(--border-color)", borderRadius: 6,
+                }}
+                autoFocus
+              >
+                <option value="">System default</option>
+                {availablePrograms.map((p) => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+                {programPickerValue && !availablePrograms.some((p) => p.value === programPickerValue) && (
+                  <option value={programPickerValue}>{programPickerValue}</option>
+                )}
+              </select>
+            </div>
+            <div className={dialogActions}>
+              <button
+                className={submitButton}
+                disabled={isSavingProgram}
+                onClick={async () => {
+                  setIsSavingProgram(true);
+                  try { await onChangeProgram?.(session.id, programPickerValue); } finally {
+                    setIsSavingProgram(false);
+                    setIsProgramPickerOpen(false);
+                  }
+                }}
+              >
+                {isSavingProgram ? "Saving…" : "Save"}
+              </button>
+              <button className={cancelButton} onClick={() => setIsProgramPickerOpen(false)}>Cancel</button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </>
   );
 });
