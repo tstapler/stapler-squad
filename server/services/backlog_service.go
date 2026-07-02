@@ -27,6 +27,15 @@ import (
 // live tmux process and can be safely tombstoned on re-trigger.
 const headlessTriageUUIDPrefix = "headless-triage-"
 
+// triageCleanupTimeout bounds the DB writes TriggerTriage's goroutine makes after its
+// headless LLM call returns (persist result, update plan_artifacts_path, transition
+// idea->ready, mark session ended). A var (not a const) so tests can override it — see
+// TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext, a regression test for a bug
+// where this timeout used to start counting down BEFORE the (7-15 minute) LLM call
+// instead of after it, so it was always already expired by the time these persistence
+// calls ran and every successful triage silently failed to ever mark the item ready.
+var triageCleanupTimeout = 10 * time.Second
+
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
 	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
@@ -1212,10 +1221,6 @@ func (s *BacklogService) TriggerTriage(
 		}
 		defer func() { <-s.triageSem }()
 
-		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful shutdown.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cleanupCancel()
-
 		triageCtx, cancel := context.WithTimeout(s.shutdownCtx, 30*time.Minute)
 		defer cancel()
 
@@ -1225,6 +1230,17 @@ func (s *BacklogService) TriggerTriage(
 			triagePrompt,
 			headless.CallOptions{WorkDir: itemRepoPath},
 		)
+
+		// cleanupCtx outlives shutdownCtx so DB writes succeed even during graceful
+		// shutdown. Created HERE, after CallBlockingWithOptions returns, not before
+		// it: the LLM call above routinely takes 7-15 minutes (4 parallel research
+		// subagents), so a cleanupCtx created before it would have its 10s budget
+		// already expired by the time these persistence calls run below — every
+		// successful triage would silently fail to ever mark the item ready. This
+		// was a live, 100%-reproducible bug: see the backlog cross-platform audit.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), triageCleanupTimeout)
+		defer cleanupCancel()
+
 		if callErr != nil {
 			log.ErrorLog.Printf("[TriggerTriage] headless triage failed item=%s: %v", itemID, callErr)
 			_ = s.storage.UpdateItemSessionEnded(cleanupCtx, isID, time.Now())

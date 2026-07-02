@@ -4,6 +4,50 @@ Synthesized from `research/implementation-inventory.md`, `research/cross-platfor
 `research/test-coverage.md`, and `user-journey.md`. Ranked by how much each blocks trusting
 the feature to "just work."
 
+## 0. ~~TriggerTriage's cleanupCtx always expired before it was used~~ — FIXED
+
+**This is the real, universal, 100%-reproducible answer to "I've never seen it work on this
+computer."** Found by executing the ranked-order item #1 diagnostic ("verify flag state") for
+real on this machine: the flag turned out to already be enabled in the live production
+workspace (see #2 below for the full flag-verification writeup), and there were already 3 real
+backlog items in the database — all three permanently stuck at `idea` status, one over five
+weeks old. Watching a live retry of one of them in production caught the bug directly in the
+log:
+
+```
+INFO 22:48:28 [TriggerTriage] headless triage started item=c35902a2...
+ERROR 22:55:53 [TriggerTriage] persist triage result item=c35902a2...: context deadline exceeded
+ERROR 22:55:53 [TriggerTriage] update plan_artifacts_path item=c35902a2...: context deadline exceeded
+ERROR 22:55:53 [TriggerTriage] status transition idea→ready item=c35902a2...: context deadline exceeded
+INFO 22:55:53 [TriggerTriage] headless triage complete item=c35902a2... suggestions=6 tasks=11
+```
+
+The LLM call itself **succeeded** (6 suggestions, 11 tasks — the JSON parser fix from earlier
+in this audit worked correctly). But `TriggerTriage`'s `cleanupCtx` — the context guarding the
+three DB writes that persist the result, set `plan_artifacts_path`, and transition
+`idea→ready` — was created with a fixed 10-second timeout **before** the headless LLM call
+(`server/services/backlog_service.go`, `CallBlockingWithOptions`), not after it. Real triage
+calls routinely take 7–15 minutes (the prompt instructs 4 parallel research subagents), so by
+the time the LLM call returned, `cleanupCtx`'s 10-second budget had been expired for ~7 minutes
+and 40 seconds. Every single persistence write failed with `context deadline exceeded` — and
+the code still unconditionally logged "headless triage complete" afterward, since that log line
+doesn't check whether the writes above it succeeded. This is not a platform-specific,
+timing-fluke, or Linux-specific bug: it fires on every successful triage call, on any machine,
+every time, because the timeout window never overlapped the work it needed to protect.
+
+This single bug fully explains the original complaint better than every other finding in this
+document combined: triage *looks* like it's running (the item session gets created, the log
+says "complete"), the LLM does real, valid work, and then the result is silently discarded and
+the item is stuck at `idea` forever — exactly matching "partially works" (you can trigger it,
+it look like it's doing something) and "never works" (it never actually finishes).
+
+**Fix**: moved `cleanupCtx` creation to immediately after `CallBlockingWithOptions` returns,
+so its budget starts counting only once the slow call is already done. Extracted the 10s
+literal into a `triageCleanupTimeout` var for testability. Added
+`TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext`, which simulates a slow LLM call at
+test-friendly timescales — verified failing against the pre-fix code ordering and passing
+against the fix.
+
 ## 1. ~~Execution phase runs on the broken, pre-ADR-022 driver~~ — INVESTIGATED, NOT A BUG
 
 **Update after writing a real regression test** (`server/services/backlog_service_test.go`
@@ -41,17 +85,28 @@ mismatch documented in ADR-022. That fix was assumed to apply to triage only, le
 above shows the CLI-arg delivery path makes this moot for fresh spawns.
 </details>
 
-## 2. Feature flag is stored per-workspace, with no visible indicator when off
+## 2. ~~Feature flag is stored per-workspace~~ — VERIFIED ON THIS MACHINE, RULED OUT
 
 `config.GetFeatureFlag("backlog")` defaults to `false`, keyed by `SHA256(cwd)` in
-`config.json` (`config/config.go:805-824`). This checkout already has it enabled — but any
-other workspace directory (a different clone, a different worktree, a different machine
-entirely) starts with it unset. When off: the frontend redirects away from `/backlog` and hides
-the nav item; the backend interceptor returns `CodeNotFound` for backlog RPCs. **No error, no
-banner — it just looks like the feature doesn't exist.** There is no env var escape hatch, only
-the `UpdateFeatureFlag` RPC (reachable via a UI toggle, if you know to look for it). This fully
-explains "never seen it work" if the flag was never toggled in whatever workspace was used on
-the other machine — verify this first, it's the cheapest thing to rule out.
+`config.json` (`config/config.go:805-824`). The design itself is still a real footgun (see
+below), but **live verification on this machine rules it out as the explanation here**:
+
+- The live systemd unit runs with `WorkingDirectory=$HOME`, so the app's one real production
+  workspace hashes to `~/.stapler-squad/workspaces/d685c4b1a423cca3/` — confirmed by matching
+  `workspace_meta.json`'s `cwd: "/home/tstapler"` against the systemd unit's `Active: ...
+  since` timestamp exactly.
+- That workspace's `config.json` has `"backlog": true`. It has for a while.
+- `backlog_items` in that workspace's `sessions.db` already has 3 real rows, the oldest from
+  2026-05-26 — over five weeks of the user actually trying to use this feature, not a
+  never-toggled flag.
+
+So on this machine, the flag was never the problem. What actually explains "never seen it
+work" here is gap #0 above — all three of those items are stuck at `idea` because of the
+`cleanupCtx` bug, not because they never existed or the flag was off. The per-workspace design
+is still worth hardening (no error/banner when off elsewhere, no env var escape hatch, only
+reachable via the `UpdateFeatureFlag` RPC/UI toggle) — flag this as the first check on a
+*different* machine where the failure mode might genuinely be flag-related, but it is not what
+was happening here.
 
 ## 3. GitHub/external-source ingestion is a stub with no UI — backlog can't self-populate
 
@@ -144,24 +199,26 @@ but it means the plan docs overstate what was actually delivered — don't trust
 
 ## Suggested triage order if/when this becomes a fix pass
 
-1. Verify #2 (flag state) on the machine where it's never worked — 5 minutes, rules out the
-   cheapest explanation. (#1's original hypothesis is now ruled out — see above.)
+1. ~~Verify #2 (flag state) on the machine where it's never worked~~ — **done, and it led
+   straight to the real bug**: the flag was already enabled and 3 real backlog items already
+   existed on this machine, all stuck at `idea`. Watching a live retry of one of them in
+   production caught gap #0 (`cleanupCtx` expiring before use) directly in the logs — now
+   fixed, with a regression test verified against both the buggy and fixed code paths.
 2. ~~Add one real e2e/integration test~~ — **done**:
    `TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent` in
-   `server/services/backlog_service_test.go` now covers create→triage→approve→spawn with the
-   real production code path, faking only the LLM/subprocess boundary. It passes today,
-   which rules out #1 but does not by itself explain the "never worked here" report — the
-   remaining candidates are #2 (flag) and unverified real-tmux/real-Claude behavior this test
-   deliberately doesn't cover.
+   `server/services/backlog_service_test.go` covers create→triage→approve→spawn with the real
+   production code path, faking only the LLM/subprocess boundary.
 3. Decide deliberately on #3 (GitHub sync): finish it or explicitly cut it and remove the
-   half-built RPC surface — right now it's neither shipped nor absent.
+   half-built RPC surface — right now it's neither shipped nor absent. **Remaining open item.**
 4. ~~Harden #5 (triage JSON parsing)~~ — **done**: replaced the naive brace-scan with
    independent `json.Decoder` attempts per `{` in `session/backlog_triage.go` (a first
    balanced-brace-counter attempt was itself found buggy by code review and superseded — see
    PR #134 history); 10 adversarial regression tests in `session/backlog_triage_test.go`.
 5. ~~Linux PATH robustness (#6)~~ — **done**: `scripts/install-service.sh` + a new
    `findClaudeBinary` fallback in `session/headless/caller.go`.
-6. If #1-#5 don't explain it, the next real test to write is one that actually exercises a
-   live tmux session + live `claude` process (like the existing `harness`-tagged test, but
-   extended past triage into execution) — that's the one class of bug this audit's tests
-   structurally cannot see.
+6. ~~TriggerTriage's cleanupCtx expiring before use~~ — **done, see #0** — this is now believed
+   to be the actual, complete explanation for "never seen it work" on this machine specifically.
+7. If GitHub sync's fate (#3) doesn't fully close things out, the next real test to write is one
+   that actually exercises a live tmux session + live `claude` process for the *execution* half
+   (like the existing `harness`-tagged test, but extended past triage) — the one class of bug
+   this audit's tests still structurally cannot see.
