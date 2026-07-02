@@ -55,12 +55,15 @@ var claudeFallbackDirs = []string{
 // NewPool returns ErrClaudeNotFound, the headless pool is left nil (only a
 // log warning — see server/dependencies.go), and backlog triage quietly
 // no-ops with no user-visible error.
-func findClaudeBinary(lookPath func(string) (string, error), homeDir string) (string, error) {
+// fallbackDirs takes an explicit parameter (rather than reading
+// claudeFallbackDirs directly) so tests can inject a controlled set of
+// candidate directories without mutating package-level state.
+func findClaudeBinary(lookPath func(string) (string, error), homeDir string, fallbackDirs []string) (string, error) {
 	if bin, err := lookPath("claude"); err == nil {
 		return bin, nil
 	}
 
-	dirs := claudeFallbackDirs
+	dirs := fallbackDirs
 	if homeDir != "" {
 		dirs = append([]string{filepath.Join(homeDir, ".local", "bin")}, dirs...)
 	}
@@ -79,7 +82,7 @@ func findClaudeBinary(lookPath func(string) (string, error), homeDir string) (st
 // Returns ErrClaudeNotFound if the binary is not found anywhere.
 func NewPool(cfg PoolConfig) (*Pool, error) {
 	homeDir, _ := os.UserHomeDir()
-	bin, err := findClaudeBinary(exec.LookPath, homeDir)
+	bin, err := findClaudeBinary(exec.LookPath, homeDir, claudeFallbackDirs)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrClaudeNotFound, err)
 	}
