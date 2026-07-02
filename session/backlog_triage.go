@@ -126,7 +126,7 @@ func extractTopLevelJSONObjects(raw string) []string {
 			if depth > 0 {
 				depth--
 				if depth == 0 && start != -1 {
-					candidates = append(candidates, raw[start:i+len("}")])
+					candidates = append(candidates, raw[start:i+1]) // +1: include the closing '}' itself
 					start = -1
 				}
 			}

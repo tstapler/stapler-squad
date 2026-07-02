@@ -108,18 +108,45 @@ Final answer: {"summary":"real one","suggestions":[]}`
 
 // TestParseHeadlessTriageResult_BraceInsideStringLiteralIgnored verifies that a
 // brace character embedded inside a JSON string value does not confuse the
-// balanced-scan depth counter.
+// balanced-scan depth counter, even with a decoy object in the preamble whose own
+// depth-counting would go wrong if string literals weren't tracked correctly: were
+// the scanner to naively count every `{`/`}` regardless of string context, the
+// decoy's un-nested brace plus the real object's embedded `{ braces }` would throw
+// off depth tracking and either merge the two spans or truncate the real one early.
 func TestParseHeadlessTriageResult_BraceInsideStringLiteralIgnored(t *testing.T) {
-	raw := `{"summary":"config looks like { nested }","suggestions":[]}`
+	raw := `Example: {"x":"y"}
+Real: {"summary":"config looks like { nested }","suggestions":[]}`
 	result, err := ParseHeadlessTriageResult(raw)
 	require.NoError(t, err)
 	assert.Equal(t, "config looks like { nested }", result.Summary)
 }
 
-// TestParseHeadlessTriageResult_UnbalancedPreambleBrace verifies parsing still
-// succeeds when the preamble contains an unbalanced single brace (e.g. a smiley
-// or stray character) rather than a complete decoy object.
-func TestParseHeadlessTriageResult_UnbalancedPreambleBrace(t *testing.T) {
+// TestParseHeadlessTriageResult_EscapedQuoteInStringLiteral verifies that an
+// escaped quote (`\"`) inside a JSON string value does not prematurely end
+// string-literal tracking and expose the brace-depth counter to characters that
+// are still logically inside the string.
+func TestParseHeadlessTriageResult_EscapedQuoteInStringLiteral(t *testing.T) {
+	raw := `{"summary":"She said \"the plan has a { in it\" during standup","suggestions":[]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, `She said "the plan has a { in it" during standup`, result.Summary)
+}
+
+// TestParseHeadlessTriageResult_EscapedBackslashBeforeQuote verifies that a literal
+// escaped backslash (`\\`) immediately followed by a closing quote is not
+// misread as an escaped quote (`\"`) — the escape flag must reset after consuming
+// the backslash, not be evaluated against the following quote character.
+func TestParseHeadlessTriageResult_EscapedBackslashBeforeQuote(t *testing.T) {
+	raw := `{"summary":"path is C:\\","suggestions":[]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, `path is C:\`, result.Summary)
+}
+
+// TestParseHeadlessTriageResult_StrayClosingBraceBeforeJSON verifies parsing still
+// succeeds when the preamble contains a stray, unmatched closing brace (not a
+// complete decoy object) before the real JSON.
+func TestParseHeadlessTriageResult_StrayClosingBraceBeforeJSON(t *testing.T) {
 	raw := `Here's a stray closing brace: } — ignore that.
 {"summary":"still parses","suggestions":[]}`
 	result, err := ParseHeadlessTriageResult(raw)
