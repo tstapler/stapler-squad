@@ -118,8 +118,8 @@ RestartSec=5s
 KillMode=process
 StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
-Environment=HOME=$HOME
-Environment=PATH=$service_path
+Environment="HOME=$HOME"
+Environment="PATH=$service_path"
 
 [Install]
 WantedBy=default.target
