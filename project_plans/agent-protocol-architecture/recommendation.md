@@ -96,3 +96,44 @@ backlog audit fixes.
    time-box it, and judge success by whether it actually reduces the historical fragility bug
    count for Claude sessions, not by protocol purity.
 4. Leave A2A alone until there's an actual second agent in the picture.
+
+## Headless-by-default with drop-in observability (see `research/headless-drop-in-observability.md`)
+
+A follow-on question, prompted by ADR-022's own "Future enhancement" note ("no tmux pane to
+inspect mid-triage... add a streaming progress UI"): the team wants Claude Code sessions to run
+headlessly by default for background/autonomous work, but wants a human able to drop in and see
+live progress — and ideally intervene — without the session having been interactive from the
+start.
+
+**stapler-squad already has three distinct mechanisms, not one**: true headless (bare `Setsid`
+subprocess, no PTY, nothing to attach to — `session/headless/*.go`), "hidden" real tmux sessions
+(`TriggerReReview`'s `hidden: true` — fully attachable via `GetSession`, which is not gated on
+`Hidden` at all, only `ListSessions` is), and fully visible interactive tmux sessions. ADR-022
+deliberately moved triage *off* tmux+`AutonomousDriver` onto pure headless to eliminate four
+concrete failure modes (prompt-field mismatch, silent nil-pool gate, fixed per-turn timeout
+racing variable-length subagent work, no completion signaler) — any drop-in-observability design
+must not reintroduce these.
+
+**Verdict: do not make every headless call a real tmux session** (rejected as a regression
+relative to ADR-022 — it reintroduces the exact overhead/fragility-surface ADR-022 removed, and
+risks the "well, now there's a tmux session, might as well drive it with `AutonomousDriver`"
+regression path). Instead, build a structured, persisted, replayable session-event layer,
+independent of whether a PTY exists underneath. This is not a speculative choice: ACP
+(`session/update` + `session/load`/`session/resume`, explicitly designed so "a client can attach
+to a session it did not create"), Anthropic's own Managed Agents API (`{domain}.{action}`
+persisted event log with stream-only `event_start`/`event_delta` previews for live observers),
+and Anthropic's own Claude Code Agent View (shipped May 2026 — supervisor process + structured
+peek/reply, explicitly *not* a PTY-per-session model) all converged independently on this same
+shape. Mechanism 2 (hidden-but-attachable tmux) stays as-is for program types that will never
+have a structured event API (aider, plain shells) — it is not being replaced, just not
+generalized.
+
+**Concrete first step**: persist `session/headless`'s existing `StreamChunk` stream as a
+sequenced, replayable event log keyed by the `ItemSession` ID already created synchronously in
+`TriggerTriage` (SQLite via the existing ent storage — no new infra), add one polling read
+endpoint (`GetItemSessionEvents(itemSessionID, afterSeq)`), and wire a "view progress" UI
+affordance on running triage `ItemSession` rows. This directly closes the gap ADR-022 flagged,
+without touching `AutonomousDriver` or the tmux driver, and without competing for priority with
+the ACP spike above — full detail, including the push/SSE follow-on and the eventual question of
+whether this event layer should become the same backing store the ACP spike reads from, is in
+`research/headless-drop-in-observability.md`.
