@@ -154,6 +154,21 @@ func TestParseHeadlessTriageResult_StrayClosingBraceBeforeJSON(t *testing.T) {
 	assert.Equal(t, "still parses", result.Summary)
 }
 
+// TestParseHeadlessTriageResult_StrayUnmatchedOpeningBrace is a regression test
+// for a bug caught in code review: a hand-rolled brace-depth counter permanently
+// "gets stuck" once it sees an opening brace that never closes — depth never
+// returns to zero, so every well-formed object after it is silently swallowed and
+// the parser wrongly reports "no JSON object found" even though a valid result
+// follows. The fix decodes independently from each `{`, so one unmatched brace
+// cannot poison the rest of the scan.
+func TestParseHeadlessTriageResult_StrayUnmatchedOpeningBrace(t *testing.T) {
+	raw := `Note: { this brace never closes, it's just a stray character.
+{"summary":"still found me","suggestions":[]}`
+	result, err := ParseHeadlessTriageResult(raw)
+	require.NoError(t, err)
+	assert.Equal(t, "still found me", result.Summary)
+}
+
 // ─── BuildHeadlessTriagePrompt ────────────────────────────────────────────────
 
 func TestBuildHeadlessTriagePrompt_ContainsTitle(t *testing.T) {

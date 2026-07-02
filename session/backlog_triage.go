@@ -87,50 +87,32 @@ After all files are written, output ONLY a JSON object (no other text before or 
 	return sb.String()
 }
 
-// extractTopLevelJSONObjects scans raw for every balanced, top-level `{...}` span,
-// respecting string literals (so a `{` or `}` inside a quoted JSON string does not
-// affect brace depth) and returned in the order they appear in raw.
+// extractTopLevelJSONObjects returns every complete JSON object found in raw, in
+// the order they appear, by attempting a real JSON decode starting at each `{`.
 //
-// This is more robust than a naive first-`{`/last-`}` scan: if the model's response
-// contains an unrelated brace in prose before the real JSON (e.g. an illustrative
-// "{example}" snippet), first/last indexing spans across both and produces a
-// concatenated, unparseable blob. Balanced scanning instead yields one candidate
-// per brace-delimited span, letting the caller try each independently.
+// This is more robust than a naive first-`{`/last-`}` scan (which spans across an
+// unrelated brace in prose and the real JSON, producing an unparseable concatenated
+// blob) and more robust than a hand-rolled brace-depth counter (which permanently
+// "gets stuck" if an earlier `{` in prose is never closed — depth never returns to
+// zero, silently swallowing every well-formed object that follows). Delegating to
+// json.Decoder makes each attempt independent: a malformed or unmatched brace at
+// one position simply fails to decode there and has no effect on whether a later,
+// well-formed object is found. A `{` embedded inside an already-successfully-parsed
+// object's string value is never re-examined, since the scan skips forward past
+// the full span the decoder consumed.
 func extractTopLevelJSONObjects(raw string) []string {
 	var candidates []string
-	var inString, escaped bool
-	depth := 0
-	start := -1
-
-	for i, r := range raw {
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case r == '\\':
-				escaped = true
-			case r == '"':
-				inString = false
-			}
+	for i := 0; i < len(raw); i++ {
+		if raw[i] != '{' {
 			continue
 		}
-		switch r {
-		case '"':
-			inString = true
-		case '{':
-			if depth == 0 {
-				start = i
-			}
-			depth++
-		case '}':
-			if depth > 0 {
-				depth--
-				if depth == 0 && start != -1 {
-					candidates = append(candidates, raw[start:i+1]) // +1: include the closing '}' itself
-					start = -1
-				}
-			}
+		dec := json.NewDecoder(strings.NewReader(raw[i:]))
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			continue // not a valid JSON value starting here; keep scanning byte by byte
 		}
+		candidates = append(candidates, string(v))
+		i += int(dec.InputOffset()) - 1 // -1 compensates for the loop's own i++
 	}
 	return candidates
 }
