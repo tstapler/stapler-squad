@@ -158,6 +158,68 @@ func TestInstallAgy_Idempotent(t *testing.T) {
 	assert.Equal(t, string(content1), string(content2), "hooks changed on second run")
 }
 
+// installAgy_should_patchOnlyAntigravityCli_When_bothFilesExist
+func TestInstallAgy_PatchesOnlyFirstFound(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	agyDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	configDir := filepath.Join(home, ".gemini", "config")
+	require.NoError(t, os.MkdirAll(agyDir, 0700))
+	require.NoError(t, os.MkdirAll(configDir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(agyDir, "hooks.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "hooks.json"), []byte(`{"other":"value"}`), 0644))
+	installAgy()
+	raw1, _ := os.ReadFile(filepath.Join(agyDir, "hooks.json"))
+	assert.Contains(t, string(raw1), "check --antigravity")
+	raw2, _ := os.ReadFile(filepath.Join(configDir, "hooks.json"))
+	assert.JSONEq(t, `{"other":"value"}`, string(raw2))
+}
+
+// installAgy_should_fallBackToConfigJson_When_antigravityCliAbsent
+func TestInstallAgy_FallsBackToConfigJson(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".gemini", "config")
+	require.NoError(t, os.MkdirAll(configDir, 0700))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "hooks.json"), []byte("{}"), 0644))
+	installAgy()
+	raw, _ := os.ReadFile(filepath.Join(configDir, "hooks.json"))
+	assert.Contains(t, string(raw), "check --antigravity")
+	_, err := os.Stat(filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json"))
+	assert.True(t, os.IsNotExist(err))
+}
+
+// installAgy_should_cleanStaleFallback_When_bothWerePreviouslyPatched
+func TestInstallAgy_CleansUpStaleFallbackEntry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	agyDir := filepath.Join(home, ".gemini", "antigravity-cli")
+	configDir := filepath.Join(home, ".gemini", "config")
+	require.NoError(t, os.MkdirAll(agyDir, 0700))
+	require.NoError(t, os.MkdirAll(configDir, 0700))
+	staleHook := `{"stapler-squad":{"enabled":true,"PreToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/fake/ssq-hooks check --antigravity","timeout":10}]}]}}`
+	require.NoError(t, os.WriteFile(filepath.Join(agyDir, "hooks.json"), []byte("{}"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, "hooks.json"), []byte(staleHook), 0644))
+	installAgy()
+	raw1, _ := os.ReadFile(filepath.Join(agyDir, "hooks.json"))
+	assert.Contains(t, string(raw1), "check --antigravity")
+	raw2, _ := os.ReadFile(filepath.Join(configDir, "hooks.json"))
+	assert.NotContains(t, string(raw2), "stapler-squad")
+}
+
+// installAgy_should_createAntigravityCli_When_neitherPathExists
+func TestInstallAgy_CreatesAntigravityCliWhenNeitherExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	installAgy()
+	agyHooks := filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json")
+	assert.FileExists(t, agyHooks)
+	raw, _ := os.ReadFile(agyHooks)
+	assert.Contains(t, string(raw), "check --antigravity")
+	_, err := os.Stat(filepath.Join(home, ".gemini", "config", "hooks.json"))
+	assert.True(t, os.IsNotExist(err))
+}
+
 // ── installGemini integration tests ───────────────────────────────────────────
 
 // installGemini_should_patchSettingsJson_When_settingsJsonExists

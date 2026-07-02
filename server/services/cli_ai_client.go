@@ -11,18 +11,19 @@ import (
 )
 
 // CLIAgentSpec describes how to invoke an AI agent CLI in one-shot mode.
-// The combined system+user prompt is written to the process's stdin.
 type CLIAgentSpec struct {
 	// Name is the human-readable identifier used in logs and error messages.
 	Name string
 	// Binary is the executable name resolved via exec.LookPath.
 	Binary string
 	// Args returns the argv slice (excluding binary name) for one-shot mode.
-	// The prompt is always delivered via stdin, not as an argument.
 	Args func() []string
-	// PromptSeparator is inserted between system and user prompts when
-	// combining them for stdin delivery. Defaults to "\n\n---\n\n".
+	// PromptSeparator is inserted between system and user prompts. Defaults to "\n\n---\n\n".
 	PromptSeparator string
+	// PromptAsArg delivers the combined prompt as the last positional argument to Args()
+	// instead of writing it to stdin. Required for CLIs like agy (--print "msg") and
+	// opencode (run "msg") that take the prompt inline rather than from stdin.
+	PromptAsArg bool
 }
 
 // knownCLIAgents lists supported AI CLI agents in preference order for
@@ -38,19 +39,27 @@ var knownCLIAgents = []CLIAgentSpec{
 	},
 	{
 		// Gemini CLI: reads a prompt from stdin in non-interactive mode.
-		// Flags are intentionally minimal; extend this spec when the CLI
-		// stabilises its non-interactive interface.
 		Name:            "gemini",
 		Binary:          "gemini",
 		Args:            func() []string { return []string{} },
 		PromptSeparator: "\n\n---\n\n",
 	},
 	{
-		// OpenCode CLI (opencode.ai). Adjust Args when confirmed.
+		// Antigravity CLI: --print takes the prompt as a positional string argument (not stdin).
+		// Verified: agy --print "hello" exits 0 and writes response to stdout. (v1.0.15)
+		Name:            "agy",
+		Binary:          "agy",
+		Args:            func() []string { return []string{"--print"} },
+		PromptSeparator: "\n\n---\n\n",
+		PromptAsArg:     true,
+	},
+	{
+		// OpenCode CLI: run [message..] takes the prompt as positional args, not stdin.
 		Name:            "opencode",
 		Binary:          "opencode",
 		Args:            func() []string { return []string{"run"} },
 		PromptSeparator: "\n\n",
+		PromptAsArg:     true,
 	},
 }
 
@@ -75,18 +84,20 @@ func NewCLIAIClient(spec CLIAgentSpec) (*CLIAIClient, error) {
 	return &CLIAIClient{spec: spec, bin: bin}, nil
 }
 
-// Complete writes the combined prompt to the CLI's stdin and returns stdout.
-// A 55-second timeout is applied so the caller's 60-second deadline has
-// headroom for context propagation.
+// Complete delivers the combined prompt to the CLI and returns stdout.
+// A 55-second timeout is applied so the caller's 60-second deadline has headroom.
 func (c *CLIAIClient) Complete(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	combined := systemPrompt + c.spec.PromptSeparator + userPrompt
-	cmd := executor.New(
-		ctx,
-		c.bin,
-		c.spec.Args(),
-		executor.WithStdin(strings.NewReader(combined)),
-		executor.WithTimeout(55*time.Second),
-	)
+	var cmd *executor.ShortLivedCmd
+	if c.spec.PromptAsArg {
+		argv := append(c.spec.Args(), combined)
+		cmd = executor.New(ctx, c.bin, argv, executor.WithTimeout(55*time.Second))
+	} else {
+		cmd = executor.New(ctx, c.bin, c.spec.Args(),
+			executor.WithStdin(strings.NewReader(combined)),
+			executor.WithTimeout(55*time.Second),
+		)
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("CLI agent %q: %w", c.spec.Name, err)

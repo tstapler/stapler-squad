@@ -801,22 +801,95 @@ func installAgy() {
 		os.Exit(1)
 	}
 	fmt.Printf("Installed binary: %s\n", destBin)
-	// 2. Patch ~/.gemini/config/hooks.json (authoritative global path) and ~/.gemini/antigravity-cli/hooks.json (fallback).
-	hooksPaths := []string{
-		filepath.Join(home, ".gemini", "config", "hooks.json"),
+	// 2. Discover agy hooks file — patch only the first found (mirrors installGemini).
+	// ~/.gemini/antigravity-cli/ is agy's primary runtime state dir.
+	// ~/.gemini/config/hooks.json is the fallback global config location.
+	candidates := []string{
 		filepath.Join(home, ".gemini", "antigravity-cli", "hooks.json"),
+		filepath.Join(home, ".gemini", "config", "hooks.json"),
 	}
-	for _, hooksPath := range hooksPaths {
-		if err := patchAntigravityHooks(hooksPath, destBin); err != nil {
-			fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", hooksPath, err)
-			os.Exit(1)
+	hooksPath := ""
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			hooksPath = c
+			break
 		}
-		fmt.Printf("Updated hook:     %s\n", hooksPath)
+	}
+	if hooksPath == "" {
+		// Neither found: create the primary (antigravity-cli is where agy reads hooks).
+		hooksPath = candidates[0]
+	}
+	// 3. Patch the selected file.
+	if err := patchAntigravityHooks(hooksPath, destBin); err != nil {
+		fmt.Fprintf(os.Stderr, "Error updating %s: %v\n", hooksPath, err)
+		os.Exit(1)
+	}
+	fmt.Printf("Updated hook:     %s\n", hooksPath)
+	// 4. Cleanup: remove any stale ssq-hooks entry from the other candidate.
+	// This handles users who ran an old version that patched both paths.
+	for _, c := range candidates {
+		if c != hooksPath {
+			_ = removeAntigravityHookEntry(c)
+		}
 	}
 	fmt.Println("Done. Restart agy for the hook to take effect.")
 }
 
-// patchAntigravityHooks patches ~/.gemini/antigravity-cli/hooks.json to register the ssq-hooks check command.
+// removeAntigravityHookEntry removes the "stapler-squad" key from hooksPath if it
+// contains any ssq-hooks check --antigravity command. No-ops if the file doesn't
+// exist, the key is absent, or no matching command is found.
+func removeAntigravityHookEntry(hooksPath string) error {
+	raw, err := os.ReadFile(hooksPath)
+	if err != nil {
+		return nil // file absent — nothing to clean up
+	}
+	var hooksData map[string]interface{}
+	if err := json.Unmarshal(raw, &hooksData); err != nil {
+		return nil // not valid JSON — leave it alone
+	}
+	existing, ok := hooksData["stapler-squad"]
+	if !ok {
+		return nil // no entry — nothing to clean up
+	}
+	existingMap, ok := existing.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	preToolUse, _ := existingMap["PreToolUse"].([]interface{})
+	found := false
+	for _, entry := range preToolUse {
+		m, ok := entry.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		innerHooks, _ := m["hooks"].([]interface{})
+		for _, h := range innerHooks {
+			hm, ok := h.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if cmd, _ := hm["command"].(string); strings.HasSuffix(cmd, " check --antigravity") {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		return nil // our command not present — leave it alone
+	}
+	delete(hooksData, "stapler-squad")
+	out, err := json.MarshalIndent(hooksData, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmpPath := hooksPath + ".tmp"
+	if err := os.WriteFile(tmpPath, append(out, '\n'), 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, hooksPath)
+}
+
+// patchAntigravityHooks patches the agy hooks.json file to register the ssq-hooks check command.
 func patchAntigravityHooks(hooksPath, binPath string) error {
 	hookCmd := binPath + " check --antigravity"
 
@@ -889,6 +962,21 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 	return os.Rename(tmpPath, hooksPath)
 }
 
+// installOpenCode creates a shell wrapper at ~/.local/bin/open-code that routes
+// all opencode invocations through ssq-hooks proxy before execution.
+//
+// WHY A PROXY WRAPPER (not a native hook):
+// opencode v1.4.0 supports only two hook types in its config:
+//   - hook.file_edited: fires after a file is written (not a permission gate)
+//   - hook.session_completed: fires when the session ends (not a permission gate)
+//
+// There is no PreToolUse / BeforeTool / pre-execution hook in opencode's hook system.
+// The proxy intercepts the "open-code" binary name in PATH. The real opencode binary
+// is named "opencode" (no hyphen); users who alias "open-code" → this wrapper get
+// ssq-hooks intercept for every invocation.
+//
+// Revisit when: opencode adds a native PreToolUse hook. Replace this proxy with
+// a patchOpenCodeConfig() call similar to patchBeforeToolHook().
 func installOpenCode() {
 	home, _ := os.UserHomeDir()
 	binDir := filepath.Join(home, ".local", "bin")

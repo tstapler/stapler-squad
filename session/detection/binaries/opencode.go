@@ -48,10 +48,33 @@ func (d *OpencodeDetector) Patterns() dtypes.StatusPatterns {
 				Priority:    18,
 			},
 		},
-		Error:        []dtypes.StatusPattern{},
+		Error: []dtypes.StatusPattern{
+			{
+				Name:    "opencode_error_prefix",
+				Pattern: `(?m)^Error:`,
+				// Observed in live testing: "Error: Configuration is invalid at /path"
+				// Tentative — may match other tool errors in the TUI.
+				Description: "OpenCode error message line prefix (observed in live testing)",
+				Priority:    5,
+			},
+		},
 		TestsFailing: []dtypes.StatusPattern{},
-		Idle:         []dtypes.StatusPattern{},
-		Active:       []dtypes.StatusPattern{},
-		Success:      []dtypes.StatusPattern{},
+		Idle: []dtypes.StatusPattern{
+			// TODO: No distinctive idle string found in opencode TUI source.
+			// The idle state appears as a bordered input box with no spinner.
+			// StatusUnknown is the correct fallback.
+		},
+		Active: []dtypes.StatusPattern{
+			{
+				Name:        "opencode_braille_spinner",
+				Pattern:     `[⠙⠹⠸⠼⠴⠦⠧⠇⠏⠋]`,
+				Description: "OpenCode braille spinner during LLM generation (distinct from tool execution arrows)",
+				Priority:    9,
+			},
+		},
+		Success: []dtypes.StatusPattern{
+			// TODO: No explicit completion indicator found in opencode TUI source.
+			// After a task completes, opencode returns to idle input state.
+		},
 	}
 }

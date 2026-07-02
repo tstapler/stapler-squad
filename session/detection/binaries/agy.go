@@ -52,10 +52,43 @@ func (d *AgyDetector) Patterns() dtypes.StatusPatterns {
 			},
 		},
 		InputRequired: []dtypes.StatusPattern{},
-		Error:         []dtypes.StatusPattern{},
-		TestsFailing:  []dtypes.StatusPattern{},
-		Idle:          []dtypes.StatusPattern{},
-		Active:        []dtypes.StatusPattern{},
-		Success:       []dtypes.StatusPattern{},
+		Error: []dtypes.StatusPattern{
+			// TODO: Add error patterns once real agy terminal output is captured.
+			// agy shares the Gemini jetski TUI — check what Gemini shows on API errors.
+			// Capture via: tmux capture-pane -p on a running agy session hitting a rate limit.
+		},
+		TestsFailing: []dtypes.StatusPattern{},
+		Idle: []dtypes.StatusPattern{
+			{
+				Name:        "agy_idle_readline",
+				Pattern:     `> ▌`,
+				Description: "Agy readline input cursor on empty line (shared with Gemini idle TUI)",
+				Priority:    5,
+			},
+			{
+				Name:        "agy_idle_insert",
+				Pattern:     `\[INSERT\]`,
+				Description: "Agy INSERT mode indicator in status bar (shared with Gemini idle TUI)",
+				Priority:    6,
+			},
+		},
+		Active: []dtypes.StatusPattern{
+			{
+				Name:        "agy_active_running",
+				Pattern:     `= Running Agent\.\.\.`,
+				Description: "Agy running agent indicator (shared with Gemini active TUI)",
+				Priority:    11,
+			},
+			{
+				Name:        "agy_active_thinking",
+				Pattern:     `Thinking\.\.\. \(esc to cancel`,
+				Description: "Agy thinking spinner with cancel hint (shared with Gemini active TUI)",
+				Priority:    12,
+			},
+		},
+		Success: []dtypes.StatusPattern{
+			// TODO: Add success/completion patterns once real agy terminal output is captured.
+			// After a task completes, agy likely returns to Ready state (agy_ready covers this).
+		},
 	}
 }

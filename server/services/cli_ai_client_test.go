@@ -108,6 +108,64 @@ func TestNewBestAvailableAIClient_FallsBackToAnthropicAPIWhenNoCLI(t *testing.T)
 	}
 }
 
+// TestCLIAgentSpec_PromptAsArg_appendsPromptToArgv verifies that PromptAsArg=true
+// passes the combined prompt as a positional argument rather than via stdin.
+// Uses `echo` as a stand-in: it prints its argv to stdout.
+func TestCLIAgentSpec_PromptAsArg_appendsPromptToArgv(t *testing.T) {
+	echoPath, err := exec.LookPath("echo")
+	if err != nil {
+		t.Skip("echo not available")
+	}
+	spec := CLIAgentSpec{
+		Name:            "echo",
+		Binary:          "echo",
+		Args:            func() []string { return []string{} },
+		PromptSeparator: "\n\n---\n\n",
+		PromptAsArg:     true,
+	}
+	c := &CLIAIClient{spec: spec, bin: echoPath}
+
+	out, err := c.Complete(context.Background(), "SYSTEM", "USER")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "SYSTEM") || !strings.Contains(out, "USER") || !strings.Contains(out, "---") {
+		t.Errorf("expected SYSTEM, USER, and separator in output, got: %q", out)
+	}
+}
+
+// TestKnownCLIAgents_agy_hasCorrectSpec verifies agy is registered with PromptAsArg=true.
+func TestKnownCLIAgents_agy_hasCorrectSpec(t *testing.T) {
+	for _, spec := range knownCLIAgents {
+		if spec.Name == "agy" {
+			if !spec.PromptAsArg {
+				t.Error("agy spec: PromptAsArg should be true")
+			}
+			if args := spec.Args(); len(args) == 0 || args[0] != "--print" {
+				t.Errorf("agy spec: Args() = %v, want [--print]", args)
+			}
+			return
+		}
+	}
+	t.Fatal("agy not found in knownCLIAgents")
+}
+
+// TestKnownCLIAgents_opencode_hasPromptAsArg verifies opencode is registered with PromptAsArg=true.
+func TestKnownCLIAgents_opencode_hasPromptAsArg(t *testing.T) {
+	for _, spec := range knownCLIAgents {
+		if spec.Name == "opencode" {
+			if !spec.PromptAsArg {
+				t.Error("opencode spec: PromptAsArg should be true")
+			}
+			if args := spec.Args(); len(args) == 0 || args[0] != "run" {
+				t.Errorf("opencode spec: Args() = %v, want [run]", args)
+			}
+			return
+		}
+	}
+	t.Fatal("opencode not found in knownCLIAgents")
+}
+
 // TestNewBestAvailableAIClient_FallsBackToCLIWhenNoKey verifies that with no API key
 // the factory falls through to the first available CLI binary.
 // Only runs when the cat binary is available (used as a stand-in for a real AI CLI).
