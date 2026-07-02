@@ -31,13 +31,19 @@ type fakePoolCall struct {
 	workDir string
 }
 
-func (f *fakeHeadlessPool) CallBlockingWithOptions(_ context.Context, key headless.FeatureKey, _, _ string, opts headless.CallOptions) (string, error) {
+func (f *fakeHeadlessPool) CallBlockingWithOptions(ctx context.Context, key headless.FeatureKey, _, _ string, opts headless.CallOptions) (string, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, fakePoolCall{key: key, workDir: opts.WorkDir})
 	delay := f.delay
 	f.mu.Unlock()
 	if delay > 0 {
-		time.Sleep(delay)
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	return f.response, f.err
 }
@@ -392,22 +398,20 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 // forever. This test simulates that exact shape (LLM call slower than the
 // cleanup budget) at test-friendly timescales.
 func TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext(t *testing.T) {
-	// triageCleanupTimeout is reduced but kept generous enough (2s) that the real
-	// SQLite writes below can't flake under CI load or a busy test machine — the
-	// bug being tested is about ORDERING (timeout starts before vs. after the
-	// slow call), not about needing a tiny timeout, so there's no reason to cut
-	// this closer to the wire.
-	origTimeout := triageCleanupTimeout
-	triageCleanupTimeout = 2 * time.Second
-	defer func() { triageCleanupTimeout = origTimeout }()
-
 	storage := createTestStorage(t)
-	// delay outlasts triageCleanupTimeout — this is what the old code got wrong:
-	// a cleanupCtx created before this delay would already be expired by the
-	// time it's used afterward.
+	// delay outlasts the cleanup timeout below — this is what the old code got
+	// wrong: a cleanupCtx created before this delay would already be expired by
+	// the time it's used afterward.
 	pool := &fakeHeadlessPool{response: validTriageJSON(), delay: 3 * time.Second}
 	svc := NewBacklogService(storage, nil, nil, nil)
 	svc.SetHeadlessPool(pool)
+	// Reduced but kept generous enough (2s) that the real SQLite writes below
+	// can't flake under CI load or a busy test machine — the bug being tested
+	// is about ORDERING (timeout starts before vs. after the slow call), not
+	// about needing a tiny timeout, so there's no reason to cut this closer to
+	// the wire. Set on this instance only — no shared global state, no risk to
+	// any other concurrently running test.
+	svc.SetTriageCleanupTimeout(2 * time.Second)
 
 	repoPath := t.TempDir()
 	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{

@@ -27,14 +27,11 @@ import (
 // live tmux process and can be safely tombstoned on re-trigger.
 const headlessTriageUUIDPrefix = "headless-triage-"
 
-// triageCleanupTimeout bounds the DB writes TriggerTriage's goroutine makes after its
-// headless LLM call returns (persist result, update plan_artifacts_path, transition
-// idea->ready, mark session ended). A var (not a const) so tests can override it — see
-// TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext, a regression test for a bug
-// where this timeout used to start counting down BEFORE the (7-15 minute) LLM call
-// instead of after it, so it was always already expired by the time these persistence
-// calls ran and every successful triage silently failed to ever mark the item ready.
-var triageCleanupTimeout = 10 * time.Second
+// defaultTriageCleanupTimeout bounds the DB writes TriggerTriage's goroutine makes
+// after its headless LLM call returns (persist result, update plan_artifacts_path,
+// transition idea->ready, mark session ended). See BacklogService.triageCleanupTimeout
+// for why this needed to become configurable rather than a global.
+const defaultTriageCleanupTimeout = 10 * time.Second
 
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
@@ -88,6 +85,17 @@ type BacklogService struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	triageSem      chan struct{}
+
+	// triageCleanupTimeout bounds the post-LLM-call DB writes in TriggerTriage's
+	// goroutine. An instance field (not a package var) so tests can override it on
+	// their own *BacklogService without any shared global state or data-race risk
+	// across concurrently running tests — see SetTriageCleanupTimeout and
+	// TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext, a regression test
+	// for a bug where this timeout used to start counting down BEFORE the
+	// (7-15 minute) LLM call instead of after it, so it was always already expired
+	// by the time these persistence calls ran and every successful triage
+	// silently failed to ever mark the item ready.
+	triageCleanupTimeout time.Duration
 }
 
 // NewBacklogService creates a BacklogService with all optional dependencies.
@@ -103,20 +111,28 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &BacklogService{
-		storage:        storage,
-		sourceBackend:  storage,
-		sessionCreator: creator,
-		cfg:            cfg,
-		engine:         engine,
-		shutdownCtx:    ctx,
-		shutdownCancel: cancel,
-		triageSem:      make(chan struct{}, 8),
+		storage:              storage,
+		sourceBackend:        storage,
+		sessionCreator:       creator,
+		cfg:                  cfg,
+		engine:               engine,
+		shutdownCtx:          ctx,
+		shutdownCancel:       cancel,
+		triageSem:            make(chan struct{}, 8),
+		triageCleanupTimeout: defaultTriageCleanupTimeout,
 	}
 }
 
 // SetHeadlessPool wires the headless pool for autonomous triage calls.
 func (s *BacklogService) SetHeadlessPool(pool headless.PoolClient) {
 	s.headlessPool = pool
+}
+
+// SetTriageCleanupTimeout overrides the default timeout for TriggerTriage's
+// post-LLM-call DB writes. Exposed for tests; production callers should rely
+// on the default.
+func (s *BacklogService) SetTriageCleanupTimeout(d time.Duration) {
+	s.triageCleanupTimeout = d
 }
 
 // Shutdown cancels the service's background context, unblocking any goroutines
@@ -1238,7 +1254,7 @@ func (s *BacklogService) TriggerTriage(
 		// already expired by the time these persistence calls run below — every
 		// successful triage would silently fail to ever mark the item ready. This
 		// was a live, 100%-reproducible bug: see the backlog cross-platform audit.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), triageCleanupTimeout)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), s.triageCleanupTimeout)
 		defer cleanupCancel()
 
 		if callErr != nil {
