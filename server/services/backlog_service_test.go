@@ -955,6 +955,21 @@ func TestTriggerSync_ReturnsNotFoundForMissingSource(t *testing.T) {
 	assert.Equal(t, connect.CodeNotFound, connErr.Code())
 }
 
+func TestTriggerSync_ReturnsInvalidArgumentForMalformedSourceID(t *testing.T) {
+	svc := newBacklogService(t)
+	registry := session.NewPluginRegistry()
+	registry.Register(&fakeSourcePlugin{})
+	svc.SetPluginRegistry(registry)
+
+	_, err := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{
+		SourceId: "not-a-uuid",
+	}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
+}
+
 func TestTriggerSync_SucceedsAndCreatesItems(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := NewBacklogService(storage, nil, nil, nil)
@@ -1038,6 +1053,18 @@ func TestTriggerSync_PropagatesFetchError(t *testing.T) {
 func TestGetSyncHistory_ReturnsInvalidArgumentWhenSourceIDEmpty(t *testing.T) {
 	svc := newBacklogService(t)
 	_, err := svc.GetSyncHistory(t.Context(), connect.NewRequest(&sessionv1.GetSyncHistoryRequest{SourceId: ""}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
+}
+
+// A malformed (non-UUID) source_id must be rejected as CodeInvalidArgument,
+// not surfaced as CodeInternal — the storage layer's parse error isn't a
+// server-side failure, it's bad client input.
+func TestGetSyncHistory_ReturnsInvalidArgumentForMalformedSourceID(t *testing.T) {
+	svc := newBacklogService(t)
+	_, err := svc.GetSyncHistory(t.Context(), connect.NewRequest(&sessionv1.GetSyncHistoryRequest{SourceId: "not-a-uuid"}))
 	require.Error(t, err)
 	var connErr *connect.Error
 	require.ErrorAs(t, err, &connErr)

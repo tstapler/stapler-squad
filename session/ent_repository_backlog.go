@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"entgo.io/ent/dialect/sql"
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
@@ -469,7 +468,7 @@ func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID strin
 	}
 	events, err := r.client.SourceSyncEvent.Query().
 		Where(sourcesyncevent.HasSourceWith(itemsource.ID(parsedID))).
-		Order(sourcesyncevent.ByStartedAt(sql.OrderDesc())).
+		Order(ent.Desc(sourcesyncevent.FieldStartedAt)).
 		Limit(maxSourceSyncEventsHistory).
 		All(ctx)
 	if err != nil {

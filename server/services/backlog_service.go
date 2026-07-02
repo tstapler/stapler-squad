@@ -1676,6 +1676,9 @@ func (s *BacklogService) TriggerSync(
 	if req.Msg.SourceId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("source_id is required"))
 	}
+	if _, parseErr := uuid.Parse(req.Msg.SourceId); parseErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid source_id %q: %w", req.Msg.SourceId, parseErr))
+	}
 
 	var sl *session.SyncLoop
 	if s.syncKeyFunc != nil {
@@ -1709,6 +1712,9 @@ func (s *BacklogService) GetSyncHistory(
 	}
 	if req.Msg.SourceId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("source_id is required"))
+	}
+	if _, parseErr := uuid.Parse(req.Msg.SourceId); parseErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid source_id %q: %w", req.Msg.SourceId, parseErr))
 	}
 
 	events, err := s.storage.ListSourceSyncEvents(ctx, req.Msg.SourceId)
