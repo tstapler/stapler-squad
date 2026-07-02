@@ -3,7 +3,7 @@
 Read-only trace of the backlog feature from a real user's perspective: UI entry point →
 RPC → backend code path → reachability → implementation status → autonomy/guardrail notes.
 
-Repo root: `/home/tstapler/.stapler-squad/workspaces/d685c4b1a423cca3/worktrees/stapler-squad-bklof_18be35f4c19c4b24`
+All file paths below are relative to the repo root.
 
 ---
 

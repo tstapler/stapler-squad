@@ -84,8 +84,8 @@ func (i *Instance) SwitchWorkspace(req WorkspaceSwitchRequest) (*WorkspaceSwitch
 
 	i.stateMutex.Lock()
 	// unlocked tracks whether the lock has already been released early (see below).
-	// Start() acquires stateMutex itself (instance.go ~900), so it must never be called
-	// while this function still holds the lock - sync.RWMutex/deadlock.RWMutex is not
+	// Start() acquires stateMutex itself during its Active-status transition, so it
+	// must never be called while this function still holds the lock - sync.RWMutex/deadlock.RWMutex is not
 	// reentrant and a nested Lock() on the same goroutine deadlocks forever. unlock() is
 	// idempotent so it's safe to call both explicitly (before each Start() call below)
 	// and again via this defer on every other return path.
