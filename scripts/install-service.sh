@@ -92,6 +92,17 @@ install_linux() {
     mkdir -p "$service_dir"
     mkdir -p "$log_dir"
 
+    # Build a PATH that preserves the current shell's PATH first (so custom
+    # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
+    # but appends standard fallback locations, mirroring install_macos's
+    # LaunchAgent PATH below. Without this, the unit bakes in a raw PATH
+    # snapshot from install time with no fallback: if claude/tmux/git later
+    # move (nvm/asdf reinstall, a fresh `pip install --user`/npm global
+    # install to ~/.local/bin) without a subsequent `make install-service`,
+    # the headless LLM pool's exec.LookPath("claude") silently fails and
+    # backlog triage no-ops with only a log warning (see server/dependencies.go).
+    service_path="$PATH:$HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
     cat > "$service_file" << EOF
 [Unit]
 Description=Stapler Squad — AI Agent Session Manager
@@ -108,7 +119,7 @@ KillMode=process
 StandardOutput=append:$log_dir/service.log
 StandardError=append:$log_dir/service.log
 Environment=HOME=$HOME
-Environment=PATH=$PATH
+Environment=PATH=$service_path
 
 [Install]
 WantedBy=default.target

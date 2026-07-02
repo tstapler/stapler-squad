@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -30,10 +32,54 @@ type firstCallJSONResult struct {
 	CostUSD   float64 `json:"cost_usd"`
 }
 
-// NewPool constructs a Pool by looking up the claude binary in PATH.
-// Returns ErrClaudeNotFound if the binary is not found.
+// claudeFallbackDirs lists standard install locations to check for the claude
+// binary if it's not found via the process's PATH. Checked in order; the
+// first executable match wins.
+var claudeFallbackDirs = []string{
+	"/usr/local/bin",
+	"/opt/homebrew/bin",
+}
+
+// findClaudeBinary locates the claude binary, trying lookPath (the process's
+// PATH) first and falling back to well-known install locations relative to
+// homeDir if that fails.
+//
+// This exists because a service manager's baked-in PATH can go stale
+// independently of the interactive shell's PATH that a developer actually
+// uses: systemd user units snapshot PATH at install time with no fallback
+// (unlike the macOS LaunchAgent plist, which explicitly appends Homebrew and
+// system paths — see scripts/install-service.sh). If claude is later
+// reinstalled to a new location (nvm/asdf switch, a fresh `pip install
+// --user`/npm global install) without a subsequent `make install-service`,
+// the bare exec.LookPath("claude") call below would otherwise fail silently:
+// NewPool returns ErrClaudeNotFound, the headless pool is left nil (only a
+// log warning — see server/dependencies.go), and backlog triage quietly
+// no-ops with no user-visible error.
+func findClaudeBinary(lookPath func(string) (string, error), homeDir string) (string, error) {
+	if bin, err := lookPath("claude"); err == nil {
+		return bin, nil
+	}
+
+	dirs := claudeFallbackDirs
+	if homeDir != "" {
+		dirs = append([]string{filepath.Join(homeDir, ".local", "bin")}, dirs...)
+	}
+	for _, dir := range dirs {
+		candidate := filepath.Join(dir, "claude")
+		info, statErr := os.Stat(candidate)
+		if statErr == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("claude not found in PATH or fallback locations %v", dirs)
+}
+
+// NewPool constructs a Pool by looking up the claude binary in PATH, falling
+// back to well-known install locations if PATH lookup fails.
+// Returns ErrClaudeNotFound if the binary is not found anywhere.
 func NewPool(cfg PoolConfig) (*Pool, error) {
-	bin, err := exec.LookPath("claude")
+	homeDir, _ := os.UserHomeDir()
+	bin, err := findClaudeBinary(exec.LookPath, homeDir)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrClaudeNotFound, err)
 	}

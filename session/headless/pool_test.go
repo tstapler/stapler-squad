@@ -376,9 +376,14 @@ func (s *slowReadCloser) Read(p []byte) (int, error) {
 
 func (s *slowReadCloser) Close() error { return nil }
 
-// TestNewPool_ReturnsErrClaudeNotFound_WhenBinaryMissing verifies PATH check.
+// TestNewPool_ReturnsErrClaudeNotFound_WhenBinaryMissing verifies NewPool
+// fails only when claude is absent from BOTH PATH and every fallback
+// location (see findClaudeBinary in caller.go). HOME must also be overridden
+// here — a broken PATH alone isn't enough to prove "not found anywhere" on a
+// dev machine that has claude installed at the real $HOME/.local/bin fallback.
 func TestNewPool_ReturnsErrClaudeNotFound_WhenBinaryMissing(t *testing.T) {
 	t.Setenv("PATH", "/tmp/nonexistent-path-for-test-headless")
+	t.Setenv("HOME", t.TempDir())
 	_, err := NewPool(PoolConfig{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrClaudeNotFound)

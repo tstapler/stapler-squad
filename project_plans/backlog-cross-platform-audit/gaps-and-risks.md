@@ -95,16 +95,28 @@ Four new regression tests cover: a stray brace in preamble, multiple valid-looki
 before the real one, a brace inside a string literal, and an unbalanced stray brace. All 12
 parser tests (8 existing + 4 new) pass; no other test regressed.
 
-## 6. Linux install path is more fragile than macOS for finding `claude`/`tmux`/`git`
+## 6. ~~Linux install path is more fragile than macOS~~ — FIXED
 
-The macOS LaunchAgent plist explicitly appends Homebrew + system fallback paths; the Linux
-systemd unit bakes in a raw `$PATH` snapshot from install time with no fallback.
-`session/headless/caller.go:36` does a bare `exec.LookPath("claude")`. If that snapshot goes
-stale (nvm/asdf reinstall, PATH change since `make install-service`), the headless pool goes
-nil (`server/dependencies.go:452-464`, log-warn only) and backlog triage silently no-ops.
-**Actionable check on this machine**: confirm `journalctl --user -u stapler-squad` has no
-"headless pool" warnings, and that `claude`/`tmux`/`git` resolve the same way inside the
-systemd unit's environment as in an interactive shell.
+The macOS LaunchAgent plist explicitly appended Homebrew + system fallback paths; the Linux
+systemd unit baked in a raw `$PATH` snapshot from install time with no fallback.
+`session/headless/caller.go:36` did a bare `exec.LookPath("claude")`. If that snapshot went
+stale (nvm/asdf reinstall, PATH change since `make install-service`), the headless pool went
+nil (`server/dependencies.go:452-464`, log-warn only) and backlog triage silently no-opped.
+
+**Fix, two layers**:
+1. `scripts/install-service.sh`'s Linux path now appends the same class of fallback locations
+   the macOS plist already had (`$HOME/.local/bin`, `/usr/local/sbin`, `/usr/local/bin`,
+   `/usr/sbin`, `/usr/bin`, `/sbin`, `/bin`) to the systemd unit's `Environment=PATH=`, so a
+   freshly (re)installed service is robust the same way macOS already was.
+2. `session/headless/caller.go`'s `NewPool` now calls a new `findClaudeBinary` helper that
+   falls back to `$HOME/.local/bin/claude` and other well-known install locations if
+   `exec.LookPath("claude")` fails — this covers an *already-running* service with a stale
+   baked-in PATH, which the install-script fix alone can't retroactively help. 7 new unit
+   tests cover: PATH-success passthrough, home-fallback success, non-executable/directory
+   rejected as false matches, home-fallback priority over system dirs, and empty-homeDir
+   safety. One existing test (`TestNewPool_ReturnsErrClaudeNotFound_WhenBinaryMissing`) had to
+   additionally override `HOME` — it previously only broke `PATH`, which no longer proves
+   "claude not found anywhere" now that a real fallback exists.
 
 ## 7. Historical Linux-only subprocess bug (fixed once, same pattern still lingers elsewhere)
 
@@ -143,10 +155,12 @@ but it means the plan docs overstate what was actually delivered — don't trust
    deliberately doesn't cover.
 3. Decide deliberately on #3 (GitHub sync): finish it or explicitly cut it and remove the
    half-built RPC surface — right now it's neither shipped nor absent.
-4. ~~Harden #5 (triage JSON parsing)~~ — **done**: replaced the naive brace-scan with a
-   balanced-brace, string-literal-aware scanner in `session/backlog_triage.go`; 4 new
-   adversarial regression tests in `session/backlog_triage_test.go`.
-5. Linux PATH robustness (#6) — cheap, worth doing opportunistically.
+4. ~~Harden #5 (triage JSON parsing)~~ — **done**: replaced the naive brace-scan with
+   independent `json.Decoder` attempts per `{` in `session/backlog_triage.go` (a first
+   balanced-brace-counter attempt was itself found buggy by code review and superseded — see
+   PR #134 history); 10 adversarial regression tests in `session/backlog_triage_test.go`.
+5. ~~Linux PATH robustness (#6)~~ — **done**: `scripts/install-service.sh` + a new
+   `findClaudeBinary` fallback in `session/headless/caller.go`.
 6. If #1-#5 don't explain it, the next real test to write is one that actually exercises a
    live tmux session + live `claude` process (like the existing `harness`-tagged test, but
    extended past triage into execution) — that's the one class of bug this audit's tests
