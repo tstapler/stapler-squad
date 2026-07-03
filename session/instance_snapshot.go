@@ -138,7 +138,7 @@ type InstanceSnapshot struct {
 }
 
 // buildSnapshot builds a point-in-time InstanceSnapshot from i.
-// Must be called while i.stateMutex is held so all fields are stable.
+// Must be called while i.mu is held so all fields are stable.
 // All reference types (slices, maps, pointers) are deep-copied so that
 // mutations to the live Instance after Unlock cannot corrupt the snapshot.
 func buildSnapshot(i *Instance) *InstanceSnapshot {

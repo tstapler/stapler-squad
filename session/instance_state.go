@@ -16,7 +16,7 @@ import (
 // loadStatus sets Status directly without state machine validation.
 // Call ONLY from FromInstanceData() deserialization or test setup.
 // Never call from operational code paths.
-// Must be called with i.stateMutex held (or before the instance is shared).
+// Must be called with i.mu held (or before the instance is shared).
 func (i *Instance) loadStatus(status Status) {
 	i.Status = status
 }
@@ -28,7 +28,7 @@ func (i *Instance) setStatus(status Status) {
 }
 
 // transitionTo validates and executes a state transition using the TransitionDef table.
-// Must be called with i.stateMutex held.
+// Must be called with i.mu held.
 func (i *Instance) transitionTo(ctx context.Context, to Status) error {
 	def, ok := transitionIndex[transitionKey{i.Status, to}]
 	if !ok {

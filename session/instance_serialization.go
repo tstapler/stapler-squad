@@ -27,9 +27,9 @@ func (i *Instance) ToInstanceData() InstanceData {
 	// that publishes to the atomic snapshot pointer.
 	// LaunchCommand is not in the snapshot (set once during Start) and is read directly.
 	// gitManager and claudeSession sub-objects have their own synchronisation.
-	i.stateMutex.RLock()
+	i.mu.RLock()
 	snap := buildSnapshot(i)
-	i.stateMutex.RUnlock()
+	i.mu.RUnlock()
 
 	data := InstanceData{
 		Title:                snap.Title,

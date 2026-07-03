@@ -50,15 +50,6 @@ jest.mock("@/lib/hooks/useExportRules", () => ({
   }),
 }));
 
-const mockSaveToConfigFile = jest.fn().mockResolvedValue({ savedCount: 1, filePath: "~/.config/stapler-squad/shared_rules.yaml" });
-jest.mock("@/lib/hooks/useSaveRulesToConfigFile", () => ({
-  useSaveRulesToConfigFile: () => ({
-    saveToConfigFile: mockSaveToConfigFile,
-    loading: false,
-    error: null,
-  }),
-}));
-
 // Stub ImportRulesModal so it renders a lightweight sentinel instead of the full modal.
 jest.mock("./ImportRulesModal", () => ({
   ImportRulesModal: ({ open, onClose }: { open: boolean; onClose: () => void }) =>

@@ -5,7 +5,6 @@ import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useExportRules } from "@/lib/hooks/useExportRules";
-import { useSaveRulesToConfigFile } from "@/lib/hooks/useSaveRulesToConfigFile";
 import { ApprovalRuleProto, AutoDecision, SuggestionSource } from "@/gen/session/v1/types_pb";
 
 type SortKey = "name" | "decision" | "priority" | "hits";
@@ -33,7 +32,7 @@ import {
   generateErrorBanner, dismissErrorButton, suggestionsContainer,
   ruleModalContent, rowCount,
   searchBar, thSortable, hitBadge, hitBadgeActive,
-  exportConfigButton, configFileHint,
+  configFileHint,
 } from "./ApprovalRulesPanel.css";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -83,7 +82,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
   const { rules, loading, error, upsertRule, deleteRule, refresh } = useApprovalRules();
   const { summary, loading: analyticsLoading } = useApprovalAnalytics({ windowDays: 7 });
   const { exportRules, loading: exporting, error: exportError } = useExportRules();
-  const { saveToConfigFile, loading: savingToConfig } = useSaveRulesToConfigFile();
 
   // ── Epic 3: panel-level "Generate Suggestions" hook ─────────────────────
   const {
@@ -111,7 +109,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
   const [sortKey, setSortKey] = useState<SortKey>("priority");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [importModalOpen, setImportModalOpen] = useState(false);
-  const [configFilePath, setConfigFilePath] = useState<string | null>(null);
 
   // ── URL param pre-fill ───────────────────────────────────────────────────
   const urlPrefill = useMemo<RuleBuilderPrefill | null>(() => {
@@ -222,16 +219,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     setTemplateSeed(null);
     cmdClear();
     setCmdSampleText("");
-  };
-
-  const handleExportToConfigFile = async (ruleId: string) => {
-    try {
-      const result = await saveToConfigFile({ ruleIds: [ruleId] });
-      setConfigFilePath(result.filePath);
-      void refresh();
-    } catch {
-      // error shown via savingToConfig state
-    }
   };
 
   const handleEdit = (rule: ApprovalRuleProto) => {
@@ -465,9 +452,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       {/* ── Config file path hint (shown when viewing config tab) ── */}
       {sourceFilter === "config" && (
         <div className={configFileHint}>
-          {configFilePath
-            ? `Stored in ${configFilePath}`
-            : "Stored in ~/.config/stapler-squad/shared_rules.yaml"}
+          Stored in ~/.config/stapler-squad/shared_rules.yaml
         </div>
       )}
 
@@ -613,15 +598,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
                           Edit
                         </button>
                         <button
-                          className={exportConfigButton}
-                          onClick={() => void handleExportToConfigFile(rule.id)}
-                          disabled={savingToConfig}
-                          aria-label={`Export rule ${rule.name} to config file`}
-                          title="Copy to shared config file (~/.config/stapler-squad/shared_rules.yaml)"
-                        >
-                          → Config
-                        </button>
-                        <button
                           className={deleteButton}
                           onClick={() => deleteRule(rule.id)}
                           aria-label={`Delete rule ${rule.name}`}
@@ -721,12 +697,6 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
               prefill={showBuilder ? effectivePrefill : null}
               templateSeed={templateSeed}
               onSave={handleSave}
-              onSaveToConfig={async (rule) => {
-                const result = await saveToConfigFile({ rule });
-                setConfigFilePath(result.filePath);
-                void refresh();
-                setShowBuilder(false);
-              }}
               onCancel={handleCancel}
               subcommandStats={summary?.commandSubcommandStats ?? []}
             />

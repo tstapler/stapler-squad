@@ -88,7 +88,7 @@ func newRulesService(t *testing.T) *RulesService {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, NewConfigFileRulesStore(), analyticsStore, c, nil, nil)
+	return NewRulesService(rulesStore, analyticsStore, c, nil, nil)
 }
 
 // ─── ListPendingApprovals ────────────────────────────────────────────────────

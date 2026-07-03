@@ -283,7 +283,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, NewConfigFileRulesStore(), analyticsStore, classifierObj, promptBuilder, aiClientImpl)
+	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -2732,22 +2732,6 @@ func (s *SessionService) BulkUpsertRules(
 	req *connect.Request[sessionv1.BulkUpsertRulesRequest],
 ) (*connect.Response[sessionv1.BulkUpsertRulesResponse], error) {
 	return s.rulesSvc.BulkUpsertRules(ctx, req)
-}
-
-// GetConfigFileRules returns all rules from the shared config YAML file.
-func (s *SessionService) GetConfigFileRules(
-	ctx context.Context,
-	req *connect.Request[sessionv1.GetConfigFileRulesRequest],
-) (*connect.Response[sessionv1.GetConfigFileRulesResponse], error) {
-	return s.rulesSvc.GetConfigFileRules(ctx, req)
-}
-
-// SaveRulesToConfigFile exports rules to the shared config YAML file.
-func (s *SessionService) SaveRulesToConfigFile(
-	ctx context.Context,
-	req *connect.Request[sessionv1.SaveRulesToConfigFileRequest],
-) (*connect.Response[sessionv1.SaveRulesToConfigFileResponse], error) {
-	return s.rulesSvc.SaveRulesToConfigFile(ctx, req)
 }
 
 // ListDatabases returns all discovered workspace databases with metadata.
