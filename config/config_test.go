@@ -267,6 +267,31 @@ func TestGetConfigDir(t *testing.T) {
 	})
 
 	t.Run("uses test mode isolation for tests", func(t *testing.T) {
+		// GetConfigDir checks STAPLER_SQUAD_TEST_DIR (priority 1) and
+		// STAPLER_SQUAD_INSTANCE (priority 2) before falling through to test
+		// mode auto-detection (priority 3). Both can be set in the ambient
+		// environment this test process inherits (e.g. a stapler-squad
+		// session sets STAPLER_SQUAD_INSTANCE for its own tooling), which
+		// would otherwise short-circuit test mode detection and make this
+		// test order- and environment-dependent. Clear both explicitly so
+		// this test always exercises pure test mode auto-detection.
+		originalTestDir := os.Getenv("STAPLER_SQUAD_TEST_DIR")
+		originalInstance := os.Getenv("STAPLER_SQUAD_INSTANCE")
+		os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+		os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+		defer func() {
+			if originalTestDir == "" {
+				os.Unsetenv("STAPLER_SQUAD_TEST_DIR")
+			} else {
+				os.Setenv("STAPLER_SQUAD_TEST_DIR", originalTestDir)
+			}
+			if originalInstance == "" {
+				os.Unsetenv("STAPLER_SQUAD_INSTANCE")
+			} else {
+				os.Setenv("STAPLER_SQUAD_INSTANCE", originalInstance)
+			}
+		}()
+
 		// This test itself triggers test mode auto-detection
 		configDir, err := GetConfigDir()
 
@@ -450,13 +475,15 @@ func TestGetClaudeCommand_Timeout(t *testing.T) {
 	})
 
 	t.Run("Default executor uses timeout protection", func(t *testing.T) {
-		// Verify that NewConfig() creates a config with timeout protection.
+		// Verify that NewConfig() creates a config with a non-nil executor.
 		cfg := NewConfig()
 		assert.NotNil(t, cfg.executor)
 
-		// The default should be timeoutCommandExecutor
-		_, ok := cfg.executor.(*timeoutCommandExecutor)
-		assert.True(t, ok, "Default executor should be timeoutCommandExecutor")
+		// In test mode the default executor is lookPathOnlyExecutor (avoids slow
+		// shell config sourcing); in production it is timeoutCommandExecutor.
+		_, isTimeout := cfg.executor.(*timeoutCommandExecutor)
+		_, isLookPath := cfg.executor.(*lookPathOnlyExecutor)
+		assert.True(t, isTimeout || isLookPath, "Default executor should be timeoutCommandExecutor or lookPathOnlyExecutor, got %T", cfg.executor)
 	})
 }
 
@@ -651,6 +678,31 @@ func TestEscapeAnalyticsDefaults(t *testing.T) {
 		assert.Equal(t, 5000, cfg.EscapeAnalyticsMaxRowsPerSession)
 		assert.Equal(t, 14, cfg.EscapeAnalyticsRetentionDays)
 	})
+}
+
+// TestDefaultConfigMirrorsEscapeAnalyticsDefaults is a regression test for BUG-025:
+// DefaultConfig() must produce the same escape analytics defaults as
+// LoadConfigFromPath's post-decode defaulting (see the comment above the
+// SessionDefaults init in DefaultConfig — the two code paths must be
+// equivalent). Before this fix, DefaultConfig() left these fields at their Go
+// zero values, so a fresh install's very first LoadConfig() call (which
+// returns DefaultConfig() directly, before any config.json exists) would pass
+// EscapeAnalyticsMaxRowsPerSession=0 into the batch writer at server startup —
+// disabling the per-session row cap instead of applying the intended default.
+func TestDefaultConfigMirrorsEscapeAnalyticsDefaults(t *testing.T) {
+	fresh := DefaultConfig()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0600))
+	loaded, err := LoadConfigFromPath(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, loaded.EscapeAnalyticsCaptureLevel, fresh.EscapeAnalyticsCaptureLevel)
+	require.NotNil(t, fresh.EscapeAnalyticsSamplingRate)
+	require.NotNil(t, loaded.EscapeAnalyticsSamplingRate)
+	assert.Equal(t, *loaded.EscapeAnalyticsSamplingRate, *fresh.EscapeAnalyticsSamplingRate)
+	assert.Equal(t, loaded.EscapeAnalyticsMaxRowsPerSession, fresh.EscapeAnalyticsMaxRowsPerSession)
+	assert.Equal(t, loaded.EscapeAnalyticsRetentionDays, fresh.EscapeAnalyticsRetentionDays)
 }
 
 // TestEscapeAnalyticsCaptureLevel_Validation verifies that invalid capture level values

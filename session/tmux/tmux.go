@@ -802,6 +802,8 @@ func (t *TmuxSession) RestoreWithWorkDir(workDir string) error {
 	// First check if the session actually exists
 	// Try multiple times with increasing delays to handle slow tmux startup or temporary unavailability
 	const maxRetries = 5
+	// ponytail: caller already ran DoesSessionExistNoCache() and got false — cache is stale, flush it.
+	t.invalidateExistsCache()
 	sessionExists := false
 	for i := 0; i < maxRetries; i++ {
 		if t.DoesSessionExist() {

@@ -248,7 +248,7 @@ func (sg *StateGenerator) calculateCursorPosition(lines []*sessionv1.TerminalLin
 		if !lines[i].Attributes.IsEmpty {
 			cursorRow = uint32(i)
 			// Calculate visual character width (strip ANSI codes, handle multi-byte UTF-8)
-			visibleContent := sg.stripANSIBytes(lines[i].Content)
+			visibleContent := stripANSIBytes(lines[i].Content)
 			// Use runewidth to get visual column count instead of byte length
 			// This properly handles multi-byte UTF-8, wide characters (CJK/emoji), and zero-width chars
 			cursorCol = uint32(runewidth.StringWidth(string(visibleContent)))
@@ -263,31 +263,6 @@ func (sg *StateGenerator) calculateCursorPosition(lines []*sessionv1.TerminalLin
 	}
 }
 
-// stripANSIBytes removes ANSI escape sequences for visible character counting
-func (sg *StateGenerator) stripANSIBytes(b []byte) []byte {
-	var result bytes.Buffer
-	inEscape := false
-
-	for i := 0; i < len(b); i++ {
-		if b[i] == '\x1b' {
-			inEscape = true
-			continue
-		}
-
-		if inEscape {
-			// End of escape sequence
-			if b[i] >= 'A' && b[i] <= 'Z' || b[i] >= 'a' && b[i] <= 'z' {
-				inEscape = false
-			}
-			continue
-		}
-
-		result.WriteByte(b[i])
-	}
-
-	return result.Bytes()
-}
-
 // sanitizeUTF8Bytes converts raw bytes to valid UTF-8, preserving ANSI escape sequences
 // This prevents xterm.js parsing errors from invalid byte sequences while maintaining
 // terminal formatting and color information
@@ -299,26 +274,16 @@ func (sg *StateGenerator) sanitizeUTF8Bytes(rawBytes []byte) []byte {
 
 	// Convert to valid UTF-8 by replacing invalid sequences
 	var result bytes.Buffer
-	inEscape := false
+	result.Grow(len(rawBytes))
 
 	for i := 0; i < len(rawBytes); {
-		// Start of ANSI escape sequence
+		// Escape sequence: consume and preserve the whole sequence at once,
+		// so an OSC/DCS payload containing a letter (window titles,
+		// hyperlink URLs, etc.) doesn't get split mid-payload.
 		if rawBytes[i] == '\x1b' {
-			inEscape = true
-			result.WriteByte(rawBytes[i])
-			i++
-			continue
-		}
-
-		// Inside ANSI escape sequence - preserve all bytes
-		if inEscape {
-			b := rawBytes[i]
-			result.WriteByte(b)
-			// End of escape sequence (letter terminates most ANSI sequences)
-			if (b >= 'A' && b <= 'Z') || (b >= 'a' && b <= 'z') {
-				inEscape = false
-			}
-			i++
+			n := scanEscapeSequence(rawBytes, i)
+			result.Write(rawBytes[i : i+n])
+			i += n
 			continue
 		}
 

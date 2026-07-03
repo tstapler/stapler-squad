@@ -11,6 +11,8 @@ import { BacklogItemDetail } from "@/components/backlog/BacklogItemDetail";
 import { BacklogItemForm } from "@/components/backlog/BacklogItemForm";
 import { BacklogEmptyState, FilterZeroState, FooterNudge } from "@/components/backlog/BacklogEmptyState";
 import { VaguenessPromptModal } from "@/components/backlog/VaguenessPromptModal";
+import { BacklogTourModal } from "@/components/backlog/BacklogTourModal";
+import { useBacklogTour } from "@/components/backlog/useBacklogTour";
 import {
   useBacklogService,
   type BacklogItem,
@@ -193,6 +195,9 @@ function BacklogPageInner() {
   // New-item modal
   const [showForm, setShowForm] = useState(false);
 
+  // First-visit walkthrough
+  const { showTour, setTourComplete, hideTour, resetTour } = useBacklogTour();
+
   // Vagueness prompt modal state
   const [vaguenessItem, setVaguenessItem] = useState<BacklogItem | null>(null);
 
@@ -283,6 +288,14 @@ function BacklogPageInner() {
       <div className={styles.pageHeader}>
         <h1 className={styles.pageTitle}>Backlog</h1>
         <div className={styles.headerActions}>
+          <button
+            className={styles.helpButton}
+            onClick={() => { track({ name: "backlog_open_tour", category: "user_action", component: "BacklogPage" }); resetTour(); }}
+            aria-label="How this page works"
+            data-testid="backlog-tour-button"
+          >
+            ?
+          </button>
           <button
             className={styles.newItemButton}
             onClick={() => { track({ name: "backlog_new_item", category: "user_action", component: "BacklogPage" }); setShowForm(true); }}
@@ -489,6 +502,12 @@ function BacklogPageInner() {
           </div>
         </div>
       )}
+
+      {/* First-visit walkthrough */}
+      <BacklogTourModal
+        isOpen={showTour}
+        onComplete={(persist) => (persist ? setTourComplete() : hideTour())}
+      />
 
       {/* Vagueness Prompt Modal */}
       {vaguenessItem && (

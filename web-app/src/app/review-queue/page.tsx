@@ -239,11 +239,13 @@ function ReviewQueueContent() {
   // remains in the store — does not incorrectly trigger auto-advance.
   // reviewQueueItems is kept as the dep so the effect fires when the visible queue changes (the moment
   // we need to re-evaluate), but the guard checks allQueueItems to distinguish "filtered out" from "removed".
+  // force=false so the user's auto-advance preference is respected even on genuine removals (e.g. after
+  // approving/denying a permission request — the user may still want to watch the session continue).
   useEffect(() => {
     if (!selectedSession) return;
     const stillInQueue = allQueueItems.some((item) => item.sessionId === selectedSession.id);
     if (!stillInQueue) {
-      handleAutoAdvance(selectedSession.id, true);
+      handleAutoAdvance(selectedSession.id);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewQueueItems]);

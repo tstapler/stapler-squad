@@ -1,0 +1,12 @@
+{
+  "id": "backlog:delete-item",
+  "type": "backend",
+  "service": "BacklogService",
+  "method": "DeleteBacklogItem",
+  "protoFile": "proto/session/v1/backlog.proto",
+  "markerFound": true,
+  "handlerFile": "server/services/backlog_service.go",
+  "tested": false,
+  "testIds": [],
+  "lastModified": "2026-07-02T17:50:32.459009075-07:00"
+}

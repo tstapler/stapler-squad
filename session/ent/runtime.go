@@ -407,7 +407,7 @@ func init() {
 	// session.DefaultGithubPrNumber holds the default value on creation for the github_pr_number field.
 	session.DefaultGithubPrNumber = sessionDescGithubPrNumber.Default.(int)
 	// sessionDescSessionArtifacts is the schema descriptor for session_artifacts field.
-	sessionDescSessionArtifacts := sessionFields[38].Descriptor()
+	sessionDescSessionArtifacts := sessionFields[40].Descriptor()
 	// session.DefaultSessionArtifacts holds the default value on creation for the session_artifacts field.
 	session.DefaultSessionArtifacts = sessionDescSessionArtifacts.Default.(string)
 	sessiongoalFields := schema.SessionGoal{}.Fields()

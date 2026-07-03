@@ -4,7 +4,9 @@
   "component": "BacklogItemDetail",
   "path": "web-app/src/components/backlog/BacklogItemDetail.tsx",
   "markerLine": 0,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "tested": true,
+  "testIds": [
+    "BacklogItemDetail — background refresh must not unmount the view"
+  ],
+  "lastModified": "2026-07-01T00:00:00Z"
 }

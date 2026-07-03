@@ -54,7 +54,7 @@ func newRulesServiceWithAI(t *testing.T, aiClient AIClient) *RulesService {
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient)
+	return NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, aiClient)
 }
 
 // fixture2ElementJSON is a valid 2-element JSON array matching the AI response format.
@@ -125,7 +125,7 @@ func TestGenerateSuggestedRule_NilAIClient_ReturnsUnimplemented(t *testing.T) {
 	require.NoError(t, err)
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, analyticsStore, c, nil, nil) // nil AI
+	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil) // nil AI
 
 	_, err = svc.GenerateSuggestedRule(context.Background(), connect.NewRequest(&sessionv1.GenerateSuggestedRuleRequest{
 		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
@@ -179,7 +179,7 @@ func TestBuildPromptContext_IncludesRulesAndGaps(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond, "analytics entries must be persisted within 2s")
 
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"})
+	svc := NewRulesService(rulesStore, nil, analyticsStore, c, &DefaultRulePromptBuilder{}, &mockAIClient{response: "[]"})
 
 	req := &sessionv1.GenerateSuggestedRuleRequest{
 		Source: sessionv1.SuggestionSource_SUGGESTION_SOURCE_ANALYTICS_GAPS,
@@ -375,7 +375,7 @@ func TestAttachConflictInfo_SeedRuleAtHigherPriority_ShadowsSuggestion(t *testin
 
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	svc := NewRulesService(rulesStore, analyticsStore, c, nil, nil)
+	svc := NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
 
 	suggestion := &sessionv1.SuggestedRuleProto{
 		ToolName:       "Bash",
@@ -414,7 +414,7 @@ func newRulesServiceForCoverage(t *testing.T, specs []RuleSpec) *RulesService {
 	}
 	analyticsStore := NewAnalyticsStore(storage)
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, analyticsStore, c, nil, nil)
+	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
 }
 
 // testProg is an arbitrary program name that has no seed rules, so seed-rule
@@ -628,7 +628,7 @@ func newSimpleRulesService(t *testing.T) *RulesService {
 	analyticsStore := NewAnalyticsStore(storage)
 	analyticsStore.Start(context.Background())
 	c := classifier.NewRuleBasedClassifier()
-	return NewRulesService(rulesStore, analyticsStore, c, nil, nil)
+	return NewRulesService(rulesStore, nil, analyticsStore, c, nil, nil)
 }
 
 const validYAML3Rules = `rules:
@@ -1390,4 +1390,20 @@ func FuzzValidateRules_NoPanic(f *testing.F) {
 			YamlContent: string(data),
 		}))
 	})
+}
+
+// ── ConfigFileRulesRepository stub contract tests ─────────────────────────────
+
+func TestGetConfigFileRules_should_returnCodeUnimplemented_when_configStoreIsNil(t *testing.T) {
+	svc := newSimpleRulesService(t) // configStore == nil
+	_, err := svc.GetConfigFileRules(context.Background(), connect.NewRequest(&sessionv1.GetConfigFileRulesRequest{}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
+}
+
+func TestSaveRulesToConfigFile_should_returnCodeUnimplemented_when_configStoreIsNil(t *testing.T) {
+	svc := newSimpleRulesService(t) // configStore == nil
+	_, err := svc.SaveRulesToConfigFile(context.Background(), connect.NewRequest(&sessionv1.SaveRulesToConfigFileRequest{}))
+	require.Error(t, err)
+	assert.Equal(t, connect.CodeUnimplemented, connect.CodeOf(err))
 }

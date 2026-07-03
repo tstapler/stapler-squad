@@ -701,6 +701,11 @@ func (s *Storage) ArchiveBacklogItem(ctx context.Context, id string) (*BacklogIt
 	return s.repo.ArchiveBacklogItem(ctx, id)
 }
 
+// DeleteBacklogItem permanently removes an item and all its child records.
+func (s *Storage) DeleteBacklogItem(ctx context.Context, id string) error {
+	return s.repo.DeleteBacklogItem(ctx, id)
+}
+
 // TransitionBacklogItemStatus changes the status of a backlog item.
 func (s *Storage) TransitionBacklogItemStatus(ctx context.Context, id string, toStatus BacklogStatus, precondition *BacklogItemPrecondition) (*BacklogItemData, error) {
 	return s.repo.TransitionBacklogItemStatus(ctx, id, toStatus, precondition)

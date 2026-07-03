@@ -81,3 +81,40 @@ func TestBuildServiceDeps_OnlyCoreNil_DifferentFromPartialCore(t *testing.T) {
 		t.Logf("note: nil and zero-value CoreDeps produce the same error: %v", nilErr)
 	}
 }
+
+func TestPrNumFromTitle(t *testing.T) {
+	cases := []struct {
+		title   string
+		matches bool
+		want    int
+	}{
+		{"pr-1255-actions-spring-boot", true, 1255},
+		{"PR-42-feature", true, 42},   // case-insensitive
+		{"pr-0-foo", true, 0},          // zero is valid match; caller ignores pr 0
+		{"pr-99-", true, 99},           // trailing dash only
+		{"pr-1255", false, 0},          // missing trailing dash
+		{"pr-foo-bar", false, 0},       // non-numeric
+		{"feature-branch", false, 0},   // no prefix
+	}
+	for _, tc := range cases {
+		t.Run(tc.title, func(t *testing.T) {
+			m := prNumFromTitle.FindStringSubmatch(tc.title)
+			if !tc.matches {
+				if m != nil {
+					t.Errorf("expected no match, got %v", m)
+				}
+				return
+			}
+			if m == nil {
+				t.Fatalf("expected match for %q, got none", tc.title)
+			}
+			var got int
+			for _, b := range m[1] {
+				got = got*10 + int(b-'0')
+			}
+			if got != tc.want {
+				t.Errorf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}

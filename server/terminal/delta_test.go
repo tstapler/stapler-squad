@@ -309,6 +309,30 @@ func TestStripANSIBytes(t *testing.T) {
 			input:    "",
 			expected: "",
 		},
+		{
+			// OSC window-title sequence whose payload contains a letter
+			// ("my") before the real BEL terminator. A naive "any letter
+			// ends the escape" scanner stops at the 'm' in "my" and leaks
+			// "y title" + BEL into the visible count.
+			input:    "\x1b]0;my title\x07Hello",
+			expected: "Hello",
+		},
+		{
+			// OSC 8 hyperlink, terminated with ST (ESC \) instead of BEL.
+			input:    "\x1b]8;;https://example.com\x1b\\Link\x1b]8;;\x1b\\ done",
+			expected: "Link done",
+		},
+		{
+			// DCS sequence terminated with ST.
+			input:    "\x1bPq#0;2;0;0;0\x1b\\Sixel",
+			expected: "Sixel",
+		},
+		{
+			// '@' (Insert Character) and '~' (used by many real xterm
+			// sequences) are valid CSI final bytes that are not letters.
+			input:    "\x1b[5@Insert\x1b[3~Tilde",
+			expected: "InsertTilde",
+		},
 	}
 
 	for _, tt := range tests {

@@ -20,7 +20,11 @@ import (
 // Pass nil to use the default timeout executor.
 func NewConfigWithExecutor(exec CommandExecutor) *Config {
 	if exec == nil {
-		exec = newTimeoutCommandExecutor(5 * time.Second)
+		if IsTestMode() {
+			exec = &lookPathOnlyExecutor{}
+		} else {
+			exec = newTimeoutCommandExecutor(5 * time.Second)
+		}
 	}
 	return &Config{executor: exec}
 }
@@ -337,6 +341,14 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.SessionDefaults.Tags = []string{}
 	cfg.SessionDefaults.DirectoryRules = []DirectoryRule{}
 	cfg.SessionDefaults.Aliases = []AliasConfig{}
+	// Escape analytics defaults. LoadConfigFromPath applies the same defaults
+	// after JSON decode (for fields absent from an existing config.json);
+	// DefaultConfig must mirror them so the two code paths are equivalent.
+	cfg.EscapeAnalyticsCaptureLevel = "summary"
+	defaultEscapeSamplingRate := 1.0
+	cfg.EscapeAnalyticsSamplingRate = &defaultEscapeSamplingRate
+	cfg.EscapeAnalyticsMaxRowsPerSession = 10000
+	cfg.EscapeAnalyticsRetentionDays = 7
 	// Apply environment variable overrides (never log the value).
 	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
 		cfg.AnthropicAPIKey = v

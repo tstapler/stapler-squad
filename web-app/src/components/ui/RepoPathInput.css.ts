@@ -43,6 +43,18 @@ export const inputError = style({
   },
 });
 
+export const hint = style({
+  color: vars.color.textMuted,
+  fontSize: vars.fontSize.xs,
+  marginTop: vars.space["1"],
+});
+
+export const githubHint = style({
+  color: vars.color.primary,
+  fontSize: vars.fontSize.xs,
+  marginTop: vars.space["1"],
+});
+
 export const dropdownWrapper = style({
   position: "absolute",
   top: "calc(100% + 2px)",

@@ -119,6 +119,12 @@ func (Session) Fields() []ent.Field {
 			Optional().
 			Default(0).
 			Comment("GitHub PR number discovered by PRStatusPoller or extracted from push output. 0 = not yet discovered."),
+		field.String("github_owner").
+			Optional().
+			Comment("GitHub repository owner (user or org) associated with this session."),
+		field.String("github_repo").
+			Optional().
+			Comment("GitHub repository name associated with this session."),
 		field.String("session_artifacts").
 			Optional().
 			Default("").

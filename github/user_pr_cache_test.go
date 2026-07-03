@@ -70,8 +70,9 @@ func TestUserPRCache_UserPR_Fields(t *testing.T) {
 func TestUserPRCache_Annotate_NoopBeforeSnapshot(t *testing.T) {
 	c := github.NewUserPRCache()
 	// Annotate on an empty cache should not panic.
+	ref, _ := github.NewRepoRef("acme", "proj")
 	c.Annotate([]github.PRAnnotationSession{
-		{ID: "s1", Branch: "feat/x", GitHubOwner: "acme"},
+		{ID: "s1", Branch: "feat/x", Repo: ref},
 	}, nil)
 	if got := c.GetAll(); got != nil {
 		t.Fatalf("expected nil, got %v", got)

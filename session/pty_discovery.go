@@ -180,8 +180,14 @@ func batchIsClaudeProcess(pids []int) map[int]bool {
 		if err != nil {
 			continue
 		}
-		cmdLine := strings.ToLower(line[spaceIdx+1:])
-		result[pid] = strings.Contains(cmdLine, "claude")
+		// Extract only the program name (first token) and compare basename exactly.
+		// Substring match on the full command line would cause false positives for
+		// paths like /home/claude/... or wrappers like claude-code.
+		prog := line[spaceIdx+1:]
+		if end := strings.IndexByte(prog, ' '); end >= 0 {
+			prog = prog[:end]
+		}
+		result[pid] = strings.ToLower(filepath.Base(prog)) == "claude"
 	}
 	return result
 }

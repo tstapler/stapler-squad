@@ -20,7 +20,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
@@ -248,5 +250,81 @@ func TestReadFileIfSmall_atOrAboveLimit(t *testing.T) {
 	data, ok := readFileIfSmall(path)
 	if ok {
 		t.Errorf("readFileIfSmall returned true for file at/above limit (data len=%d)", len(data))
+	}
+}
+
+// TestGoGitVCSReader_AheadBehind_SingleflightCollapsesParallelCallers verifies
+// result consistency and absence of data races when 4 goroutines call AheadBehind
+// concurrently with a cold cache. It does not assert call-count deduplication
+// (GoGitVCSReader has no invocation counter hook); race-detector clean is the
+// correctness gate.
+func TestGoGitVCSReader_AheadBehind_SingleflightCollapsesParallelCallers(t *testing.T) {
+	dir := initRepoInternal(t)
+
+	r := &GoGitVCSReader{}
+	// Ensure cache is cold (zero value = expired)
+	const workers = 4
+	type result struct {
+		ahead, behind int
+		err           error
+	}
+	results := make([]result, workers)
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	for i := range workers {
+		go func(idx int) {
+			defer wg.Done()
+			a, b, err := r.AheadBehind(dir, "main")
+			results[idx] = result{a, b, err}
+		}(i)
+	}
+	wg.Wait()
+	for i, res := range results {
+		if res.err != nil {
+			t.Errorf("worker %d: unexpected error: %v", i, res.err)
+		}
+		if res.ahead != results[0].ahead || res.behind != results[0].behind {
+			t.Errorf("worker %d: got (%d, %d), want (%d, %d)",
+				i, res.ahead, res.behind, results[0].ahead, results[0].behind)
+		}
+	}
+}
+
+// TestGoGitVCSReader_AheadBehind_InvalidPath_ReturnsError verifies that
+// openRepoEntry failure inside the singleflight Do body is returned as an
+// error to the caller without panicking. True panic injection requires a
+// hook into the Do body which GoGitVCSReader does not expose.
+func TestGoGitVCSReader_AheadBehind_InvalidPath_ReturnsError(t *testing.T) {
+	// Use a non-existent path — openRepoEntry returns error, not panic,
+	// but confirms the caller handles Do errors without crashing.
+	r := &GoGitVCSReader{}
+	_, _, err := r.AheadBehind("/nonexistent/path/guaranteed-missing", "main")
+	if err == nil {
+		t.Fatal("expected error from non-existent repo, got nil")
+	}
+	// Reaching here proves no panic escaped to the caller
+}
+
+// TestGoGitVCSReader_HasUncommitted_CacheHitReturnsCachedValue verifies
+// that a warm hasUncommittedCache entry is returned without re-scanning.
+func TestGoGitVCSReader_HasUncommitted_CacheHitReturnsCachedValue(t *testing.T) {
+	dir := initRepoInternal(t)
+	r := &GoGitVCSReader{}
+	// Cold call — establishes the actual value
+	got, err := r.HasUncommitted(dir)
+	if err != nil {
+		t.Fatalf("cold call: %v", err)
+	}
+	// Pre-populate cache with inverted value to detect cache bypass
+	r.hasUncommittedCache.Store(dir, hasUncommittedEntry{
+		result: !got,
+		expiry: time.Now().Add(30 * time.Second),
+	})
+	cached, err := r.HasUncommitted(dir)
+	if err != nil {
+		t.Fatalf("warm call: %v", err)
+	}
+	if cached != !got {
+		t.Errorf("warm call: got %v, want %v (cache was not used)", cached, !got)
 	}
 }

@@ -50,6 +50,13 @@ type ResponseStream struct {
 	exitTail     []byte                      // Rolling buffer of last exitTailSize bytes; logged on PTY EOF
 }
 
+// mangleCorrelatorTTL is how long a Stage 1 observation waits for its matching
+// Stage 2 observation before being evicted and recorded as "stripped".
+const mangleCorrelatorTTL = 5 * time.Second
+
+// mangleCorrelatorMaxPending bounds the correlator's in-memory pending map.
+const mangleCorrelatorMaxPending = 10000
+
 // newEscapeParserForSession creates and configures an EscapeCodeParser for a session,
 // wiring in the global escape event writer and config-driven settings.
 func newEscapeParserForSession(sessionName string) *analytics.EscapeCodeParser {
@@ -58,6 +65,7 @@ func newEscapeParserForSession(sessionName string) *analytics.EscapeCodeParser {
 	writer := analytics.GetGlobalEscapeWriter()
 	if cfg.captureLevel != "off" {
 		parser.SetEventWriter(writer, cfg.captureLevel, cfg.redactOSC, cfg.samplingRate)
+		parser.SetCorrelator(analytics.NewMangleCorrelator(mangleCorrelatorTTL, mangleCorrelatorMaxPending))
 	} else {
 		parser.SetEventWriter(analytics.NoopEscapeEventWriter{}, "off", true, 0)
 	}
@@ -130,6 +138,17 @@ func (rs *ResponseStream) SetOnOutput(fn func()) {
 	rs.onOutput = fn
 }
 
+// SetStableSessionID switches the escape parser's recorded session identifier
+// from the tmux session name (used at construction time, before the owning
+// Instance's stable UUID is available) to the stable UUID. This only affects
+// how escape_event rows are tagged — it does not change rs.sessionName, which
+// is still used for logging, PTY naming, and history keyed off the tmux name.
+func (rs *ResponseStream) SetStableSessionID(id string) {
+	if rs.escapeParser != nil && id != "" {
+		rs.escapeParser.SetStableSessionID(id)
+	}
+}
+
 // Start begins streaming responses from the PTY to all subscribers.
 // This is a non-blocking call that starts a background goroutine.
 // Use the provided context to stop the stream.
@@ -149,6 +168,18 @@ func (rs *ResponseStream) Start(ctx context.Context) error {
 	rs.ctx = innerCtx
 	rs.cancel = cancel
 	rs.started = true
+
+	// Start the mangle-correlator eviction loop (no-op if no correlator is attached,
+	// e.g. capture_level=off). Tied to innerCtx so it stops when the stream stops, and
+	// tracked by rs.wg like streamLoop so Stop() genuinely blocks until both have exited
+	// (Stop()'s doc comment promises full drain, not "everything but this one goroutine").
+	if rs.escapeParser != nil {
+		rs.wg.Add(1)
+		go func() {
+			defer rs.wg.Done()
+			rs.escapeParser.RunCorrelatorEviction(innerCtx)
+		}()
+	}
 
 	// Start the streaming goroutine
 	rs.wg.Add(1)

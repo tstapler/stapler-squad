@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // spyWriter is a test implementation of EscapeEventWriter that records events.
@@ -68,6 +69,23 @@ func TestParseCSISequences(t *testing.T) {
 			input:    []byte("\x1b[1;24r"),
 			wantCat:  CategoryScroll,
 			wantDesc: "Set Scroll Region (1;24)",
+		},
+		{
+			// '@' (0x40) is a valid CSI final byte (Insert Character, ICH),
+			// not a letter — regression guard for the terminator range.
+			name:     "insert character",
+			input:    []byte("\x1b[5@"),
+			wantCat:  CategoryErase,
+			wantDesc: "Insert Characters (5)",
+		},
+		{
+			// '~' (0x7E) is a valid CSI final byte used by many real xterm
+			// sequences (Delete key, function keys, etc.) — regression
+			// guard for the terminator range extending past 'z' (0x7A).
+			name:     "tilde-terminated sequence",
+			input:    []byte("\x1b[3~"),
+			wantCat:  CategoryCSI,
+			wantDesc: "CSI ~ (3)",
 		},
 	}
 
@@ -507,6 +525,135 @@ func TestEventWriterSequenceFields(t *testing.T) {
 	}
 	if ev.ByteLen != 3 { // \x1b[A = 3 bytes
 		t.Errorf("ByteLen = %d, want 3", ev.ByteLen)
+	}
+}
+
+// TestSetSessionIDOverridesConstructorSessionID is a regression test for BUG-025:
+// escape_event rows were stored under the tmux session name (the constructor arg)
+// instead of the stable session UUID, so the web UI (which queries by stable UUID)
+// never found them. SetStableSessionID must retroactively change what gets recorded.
+func TestSetSessionIDOverridesConstructorSessionID(t *testing.T) {
+	parser, _, spy := newParserWithSpy("summary", false, 1.0)
+
+	parser.Parse([]byte("\x1b[A"), 0)
+	if len(spy.events) != 1 {
+		t.Fatalf("expected 1 event before SetStableSessionID, got %d", len(spy.events))
+	}
+	if spy.events[0].SessionID != "test-session" {
+		t.Fatalf("SessionID before override = %q, want %q", spy.events[0].SessionID, "test-session")
+	}
+
+	parser.SetStableSessionID("stable-uuid-1234")
+	parser.Parse([]byte("\x1b[B"), 0)
+	if len(spy.events) != 2 {
+		t.Fatalf("expected 2 events after SetStableSessionID, got %d", len(spy.events))
+	}
+	if spy.events[1].SessionID != "stable-uuid-1234" {
+		t.Errorf("SessionID after override = %q, want %q", spy.events[1].SessionID, "stable-uuid-1234")
+	}
+}
+
+// TestMangleCorrelationStage1ThenStage2Match is a regression test for BUG-025:
+// emitEventWithStageAndSeq always called RecordStage1 regardless of stage, so a
+// wired correlator would never actually check Stage 2 observations against Stage 1.
+// A Stage 1 observation followed by an identical Stage 2 observation at the same
+// session_seq must NOT be flagged as mangled.
+func TestMangleCorrelationStage1ThenStage2Match(t *testing.T) {
+	parser, _, spy := newParserWithSpy("summary", false, 1.0)
+	parser.SetCorrelator(NewMangleCorrelator(5*time.Second, 100))
+
+	// Stage 1: PTY read observes the sequence at session_seq 0.
+	parser.Parse([]byte("\x1b[31m"), 0)
+	// Stage 2: transport observes the identical bytes at the same session_seq.
+	parser.ParseStage2([]byte("\x1b[31m"), 0)
+
+	if len(spy.events) != 2 {
+		t.Fatalf("expected 2 events (stage1 + stage2), got %d", len(spy.events))
+	}
+	stage1, stage2 := spy.events[0], spy.events[1]
+	if stage1.Stage != StagePTYRead {
+		t.Errorf("events[0].Stage = %q, want %q", stage1.Stage, StagePTYRead)
+	}
+	if stage2.Stage != StageTransport {
+		t.Errorf("events[1].Stage = %q, want %q", stage2.Stage, StageTransport)
+	}
+	if stage2.Mangled {
+		t.Errorf("expected Mangled=false for an identical Stage 2 observation, got true (type=%q)", stage2.MangleType)
+	}
+}
+
+// TestMangleCorrelationStage1ThenStage2Mutated is a regression test for BUG-025:
+// verifies that once RecordStage1/CheckStage2 are correctly branched by stage, a
+// Stage 2 observation with different bytes at the same session_seq is flagged
+// mangled=true. This is the actual purpose of the escape analytics feature the
+// user reported as not working ("make sure [things] don't [get] mangle[d]").
+func TestMangleCorrelationStage1ThenStage2Mutated(t *testing.T) {
+	parser, _, spy := newParserWithSpy("summary", false, 1.0)
+	parser.SetCorrelator(NewMangleCorrelator(5*time.Second, 100))
+
+	// Stage 1: PTY read observes "ESC[31m" (red) at session_seq 0.
+	parser.Parse([]byte("\x1b[31m"), 0)
+	// Stage 2: transport observes "ESC[32m" (green) at the same session_seq —
+	// same byte length, different payload, simulating a mutated sequence.
+	parser.ParseStage2([]byte("\x1b[32m"), 0)
+
+	if len(spy.events) != 2 {
+		t.Fatalf("expected 2 events (stage1 + stage2), got %d", len(spy.events))
+	}
+	stage2 := spy.events[1]
+	if !stage2.Mangled {
+		t.Fatal("expected Mangled=true for a mutated Stage 2 observation, got false")
+	}
+	if stage2.MangleType != "mutated" {
+		t.Errorf("MangleType = %q, want %q", stage2.MangleType, "mutated")
+	}
+}
+
+// TestMangleCorrelationTotalsAreConcurrencySafe drives Stage 1 and Stage 2 through
+// the same parser from separate goroutines concurrently — mirroring the real
+// pipeline, where Parse runs on the PTY read goroutine and ParseStage2 runs on the
+// WebSocket output goroutine against the same *EscapeCodeParser. Run with -race:
+// totalSequences/totalMangled must be safe to increment from both goroutines.
+func TestMangleCorrelationTotalsAreConcurrencySafe(t *testing.T) {
+	store := NewEscapeCodeStore()
+	store.SetEnabled(true)
+	parser := NewEscapeCodeParser(store, "test-session")
+	parser.SetEnabled(true)
+	// NoopEscapeEventWriter, not spyWriter: spyWriter's plain slice append is not
+	// itself concurrency-safe, and this test is only about the parser's own
+	// totalSequences/totalMangled counters, not what a writer does with events.
+	// The production writer (EscapeEventBatchWriter) is concurrency-safe via a
+	// channel send; see TestMangleCorrelationStage1ThenStage2Mutated for
+	// correlation-content coverage using the (single-goroutine) spy.
+	parser.SetEventWriter(NoopEscapeEventWriter{}, "summary", false, 1.0)
+	parser.SetCorrelator(NewMangleCorrelator(5*time.Second, 1000))
+
+	const n = 200
+	done := make(chan struct{}, 2)
+	go func() {
+		for i := 0; i < n; i++ {
+			parser.Parse([]byte("\x1b[31m"), int64(i))
+		}
+		done <- struct{}{}
+	}()
+	go func() {
+		for i := 0; i < n; i++ {
+			parser.ParseStage2([]byte("\x1b[31m"), int64(i))
+		}
+		done <- struct{}{}
+	}()
+	<-done
+	<-done
+
+	stats := parser.GetStats()
+	if stats.TotalSequences != 2*n {
+		t.Errorf("TotalSequences = %d, want %d", stats.TotalSequences, 2*n)
+	}
+	// Stage 1 and Stage 2 send byte-identical payloads in matching order, so nothing
+	// should ever be flagged mangled here — this is also touched by the same concurrent
+	// write pattern as TotalSequences, so it's worth asserting for free.
+	if stats.TotalMangled != 0 {
+		t.Errorf("TotalMangled = %d, want 0", stats.TotalMangled)
 	}
 }
 

@@ -23,6 +23,7 @@ type StatusChangeListener func(newStatus detection.DetectedStatus, sessionName s
 // Using an interface breaks the bidirectional Instance ↔ ClaudeController dependency.
 type InstanceContext interface {
 	GetTitle() string
+	GetStableID() string
 	GetPTYReader() (*os.File, error)
 	Preview() (string, error)
 	LastMeaningfulOutputTime() time.Time
@@ -203,6 +204,10 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 
 		// Create response stream
 		rs := NewResponseStream(cc.sessionName, pa)
+		// Tag escape analytics with the stable session UUID (not the mutable tmux
+		// name) so escape_event rows can be correlated with the session identifier
+		// used everywhere else in the app (session selectors, RPCs, etc.).
+		rs.SetStableSessionID(cc.instance.GetStableID())
 
 		// Create status detector and tag it with the session name for detection event attribution.
 		sd := detection.NewStatusDetector()

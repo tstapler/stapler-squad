@@ -4,7 +4,10 @@
   "component": "BacklogPage",
   "path": "web-app/src/app/backlog/page.tsx",
   "markerLine": 0,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "tested": true,
+  "testIds": [
+    "e2e:backlog-tour-first-visit",
+    "e2e:backlog-tour-reopen-button"
+  ],
+  "lastModified": "2026-07-01T00:00:00Z"
 }

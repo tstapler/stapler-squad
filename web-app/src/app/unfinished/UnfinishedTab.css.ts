@@ -2,6 +2,8 @@ import { style } from "@vanilla-extract/css";
 import { vars } from "@/styles/theme.css";
 
 export const container = style({
+  height: "100%",
+  overflowY: "auto",
   maxWidth: "960px",
   margin: "0 auto",
   padding: `${vars.space["4"]} ${vars.space["4"]}`,

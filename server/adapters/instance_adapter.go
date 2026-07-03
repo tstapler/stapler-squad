@@ -61,13 +61,13 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		InstanceType:     instanceTypeToProto(snap.InstanceType),
 		ExternalMetadata: externalMetadataToProto(snap.ExternalMetadata),
 		// PR status fields (populated by PRStatusPoller)
-		GithubPrState:         snap.GitHub.GitHubPRState,
-		GithubPrIsDraft:       snap.GitHub.GitHubPRIsDraft,
-		GithubPrPriority:      snap.GitHub.GitHubPRPriority,
-		GithubApprovedCount:   int32(snap.GitHub.GitHubApprovedCount),
-		GithubChangesReqCount: int32(snap.GitHub.GitHubChangesReqCount),
-		GithubCheckConclusion: snap.GitHub.GitHubCheckConclusion,
-		LastPrStatusCheck:     timestamppb.New(snap.GitHub.LastPRStatusCheck),
+		GithubPrState:         inst.GitHubPRState,
+		GithubPrIsDraft:       inst.GitHubPRIsDraft,
+		GithubPrPriority:      inst.GitHubPRPriority,
+		GithubApprovedCount:   int32(inst.GitHubApprovedCount),
+		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
+		GithubCheckConclusion: inst.GitHubCheckConclusion,
+		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
 		LaunchCommand:         inst.LaunchCommand,
 	}
 

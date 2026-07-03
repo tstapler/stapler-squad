@@ -1,5 +1,124 @@
 # Changelog
 
+## [1.33.1](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.33.0...v1.33.1) (2026-07-02)
+
+
+### Bug Fixes
+
+* **analytics:** escape analytics session_id mismatch and dead mangle detection ([#149](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/149)) ([a121de8](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a121de83717185a5a42183288ffde1f8e0a298cf))
+* backlog/triage sessions die on launch (shell injection + flag-parsing crash) ([#150](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/150)) ([8016921](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/8016921fa302c01ed9c16c5f568e410b9081b2b7))
+* **backlog:** GitHub URL repo-path support, first-visit tour, and two related bugs ([#152](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/152)) ([6ef8164](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/6ef8164b215f0c08c4a497b00fd33da516e9a288))
+* web-build target doesn't generate proto bindings on a clean clone ([#155](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/155)) ([1bb135e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/1bb135e8d93456c70db12ceb77b9f335369925f9))
+
+## [1.33.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.32.0...v1.33.0) (2026-07-02)
+
+
+### Features
+
+* **pr-status:** show PR badge in row mode and use go-git for branch detection ([664fbfb](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/664fbfb118d036a7ef52e0519a05d9e8368f22ca))
+
+
+### Bug Fixes
+
+* **codesign:** correct otool byte-order in verify-codesign plist decode ([ca60c0a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/ca60c0ae893ba542a62cc46c5789af38fb57da4c))
+* **css:** enable scroll on unfinished tab container ([fa5f37e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/fa5f37e25607ca094858655a57cbc0ca9202f368))
+* **lint:** suppress norawexec on lookPathOnlyExecutor stub ([d054495](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/d054495cb49d5a4151475df6fa0fe2e8cb99edc2))
+* **lint:** use correct nolint directives for lookPathOnlyExecutor stub ([8987673](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/898767374dad24c5c6ab8e30aecf4ec5c96c5c29))
+* repair broken release pipeline and build-from-source path ([#147](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/147)) ([1fc2ff6](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/1fc2ff6c90fe88af32f14fa600bdfc03a63fcf54))
+* review queue auto-advance respects preference after approve/deny ([c63886a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/c63886aa90a2354e41140a51280ad86eadfc06df))
+* **unfinished:** stack GitHub auth banner vertically so Connect button is always visible ([750d252](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/750d252092abf455d7c20ad8ad143486e28674d2))
+
+## [1.32.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.31.1...v1.32.0) (2026-07-01)
+
+
+### Features
+
+* **artifacts:** extract PR URLs, commits & external URLs from JSONL history ([#129](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/129)) ([bfe06a5](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/bfe06a543ce070f5e87b7a501ccd0dda1a2221c2))
+* **autonomous:** P0 foundation — AutonomousDriver + StatusChangeListener fan-out ([#105](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/105)) ([95b7c69](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/95b7c696df5ca3c0eea6f0e81d6c56ac664ba978))
+* **autonomous:** triage migration, review queue UX, backlog MCP tools, session detail polish ([633e88d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/633e88d7b56d9bf8d9077c3f2109aadaf46b383a))
+* **backlog:** implement CancelTriage RPC and session delete button ([a690c36](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a690c366d6704651b913a60dab6b8774303a7f45))
+* **detection:** add StatusWaitingForAgent for background agent state ([#115](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/115)) ([dddb62d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/dddb62d555e2752abfca5d25ce79c946580bf6aa))
+* **detection:** detect monitors-still-running as WaitingForAgent ([#121](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/121)) ([995d065](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/995d065c81d059fbc7de93304efe56ca407af351))
+* **detection:** fix session status indicators + observability ring buffer ([#110](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/110)) ([f9f3079](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/f9f30798eb9bb44a0da3a46f3593234061d347b0))
+* **detection:** surface WAITING_FOR_AGENT as distinct SubStatus chip ([#126](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/126)) ([e5f80e8](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e5f80e8bf4b691212b9524cfcab216caf5e3a43a))
+* **events:** fix event pipeline gaps for cross-surface state consistency ([#120](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/120)) ([016b558](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/016b5584b5005363c7160e95181f307224264421))
+* **files:** local file browser with iframe/SVG rendering ([#113](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/113)) ([e55ada1](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e55ada1df4ed8a157b21949b74c9852823cf7e05))
+* gap-finder workflow + SESSION_STATUS_RESTORING ProtoToStatus fix ([#123](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/123)) ([45a5a91](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/45a5a91d53480f500e00fa584e4db7b115edf309))
+* GitHub work continuity — persistence, annotation fallback, and type-safe RepoRef ([3be7e09](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/3be7e0902f57295fb17953d9ff3a84cabcfd3b9f))
+* GitHub work continuity — UserPRCache, GitHubUserService, and Unfinished Tab integration ([#141](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/141)) ([e322a7e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e322a7ebf798ba9e18543fd9d84e396ad065d501))
+* local file browser + detection readline fixes ([#116](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/116)) ([5ce6c1c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/5ce6c1c0914c1e774b851f2ac8025a21fb7208f1))
+* **omnibar:** add [@alias](https://github.com/alias) session presets ([#122](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/122)) ([a65f7d2](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/a65f7d2ebfd49239c5436f01e2978984dfa4d3bb))
+* **omnibar:** alias name_prefix field and trust-dialog double-fire fix ([#128](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/128)) ([7dbfb10](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/7dbfb10c27524319ad63e918a3f4ea704b309818))
+* **onboarding:** offer to install Claude Code hooks during onboarding ([#138](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/138)) ([41e0206](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/41e0206f54acbf58203959fbc697e173cb7471fb))
+* **pane:** add session peek modal triggered from pane picker ([9bf226a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/9bf226a7564e54b36b433cc52a359c573887cd14))
+* **reconnect:** jittered backoff reconnect for session-watch and terminal streams ([#136](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/136)) ([837ba8c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/837ba8cc70eb6f637c2b3bab2a4b27838e1d1113))
+* **registry:** typed feature catalog replacing comment-based annotations ([#112](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/112)) ([6232826](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/6232826397e21f803d4af4bc01af481b7ac39545))
+* **rules:** auto-suggest rule name from criteria inputs ([#140](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/140)) ([d072abc](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/d072abc37fcb228dd052cd38cb8c324eb8c3bdcf))
+* **rules:** structured rule builder, template library, analytics→rule workflow ([#103](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/103)) ([48adec6](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/48adec6b2e47301106ea1b9192828fea445e83b2))
+* **server:** startup fast restore, terminal snapshot fix, build warnings ([#128](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/128)) ([e158b30](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e158b305f3bb7b19e9a81e772f082140043df82a))
+* **session-list:** bulk selection for row mode with undo-on-delete ([#137](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/137)) ([3571d03](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/3571d037fa81e3f3b1a804da21dbb6adbf7376ba))
+* **session:** add 30-min background reaper for paused-session tmux processes ([66e33e2](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/66e33e24b88bf91153f1d4b935ce9cfdd63ff224))
+* **session:** enable/disable autonomous mode on existing sessions ([4f2967c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/4f2967cfb604880a4ede96e7e7c2cf0db90a10c3))
+* **settings:** add UpsertAlias and DeleteAlias RPCs with AliasesManager UI ([#124](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/124)) ([e54f41b](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e54f41b012370f4f3620e2fe64cad122230fc66e))
+* **status:** unify session status vocabulary across UI ([c42514d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/c42514d4020c41c6ad16ec2f546846e257a81563))
+* workflow run history, session archiving, slash commands, and pause memory optimization ([9c23e61](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/9c23e6126664bc7faf458babbefc1fc7069e5c99))
+* **workflows:** Quick Workflows — [@slug](https://github.com/slug) omnibar, management UI, cron scheduling ([#106](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/106)) ([883deca](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/883deca379d7529f921d654b6671c559c7766ab9))
+* **workflows:** session affordances, retention enforcer, bulk-session RPCs ([ac4efa1](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/ac4efa121abdb34649470cc16133e0a04872e20e))
+
+
+### Bug Fixes
+
+* **backlog:** replace idle triage sessions with headless pool calls ([#127](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/127)) ([2d7e116](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/2d7e116ca3f624a891babb2e27aa447e904c50be))
+* **ci:** force-add bench-baseline.txt to bypass .gitignore in benchmark gate ([ebd4278](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/ebd4278098639893694f192f457fb214ed481257))
+* **codesign:** auto-run setup-codesign and fix OpenSSL 3 PKCS12 compatibility ([de6c7a6](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/de6c7a62ca8ddb61ce728d2094e59808bac8a3d6))
+* **codesign:** install binary to ~/.stapler-squad/bin/ before signing to prevent sealed-resource invalidation ([6c539c3](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/6c539c31202e181c93b5905d929d5a49067c6591))
+* **db:** make approval_rule JSON fields Optional to fix SQLite migration ([3f06c42](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/3f06c420517312b4d7bfed3ae5c4201a9c3c9c90))
+* **deps:** upgrade gopsutil v3 to v4 to drop crashing go-m1cpu cgo init ([#129](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/129)) ([69bc09f](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/69bc09fa3564ecd7d965fc51386311c5b49bf79d))
+* **detection:** detect indented spinners and CR-overwritten esc-to-interrupt ([#108](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/108)) ([54a5f63](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/54a5f637a3859dc901d521bb3f9861032616ab63))
+* **detection:** detect WaitingForAgent when esc-to-interrupt appears below spinner ([44b455a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/44b455a751cc3907a9ce3fdb3b2c945929ba6a25))
+* **detection:** detect workflow approval dialog and idle-while-typing states ([63c8ca9](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/63c8ca9cff55e40879a08954dcfd1c1a528c5dc1))
+* **detection:** fix ⌛ Thinking chip missing on most active sessions ([375f7b0](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/375f7b0419a0d2011aedc9576aeaab27a90e4710))
+* **detection:** use bottom-up scan in review queue for no-controller sessions ([5d2ba8f](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/5d2ba8f85acaa209f96ae3d6ab70d9d3ef49688a))
+* **history-linker:** preserve paused/hibernated session UUID on rescan ([#118](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/118)) ([fb0e49f](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/fb0e49f723385a12a77f47fa67157c02cd3790e3))
+* **install:** fix macOS FDA flow and health-check timeout on first install ([38c98b5](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/38c98b518a383d4aee9076420d87382e5701f843))
+* **install:** increase health-check timeout to 120s for session-restore latency ([f64eea0](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/f64eea0bd4d55fd8b6cfee1def6bb0b2db253710))
+* **install:** require launchctl bootstrap; remove launchctl load fallback ([9d3c503](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/9d3c503ec531b78a5f5808623bdd1aecec1f7c49))
+* **install:** skip FDA prompt for non-admin users with cert-signed binary ([c24d088](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/c24d088cd1bdb72225f0ac81cb16846b7d637c2a))
+* **lint,status:** fix ESLint errors on main and complete status descriptions ([5635c56](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/5635c567e7c2b5ce9606e15b42b5fbe166cda2ba))
+* **notifications:** auto-resolve stale toasts and Chrome notifications ([#109](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/109)) ([31fd160](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/31fd160c667b018a817e60b2b8cb0853d831084d))
+* publish session update event on controller status change ([9241d3e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/9241d3e0bcb89c0f65971f64435f4afe4fab1064))
+* **registry:** add workflow/detection RPCs to scanner methodToID map ([24388a0](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/24388a079da33430e2d880e0b0647c8124b27388))
+* **review-queue:** suppress auto-advance on session status transitions ([#135](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/135)) ([8ec3e9d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/8ec3e9d4d170c86ce751858f4b62e6f6caafc2d9))
+* **rules:** correct coverage false-positives and add three-state UX ([#104](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/104)) ([0d3d3af](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/0d3d3af82156d45b4bec22d1321b7272c548275f))
+* **server:** wire SessionHealthChecker into server startup ([bec3c4d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/bec3c4d65a13e9d4d7984dacc3b3a1264a86e2aa))
+* **session-driver:** add live output check before prompt injection ([aa9834c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/aa9834cdc11b87460eb2d706946cc1c4e07eac2f))
+* **session:** preserve initial prompt on restart, defer controller startup, add StartWithSize ([b4c78a1](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/b4c78a15b056f1b22e6bf1ada07d32778f9ec488))
+* **session:** wire InitialPrompt to proto adapter and skip driver send when empty ([b8d9ed2](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/b8d9ed297e9623b13a492dd23dafccd14555167f))
+* **session:** wire status manager on new sessions before starting driver ([729968c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/729968c7b980f0132fa34c18db53e8459750ca72))
+* **session:** wire status manager on new sessions before starting driver ([#111](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/111)) ([715fcd5](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/715fcd5ca4d6eda94f56aa016da8e45f88ee2e4a))
+* skip shell sourcing in test mode to prevent service test timeout ([49eb0ba](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/49eb0ba5dab6438f9796f36fa6ff8da55b10875a))
+* **startup:** resume session drivers for sessions with undelivered InitialPrompt ([f62b772](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/f62b77252ce8d3ff472ce95c4819a7fa6edfcc95))
+* **status:** address second-pass UX review findings ([b03dc73](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/b03dc7344430c8651c86cc34c6e07f9b23544ec4))
+* **terminal:** prevent multi-tab disconnect from killing shared control-mode process ([#107](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/107)) ([4314926](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/43149267e596c515d481c1e7ac583eea37daf5fe))
+* **terminal:** repair escape code pipeline for new Claude Code renderer ([#139](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/139)) ([dc71b82](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/dc71b828a6d6a61883cd12b7c666e836eda97c90))
+* **terminal:** trailing-edge resize debounce + test isolation fixes ([#125](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/125)) ([e5a42e7](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e5a42e730124cd557528e43a8f8b0c839377c162))
+* **tmux:** flush stale exists-cache in RestoreWithWorkDir and add --tmux-keep-server to plist ([12b992a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/12b992a32ca5e9997f6b042e719bc49ef99eec91))
+* **triage:** address code review findings from post-commit review ([6030616](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/60306163562e4bf694580ad8b199c343db9fc0f1))
+* **triage:** silent storage error, hung session timeout, and Claude detection false positives ([cc82510](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/cc8251090c0d6987e8f439fb1ba7b8cbce5d41e7))
+* **triage:** surface storage errors, add timeout, harden claude detection, link notifications to backlog ([59d41da](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/59d41da13308eadabf3800e1279c4da11c011e28))
+* **ux:** accessibility, status correctness, and detection bug fixes ([5dd16d5](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/5dd16d57a98a6fd8bcf27ce5da0ee8ce96e178d2))
+* **ux:** session list accessibility and UX polish ([dee2af4](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/dee2af4dd361d35bb1daa84b218e1b58da487513))
+
+
+### Performance Improvements
+
+* batch HistoryLinker PIDs, guard hot debug logs, cache AheadBehind/CommitMessages, pool blob buffer ([#130](https://github.com/TylerStaplerAtFanatics/stapler-squad/issues/130)) ([e385af2](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/e385af280c449e5f940387214cc563c6412e2d33))
+* **memory:** replace wt.Status() with index-based diff + customizable session columns ([1a147e0](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/1a147e0d146b0c00064df0ab619a59bda37739e5))
+* optimize CircularBuffer and eliminate full-buffer copies in status detection ([08a4ef7](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/08a4ef75c2a7cf193823fc187c4573adc4189771))
+* **session:** reduce lock contention across session concurrency primitives ([5dc5d8a](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/5dc5d8ac524a6c1ad9fec28ad0f561101c6e924b))
+* **tmux:** add semaphore to cap concurrent capture-pane subprocesses ([fa54896](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/fa548964a70cc757ac46a5d49b810ca389b53f90))
+* **vcs:** cache reachableSet results and batch-read blobs under single lock ([125f4ef](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/125f4ef7e3f32f0a1f05c213cd394e4ab2e5e3bd))
+
 ## [1.31.1](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.31.0...v1.31.1) (2026-06-02)
 
 

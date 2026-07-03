@@ -235,10 +235,10 @@ func probeSocket(socketPath string) (*SessionMetadata, error) {
 	return ParseMetadataMessage(msg)
 }
 
-// isClaudeCommand checks if a command is related to Claude.
+// isClaudeCommand checks if a command invokes the claude binary.
+// Uses exact basename match to avoid false positives from wrappers or paths containing "claude".
 func isClaudeCommand(command string) bool {
-	base := filepath.Base(command)
-	return strings.Contains(strings.ToLower(base), "claude")
+	return strings.ToLower(filepath.Base(command)) == "claude"
 }
 
 // CleanStaleSocket removes a socket file if it's no longer connected to a running process.

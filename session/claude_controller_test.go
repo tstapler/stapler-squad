@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/testutil/wait"
 )
@@ -591,12 +592,30 @@ func TestHashString_EmptyString(t *testing.T) {
 // mockInstance is a minimal InstanceContext that returns a controllable Preview.
 type mockInstance struct {
 	title      string
+	stableID   string
+	ptyReader  *os.File // nil = GetPTYReader() errors, matching the old always-error behavior
 	preview    string
 	previewErr error
 }
 
-func (m *mockInstance) GetTitle() string                    { return m.title }
-func (m *mockInstance) GetPTYReader() (*os.File, error)     { return nil, fmt.Errorf("no PTY in mock") }
+func (m *mockInstance) GetTitle() string { return m.title }
+
+// GetStableID deliberately does NOT fall back to title when stableID is unset — a fallback
+// to title would make GetStableID() == title == sessionName by coincidence for any test that
+// forgets to set stableID, which would let a future regression to BUG-025 (using the tmux
+// name instead of the stable UUID) silently pass any test asserting on this value.
+func (m *mockInstance) GetStableID() string {
+	if m.stableID != "" {
+		return m.stableID
+	}
+	return "UNSET-STABLE-ID"
+}
+func (m *mockInstance) GetPTYReader() (*os.File, error) {
+	if m.ptyReader != nil {
+		return m.ptyReader, nil
+	}
+	return nil, fmt.Errorf("no PTY in mock")
+}
 func (m *mockInstance) Preview() (string, error)            { return m.preview, m.previewErr }
 func (m *mockInstance) LastMeaningfulOutputTime() time.Time { return time.Time{} }
 func (m *mockInstance) GetCreatedAt() time.Time             { return time.Time{} }
@@ -618,6 +637,68 @@ func newControllerWithMock(content string) (*ClaudeController, *mockInstance) {
 	}
 	cc.ptyAccess.Store(NewPTYAccess("test", nil, buf))
 	return cc, inst
+}
+
+// TestClaudeController_Start_TagsEscapeAnalyticsWithStableID is a regression test for
+// BUG-025 at its actual assembly point. TestResponseStream_SetStableSessionID (in
+// response_stream_test.go) proves ResponseStream.SetStableSessionID wiring works, but it
+// calls that method directly — it never goes through ClaudeController.Start(), which is
+// where cc.instance.GetStableID() is actually supplied in production
+// (claude_controller.go: `rs.SetStableSessionID(cc.instance.GetStableID())`). Every other
+// test in this file uses mockInstance.GetPTYReader()'s default always-error behavior, so
+// Start() returns before reaching that line — this test is the only one that gives
+// mockInstance a real (pipe-backed) PTY so Start() can proceed past it. Without this test,
+// a future regression at that exact line (e.g. reverting to `rs.SetStableSessionID(cc.sessionName)`)
+// would pass the entire existing suite.
+func TestClaudeController_Start_TagsEscapeAnalyticsWithStableID(t *testing.T) {
+	t.Setenv("STAPLER_SQUAD_TEST_DIR", t.TempDir())
+
+	spy := &escapeEventSpy{}
+	prev := analytics.GetGlobalEscapeWriter()
+	analytics.SetGlobalEscapeWriter(spy)
+	defer analytics.SetGlobalEscapeWriter(prev)
+
+	reader, writer, err := mockPTY()
+	if err != nil {
+		t.Fatalf("failed to create mock PTY: %v", err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+
+	inst := &mockInstance{
+		title:     "claude-controller-wiring-test-tmux-name",
+		stableID:  "claude-controller-wiring-test-stable-uuid",
+		ptyReader: reader,
+	}
+	cc, err := NewClaudeController(inst)
+	if err != nil {
+		t.Fatalf("NewClaudeController() failed: %v", err)
+	}
+	if err := cc.Start(context.Background()); err != nil {
+		t.Fatalf("Start() failed: %v", err)
+	}
+	defer cc.Stop()
+
+	if _, err := writer.Write([]byte("\x1b[31m")); err != nil {
+		t.Fatalf("failed to write test data: %v", err)
+	}
+
+	cfg := wait.FastWaitConfig()
+	cfg.Description = "escape event captured via ClaudeController.Start()"
+	if err := wait.WaitForCondition(func() bool {
+		return len(spy.snapshot()) > 0
+	}, cfg); err != nil {
+		t.Fatalf("no escape event captured: %v", err)
+	}
+
+	for _, ev := range spy.snapshot() {
+		if ev.SessionID == inst.title {
+			t.Fatalf("escape event used the tmux name (%q) instead of the stable ID — BUG-025 regressed", ev.SessionID)
+		}
+		if ev.SessionID != inst.stableID {
+			t.Errorf("event SessionID = %q, want %q", ev.SessionID, inst.stableID)
+		}
+	}
 }
 
 func TestGetCurrentStatus_CacheHit(t *testing.T) {

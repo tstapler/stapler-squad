@@ -23,13 +23,36 @@ service GitHubUserService {
   // Used by the frontend to show/hide the GitHub PRs section and render
   // the auth banner when the user has not authenticated.
   rpc GetGitHubAuthState(GetGitHubAuthStateRequest) returns (GetGitHubAuthStateResponse) {}
+
+  // StartGitHubDeviceAuth initiates the GitHub Device Flow OAuth. Returns the
+  // user_code to display and verification_uri to open. The caller should then
+  // poll PollGitHubDeviceAuth until auth completes or expires.
+  rpc StartGitHubDeviceAuth(StartGitHubDeviceAuthRequest) returns (StartGitHubDeviceAuthResponse) {}
+
+  // PollGitHubDeviceAuth polls GitHub's token endpoint once. Returns the
+  // current status: pending, complete (token stored in keychain), or expired.
+  rpc PollGitHubDeviceAuth(PollGitHubDeviceAuthRequest) returns (PollGitHubDeviceAuthResponse) {}
+
+  // RevokeGitHubToken removes the keychain-stored GitHub token and clears
+  // the auth state. Does not revoke the token on GitHub's side.
+  rpc RevokeGitHubToken(RevokeGitHubTokenRequest) returns (RevokeGitHubTokenResponse) {}
+
+  // ListGitHubAccounts returns all connected GitHub accounts (from keychain and env vars).
+  rpc ListGitHubAccounts(ListGitHubAccountsRequest) returns (ListGitHubAccountsResponse) {}
+}
+
+// GitHubAccount is a single connected GitHub account.
+message GitHubAccount {
+  string username    = 1;
+  bool   is_env_token = 2; // true when sourced from GITHUB_TOKEN/GH_TOKEN env var
 }
 
 // GitHubAuthState describes the current GitHub authentication status.
 message GitHubAuthState {
   bool   available     = 1; // true when a token is present and /user returned 200
-  string username      = 2; // GitHub login, empty when available=false
+  string username      = 2; // primary (first) GitHub login; empty when available=false
   string error_message = 3; // human-readable reason when available=false
+  repeated GitHubAccount accounts = 4; // all connected accounts
 }
 
 message ListUserPRsRequest {}
@@ -52,4 +75,45 @@ message GetGitHubAuthStateRequest {}
 
 message GetGitHubAuthStateResponse {
   GitHubAuthState auth_state = 1;
+}
+
+message StartGitHubDeviceAuthRequest {}
+
+message StartGitHubDeviceAuthResponse {
+  string device_code       = 1; // opaque code passed back to PollGitHubDeviceAuth
+  string user_code         = 2; // 8-char code the user enters at verification_uri
+  string verification_uri  = 3; // URL to open (e.g. https://github.com/login/device)
+  int32  expires_in        = 4; // seconds until the device_code expires
+  int32  interval          = 5; // minimum poll interval in seconds
+}
+
+message PollGitHubDeviceAuthRequest {
+  string device_code = 1;
+}
+
+// DeviceAuthStatus describes the outcome of a single poll attempt.
+enum DeviceAuthStatus {
+  DEVICE_AUTH_STATUS_UNSPECIFIED = 0;
+  DEVICE_AUTH_STATUS_PENDING     = 1; // waiting for user to authorize
+  DEVICE_AUTH_STATUS_COMPLETE    = 2; // token received and stored in keychain
+  DEVICE_AUTH_STATUS_EXPIRED     = 3; // device code expired; restart the flow
+  DEVICE_AUTH_STATUS_ERROR       = 4; // unexpected error
+}
+
+message PollGitHubDeviceAuthResponse {
+  DeviceAuthStatus status      = 1;
+  string           error       = 2; // set when status == ERROR
+  GitHubAuthState  auth_state  = 3; // set when status == COMPLETE
+}
+
+message RevokeGitHubTokenRequest {
+  string username = 1; // if set, remove only this account; otherwise remove the legacy single-account token
+}
+
+message RevokeGitHubTokenResponse {}
+
+message ListGitHubAccountsRequest {}
+
+message ListGitHubAccountsResponse {
+  repeated GitHubAccount accounts = 1;
 }

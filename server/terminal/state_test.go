@@ -424,10 +424,9 @@ func TestStateGenerator_MonotonicSequencing(t *testing.T) {
 	}
 }
 
-// TestStateGenerator_StripANSIBytes tests ANSI escape sequence removal in StateGenerator
+// TestStateGenerator_StripANSIBytes tests ANSI escape sequence removal used by
+// StateGenerator (via the shared package-level stripANSIBytes).
 func TestStateGenerator_StripANSIBytes(t *testing.T) {
-	sg := NewStateGenerator(80, 24)
-
 	tests := []struct {
 		input    string
 		expected string
@@ -452,11 +451,32 @@ func TestStateGenerator_StripANSIBytes(t *testing.T) {
 			input:    "\x1b[38;5;208mOrange\x1b[0m",
 			expected: "Orange",
 		},
+		{
+			// OSC sequence with a letter in the payload before its BEL
+			// terminator must not be split mid-payload.
+			input:    "\x1b]0;my title\x07Hello",
+			expected: "Hello",
+		},
+		{
+			// OSC 8 hyperlink, terminated with ST (ESC \) instead of BEL.
+			input:    "\x1b]8;;https://example.com\x1b\\Link",
+			expected: "Link",
+		},
+		{
+			// DCS sequence terminated with ST.
+			input:    "\x1bPq#0;2;0;0;0\x1b\\Sixel",
+			expected: "Sixel",
+		},
+		{
+			// CSI final byte '@' (Insert Character) is not a letter.
+			input:    "\x1b[5@Hello",
+			expected: "Hello",
+		},
 	}
 
 	for i, tt := range tests {
 		t.Run("strip_test_"+string(rune('A'+i)), func(t *testing.T) {
-			result := sg.stripANSIBytes([]byte(tt.input))
+			result := stripANSIBytes([]byte(tt.input))
 			if string(result) != tt.expected {
 				t.Errorf("Expected %q, got %q", tt.expected, string(result))
 			}
@@ -596,6 +616,18 @@ func TestStateGenerator_SanitizeUTF8Bytes(t *testing.T) {
 			input:    []byte("Text\x07Bell\x08Backspace"),
 			expected: "Text\x07Bell\x08Backspace",
 			desc:     "Bell and backspace characters should be preserved",
+		},
+		{
+			name:     "osc_title_with_letter_in_payload",
+			input:    []byte("\x1b]0;my title\x07Hello"),
+			expected: "\x1b]0;my title\x07Hello",
+			desc:     "OSC title sequence must be preserved intact even though its payload contains a letter before the BEL terminator",
+		},
+		{
+			name:     "osc_hyperlink_terminated_by_st",
+			input:    []byte("\x1b]8;;https://example.com\x1b\\Link\x1b]8;;\x1b\\"),
+			expected: "\x1b]8;;https://example.com\x1b\\Link\x1b]8;;\x1b\\",
+			desc:     "OSC 8 hyperlink sequences terminated by ST (ESC \\\\) must be preserved intact",
 		},
 	}
 

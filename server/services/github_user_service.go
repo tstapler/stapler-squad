@@ -2,13 +2,14 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"connectrpc.com/connect"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -96,17 +97,122 @@ func (s *GitHubUserService) GetGitHubAuthState(
 	}), nil
 }
 
+// +api: github-user:start-device-auth
+// StartGitHubDeviceAuth initiates the GitHub Device Flow OAuth.
+func (s *GitHubUserService) StartGitHubDeviceAuth(
+	ctx context.Context,
+	_ *connect.Request[sessionv1.StartGitHubDeviceAuthRequest],
+) (*connect.Response[sessionv1.StartGitHubDeviceAuthResponse], error) {
+	da, err := githubpkg.StartDeviceAuth(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("start device auth: %w", err))
+	}
+	return connect.NewResponse(&sessionv1.StartGitHubDeviceAuthResponse{
+		DeviceCode:      da.DeviceCode,
+		UserCode:        da.UserCode,
+		VerificationUri: da.VerificationURI,
+		ExpiresIn:       int32(da.ExpiresIn),
+		Interval:        int32(da.Interval),
+	}), nil
+}
+
+// +api: github-user:poll-device-auth
+// PollGitHubDeviceAuth polls GitHub's token endpoint once. The frontend calls
+// this on an interval until status is COMPLETE or EXPIRED.
+func (s *GitHubUserService) PollGitHubDeviceAuth(
+	ctx context.Context,
+	req *connect.Request[sessionv1.PollGitHubDeviceAuthRequest],
+) (*connect.Response[sessionv1.PollGitHubDeviceAuthResponse], error) {
+	if req.Msg.DeviceCode == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("device_code is required"))
+	}
+
+	token, err := githubpkg.PollDeviceAuth(ctx, req.Msg.DeviceCode)
+	if err == nil {
+		// Discover the username and store per-account in the keychain.
+		if storeErr := githubpkg.StoreTokenForDiscoveredUser(ctx, token); storeErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("store token in keychain: %w", storeErr))
+		}
+		s.cache.InvalidateLoginCache()
+		_ = s.cache.Refresh(ctx)
+		return connect.NewResponse(&sessionv1.PollGitHubDeviceAuthResponse{
+			Status:    sessionv1.DeviceAuthStatus_DEVICE_AUTH_STATUS_COMPLETE,
+			AuthState: s.resolveAuthState(ctx),
+		}), nil
+	}
+
+	if errors.Is(err, githubpkg.ErrAuthorizationPending) {
+		return connect.NewResponse(&sessionv1.PollGitHubDeviceAuthResponse{
+			Status: sessionv1.DeviceAuthStatus_DEVICE_AUTH_STATUS_PENDING,
+		}), nil
+	}
+	if errors.Is(err, githubpkg.ErrDeviceFlowExpired) {
+		return connect.NewResponse(&sessionv1.PollGitHubDeviceAuthResponse{
+			Status: sessionv1.DeviceAuthStatus_DEVICE_AUTH_STATUS_EXPIRED,
+		}), nil
+	}
+	return connect.NewResponse(&sessionv1.PollGitHubDeviceAuthResponse{
+		Status: sessionv1.DeviceAuthStatus_DEVICE_AUTH_STATUS_ERROR,
+		Error:  err.Error(),
+	}), nil
+}
+
+// +api: github-user:revoke-token
+// RevokeGitHubToken removes a per-account keychain token (or the legacy slot) and resets auth state.
+func (s *GitHubUserService) RevokeGitHubToken(
+	ctx context.Context,
+	req *connect.Request[sessionv1.RevokeGitHubTokenRequest],
+) (*connect.Response[sessionv1.RevokeGitHubTokenResponse], error) {
+	if req.Msg.Username != "" {
+		_ = githubpkg.DeleteKeychainTokenForAccount(req.Msg.Username)
+	} else {
+		_ = githubpkg.DeleteKeychainToken()
+	}
+	s.cache.InvalidateLoginCache()
+	_ = s.cache.Refresh(ctx)
+	return connect.NewResponse(&sessionv1.RevokeGitHubTokenResponse{}), nil
+}
+
+// +api: github-user:list-accounts
+// ListGitHubAccounts returns all connected GitHub accounts.
+func (s *GitHubUserService) ListGitHubAccounts(
+	_ context.Context,
+	_ *connect.Request[sessionv1.ListGitHubAccountsRequest],
+) (*connect.Response[sessionv1.ListGitHubAccountsResponse], error) {
+	accounts := s.buildAccountList()
+	return connect.NewResponse(&sessionv1.ListGitHubAccountsResponse{
+		Accounts: accounts,
+	}), nil
+}
+
 // resolveAuthState returns the current GitHub auth state from the cache.
-// No network call is made; it reads the login stored by the background fetch.
+// No network call is made; it reads the logins stored by the background fetch.
 func (s *GitHubUserService) resolveAuthState(_ context.Context) *sessionv1.GitHubAuthState {
-	login := s.cache.GetCachedLogin()
-	if login == "" {
+	logins := s.cache.GetCachedLogins()
+	if len(logins) == 0 {
 		return &sessionv1.GitHubAuthState{
 			Available:    false,
 			ErrorMessage: "GitHub authentication not yet resolved",
 		}
 	}
-	return &sessionv1.GitHubAuthState{Available: true, Username: login}
+	return &sessionv1.GitHubAuthState{
+		Available: true,
+		Username:  logins[0],
+		Accounts:  s.buildAccountList(),
+	}
+}
+
+func (s *GitHubUserService) buildAccountList() []*sessionv1.GitHubAccount {
+	logins := s.cache.GetCachedLogins()
+	accounts := make([]*sessionv1.GitHubAccount, 0, len(logins))
+	for _, login := range logins {
+		isEnv := login == "env:GITHUB_TOKEN" || login == "env:GH_TOKEN"
+		accounts = append(accounts, &sessionv1.GitHubAccount{
+			Username:   login,
+			IsEnvToken: isEnv,
+		})
+	}
+	return accounts
 }
 
 // userPRsToProto converts a slice of UserPR to proto messages.

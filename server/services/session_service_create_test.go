@@ -139,6 +139,62 @@ func TestCreateSession_EmptyPath_OneOff_PassesPathValidation(t *testing.T) {
 	}
 }
 
+// TestCreateSession_EmptyPath_Autonomous_PassesPathValidation is a regression test for
+// a bug where autonomous sessions created via the omnibar (SessionType=DIRECTORY,
+// AutonomousMode=true, Path="") were rejected with "path is required": the guard
+// only exempted SESSION_TYPE_ONE_OFF, not AutonomousMode, even though the omnibar
+// always sends an empty path for autonomous sessions and relies on the server to
+// generate a scratch directory (mirroring one-off).
+func TestCreateSession_EmptyPath_Autonomous_PassesPathValidation(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	baseDir := t.TempDir()
+	t.Setenv("HOME", baseDir)
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:          "autonomous-session",
+		Path:           "",
+		SessionType:    sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+		AutonomousMode: true,
+	}))
+
+	if err != nil {
+		assertNotConnectCode(t, err, connect.CodeInvalidArgument, "autonomous session must not fail path validation")
+	} else {
+		require.NotNil(t, resp.Msg.Session)
+		destroyCreatedSession(t, svc, resp.Msg.Session.Id)
+	}
+}
+
+// TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir guards the
+// asymmetry between the path guard (which exempts AutonomousMode unconditionally)
+// and the directory-generation block (which only fires when resolvedPath == "").
+// An autonomous request that supplies its own path must use that path as-is, not
+// have it silently replaced by a generated ~/oneoff scratch directory.
+func TestCreateSession_Autonomous_ExplicitPath_DoesNotGenerateScratchDir(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	baseDir := t.TempDir()
+	t.Setenv("HOME", baseDir)
+	explicitPath := t.TempDir()
+	oneOffDir := filepath.Join(baseDir, "oneoff")
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:          "autonomous-explicit-path-test",
+		Path:           explicitPath,
+		SessionType:    sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+		AutonomousMode: true,
+	}))
+	if err == nil {
+		destroyCreatedSession(t, svc, resp.Msg.Session.Id)
+	}
+
+	_, statErr := os.Stat(oneOffDir)
+	assert.True(t, os.IsNotExist(statErr), "autonomous session with an explicit path must not generate a scratch directory")
+}
+
 func TestCreateSession_DuplicateTitle_ReturnsAlreadyExists(t *testing.T) {
 	storage := createTestStorage(t)
 	svc := newCreateTestService(t, storage)
@@ -228,6 +284,34 @@ func TestCreateSession_OneOff_TwoCallsCreateTwoDistinctDirectories(t *testing.T)
 		require.NoError(t, err)
 		assert.Len(t, entries, i+1, "after %d one-off creation(s), should have %d directories", i+1, i+1)
 	}
+}
+
+// TestCreateSession_Autonomous_CreatesDirectoryInBaseDir verifies that, like one-off
+// sessions, an autonomous session with an empty path gets a generated scratch
+// directory rather than being rejected before directory-generation logic runs.
+func TestCreateSession_Autonomous_CreatesDirectoryInBaseDir(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := newCreateTestService(t, storage)
+
+	baseDir := t.TempDir()
+	t.Setenv("HOME", baseDir)
+	expectedBase := filepath.Join(baseDir, "oneoff")
+
+	resp, err := svc.CreateSession(context.Background(), connect.NewRequest(&sessionv1.CreateSessionRequest{
+		Title:          "autonomous-scratch",
+		Path:           "",
+		SessionType:    sessionv1.SessionType_SESSION_TYPE_DIRECTORY,
+		AutonomousMode: true,
+	}))
+	if err == nil {
+		destroyCreatedSession(t, svc, resp.Msg.Session.Id)
+	}
+
+	// Whether or not tmux started, the generated directory must have been created.
+	entries, err := os.ReadDir(expectedBase)
+	require.NoError(t, err, "autonomous session should generate a scratch directory")
+	require.Len(t, entries, 1, "exactly one generated directory should exist")
+	assert.True(t, entries[0].IsDir(), "generated entry should be a directory")
 }
 
 func TestCreateSession_OneOff_BadBaseDir_ReturnsInternalError(t *testing.T) {

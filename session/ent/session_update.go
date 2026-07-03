@@ -736,6 +736,46 @@ func (_u *SessionUpdate) ClearGithubPrNumber() *SessionUpdate {
 	return _u
 }
 
+// SetGithubOwner sets the "github_owner" field.
+func (_u *SessionUpdate) SetGithubOwner(v string) *SessionUpdate {
+	_u.mutation.SetGithubOwner(v)
+	return _u
+}
+
+// SetNillableGithubOwner sets the "github_owner" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableGithubOwner(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetGithubOwner(*v)
+	}
+	return _u
+}
+
+// ClearGithubOwner clears the value of the "github_owner" field.
+func (_u *SessionUpdate) ClearGithubOwner() *SessionUpdate {
+	_u.mutation.ClearGithubOwner()
+	return _u
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (_u *SessionUpdate) SetGithubRepo(v string) *SessionUpdate {
+	_u.mutation.SetGithubRepo(v)
+	return _u
+}
+
+// SetNillableGithubRepo sets the "github_repo" field if the given value is not nil.
+func (_u *SessionUpdate) SetNillableGithubRepo(v *string) *SessionUpdate {
+	if v != nil {
+		_u.SetGithubRepo(*v)
+	}
+	return _u
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (_u *SessionUpdate) ClearGithubRepo() *SessionUpdate {
+	_u.mutation.ClearGithubRepo()
+	return _u
+}
+
 // SetSessionArtifacts sets the "session_artifacts" field.
 func (_u *SessionUpdate) SetSessionArtifacts(v string) *SessionUpdate {
 	_u.mutation.SetSessionArtifacts(v)
@@ -1240,6 +1280,18 @@ func (_u *SessionUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.GithubPrNumberCleared() {
 		_spec.ClearField(session.FieldGithubPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.GithubOwner(); ok {
+		_spec.SetField(session.FieldGithubOwner, field.TypeString, value)
+	}
+	if _u.mutation.GithubOwnerCleared() {
+		_spec.ClearField(session.FieldGithubOwner, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubRepo(); ok {
+		_spec.SetField(session.FieldGithubRepo, field.TypeString, value)
+	}
+	if _u.mutation.GithubRepoCleared() {
+		_spec.ClearField(session.FieldGithubRepo, field.TypeString)
 	}
 	if value, ok := _u.mutation.SessionArtifacts(); ok {
 		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)
@@ -2218,6 +2270,46 @@ func (_u *SessionUpdateOne) ClearGithubPrNumber() *SessionUpdateOne {
 	return _u
 }
 
+// SetGithubOwner sets the "github_owner" field.
+func (_u *SessionUpdateOne) SetGithubOwner(v string) *SessionUpdateOne {
+	_u.mutation.SetGithubOwner(v)
+	return _u
+}
+
+// SetNillableGithubOwner sets the "github_owner" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableGithubOwner(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetGithubOwner(*v)
+	}
+	return _u
+}
+
+// ClearGithubOwner clears the value of the "github_owner" field.
+func (_u *SessionUpdateOne) ClearGithubOwner() *SessionUpdateOne {
+	_u.mutation.ClearGithubOwner()
+	return _u
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (_u *SessionUpdateOne) SetGithubRepo(v string) *SessionUpdateOne {
+	_u.mutation.SetGithubRepo(v)
+	return _u
+}
+
+// SetNillableGithubRepo sets the "github_repo" field if the given value is not nil.
+func (_u *SessionUpdateOne) SetNillableGithubRepo(v *string) *SessionUpdateOne {
+	if v != nil {
+		_u.SetGithubRepo(*v)
+	}
+	return _u
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (_u *SessionUpdateOne) ClearGithubRepo() *SessionUpdateOne {
+	_u.mutation.ClearGithubRepo()
+	return _u
+}
+
 // SetSessionArtifacts sets the "session_artifacts" field.
 func (_u *SessionUpdateOne) SetSessionArtifacts(v string) *SessionUpdateOne {
 	_u.mutation.SetSessionArtifacts(v)
@@ -2752,6 +2844,18 @@ func (_u *SessionUpdateOne) sqlSave(ctx context.Context) (_node *Session, err er
 	}
 	if _u.mutation.GithubPrNumberCleared() {
 		_spec.ClearField(session.FieldGithubPrNumber, field.TypeInt)
+	}
+	if value, ok := _u.mutation.GithubOwner(); ok {
+		_spec.SetField(session.FieldGithubOwner, field.TypeString, value)
+	}
+	if _u.mutation.GithubOwnerCleared() {
+		_spec.ClearField(session.FieldGithubOwner, field.TypeString)
+	}
+	if value, ok := _u.mutation.GithubRepo(); ok {
+		_spec.SetField(session.FieldGithubRepo, field.TypeString, value)
+	}
+	if _u.mutation.GithubRepoCleared() {
+		_spec.ClearField(session.FieldGithubRepo, field.TypeString)
 	}
 	if value, ok := _u.mutation.SessionArtifacts(); ok {
 		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)

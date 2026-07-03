@@ -174,6 +174,12 @@ const (
 	// SessionServiceBulkUpsertRulesProcedure is the fully-qualified name of the SessionService's
 	// BulkUpsertRules RPC.
 	SessionServiceBulkUpsertRulesProcedure = "/session.v1.SessionService/BulkUpsertRules"
+	// SessionServiceGetConfigFileRulesProcedure is the fully-qualified name of the SessionService's
+	// GetConfigFileRules RPC.
+	SessionServiceGetConfigFileRulesProcedure = "/session.v1.SessionService/GetConfigFileRules"
+	// SessionServiceSaveRulesToConfigFileProcedure is the fully-qualified name of the SessionService's
+	// SaveRulesToConfigFile RPC.
+	SessionServiceSaveRulesToConfigFileProcedure = "/session.v1.SessionService/SaveRulesToConfigFile"
 	// SessionServiceListDatabasesProcedure is the fully-qualified name of the SessionService's
 	// ListDatabases RPC.
 	SessionServiceListDatabasesProcedure = "/session.v1.SessionService/ListDatabases"
@@ -490,6 +496,10 @@ type SessionServiceClient interface {
 	// BulkUpsertRules creates or updates multiple user-defined rules in one call.
 	// Rebuilds the in-memory classifier exactly once after all rules are stored.
 	BulkUpsertRules(context.Context, *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error)
+	// GetConfigFileRules returns rules persisted in the shared YAML config file.
+	GetConfigFileRules(context.Context, *connect.Request[v1.GetConfigFileRulesRequest]) (*connect.Response[v1.GetConfigFileRulesResponse], error)
+	// SaveRulesToConfigFile exports one or more rules to the shared YAML config file.
+	SaveRulesToConfigFile(context.Context, *connect.Request[v1.SaveRulesToConfigFileRequest]) (*connect.Response[v1.SaveRulesToConfigFileResponse], error)
 	// ListDatabases returns all discovered workspace databases with metadata.
 	// Used by the workspace switcher UI to show available workspaces.
 	ListDatabases(context.Context, *connect.Request[v1.ListDatabasesRequest]) (*connect.Response[v1.ListDatabasesResponse], error)
@@ -956,6 +966,18 @@ func NewSessionServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(sessionServiceMethods.ByName("BulkUpsertRules")),
 			connect.WithClientOptions(opts...),
 		),
+		getConfigFileRules: connect.NewClient[v1.GetConfigFileRulesRequest, v1.GetConfigFileRulesResponse](
+			httpClient,
+			baseURL+SessionServiceGetConfigFileRulesProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("GetConfigFileRules")),
+			connect.WithClientOptions(opts...),
+		),
+		saveRulesToConfigFile: connect.NewClient[v1.SaveRulesToConfigFileRequest, v1.SaveRulesToConfigFileResponse](
+			httpClient,
+			baseURL+SessionServiceSaveRulesToConfigFileProcedure,
+			connect.WithSchema(sessionServiceMethods.ByName("SaveRulesToConfigFile")),
+			connect.WithClientOptions(opts...),
+		),
 		listDatabases: connect.NewClient[v1.ListDatabasesRequest, v1.ListDatabasesResponse](
 			httpClient,
 			baseURL+SessionServiceListDatabasesProcedure,
@@ -1387,6 +1409,8 @@ type sessionServiceClient struct {
 	validateRules                *connect.Client[v1.ValidateRulesRequest, v1.ValidateRulesResponse]
 	exportRules                  *connect.Client[v1.ExportRulesRequest, v1.ExportRulesResponse]
 	bulkUpsertRules              *connect.Client[v1.BulkUpsertRulesRequest, v1.BulkUpsertRulesResponse]
+	getConfigFileRules           *connect.Client[v1.GetConfigFileRulesRequest, v1.GetConfigFileRulesResponse]
+	saveRulesToConfigFile        *connect.Client[v1.SaveRulesToConfigFileRequest, v1.SaveRulesToConfigFileResponse]
 	listDatabases                *connect.Client[v1.ListDatabasesRequest, v1.ListDatabasesResponse]
 	getCurrentDatabase           *connect.Client[v1.GetCurrentDatabaseRequest, v1.GetCurrentDatabaseResponse]
 	switchDatabase               *connect.Client[v1.SwitchDatabaseRequest, v1.SwitchDatabaseResponse]
@@ -1690,6 +1714,16 @@ func (c *sessionServiceClient) ExportRules(ctx context.Context, req *connect.Req
 // BulkUpsertRules calls session.v1.SessionService.BulkUpsertRules.
 func (c *sessionServiceClient) BulkUpsertRules(ctx context.Context, req *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error) {
 	return c.bulkUpsertRules.CallUnary(ctx, req)
+}
+
+// GetConfigFileRules calls session.v1.SessionService.GetConfigFileRules.
+func (c *sessionServiceClient) GetConfigFileRules(ctx context.Context, req *connect.Request[v1.GetConfigFileRulesRequest]) (*connect.Response[v1.GetConfigFileRulesResponse], error) {
+	return c.getConfigFileRules.CallUnary(ctx, req)
+}
+
+// SaveRulesToConfigFile calls session.v1.SessionService.SaveRulesToConfigFile.
+func (c *sessionServiceClient) SaveRulesToConfigFile(ctx context.Context, req *connect.Request[v1.SaveRulesToConfigFileRequest]) (*connect.Response[v1.SaveRulesToConfigFileResponse], error) {
+	return c.saveRulesToConfigFile.CallUnary(ctx, req)
 }
 
 // ListDatabases calls session.v1.SessionService.ListDatabases.
@@ -2132,6 +2166,10 @@ type SessionServiceHandler interface {
 	// BulkUpsertRules creates or updates multiple user-defined rules in one call.
 	// Rebuilds the in-memory classifier exactly once after all rules are stored.
 	BulkUpsertRules(context.Context, *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error)
+	// GetConfigFileRules returns rules persisted in the shared YAML config file.
+	GetConfigFileRules(context.Context, *connect.Request[v1.GetConfigFileRulesRequest]) (*connect.Response[v1.GetConfigFileRulesResponse], error)
+	// SaveRulesToConfigFile exports one or more rules to the shared YAML config file.
+	SaveRulesToConfigFile(context.Context, *connect.Request[v1.SaveRulesToConfigFileRequest]) (*connect.Response[v1.SaveRulesToConfigFileResponse], error)
 	// ListDatabases returns all discovered workspace databases with metadata.
 	// Used by the workspace switcher UI to show available workspaces.
 	ListDatabases(context.Context, *connect.Request[v1.ListDatabasesRequest]) (*connect.Response[v1.ListDatabasesResponse], error)
@@ -2592,6 +2630,18 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 		SessionServiceBulkUpsertRulesProcedure,
 		svc.BulkUpsertRules,
 		connect.WithSchema(sessionServiceMethods.ByName("BulkUpsertRules")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceGetConfigFileRulesHandler := connect.NewUnaryHandler(
+		SessionServiceGetConfigFileRulesProcedure,
+		svc.GetConfigFileRules,
+		connect.WithSchema(sessionServiceMethods.ByName("GetConfigFileRules")),
+		connect.WithHandlerOptions(opts...),
+	)
+	sessionServiceSaveRulesToConfigFileHandler := connect.NewUnaryHandler(
+		SessionServiceSaveRulesToConfigFileProcedure,
+		svc.SaveRulesToConfigFile,
+		connect.WithSchema(sessionServiceMethods.ByName("SaveRulesToConfigFile")),
 		connect.WithHandlerOptions(opts...),
 	)
 	sessionServiceListDatabasesHandler := connect.NewUnaryHandler(
@@ -3070,6 +3120,10 @@ func NewSessionServiceHandler(svc SessionServiceHandler, opts ...connect.Handler
 			sessionServiceExportRulesHandler.ServeHTTP(w, r)
 		case SessionServiceBulkUpsertRulesProcedure:
 			sessionServiceBulkUpsertRulesHandler.ServeHTTP(w, r)
+		case SessionServiceGetConfigFileRulesProcedure:
+			sessionServiceGetConfigFileRulesHandler.ServeHTTP(w, r)
+		case SessionServiceSaveRulesToConfigFileProcedure:
+			sessionServiceSaveRulesToConfigFileHandler.ServeHTTP(w, r)
 		case SessionServiceListDatabasesProcedure:
 			sessionServiceListDatabasesHandler.ServeHTTP(w, r)
 		case SessionServiceGetCurrentDatabaseProcedure:
@@ -3395,6 +3449,14 @@ func (UnimplementedSessionServiceHandler) ExportRules(context.Context, *connect.
 
 func (UnimplementedSessionServiceHandler) BulkUpsertRules(context.Context, *connect.Request[v1.BulkUpsertRulesRequest]) (*connect.Response[v1.BulkUpsertRulesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.BulkUpsertRules is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) GetConfigFileRules(context.Context, *connect.Request[v1.GetConfigFileRulesRequest]) (*connect.Response[v1.GetConfigFileRulesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.GetConfigFileRules is not implemented"))
+}
+
+func (UnimplementedSessionServiceHandler) SaveRulesToConfigFile(context.Context, *connect.Request[v1.SaveRulesToConfigFileRequest]) (*connect.Response[v1.SaveRulesToConfigFileResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.SessionService.SaveRulesToConfigFile is not implemented"))
 }
 
 func (UnimplementedSessionServiceHandler) ListDatabases(context.Context, *connect.Request[v1.ListDatabasesRequest]) (*connect.Response[v1.ListDatabasesResponse], error) {

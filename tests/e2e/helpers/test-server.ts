@@ -113,7 +113,9 @@ export class TestServer {
     return this.config.testDir;
   }
 
-  private async waitForServer(maxAttempts = 30): Promise<void> {
+  // 90s: on this machine a cold test-mode boot (DB init + demo seeding) has been
+  // observed taking ~30-45s before /health responds, right at the old 30s cap.
+  private async waitForServer(maxAttempts = 90): Promise<void> {
     const url = `${this.getBaseUrl()}/health`;
 
     for (let i = 0; i < maxAttempts; i++) {

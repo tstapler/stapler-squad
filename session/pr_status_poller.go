@@ -271,16 +271,17 @@ func (p *PRStatusPoller) fetchAndUpdatePRStatus(inst *Instance) {
 	ctx, cancel := context.WithTimeout(p.ctx, p.config.CallTimeout)
 	defer cancel()
 
-	// Lock-free snapshot for the pre-fetch reads; the subsequent writes
-	// (GitHubPRNumber, LastPRStatusCheck) remain guarded by stateMutex.
-	prefetch := inst.Snapshot()
-	prNumber := prefetch.GitHub.GitHubPRNumber
-	branch := prefetch.Branch
-	owner := prefetch.GitHub.GitHubOwner
-	repo := prefetch.GitHub.GitHubRepo
+	// Use Snapshot() — actor-based writes (SetGitHubPRNumber etc.) do not hold mu,
+	// so mu.RLock would not synchronize with them.
+	snap := inst.Snapshot()
+	prNumber := snap.GitHub.GitHubPRNumber
+	owner := snap.GitHub.GitHubOwner
+	repo := snap.GitHub.GitHubRepo
 
-	// Auto-discovery: find PR for branch when PR number not yet known
+	// Auto-discovery: find PR for branch when PR number not yet known.
+	// CurrentBranch() reads live from git for directory sessions (Branch field is empty).
 	if prNumber == 0 {
+		branch := inst.CurrentBranch()
 		if branch == "" {
 			return
 		}

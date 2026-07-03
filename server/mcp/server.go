@@ -8,6 +8,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	mcpserver "github.com/mark3labs/mcp-go/server"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/events"
 	"github.com/tstapler/stapler-squad/server/services"
@@ -19,7 +20,8 @@ import (
 // Shared by the stdio path (RunServer) and the HTTP path (NewHTTPHandler).
 // storage is optional — when nil, backlog tools are not registered.
 // eventBus is optional — when nil, triage-complete notifications are disabled.
-func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus) *mcpserver.MCPServer {
+// prCache is optional — when nil, GitHub PR tools are not registered.
+func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache) *mcpserver.MCPServer {
 	s := mcpserver.NewMCPServer(
 		"stapler-squad",
 		"1.0.0",
@@ -38,6 +40,9 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 		registerBacklogTools(s, &backlogHandlers{storage: storage, store: store, eventBus: eventBus, reviewStopper: svc})
 		registerGoalTools(s, &goalHandlers{storage: storage, store: store, eventBus: eventBus})
 	}
+	if prCache != nil {
+		registerGitHubTools(s, &githubHandlers{cache: prCache, store: store})
+	}
 	return s
 }
 
@@ -46,8 +51,9 @@ func NewCore(store session.InstanceStore, svc *services.SessionService, sbMgr *s
 // existing HTTP server so Claude sessions can connect without spawning a
 // subprocess.
 // eventBus is optional — pass nil to disable triage-complete notifications.
-func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus) *mcpserver.StreamableHTTPServer {
-	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage, eventBus))
+// prCache is optional — pass nil to disable GitHub PR tools.
+func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache) *mcpserver.StreamableHTTPServer {
+	return mcpserver.NewStreamableHTTPServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache))
 }
 
 // RunServer initializes and starts the MCP stdio server.
@@ -56,7 +62,8 @@ func NewHTTPHandler(store session.InstanceStore, svc *services.SessionService, s
 // sbMgr provides read access to terminal scrollback data persisted on disk.
 // storage is used for backlog tools (optional; pass nil to disable).
 // eventBus is optional — pass nil to disable triage-complete notifications on stdio path.
-func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus) error {
+// prCache is optional — pass nil to disable GitHub PR tools.
+func RunServer(ctx context.Context, store session.InstanceStore, svc *services.SessionService, sbMgr *scrollback.ScrollbackManager, storage *session.Storage, eventBus *events.EventBus, prCache *githubpkg.UserPRCache) error {
 	log.Info("mcp server starting on stdio transport")
 
 	// Inject session UUID from environment into the root context so that
@@ -66,7 +73,7 @@ func RunServer(ctx context.Context, store session.InstanceStore, svc *services.S
 		log.InfoLog.Printf("[mcp] session UUID injected from environment: %s", uuid)
 	}
 
-	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus))
+	stdio := mcpserver.NewStdioServer(NewCore(store, svc, sbMgr, storage, eventBus, prCache))
 	return stdio.Listen(ctx, os.Stdin, os.Stdout)
 }
 

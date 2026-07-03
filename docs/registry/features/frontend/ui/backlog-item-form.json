@@ -4,7 +4,11 @@
   "component": "BacklogItemForm",
   "path": "web-app/src/components/backlog/BacklogItemForm.tsx",
   "markerLine": 0,
-  "tested": false,
-  "testIds": [],
-  "lastModified": "2026-05-12T00:00:00Z"
+  "tested": true,
+  "testIds": [
+    "BacklogItemForm — Repository Path help",
+    "BacklogItemForm — checkbox help text",
+    "BacklogItemForm — cloning busy state"
+  ],
+  "lastModified": "2026-07-01T00:00:00Z"
 }

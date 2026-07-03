@@ -1,6 +1,8 @@
 package session
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -475,6 +477,119 @@ func TestParseClaudeSessionID_noSessionId(t *testing.T) {
 	got := parseClaudeSessionID(output)
 	if got != "" {
 		t.Errorf("parseClaudeSessionID(%q) = %q, want empty string", output, got)
+	}
+}
+
+func readTestdata(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("detection", "testdata", name))
+	if err != nil {
+		t.Fatalf("readTestdata(%q): %v", name, err)
+	}
+	return string(data)
+}
+
+// TestOutputShowsConversationStarted verifies that live terminal output patterns
+// reliably distinguish an active or completed conversation from a fresh session.
+func TestOutputShowsConversationStarted(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   bool
+	}{
+		// ── positive: active processing ──────────────────────────────────────
+		{
+			name:   "active spinner with esc to interrupt",
+			output: readTestdata(t, "claude_active.txt"),
+			want:   true,
+		},
+		{
+			name:   "asterism active spinner",
+			output: readTestdata(t, "claude_asterism_active.txt"),
+			want:   true,
+		},
+		{
+			name:   "task manager active (✽ asterism + esc to interrupt)",
+			output: readTestdata(t, "claude_active_task_manager.txt"),
+			want:   true,
+		},
+		{
+			name:   "thinking verb active",
+			output: readTestdata(t, "claude_thinking_verb.txt"),
+			want:   true,
+		},
+		// ── positive: completed/post-conversation states ───────────────────
+		{
+			name:   "asterism completion verb (past tense + for Xm)",
+			output: readTestdata(t, "claude_asterism_success.txt"),
+			want:   true,
+		},
+		{
+			name:   "cost summary (⎿  $X.XX)",
+			output: readTestdata(t, "claude_cost_summary.txt"),
+			want:   true,
+		},
+		{
+			name:   "baked idle with ◉ Baked for marker",
+			output: readTestdata(t, "claude_baked_idle.txt"),
+			want:   true,
+		},
+		// ── positive: inline signals ──────────────────────────────────────
+		{
+			name:   "esc to interrupt inline",
+			output: "Some output\nesc to interrupt\n",
+			want:   true,
+		},
+		{
+			name:   "spinner time suffix only",
+			output: "✻ Wandering... (2m 3s · ↑ 1.2k tokens)\n> ▌\n",
+			want:   true,
+		},
+		{
+			name:   "cost summary only",
+			output: "⎿  $0.18 · 5 tool uses · 800 tokens\n",
+			want:   true,
+		},
+		{
+			name:   "baked marker",
+			output: "◉ Baked for 30s\n> ▌\n",
+			want:   true,
+		},
+		{
+			name:   "resuming marker",
+			output: "◉ Claude resuming /loop wakeup (May 2 11:55pm)\n",
+			want:   true,
+		},
+		// ── negative: no conversation started ────────────────────────────
+		{
+			name:   "empty string",
+			output: "",
+			want:   false,
+		},
+		{
+			name:   "bare readline prompt",
+			output: ">\n? for shortcuts\n",
+			want:   false,
+		},
+		{
+			name:   "startup trust dialog",
+			output: "Quick safety check: Is this a project you created or one you trust?\n 1. Yes, I trust this folder\n 2. No, exit",
+			want:   false,
+		},
+		{
+			name:   "plain text mentioning esc (not the sentinel phrase)",
+			output: "Press esc key to cancel the operation\n",
+			want:   false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := outputShowsConversationStarted(tc.output)
+			if got != tc.want {
+				t.Errorf("outputShowsConversationStarted(...) = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

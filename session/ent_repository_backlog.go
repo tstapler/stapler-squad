@@ -10,7 +10,9 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent"
 	"github.com/tstapler/stapler-squad/session/ent/backlogitem"
 	"github.com/tstapler/stapler-squad/session/ent/backlogstatusevent"
+	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
+	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
 	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 )
 
@@ -269,6 +271,47 @@ func (r *EntRepository) ArchiveBacklogItem(ctx context.Context, id string) (*Bac
 	}
 	result := backlogItemToData(item)
 	return &result, nil
+}
+
+// DeleteBacklogItem permanently removes an item and all its child records.
+func (r *EntRepository) DeleteBacklogItem(ctx context.Context, id string) error {
+	parsedID, err := uuid.Parse(id)
+	if err != nil {
+		return fmt.Errorf("%w: invalid id %q: %v", ErrNotFound, id, err)
+	}
+
+	// Resolve item_session IDs first so we can delete their review_verdicts.
+	itemSessionIDs, err := r.client.ItemSession.Query().
+		Where(itemsession.HasBacklogItemWith(backlogitem.ID(parsedID))).
+		IDs(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to query item sessions for backlog item %s: %w", id, err)
+	}
+
+	if len(itemSessionIDs) > 0 {
+		_, err = r.client.ReviewVerdict.Delete().
+			Where(reviewverdict.HasItemSessionWith(itemsession.IDIn(itemSessionIDs...))).
+			Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to delete review verdicts for backlog item %s: %w", id, err)
+		}
+
+		_, err = r.client.ItemSession.Delete().
+			Where(itemsession.IDIn(itemSessionIDs...)).
+			Exec(ctx)
+		if err != nil {
+			return fmt.Errorf("failed to delete item sessions for backlog item %s: %w", id, err)
+		}
+	}
+
+	err = r.client.BacklogItem.DeleteOneID(parsedID).Exec(ctx)
+	if err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("%w: backlog item %s", ErrNotFound, id)
+		}
+		return fmt.Errorf("failed to delete backlog item %s: %w", id, err)
+	}
+	return nil
 }
 
 // TransitionBacklogItemStatus changes the status of a backlog item with optional precondition.

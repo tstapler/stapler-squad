@@ -197,7 +197,20 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("build /user request: %w", err)
 	}
+	return fetchLoginFromRequest(req)
+}
 
+// GetCurrentUserLoginWithToken fetches the GitHub login for an explicit token.
+// Returns ("", nil) when the token is invalid or unauthenticated.
+func GetCurrentUserLoginWithToken(ctx context.Context, token string) (string, error) {
+	req, err := newGHRequestWithToken(ctx, "user", token)
+	if err != nil {
+		return "", fmt.Errorf("build /user request: %w", err)
+	}
+	return fetchLoginFromRequest(req)
+}
+
+func fetchLoginFromRequest(req *http.Request) (string, error) {
 	resp, err := ghHTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("/user request failed: %w", err)
@@ -221,6 +234,7 @@ func GetCurrentUserLogin(ctx context.Context) (string, error) {
 	}
 	return u.Login, nil
 }
+
 
 // GetPRInfo fetches metadata for a pull request including review and CI status.
 func GetPRInfo(owner, repo string, prNumber int) (*PRInfo, error) {
@@ -645,20 +659,22 @@ func GetRemoteURL(repoPath string) (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-// GetOwnerRepoFromRemote returns the GitHub owner and repo name for a local
-// git repository by reading the origin remote URL and parsing it.
-// Returns empty strings (not an error) when the remote is not a GitHub URL.
-func GetOwnerRepoFromRemote(repoPath string) (owner, repo string, err error) {
+// GetOwnerRepoFromRemote returns a RepoRef for a local git repository by
+// reading the origin remote URL and parsing it. Returns an invalid zero-value
+// RepoRef (not an error) when the remote is not a GitHub URL.
+func GetOwnerRepoFromRemote(repoPath string) (RepoRef, error) {
 	remoteURL, err := GetRemoteURL(repoPath)
 	if err != nil {
-		return "", "", err
+		return RepoRef{}, err
 	}
 	ref, parseErr := ParseGitHubRef(remoteURL)
 	if parseErr != nil {
-		return "", "", nil // not a GitHub URL — callers degrade gracefully
+		return RepoRef{}, nil // not a GitHub URL — callers check IsValid()
 	}
-	return ref.Owner, ref.Repo, nil
+	r, _ := NewRepoRef(ref.Owner, ref.Repo)
+	return r, nil
 }
+
 
 // GeneratePRPrompt generates a context prompt from PR information
 // This can be used to initialize a Claude Code session with PR context

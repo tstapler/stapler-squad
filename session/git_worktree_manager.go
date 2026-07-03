@@ -132,6 +132,16 @@ func (gm *GitWorktreeManager) IsDirty() (bool, error) {
 	return gm.worktree.IsDirty()
 }
 
+// InvalidateDirtyCache clears the IsDirty TTL cache so the next call re-runs git status.
+// Call after transitions that may change worktree dirty state (Resume, Stop).
+// No-op if no worktree is set.
+func (gm *GitWorktreeManager) InvalidateDirtyCache() {
+	if gm.worktree == nil {
+		return
+	}
+	gm.worktree.InvalidateDirtyCache()
+}
+
 // CommitChanges stages all changes and creates a commit.
 func (gm *GitWorktreeManager) CommitChanges(commitMsg string) error {
 	if gm.worktree == nil {
@@ -231,6 +241,7 @@ type GitManager interface {
 	Remove() error
 	Prune() error
 	IsDirty() (bool, error)
+	InvalidateDirtyCache()
 	CommitChanges(commitMsg string) error
 	PushChanges(commitMsg string, open bool) error
 	IsBranchCheckedOut() (bool, error)

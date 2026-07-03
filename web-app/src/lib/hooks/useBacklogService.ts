@@ -280,6 +280,7 @@ interface UseBacklogServiceReturn {
   createBacklogItem: (data: BacklogItemInput) => Promise<{ item: BacklogItem; triageTriggered: boolean } | null>;
   updateBacklogItem: (id: string, data: Partial<BacklogItemInput>) => Promise<BacklogItem | null>;
   archiveBacklogItem: (id: string) => Promise<boolean>;
+  deleteBacklogItem: (id: string) => Promise<boolean>;
   transitionStatus: (
     id: string,
     toStatus: BacklogItemStatus,
@@ -416,6 +417,18 @@ export function useBacklogService(): UseBacklogServiceReturn {
     }
   }, []);
 
+  const deleteBacklogItem = useCallback(async (id: string): Promise<boolean> => {
+    if (!clientRef.current) return false;
+    try {
+      await clientRef.current.deleteBacklogItem({ itemId: id });
+      return true;
+    } catch (err) {
+      console.error("[useBacklogService] deleteBacklogItem:", err);
+      setLastError(err instanceof Error ? err : new Error(String(err)));
+      throw err;
+    }
+  }, []);
+
   const transitionStatus = useCallback(
     async (
       id: string,
@@ -540,6 +553,7 @@ export function useBacklogService(): UseBacklogServiceReturn {
       createBacklogItem,
       updateBacklogItem,
       archiveBacklogItem,
+      deleteBacklogItem,
       transitionStatus,
       spawnSessionFromItem,
       triggerTriage,

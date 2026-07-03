@@ -18,9 +18,17 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// ConfigFileRulesRepository is the seam for config-file rule persistence.
+// Implementations are registered via NewRulesService; nil means the feature is unavailable.
+type ConfigFileRulesRepository interface {
+	GetRules(ctx context.Context) (rules []RuleSpec, filePath string, err error)
+	SaveRules(ctx context.Context, ruleIDs []string, rule *sessionv1.ApprovalRuleProto) (filePath string, err error)
+}
+
 // RulesService handles auto-approval rule management and analytics RPCs.
 type RulesService struct {
 	rulesStore     *RulesStore
+	configStore    ConfigFileRulesRepository // nil = feature unavailable
 	analyticsStore *AnalyticsStore
 	classifier     *classifier.RuleBasedClassifier
 	promptBuilder  RulePromptBuilder // nil = AI generation unavailable
@@ -28,10 +36,11 @@ type RulesService struct {
 }
 
 // NewRulesService creates a RulesService.
-// promptBuilder and aiClient may be nil; nil means AI rule generation is unavailable.
-func NewRulesService(rulesStore *RulesStore, analyticsStore *AnalyticsStore, classifier *classifier.RuleBasedClassifier, promptBuilder RulePromptBuilder, aiClient AIClient) *RulesService {
+// configStore, promptBuilder, and aiClient may be nil; nil means that capability is unavailable.
+func NewRulesService(rulesStore *RulesStore, configStore ConfigFileRulesRepository, analyticsStore *AnalyticsStore, classifier *classifier.RuleBasedClassifier, promptBuilder RulePromptBuilder, aiClient AIClient) *RulesService {
 	return &RulesService{
 		rulesStore:     rulesStore,
+		configStore:    configStore,
 		analyticsStore: analyticsStore,
 		classifier:     classifier,
 		promptBuilder:  promptBuilder,
@@ -1212,4 +1221,38 @@ func ruleProtoToSpec(p *sessionv1.ApprovalRuleProto) RuleSpec {
 		Source:                "user", // always override -- never accept client-supplied source
 		CreatedAt:             time.Now(),
 	}
+}
+
+// GetConfigFileRules returns rules from the shared YAML config file.
+func (rs *RulesService) GetConfigFileRules(
+	ctx context.Context,
+	_ *connect.Request[sessionv1.GetConfigFileRulesRequest],
+) (*connect.Response[sessionv1.GetConfigFileRulesResponse], error) {
+	if rs.configStore == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("GetConfigFileRules: not yet implemented"))
+	}
+	rules, filePath, err := rs.configStore.GetRules(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	protos := make([]*sessionv1.ApprovalRuleProto, 0, len(rules))
+	for _, r := range rules {
+		protos = append(protos, specToProto(r))
+	}
+	return connect.NewResponse(&sessionv1.GetConfigFileRulesResponse{Rules: protos, FilePath: filePath}), nil
+}
+
+// SaveRulesToConfigFile exports rules to the shared YAML config file.
+func (rs *RulesService) SaveRulesToConfigFile(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SaveRulesToConfigFileRequest],
+) (*connect.Response[sessionv1.SaveRulesToConfigFileResponse], error) {
+	if rs.configStore == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("SaveRulesToConfigFile: not yet implemented"))
+	}
+	filePath, err := rs.configStore.SaveRules(ctx, req.Msg.RuleIds, req.Msg.Rule)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&sessionv1.SaveRulesToConfigFileResponse{FilePath: filePath}), nil
 }

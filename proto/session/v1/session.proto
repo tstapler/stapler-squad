@@ -176,6 +176,12 @@ service SessionService {
   // Rebuilds the in-memory classifier exactly once after all rules are stored.
   rpc BulkUpsertRules(BulkUpsertRulesRequest) returns (BulkUpsertRulesResponse) {}
 
+  // GetConfigFileRules returns rules persisted in the shared YAML config file.
+  rpc GetConfigFileRules(GetConfigFileRulesRequest) returns (GetConfigFileRulesResponse) {}
+
+  // SaveRulesToConfigFile exports one or more rules to the shared YAML config file.
+  rpc SaveRulesToConfigFile(SaveRulesToConfigFileRequest) returns (SaveRulesToConfigFileResponse) {}
+
   // ListDatabases returns all discovered workspace databases with metadata.
   // Used by the workspace switcher UI to show available workspaces.
   rpc ListDatabases(ListDatabasesRequest) returns (ListDatabasesResponse) {}
@@ -2369,6 +2375,24 @@ message BulkUpsertRulesResponse {
   int32 updated = 2;
   int32 skipped = 3;
   repeated string errors = 4;
+}
+
+// GetConfigFileRules messages
+message GetConfigFileRulesRequest {}
+
+message GetConfigFileRulesResponse {
+  repeated ApprovalRuleProto rules = 1;
+  string file_path = 2;
+}
+
+// SaveRulesToConfigFile messages
+message SaveRulesToConfigFileRequest {
+  repeated string rule_ids = 1;
+  ApprovalRuleProto rule = 2;
+}
+
+message SaveRulesToConfigFileResponse {
+  string file_path = 1;
 }
 
 // ============================================================================

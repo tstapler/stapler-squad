@@ -70,7 +70,7 @@ var (
 				if mcpErr != nil {
 					return fmt.Errorf("mcp: init deps: %w", mcpErr)
 				}
-				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil)
+				return mcpserver.RunServer(ctx, store, svc, sbMgr, storage, nil, nil)
 			}
 
 			// Enable test mode if flag is set

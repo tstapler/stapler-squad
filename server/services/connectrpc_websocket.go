@@ -751,8 +751,15 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				if escapeParser != nil && escapeParser.IsEnabled() {
 					// Use the monotonic PTY byte offset from the circular buffer so
 					// session_seq is stable across WebSocket reconnections (mirrors
-					// the Stage 1 counter in ResponseStream.streamLoop).
-					escapeParser.ParseStage2(buf, instance.GetTotalBytesWritten())
+					// the Stage 1 counter in ResponseStream.streamLoop). GetTotalBytesWritten
+					// reflects the buffer's total *after* every coalesced chunk in buf has
+					// already been written (streamLoop writes to the buffer, then broadcasts,
+					// in that order, on a single goroutine — so by the time this goroutine
+					// drains updateChan the buffer is always caught up). Subtract len(buf) to
+					// get the offset at the *start* of buf, matching how Stage 1 captures its
+					// offset before writing — without this, every sessionSeq here is off by
+					// len(buf) and mangle correlation against Stage 1 records never matches.
+					escapeParser.ParseStage2(buf, instance.GetTotalBytesWritten()-int64(len(buf)))
 				}
 
 				if err := sendData(buf); err != nil {

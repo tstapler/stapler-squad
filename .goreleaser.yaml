@@ -1,7 +1,8 @@
 version: 2.9
 
 builds:
-  - binary: stapler-squad
+  - id: stapler-squad
+    binary: stapler-squad
     goos:
       - darwin
       - linux
@@ -13,7 +14,8 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -X main.version={{.Version}}
-  - binary: ssq-mux
+  - id: ssq-mux
+    binary: ssq-mux
     main: ./cmd/ssq-mux
     goos:
       - darwin
@@ -24,7 +26,8 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
-  - binary: ssq-hooks
+  - id: ssq-hooks
+    binary: ssq-hooks
     main: ./cmd/ssq-hooks
     goos:
       - darwin
@@ -37,12 +40,12 @@ builds:
       - CGO_ENABLED=0
 
 archives:
-  - format: tar.gz
+  - formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
 
 brews:
   - name: stapler-squad

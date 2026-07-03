@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
@@ -129,22 +130,29 @@ func findGitRepoRoot(path string) (string, error) {
 	}
 }
 
-// getCurrentBranchName returns the current branch name for a git repository or worktree
+// GetCurrentBranchName returns the current branch name for a git repository or worktree.
+// Returns an error if the repo is in detached HEAD state.
+func GetCurrentBranchName(path string) (string, error) {
+	return getCurrentBranchName(path)
+}
+
+// getCurrentBranchName returns the current branch name for a git repository or worktree.
+// Uses go-git to read HEAD directly (file read, no subprocess).
 func getCurrentBranchName(path string) (string, error) {
-	branchCtx, branchCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer branchCancel()
-	cmd := safeexec.CommandContext(branchCtx, "git", "-C", path, "branch", "--show-current")
-	output, err := cmd.Output()
+	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
-		return "", fmt.Errorf("failed to get current branch name: %w", err)
+		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
-
-	branchName := strings.TrimSpace(string(output))
-	if branchName == "" {
-		return "", fmt.Errorf("repository at '%s' is in detached HEAD state or has no branches", path)
+	// Don't resolve the symbolic ref — we want the branch name, not the commit hash.
+	ref, err := repo.Reference(plumbing.HEAD, false)
+	if err != nil {
+		return "", fmt.Errorf("failed to read HEAD at %s: %w", path, err)
 	}
-
-	return branchName, nil
+	if ref.Type() != plumbing.SymbolicReference {
+		return "", fmt.Errorf("repository at '%s' is in detached HEAD state", path)
+	}
+	// ref.Target() is e.g. "refs/heads/main"; Short() trims to "main".
+	return ref.Target().Short(), nil
 }
 
 // getHeadCommitSHA returns the SHA of the HEAD commit for a git repository or worktree

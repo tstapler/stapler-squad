@@ -14915,6 +14915,8 @@ type SessionMutation struct {
 	github_pr_url          *string
 	github_pr_number       *int
 	addgithub_pr_number    *int
+	github_owner           *string
+	github_repo            *string
 	session_artifacts      *string
 	clearedFields          map[string]struct{}
 	worktree               *int
@@ -16839,6 +16841,104 @@ func (m *SessionMutation) ResetGithubPrNumber() {
 	delete(m.clearedFields, session.FieldGithubPrNumber)
 }
 
+// SetGithubOwner sets the "github_owner" field.
+func (m *SessionMutation) SetGithubOwner(s string) {
+	m.github_owner = &s
+}
+
+// GithubOwner returns the value of the "github_owner" field in the mutation.
+func (m *SessionMutation) GithubOwner() (r string, exists bool) {
+	v := m.github_owner
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGithubOwner returns the old "github_owner" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldGithubOwner(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGithubOwner is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGithubOwner requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGithubOwner: %w", err)
+	}
+	return oldValue.GithubOwner, nil
+}
+
+// ClearGithubOwner clears the value of the "github_owner" field.
+func (m *SessionMutation) ClearGithubOwner() {
+	m.github_owner = nil
+	m.clearedFields[session.FieldGithubOwner] = struct{}{}
+}
+
+// GithubOwnerCleared returns if the "github_owner" field was cleared in this mutation.
+func (m *SessionMutation) GithubOwnerCleared() bool {
+	_, ok := m.clearedFields[session.FieldGithubOwner]
+	return ok
+}
+
+// ResetGithubOwner resets all changes to the "github_owner" field.
+func (m *SessionMutation) ResetGithubOwner() {
+	m.github_owner = nil
+	delete(m.clearedFields, session.FieldGithubOwner)
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (m *SessionMutation) SetGithubRepo(s string) {
+	m.github_repo = &s
+}
+
+// GithubRepo returns the value of the "github_repo" field in the mutation.
+func (m *SessionMutation) GithubRepo() (r string, exists bool) {
+	v := m.github_repo
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGithubRepo returns the old "github_repo" field's value of the Session entity.
+// If the Session object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *SessionMutation) OldGithubRepo(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGithubRepo is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGithubRepo requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGithubRepo: %w", err)
+	}
+	return oldValue.GithubRepo, nil
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (m *SessionMutation) ClearGithubRepo() {
+	m.github_repo = nil
+	m.clearedFields[session.FieldGithubRepo] = struct{}{}
+}
+
+// GithubRepoCleared returns if the "github_repo" field was cleared in this mutation.
+func (m *SessionMutation) GithubRepoCleared() bool {
+	_, ok := m.clearedFields[session.FieldGithubRepo]
+	return ok
+}
+
+// ResetGithubRepo resets all changes to the "github_repo" field.
+func (m *SessionMutation) ResetGithubRepo() {
+	m.github_repo = nil
+	delete(m.clearedFields, session.FieldGithubRepo)
+}
+
 // SetSessionArtifacts sets the "session_artifacts" field.
 func (m *SessionMutation) SetSessionArtifacts(s string) {
 	m.session_artifacts = &s
@@ -17240,7 +17340,7 @@ func (m *SessionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *SessionMutation) Fields() []string {
-	fields := make([]string, 0, 39)
+	fields := make([]string, 0, 41)
 	if m.title != nil {
 		fields = append(fields, session.FieldTitle)
 	}
@@ -17355,6 +17455,12 @@ func (m *SessionMutation) Fields() []string {
 	if m.github_pr_number != nil {
 		fields = append(fields, session.FieldGithubPrNumber)
 	}
+	if m.github_owner != nil {
+		fields = append(fields, session.FieldGithubOwner)
+	}
+	if m.github_repo != nil {
+		fields = append(fields, session.FieldGithubRepo)
+	}
 	if m.session_artifacts != nil {
 		fields = append(fields, session.FieldSessionArtifacts)
 	}
@@ -17442,6 +17548,10 @@ func (m *SessionMutation) Field(name string) (ent.Value, bool) {
 		return m.GithubPrURL()
 	case session.FieldGithubPrNumber:
 		return m.GithubPrNumber()
+	case session.FieldGithubOwner:
+		return m.GithubOwner()
+	case session.FieldGithubRepo:
+		return m.GithubRepo()
 	case session.FieldSessionArtifacts:
 		return m.SessionArtifacts()
 	}
@@ -17529,6 +17639,10 @@ func (m *SessionMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldGithubPrURL(ctx)
 	case session.FieldGithubPrNumber:
 		return m.OldGithubPrNumber(ctx)
+	case session.FieldGithubOwner:
+		return m.OldGithubOwner(ctx)
+	case session.FieldGithubRepo:
+		return m.OldGithubRepo(ctx)
 	case session.FieldSessionArtifacts:
 		return m.OldSessionArtifacts(ctx)
 	}
@@ -17806,6 +17920,20 @@ func (m *SessionMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetGithubPrNumber(v)
 		return nil
+	case session.FieldGithubOwner:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGithubOwner(v)
+		return nil
+	case session.FieldGithubRepo:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGithubRepo(v)
+		return nil
 	case session.FieldSessionArtifacts:
 		v, ok := value.(string)
 		if !ok {
@@ -17975,6 +18103,12 @@ func (m *SessionMutation) ClearedFields() []string {
 	if m.FieldCleared(session.FieldGithubPrNumber) {
 		fields = append(fields, session.FieldGithubPrNumber)
 	}
+	if m.FieldCleared(session.FieldGithubOwner) {
+		fields = append(fields, session.FieldGithubOwner)
+	}
+	if m.FieldCleared(session.FieldGithubRepo) {
+		fields = append(fields, session.FieldGithubRepo)
+	}
 	if m.FieldCleared(session.FieldSessionArtifacts) {
 		fields = append(fields, session.FieldSessionArtifacts)
 	}
@@ -18072,6 +18206,12 @@ func (m *SessionMutation) ClearField(name string) error {
 		return nil
 	case session.FieldGithubPrNumber:
 		m.ClearGithubPrNumber()
+		return nil
+	case session.FieldGithubOwner:
+		m.ClearGithubOwner()
+		return nil
+	case session.FieldGithubRepo:
+		m.ClearGithubRepo()
 		return nil
 	case session.FieldSessionArtifacts:
 		m.ClearSessionArtifacts()
@@ -18197,6 +18337,12 @@ func (m *SessionMutation) ResetField(name string) error {
 		return nil
 	case session.FieldGithubPrNumber:
 		m.ResetGithubPrNumber()
+		return nil
+	case session.FieldGithubOwner:
+		m.ResetGithubOwner()
+		return nil
+	case session.FieldGithubRepo:
+		m.ResetGithubRepo()
 		return nil
 	case session.FieldSessionArtifacts:
 		m.ResetSessionArtifacts()

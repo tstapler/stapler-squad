@@ -19,6 +19,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
+	"golang.org/x/sync/singleflight"
 )
 
 // diffStatCacheTTL is how long a DiffShortstat result is reused before re-scanning.
@@ -46,6 +47,19 @@ var errStopWalk = errors.New("stop untracked walk")
 type diffStatEntry struct {
 	result DiffStat
 	expiry time.Time
+}
+
+type hasUncommittedEntry struct {
+	result bool
+	expiry time.Time
+}
+
+// trackedFile holds the index metadata for a single tracked file needed by the
+// OS stat phase of HasUncommitted.
+type trackedFile struct {
+	name       string
+	size       uint32
+	modifiedAt time.Time
 }
 
 type aheadBehindEntry struct {
@@ -138,10 +152,6 @@ func (g *GoGitVCSReader) ClearCache() {
 // or where index.lock contention is a concern.
 //
 // All fields are zero-value safe — GoGitVCSReader{} is valid without a constructor.
-//
-// Memory note: each cached *git.Repository holds an internal object LRU cache
-// (~96 MB per repo by default). Call ClearCache() periodically (e.g. every
-// 5 minutes) to release these caches and bound total memory usage.
 type GoGitVCSReader struct {
 	// repoCache caches open go-git Repository handles keyed by absolute path.
 	// Values are *cachedRepo; LoadOrStore ensures only one entry per path wins.
@@ -170,9 +180,46 @@ type GoGitVCSReader struct {
 	// changes rarely; a 30s TTL matches diffStatCacheTTL and eliminates the
 	// mutex-held walk that was the #1 hotspot (47.4B cycles, 38 events).
 	reachableSetCache sync.Map // map[plumbing.Hash]reachableSetEntry
+
+	// hasUncommittedCache caches HasUncommitted results keyed by worktreePath.
+	// Eliminates repeated index walks within the TTL window.
+	hasUncommittedCache sync.Map // map[string]hasUncommittedEntry
+
+	// aheadBehindSF deduplicates concurrent AheadBehind calls for the same key.
+	// On a cache miss, exactly one goroutine performs the BFS; others receive the result.
+	aheadBehindSF singleflight.Group //nolint:exhaustruct
+	// diffStatSF deduplicates concurrent DiffShortstat calls for the same worktree path.
+	diffStatSF singleflight.Group //nolint:exhaustruct
+	// hasUncommittedSF deduplicates concurrent HasUncommitted calls for the same path.
+	hasUncommittedSF singleflight.Group //nolint:exhaustruct
+	// commitMessagesSF deduplicates concurrent CommitMessages calls for the same key.
+	commitMessagesSF singleflight.Group //nolint:exhaustruct
 }
 
 var _ VCSReader = (*GoGitVCSReader)(nil)
+
+// sfDo calls sf.Do(key, fn) and catches any panic fn produces, returning it
+// as an error. The result is type-asserted to T; callers must ensure fn only
+// returns a non-nil value of type T when err is nil.
+func sfDo[T any](sf *singleflight.Group, key string, fn func() (T, error)) (T, error) {
+	val, err, _ := sf.Do(key, func() (v any, doErr error) {
+		defer func() {
+			if r := recover(); r != nil {
+				doErr = fmt.Errorf("go-git panic: %v", r)
+			}
+		}()
+		result, fnErr := fn()
+		if fnErr != nil {
+			return result, fnErr
+		}
+		return result, nil
+	})
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	return val.(T), nil
+}
 
 func (g *GoGitVCSReader) ListWorktrees(repoPath string) ([]WorktreeInfo, error) {
 	repo, err := g.openWorktree(repoPath)
@@ -273,6 +320,87 @@ func (g *GoGitVCSReader) ResolveDefaultBranch(repoPath string) string {
 	return ""
 }
 
+// hasUncommittedGoGitPhase runs the go-git index phase of HasUncommitted.
+// Acquires and releases entry.mu via defer. Returns tracked file slice + dirty flag.
+// MUST NOT be called with entry.mu already held — Go mutexes are not reentrant.
+//
+// Returns:
+//   - tracked: slice of index entries needed for the OS stat phase (lock released before caller uses these)
+//   - dirty: true if dirty was determined from go-git alone
+//   - dirtyKnown: true if dirty result is definitive (caller should skip OS phase)
+//   - err: any error encountered
+func (g *GoGitVCSReader) hasUncommittedGoGitPhase(entry *cachedRepo, worktreePath string) (tracked []trackedFile, dirty bool, dirtyKnown bool, err error) {
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	repo := entry.repo
+
+	idx, idxErr := repo.Storer.Index()
+	if idxErr != nil {
+		return nil, false, false, fmt.Errorf("read index: %w", idxErr)
+	}
+
+	// --- staged changes: index vs HEAD (go-git, needs lock) ---
+	headRef, headErr := repo.Head()
+	if headErr == nil {
+		headCommit, cerr := repo.CommitObject(headRef.Hash())
+		if cerr != nil {
+			return nil, false, false, fmt.Errorf("head commit: %w", cerr)
+		}
+		headTree, terr := headCommit.Tree()
+		if terr != nil {
+			return nil, false, false, fmt.Errorf("head tree: %w", terr)
+		}
+
+		// Walk the tree without loading blob content — only tree-entry hashes are needed.
+		// object.FileIter.Next() calls GetBlob() per entry (loads full content); TreeWalker
+		// loads only tree objects, which are orders of magnitude smaller.
+		headHashes := make(map[string]plumbing.Hash, len(headTree.Entries))
+		tw := object.NewTreeWalker(headTree, true, nil)
+		defer tw.Close()
+		for {
+			name, te, twErr := tw.Next()
+			if errors.Is(twErr, io.EOF) {
+				break
+			}
+			if twErr != nil {
+				return nil, false, false, fmt.Errorf("walk head tree: %w", twErr)
+			}
+			if te.Mode == filemode.Dir {
+				continue
+			}
+			headHashes[name] = te.Hash
+		}
+
+		indexNames := make(map[string]bool, len(idx.Entries))
+		for _, idxEntry := range idx.Entries {
+			if idxEntry.Stage != 0 { // merge conflict stage → dirty
+				return nil, true, true, nil
+			}
+			indexNames[idxEntry.Name] = true
+			if h, ok := headHashes[idxEntry.Name]; !ok || h != idxEntry.Hash {
+				return nil, true, true, nil // new or modified staged file
+			}
+		}
+		for name := range headHashes {
+			if !indexNames[name] {
+				return nil, true, true, nil // staged deletion
+			}
+		}
+	} else if !errors.Is(headErr, plumbing.ErrReferenceNotFound) {
+		return nil, false, false, fmt.Errorf("head: %w", headErr)
+	}
+
+	// Capture index entries needed for the OS phase as plain value types.
+	// entry.mu is released by defer when this function returns — OS stat work
+	// must happen in the caller after this function returns.
+	result := make([]trackedFile, len(idx.Entries))
+	for i, idxEntry := range idx.Entries {
+		result[i] = trackedFile{idxEntry.Name, idxEntry.Size, idxEntry.ModifiedAt}
+	}
+	return result, false, false, nil
+}
+
 // HasUncommitted reports whether the worktree has any staged or unstaged changes.
 //
 // Strategy (no subprocess, low allocations):
@@ -283,128 +411,82 @@ func (g *GoGitVCSReader) ResolveDefaultBranch(repoPath string) string {
 //
 // This avoids the 1.85 GB allocation caused by wt.Status(), which hashes every
 // modified file in full.
+
 func (g *GoGitVCSReader) HasUncommitted(worktreePath string) (bool, error) {
-	entry, err := g.openRepoEntry(worktreePath)
-	if err != nil {
-		return false, fmt.Errorf("open repo %s: %w", worktreePath, err)
+	if v, ok := g.hasUncommittedCache.Load(worktreePath); ok {
+		if e := v.(hasUncommittedEntry); time.Now().Before(e.expiry) {
+			return e.result, nil
+		}
 	}
 
-	// Phase 1: go-git operations — hold the per-repo mutex for the full phase.
-	// The mutex is NOT deferred so we can release it before the OS-only phase.
-	entry.mu.Lock()
-	repo := entry.repo
-
-	idx, err := repo.Storer.Index()
-	if err != nil {
-		entry.mu.Unlock()
-		return false, fmt.Errorf("read index: %w", err)
-	}
-
-	// --- staged changes: index vs HEAD (go-git, needs lock) ---
-	headRef, headErr := repo.Head()
-	if headErr == nil {
-		headCommit, cerr := repo.CommitObject(headRef.Hash())
-		if cerr != nil {
-			entry.mu.Unlock()
-			return false, fmt.Errorf("head commit: %w", cerr)
-		}
-		headTree, terr := headCommit.Tree()
-		if terr != nil {
-			entry.mu.Unlock()
-			return false, fmt.Errorf("head tree: %w", terr)
+	result, sfErr := sfDo(&g.hasUncommittedSF, worktreePath, func() (bool, error) {
+		entry, err := g.openRepoEntry(worktreePath)
+		if err != nil {
+			return false, fmt.Errorf("open repo %s: %w", worktreePath, err)
 		}
 
-		// Walk the tree without loading blob content — only tree-entry hashes are needed.
-		// object.FileIter.Next() calls GetBlob() per entry (loads full content); TreeWalker
-		// loads only tree objects, which are orders of magnitude smaller.
-		headHashes := make(map[string]plumbing.Hash, len(headTree.Entries))
-		tw := object.NewTreeWalker(headTree, true, nil)
-		for {
-			name, te, twErr := tw.Next()
-			if errors.Is(twErr, io.EOF) {
-				break
-			}
-			if twErr != nil {
-				tw.Close()
-				entry.mu.Unlock()
-				return false, fmt.Errorf("walk head tree: %w", twErr)
-			}
-			if te.Mode == filemode.Dir {
+		// Phase 1: go-git index phase — entry.mu is held only inside this call.
+		tracked, dirty, dirtyKnown, err := g.hasUncommittedGoGitPhase(entry, worktreePath)
+		if err != nil {
+			return false, err
+		}
+		if dirtyKnown {
+			g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
+				result: dirty, expiry: time.Now().Add(diffStatCacheTTL),
+			})
+			return dirty, nil
+		}
+
+		// Phase 2: OS stat walk — entry.mu is NOT held here (released by hasUncommittedGoGitPhase).
+		indexedMap := make(map[string]struct{}, len(tracked))
+		for _, tf := range tracked {
+			indexedMap[tf.name] = struct{}{}
+			info, serr := os.Lstat(filepath.Join(worktreePath, tf.name))
+			if serr != nil {
+				if os.IsNotExist(serr) {
+					r := true // tracked file deleted
+					g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
+						result: r, expiry: time.Now().Add(diffStatCacheTTL),
+					})
+					return r, nil
+				}
 				continue
 			}
-			headHashes[name] = te.Hash
-		}
-		tw.Close()
-
-		indexNames := make(map[string]bool, len(idx.Entries))
-		for _, idxEntry := range idx.Entries {
-			if idxEntry.Stage != 0 { // merge conflict stage → dirty
-				entry.mu.Unlock()
-				return true, nil
-			}
-			indexNames[idxEntry.Name] = true
-			if h, ok := headHashes[idxEntry.Name]; !ok || h != idxEntry.Hash {
-				entry.mu.Unlock()
-				return true, nil // new or modified staged file
+			if info.Size() != int64(tf.size) ||
+				!info.ModTime().Truncate(time.Second).Equal(tf.modifiedAt.Truncate(time.Second)) {
+				r := true
+				g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
+					result: r, expiry: time.Now().Add(diffStatCacheTTL),
+				})
+				return r, nil
 			}
 		}
-		for name := range headHashes {
-			if !indexNames[name] {
-				entry.mu.Unlock()
-				return true, nil // staged deletion
-			}
-		}
-	} else if !errors.Is(headErr, plumbing.ErrReferenceNotFound) {
-		entry.mu.Unlock()
-		return false, fmt.Errorf("head: %w", headErr)
-	}
 
-	// Capture index entries needed for the OS phase as plain value types.
-	type trackedFile struct {
-		name       string
-		size       uint32
-		modifiedAt time.Time
-	}
-	tracked := make([]trackedFile, len(idx.Entries))
-	for i, idxEntry := range idx.Entries {
-		tracked[i] = trackedFile{idxEntry.Name, idxEntry.Size, idxEntry.ModifiedAt}
-	}
-	entry.mu.Unlock() // release before all OS calls — no go-git access below
-
-	// Phase 2: filesystem stat + directory walk — no go-git, no lock needed.
-	indexed := make(map[string]bool, len(tracked))
-	for _, tf := range tracked {
-		indexed[tf.name] = true
-		info, serr := os.Lstat(filepath.Join(worktreePath, tf.name))
-		if serr != nil {
-			if os.IsNotExist(serr) {
-				return true, nil // tracked file deleted
-			}
-			continue
+		// Phase 3: untracked files walk — no lock held
+		r, err := hasUntrackedFiles(worktreePath, indexedMap)
+		if err != nil {
+			return false, err
 		}
-		if info.Size() != int64(tf.size) ||
-			!info.ModTime().Truncate(time.Second).Equal(tf.modifiedAt.Truncate(time.Second)) {
-			return true, nil
-		}
+		g.hasUncommittedCache.Store(worktreePath, hasUncommittedEntry{
+			result: r, expiry: time.Now().Add(diffStatCacheTTL),
+		})
+		return r, nil
+	})
+	if sfErr != nil {
+		return false, sfErr
 	}
-
-	// Detect untracked files: walk working tree, skip .git directory.
-	hasUntracked, err := hasUntrackedFiles(worktreePath, indexed)
-	if err != nil {
-		return false, err
-	}
-	return hasUntracked, nil
+	return result, nil
 }
 
 // hasUntrackedFiles reports whether any file under root is absent from the indexed set.
 // It skips the .git directory and respects the .gitignore convention by not reading
 // .gitignore files (callers that need full .gitignore support should use wt.Status()).
 // For the mtime-stat approach this is a best-effort check sufficient for typical use.
-func hasUntrackedFiles(root string, indexed map[string]bool) (bool, error) {
+func hasUntrackedFiles(root string, indexed map[string]struct{}) (bool, error) {
 	return hasUntrackedFilesRec(root, root, indexed)
 }
 
-func hasUntrackedFilesRec(root, dir string, indexed map[string]bool) (bool, error) {
+func hasUntrackedFilesRec(root, dir string, indexed map[string]struct{}) (bool, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false, err
@@ -428,7 +510,7 @@ func hasUntrackedFilesRec(root, dir string, indexed map[string]bool) (bool, erro
 			if found {
 				return true, nil
 			}
-		} else if !indexed[rel] {
+		} else if _, tracked := indexed[rel]; !tracked {
 			return true, nil // untracked file
 		}
 	}
@@ -449,58 +531,48 @@ func (g *GoGitVCSReader) AheadBehind(worktreePath, base string) (int, int, error
 		}
 	}
 
-	entry, err := g.openRepoEntry(worktreePath)
+	type abResult struct{ ahead, behind int }
+	result, err := sfDo(&g.aheadBehindSF, cacheKey, func() (abResult, error) {
+		entry, openErr := g.openRepoEntry(worktreePath)
+		if openErr != nil {
+			return abResult{}, fmt.Errorf("open repo %s: %w", worktreePath, openErr)
+		}
+
+		entry.mu.Lock()
+		defer entry.mu.Unlock() // REQUIRED: defer, never explicit unlocks — ensures mutex releases on panic
+
+		repo := entry.repo
+		headRef, headErr := repo.Head()
+		if headErr != nil {
+			return abResult{}, fmt.Errorf("head: %w", headErr)
+		}
+		baseHash, baseErr := resolveRef(repo, base)
+		if baseErr != nil {
+			return abResult{}, fmt.Errorf("resolve base %q: %w", base, baseErr)
+		}
+		if headRef.Hash() == baseHash {
+			g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{expiry: time.Now().Add(diffStatCacheTTL)})
+			return abResult{0, 0}, nil
+		}
+		mb, mbErr := findMergeBase(repo, headRef.Hash(), baseHash)
+		if mbErr != nil {
+			return abResult{}, fmt.Errorf("merge base: %w", mbErr)
+		}
+		ahead, aheadErr := countCommitsTo(repo, headRef.Hash(), mb)
+		if aheadErr != nil {
+			return abResult{}, aheadErr
+		}
+		behind, behindErr := countCommitsTo(repo, baseHash, mb)
+		if behindErr != nil {
+			return abResult{}, behindErr
+		}
+		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, expiry: time.Now().Add(diffStatCacheTTL)})
+		return abResult{ahead, behind}, nil
+	})
 	if err != nil {
-		return 0, 0, fmt.Errorf("open repo %s: %w", worktreePath, err)
-	}
-
-	// Lock scope: covers the snapshot phase (Head/resolveRef) AND the BFS/count
-	// phases (findMergeBase, countCommitsTo). go-git's packfile reader is not
-	// goroutine-safe; the scanner runs 4 concurrent workers sharing a single queue,
-	// so the same repo can be processed by two workers simultaneously. The lock must
-	// therefore cover every repo.CommitObject call, not just the snapshot phase.
-	// It is released before the final sync.Map Store, which is already goroutine-safe.
-	// The mutex is NOT deferred so we can release it before the cache Store.
-	entry.mu.Lock()
-	repo := entry.repo
-
-	headRef, err := repo.Head()
-	if err != nil {
-		entry.mu.Unlock()
-		return 0, 0, fmt.Errorf("head: %w", err)
-	}
-
-	baseHash, err := resolveRef(repo, base)
-	if err != nil {
-		entry.mu.Unlock()
-		return 0, 0, fmt.Errorf("resolve base %q: %w", base, err)
-	}
-
-	if headRef.Hash() == baseHash {
-		entry.mu.Unlock()
-		g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{expiry: time.Now().Add(diffStatCacheTTL)})
-		return 0, 0, nil
-	}
-
-	mb, err := findMergeBase(repo, headRef.Hash(), baseHash)
-	if err != nil {
-		entry.mu.Unlock()
-		return 0, 0, fmt.Errorf("merge base: %w", err)
-	}
-
-	ahead, err := countCommitsTo(repo, headRef.Hash(), mb)
-	if err != nil {
-		entry.mu.Unlock()
 		return 0, 0, err
 	}
-	behind, err := countCommitsTo(repo, baseHash, mb)
-	if err != nil {
-		entry.mu.Unlock()
-		return 0, 0, err
-	}
-	entry.mu.Unlock()
-	g.aheadBehindCache.Store(cacheKey, aheadBehindEntry{ahead: ahead, behind: behind, expiry: time.Now().Add(diffStatCacheTTL)})
-	return ahead, behind, nil
+	return result.ahead, result.behind, nil
 }
 
 func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]string, error) {
@@ -511,60 +583,66 @@ func (g *GoGitVCSReader) CommitMessages(worktreePath, base string, max int) ([]s
 		}
 	}
 
-	entry, err := g.openRepoEntry(worktreePath)
-	if err != nil {
-		return nil, err
-	}
-
-	// Phase 1: snapshot HEAD and base as plain hash values under a brief lock.
-	// These are cheap reference-store reads; holding the lock only here avoids
-	// keeping it across the far more expensive graph walks below.
-	entry.mu.Lock()
-	headRef, err := entry.repo.Head()
-	if err != nil {
-		entry.mu.Unlock()
-		return nil, err
-	}
-	headHash := headRef.Hash() // plumbing.Hash is a plain [20]byte value type
-	baseHash, err := resolveRef(entry.repo, base)
-	entry.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-
-	// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
-	// only on a cache miss, so repeated calls within the TTL window skip the
-	// O(N) walk entirely and return the cached map without touching the mutex.
-	baseReachable, err := g.cachedReachableSet(entry, baseHash)
-	if err != nil {
-		return nil, err
-	}
-
-	// Phase 3: log walk from HEAD. go-git's packfile reader requires the lock.
-	entry.mu.Lock()
-	iter, err := entry.repo.Log(&git.LogOptions{From: headHash})
-	if err != nil {
-		entry.mu.Unlock()
-		return nil, err
-	}
-
-	var msgs []string
-	err = iter.ForEach(func(c *object.Commit) error {
-		if baseReachable[c.Hash] {
-			return storer.ErrStop
+	msgs, err := sfDo(&g.commitMessagesSF, cacheKey, func() ([]string, error) {
+		entry, openErr := g.openRepoEntry(worktreePath)
+		if openErr != nil {
+			return nil, openErr
 		}
-		if len(msgs) < max {
-			// Mimic `git log --oneline`: short hash + first line of message.
-			msgs = append(msgs, c.Hash.String()[:7]+" "+firstLine(c.Message))
+
+		// Phase 1: snapshot HEAD and base as plain hash values under a brief lock.
+		// These are cheap reference-store reads; holding the lock only here avoids
+		// keeping it across the far more expensive graph walks below.
+		var headHash plumbing.Hash
+		var baseHash plumbing.Hash
+		if err := func() error {
+			entry.mu.Lock()
+			defer entry.mu.Unlock()
+			headRef, headErr := entry.repo.Head()
+			if headErr != nil {
+				return headErr
+			}
+			headHash = headRef.Hash() // plumbing.Hash is a plain [20]byte value type
+			var baseErr error
+			baseHash, baseErr = resolveRef(entry.repo, base)
+			return baseErr
+		}(); err != nil {
+			return nil, err
 		}
-		return nil
+
+		// Phase 2: reachable set for base. cachedReachableSet acquires entry.mu
+		// only on a cache miss, so repeated calls within the TTL window skip the
+		// O(N) walk entirely and return the cached map without touching the mutex.
+		baseReachable, reachErr := g.cachedReachableSet(entry, baseHash)
+		if reachErr != nil {
+			return nil, reachErr
+		}
+
+		// Phase 3: log walk from HEAD. go-git's packfile reader requires the lock.
+		entry.mu.Lock()
+		defer entry.mu.Unlock()
+		iter, iterErr := entry.repo.Log(&git.LogOptions{From: headHash})
+		if iterErr != nil {
+			return nil, iterErr
+		}
+		defer iter.Close()
+
+		var result []string
+		walkErr := iter.ForEach(func(c *object.Commit) error {
+			if baseReachable[c.Hash] {
+				return storer.ErrStop
+			}
+			if len(result) < max {
+				// Mimic `git log --oneline`: short hash + first line of message.
+				result = append(result, c.Hash.String()[:7]+" "+firstLine(c.Message))
+			}
+			return nil
+		})
+		if walkErr != nil {
+			return nil, walkErr
+		}
+		g.commitMessagesCache.Store(cacheKey, commitMessagesEntry{msgs: result, expiry: time.Now().Add(diffStatCacheTTL)})
+		return result, nil
 	})
-	iter.Close()
-	entry.mu.Unlock()
-
-	if err == nil {
-		g.commitMessagesCache.Store(cacheKey, commitMessagesEntry{msgs: msgs, expiry: time.Now().Add(diffStatCacheTTL)})
-	}
 	return msgs, err
 }
 
@@ -599,14 +677,23 @@ func (g *GoGitVCSReader) DiffShortstat(worktreePath string) (DiffStat, error) {
 			return e.result, nil
 		}
 	}
-	result, err := g.diffShortstatUncached(worktreePath)
-	if err == nil {
+	result, err := sfDo(&g.diffStatSF, worktreePath, func() (DiffStat, error) {
+		// diffShortstatUncached acquires entry.mu internally — do NOT add an outer lock here.
+		// It does not call DiffShortstat, so there is no recursive sfDo path for this key.
+		stat, uncachedErr := g.diffShortstatUncached(worktreePath)
+		if uncachedErr != nil {
+			return DiffStat{}, uncachedErr
+		}
 		g.diffStatCache.Store(worktreePath, diffStatEntry{
-			result: result,
+			result: stat,
 			expiry: time.Now().Add(diffStatCacheTTL),
 		})
+		return stat, nil
+	})
+	if err != nil {
+		return DiffStat{}, err
 	}
-	return result, err
+	return result, nil
 }
 
 // diffShortstatUncached computes a DiffStat for worktreePath using index metadata
@@ -643,13 +730,16 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 	if headRef, headErr := repo.Head(); headErr == nil {
 		if headCommit, cerr := repo.CommitObject(headRef.Hash()); cerr == nil {
 			if headTree, terr := headCommit.Tree(); terr == nil {
+				var twWalkErr error
 				tw := object.NewTreeWalker(headTree, true, nil)
+				defer tw.Close()
 				for {
 					name, te, twErr := tw.Next()
 					if errors.Is(twErr, io.EOF) {
 						break
 					}
 					if twErr != nil {
+						twWalkErr = twErr
 						break
 					}
 					if te.Mode == filemode.Dir {
@@ -657,7 +747,10 @@ func (g *GoGitVCSReader) diffShortstatUncached(worktreePath string) (DiffStat, e
 					}
 					headHashes[name] = te.Hash
 				}
-				tw.Close()
+				if twWalkErr != nil {
+					entry.mu.Unlock()
+					return DiffStat{}, fmt.Errorf("walk head tree: %w", twWalkErr)
+				}
 			}
 		}
 	}

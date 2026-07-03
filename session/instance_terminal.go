@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/git"
 )
 
 // GetCreatedAt returns the time this instance was created. The field is immutable after creation.
@@ -246,6 +247,26 @@ func (i *Instance) IsGitHubSession() bool { return i.GitHub().IsGitHubSession() 
 
 // prUpdateResult is returned by UpdatePRStatus.
 type prUpdateResult struct{ PriorityChanged bool }
+
+// CurrentBranch returns the branch the session is currently on.
+// For worktree sessions, it returns the stored Branch field (set at creation and on worktree
+// changes). For directory sessions, Branch is never stored, so it reads the branch live
+// from the working directory via git. Returns "" if the branch cannot be determined.
+func (i *Instance) CurrentBranch() string {
+	if i.Branch != "" {
+		return i.Branch
+	}
+	workDir := i.GetWorkingDirectory()
+	if workDir == "" {
+		return ""
+	}
+	branch, err := git.GetCurrentBranchName(workDir)
+	if err != nil {
+		log.Debug("CurrentBranch: could not read branch from git", "session", i.Title, "err", err)
+		return ""
+	}
+	return branch
+}
 
 // UpdatePRStatus atomically updates the PR status fields on this instance.
 // Called by PRStatusPoller on each successful fetch.

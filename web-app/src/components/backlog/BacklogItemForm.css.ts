@@ -109,6 +109,12 @@ export const checkboxLabel = style({
   cursor: "pointer",
 });
 
+export const checkboxHint = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  marginLeft: vars.space["6"],
+});
+
 export const acSection = style({
   display: "flex",
   flexDirection: "column",

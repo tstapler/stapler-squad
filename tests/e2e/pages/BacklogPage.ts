@@ -12,6 +12,8 @@ export class BacklogPage {
   readonly lifecycleDiagram: Locator;
   readonly filterZeroState: Locator;
   readonly clearFiltersButton: Locator;
+  readonly tourButton: Locator;
+  readonly tourModal: Locator;
 
   constructor(page: Page) {
     this.page = page;
@@ -25,6 +27,8 @@ export class BacklogPage {
     this.lifecycleDiagram = page.locator('[data-testid="backlog-lifecycle-diagram"]');
     this.filterZeroState = page.locator('[data-testid="backlog-filter-zero-state"]');
     this.clearFiltersButton = page.locator('[data-testid="backlog-clear-filters-button"]');
+    this.tourButton = page.locator('[data-testid="backlog-tour-button"]');
+    this.tourModal = page.locator('[data-testid="backlog-tour-modal"]');
   }
 
   async goto() {

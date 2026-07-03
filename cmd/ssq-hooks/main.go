@@ -1049,21 +1049,6 @@ func patchAntigravityHooks(hooksPath, binPath string) error {
 	return os.Rename(tmpPath, hooksPath)
 }
 
-// installOpenCode creates a shell wrapper at ~/.local/bin/open-code that routes
-// all opencode invocations through ssq-hooks proxy before execution.
-//
-// WHY A PROXY WRAPPER (not a native hook):
-// opencode v1.4.0 supports only two hook types in its config:
-//   - hook.file_edited: fires after a file is written (not a permission gate)
-//   - hook.session_completed: fires when the session ends (not a permission gate)
-//
-// There is no PreToolUse / BeforeTool / pre-execution hook in opencode's hook system.
-// The proxy intercepts the "open-code" binary name in PATH. The real opencode binary
-// is named "opencode" (no hyphen); users who alias "open-code" → this wrapper get
-// ssq-hooks intercept for every invocation.
-//
-// Revisit when: opencode adds a native PreToolUse hook. Replace this proxy with
-// a patchOpenCodeConfig() call similar to patchBeforeToolHook().
 func installOpenCode() {
 	home, _ := os.UserHomeDir()
 	binDir := filepath.Join(home, ".local", "bin")

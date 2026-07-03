@@ -582,6 +582,8 @@ var (
 		{Name: "archived_at", Type: field.TypeTime, Nullable: true},
 		{Name: "github_pr_url", Type: field.TypeString, Nullable: true},
 		{Name: "github_pr_number", Type: field.TypeInt, Nullable: true, Default: 0},
+		{Name: "github_owner", Type: field.TypeString, Nullable: true},
+		{Name: "github_repo", Type: field.TypeString, Nullable: true},
 		{Name: "session_artifacts", Type: field.TypeString, Nullable: true, Default: ""},
 		{Name: "project_sessions", Type: field.TypeInt, Nullable: true},
 	}
@@ -593,7 +595,7 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "sessions_projects_sessions",
-				Columns:    []*schema.Column{SessionsColumns[40]},
+				Columns:    []*schema.Column{SessionsColumns[42]},
 				RefColumns: []*schema.Column{ProjectsColumns[0]},
 				OnDelete:   schema.SetNull,
 			},

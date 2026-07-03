@@ -71,6 +71,17 @@ const (
 	GitHubRefTypePR
 )
 
+// isTraversalSegment reports whether s is "." or ".." — never valid as a
+// GitHub owner or repo name, but syntactically accepted by the "no slash"
+// regex character classes below. GetRepoPath joins Owner/Repo directly into a
+// local filesystem path (filepath.Join(baseDir, "github.com", owner, repo)),
+// so letting either through would allow a crafted repo_path (e.g.
+// "https://github.com/../..") to resolve outside the intended clone
+// directory.
+func isTraversalSegment(s string) bool {
+	return s == "." || s == ".."
+}
+
 // ParseGitHubURL parses a GitHub URL and returns the components.
 // Supported formats:
 //   - https://github.com/owner/repo
@@ -85,11 +96,15 @@ func ParseGitHubURL(input string) (*GitHubRef, error) {
 	// GitHub PR URL pattern
 	prPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+)/pull/(\d+)`)
 	if match := prPattern.FindStringSubmatch(input); match != nil {
+		owner, repo := match[1], strings.TrimSuffix(match[2], ".git")
+		if isTraversalSegment(owner) || isTraversalSegment(repo) {
+			return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
+		}
 		prNum := 0
 		fmt.Sscanf(match[3], "%d", &prNum)
 		return &GitHubRef{
-			Owner:    match[1],
-			Repo:     strings.TrimSuffix(match[2], ".git"),
+			Owner:    owner,
+			Repo:     repo,
 			PRNumber: prNum,
 			Type:     GitHubRefTypePR,
 		}, nil
@@ -98,9 +113,13 @@ func ParseGitHubURL(input string) (*GitHubRef, error) {
 	// GitHub branch URL pattern
 	branchPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+)/tree/(.+)$`)
 	if match := branchPattern.FindStringSubmatch(input); match != nil {
+		owner, repo := match[1], strings.TrimSuffix(match[2], ".git")
+		if isTraversalSegment(owner) || isTraversalSegment(repo) {
+			return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
+		}
 		return &GitHubRef{
-			Owner:  match[1],
-			Repo:   strings.TrimSuffix(match[2], ".git"),
+			Owner:  owner,
+			Repo:   repo,
 			Branch: match[3],
 			Type:   GitHubRefTypeBranch,
 		}, nil
@@ -109,9 +128,13 @@ func ParseGitHubURL(input string) (*GitHubRef, error) {
 	// GitHub repo URL pattern (must come after branch pattern)
 	repoPattern := regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$`)
 	if match := repoPattern.FindStringSubmatch(input); match != nil {
+		owner, repo := match[1], strings.TrimSuffix(match[2], ".git")
+		if isTraversalSegment(owner) || isTraversalSegment(repo) {
+			return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
+		}
 		return &GitHubRef{
-			Owner: match[1],
-			Repo:  strings.TrimSuffix(match[2], ".git"),
+			Owner: owner,
+			Repo:  repo,
 			Type:  GitHubRefTypeRepo,
 		}, nil
 	}
@@ -121,9 +144,13 @@ func ParseGitHubURL(input string) (*GitHubRef, error) {
 	if match := shorthandPattern.FindStringSubmatch(input); match != nil {
 		// Make sure it doesn't look like a local path
 		if !strings.HasPrefix(input, "/") && !strings.HasPrefix(input, "~") && !strings.HasPrefix(input, ".") {
+			owner, repo := match[1], match[2]
+			if isTraversalSegment(owner) || isTraversalSegment(repo) {
+				return nil, fmt.Errorf("invalid GitHub owner/repo: %s", input)
+			}
 			ref := &GitHubRef{
-				Owner: match[1],
-				Repo:  match[2],
+				Owner: owner,
+				Repo:  repo,
 				Type:  GitHubRefTypeRepo,
 			}
 			if match[3] != "" {

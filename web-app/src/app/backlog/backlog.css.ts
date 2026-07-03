@@ -50,6 +50,27 @@ export const newItemButton = style({
   },
 });
 
+export const helpButton = style({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "28px",
+  height: "28px",
+  padding: 0,
+  background: "transparent",
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: vars.radii.full,
+  fontSize: vars.fontSize.sm,
+  fontWeight: vars.fontWeight.medium,
+  cursor: "pointer",
+  transition: "background 0.1s ease",
+  ":hover": {
+    background: vars.color.hoverBackground,
+    borderColor: vars.color.borderStrong,
+  },
+});
+
 export const tabBar = style({
   display: "flex",
   gap: 0,

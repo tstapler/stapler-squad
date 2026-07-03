@@ -65,6 +65,49 @@ jobs:
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # web-build-smoke: proves `make web-build` succeeds standalone on a bare
+  # checkout, with none of the manual buf/pnpm pre-steps that `prepare` (above)
+  # runs by hand. `prepare` bypasses the Makefile's own dependency graph, so it
+  # cannot catch a missing prerequisite there (e.g. `web-app/out` not depending
+  # on `proto-gen` — see #144). This job exercises the exact entry point
+  # documented in CLAUDE.md/README (`make web-build`) the way a fresh clone
+  # actually would.
+  # ─────────────────────────────────────────────────────────────────────────────
+  web-build-smoke:
+    name: make web-build (clean checkout smoke test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.0'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.27.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: web-app/pnpm-lock.yaml
+
+      - name: Set up buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          version: '1.41.0'
+
+      - name: make web-build (no manual pre-steps)
+        run: make web-build
+
+      - name: Verify proto bindings were generated
+        run: test -f web-app/src/gen/session/v1/session_pb.ts
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # test: runs on linux/amd64 only. Does NOT gate the build matrix — binaries
   # are published regardless of test failures so the build artifact is always
   # available for manual verification. Lint runs in its own workflow (lint.yml).

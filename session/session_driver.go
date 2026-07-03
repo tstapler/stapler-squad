@@ -16,6 +16,7 @@ package session
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,15 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 )
+
+// spinnerTimeRe matches the time/token suffix of an active Claude Code spinner,
+// e.g. "(4m 18s ·" or "(1h 5m 37s ·". Only present while Claude is processing.
+var spinnerTimeRe = regexp.MustCompile(`\(\d+[hms]`)
+
+// completionVerbRe matches past-tense spinner verbs printed when Claude finishes
+// a work session, e.g. "✻ Perambulated for 1h 5m", "✽ Roosted for 9m", or
+// "* Moonwalked for 30s". Matches any leading symbol variant.
+var completionVerbRe = regexp.MustCompile(`[✻✽\*] \w+ed for \d+`)
 
 const (
 	driverPollInterval  = 2 * time.Second
@@ -140,9 +150,11 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		initialPromptSentAt = time.Now()
 	} else {
 		// Check if the prompt was already delivered in a previous service run.
-		// If a JSONL conversation file exists for this session, Claude already received
-		// the prompt and started working; re-sending would inject a duplicate command.
-		if _, err := FindConversationFilePath(inst.GetStableID()); err == nil {
+		// Use live terminal output first (no disk latency), then fall back to JSONL file.
+		if startOutput, err := inst.Preview(); err == nil && outputShowsConversationStarted(startOutput) {
+			sentInitial = true
+			initialPromptSentAt = time.Now()
+		} else if _, err := FindConversationFilePath(inst.GetStableID()); err == nil {
 			sentInitial = true
 			initialPromptSentAt = time.Now()
 		}
@@ -211,7 +223,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		output, previewErr := inst.Preview()
 		if previewErr == nil && output != "" {
 			if shouldAnswerStartupDialog(output, lastDialogAnsweredAt, dialogCooldown) {
-				if err := inst.SendKeys("1\n"); err != nil {
+				if err := inst.SendKeys("1\r"); err != nil {
 					log.Warn("SessionDriver: failed to answer startup dialog",
 						"session", inst.Title,
 						"err", err,
@@ -236,7 +248,39 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 			claudeAtPrompt := detectedSt == detection.StatusIdle
 			timedOut := time.Now().After(readyDeadline)
 
-			if claudeAtPrompt || timedOut {
+			// On timeout, skip if Claude is known to be actively processing — injecting
+			// while busy writes text into the PTY buffer without Enter ever submitting it,
+			// since readline isn't active. Keep waiting; claudeAtPrompt will fire when Claude
+			// finishes and returns to the input prompt.
+			claudeIsKnownBusy := detectedSt == detection.StatusProcessing ||
+				detectedSt == detection.StatusExecuting ||
+				detectedSt == detection.StatusWaitingForAgent
+
+			if claudeAtPrompt || (timedOut && !claudeIsKnownBusy) {
+				// Re-check whether a conversation is already active before injecting.
+				// The user may have typed something manually while we were waiting.
+				//
+				// Check live PTY output first (no disk I/O, no flush latency), then
+				// fall back to the JSONL file check for cases not visible in the terminal
+				// buffer (e.g. the session just started and the buffer hasn't scrolled yet).
+				if outputShowsConversationStarted(output) {
+					log.Info("SessionDriver: terminal output shows conversation already active, skipping injection",
+						"session", inst.Title,
+					)
+					sentInitial = true
+					initialPromptSentAt = time.Now()
+					continue
+				}
+
+				if _, convErr := FindConversationFilePath(inst.GetStableID()); convErr == nil {
+					log.Info("SessionDriver: conversation file exists, skipping initial prompt injection",
+						"session", inst.Title,
+					)
+					sentInitial = true
+					initialPromptSentAt = time.Now()
+					continue
+				}
+
 				sendAttempts++
 
 				if timedOut && !claudeAtPrompt {
@@ -345,7 +389,7 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		if mgr := inst.GetStatusManager(); mgr != nil {
 			if si := mgr.GetStatus(inst); si.ClaudeStatus == detection.StatusNeedsApproval {
 				if previewErr == nil && output != "" && shouldApprovePrompt(output, allowedPath) {
-					if err := inst.SendKeys("1\n"); err != nil {
+					if err := inst.SendKeys("1\r"); err != nil {
 						log.Warn("SessionDriver: failed to approve prompt",
 							"session", inst.Title,
 							"err", err,
@@ -538,6 +582,42 @@ func isStartupDialog(output string) bool {
 // the double-fire guard directly unit-testable.
 func shouldAnswerStartupDialog(output string, lastAnsweredAt time.Time, cooldown time.Duration) bool {
 	return isStartupDialog(output) && time.Since(lastAnsweredAt) > cooldown
+}
+
+// outputShowsConversationStarted returns true when live terminal content
+// indicates that a Claude Code conversation has already begun in this session.
+// It checks for signals that are exclusive to in-progress or completed exchanges.
+//
+// This uses live PTY buffer content (via inst.Preview()) with no disk I/O, making
+// it more up-to-date than FindConversationFilePath which depends on JSONL flush latency.
+func outputShowsConversationStarted(output string) bool {
+	// "esc to interrupt" is shown exclusively while Claude is actively processing.
+	if strings.Contains(output, "esc to interrupt") {
+		return true
+	}
+
+	// Spinner time suffix e.g. "(4m 18s ·" — only present in active work spinner.
+	if spinnerTimeRe.MatchString(output) {
+		return true
+	}
+
+	// Cost summary printed after a completed exchange: "⎿  $0.42" or "Cost: $X.XX".
+	if strings.Contains(output, "⎿  $") || strings.Contains(output, "Cost: $") {
+		return true
+	}
+
+	// Baked/resumption markers used by /loop mode.
+	if strings.Contains(output, "◉ Baked for") || strings.Contains(output, "◉ Claude resuming") {
+		return true
+	}
+
+	// Past-tense completion verb e.g. "✻ Perambulated for 1h 5m" — printed after
+	// an active work session finishes and Claude returns to the idle readline prompt.
+	if completionVerbRe.MatchString(output) {
+		return true
+	}
+
+	return false
 }
 
 // scanTerminalForPRURL searches terminal scrollback output for a GitHub PR URL

@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +38,9 @@ import (
 
 // Compile-time interface check: SessionService must implement the full ConnectRPC handler.
 var _ sessionv1connect.SessionServiceHandler = (*SessionService)(nil)
+
+// resumeIDRe validates the client-supplied resume_id field: must be a standard UUID.
+var resumeIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // ReactiveQueueManager is an interface to avoid circular dependencies.
 // The actual implementation is in server/review_queue_manager.go
@@ -283,7 +287,7 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 			log.Info("[SessionService] AI rule generation unavailable: set ANTHROPIC_API_KEY or install claude/gemini/opencode CLI")
 		}
 	}
-	rulesSvc := NewRulesService(rulesStore, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
+	rulesSvc := NewRulesService(rulesStore, nil, analyticsStore, classifierObj, promptBuilder, aiClientImpl)
 
 	// Initialize capacity monitor.
 	var capCfg config.CapacityConfig
@@ -1021,6 +1025,9 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("title is required"))
 	}
 	if req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_ONE_OFF &&
+		// AutonomousMode: the omnibar always submits an empty path for autonomous
+		// sessions; see the directory-generation block below.
+		!req.Msg.AutonomousMode &&
 		req.Msg.AliasName == "" &&
 		req.Msg.SessionType != sessionv1.SessionType_SESSION_TYPE_NEW_PROJECT &&
 		req.Msg.Path == "" {
@@ -1037,6 +1044,14 @@ func (s *SessionService) CreateSession(
 	for _, data := range existing {
 		if data.Title == req.Msg.Title {
 			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("session with title '%s' already exists", req.Msg.Title))
+		}
+	}
+
+	// Validate client-supplied resume_id before the fork block can overwrite it.
+	if req.Msg.ResumeId != "" && req.Msg.ForkSourceId == "" {
+		if !resumeIDRe.MatchString(req.Msg.ResumeId) {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				errors.New("resume_id must be a valid UUID"))
 		}
 	}
 
@@ -1089,7 +1104,10 @@ func (s *SessionService) CreateSession(
 	cfg := config.LoadConfig()
 
 	// One-off session: generate a fresh directory and override resolvedPath.
-	if req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_ONE_OFF {
+	// Autonomous sessions created without an explicit path (the omnibar's normal
+	// flow) get the same treatment — the agent needs somewhere to run.
+	if req.Msg.SessionType == sessionv1.SessionType_SESSION_TYPE_ONE_OFF ||
+		(req.Msg.AutonomousMode && resolvedPath == "") {
 		baseDir, err := cfg.OneOffBaseDirOrDefault()
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resolve one_off_base_dir: %w", err))
@@ -3438,7 +3456,9 @@ func (l *sessionExitedPublisher) OnLifecycleEvent(event session.LifecycleEvent, 
 
 // wireStatusChangeCallback registers a ReactiveQueueManager callback on inst so that
 // ClaudeController status transitions immediately trigger a CheckSession call, bypassing
-// the poll cycle. Safe to call before or after the controller is started.
+// the poll cycle. Also publishes a session update event so WatchSessions clients receive
+// the detection state change without waiting for the next poll cycle.
+// Safe to call before or after the controller is started.
 func (s *SessionService) wireStatusChangeCallback(inst *session.Instance) {
 	if inst == nil || s.reviewQueueSvc == nil {
 		return
@@ -3447,8 +3467,12 @@ func (s *SessionService) wireStatusChangeCallback(inst *session.Instance) {
 	if mgr == nil {
 		return
 	}
-	inst.SetStatusChangeCallback(func(newStatus detection.DetectedStatus, _ string) {
+	inst.SetStatusChangeCallback(func(newStatus detection.DetectedStatus, context string) {
 		mgr.OnControllerStatusChange(inst, newStatus)
+		s.eventBus.Publish(events.NewSessionUpdatedEventWithDetection(
+			inst, []string{"detected_status"},
+			newStatus, context,
+		))
 	})
 }
 
@@ -3983,4 +4007,20 @@ func (s *SessionService) SetTokenStoreReader(store tokens.TokenStoreReader) {
 // GetInstances returns all managed (poller-tracked) live instances, satisfying InstancePoller.
 func (s *SessionService) GetInstances() []*session.Instance {
 	return s.allInstances()
+}
+
+// GetConfigFileRules delegates to RulesService.
+func (s *SessionService) GetConfigFileRules(
+	ctx context.Context,
+	req *connect.Request[sessionv1.GetConfigFileRulesRequest],
+) (*connect.Response[sessionv1.GetConfigFileRulesResponse], error) {
+	return s.rulesSvc.GetConfigFileRules(ctx, req)
+}
+
+// SaveRulesToConfigFile delegates to RulesService.
+func (s *SessionService) SaveRulesToConfigFile(
+	ctx context.Context,
+	req *connect.Request[sessionv1.SaveRulesToConfigFileRequest],
+) (*connect.Response[sessionv1.SaveRulesToConfigFileResponse], error) {
+	return s.rulesSvc.SaveRulesToConfigFile(ctx, req)
 }

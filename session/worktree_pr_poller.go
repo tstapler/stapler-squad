@@ -13,8 +13,7 @@ import (
 
 // WorktreeScanItem is the minimal worktree info the poller needs from the
 // unfinished-work scanner. Using a local struct avoids an import cycle:
-//
-//	session → session/unfinished → pkg/events → session
+//   session → session/unfinished → pkg/events → session
 //
 // The server layer bridges the two packages via WorktreeSource (adapter pattern).
 type WorktreeScanItem struct {
@@ -197,12 +196,12 @@ func (p *WorktreePRPoller) pollWorktrees(items []WorktreeScanItem) {
 
 // fetchAndStore fetches PR info for one worktree and stores it in the cache.
 func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
-	owner, repo, err := github.GetOwnerRepoFromRemote(item.RepoPath)
+	repoRef, err := github.GetOwnerRepoFromRemote(item.RepoPath)
 	if err != nil {
 		log.Warn("worktree PR poller: could not read remote URL", "path", item.RepoPath, "err", err)
 		return
 	}
-	if owner == "" || repo == "" {
+	if !repoRef.IsValid() {
 		return // not a GitHub remote
 	}
 
@@ -213,7 +212,7 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 
 	// Use ETag conditional fetch when we already know the PR number.
 	if existing := p.GetPRData(item.RepoPath, item.Branch); existing != nil && existing.Number > 0 {
-		info, changed, fetchErr := github.GetPRInfoConditional(ctx, owner, repo, existing.Number, p.etagCache)
+		info, changed, fetchErr := github.GetPRInfoConditional(ctx, repoRef.Owner(), repoRef.Repo(), existing.Number, p.etagCache)
 		if fetchErr != nil {
 			p.handleFetchError(fetchErr)
 			return
@@ -226,7 +225,7 @@ func (p *WorktreePRPoller) fetchAndStore(item WorktreeScanItem) {
 	}
 
 	// Discovery: find PR by branch name.
-	info, err := github.GetPRForBranch(ctx, owner, repo, item.Branch)
+	info, err := github.GetPRForBranch(ctx, repoRef.Owner(), repoRef.Repo(), item.Branch)
 	if err != nil {
 		if strings.Contains(err.Error(), "no open PR") {
 			return // expected when branch has no PR yet

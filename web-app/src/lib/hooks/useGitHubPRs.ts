@@ -15,6 +15,7 @@ import { getApiBaseUrl, createAuthInterceptor } from "@/lib/config";
 export interface UseGitHubPRsReturn {
   prs: UserPR[];
   authState: GitHubAuthState | undefined;
+  refresh: () => void;
 }
 
 /**
@@ -67,5 +68,5 @@ export function useGitHubPRs(): UseGitHubPRsReturn {
     };
   }, [startWatch]);
 
-  return { prs, authState };
+  return { prs, authState, refresh: startWatch };
 }

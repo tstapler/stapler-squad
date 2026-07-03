@@ -256,28 +256,19 @@ func splitIntoBytesLines(output []byte) [][]byte {
 	return lines
 }
 
-// stripANSIBytes removes ANSI escape sequences from raw bytes.
-// Used for calculating cursor position based on visible characters.
+// stripANSIBytes removes ANSI/DEC escape sequences (CSI, OSC, DCS/PM/APC/SOS,
+// charset designation, and simple escapes) from raw bytes, leaving only
+// visible characters. Used for calculating cursor position.
 func stripANSIBytes(b []byte) []byte {
 	var result bytes.Buffer
-	inEscape := false
-
-	for i := 0; i < len(b); i++ {
+	result.Grow(len(b))
+	for i := 0; i < len(b); {
 		if b[i] == '\x1b' {
-			inEscape = true
+			i += scanEscapeSequence(b, i)
 			continue
 		}
-
-		if inEscape {
-			// End of escape sequence
-			if b[i] >= 'A' && b[i] <= 'Z' || b[i] >= 'a' && b[i] <= 'z' {
-				inEscape = false
-			}
-			continue
-		}
-
 		result.WriteByte(b[i])
+		i++
 	}
-
 	return result.Bytes()
 }

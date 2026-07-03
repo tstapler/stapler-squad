@@ -6,6 +6,7 @@ import { Session, SessionStatus, SubStatus } from "@/gen/session/v1/types_pb";
 import { Tooltip } from "../ui/Tooltip";
 import { SessionActionsOverflow, SessionActionsOverflowHandle } from "./SessionActionsOverflow";
 import { SubStatusChip } from "./SubStatusChip";
+import { GitHubBadge } from "./GitHubBadge";
 import {
   row,
   rowPaused,
@@ -253,6 +254,20 @@ export function SessionRow({
             !(suppressApprovalSubStatus && (session.subStatus === SubStatus.NEEDS_APPROVAL || session.subStatus === SubStatus.INPUT_REQUIRED)) && (
               <SubStatusChip subStatus={session.subStatus} />
             )}
+          <GitHubBadge
+            prNumber={session.githubPrNumber}
+            prUrl={session.githubPrUrl}
+            owner={session.githubOwner}
+            repo={session.githubRepo}
+            sourceRef={session.githubSourceRef}
+            prPriority={session.githubPrPriority}
+            prState={session.githubPrState}
+            isDraft={session.githubPrIsDraft}
+            approvedCount={session.githubApprovedCount}
+            changesRequestedCount={session.githubChangesReqCount}
+            checkConclusion={session.githubCheckConclusion}
+            compact={true}
+          />
         </span>
       </span>
 

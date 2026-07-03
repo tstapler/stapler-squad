@@ -193,6 +193,12 @@ message ArchiveBacklogItemResponse {
   BacklogItem item = 1;
 }
 
+message DeleteBacklogItemRequest {
+  string item_id = 1;
+}
+
+message DeleteBacklogItemResponse {}
+
 message TransitionBacklogItemStatusRequest {
   string item_id = 1;
   string target_status = 2;
@@ -333,6 +339,9 @@ service BacklogService {
 
   // ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
   rpc ArchiveBacklogItem(ArchiveBacklogItemRequest) returns (ArchiveBacklogItemResponse) {}
+
+  // DeleteBacklogItem permanently removes an item and all its child records.
+  rpc DeleteBacklogItem(DeleteBacklogItemRequest) returns (DeleteBacklogItemResponse) {}
 
   // TransitionBacklogItemStatus moves an item through the status state machine.
   rpc TransitionBacklogItemStatus(TransitionBacklogItemStatusRequest) returns (TransitionBacklogItemStatusResponse) {}

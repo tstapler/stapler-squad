@@ -56,6 +56,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     overrideVerdict,
     triggerReReview,
     archiveBacklogItem,
+    deleteBacklogItem,
     updateBacklogItem,
     lastError,
   } = useBacklogService();
@@ -97,11 +98,12 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
   }, [load]);
 
   // Poll for updated item data while triage is running so triage-review-panel appears automatically.
+  // Suspend polling while the edit form is open so a background refresh can't clobber unsaved edits.
   useEffect(() => {
-    if (item?.triageStatus !== "running") return;
+    if (item?.triageStatus !== "running" || editMode) return;
     const interval = setInterval(() => { void load(); }, 5_000);
     return () => clearInterval(interval);
-  }, [item?.triageStatus, load]);
+  }, [item?.triageStatus, editMode, load]);
 
   // Track triage progress: increment elapsed time while triageStatus === "running"
   useEffect(() => {
@@ -160,6 +162,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
           case "archive":
             await archiveBacklogItem(item.id);
             break;
+          case "delete":
+            if (!confirm("Permanently delete this item and all its history? This cannot be undone.")) return;
+            await deleteBacklogItem(item.id);
+            onClose?.();
+            return;
           case "reopen":
             await transitionStatus(item.id, "review");
             break;
@@ -173,7 +180,7 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         setActionLoading(false);
       }
     },
-    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, archiveBacklogItem, load]
+    [item, transitionStatus, triggerTriage, spawnSessionFromItem, approvePlan, overrideVerdict, triggerReReview, archiveBacklogItem, deleteBacklogItem, onClose, load]
   );
 
   const handleSaveNotes = useCallback(async () => {
@@ -339,7 +346,11 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
     }
   }, [item, overrideVerdict, transitionStatus, lastError, load]);
 
-  if (loading) {
+  // Only show the full-screen loader on the INITIAL load (no item yet). Background
+  // refreshes (the triage poll re-runs load() every 5s and toggles `loading`) must
+  // NOT unmount the detail view / edit form, or in-progress edits like unsaved
+  // acceptance criteria get discarded when the form remounts. See stapler-squad#146.
+  if (loading && !item) {
     return (
       <article className={styles.container} data-testid="backlog-item-detail">
         {onClose && (
@@ -715,6 +726,15 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
                 </button>
               </>
             )}
+
+            <button
+              className={styles.actionButtonDanger}
+              onClick={() => handleAction("delete")}
+              disabled={actionLoading}
+              data-testid="backlog-action-delete"
+            >
+              Delete
+            </button>
           </div>
         </div>
 

@@ -1,4 +1,3 @@
-// Package interceptors provides ConnectRPC interceptors for stapler-squad.
 package interceptors
 
 import (

@@ -530,6 +530,34 @@ func (_c *SessionCreate) SetNillableGithubPrNumber(v *int) *SessionCreate {
 	return _c
 }
 
+// SetGithubOwner sets the "github_owner" field.
+func (_c *SessionCreate) SetGithubOwner(v string) *SessionCreate {
+	_c.mutation.SetGithubOwner(v)
+	return _c
+}
+
+// SetNillableGithubOwner sets the "github_owner" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableGithubOwner(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetGithubOwner(*v)
+	}
+	return _c
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (_c *SessionCreate) SetGithubRepo(v string) *SessionCreate {
+	_c.mutation.SetGithubRepo(v)
+	return _c
+}
+
+// SetNillableGithubRepo sets the "github_repo" field if the given value is not nil.
+func (_c *SessionCreate) SetNillableGithubRepo(v *string) *SessionCreate {
+	if v != nil {
+		_c.SetGithubRepo(*v)
+	}
+	return _c
+}
+
 // SetSessionArtifacts sets the "session_artifacts" field.
 func (_c *SessionCreate) SetSessionArtifacts(v string) *SessionCreate {
 	_c.mutation.SetSessionArtifacts(v)
@@ -970,6 +998,14 @@ func (_c *SessionCreate) createSpec() (*Session, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.GithubPrNumber(); ok {
 		_spec.SetField(session.FieldGithubPrNumber, field.TypeInt, value)
 		_node.GithubPrNumber = value
+	}
+	if value, ok := _c.mutation.GithubOwner(); ok {
+		_spec.SetField(session.FieldGithubOwner, field.TypeString, value)
+		_node.GithubOwner = value
+	}
+	if value, ok := _c.mutation.GithubRepo(); ok {
+		_spec.SetField(session.FieldGithubRepo, field.TypeString, value)
+		_node.GithubRepo = value
 	}
 	if value, ok := _c.mutation.SessionArtifacts(); ok {
 		_spec.SetField(session.FieldSessionArtifacts, field.TypeString, value)
@@ -1770,6 +1806,42 @@ func (u *SessionUpsert) ClearGithubPrNumber() *SessionUpsert {
 	return u
 }
 
+// SetGithubOwner sets the "github_owner" field.
+func (u *SessionUpsert) SetGithubOwner(v string) *SessionUpsert {
+	u.Set(session.FieldGithubOwner, v)
+	return u
+}
+
+// UpdateGithubOwner sets the "github_owner" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateGithubOwner() *SessionUpsert {
+	u.SetExcluded(session.FieldGithubOwner)
+	return u
+}
+
+// ClearGithubOwner clears the value of the "github_owner" field.
+func (u *SessionUpsert) ClearGithubOwner() *SessionUpsert {
+	u.SetNull(session.FieldGithubOwner)
+	return u
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (u *SessionUpsert) SetGithubRepo(v string) *SessionUpsert {
+	u.Set(session.FieldGithubRepo, v)
+	return u
+}
+
+// UpdateGithubRepo sets the "github_repo" field to the value that was provided on create.
+func (u *SessionUpsert) UpdateGithubRepo() *SessionUpsert {
+	u.SetExcluded(session.FieldGithubRepo)
+	return u
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (u *SessionUpsert) ClearGithubRepo() *SessionUpsert {
+	u.SetNull(session.FieldGithubRepo)
+	return u
+}
+
 // SetSessionArtifacts sets the "session_artifacts" field.
 func (u *SessionUpsert) SetSessionArtifacts(v string) *SessionUpsert {
 	u.Set(session.FieldSessionArtifacts, v)
@@ -2565,6 +2637,48 @@ func (u *SessionUpsertOne) UpdateGithubPrNumber() *SessionUpsertOne {
 func (u *SessionUpsertOne) ClearGithubPrNumber() *SessionUpsertOne {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearGithubPrNumber()
+	})
+}
+
+// SetGithubOwner sets the "github_owner" field.
+func (u *SessionUpsertOne) SetGithubOwner(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubOwner(v)
+	})
+}
+
+// UpdateGithubOwner sets the "github_owner" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateGithubOwner() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubOwner()
+	})
+}
+
+// ClearGithubOwner clears the value of the "github_owner" field.
+func (u *SessionUpsertOne) ClearGithubOwner() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubOwner()
+	})
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (u *SessionUpsertOne) SetGithubRepo(v string) *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubRepo(v)
+	})
+}
+
+// UpdateGithubRepo sets the "github_repo" field to the value that was provided on create.
+func (u *SessionUpsertOne) UpdateGithubRepo() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubRepo()
+	})
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (u *SessionUpsertOne) ClearGithubRepo() *SessionUpsertOne {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubRepo()
 	})
 }
 
@@ -3532,6 +3646,48 @@ func (u *SessionUpsertBulk) UpdateGithubPrNumber() *SessionUpsertBulk {
 func (u *SessionUpsertBulk) ClearGithubPrNumber() *SessionUpsertBulk {
 	return u.Update(func(s *SessionUpsert) {
 		s.ClearGithubPrNumber()
+	})
+}
+
+// SetGithubOwner sets the "github_owner" field.
+func (u *SessionUpsertBulk) SetGithubOwner(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubOwner(v)
+	})
+}
+
+// UpdateGithubOwner sets the "github_owner" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateGithubOwner() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubOwner()
+	})
+}
+
+// ClearGithubOwner clears the value of the "github_owner" field.
+func (u *SessionUpsertBulk) ClearGithubOwner() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubOwner()
+	})
+}
+
+// SetGithubRepo sets the "github_repo" field.
+func (u *SessionUpsertBulk) SetGithubRepo(v string) *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.SetGithubRepo(v)
+	})
+}
+
+// UpdateGithubRepo sets the "github_repo" field to the value that was provided on create.
+func (u *SessionUpsertBulk) UpdateGithubRepo() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.UpdateGithubRepo()
+	})
+}
+
+// ClearGithubRepo clears the value of the "github_repo" field.
+func (u *SessionUpsertBulk) ClearGithubRepo() *SessionUpsertBulk {
+	return u.Update(func(s *SessionUpsert) {
+		s.ClearGithubRepo()
 	})
 }
 

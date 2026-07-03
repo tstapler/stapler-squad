@@ -30,7 +30,7 @@ const LIFECYCLE_NODES = [
   { label: "done", active: false },
 ];
 
-function LifecycleDiagram() {
+export function LifecycleDiagram() {
   return (
     <div className={styles.lifecycleDiagram} aria-hidden="true" data-testid="backlog-lifecycle-diagram">
       {LIFECYCLE_NODES.map((node, i) => (

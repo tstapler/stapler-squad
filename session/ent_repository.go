@@ -203,6 +203,12 @@ func (r *EntRepository) Create(ctx context.Context, data InstanceData) error {
 	if data.GitHubPRNumber > 0 {
 		sessionCreate.SetGithubPrNumber(data.GitHubPRNumber)
 	}
+	if data.GitHubOwner != "" {
+		sessionCreate.SetGithubOwner(data.GitHubOwner)
+	}
+	if data.GitHubRepo != "" {
+		sessionCreate.SetGithubRepo(data.GitHubRepo)
+	}
 
 	// Link project if specified (look up by name)
 	if data.ProjectID != "" {
@@ -432,6 +438,12 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 	}
 	if data.GitHubPRNumber > 0 {
 		sessionUpdate.SetGithubPrNumber(data.GitHubPRNumber)
+	}
+	if data.GitHubOwner != "" {
+		sessionUpdate.SetGithubOwner(data.GitHubOwner)
+	}
+	if data.GitHubRepo != "" {
+		sessionUpdate.SetGithubRepo(data.GitHubRepo)
 	}
 
 	// Update project link (look up by name or clear if empty)
@@ -1027,6 +1039,8 @@ func (r *EntRepository) sessionToInstanceData(sess *ent.Session) *InstanceData {
 	data.ArchivedAt = sess.ArchivedAt
 	data.GitHubPRURL = sess.GithubPrURL
 	data.GitHubPRNumber = sess.GithubPrNumber
+	data.GitHubOwner = sess.GithubOwner
+	data.GitHubRepo = sess.GithubRepo
 
 	// Set session type
 	if sess.SessionType != "" {

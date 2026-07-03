@@ -6,6 +6,7 @@ const _features = [
   FEATURE_CATALOG['backlog-transition-status'],
   FEATURE_CATALOG['backlog-spawn-session'],
   FEATURE_CATALOG['backlog-trigger-triage'],
+  FEATURE_CATALOG['backlog-first-visit-tour'],
 ] as const;
 import { test, expect } from '@playwright/test';
 import { BacklogPage } from './pages/BacklogPage';
@@ -32,6 +33,12 @@ test.describe('Backlog', () => {
   });
 
   test.beforeEach(async ({ page }) => {
+    // Pre-seed the first-visit tour as already dismissed so it doesn't pop up
+    // (and block clicks on) every other test in this suite. The dedicated
+    // "Backlog Tour" tests below explicitly clear this to exercise the tour.
+    await page.addInitScript(() => {
+      localStorage.setItem('stapler-squad:backlog-onboarded', 'true');
+    });
     await page.goto(`${BASE_URL}/backlog`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-testid="backlog-page"]', { timeout: 15000 });
   });
@@ -482,6 +489,48 @@ test.describe('Backlog', () => {
       await expect(triggerBtn).toBeDisabled();
       await expect(triggerBtn).toHaveAttribute('aria-disabled', 'true');
       await expect(triggerBtn).toHaveAttribute('title', 'Set repository path first');
+    });
+  });
+
+  test.describe('Backlog Tour', () => {
+    test('e2e:backlog-tour-first-visit - Tour appears on first visit and dismissing it persists across reload', async ({ page }) => {
+      const backlogPage = new BacklogPage(page);
+
+      // Clear the onboarded flag the outer beforeEach pre-seeded, then reload
+      // so the page mounts fresh with no first-visit state recorded.
+      await page.evaluate(() => localStorage.removeItem('stapler-squad:backlog-onboarded'));
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('[data-testid="backlog-page"]', { timeout: 15000 });
+
+      await expect(backlogPage.tourModal).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText('How backlog items work')).toBeVisible();
+
+      await page.getByRole('button', { name: 'Skip tour' }).click();
+      await expect(backlogPage.tourModal).toBeHidden();
+
+      // Dismissal persists: reloading must not bring the tour back.
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForSelector('[data-testid="backlog-page"]', { timeout: 15000 });
+      await expect(backlogPage.tourModal).toBeHidden();
+      const onboarded = await page.evaluate(() => localStorage.getItem('stapler-squad:backlog-onboarded'));
+      expect(onboarded).toBe('true');
+    });
+
+    test('e2e:backlog-tour-reopen-button - "?" button reopens the tour after it has been dismissed', async ({ page }) => {
+      const backlogPage = new BacklogPage(page);
+
+      // beforeEach already pre-seeded onboarded=true, so the tour should not be showing.
+      await expect(backlogPage.tourModal).toBeHidden();
+
+      await backlogPage.tourButton.click();
+      await expect(backlogPage.tourModal).toBeVisible({ timeout: 5000 });
+      await expect(page.getByText('How backlog items work')).toBeVisible();
+
+      // Explains the Repository Path gotcha that originally prompted this feature.
+      await page.getByRole('button', { name: 'Next' }).click();
+      await expect(page.getByTestId('backlog-tour-repo-path-callout')).toContainText(
+        "we'll clone it for you automatically"
+      );
     });
   });
 });

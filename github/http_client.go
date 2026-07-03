@@ -16,7 +16,7 @@ import (
 var ghHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 // getGHToken returns a GitHub personal access token for native HTTP calls.
-// Precedence: GITHUB_TOKEN env → GH_TOKEN env.
+// Precedence: GITHUB_TOKEN env → GH_TOKEN env → OS keychain.
 // Returns an empty string (not an error) when no token source is available so
 // callers can decide whether to degrade gracefully.
 func getGHToken(_ context.Context) string {
@@ -24,6 +24,9 @@ func getGHToken(_ context.Context) string {
 		return tok
 	}
 	if tok := os.Getenv("GH_TOKEN"); tok != "" {
+		return tok
+	}
+	if tok := GetKeychainToken(); tok != "" {
 		return tok
 	}
 	return ""
@@ -75,28 +78,31 @@ func checkRateLimitHeaders(resp *http.Response) time.Duration {
 
 // newGHRequest creates an authenticated GET request to the GitHub REST API.
 func newGHRequest(ctx context.Context, path string) (*http.Request, error) {
+	return newGHRequestWithToken(ctx, path, getGHToken(ctx))
+}
+
+// newGHRequestWithToken creates a GET request authenticated with an explicit token.
+func newGHRequestWithToken(ctx context.Context, path, token string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/"+path, nil)
 	if err != nil {
 		return nil, err
 	}
-	if tok := getGHToken(ctx); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	return req, nil
 }
 
-// newGHPostRequest creates an authenticated POST request to the GitHub REST or
-// GraphQL API. Pass "graphql" as path to target https://api.github.com/graphql.
-// The body is read from body (typically a bytes.Reader wrapping a JSON payload).
-func newGHPostRequest(ctx context.Context, path string, body io.Reader) (*http.Request, error) {
+// newGHPostRequestWithToken creates a POST request authenticated with an explicit token.
+func newGHPostRequestWithToken(ctx context.Context, path string, body io.Reader, token string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/"+path, body)
 	if err != nil {
 		return nil, err
 	}
-	if tok := getGHToken(ctx); tok != "" {
-		req.Header.Set("Authorization", "Bearer "+tok)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/vnd.github+json")

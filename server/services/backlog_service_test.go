@@ -68,6 +68,23 @@ func validTriageJSON() string {
 	return `{"summary":"test summary","suggestions":[{"text":"do X","rationale":"why"}],"tasks":[{"text":"write tests","estimate":"1h","category":"test"}]}`
 }
 
+// fakeGitHubResolver is a test stub for BacklogService.resolveGitHubInput. It
+// records every input it was called with so tests can assert whether a plain
+// local path bypassed resolution entirely.
+type fakeGitHubResolver struct {
+	calls     []string
+	localPath string
+	err       error
+}
+
+func (f *fakeGitHubResolver) resolve(input string) (string, *session.GitHubRef, error) {
+	f.calls = append(f.calls, input)
+	if f.err != nil {
+		return "", nil, f.err
+	}
+	return f.localPath, &session.GitHubRef{}, nil
+}
+
 // mockSessionCreator records CreateDirectorySession calls for inspection.
 type mockSessionCreator struct {
 	calls []mockCreateCall
@@ -184,6 +201,108 @@ func TestCreateBacklogItem_NilStorage(t *testing.T) {
 	var connErr *connect.Error
 	require.ErrorAs(t, err, &connErr)
 	assert.Equal(t, connect.CodeUnavailable, connErr.Code())
+}
+
+// UT-014a: RepoPath that looks like a GitHub URL is resolved to a local clone path.
+func TestCreateBacklogItem_ResolvesGitHubURL(t *testing.T) {
+	svc := newBacklogService(t)
+	resolver := &fakeGitHubResolver{localPath: "/tmp/fake-clone/owner/repo"}
+	svc.SetGitHubResolver(resolver.resolve)
+
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "clone this repo",
+		RepoPath: "https://github.com/owner/repo",
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "/tmp/fake-clone/owner/repo", resp.Msg.Item.RepoPath)
+	require.Len(t, resolver.calls, 1)
+	assert.Equal(t, "https://github.com/owner/repo", resolver.calls[0])
+}
+
+// UT-014b: A resolver failure (e.g. clone error) surfaces as CodeInvalidArgument
+// with the original input in the message, not a silent failure downstream.
+func TestCreateBacklogItem_GitHubResolveError_ReturnsInvalidArgument(t *testing.T) {
+	svc := newBacklogService(t)
+	resolver := &fakeGitHubResolver{err: errors.New("clone failed: repository not found")}
+	svc.SetGitHubResolver(resolver.resolve)
+
+	_, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "bad repo",
+		RepoPath: "https://github.com/owner/does-not-exist",
+	}))
+	require.Error(t, err)
+
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
+	assert.Contains(t, connErr.Error(), "https://github.com/owner/does-not-exist")
+}
+
+// UT-014c: A plain local filesystem path is stored as-is and never passed to the resolver.
+func TestCreateBacklogItem_PlainPath_DoesNotCallResolver(t *testing.T) {
+	svc := newBacklogService(t)
+	resolver := &fakeGitHubResolver{localPath: "should-not-be-used"}
+	svc.SetGitHubResolver(resolver.resolve)
+
+	resp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:    "local repo",
+		RepoPath: "/home/user/projects/my-repo",
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "/home/user/projects/my-repo", resp.Msg.Item.RepoPath)
+	assert.Empty(t, resolver.calls)
+}
+
+// ─── UpdateBacklogItem ────────────────────────────────────────────────────────
+
+// UT-015a: Updating repo_path with a GitHub URL resolves it to a local clone path.
+func TestUpdateBacklogItem_ResolvesGitHubURL(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item to fix up",
+	}))
+	require.NoError(t, err)
+
+	resolver := &fakeGitHubResolver{localPath: "/tmp/fake-clone/owner/repo"}
+	svc.SetGitHubResolver(resolver.resolve)
+
+	resp, err := svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:   created.Msg.Item.Id,
+		RepoPath: "https://github.com/owner/repo",
+	}))
+	require.NoError(t, err)
+
+	assert.Equal(t, "/tmp/fake-clone/owner/repo", resp.Msg.Item.RepoPath)
+	require.Len(t, resolver.calls, 1)
+	assert.Equal(t, "https://github.com/owner/repo", resolver.calls[0])
+}
+
+// UT-015b: A resolver failure on update surfaces as CodeInvalidArgument — this is the
+// fix-up path for an item created with a bad (unresolvable) repo_path.
+func TestUpdateBacklogItem_GitHubResolveError_ReturnsInvalidArgument(t *testing.T) {
+	svc := newBacklogService(t)
+
+	created, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title: "item to fix up",
+	}))
+	require.NoError(t, err)
+
+	resolver := &fakeGitHubResolver{err: errors.New("clone failed")}
+	svc.SetGitHubResolver(resolver.resolve)
+
+	_, err = svc.UpdateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.UpdateBacklogItemRequest{
+		ItemId:   created.Msg.Item.Id,
+		RepoPath: "https://github.com/owner/does-not-exist",
+	}))
+	require.Error(t, err)
+
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeInvalidArgument, connErr.Code())
+	assert.Contains(t, connErr.Error(), "https://github.com/owner/does-not-exist")
 }
 
 // ─── ListBacklogItems ─────────────────────────────────────────────────────────

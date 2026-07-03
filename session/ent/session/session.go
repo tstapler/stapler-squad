@@ -90,6 +90,10 @@ const (
 	FieldGithubPrURL = "github_pr_url"
 	// FieldGithubPrNumber holds the string denoting the github_pr_number field in the database.
 	FieldGithubPrNumber = "github_pr_number"
+	// FieldGithubOwner holds the string denoting the github_owner field in the database.
+	FieldGithubOwner = "github_owner"
+	// FieldGithubRepo holds the string denoting the github_repo field in the database.
+	FieldGithubRepo = "github_repo"
 	// FieldSessionArtifacts holds the string denoting the session_artifacts field in the database.
 	FieldSessionArtifacts = "session_artifacts"
 	// EdgeWorktree holds the string denoting the worktree edge name in mutations.
@@ -196,6 +200,8 @@ var Columns = []string{
 	FieldArchivedAt,
 	FieldGithubPrURL,
 	FieldGithubPrNumber,
+	FieldGithubOwner,
+	FieldGithubRepo,
 	FieldSessionArtifacts,
 }
 
@@ -456,6 +462,16 @@ func ByGithubPrURL(opts ...sql.OrderTermOption) OrderOption {
 // ByGithubPrNumber orders the results by the github_pr_number field.
 func ByGithubPrNumber(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldGithubPrNumber, opts...).ToFunc()
+}
+
+// ByGithubOwner orders the results by the github_owner field.
+func ByGithubOwner(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGithubOwner, opts...).ToFunc()
+}
+
+// ByGithubRepo orders the results by the github_repo field.
+func ByGithubRepo(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGithubRepo, opts...).ToFunc()
 }
 
 // BySessionArtifacts orders the results by the session_artifacts field.

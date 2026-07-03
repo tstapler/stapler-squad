@@ -1243,6 +1243,7 @@ func pauseLocked(s *instanceState) error {
 	if err := transitionToLocked(s, context.Background(), Paused); err != nil {
 		return fmt.Errorf("failed to transition to Paused: %w", err)
 	}
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session paused")
 	_ = clipboard.WriteAll(i.gitManager.GetBranchName())
 	return nil
@@ -1253,7 +1254,8 @@ func (i *Instance) Resume() error {
 	if !i.started {
 		return fmt.Errorf("cannot resume instance that has not been started")
 	}
-	if i.Status != Paused {
+	// Status is actor-managed; use Snapshot() to avoid racing with concurrent actor writes.
+	if i.Snapshot().Status != Paused {
 		return fmt.Errorf("can only resume paused instances")
 	}
 
@@ -1353,6 +1355,7 @@ func (i *Instance) Resume() error {
 		return fmt.Errorf("failed to transition to Active on resume: %w", err)
 	}
 	i.mu.Unlock()
+	i.gitManager.InvalidateDirtyCache()
 	log.ForSession(i.Title).Info("session resumed")
 
 	// Start ClaudeController for idle detection and automation

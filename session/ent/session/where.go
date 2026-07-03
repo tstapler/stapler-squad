@@ -245,6 +245,16 @@ func GithubPrNumber(v int) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldGithubPrNumber, v))
 }
 
+// GithubOwner applies equality check predicate on the "github_owner" field. It's identical to GithubOwnerEQ.
+func GithubOwner(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubOwner, v))
+}
+
+// GithubRepo applies equality check predicate on the "github_repo" field. It's identical to GithubRepoEQ.
+func GithubRepo(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubRepo, v))
+}
+
 // SessionArtifacts applies equality check predicate on the "session_artifacts" field. It's identical to SessionArtifactsEQ.
 func SessionArtifacts(v string) predicate.Session {
 	return predicate.Session(sql.FieldEQ(FieldSessionArtifacts, v))
@@ -2338,6 +2348,156 @@ func GithubPrNumberIsNil() predicate.Session {
 // GithubPrNumberNotNil applies the NotNil predicate on the "github_pr_number" field.
 func GithubPrNumberNotNil() predicate.Session {
 	return predicate.Session(sql.FieldNotNull(FieldGithubPrNumber))
+}
+
+// GithubOwnerEQ applies the EQ predicate on the "github_owner" field.
+func GithubOwnerEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubOwner, v))
+}
+
+// GithubOwnerNEQ applies the NEQ predicate on the "github_owner" field.
+func GithubOwnerNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldGithubOwner, v))
+}
+
+// GithubOwnerIn applies the In predicate on the "github_owner" field.
+func GithubOwnerIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldGithubOwner, vs...))
+}
+
+// GithubOwnerNotIn applies the NotIn predicate on the "github_owner" field.
+func GithubOwnerNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldGithubOwner, vs...))
+}
+
+// GithubOwnerGT applies the GT predicate on the "github_owner" field.
+func GithubOwnerGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldGithubOwner, v))
+}
+
+// GithubOwnerGTE applies the GTE predicate on the "github_owner" field.
+func GithubOwnerGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldGithubOwner, v))
+}
+
+// GithubOwnerLT applies the LT predicate on the "github_owner" field.
+func GithubOwnerLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldGithubOwner, v))
+}
+
+// GithubOwnerLTE applies the LTE predicate on the "github_owner" field.
+func GithubOwnerLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldGithubOwner, v))
+}
+
+// GithubOwnerContains applies the Contains predicate on the "github_owner" field.
+func GithubOwnerContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldGithubOwner, v))
+}
+
+// GithubOwnerHasPrefix applies the HasPrefix predicate on the "github_owner" field.
+func GithubOwnerHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldGithubOwner, v))
+}
+
+// GithubOwnerHasSuffix applies the HasSuffix predicate on the "github_owner" field.
+func GithubOwnerHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldGithubOwner, v))
+}
+
+// GithubOwnerIsNil applies the IsNil predicate on the "github_owner" field.
+func GithubOwnerIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldGithubOwner))
+}
+
+// GithubOwnerNotNil applies the NotNil predicate on the "github_owner" field.
+func GithubOwnerNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldGithubOwner))
+}
+
+// GithubOwnerEqualFold applies the EqualFold predicate on the "github_owner" field.
+func GithubOwnerEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldGithubOwner, v))
+}
+
+// GithubOwnerContainsFold applies the ContainsFold predicate on the "github_owner" field.
+func GithubOwnerContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldGithubOwner, v))
+}
+
+// GithubRepoEQ applies the EQ predicate on the "github_repo" field.
+func GithubRepoEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldEQ(FieldGithubRepo, v))
+}
+
+// GithubRepoNEQ applies the NEQ predicate on the "github_repo" field.
+func GithubRepoNEQ(v string) predicate.Session {
+	return predicate.Session(sql.FieldNEQ(FieldGithubRepo, v))
+}
+
+// GithubRepoIn applies the In predicate on the "github_repo" field.
+func GithubRepoIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldIn(FieldGithubRepo, vs...))
+}
+
+// GithubRepoNotIn applies the NotIn predicate on the "github_repo" field.
+func GithubRepoNotIn(vs ...string) predicate.Session {
+	return predicate.Session(sql.FieldNotIn(FieldGithubRepo, vs...))
+}
+
+// GithubRepoGT applies the GT predicate on the "github_repo" field.
+func GithubRepoGT(v string) predicate.Session {
+	return predicate.Session(sql.FieldGT(FieldGithubRepo, v))
+}
+
+// GithubRepoGTE applies the GTE predicate on the "github_repo" field.
+func GithubRepoGTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldGTE(FieldGithubRepo, v))
+}
+
+// GithubRepoLT applies the LT predicate on the "github_repo" field.
+func GithubRepoLT(v string) predicate.Session {
+	return predicate.Session(sql.FieldLT(FieldGithubRepo, v))
+}
+
+// GithubRepoLTE applies the LTE predicate on the "github_repo" field.
+func GithubRepoLTE(v string) predicate.Session {
+	return predicate.Session(sql.FieldLTE(FieldGithubRepo, v))
+}
+
+// GithubRepoContains applies the Contains predicate on the "github_repo" field.
+func GithubRepoContains(v string) predicate.Session {
+	return predicate.Session(sql.FieldContains(FieldGithubRepo, v))
+}
+
+// GithubRepoHasPrefix applies the HasPrefix predicate on the "github_repo" field.
+func GithubRepoHasPrefix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasPrefix(FieldGithubRepo, v))
+}
+
+// GithubRepoHasSuffix applies the HasSuffix predicate on the "github_repo" field.
+func GithubRepoHasSuffix(v string) predicate.Session {
+	return predicate.Session(sql.FieldHasSuffix(FieldGithubRepo, v))
+}
+
+// GithubRepoIsNil applies the IsNil predicate on the "github_repo" field.
+func GithubRepoIsNil() predicate.Session {
+	return predicate.Session(sql.FieldIsNull(FieldGithubRepo))
+}
+
+// GithubRepoNotNil applies the NotNil predicate on the "github_repo" field.
+func GithubRepoNotNil() predicate.Session {
+	return predicate.Session(sql.FieldNotNull(FieldGithubRepo))
+}
+
+// GithubRepoEqualFold applies the EqualFold predicate on the "github_repo" field.
+func GithubRepoEqualFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldEqualFold(FieldGithubRepo, v))
+}
+
+// GithubRepoContainsFold applies the ContainsFold predicate on the "github_repo" field.
+func GithubRepoContainsFold(v string) predicate.Session {
+	return predicate.Session(sql.FieldContainsFold(FieldGithubRepo, v))
 }
 
 // SessionArtifactsEQ applies the EQ predicate on the "session_artifacts" field.

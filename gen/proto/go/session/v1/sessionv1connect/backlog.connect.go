@@ -48,6 +48,9 @@ const (
 	// BacklogServiceArchiveBacklogItemProcedure is the fully-qualified name of the BacklogService's
 	// ArchiveBacklogItem RPC.
 	BacklogServiceArchiveBacklogItemProcedure = "/session.v1.BacklogService/ArchiveBacklogItem"
+	// BacklogServiceDeleteBacklogItemProcedure is the fully-qualified name of the BacklogService's
+	// DeleteBacklogItem RPC.
+	BacklogServiceDeleteBacklogItemProcedure = "/session.v1.BacklogService/DeleteBacklogItem"
 	// BacklogServiceTransitionBacklogItemStatusProcedure is the fully-qualified name of the
 	// BacklogService's TransitionBacklogItemStatus RPC.
 	BacklogServiceTransitionBacklogItemStatusProcedure = "/session.v1.BacklogService/TransitionBacklogItemStatus"
@@ -107,6 +110,8 @@ type BacklogServiceClient interface {
 	UpdateBacklogItem(context.Context, *connect.Request[v1.UpdateBacklogItemRequest]) (*connect.Response[v1.UpdateBacklogItemResponse], error)
 	// ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
 	ArchiveBacklogItem(context.Context, *connect.Request[v1.ArchiveBacklogItemRequest]) (*connect.Response[v1.ArchiveBacklogItemResponse], error)
+	// DeleteBacklogItem permanently removes an item and all its child records.
+	DeleteBacklogItem(context.Context, *connect.Request[v1.DeleteBacklogItemRequest]) (*connect.Response[v1.DeleteBacklogItemResponse], error)
 	// TransitionBacklogItemStatus moves an item through the status state machine.
 	TransitionBacklogItemStatus(context.Context, *connect.Request[v1.TransitionBacklogItemStatusRequest]) (*connect.Response[v1.TransitionBacklogItemStatusResponse], error)
 	// SpawnSessionFromItem creates a new AI agent session for a backlog item.
@@ -178,6 +183,12 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			httpClient,
 			baseURL+BacklogServiceArchiveBacklogItemProcedure,
 			connect.WithSchema(backlogServiceMethods.ByName("ArchiveBacklogItem")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteBacklogItem: connect.NewClient[v1.DeleteBacklogItemRequest, v1.DeleteBacklogItemResponse](
+			httpClient,
+			baseURL+BacklogServiceDeleteBacklogItemProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("DeleteBacklogItem")),
 			connect.WithClientOptions(opts...),
 		),
 		transitionBacklogItemStatus: connect.NewClient[v1.TransitionBacklogItemStatusRequest, v1.TransitionBacklogItemStatusResponse](
@@ -280,6 +291,7 @@ type backlogServiceClient struct {
 	listBacklogItems            *connect.Client[v1.ListBacklogItemsRequest, v1.ListBacklogItemsResponse]
 	updateBacklogItem           *connect.Client[v1.UpdateBacklogItemRequest, v1.UpdateBacklogItemResponse]
 	archiveBacklogItem          *connect.Client[v1.ArchiveBacklogItemRequest, v1.ArchiveBacklogItemResponse]
+	deleteBacklogItem           *connect.Client[v1.DeleteBacklogItemRequest, v1.DeleteBacklogItemResponse]
 	transitionBacklogItemStatus *connect.Client[v1.TransitionBacklogItemStatusRequest, v1.TransitionBacklogItemStatusResponse]
 	spawnSessionFromItem        *connect.Client[v1.SpawnSessionFromItemRequest, v1.SpawnSessionFromItemResponse]
 	attachSessionToItem         *connect.Client[v1.AttachSessionToItemRequest, v1.AttachSessionToItemResponse]
@@ -320,6 +332,11 @@ func (c *backlogServiceClient) UpdateBacklogItem(ctx context.Context, req *conne
 // ArchiveBacklogItem calls session.v1.BacklogService.ArchiveBacklogItem.
 func (c *backlogServiceClient) ArchiveBacklogItem(ctx context.Context, req *connect.Request[v1.ArchiveBacklogItemRequest]) (*connect.Response[v1.ArchiveBacklogItemResponse], error) {
 	return c.archiveBacklogItem.CallUnary(ctx, req)
+}
+
+// DeleteBacklogItem calls session.v1.BacklogService.DeleteBacklogItem.
+func (c *backlogServiceClient) DeleteBacklogItem(ctx context.Context, req *connect.Request[v1.DeleteBacklogItemRequest]) (*connect.Response[v1.DeleteBacklogItemResponse], error) {
+	return c.deleteBacklogItem.CallUnary(ctx, req)
 }
 
 // TransitionBacklogItemStatus calls session.v1.BacklogService.TransitionBacklogItemStatus.
@@ -409,6 +426,8 @@ type BacklogServiceHandler interface {
 	UpdateBacklogItem(context.Context, *connect.Request[v1.UpdateBacklogItemRequest]) (*connect.Response[v1.UpdateBacklogItemResponse], error)
 	// ArchiveBacklogItem soft-deletes an item by setting its archived_at timestamp.
 	ArchiveBacklogItem(context.Context, *connect.Request[v1.ArchiveBacklogItemRequest]) (*connect.Response[v1.ArchiveBacklogItemResponse], error)
+	// DeleteBacklogItem permanently removes an item and all its child records.
+	DeleteBacklogItem(context.Context, *connect.Request[v1.DeleteBacklogItemRequest]) (*connect.Response[v1.DeleteBacklogItemResponse], error)
 	// TransitionBacklogItemStatus moves an item through the status state machine.
 	TransitionBacklogItemStatus(context.Context, *connect.Request[v1.TransitionBacklogItemStatusRequest]) (*connect.Response[v1.TransitionBacklogItemStatusResponse], error)
 	// SpawnSessionFromItem creates a new AI agent session for a backlog item.
@@ -476,6 +495,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		BacklogServiceArchiveBacklogItemProcedure,
 		svc.ArchiveBacklogItem,
 		connect.WithSchema(backlogServiceMethods.ByName("ArchiveBacklogItem")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceDeleteBacklogItemHandler := connect.NewUnaryHandler(
+		BacklogServiceDeleteBacklogItemProcedure,
+		svc.DeleteBacklogItem,
+		connect.WithSchema(backlogServiceMethods.ByName("DeleteBacklogItem")),
 		connect.WithHandlerOptions(opts...),
 	)
 	backlogServiceTransitionBacklogItemStatusHandler := connect.NewUnaryHandler(
@@ -580,6 +605,8 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceUpdateBacklogItemHandler.ServeHTTP(w, r)
 		case BacklogServiceArchiveBacklogItemProcedure:
 			backlogServiceArchiveBacklogItemHandler.ServeHTTP(w, r)
+		case BacklogServiceDeleteBacklogItemProcedure:
+			backlogServiceDeleteBacklogItemHandler.ServeHTTP(w, r)
 		case BacklogServiceTransitionBacklogItemStatusProcedure:
 			backlogServiceTransitionBacklogItemStatusHandler.ServeHTTP(w, r)
 		case BacklogServiceSpawnSessionFromItemProcedure:
@@ -637,6 +664,10 @@ func (UnimplementedBacklogServiceHandler) UpdateBacklogItem(context.Context, *co
 
 func (UnimplementedBacklogServiceHandler) ArchiveBacklogItem(context.Context, *connect.Request[v1.ArchiveBacklogItemRequest]) (*connect.Response[v1.ArchiveBacklogItemResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ArchiveBacklogItem is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) DeleteBacklogItem(context.Context, *connect.Request[v1.DeleteBacklogItemRequest]) (*connect.Response[v1.DeleteBacklogItemResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.DeleteBacklogItem is not implemented"))
 }
 
 func (UnimplementedBacklogServiceHandler) TransitionBacklogItemStatus(context.Context, *connect.Request[v1.TransitionBacklogItemStatusRequest]) (*connect.Response[v1.TransitionBacklogItemStatusResponse], error) {

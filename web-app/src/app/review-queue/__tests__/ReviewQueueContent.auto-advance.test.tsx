@@ -328,9 +328,8 @@ describe("ReviewQueueContent — auto-advance suppression on status transition",
     const item2 = makeReviewItem("s2");
     const allItems = [item1, item2];
 
-    // Note: the "deleted externally" path uses force=true (bypasses preference).
-    // This test ensures the status-transition suppression works independently
-    // of the preference toggle.
+    // The "deleted externally" path uses force=false so it also respects the preference.
+    // This test ensures the status-transition suppression works correctly when pref=off.
     const { rerender } = setupWithSelectedSession(allItems, "s1");
 
     mockUseReviewQueueContext.mockReturnValue(makeContextValue(allItems));
@@ -425,6 +424,41 @@ describe("ReviewQueueContent — auto-advance fires on genuine removal", () => {
       ([url]: [string]) => typeof url === "string" && url.includes("?session=")
     );
     expect(sessionNavCalls.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * T-AA-008
+   * When auto-advance preference is OFF and the selected session is genuinely
+   * removed from allQueueItems (e.g. after approving/denying a permission request),
+   * auto-advance must NOT fire. The user may still want to watch the session continue.
+   *
+   * Previously broken: the "deleted externally" path used force=true, bypassing
+   * the preference and always advancing after any genuine removal.
+   */
+  it("T-AA-008: should_not_autoAdvance_when_preferenceIsOff_and_sessionGenuinelyRemoved", () => {
+    localStorage.setItem("review-queue-auto-advance", "false");
+
+    const item1 = makeReviewItem("s1");
+    const item2 = makeReviewItem("s2");
+    const allItems = [item1, item2];
+
+    const { rerender } = setupWithSelectedSession(allItems, "s1");
+
+    // Genuinely remove s1 from allQueueItems (simulates approve/deny acknowledgement)
+    mockUseReviewQueueContext.mockReturnValue(makeContextValue([item2]));
+    mockUseSessionServiceContext.mockReturnValue(
+      makeSessionServiceValue([makeSession("s2")])
+    );
+
+    act(() => { capturedOnItemsChange?.([item2]); });
+    rerender(<ReviewQueuePage />);
+    act(() => { jest.advanceTimersByTime(400); });
+
+    // Auto-advance must NOT fire — preference is off
+    const sessionNavCalls = mockPush.mock.calls.filter(
+      ([url]: [string]) => typeof url === "string" && url.includes("?session=")
+    );
+    expect(sessionNavCalls).toHaveLength(0);
   });
 });
 

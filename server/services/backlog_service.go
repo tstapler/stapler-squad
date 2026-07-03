@@ -40,6 +40,11 @@ const defaultTriageCleanupTimeout = 10 * time.Second
 // block the RPC handler for however long the client's transport allows.
 const defaultTriggerSyncTimeout = 2 * time.Minute
 
+// maxTriageSessionAge is the maximum age of an open triage ItemSession before it is
+// treated as orphaned in the re-trigger guard. This prevents a hung or leaked session
+// from blocking re-trigger indefinitely.
+const maxTriageSessionAge = 2 * time.Hour
+
 // SessionCreator allows BacklogService to spawn sessions without importing handler internals.
 type SessionCreator interface {
 	CreateDirectorySession(ctx context.Context, title, path, prompt string, tags []string, oneShot bool, hidden bool) (*session.Instance, error)
@@ -116,6 +121,11 @@ type BacklogService struct {
 	// also don't self-gate). Wired to BacklogController.IsEnabled in production
 	// so a manually-triggered sync can't run while the feature is toggled off.
 	syncFeatureEnabled func() bool
+
+	// resolveGitHubInput resolves a GitHub URL/shorthand to a local clone path,
+	// cloning it if necessary. Defaults to session.ResolveGitHubInput; overridable
+	// via SetGitHubResolver so tests don't need real network/git access.
+	resolveGitHubInput func(input string) (string, *session.GitHubRef, error)
 }
 
 // NewBacklogService creates a BacklogService with all optional dependencies.
@@ -140,6 +150,7 @@ func NewBacklogService(storage *session.Storage, creator SessionCreator, cfg *co
 		shutdownCancel:       cancel,
 		triageSem:            make(chan struct{}, 8),
 		triageCleanupTimeout: defaultTriageCleanupTimeout,
+		resolveGitHubInput:   session.ResolveGitHubInput,
 	}
 }
 
@@ -189,6 +200,27 @@ func (s *BacklogService) SetSessionStopper(stopper SessionStopper) {
 // When set, SpawnSessionFromItem with autonomous=true will start an AutonomousDriver on the spawned instance.
 func (s *BacklogService) SetAutonomousDriverStarter(starter AutonomousDriverStarter) {
 	s.autonomousStarter = starter
+}
+
+// SetGitHubResolver overrides how GitHub URLs are resolved to local clone paths.
+// Used by tests to avoid real network/git access; production wiring uses the
+// session.ResolveGitHubInput default set in NewBacklogService.
+func (s *BacklogService) SetGitHubResolver(fn func(input string) (string, *session.GitHubRef, error)) {
+	s.resolveGitHubInput = fn
+}
+
+// resolveRepoPathInput resolves a GitHub URL/shorthand repo_path to a local clone
+// path, cloning it if necessary (mirrors SessionService.CreateSession's handling
+// of GitHub URLs). Plain filesystem paths pass through unchanged.
+func (s *BacklogService) resolveRepoPathInput(input string) (string, error) {
+	if input == "" || !session.IsGitHubURL(input) {
+		return input, nil
+	}
+	localPath, _, err := s.resolveGitHubInput(input)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve GitHub URL %q: %w", input, err)
+	}
+	return localPath, nil
 }
 
 // encryptAndMergeToken produces a token config JSON string suitable for storage.
@@ -495,13 +527,18 @@ func (s *BacklogService) CreateBacklogItem(
 		priority = session.DefaultBacklogPriority
 	}
 
+	repoPath, err := s.resolveRepoPathInput(req.Msg.RepoPath)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
 	data := session.BacklogItemData{
 		Title:              req.Msg.Title,
 		Description:        req.Msg.Description,
 		AcceptanceCriteria: acJSON,
 		Priority:           priority,
 		Status:             string(session.BacklogStatusIdea),
-		RepoPath:           req.Msg.RepoPath,
+		RepoPath:           repoPath,
 		SkipReviewGate:     req.Msg.SkipReviewGate,
 		SkipPlanning:       req.Msg.SkipPlanning,
 		Notes:              req.Msg.Notes,
@@ -645,7 +682,10 @@ func (s *BacklogService) UpdateBacklogItem(
 		update.Priority = &prio
 	}
 	if req.Msg.RepoPath != "" {
-		rp := req.Msg.RepoPath
+		rp, resolveErr := s.resolveRepoPathInput(req.Msg.RepoPath)
+		if resolveErr != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, resolveErr)
+		}
 		update.RepoPath = &rp
 	}
 	skipRG := req.Msg.SkipReviewGate
@@ -707,6 +747,28 @@ func (s *BacklogService) ArchiveBacklogItem(
 	return connect.NewResponse(&sessionv1.ArchiveBacklogItemResponse{
 		Item: backlogItemToProto(archived),
 	}), nil
+}
+
+// --- DeleteBacklogItem ---
+
+// DeleteBacklogItem permanently removes an item and all its child records.
+// +api: backlog:delete-item
+func (s *BacklogService) DeleteBacklogItem(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteBacklogItemRequest],
+) (*connect.Response[sessionv1.DeleteBacklogItemResponse], error) {
+	if s.storage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("storage not available"))
+	}
+
+	if err := s.storage.DeleteBacklogItem(ctx, req.Msg.ItemId); err != nil {
+		if ent.IsNotFound(err) {
+			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("backlog item %q not found", req.Msg.ItemId))
+		}
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to delete backlog item: %w", err))
+	}
+
+	return connect.NewResponse(&sessionv1.DeleteBacklogItemResponse{}), nil
 }
 
 // --- TransitionBacklogItemStatus ---
@@ -1221,8 +1283,11 @@ func (s *BacklogService) TriggerTriage(
 			continue
 		}
 		// Headless triage sessions have no live in-memory instance; treat as orphaned.
+		// Sessions older than maxTriageSessionAge are also treated as orphaned to prevent
+		// a hung or leaked session from blocking re-trigger indefinitely.
 		isHeadless := strings.HasPrefix(is.SessionUUID, headlessTriageUUIDPrefix)
-		notLive := isHeadless || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
+		isStale := time.Since(is.CreatedAt) > maxTriageSessionAge
+		notLive := isHeadless || isStale || s.sessionStopper == nil || !s.sessionStopper.IsSessionLive(is.SessionUUID)
 		statusAdvanced := item.Status != string(session.BacklogStatusIdea)
 		if notLive || statusAdvanced {
 			now := time.Now()

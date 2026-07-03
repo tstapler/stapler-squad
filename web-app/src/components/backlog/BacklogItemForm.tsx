@@ -1,9 +1,10 @@
 "use client";
 // +feature: backlog:item-form
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus } from "@/lib/hooks/useBacklogService";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
+import { isGitHubRef } from "@/lib/github/urlParser";
 import * as styles from "./BacklogItemForm.css";
 
 interface BacklogItemFormProps {
@@ -109,6 +110,7 @@ export function BacklogItemForm({
   }, []);
 
   const busy = submitting || isLoading;
+  const isCloningRepo = useMemo(() => isGitHubRef(repoPath), [repoPath]);
 
   return (
     <form
@@ -170,10 +172,12 @@ export function BacklogItemForm({
             id="backlog-repo-path"
             value={repoPath}
             onChange={setRepoPath}
-            placeholder="/home/user/project"
+            placeholder="/home/user/project or https://github.com/owner/repo"
             required
             disabled={busy}
             error={errors.repoPath}
+            hint="Local path to your clone, or a GitHub URL — we'll clone it for you."
+            detectGitHubUrl
             data-testid="backlog-repo-path-input"
           />
           {errors.repoPath && (
@@ -206,31 +210,41 @@ export function BacklogItemForm({
 
       {/* Flags */}
       <div className={styles.twoColumn}>
-        <label className={styles.checkboxRow} htmlFor="backlog-skip-planning">
-          <input
-            id="backlog-skip-planning"
-            type="checkbox"
-            className={styles.checkboxInput}
-            checked={skipPlanning}
-            onChange={(e) => setSkipPlanning(e.target.checked)}
-            disabled={busy}
-            data-testid="backlog-skip-planning-checkbox"
-          />
-          <span className={styles.checkboxLabel}>Skip planning phase</span>
-        </label>
+        <div className={styles.fieldGroup}>
+          <label className={styles.checkboxRow} htmlFor="backlog-skip-planning">
+            <input
+              id="backlog-skip-planning"
+              type="checkbox"
+              className={styles.checkboxInput}
+              checked={skipPlanning}
+              onChange={(e) => setSkipPlanning(e.target.checked)}
+              disabled={busy}
+              data-testid="backlog-skip-planning-checkbox"
+            />
+            <span className={styles.checkboxLabel}>Skip planning phase</span>
+          </label>
+          <span className={styles.checkboxHint}>
+            Go straight to triage without a separate planning pass.
+          </span>
+        </div>
 
-        <label className={styles.checkboxRow} htmlFor="backlog-skip-review">
-          <input
-            id="backlog-skip-review"
-            type="checkbox"
-            className={styles.checkboxInput}
-            checked={skipReviewGate}
-            onChange={(e) => setSkipReviewGate(e.target.checked)}
-            disabled={busy}
-            data-testid="backlog-skip-review-checkbox"
-          />
-          <span className={styles.checkboxLabel}>Skip review gate</span>
-        </label>
+        <div className={styles.fieldGroup}>
+          <label className={styles.checkboxRow} htmlFor="backlog-skip-review">
+            <input
+              id="backlog-skip-review"
+              type="checkbox"
+              className={styles.checkboxInput}
+              checked={skipReviewGate}
+              onChange={(e) => setSkipReviewGate(e.target.checked)}
+              disabled={busy}
+              data-testid="backlog-skip-review-checkbox"
+            />
+            <span className={styles.checkboxLabel}>Skip review gate</span>
+          </label>
+          <span className={styles.checkboxHint}>
+            Mark work done without an automated review pass first.
+          </span>
+        </div>
       </div>
 
       {/* Acceptance Criteria */}
@@ -310,7 +324,13 @@ export function BacklogItemForm({
           disabled={busy}
           data-testid="backlog-form-submit"
         >
-          {busy ? "Saving…" : initialValues?.id ? "Save Changes" : "Create Item"}
+          {busy
+            ? isCloningRepo
+              ? "Cloning repository…"
+              : "Saving…"
+            : initialValues?.id
+              ? "Save Changes"
+              : "Create Item"}
         </button>
       </div>
     </form>
