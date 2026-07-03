@@ -72,13 +72,14 @@ func (i *Instance) Rename(newTitle string) error {
 	}
 
 	// Use mutex for thread safety
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	i.mu.Lock()
+	defer i.mu.Unlock()
 
 	// Update the title
 	oldTitle := i.Title
 	i.Title = newTitle
 	i.UpdatedAt = time.Now()
+	i.snapshot.Store(buildSnapshot(i))
 
 	log.Info("renamed session", "from", oldTitle, "to", newTitle)
 	return nil
@@ -170,9 +171,10 @@ func (i *Instance) CaptureCurrentState() error {
 	if path == "" {
 		return nil
 	}
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	i.WorkingDir = path
+	i.snapshot.Store(buildSnapshot(i))
 	return nil
 }
 
@@ -242,17 +244,27 @@ func (i *Instance) GetPRDisplayInfo() string { return i.GitHub().PRDisplayInfo()
 // Delegates to GitHubMetadataView.IsGitHubSession.
 func (i *Instance) IsGitHubSession() bool { return i.GitHub().IsGitHubSession() }
 
+// prUpdateResult is returned by UpdatePRStatus.
+type prUpdateResult struct{ PriorityChanged bool }
+
 // UpdatePRStatus atomically updates the PR status fields on this instance.
 // Called by PRStatusPoller on each successful fetch.
-func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, approvedCount, changesReqCount int, isDraft, terminal bool) {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
-	i.GitHubPRState = state
-	i.GitHubPRPriority = priority
-	i.GitHubPRIsDraft = isDraft
-	i.GitHubApprovedCount = approvedCount
-	i.GitHubChangesReqCount = changesReqCount
-	i.GitHubCheckConclusion = checkConclusion
-	i.GitHubPRStatusTerminal = terminal
-	i.LastPRStatusCheck = time.Now()
+// Returns prUpdateResult indicating whether the priority changed.
+func (i *Instance) UpdatePRStatus(state, priority, checkConclusion string, approvedCount, changesReqCount int, isDraft, terminal bool) prUpdateResult {
+	var result prUpdateResult
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		inst := s.inst
+		result.PriorityChanged = priority != inst.GitHubPRPriority
+		inst.GitHubPRState = state
+		inst.GitHubPRPriority = priority
+		inst.GitHubPRIsDraft = isDraft
+		inst.GitHubApprovedCount = approvedCount
+		inst.GitHubChangesReqCount = changesReqCount
+		inst.GitHubCheckConclusion = checkConclusion
+		inst.GitHubPRStatusTerminal = terminal
+		inst.LastPRStatusCheck = time.Now()
+		inst.snapshot.Store(buildSnapshot(inst))
+		return nil
+	})
+	return result
 }

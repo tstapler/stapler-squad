@@ -71,9 +71,10 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		}
 	}
 
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
+	i.mu.Lock()
+	defer i.mu.Unlock()
 	i.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, i.Title)
+	i.snapshot.Store(buildSnapshot(i))
 }
 
 // GetTimeSinceLastMeaningfulOutput returns how long ago meaningful output was recorded.
@@ -85,15 +86,15 @@ func (i *Instance) GetTimeSinceLastMeaningfulOutput() time.Duration {
 	if ns != 0 {
 		return time.Since(time.Unix(0, ns))
 	}
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	return i.TimeSinceLastMeaningfulOutput(i.CreatedAt)
 }
 
 // GetTimeSinceLastTerminalUpdate delegates to ReviewState.TimeSinceLastTerminalUpdate.
 // Falls back to time since creation if no terminal output has been recorded.
 func (i *Instance) GetTimeSinceLastTerminalUpdate() time.Duration {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	return i.TimeSinceLastTerminalUpdate(i.CreatedAt)
 }

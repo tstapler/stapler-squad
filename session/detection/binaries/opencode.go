@@ -59,7 +59,7 @@ func (d *OpencodeDetector) Patterns() dtypes.StatusPatterns {
 			},
 		},
 		TestsFailing: []dtypes.StatusPattern{},
-		Idle: []dtypes.StatusPattern{
+		Idle:         []dtypes.StatusPattern{
 			// TODO: No distinctive idle string found in opencode TUI source.
 			// The idle state appears as a bordered input box with no spinner.
 			// StatusUnknown is the correct fallback.

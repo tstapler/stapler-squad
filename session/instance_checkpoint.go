@@ -23,17 +23,28 @@ import (
 // CreateCheckpoint captures a named state bookmark for this session.
 // scrollbackSeq should be the current scrollback high-water mark (from ScrollbackManager);
 // pass 0 if the caller does not have access to scrollback state.
-// Thread-safe: acquires stateMutex write lock.
+// Thread-safe: routed through the actor mailbox.
 // Returns an error if the instance is not started.
 func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkpoint, error) {
+	var result *Checkpoint
+	err := i.sendSyncErr(func(s *instanceState) error {
+		var e error
+		result, e = createCheckpointLocked(s, label, scrollbackSeq)
+		return e
+	})
+	return result, err
+}
+
+// createCheckpointLocked is the actor-safe body of CreateCheckpoint.
+// I/O-heavy adapter work is done before any field mutation (same discipline as the
+// old "before stateMutex" comment in the public method).
+func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*Checkpoint, error) {
+	i := s.inst
 	if !i.started {
 		return nil, fmt.Errorf("cannot create checkpoint on unstarted instance '%s'", i.Title)
 	}
 
-	// Perform I/O-heavy adapter import BEFORE acquiring the write lock.
-	// Import calls GetClaudeConversationUUID (stateMutex.RLock) internally; calling
-	// it while we already hold stateMutex.Lock() would be a recursive non-reentrant
-	// lock acquisition and causes a deadlock detected by linkdata/deadlock.
+	// Perform I/O-heavy adapter import BEFORE mutating any fields.
 	cpID := newCheckpointID()
 	var canonicalTurnIndex int
 	var canonicalPath string
@@ -56,8 +67,8 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 					cpPath := filepath.Join(cpDir, cpID+".jsonl")
 					if f, err := os.Create(cpPath); err == nil {
 						for _, turn := range turns {
-							if bytes, err := json.Marshal(turn); err == nil {
-								f.Write(bytes)
+							if b, err := json.Marshal(turn); err == nil {
+								f.Write(b)
 								f.Write([]byte("\n"))
 							}
 						}
@@ -68,9 +79,6 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 			}
 		}
 	}
-
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
 
 	// Collect git SHA — gracefully empty if no worktree.
 	gitSHA, _ := i.gitManager.GetCurrentCommitSHA()
@@ -119,6 +127,7 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 
 	i.Checkpoints = append(i.Checkpoints, cp)
 	i.ActiveCheckpoint = cp.ID
+	i.snapshot.Store(buildSnapshot(i))
 
 	return &cp, nil
 }
@@ -196,13 +205,13 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 
 	// Export canonical turns if successfully parsed
 	if hasCanonicalForked {
-		newInst.stateMutex.Lock()
+		newInst.mu.Lock()
 		if newInst.claudeSession == nil {
 			newInst.claudeSession = &ClaudeSessionData{}
 		}
 		newInst.claudeSession.ConversationUUID = newConvUUID
 		newInst.claudeSession.ProjectName = newInst.Title
-		newInst.stateMutex.Unlock()
+		newInst.mu.Unlock()
 
 		var adapter HistoryAdapter
 		claude := NewClaudeAdapter()
@@ -240,8 +249,8 @@ func (i *Instance) ForkFromCheckpoint(checkpointID, newTitle string, configDir s
 // GetCheckpoints returns a snapshot copy of the checkpoint list, safe for
 // concurrent reads from outside the instance's lock domain.
 func (i *Instance) GetCheckpoints() CheckpointList {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	cp := make(CheckpointList, len(i.Checkpoints))
 	copy(cp, i.Checkpoints)
 	return cp

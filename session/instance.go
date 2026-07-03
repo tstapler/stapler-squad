@@ -284,12 +284,16 @@ type Instance struct {
 	// Claude Code session information for persistence and re-attachment
 	claudeSession *ClaudeSessionData
 
+	// claudeSessionMu protects claudeSession and claudeSessionIDSavedCallback.
+	// Separate from mu to avoid holding the instance write lock during persistence I/O.
+	claudeSessionMu sync.RWMutex
+
 	// Review queue integration for tracking sessions needing attention
 	reviewQueue *ReviewQueue
 
 	// ReviewState holds all review queue and terminal activity timestamps.
 	// Fields are embedded (promoted) so external code can still access inst.LastViewed etc.
-	// Protected by stateMutex.
+	// Protected by mu (via sendSyncErr / Snapshot).
 	ReviewState
 
 	// controllerManager owns the ClaudeController and InstanceStatusManager references.
@@ -328,8 +332,21 @@ type Instance struct {
 	// callers that read inst.Tags directly.
 	tagManager TagManager
 
-	// Mutex to protect concurrent access to instance state
-	stateMutex deadlock.RWMutex
+	// snapshot is a lock-free atomic copy of all mutable Instance fields, published
+	// by every mutator before it releases mu. Readers can call Snapshot()
+	// without acquiring any lock. Load() is guaranteed non-nil after construction.
+	snapshot atomic.Pointer[InstanceSnapshot]
+
+	// liveInstance is the actor handle for this instance; set by NewLiveInstance.
+	// Accessed atomically so actor helpers (sendSyncErr/send/sendCtx) can route
+	// commands through the mailbox without holding any other lock.
+	liveInstance atomic.Pointer[LiveInstance]
+
+	// mu protects Instance's mutable data fields (Status, started, Tags,
+	// Checkpoints, ReviewState timestamps, GitHub PR fields, Artifacts, etc.).
+	// Use sendSyncErr / send for writes and Snapshot() for reads.
+	// Not reentrant: fn passed to sendSyncErr must not call sendSyncErr or Snapshot.
+	mu sync.RWMutex
 	// startMu prevents concurrent calls to start() from racing during session setup.
 	// Held for the full duration of start(); callers that lose the race return early.
 	startMu deadlock.Mutex
@@ -368,7 +385,7 @@ type Instance struct {
 	claudeSessionIDSavedCallback func()
 
 	// Artifacts holds structured artifacts extracted from the session's JSONL history.
-	// Populated asynchronously by ArtifactExtractor. Protected by stateMutex.
+	// Populated asynchronously by ArtifactExtractor. Protected by mu.
 	Artifacts *artifacts.SessionArtifactsBlob
 }
 
@@ -618,7 +635,35 @@ func NewInstance(opts InstanceOptions) (*Instance, error) {
 	// Initialize the CDP manager (noop when Chrome is absent on any platform).
 	instance.initCDPManager(cfg)
 
+	finishInstanceConstruction(instance)
 	return instance, nil
+}
+
+// Snapshot returns the most recently published atomic snapshot of this Instance's
+// mutable fields. The returned pointer is never nil. Callers must not mutate
+// the returned struct.
+//
+// On the first call for an Instance that bypassed finishInstanceConstruction
+// (e.g. struct literals in tests), the snapshot is built lazily under stateMutex
+// and stored via CAS so concurrent first-callers converge on one value.
+func (i *Instance) Snapshot() *InstanceSnapshot {
+	if snap := i.snapshot.Load(); snap != nil {
+		return snap
+	}
+	// Rare slow path: publish an initial snapshot.
+	i.mu.RLock()
+	snap := buildSnapshot(i)
+	i.mu.RUnlock()
+	i.snapshot.CompareAndSwap(nil, snap)
+	return i.snapshot.Load()
+}
+
+// finishInstanceConstruction publishes the initial snapshot so that Load() is
+// guaranteed non-nil by the time the *Instance is visible to any other goroutine.
+// This is the single choke-point called by every construction site — Epic 3
+// will extend this helper to also spawn the actor goroutine.
+func finishInstanceConstruction(i *Instance) {
+	i.snapshot.Store(buildSnapshot(i))
 }
 
 // SetShellRepository injects the shell persistence backend. Called by Storage after
@@ -641,26 +686,17 @@ func (i *Instance) GetSessionGoal() *SessionGoalData {
 }
 
 // HasGitHubPR reports whether a GitHub PR has been associated with this session.
-// Safe for use from any goroutine; acquires stateMutex internally.
+// Safe for use from any goroutine.
 func (i *Instance) HasGitHubPR() bool {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
-	return i.GitHubPRNumber > 0
+	return i.Snapshot().GitHub.GitHubPRNumber > 0
 }
 
 // SetArtifacts atomically updates the in-memory Artifacts cache.
 func (i *Instance) SetArtifacts(blob *artifacts.SessionArtifactsBlob) {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
-	i.Artifacts = blob
-}
-
-// SetGitHubPRNumber atomically updates the in-memory GitHubPRNumber field.
-// Call after a successful DB write so HasGitHubPR() reflects the update (M-3 fix).
-func (i *Instance) SetGitHubPRNumber(n int) {
-	i.stateMutex.Lock()
-	defer i.stateMutex.Unlock()
-	i.GitHubPRNumber = n
+	i.sendSyncErr(func(s *instanceState) error { //nolint:errcheck
+		s.inst.Artifacts = blob
+		return nil
+	})
 }
 
 // SetSessionGoalCached atomically updates the in-memory sessionGoal cache.
@@ -692,9 +728,188 @@ func NewInstanceWithCleanup(opts InstanceOptions) (*Instance, tmux.CleanupFunc, 
 // Start, Pause, Resume, Kill, Destroy, Restart and their internal helpers.
 // These coordinate across sub-managers (tmuxManager, gitManager, controllerManager).
 
+// instanceOnExitCallback returns an exit handler for the tmux control-mode %exit /
+// PTY EOF event. Defined as a top-level named function (not an inline closure) so
+// that actorState is NOT in its lexical scope — this prevents accidental calls to
+// transitionToLocked(actorState, ...) from a background goroutine (tmux reader),
+// which would be a self-sendSync deadlock.
+func instanceOnExitCallback(i *Instance) func(string) {
+	return func(reason string) {
+		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
+		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
+		i.send(func(s *instanceState) {
+			if s.inst.Status == Active {
+				if err := transitionToLocked(s, context.Background(), Stopped); err != nil {
+					log.Warn("exit callback transition failed", "session", i.Title, "err", err)
+				}
+			}
+		})
+		i.fireLifecycleEvent(EventExited, reason)
+	}
+}
+
+// Start starts the instance by routing through the actor mailbox.
 // firstTimeSetup is true if this is a new instance. Otherwise, it's one loaded from storage.
 func (i *Instance) Start(firstTimeSetup bool) error {
-	return i.start(firstTimeSetup, false, nil)
+	return i.sendSyncErr(func(s *instanceState) error {
+		return startLocked(s, firstTimeSetup)
+	})
+}
+
+// startLocked is the actor-safe body of Start(). Called only from within
+// sendSyncErr/send closures. The param is named actorState (not s) to make
+// actor-only ownership visually distinct and prevent future edits from treating
+// nested closures as safe call sites for other Locked twins.
+//
+// Differences from start():
+//   - No startMu.Lock() — the actor goroutine serializes concurrent calls.
+//     startMu and restartMu are retained; Epic 7 makes the final decision.
+//   - No setupCleanup / cleanup params — callers that need cleanup use StartWithCleanup.
+//   - Final Active transition uses transitionToLocked (no stateMutex needed).
+//   - Exit callback uses instanceOnExitCallback (actorState not in closure scope).
+func startLocked(actorState *instanceState, firstTimeSetup bool) error {
+	i := actorState.inst
+
+	log.Info("starting instance", "session", i.Title, "path", i.Path, "program", i.Program, "first_time_setup", firstTimeSetup)
+
+	if !firstTimeSetup {
+		i.trackRestartRate()
+	}
+
+	if i.Title == "" {
+		return fmt.Errorf("instance title cannot be empty")
+	}
+
+	i.initTmuxSession()
+
+	i.pm().ResetExitOnce()
+	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
+
+	if firstTimeSetup {
+		if err := i.setupFirstTimeWorktree(); err != nil {
+			return err
+		}
+	}
+
+	var setupErr error
+	defer func() {
+		if setupErr != nil {
+			if cleanupErr := i.Kill(); cleanupErr != nil {
+				setupErr = fmt.Errorf("%v (cleanup error: %v)", setupErr, cleanupErr)
+			}
+		}
+	}()
+
+	if !firstTimeSetup {
+		if !i.pm().IsAlive() {
+			startPath := i.resolveStartPath(i.GetEffectiveRootDir())
+			if i.HasClaudeSession() {
+				log.Info("cold restoring with --resume", "session", i.Title, "uuid", i.claudeSession.ConversationUUID, "path", startPath)
+			} else {
+				log.Warn("cold start: tmux dead, no conversation UUID, starting fresh", "session", i.Title, "path", startPath)
+			}
+			i.startVNCDisplay(context.Background())
+			i.allocateCDPPort()
+			if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+					}
+				}
+			}
+			if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+				if tb, ok := i.processManager.(*TmuxBackend); ok {
+					if sess := tb.TmuxManager().Session(); sess != nil {
+						sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+					}
+				}
+			}
+			if err := i.pm().Start(startPath); err != nil {
+				setupErr = fmt.Errorf("cold restore Start failed for '%s': %w", i.Title, err)
+				return setupErr
+			}
+			_ = i.pm().RestoreWithWorkDir(startPath)
+			if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
+				log.Error("cold-restored session: pty attach failed, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+			}
+			if i.claudeSession != nil {
+				i.claudeSession.ConversationUUID = ""
+				i.HistoryFilePath = ""
+			}
+		} else {
+			i.startVNCDisplay(context.Background())
+			i.allocateCDPPort()
+			workDir := i.Path
+			if i.gitManager.HasWorktree() {
+				workDir = i.gitManager.GetWorktreePath()
+			}
+			log.Info("restoring existing tmux session", "session", i.Title, "path", workDir)
+			if err := i.pm().RestoreWithWorkDir(workDir); err != nil {
+				setupErr = fmt.Errorf("failed to restore existing session: %w", err)
+				return setupErr
+			}
+			log.Info("successfully restored tmux session", "session", i.Title)
+		}
+	} else {
+		basePath := i.Path
+		if i.gitManager.HasWorktree() {
+			log.Info("setting up git worktree", "session", i.Title)
+			if err := i.gitManager.Setup(); err != nil {
+				log.ForSession(i.Title).Error("failed to setup git worktree", "err", err)
+				setupErr = fmt.Errorf("failed to setup git worktree: %w", err)
+				return setupErr
+			}
+			basePath = i.gitManager.GetWorktreePath()
+		}
+		startPath := i.resolveStartPath(basePath)
+		i.startVNCDisplay(context.Background())
+		i.allocateCDPPort()
+		if displayEnv := i.VNCDisplayEnv(); displayEnv != "" {
+			if tb, ok := i.processManager.(*TmuxBackend); ok {
+				if sess := tb.TmuxManager().Session(); sess != nil {
+					sess.ExtraEnv = append(sess.ExtraEnv, displayEnv)
+				}
+			}
+		}
+		if cdpEnvs := i.CDPDisplayEnv(); len(cdpEnvs) > 0 {
+			if tb, ok := i.processManager.(*TmuxBackend); ok {
+				if sess := tb.TmuxManager().Session(); sess != nil {
+					sess.ExtraEnv = append(sess.ExtraEnv, cdpEnvs...)
+				}
+			}
+		}
+		if err := i.pm().Start(startPath); err != nil {
+			if i.gitManager.HasWorktree() {
+				if cleanupErr := i.gitManager.Cleanup(); cleanupErr != nil {
+					err = fmt.Errorf("%v (cleanup error: %v)", err, cleanupErr)
+				}
+			}
+			setupErr = fmt.Errorf("failed to start new session: %w", err)
+			return setupErr
+		}
+		_ = i.pm().RestoreWithWorkDir(startPath)
+		if _, ptyErr := i.pm().GetPTY(); ptyErr != nil {
+			log.Error("new session: pty attach failed after retries, controller and sendkeys unavailable", "session", i.Title, "err", ptyErr)
+		}
+	}
+
+	// Transition to Active — no stateMutex needed inside actor command.
+	if i.Status != Active {
+		if err := transitionToLocked(actorState, context.Background(), Active); err != nil {
+			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
+			return setupErr
+		}
+	}
+	i.started = true
+	i.snapshot.Store(buildSnapshot(i))
+	i.fireLifecycleEvent(EventStarted, "")
+
+	i.startVNCServer(context.Background())
+	i.startCDP(context.Background())
+	log.ForSession(i.Title).Info("session started", "first_time_setup", firstTimeSetup)
+	log.Debug("skipping controller startup, will be started after wiring", "session", i.Title, "firstTimeSetup", firstTimeSetup)
+
+	return nil
 }
 
 // StartWithCleanup starts the instance and returns a cleanup function.
@@ -733,19 +948,9 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 	// Wire the exit callback so control-mode %exit / PTY EOF fires our handler.
 	// ResetExitOnce is called first so repeated start() calls (restarts) allow
 	// the callback to fire again after the sync.Once was exhausted in the prior run.
+	// instanceOnExitCallback routes through the actor when available (Story 4.3c).
 	i.pm().ResetExitOnce()
-	i.pm().SetOnExitCallback(func(reason string) {
-		log.Info("unexpected exit detected via control mode", "session", i.Title, "reason", reason)
-		log.ForSession(i.Title).Info("session exited unexpectedly", "reason", reason)
-		i.stateMutex.Lock()
-		if i.Status == Active {
-			if err := i.transitionTo(context.Background(), Stopped); err != nil {
-				log.Warn("exit callback transition failed", "session", i.Title, "err", err)
-			}
-		}
-		i.stateMutex.Unlock()
-		i.fireLifecycleEvent(EventExited, reason)
-	})
+	i.pm().SetOnExitCallback(instanceOnExitCallback(i))
 
 	if firstTimeSetup {
 		if err := i.setupFirstTimeWorktree(); err != nil {
@@ -897,21 +1102,21 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		}
 	}
 
-	i.stateMutex.Lock()
+	i.mu.Lock()
 	// Only transition if not already Active (e.g., recovery/restart after KillSession
 	// preserves the Active status).
 	if i.Status != Active {
 		if err := i.transitionTo(context.Background(), Active); err != nil {
-			i.stateMutex.Unlock()
+			i.mu.Unlock()
 			setupErr = fmt.Errorf("failed to transition to Active: %w", err)
 			return setupErr
 		}
 	}
-	// started must be set while still holding stateMutex: every reader of this
-	// field (instance_tmux.go, instance_terminal.go, instance_workspace.go, etc.)
-	// takes stateMutex first, so writing it after Unlock() is a data race.
+	// started must be set while still holding mu so readers via Snapshot() observe
+	// a consistent Started+Status pair.
 	i.started = true
-	i.stateMutex.Unlock()
+	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
 	i.fireLifecycleEvent(EventStarted, "")
 
 	// Phase 2: Start x11vnc and window tracker now that the tmux session is live.
@@ -971,8 +1176,14 @@ func (i *Instance) Destroy() error {
 	return i.combineErrors(errs)
 }
 
-// Pause stops the tmux session and removes the worktree, preserving the branch
+// Pause stops the tmux session and removes the worktree, preserving the branch.
 func (i *Instance) Pause() error {
+	return i.sendSyncErr(func(s *instanceState) error { return pauseLocked(s) })
+}
+
+// pauseLocked is the actor-safe body of Pause().
+func pauseLocked(s *instanceState) error {
+	i := s.inst
 	if !i.started {
 		return fmt.Errorf("cannot pause instance that has not been started")
 	}
@@ -980,8 +1191,7 @@ func (i *Instance) Pause() error {
 		return fmt.Errorf("instance is already paused")
 	}
 
-	// Stop the controller when pausing
-	i.StopController()
+	stopControllerLocked(s)
 
 	var errs []error
 
@@ -1000,29 +1210,23 @@ func (i *Instance) Pause() error {
 		}
 	}
 
-	// Kill the tmux session to free memory. The Claude session UUID is already
-	// persisted by wireClaudeSessionIDSavedCallback before we reach this point.
-	// Resume() handles the dead-tmux case by reinitializing with --resume <uuid>.
+	// Kill the tmux session to free memory.
 	if err := i.KillSession(); err != nil {
 		log.Warn("pause: failed to kill tmux session, falling back to detach", "session", i.Title, "err", err)
-		// Non-fatal: try a plain detach so the session is at least unreachable.
 		if detachErr := i.pm().DetachSafely(); detachErr != nil {
 			errs = append(errs, fmt.Errorf("failed to detach tmux session: %w", detachErr))
 			log.Error("failed to detach tmux session", "err", detachErr)
 		}
 	}
 
-	// Check if worktree exists before trying to remove it
+	// Check if worktree exists before trying to remove it.
 	if i.IsWorktree {
 		if _, err := os.Stat(i.gitManager.GetWorktreePath()); err == nil {
-			// Remove worktree but keep branch
 			if err := i.gitManager.Remove(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to remove git worktree: %w", err))
 				log.Error("failed to remove git worktree", "err", err)
 				return i.combineErrors(errs)
 			}
-
-			// Only prune if remove was successful
 			if err := i.gitManager.Prune(); err != nil {
 				errs = append(errs, fmt.Errorf("failed to prune git worktrees: %w", err))
 				log.Error("failed to prune git worktrees", "err", err)
@@ -1036,12 +1240,9 @@ func (i *Instance) Pause() error {
 		return err
 	}
 
-	i.stateMutex.Lock()
-	if err := i.transitionTo(context.Background(), Paused); err != nil {
-		i.stateMutex.Unlock()
+	if err := transitionToLocked(s, context.Background(), Paused); err != nil {
 		return fmt.Errorf("failed to transition to Paused: %w", err)
 	}
-	i.stateMutex.Unlock()
 	log.ForSession(i.Title).Info("session paused")
 	_ = clipboard.WriteAll(i.gitManager.GetBranchName())
 	return nil
@@ -1146,12 +1347,12 @@ func (i *Instance) Resume() error {
 		}
 	}
 
-	i.stateMutex.Lock()
+	i.mu.Lock()
 	if err := i.transitionTo(context.Background(), Active); err != nil {
-		i.stateMutex.Unlock()
+		i.mu.Unlock()
 		return fmt.Errorf("failed to transition to Active on resume: %w", err)
 	}
-	i.stateMutex.Unlock()
+	i.mu.Unlock()
 	log.ForSession(i.Title).Info("session resumed")
 
 	// Start ClaudeController for idle detection and automation
@@ -1280,7 +1481,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 
 	// For paused sessions, transition to Active now that the new tmux session is live.
 	// For already-active sessions, preserve the existing status.
-	i.stateMutex.Lock()
+	i.mu.Lock()
 	if waspaused {
 		if err := i.transitionTo(context.Background(), Active); err != nil {
 			log.Warn("restart: failed to transition from paused to active", "session", i.Title, "err", err)
@@ -1289,7 +1490,8 @@ func (i *Instance) Restart(preserveOutput bool) error {
 		i.started = true
 	}
 	i.UpdatedAt = time.Now()
-	i.stateMutex.Unlock()
+	i.snapshot.Store(buildSnapshot(i))
+	i.mu.Unlock()
 
 	log.Info("successfully restarted session", "session", i.Title)
 	return nil

@@ -1,100 +1,130 @@
 # Validation: Switching Session Programs Does Not Save Correctly
 
+> **Superseded 2026-07-01.** Replaces the 2026-06-30 version, which mapped tests to a fix that has
+> since shipped (commit `914138ec`). This revision maps tests to the **residual gaps** (see
+> `plan.md`), since the core save-and-persist behavior is already correct on `main` but untested.
+
 ## Acceptance Criteria → Test Mapping
 
-### AC1: Program change saves correctly for all session states
+### AC1: Program change persists correctly for every session state (regression coverage for the shipped fix — currently untested)
 
 | Test | Type | Covers |
 |------|------|--------|
-| `TestUpdateSession_ProgramUpdate_Active_Restarts` | Go unit | Active session: program updated in DB + `Restart()` called |
-| `TestUpdateSession_ProgramUpdate_Stopped_SavesNorestart` | Go unit | Stopped session: program updated in DB, no restart |
-| `TestUpdateSession_ProgramUpdate_Paused_SavesNoRestart` | Go unit | Paused session: program saved, no restart, used on resume |
-| `TestUpdateSession_ProgramUpdate_SameValue_NoOp` | Go unit | No restart when program unchanged |
-| `TestUpdateSession_ProgramUpdate_RestartError_RollsBack` | Go unit | Restart failure: verify DB not left in inconsistent state |
+| `TestUpdateSession_ProgramUpdate_Active_RestartsAndPersists` | Go unit | Active session: `SaveInstances` called before `Restart`; DB has new program even if `Restart` errors |
+| `TestUpdateSession_ProgramUpdate_Stopped_SavesNoRestart` | Go unit | Non-Active session: program persisted, `Restart` never invoked |
+| `TestUpdateSession_ProgramUpdate_EmptyString_ResolvesToConfigDefault` | Go unit | `program: ""` resolves to `config.LoadConfig().DefaultProgram` before persistence, not dropped and not stored as `""` |
+| `TestUpdateSession_ProgramUpdate_SameValue_NoOp` | Go unit | No restart/save-of-new-value churn when requested program equals current |
+| `TestUpdateSession_ProgramUpdate_RestartError_DBStillConsistent` | Go unit | Restart failure returns `CodeInternal` but DB already has the new program (pre-save ordering) |
 
-### AC2: "System default" (empty string) clears the program
-
-| Test | Type | Covers |
-|------|------|--------|
-| `TestUpdateSession_ProgramUpdate_EmptyString_ClearsToDefault` | Go unit | Empty string → persists resolved config default, not blocked by guard |
-| `TestUpdateSession_ProgramUpdate_EmptyString_WasBlockedByGuard` | Go unit (regression) | Guard regression: verify `*req.Msg.Program != ""` is gone |
-
-### AC3: React state syncs from WatchSessions after external update
+### AC2: Program change is discoverable and usable from the overflow menu (regression coverage for shipped UI)
 
 | Test | Type | Covers |
 |------|------|--------|
-| `program edit shows updated value after session stream update` | Jest/RTL | `useEffect` re-syncs `programValue` when `session.program` changes and `!isEditingProgram` |
-| `program edit form does not re-sync while editing is active` | Jest/RTL | Re-sync guard: `isEditingProgram == true` blocks overwrite |
+| `SessionActionsOverflow_should_showChangeProgramItem_When_menuOpen` | Jest/RTL | Menu item renders |
+| `SessionActionsOverflow_should_prefillCurrentProgram_When_pickerOpens` | Jest/RTL | Dialog pre-selects `session.program` |
+| `SessionActionsOverflow_should_callOnChangeProgram_When_saved` | Jest/RTL | Save wires to `onChangeProgram(sessionId, value)` |
+| `SessionActionsOverflow_should_sendEmptyString_When_systemDefaultSelected` | Jest/RTL | "System default" option saves `""`, not omitted |
+| `SessionActionsOverflow_should_showRestartHint_When_sessionActive` | Jest/RTL | Restart warning text only renders for `SessionStatus.ACTIVE` (also regression-guards Task 11's literal→enum fix) |
 
-### AC4: Program change is discoverable from overflow menu
-
-| Test | Type | Covers |
-|------|------|--------|
-| `Change Program appears in session overflow menu` | Jest/RTL | Menu item renders |
-| `Change Program opens inline select dialog` | Jest/RTL | Dialog opens with current program pre-selected |
-| `Change Program dialog calls updateSession on save` | Jest/RTL | Save wires to hook |
-| `session-program-change.spec.ts` | Playwright e2e | Full flow: overflow → select → save → session list shows new program |
-
-### AC5: Active session restart requires confirmation
+### AC3: Two independent program-switch code paths stay consistent (new — closes pitfalls gap)
 
 | Test | Type | Covers |
 |------|------|--------|
-| `Change Program on Active session shows confirmation dialog` | Jest/RTL | Confirmation renders with restart warning |
-| `Change Program confirmation cancel does not call updateSession` | Jest/RTL | Cancel path |
-| `Change Program confirmation confirm calls updateSession` | Jest/RTL | Confirm path |
+| `TestUpdateSessionProgram_EmptyString_ResolvesToConfigDefault` | Go unit | Capacity-monitor path gets the same empty→default guard as the RPC path (currently missing) |
+| `TestProgramSwitch_ConcurrentManualAndAutoFallback_NoDoubleRestart` | Go unit (race) | Both paths firing near-simultaneously on the same instance serialize instead of double-restarting/double-porting history; run under `go test -race` per `make ci`'s `test-race` target |
 
-### AC6: Non-Active sessions show pending indicator
-
-| Test | Type | Covers |
-|------|------|--------|
-| `Stopped session shows pending-program indicator after change` | Jest/RTL | Pending state renders |
-
-### AC7: Claude UUID cleared on program switch away from claude
+### AC4: Claude conversation UUID does not leak across a program-family round trip (new — closes pitfalls gap)
 
 | Test | Type | Covers |
 |------|------|--------|
-| `TestUpdateSession_ProgramSwitch_ClearsClaudeUUID` | Go unit | UUID cleared when switching from `claude` → non-claude |
-| `TestUpdateSession_ProgramSwitch_PreservesUUID_SameFamily` | Go unit | UUID preserved when switching within claude family |
+| `TestUpdateSession_ProgramSwitch_ClearsClaudeUUID_LeavingFamily` | Go unit | Switching claude → aider clears `claudeSession.ConversationUUID` / `HistoryFilePath` |
+| `TestUpdateSession_ProgramSwitch_PreservesUUID_WithinClaudeAntigravityFamily` | Go unit | Switching claude ↔ antigravity still ports history via `PortSessionHistory`, UUID not blanked |
+| `TestUpdateSession_ProgramSwitch_RoundTrip_NoStaleResume` | Go unit (regression) | claude → aider → claude does not pass a stale `--resume <uuid>` on the second switch |
+
+### AC5: Active-session program change requires explicit confirmation (new — UX gap)
+
+| Test | Type | Covers |
+|------|------|--------|
+| `SessionActionsOverflow_should_showConfirmDialog_When_savingProgramOnActiveSession` | Jest/RTL | Two-step confirm renders instead of immediate save, matching `Restart`/`Delete` pattern |
+| `SessionActionsOverflow_should_notCallOnChangeProgram_When_confirmCancelled` | Jest/RTL | Cancel path is a no-op |
+| `SessionActionsOverflow_should_callOnChangeProgram_When_confirmAccepted` | Jest/RTL | Confirm path proceeds |
+
+### AC6: Non-Active sessions surface a "pending on resume" state after a program change (new — UX gap)
+
+| Test | Type | Covers |
+|------|------|--------|
+| `SessionCard_should_showPendingProgramBadge_When_stoppedSessionProgramChangedSinceLastLaunch` | Jest/RTL | Badge renders when `session.program` differs from the program embedded in `session.launchCommand` |
+
+### AC7: Overflow-menu program picker doesn't clobber concurrent server-side changes (new — closes pitfalls gap)
+
+| Test | Type | Covers |
+|------|------|--------|
+| `SessionActionsOverflow_should_resyncPickerValue_When_sessionProgramChangesWhileDialogOpen` | Jest/RTL | Mirrors `SessionDetailView`'s existing re-sync `useEffect`; open dialog reflects an external `WatchSessions` push instead of saving stale local state |
+
+### AC8: End-to-end flow works through the real UI
+
+| Test | Type | Covers |
+|------|------|--------|
+| `tests/e2e/session-program-change.spec.ts` | Playwright e2e | Overflow menu → change program → save → session list/detail view reflect new program; asserts via `data-testid`/ARIA locators per `.claude/rules/e2e-test-conventions.md`, no `waitForTimeout` |
 
 ---
 
 ## Edge Cases and Error Scenarios
 
-### Edge Case 1: Program not in available programs list
-- User's shell PATH changed after session was created; program no longer resolvable.
-- **Expected:** Backend stores the string as-is; session fails to start with a clear error (existing behavior — no change needed).
-- **Test:** `TestUpdateSession_ProgramNotInAvailableList_SavesAnyway` — verify no validation on program string content.
+### Edge Case 1: `program` not in the available-programs list
+- Program string is stale (PATH changed, or a custom/typo'd value) after session creation.
+- **Expected:** backend stores the string as-is (no content validation); session fails to start with a
+  surfaced error on next launch — existing behavior, no change required.
+- **Test:** `TestUpdateSession_ProgramNotInAvailableList_SavesAnyway`
 
-### Edge Case 2: Empty program value and `NotEmpty()` constraint
-- User selects "System default" (value `""`); backend must not persist `""` to DB.
-- **Expected:** Backend resolves `""` to `config.DefaultProgram` before persisting.
-- **Test:** `TestUpdateSession_EmptyProgram_PersistsResolvedDefault` — verify DB stores resolved name, not empty string.
+### Edge Case 2: `instance.started == false` (fallback load path)
+- Poller unavailable; instance loaded via `loadInstancesWithWiring()` without `started = true`.
+- **Expected:** `Restart()` returns `ErrCannotRestart`; `UpdateSession` propagates `CodeInternal`, but
+  since the pre-save already ran, the program metadata is durable and a manual restart afterward picks
+  up the new program.
+- **Test:** `TestUpdateSession_Active_StartedFalse_RestartErrorsButProgramPersists`
 
-### Edge Case 3: Restart fails mid-update (RC4 ordering)
-- `Restart()` succeeds but `SaveInstances` fails (disk full, DB locked).
-- **Expected after fix:** `SaveInstances` runs before `Restart()`; if save fails, restart is skipped and error is returned.
-- **Test:** `TestUpdateSession_SaveFails_DoesNotRestart` — mock storage to fail; verify `Restart()` never called.
+### Edge Case 3: Concurrent manual change + capacity-monitor auto-fallback (see AC3)
+- Both paths read the pre-change `Program`, both decide "changed," both call `SetProgram` /
+  `PortSessionHistory` / `SaveInstances` / `Restart` independently.
+- **Expected (post-Task-4 fix):** second writer blocks or is rejected with a clear "program change
+  already in progress" error rather than double-restarting the tmux session.
+- **Test:** `TestProgramSwitch_ConcurrentManualAndAutoFallback_NoDoubleRestart` (see AC3); run with
+  `go test -race`.
 
-### Edge Case 4: `instance.started == false` (fallback load path)
-- Poller unavailable; instance loaded from DB without `started = true`.
-- **Expected:** `Restart()` returns `ErrCannotRestart`; user gets clear error, not HTTP 200.
-- **Test:** `TestUpdateSession_Active_StartedFalse_ReturnsError` — mock poller unavailable path.
+### Edge Case 4: Restart on a paused worktree session
+- Restarting a paused worktree session recreates the worktree as a side effect unrelated to the program
+  field, and can independently affect Claude conversation UUID state.
+- **Expected:** documented as existing, unrelated behavior — not in scope for this backlog item; note
+  in the PR description so it isn't conflated with AC4's targeted UUID-clearing fix.
+- **Test:** none required; documentation-only callout.
 
-### Edge Case 5: Concurrent program change from two tabs
-- Two UI tabs open; both change program to different values simultaneously.
-- **Expected:** Last write wins (existing mutex behavior); no crash.
-- **Test:** Not required (existing session lock covers this; document as known behavior).
-
-### Edge Case 6: Switch back to claude after UUID was not cleared (regression guard)
-- Pre-fix: UUID not cleared on switch away from claude; switch back attempts `--resume <stale-uuid>`.
-- **Expected post-fix:** UUID cleared on switch away, so switch-back starts fresh.
-- **Test:** `TestUpdateSession_SwitchBackToClaude_NoStaleResume` — verify UUID is absent after round-trip.
+### Edge Case 5: Substring-match false positive in history-porting heuristic
+- `strings.Contains(program, "claude")` / `"agy"` also matches custom program strings like
+  `claude-experimental` or `aider --model agy-local`.
+- **Expected:** flagged as a known limitation; out of scope for this backlog item unless it causes a
+  concrete user-facing bug report. If addressed, needs an exact-match or prefix-based classifier instead
+  of substring containment.
+- **Test:** not required for this item; `TestPortSessionHistory_SubstringFalsePositive_KnownLimitation`
+  could be added as a documented-limitation regression test if the team decides to harden the heuristic
+  later.
 
 ---
 
 ## Test Infrastructure Notes
 
-- Go tests for `UpdateSession` go in `server/services/session_service_test.go` alongside existing `TestUpdateSession_*` tests.
-- Jest tests for program edit UI go alongside `SessionDetailView` tests if they exist, or in a new `SessionDetailView.program.test.tsx`.
-- Playwright e2e test requires the test server running with `STAPLER_SQUAD_INSTANCE=e2e-local`; follows existing e2e conventions (data-testid locators, no waitForTimeout).
-- Register the new e2e spec in `backend-features.json` and `frontend-features.json` per the feature registry rules.
+- Go tests go in `server/services/session_service_test.go` alongside existing `TestUpdateSession_*`
+  tests (tag/title/status coverage already lives there per `research/architecture.md`).
+- `TestProgramSwitch_ConcurrentManualAndAutoFallback_NoDoubleRestart` must run under `go test -race`
+  (part of `make ci`'s `test-race` target) since it's specifically testing a suspected data race.
+- Jest tests for the overflow-menu picker go in a new
+  `web-app/src/components/sessions/__tests__/SessionActionsOverflow.test.tsx` (file currently has zero
+  program-related coverage per `research/pitfalls.md`).
+- Playwright e2e spec: `tests/e2e/session-program-change.spec.ts`, requires the test server running
+  (`STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=e2e-local ./stapler-squad --tmux-keep-server`),
+  must start with `// @feature session:update`, use only `data-testid`/ARIA locators, and avoid
+  `waitForTimeout`.
+- After adding tests: flip `docs/registry/features/backend/session/update.json` `tested` to `true` with
+  real `testIds`; add a new `docs/registry/features/frontend/session-change-program.json` entry (none
+  currently exists); run `make registry-generate` and confirm `docs/registry/coverage-gaps.json` shrinks
+  rather than grows.

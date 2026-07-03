@@ -57,7 +57,7 @@ func createTestWorkflowService(t *testing.T) (*SessionService, *WorkflowService)
 
 	repo := createTestEntClient(t)
 	workflowRepo := session.NewEntWorkflowRepository(repo.GetEntClient())
-	workflowSvc := NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */)
+	workflowSvc := NewWorkflowService(workflowRepo, nil /* scheduler nil OK for CRUD tests */, storage)
 	sessSvc.SetWorkflowService(workflowSvc)
 
 	return sessSvc, workflowSvc

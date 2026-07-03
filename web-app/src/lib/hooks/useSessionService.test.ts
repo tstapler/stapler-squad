@@ -236,10 +236,10 @@ describe("useSessionService visibility/online handler", () => {
       { wrapper: makeWrapper(store) }
     );
 
-    await waitFor(() => expect(mockListSessions).toHaveBeenCalled());
+    // Wait for the listener registration effect to fire (listSessions not called for autoWatch:false)
+    await waitFor(() => expect(capturedDocHandler).not.toBeNull());
 
     // Both listeners must have been registered
-    expect(capturedDocHandler).not.toBeNull();
     expect(capturedWinHandler).not.toBeNull();
   });
 
@@ -308,7 +308,8 @@ describe("useSessionService visibility/online handler", () => {
       { wrapper: makeWrapper(store) }
     );
 
-    await waitFor(() => expect(mockListSessions).toHaveBeenCalled());
+    // Flush effects — listSessions not called for autoWatch:false, so just flush pending promises
+    await act(async () => { await Promise.resolve(); });
 
     // Without the feature flag, no listeners should have been registered
     expect(capturedDocHandler).toBeNull();

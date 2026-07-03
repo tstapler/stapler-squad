@@ -79,6 +79,8 @@ interface RuleBuilderFormProps {
   prefill?: RuleBuilderPrefill | null;
   templateSeed?: RuleTemplate | null;
   onSave: (rule: Partial<ApprovalRuleProto> & { id: string }) => Promise<void>;
+  /** If provided, the form shows a "Save to Config File" destination option. */
+  onSaveToConfig?: (rule: Partial<ApprovalRuleProto>) => Promise<void>;
   onCancel: () => void;
   /** Optional: command-sample generation hook interface, for "Generate from command" section. */
   onCmdGenerate?: (params: { source: SuggestionSource; commandSample?: string }) => Promise<void>;
@@ -88,7 +90,7 @@ interface RuleBuilderFormProps {
   subcommandStats?: SubcommandStat[];
 }
 
-export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onCancel, onCmdGenerate, cmdSuggestions = [], cmdLoading = false, cmdClear, subcommandStats }: RuleBuilderFormProps) {
+export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onSaveToConfig, onCancel, onCmdGenerate, cmdSuggestions = [], cmdLoading = false, cmdClear, subcommandStats }: RuleBuilderFormProps) {
   const [mode, setMode] = useState<Mode>("structured");
   const [pendingMode, setPendingMode] = useState<Mode | null>(null);
   const [toolTarget, setToolTarget] = useState<ToolTarget>("name");
@@ -106,16 +108,17 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onCan
   const [safePythonImportsOnly, setSafePythonImportsOnly] = useState(false);
   const [commandPattern, setCommandPattern] = useState("");
   const [filePattern, setFilePattern] = useState("");
-  const [decision, setDecision] = useState<AutoDecision>(AutoDecision.ESCALATE);
+  const [decision, setDecision] = useState<AutoDecision>(AutoDecision.ALLOW);
   const [riskLevel, setRiskLevel] = useState("medium");
   const [reason, setReason] = useState("");
   const [alternative, setAlternative] = useState("");
-  const [priority, setPriority] = useState(450);
+  const [priority, setPriority] = useState(10);
   const [enabled, setEnabled] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [commandSampleText, setCommandSampleText] = useState("");
+  const [destination, setDestination] = useState<"db" | "config">("db");
   // Track whether commandPattern was set by AI (to show ai-generated-badge)
   const [commandPatternIsAi, setCommandPatternIsAi] = useState(false);
   // Track whether user has manually edited commandPattern (to prevent AI overwrite)
@@ -289,9 +292,7 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onCan
     setFormError(null);
     setSaving(true);
     try {
-      const id = editRule?.id ?? `user-${Date.now()}`;
-      await onSave({
-        id,
+      const rulePayload = {
         name: name.trim(),
         toolName: toolTarget === "name" ? toolName : "",
         toolCategory: toolTarget === "category" ? toolCategory : "",
@@ -312,7 +313,13 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onCan
         requiredFlagPrefixes: mode === "structured" ? requiredFlagPrefixes : [],
         pythonModes: mode === "structured" ? pythonModes : [],
         safePythonImportsOnly: mode === "structured" ? safePythonImportsOnly : false,
-      });
+      };
+      if (destination === "config" && onSaveToConfig && !editRule) {
+        await onSaveToConfig(rulePayload);
+      } else {
+        const id = editRule?.id ?? `user-${Date.now()}`;
+        await onSave({ id, ...rulePayload });
+      }
     } catch (e) {
       setFormError(e instanceof Error ? e.message : "Failed to save rule.");
     } finally {
@@ -582,9 +589,33 @@ export function RuleBuilderForm({ editRule, prefill, templateSeed, onSave, onCan
         </details>
       )}
 
+      {/* Destination toggle — only shown when config file option is available and not editing */}
+      {onSaveToConfig && !editRule && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+          <span style={{ color: "var(--text-secondary)", fontWeight: 500 }}>Save to:</span>
+          {(["db", "config"] as const).map((d) => (
+            <label key={d} style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+              <input
+                type="radio"
+                name="destination"
+                value={d}
+                checked={destination === d}
+                onChange={() => setDestination(d)}
+              />
+              {d === "db" ? "Database" : "Config File"}
+            </label>
+          ))}
+          {destination === "config" && (
+            <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "monospace" }}>
+              → shared_rules.yaml
+            </span>
+          )}
+        </div>
+      )}
+
       <div className={actions}>
         <button className={saveBtn} onClick={handleSave} disabled={saving}>
-          {saving ? "Saving…" : editRule ? "Update Rule" : "Save Rule"}
+          {saving ? "Saving…" : editRule ? "Update Rule" : (destination === "config" ? "Save to Config File" : "Save Rule")}
         </button>
         <button className={cancelBtn} onClick={onCancel}>Cancel</button>
       </div>

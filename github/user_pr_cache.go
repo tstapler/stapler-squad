@@ -19,22 +19,22 @@ import (
 // UserPR is an open GitHub pull request authored by the authenticated user,
 // optionally annotated with local session IDs and worktree paths.
 type UserPR struct {
-	Owner            string
-	Repo             string
-	Number           int
-	Title            string
-	URL              string
-	HeadRef          string
-	BaseRef          string
-	State            string
-	IsDraft          bool
-	UpdatedAt        time.Time
-	ClosedAt         time.Time
-	MergedAt         time.Time
-	ApprovedCount    int
-	ChangesReqCount  int
-	CheckConclusion  string // "success" / "failure" / "pending" / ""
-	SessionIDs       []string
+	Owner             string
+	Repo              string
+	Number            int
+	Title             string
+	URL               string
+	HeadRef           string
+	BaseRef           string
+	State             string
+	IsDraft           bool
+	UpdatedAt         time.Time
+	ClosedAt          time.Time
+	MergedAt          time.Time
+	ApprovedCount     int
+	ChangesReqCount   int
+	CheckConclusion   string // "success" / "failure" / "pending" / ""
+	SessionIDs        []string
 	LocalWorktreePath string
 }
 
@@ -92,13 +92,14 @@ type onUpdatedFn struct {
 
 type UserPRCache struct {
 	config       UserPRCacheConfig
-	snapshot     atomic.Value // stores *userPRSnapshot
-	subscribers  sync.Map     // maps string ID → chan []UserPR
-	onUpdated    atomic.Value // stores onUpdatedFn
-	cachedLogin  atomic.Value // stores string
-	loginState   atomic.Value // stores loginResult
+	snapshot     atomic.Value       // stores *userPRSnapshot
+	subscribers  sync.Map           // maps string ID → chan []UserPR
+	onUpdated    atomic.Value       // stores onUpdatedFn
+	cachedLogin  atomic.Value       // stores string
+	loginState   atomic.Value       // stores loginResult
 	loginGroup   singleflight.Group //nolint:exhaustruct
 	refreshGroup singleflight.Group //nolint:exhaustruct
+	startOnce    sync.Once
 	ctx          context.Context
 	cancel       context.CancelFunc
 }
@@ -115,10 +116,13 @@ func NewUserPRCacheWithConfig(cfg UserPRCacheConfig) *UserPRCache {
 	}
 }
 
-// Start launches the background polling goroutine. Call once at server startup.
+// Start launches the background polling goroutine. Safe to call multiple times;
+// only the first call has any effect.
 func (c *UserPRCache) Start(ctx context.Context) {
-	c.ctx, c.cancel = context.WithCancel(ctx)
-	go c.loop()
+	c.startOnce.Do(func() {
+		c.ctx, c.cancel = context.WithCancel(ctx)
+		go c.loop()
+	})
 }
 
 // Stop halts background polling.
@@ -371,8 +375,10 @@ type graphQLPRNode struct {
 	ClosedAt    string `json:"closedAt"`
 	MergedAt    string `json:"mergedAt"`
 	Repository  struct {
-		Owner struct{ Login string `json:"login"` } `json:"owner"`
-		Name  string                                `json:"name"`
+		Owner struct {
+			Login string `json:"login"`
+		} `json:"owner"`
+		Name string `json:"name"`
 	} `json:"repository"`
 	ReviewDecision string `json:"reviewDecision"`
 	Reviews        struct {

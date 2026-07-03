@@ -57,14 +57,14 @@ func (s *UnfinishedWorkService) sessionPathIndex() map[string][]string {
 	if s.storage == nil {
 		return map[string][]string{}
 	}
-	instances, err := s.storage.LoadInstances()
+	data, err := s.storage.ListInstanceData()
 	if err != nil {
 		return map[string][]string{}
 	}
-	index := make(map[string][]string, len(instances))
-	for _, inst := range instances {
-		if inst.Path != "" && inst.UUID != "" {
-			index[inst.Path] = append(index[inst.Path], inst.UUID)
+	index := make(map[string][]string, len(data))
+	for _, d := range data {
+		if d.Path != "" && d.UUID != "" {
+			index[d.Path] = append(index[d.Path], d.UUID)
 		}
 	}
 	return index
@@ -85,22 +85,22 @@ func (s *UnfinishedWorkService) instancePRIndex() map[string]worktreePRInfo {
 	if s.storage == nil {
 		return map[string]worktreePRInfo{}
 	}
-	instances, err := s.storage.LoadInstances()
+	data, err := s.storage.ListInstanceData()
 	if err != nil {
 		return map[string]worktreePRInfo{}
 	}
-	index := make(map[string]worktreePRInfo, len(instances))
-	for _, inst := range instances {
-		if inst.Path == "" || inst.GitHubPRNumber == 0 {
+	index := make(map[string]worktreePRInfo, len(data))
+	for _, d := range data {
+		if d.Path == "" || d.GitHubPRNumber == 0 {
 			continue
 		}
 		// Prefer the first (or best-priority) PR we find for a given path.
-		if _, exists := index[inst.Path]; !exists {
-			index[inst.Path] = worktreePRInfo{
-				Number:   inst.GitHubPRNumber,
-				URL:      inst.GitHubPRURL,
-				State:    inst.GitHubPRState,
-				Priority: inst.GitHubPRPriority,
+		if _, exists := index[d.Path]; !exists {
+			index[d.Path] = worktreePRInfo{
+				Number:   d.GitHubPRNumber,
+				URL:      d.GitHubPRURL,
+				State:    d.GitHubPRState,
+				Priority: d.GitHubPRPriority,
 			}
 		}
 	}

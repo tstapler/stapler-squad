@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -441,12 +440,6 @@ func loadStorage(path string) *session.Storage {
 
 func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 	c := classifier.NewRuleBasedClassifier()
-
-	// Load user-specific rules from ~/.config/ssq-hooks/user-rules.yaml (if present).
-	if home, err := os.UserHomeDir(); err == nil {
-		c.AddRules(loadUserRulesFile(filepath.Join(home, ".config", "ssq-hooks", "user-rules.yaml")))
-	}
-
 	rules, err := storage.AllRules(context.Background())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: Failed to load rules from DB: %v\n", err)
@@ -495,9 +488,103 @@ func loadClassifier(storage *session.Storage) *classifier.RuleBasedClassifier {
 			}
 			cr.FilePattern = compiled
 		}
+		// Populate Criteria from structured fields (mirrors specsToRules in rules_store.go).
+		if len(r.Programs) > 0 || len(r.Subcommands) > 0 || len(r.BlockedSubcommands) > 0 ||
+			len(r.RequiredFlags) > 0 || len(r.ForbiddenFlags) > 0 || len(r.RequiredFlagPrefixes) > 0 ||
+			len(r.PythonModes) > 0 || r.SafePythonImportsOnly {
+			cr.Criteria = &classifier.CommandCriteria{
+				Programs:              r.Programs,
+				Subcommands:           r.Subcommands,
+				BlockedSubcommands:    r.BlockedSubcommands,
+				RequiredFlags:         r.RequiredFlags,
+				ForbiddenFlags:        r.ForbiddenFlags,
+				RequiredFlagPrefixes:  r.RequiredFlagPrefixes,
+				PythonModes:           r.PythonModes,
+				SafePythonImportsOnly: r.SafePythonImportsOnly,
+			}
+		}
 		classifierRules = append(classifierRules, cr)
 	}
 	c.AddRules(classifierRules)
+
+	// Also load config file rules from ~/.config/stapler-squad/shared_rules.yaml.
+	configPath := filepath.Join(os.Getenv("HOME"), ".config", "stapler-squad", "shared_rules.yaml")
+	if data, err := os.ReadFile(configPath); err == nil {
+		var configFile struct {
+			Rules []struct {
+				Name           string   `yaml:"name"`
+				Tool           string   `yaml:"tool"`
+				ToolPattern    string   `yaml:"tool_pattern"`
+				Programs       []string `yaml:"programs"`
+				Subcommands    []string `yaml:"subcommands"`
+				BlockedSubs    []string `yaml:"blocked_subcommands"`
+				CommandPattern string   `yaml:"command_pattern"`
+				FilePattern    string   `yaml:"file_pattern"`
+				Decision       string   `yaml:"decision"`
+				Priority       int      `yaml:"priority"`
+				Enabled        *bool    `yaml:"enabled"`
+			} `yaml:"rules"`
+		}
+		if yamlErr := yaml.Unmarshal(data, &configFile); yamlErr == nil {
+			var configRules []classifier.Rule
+			for _, r := range configFile.Rules {
+				if r.Name == "" {
+					continue
+				}
+				enabled := true
+				if r.Enabled != nil {
+					enabled = *r.Enabled
+				}
+				priority := r.Priority
+				if priority == 0 {
+					priority = 10
+				}
+				decision := classifier.Escalate
+				switch r.Decision {
+				case "allow":
+					decision = classifier.AutoAllow
+				case "deny":
+					decision = classifier.AutoDeny
+				}
+				cr := classifier.Rule{
+					ID:       "config-" + strings.ReplaceAll(r.Name, " ", "-"),
+					Name:     r.Name,
+					ToolName: r.Tool,
+					Decision: decision,
+					Priority: priority,
+					Enabled:  enabled,
+					Source:   "config",
+				}
+				if r.ToolPattern != "" {
+					if compiled, err := regexp.Compile(r.ToolPattern); err == nil {
+						cr.ToolPattern = compiled
+					}
+				}
+				if r.CommandPattern != "" {
+					if compiled, err := regexp.Compile(r.CommandPattern); err == nil {
+						cr.CommandPattern = compiled
+					}
+				}
+				if r.FilePattern != "" {
+					if compiled, err := regexp.Compile(r.FilePattern); err == nil {
+						cr.FilePattern = compiled
+					}
+				}
+				if len(r.Programs) > 0 || len(r.Subcommands) > 0 || len(r.BlockedSubs) > 0 {
+					cr.Criteria = &classifier.CommandCriteria{
+						Programs:           r.Programs,
+						Subcommands:        r.Subcommands,
+						BlockedSubcommands: r.BlockedSubs,
+					}
+				}
+				configRules = append(configRules, cr)
+			}
+			if len(configRules) > 0 {
+				c.AddRules(configRules)
+			}
+		}
+	}
+
 	return c
 }
 
@@ -1235,114 +1322,4 @@ func getDBPathForCwd(cwd string) string {
 		return filepath.Join(home, ".stapler-squad", "sessions.db")
 	}
 	return filepath.Join(configDir, "sessions.db")
-}
-
-// userRulesFile is the YAML format for ~/.config/ssq-hooks/user-rules.yaml.
-// Use this file for personal rules that are not generally applicable to all users.
-type userRulesFile struct {
-	Rules []userRule `yaml:"rules"`
-}
-
-type userRule struct {
-	ID                 string   `yaml:"id"`
-	Name               string   `yaml:"name"`
-	ToolName           string   `yaml:"tool_name"`
-	Programs           []string `yaml:"programs"`
-	Subcommands        []string `yaml:"subcommands"`
-	BlockedSubcommands []string `yaml:"blocked_subcommands"`
-	RequiredFlags      []string `yaml:"required_flags"`
-	ForbiddenFlags     []string `yaml:"forbidden_flags"`
-	CommandPattern     string   `yaml:"command_pattern"`
-	Decision           string   `yaml:"decision"`    // "allow", "escalate", "deny"
-	RiskLevel          string   `yaml:"risk_level"`  // "low", "medium", "high", "critical"
-	Reason             string   `yaml:"reason"`
-	Alternative        string   `yaml:"alternative"`
-	Priority           int   `yaml:"priority"`
-	Enabled            *bool `yaml:"enabled"` // nil means enabled; false disables explicitly
-}
-
-func (r userRule) toClassifierRule() (classifier.Rule, error) {
-	decisionMap := map[string]classifier.ClassificationDecision{
-		"allow":   classifier.AutoAllow,
-		"escalate": classifier.Escalate,
-		"deny":    classifier.AutoDeny,
-	}
-	riskMap := map[string]classifier.RiskLevel{
-		"low":      classifier.RiskLow,
-		"medium":   classifier.RiskMedium,
-		"high":     classifier.RiskHigh,
-		"critical": classifier.RiskCritical,
-	}
-	decision, ok := decisionMap[r.Decision]
-	if !ok {
-		return classifier.Rule{}, fmt.Errorf("unknown decision %q in rule %s", r.Decision, r.ID)
-	}
-	var risk classifier.RiskLevel
-	if r.RiskLevel == "" {
-		risk = classifier.RiskLow
-	} else {
-		var ok bool
-		risk, ok = riskMap[r.RiskLevel]
-		if !ok {
-			return classifier.Rule{}, fmt.Errorf("unknown risk_level %q in rule %s", r.RiskLevel, r.ID)
-		}
-	}
-
-	cr := classifier.Rule{
-		ID:          r.ID,
-		Name:        r.Name,
-		ToolName:    r.ToolName,
-		Decision:    decision,
-		RiskLevel:   risk,
-		Reason:      r.Reason,
-		Alternative: r.Alternative,
-		Priority:    r.Priority,
-		Enabled:     r.Enabled == nil || *r.Enabled, // nil → enabled by default
-		Source:      "user",
-	}
-	if len(r.Programs)+len(r.Subcommands)+len(r.BlockedSubcommands)+len(r.RequiredFlags)+len(r.ForbiddenFlags) > 0 {
-		cr.Criteria = &classifier.CommandCriteria{
-			Programs:           r.Programs,
-			Subcommands:        r.Subcommands,
-			BlockedSubcommands: r.BlockedSubcommands,
-			RequiredFlags:      r.RequiredFlags,
-			ForbiddenFlags:     r.ForbiddenFlags,
-		}
-	}
-	if r.CommandPattern != "" {
-		compiled, err := regexp.Compile(r.CommandPattern)
-		if err != nil {
-			return classifier.Rule{}, fmt.Errorf("invalid command_pattern in rule %s: %w", r.ID, err)
-		}
-		cr.CommandPattern = compiled
-	}
-	return cr, nil
-}
-
-// loadUserRulesFile reads user-specific rules from a YAML file.
-// Returns nil silently if the file does not exist.
-func loadUserRulesFile(path string) []classifier.Rule {
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not read user rules file %s: %v\n", path, err)
-		return nil
-	}
-	var f userRulesFile
-	if err := yaml.Unmarshal(data, &f); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: could not parse user rules file %s: %v\n", path, err)
-		return nil
-	}
-	var rules []classifier.Rule
-	for _, r := range f.Rules {
-		cr, err := r.toClassifierRule()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: skipping invalid user rule: %v\n", err)
-			continue
-		}
-		rules = append(rules, cr)
-	}
-	return rules
 }

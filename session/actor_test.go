@@ -1,0 +1,76 @@
+package session
+
+// actor_test.go verifies IAC Epic 3: actor goroutine plumbing.
+//
+// Three invariants tested:
+//  1. TestActorNoLeak    — Stop() joins the goroutine; goleak sees no leak.
+//  2. TestActorSendSync  — command round-trips through mailbox; snapshot refreshed.
+//  3. TestActorStopIdempotent — Stop() is safe to call multiple times.
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
+)
+
+// knownBackgroundGoroutines lists process-wide goroutines started by the log
+// package and lumberjack at init/first-log time.  These are not actor leaks;
+// goleak must be told to ignore them so the actor-leak assertions stay tight.
+var knownBackgroundGoroutines = []goleak.Option{
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.newAsyncWriter.func1"),
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.(*AsyncHandler).StartDrain.func1"),
+	goleak.IgnoreAnyFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun"),
+}
+
+// newActorTestInstance constructs a minimal *Instance suitable for actor tests.
+// It uses a real temp directory and a no-op program so NewInstance succeeds
+// without needing tmux or git.
+func newActorTestInstance(t *testing.T) *Instance {
+	t.Helper()
+	inst, err := NewInstance(InstanceOptions{
+		Title:   "actor-test",
+		Path:    t.TempDir(),
+		Program: "echo",
+	})
+	require.NoError(t, err)
+	return inst
+}
+
+// TestActorNoLeak confirms that Stop() joins the actor goroutine so goleak
+// reports no leaked goroutines after the test.
+func TestActorNoLeak(t *testing.T) {
+	defer goleak.VerifyNone(t, knownBackgroundGoroutines...)
+
+	inst := newActorTestInstance(t)
+	li := NewLiveInstance(inst)
+	li.Stop()
+}
+
+// TestActorSendSync confirms that sendSync enqueues a command, the actor
+// executes it, and the atomic snapshot is updated afterwards.
+func TestActorSendSync(t *testing.T) {
+	inst := newActorTestInstance(t)
+	li := NewLiveInstance(inst)
+	defer li.Stop()
+
+	var called bool
+	err := li.sendSync(func(i *Instance) { called = true })
+	require.NoError(t, err)
+	require.True(t, called, "command closure must have been executed by the actor")
+
+	// Snapshot must be non-nil after the command (actor calls buildSnapshot after each cmd).
+	snap := li.Snapshot()
+	require.NotNil(t, snap)
+}
+
+// TestActorStopIdempotent confirms that calling Stop() more than once does not
+// panic, deadlock, or close the done channel twice.
+func TestActorStopIdempotent(t *testing.T) {
+	defer goleak.VerifyNone(t, knownBackgroundGoroutines...)
+
+	inst := newActorTestInstance(t)
+	li := NewLiveInstance(inst)
+	li.Stop()
+	li.Stop() // must not panic or deadlock
+}

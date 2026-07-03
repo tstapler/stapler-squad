@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
-	githubpkg "github.com/tstapler/stapler-squad/github"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
+	githubpkg "github.com/tstapler/stapler-squad/github"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

@@ -162,28 +162,28 @@ func (i *Instance) SetGitWorktree(worktree *git.GitWorktree) {
 // Performs I/O (git diff) outside the lock, then updates state under the write lock.
 func (i *Instance) UpdateDiffStats() error {
 	// Read lock for initial state checks
-	i.stateMutex.RLock()
+	i.mu.RLock()
 	if !i.started {
 		i.gitManager.ClearDiffStats()
-		i.stateMutex.RUnlock()
+		i.mu.RUnlock()
 		return nil
 	}
 	if i.Status == Paused {
-		i.stateMutex.RUnlock()
+		i.mu.RUnlock()
 		return nil
 	}
 	if !i.gitManager.HasWorktree() {
 		i.gitManager.ClearDiffStats()
-		i.stateMutex.RUnlock()
+		i.mu.RUnlock()
 		return nil
 	}
-	i.stateMutex.RUnlock()
+	i.mu.RUnlock()
 
 	// I/O outside lock: check worktree existence and compute diff
 	stats, needsPause := i.gitManager.ComputeDiffIfReady()
 
 	// Write lock to update state — keep non-logging work only to minimise hold time.
-	i.stateMutex.Lock()
+	i.mu.Lock()
 	var transitionErr error
 	var didTransitionToPaused bool
 	if needsPause {
@@ -192,7 +192,7 @@ func (i *Instance) UpdateDiffStats() error {
 			transitionErr = i.transitionTo(context.Background(), Paused)
 		}
 		i.gitManager.ClearDiffStats()
-		i.stateMutex.Unlock()
+		i.mu.Unlock()
 		if didTransitionToPaused {
 			log.Warn("worktree directory doesn't exist, marking as paused", "session", i.Title)
 		}
@@ -204,21 +204,21 @@ func (i *Instance) UpdateDiffStats() error {
 	if stats != nil && stats.Error != nil {
 		if strings.Contains(stats.Error.Error(), "base commit SHA not set") {
 			i.gitManager.ClearDiffStats()
-			i.stateMutex.Unlock()
+			i.mu.Unlock()
 			return nil
 		}
-		i.stateMutex.Unlock()
+		i.mu.Unlock()
 		return fmt.Errorf("failed to get diff stats: %w", stats.Error)
 	}
 	i.gitManager.SetDiffStats(stats)
-	i.stateMutex.Unlock()
+	i.mu.Unlock()
 	return nil
 }
 
 // GetDiffStats returns the current git diff statistics.
 func (i *Instance) GetDiffStats() *git.DiffStats {
-	i.stateMutex.RLock()
-	defer i.stateMutex.RUnlock()
+	i.mu.RLock()
+	defer i.mu.RUnlock()
 	return i.gitManager.GetDiffStats()
 }
 

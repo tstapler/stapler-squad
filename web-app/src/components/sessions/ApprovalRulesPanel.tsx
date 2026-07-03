@@ -1,11 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useApprovalRules } from "@/lib/hooks/useApprovalRules";
 import { useApprovalAnalytics } from "@/lib/hooks/useApprovalAnalytics";
 import { useGenerateRule } from "@/lib/hooks/useGenerateRule";
 import { useExportRules } from "@/lib/hooks/useExportRules";
 import { ApprovalRuleProto, AutoDecision, SuggestionSource } from "@/gen/session/v1/types_pb";
+
+type SortKey = "name" | "decision" | "priority" | "hits";
+type SortDir = "asc" | "desc";
 import { SuggestedRuleCard } from "./SuggestedRuleCard";
 import { ImportRulesModal } from "./ImportRulesModal";
 import { RuleBuilderPrefill } from "@/lib/ruleBuilderPrefill";
@@ -22,15 +25,22 @@ import {
   tableWrapper, table, th, td, tdCenter, row, rowDisabled,
   ruleName, ruleReason, ruleAlt, matchChip,
   decisionBadge, decisionAllow, decisionDeny, decisionEscalate,
-  sourceBadge, toggle, toggleOn, toggleOff, deleteButton, builtInBadge,
+  sourceBadge, configFileBadge, toggle, toggleOn, toggleOff, deleteButton, builtInBadge,
   addButton, mobileAddFab, headerButtonsHiddenOnMobile,
   formSection,
   generateButtonRow, generateButton, cancelGenerateButton,
   generateErrorBanner, dismissErrorButton, suggestionsContainer,
   ruleModalContent, rowCount,
+  searchBar, thSortable, hitBadge, hitBadgeActive,
+  configFileHint,
 } from "./ApprovalRulesPanel.css";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/** Escape all regex metacharacters in a literal string for safe interpolation into patterns. */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 function decisionLabel(d: AutoDecision): string {
   switch (d) {
@@ -53,6 +63,7 @@ function sourceLabel(s: string): string {
     case "user":            return "Custom";
     case "seed":            return "Built-in";
     case "claude-settings": return "Claude Settings";
+    case "config":          return "Config File";
     default:                return s;
   }
 }
@@ -82,52 +93,116 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     clear,
   } = useGenerateRule();
 
+  // ── Epic 6: command-sample generate hook (for the in-form "Generate from command" section) ─
+  const {
+    suggestions: cmdSuggestions,
+    loading: cmdLoading,
+    generate: cmdGenerate,
+    cancel: cmdCancel,
+    clear: cmdClear,
+  } = useGenerateRule();
+
+  const [cmdSampleText, setCmdSampleText] = useState("");
+
   const [sourceFilter, setSourceFilter] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("priority");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [importModalOpen, setImportModalOpen] = useState(false);
-  const [showBuilder, setShowBuilder] = useState(!!prefill);
+
+  // ── URL param pre-fill ───────────────────────────────────────────────────
+  const urlPrefill = useMemo<RuleBuilderPrefill | null>(() => {
+    if (typeof window === "undefined") return null;
+    const p = new URLSearchParams(window.location.search);
+    const tool = p.get("tool");
+    const program = p.get("program");
+    const subcommand = p.get("subcommand");
+    const open = p.get("open");
+    if (tool) return { toolName: tool, initialName: `Allow ${tool}` };
+    if (program) {
+      const name = subcommand ? `Allow ${program} ${subcommand}` : `Allow ${program}`;
+      return { programs: [program], subcommands: subcommand ? [subcommand] : undefined, initialName: name };
+    }
+    if (open) return {};
+    return null;
+  }, []);
+
+  const hasUrlParams = urlPrefill !== null;
+  const [showBuilder, setShowBuilder] = useState(!!prefill || hasUrlParams);
   const [editingRule, setEditingRule] = useState<ApprovalRuleProto | null>(null);
   const [templateSeed, setTemplateSeed] = useState<RuleTemplate | null>(null);
   const [showTemplates, setShowTemplates] = useState(false);
 
-  // ── URL param pre-fill (from analytics "Add rule →" links) ───────────────
-  // Runs once on mount (client only). Reads window.location.search directly to
-  // avoid useSearchParams + Suspense complications in the static export.
-  const [urlPrefill, setUrlPrefill] = useState<RuleBuilderPrefill | null>(null);
-  // Ref for the form section so we can scroll to it after URL-param pre-fill.
-  const formSectionRef = useRef<HTMLDivElement>(null);
-
+  // ── Escape key to close builder ──────────────────────────────────────────
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tool = params.get("tool");
-    const program = params.get("program");
-    const subcommand = params.get("subcommand");
-    if (!tool && !program) return;
+    if (!showBuilder) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setShowBuilder(false); setEditingRule(null); setTemplateSeed(null); }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [showBuilder]);
 
-    const fill: RuleBuilderPrefill = {};
-    if (tool) {
-      fill.toolName = tool;
-    } else if (program) {
-      fill.toolName = "Bash";
-      fill.programs = [program];
-      if (subcommand) fill.subcommands = [subcommand];
+  // Merge prop prefill, URL prefill, and cmd suggestions into effective prefill
+  const cmdSuggestion = cmdSuggestions[0] ?? null;
+  const effectivePrefill: RuleBuilderPrefill | null = (() => {
+    const base = prefill ?? urlPrefill;
+    if (!cmdSuggestion) return base;
+    return { ...base, commandPattern: cmdSuggestion.commandPattern, isAiGenerated: true };
+  })();
+
+  // ── hit counts from analytics ─────────────────────────────────────────────
+
+  const hitCountByRuleId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of summary?.topTriggeredRules ?? []) {
+      m.set(r.ruleId, (m.get(r.ruleId) ?? 0) + r.count);
     }
+    return m;
+  }, [summary]);
 
-    setUrlPrefill(fill);
-    setShowBuilder(true);
+  // ── sort toggle ───────────────────────────────────────────────────────────
 
-    setTimeout(() => {
-      formSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 100);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  function handleSort(key: SortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "priority" || key === "hits" ? "desc" : "asc");
+    }
+  }
 
-  const effectivePrefill = prefill ?? urlPrefill;
+  function sortIcon(key: SortKey) {
+    if (sortKey !== key) return " ↕";
+    return sortDir === "asc" ? " ↑" : " ↓";
+  }
 
-  // ── filter ────────────────────────────────────────────────────────────────
+  // ── filter + sort ─────────────────────────────────────────────────────────
 
-  const visibleRules = sourceFilter === "all"
-    ? rules
-    : rules.filter((r) => r.source === sourceFilter);
+  const visibleRules = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    let filtered = sourceFilter === "all" ? rules : rules.filter((r) => r.source === sourceFilter);
+    if (q) {
+      filtered = filtered.filter((r) =>
+        r.name.toLowerCase().includes(q) ||
+        r.reason.toLowerCase().includes(q) ||
+        r.toolName.toLowerCase().includes(q) ||
+        r.toolPattern.toLowerCase().includes(q) ||
+        r.commandPattern.toLowerCase().includes(q) ||
+        r.programs.some((p) => p.toLowerCase().includes(q))
+      );
+    }
+    return [...filtered].sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case "name":     cmp = a.name.localeCompare(b.name); break;
+        case "decision": cmp = a.decision - b.decision; break;
+        case "priority": cmp = a.priority - b.priority; break;
+        case "hits":     cmp = (hitCountByRuleId.get(a.id) ?? 0) - (hitCountByRuleId.get(b.id) ?? 0); break;
+      }
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }, [rules, sourceFilter, searchQuery, sortKey, sortDir, hitCountByRuleId]);
 
   // ── save ──────────────────────────────────────────────────────────────────
 
@@ -142,6 +217,8 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
     setShowBuilder(false);
     setEditingRule(null);
     setTemplateSeed(null);
+    cmdClear();
+    setCmdSampleText("");
   };
 
   const handleEdit = (rule: ApprovalRuleProto) => {
@@ -343,12 +420,22 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
         </div>
       )}
 
+      {/* ── Search ── */}
+      <input
+        className={searchBar}
+        type="search"
+        placeholder="Search by name, tool, program, pattern…"
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        aria-label="Search rules"
+      />
+
       {/* ── Source filter tabs ── */}
       <div className={tabs}>
-        {(["all", "user", "seed", "claude-settings"] as const).map((src) => {
+        {(["all", "user", "config", "seed", "claude-settings"] as const).map((src) => {
           const count = src === "all" ? rules.length : rules.filter((r) => r.source === src).length;
           const fullLabel = src === "all" ? "All" : sourceLabel(src);
-          const shortLabel = src === "claude-settings" ? "Settings" : fullLabel;
+          const shortLabel = src === "claude-settings" ? "Settings" : src === "config" ? "Config" : fullLabel;
           return (
             <button
               key={src}
@@ -362,6 +449,12 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
           );
         })}
       </div>
+      {/* ── Config file path hint (shown when viewing config tab) ── */}
+      {sourceFilter === "config" && (
+        <div className={configFileHint}>
+          Stored in ~/.config/stapler-squad/shared_rules.yaml
+        </div>
+      )}
 
       {/* ── Error ── */}
       {error && (
@@ -382,7 +475,13 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
             </p>
             {(sourceFilter === "all" || sourceFilter === "user") && (
               <p>
-                Use the builder below to create a rule or{" "}
+                <button
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0 }}
+                  onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}
+                >
+                  Add Rule
+                </button>
+                {" "}using the builder below or{" "}
                 <button
                   style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", textDecoration: "underline", padding: 0 }}
                   onClick={() => setImportModalOpen(true)}
@@ -398,16 +497,36 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
             {sourceFilter === "claude-settings" && (
               <p>No rules from your ~/.claude/settings.json file were found.</p>
             )}
+            {sourceFilter === "config" && (
+              <p>No rules in your config file yet. Use the &quot;→ Config&quot; button on a custom rule to copy it to <code>~/.config/stapler-squad/shared_rules.yaml</code>, or create a new rule and select &quot;Save to Config File&quot;.</p>
+            )}
           </div>
         ) : (
           <table className={table}>
             <thead>
               <tr>
-                <th className={th}>Name</th>
+                <th className={`${th} ${thSortable}`} onClick={() => handleSort("name")}>
+                  Name{sortIcon("name")}
+                </th>
                 <th className={th}>Match</th>
-                <th className={th}>Decision</th>
+                <th className={`${th} ${thSortable}`} onClick={() => handleSort("decision")}>
+                  Decision{sortIcon("decision")}
+                </th>
                 <th className={th}>Source</th>
-                <th className={th} title="Lower numbers run first. Custom rules (default: 10) are evaluated before built-in rules (default: 1000).">Priority ⓘ</th>
+                <th
+                  className={`${th} ${thSortable}`}
+                  title="Higher priority fires first. Custom rules default to 10; built-in rules default to 100–1000."
+                  onClick={() => handleSort("priority")}
+                >
+                  Priority ⓘ{sortIcon("priority")}
+                </th>
+                <th
+                  className={`${th} ${thSortable}`}
+                  title="Number of times this rule fired in the last 7 days"
+                  onClick={() => handleSort("hits")}
+                >
+                  Hits (7d){sortIcon("hits")}
+                </th>
                 <th className={th}>Enabled</th>
                 <th className={th}></th>
               </tr>
@@ -430,12 +549,14 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
                   </td>
                   <td className={td}>
                     <span
-                      className={sourceBadge}
+                      className={rule.source === "config" ? configFileBadge : sourceBadge}
                       title={
                         rule.source === "seed"
                           ? "These rules ship with stapler-squad and cannot be deleted"
                           : rule.source === "claude-settings"
                           ? "These rules come from your ~/.claude/settings.json file"
+                          : rule.source === "config"
+                          ? "This rule is stored in ~/.config/stapler-squad/shared_rules.yaml and can be shared"
                           : undefined
                       }
                     >
@@ -443,6 +564,14 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
                     </span>
                   </td>
                   <td className={`${td} ${tdCenter}`}>{rule.priority}</td>
+                  <td className={`${td} ${tdCenter}`}>
+                    {(() => {
+                      const hits = hitCountByRuleId.get(rule.id) ?? 0;
+                      return hits > 0
+                        ? <span className={`${hitBadge} ${hitBadgeActive}`}>{hits.toLocaleString()}</span>
+                        : <span className={hitBadge}>—</span>;
+                    })()}
+                  </td>
                   <td className={`${td} ${tdCenter}`}>
                     {rule.source === "user" ? (
                       <button
@@ -491,7 +620,7 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       {visibleRules.length > 0 && (
         <div className={rowCount}>
           {visibleRules.length} rule{visibleRules.length !== 1 ? "s" : ""}
-          {sourceFilter !== "all" && ` (filtered from ${rules.length} total)`}
+          {(sourceFilter !== "all" || searchQuery.trim()) && ` (filtered from ${rules.length} total)`}
         </div>
       )}
 
@@ -506,10 +635,10 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
       </button>
 
       {/* ── Rule Builder ── */}
-      <div className={formSection} id="rule-builder" ref={formSectionRef}>
+      <div className={formSection} id="rule-builder" {...(showBuilder ? { role: "dialog" } : {})}>
         {!showBuilder ? (
           <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button className={addButton} onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}>
+            <button data-testid="add-rule-button" className={addButton} onClick={() => { setTemplateSeed(null); setEditingRule(null); setShowBuilder(true); }}>
               + Add Custom Rule
             </button>
             <button
@@ -521,14 +650,57 @@ export function ApprovalRulesPanel({ prefill }: ApprovalRulesPanelProps) {
             </button>
           </div>
         ) : (
-          <RuleBuilderForm
-            editRule={editingRule}
-            prefill={showBuilder ? effectivePrefill : null}
-            templateSeed={templateSeed}
-            onSave={handleSave}
-            onCancel={handleCancel}
-            subcommandStats={summary?.commandSubcommandStats ?? []}
-          />
+          <>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <button
+                aria-label="Close dialog"
+                onClick={handleCancel}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "var(--text-secondary)", lineHeight: 1 }}
+              >
+                ×
+              </button>
+            </div>
+            {/* ── Epic 6: Generate from command section ── */}
+            <details data-testid="generate-from-command-details" style={{ marginBottom: 12 }}>
+              <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>Generate from command sample</summary>
+              <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+                <textarea
+                  data-testid="command-sample-textarea"
+                  value={cmdSampleText}
+                  onChange={(e) => setCmdSampleText(e.target.value)}
+                  placeholder="Paste a command you ran, e.g. git push origin main"
+                  rows={3}
+                  style={{ width: "100%", fontFamily: "monospace", fontSize: 12, padding: "6px 8px", borderRadius: 6, border: "1px solid var(--border-color)", background: "var(--input-background)", color: "var(--input-text)", resize: "vertical" }}
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    data-testid="command-sample-generate-button"
+                    disabled={!cmdSampleText.trim() || cmdLoading}
+                    onClick={() => { void cmdGenerate({ source: SuggestionSource.COMMAND_SAMPLE, commandSample: cmdSampleText }); }}
+                    style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "none", cursor: cmdSampleText.trim() ? "pointer" : "default", background: "var(--primary)", color: "var(--primary-text)" }}
+                  >
+                    {cmdLoading ? "Generating…" : "Generate"}
+                  </button>
+                  {cmdLoading && (
+                    <button
+                      onClick={cmdCancel}
+                      style={{ padding: "4px 12px", fontSize: 12, borderRadius: 6, border: "1px solid var(--border-color)", background: "none", cursor: "pointer" }}
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </div>
+            </details>
+            <RuleBuilderForm
+              editRule={editingRule}
+              prefill={showBuilder ? effectivePrefill : null}
+              templateSeed={templateSeed}
+              onSave={handleSave}
+              onCancel={handleCancel}
+              subcommandStats={summary?.commandSubcommandStats ?? []}
+            />
+          </>
         )}
       </div>
 

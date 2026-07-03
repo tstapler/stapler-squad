@@ -40,7 +40,7 @@ func RunDaemon(cfg *config.Config) error {
 	}
 	for _, instance := range instances {
 		// Assume AutoYes is true if the daemon is running.
-		instance.AutoYes = true
+		instance.SetAutoYes(true)
 	}
 
 	pollInterval := time.Duration(cfg.DaemonPollInterval) * time.Millisecond
@@ -309,7 +309,7 @@ func detectAndAddNewSessions(currentInstances *[]*session.Instance, storage *ses
 			// Only add the instance if it's been properly started
 			if instance.Started() {
 				// Assume AutoYes is true if the daemon is running
-				instance.AutoYes = true
+				instance.SetAutoYes(true)
 				newInstances = append(newInstances, instance)
 			} else {
 				log.Info("skipping new session because it's not started", "session", instance.Title, "status", instance.Status)

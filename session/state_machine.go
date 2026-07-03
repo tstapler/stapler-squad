@@ -42,14 +42,14 @@ var transitionDefs = []TransitionDef{
 	{From: Active, To: Paused},
 	{From: Active, To: Stopped},
 	{From: Active, To: Hibernated, After: func(ctx context.Context, i *Instance) {
-		// After is called with stateMutex held — launch heavy work in a goroutine.
+		// After is called with mu held — launch heavy work in a goroutine.
 		go i.hibernateProcess(ctx)
 	}},
 	{From: Paused, To: Active},
 	{From: Paused, To: Stopped},
 	{From: Stopped, To: Active},
 	{From: Hibernated, To: Active, After: func(ctx context.Context, i *Instance) {
-		// After is called with stateMutex held — launch heavy work in a goroutine.
+		// After is called with mu held — launch heavy work in a goroutine.
 		go i.resumeFromHibernation(ctx)
 	}},
 	{From: Hibernated, To: Stopped},

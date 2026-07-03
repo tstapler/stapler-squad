@@ -150,7 +150,7 @@ type TmuxSession struct {
 	// Exit detection: fired when the session exits unexpectedly (not via StopControlMode).
 	// onExit is called at most once per TmuxSession lifetime (guarded by onExitOnce).
 	// intentionalStop distinguishes operator-initiated StopControlMode() from crashes.
-	// Must not be called while stateMutex (on the owning Instance) is held.
+	// Must not be called while mu (on the owning Instance) is held.
 	onExit          func(reason string)
 	onExitOnce      sync.Once
 	intentionalStop atomic.Bool
@@ -210,7 +210,7 @@ func serverNotRunning(output []byte) bool {
 // SetOnExitCallback registers a function called when the session exits unexpectedly.
 // The callback fires at most once per TmuxSession lifetime (guarded by sync.Once).
 // It is NOT called when StopControlMode() is the cause of the exit.
-// The callback must not be called while the owning Instance's stateMutex is held.
+// The callback must not be called while the owning Instance's mu is held.
 func (t *TmuxSession) SetOnExitCallback(fn func(reason string)) {
 	t.onExit = fn
 }

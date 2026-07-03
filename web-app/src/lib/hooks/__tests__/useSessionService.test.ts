@@ -142,7 +142,8 @@ describe("useSessionService — handleSessionEvent", () => {
         { wrapper: makeWrapper(store) }
       );
 
-      await waitFor(() => expect(mockListSessions).toHaveBeenCalled());
+      // Allow effects to flush (listSessions is NOT called for autoWatch:false — by design)
+      await act(async () => { await Promise.resolve(); });
 
       // Simulate a sessionDeleted event by directly dispatching the actions
       // that handleSessionEvent dispatches — verifying the correct actions fire.
@@ -168,7 +169,8 @@ describe("useSessionService — handleSessionEvent", () => {
         { wrapper: makeWrapper(store) }
       );
 
-      await waitFor(() => expect(mockListSessions).toHaveBeenCalled());
+      // Allow effects to flush (listSessions is NOT called for autoWatch:false — by design)
+      await act(async () => { await Promise.resolve(); });
 
       // Empty sessionId — the sessionDeleted handler should still dispatch removeSession,
       // removeReviewQueueItem, and removeDetectedStatus (with empty string), but the
@@ -206,7 +208,8 @@ describe("useSessionService — handleSessionEvent", () => {
         { wrapper: makeWrapper(store) }
       );
 
-      await waitFor(() => expect(mockListSessions).toHaveBeenCalled());
+      // Allow effects to flush (listSessions is NOT called for autoWatch:false — by design)
+      await act(async () => { await Promise.resolve(); });
 
       // Simulate the dispatches that sessionAcknowledged fires
       act(() => {
@@ -226,7 +229,8 @@ describe("useSessionService — handleSessionEvent", () => {
         { wrapper: makeWrapper(store) }
       );
 
-      await waitFor(() => expect(mockListSessions).toHaveBeenCalled());
+      // Allow effects to flush (listSessions is NOT called for autoWatch:false — by design)
+      await act(async () => { await Promise.resolve(); });
 
       // Empty sessionId is guarded in the hook: `if (sessionId) { dispatch... }`
       // Verify that dispatching with empty string is harmless
@@ -239,5 +243,83 @@ describe("useSessionService — handleSessionEvent", () => {
       expect(selectDetectedStatusMap(store.getState() as never)).toEqual({});
       expect(selectReviewQueueItems(store.getState() as never)).toHaveLength(0);
     });
+  });
+});
+
+describe("useSessionService — initial load gating", () => {
+  beforeEach(() => {
+    mockListSessions.mockResolvedValue({ sessions: [] });
+    mockWatchSessions.mockImplementation(() => ({
+      [Symbol.asyncIterator]: () => ({
+        next: () => new Promise<never>(() => {}),
+      }),
+    }));
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("does NOT call listSessions when autoWatch is false (default)", async () => {
+    // Regression test: pre-fix, the initial load effect ran for all callers regardless
+    // of autoWatch, causing N×5 synchronous dispatches that froze the React thread.
+    const store = makeTestStore();
+    const { unmount } = renderHook(
+      () => useSessionService({ autoWatch: false, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    // Allow all effects to flush
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(mockListSessions).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("does NOT call listSessions when called with no options (default autoWatch=false)", async () => {
+    const store = makeTestStore();
+    const { unmount } = renderHook(
+      () => useSessionService(),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(mockListSessions).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it("calls listSessions once when autoWatch is true", async () => {
+    const store = makeTestStore();
+    const { unmount } = renderHook(
+      () => useSessionService({ autoWatch: true, enabled: true }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(mockListSessions).toHaveBeenCalled();
+    unmount();
+  });
+
+  it("does NOT call listSessions when enabled is false even with autoWatch true", async () => {
+    const store = makeTestStore();
+    const { unmount } = renderHook(
+      () => useSessionService({ autoWatch: true, enabled: false }),
+      { wrapper: makeWrapper(store) }
+    );
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    expect(mockListSessions).not.toHaveBeenCalled();
+    unmount();
   });
 });

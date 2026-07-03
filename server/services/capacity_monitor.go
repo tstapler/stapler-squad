@@ -142,7 +142,11 @@ func (m *CapacityMonitor) evaluate(ctx context.Context) {
 
 	instances := m.poller.GetInstances()
 	for _, inst := range instances {
-		if inst == nil || inst.Status != session.Active {
+		if inst == nil {
+			continue
+		}
+		// Use a lock-free snapshot read instead of accessing inst.Status directly.
+		if inst.Snapshot().Status != session.Active {
 			continue
 		}
 
@@ -151,8 +155,11 @@ func (m *CapacityMonitor) evaluate(ctx context.Context) {
 }
 
 func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.Instance) {
+	// Lock-free snapshot read: inst.Program was previously read without any lock.
+	snap := inst.Snapshot()
+
 	provider := "anthropic"
-	program := strings.ToLower(inst.Program)
+	program := strings.ToLower(snap.Program)
 	if strings.Contains(program, "agy") || strings.Contains(program, "antigravity") || strings.Contains(program, "gemini") {
 		provider = "google"
 	} else if strings.Contains(program, "openai") || strings.Contains(program, "opencode") {
@@ -169,7 +176,7 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 	}
 
 	limits := provLimits
-	limits.Model = inst.Program
+	limits.Model = snap.Program
 
 	uuid := inst.GetClaudeConversationUUID()
 	if uuid == "" {
@@ -193,20 +200,20 @@ func (m *CapacityMonitor) evaluateInstance(ctx context.Context, inst *session.In
 		var err error
 		input, output, contextUsed, err = m.queryGeminiUsageFromDB(uuid)
 		if err != nil {
-			log.Debug("CapacityMonitor: failed to query gemini DB usage", "session", inst.Title, "err", err)
+			log.Debug("CapacityMonitor: failed to query gemini DB usage", "session", snap.Title, "err", err)
 		}
 	}
 
 	limits.SessionInputTokens = int(input)
 	limits.SessionOutputTokens = int(output)
 	limits.ContextTokensUsed = contextUsed
-	limits.ContextTokensMax = client.ModelContextWindow(inst.Program)
+	limits.ContextTokensMax = client.ModelContextWindow(snap.Program)
 
 	// 2. Estimate cost.
-	limits.EstimatedCostUSD = m.estimateCost(inst.Program, input, output)
+	limits.EstimatedCostUSD = m.estimateCost(snap.Program, input, output)
 
 	m.mu.Lock()
-	m.sessionLimits[inst.Title] = limits
+	m.sessionLimits[snap.Title] = limits
 	m.mu.Unlock()
 
 	// 3. Check thresholds.
@@ -241,8 +248,11 @@ func (m *CapacityMonitor) checkThresholds(limits ProviderLimits) string {
 }
 
 func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *session.Instance, reason string, limits ProviderLimits) {
+	// Lock-free snapshot read for inst.Title, inst.Program, inst.UUID.
+	snap := inst.Snapshot()
+
 	m.mu.Lock()
-	lastWarn := m.lastWarningTime[inst.Title]
+	lastWarn := m.lastWarningTime[snap.Title]
 	m.mu.Unlock()
 
 	// Rate-limit warnings to once per 5 minutes per session.
@@ -251,13 +261,13 @@ func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *ses
 	}
 
 	m.mu.Lock()
-	m.lastWarningTime[inst.Title] = time.Now()
+	m.lastWarningTime[snap.Title] = time.Now()
 	m.mu.Unlock()
 
 	// Determine transition target.
 	var nextCLI, nextModel string
 	for _, target := range m.config.ProviderPriority {
-		if !strings.EqualFold(target.CLI, inst.Program) {
+		if !strings.EqualFold(target.CLI, snap.Program) {
 			nextCLI = target.CLI
 			nextModel = target.Model
 			break
@@ -270,14 +280,14 @@ func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *ses
 	}
 
 	msg := fmt.Sprintf("Capacity Warning for %s: %s (Context: %d/%d). Suggesting switch to %s.",
-		inst.Title, reason, limits.ContextTokensUsed, limits.ContextTokensMax, nextCLI)
+		snap.Title, reason, limits.ContextTokensUsed, limits.ContextTokensMax, nextCLI)
 
-	log.Warn("CapacityMonitor: trigger warning", "session", inst.Title, "reason", reason, "next", nextCLI)
+	log.Warn("CapacityMonitor: trigger warning", "session", snap.Title, "reason", reason, "next", nextCLI)
 
 	// Publish notification event to frontend.
 	m.eventBus.Publish(events.NewNotificationEvent(
-		inst.UUID,
-		inst.Title,
+		snap.UUID,
+		snap.Title,
 		fmt.Sprintf("cap-%d", time.Now().Unix()),
 		2, // warning priority
 		2, // warning priority
@@ -293,10 +303,10 @@ func (m *CapacityMonitor) handleTransitionTrigger(ctx context.Context, inst *ses
 
 	// Perform auto transition if enabled.
 	if m.config.TransitionMode == config.TransitionModeAuto {
-		log.Info("CapacityMonitor: performing auto-transition", "session", inst.Title, "to", nextCLI)
+		log.Info("CapacityMonitor: performing auto-transition", "session", snap.Title, "to", nextCLI)
 		go func() {
-			if err := m.sessionSwitcher.UpdateSessionProgram(context.Background(), inst.Title, nextCLI); err != nil {
-				log.Error("CapacityMonitor: auto-transition failed", "session", inst.Title, "to", nextCLI, "err", err)
+			if err := m.sessionSwitcher.UpdateSessionProgram(context.Background(), snap.Title, nextCLI); err != nil {
+				log.Error("CapacityMonitor: auto-transition failed", "session", snap.Title, "to", nextCLI, "err", err)
 			}
 		}()
 	}

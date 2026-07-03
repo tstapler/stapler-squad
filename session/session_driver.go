@@ -361,10 +361,10 @@ func runSessionDriverWithPrompt(inst *Instance, allowedPath string, initialPromp
 		// branch name differs from the PR head branch).
 		if sentInitial && !prURLLinked && inst.GitHubOwner != "" && previewErr == nil && output != "" {
 			if prURL, prNum := scanTerminalForPRURL(output); prURL != "" {
-				inst.stateMutex.Lock()
+				inst.mu.Lock()
 				inst.GitHubPRURL = prURL
 				inst.GitHubPRNumber = prNum
-				inst.stateMutex.Unlock()
+				inst.mu.Unlock()
 				log.Info("SessionDriver: auto-linked PR from terminal push output",
 					"session", inst.Title, "pr", prNum, "url", prURL)
 				prURLLinked = true

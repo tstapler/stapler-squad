@@ -438,7 +438,7 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 	// Control mode uses tmux's native -C flag for structured real-time notifications
 	// Set STAPLER_SQUAD_USE_CONTROL_MODE=false to disable and use capture-pane polling
 	useControlMode := os.Getenv("STAPLER_SQUAD_USE_CONTROL_MODE")
-	if (useControlMode == "" || useControlMode == "true") && instance.IsManaged {
+	if (useControlMode == "" || useControlMode == "true") && instance.Snapshot().IsManaged {
 		log.Info("[WebSocket] routing managed session to control mode streaming", "session", sessionID)
 		return h.streamViaControlMode(stream, instance, streamingMode)
 	}
@@ -470,12 +470,16 @@ func (h *ConnectRPCWebSocketHandler) streamTerminal(stream *connectWebSocketStre
 //
 // See: https://github.com/tmux/tmux/wiki/Control-Mode
 func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSocketStream, instance *session.Instance, streamingMode string) error {
-	sessionID := instance.Title
-	tmuxPrefix := instance.TmuxPrefix
+	// Lock-free snapshot for all direct Instance field reads in this handler.
+	// Method calls (MarkViewed, ResizePTY, etc.) and goroutine writes are left as-is.
+	snap := instance.Snapshot()
+
+	sessionID := snap.Title
+	tmuxPrefix := snap.TmuxPrefix
 	if tmuxPrefix == "" {
 		tmuxPrefix = "staplersquad_"
 	}
-	tmuxSessionName := tmuxPrefix + instance.Title
+	tmuxSessionName := tmuxPrefix + snap.Title
 
 	log.Info("[streamViaControlMode] starting", "session", sessionID, "tmux", tmuxSessionName, "mode", streamingMode)
 
@@ -898,8 +902,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 
 				// Handle input - send to tmux via send-keys
 				if input := incomingData.GetInput(); input != nil {
-					// Check send permission
-					if !instance.Permissions.CanSendCommand {
+					// Check send permission (snap captured at stream start; Permissions is immutable).
+					if !snap.Permissions.CanSendCommand {
 						log.Warn("[streamViaControlMode] send permission denied", "session", sessionID)
 						continue
 					}
@@ -1013,22 +1017,26 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 //
 // This function polls tmux's pane buffer at regular intervals and sends content deltas to clients.
 func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWebSocketStream, instance *session.Instance, streamingMode string) error {
+	// Lock-free snapshot for all direct Instance field reads in this handler.
+	// Method calls (MarkViewed, ResizePTY, etc.) and write paths are left as-is.
+	snap := instance.Snapshot()
+
 	// Determine tmux session name based on session type
 	var tmuxSessionName string
-	if instance.ExternalMetadata != nil && instance.ExternalMetadata.TmuxSessionName != "" {
+	if snap.ExternalMetadata != nil && snap.ExternalMetadata.TmuxSessionName != "" {
 		// External session - use metadata tmux name
-		tmuxSessionName = instance.ExternalMetadata.TmuxSessionName
+		tmuxSessionName = snap.ExternalMetadata.TmuxSessionName
 	} else {
 		// Managed session - construct tmux name using prefix
-		tmuxPrefix := instance.TmuxPrefix
+		tmuxPrefix := snap.TmuxPrefix
 		if tmuxPrefix == "" {
 			tmuxPrefix = "staplersquad_" // Default prefix
 		}
-		tmuxSessionName = tmuxPrefix + instance.Title
+		tmuxSessionName = tmuxPrefix + snap.Title
 	}
-	sessionID := instance.Title
+	sessionID := snap.Title
 
-	log.Info("[streamViaTmuxCapture] starting", "session", sessionID, "tmux", tmuxSessionName, "managed", instance.IsManaged, "mode", streamingMode)
+	log.Info("[streamViaTmuxCapture] starting", "session", sessionID, "tmux", tmuxSessionName, "managed", snap.IsManaged, "mode", streamingMode)
 
 	// Get or create tmux streamer for this session
 	if h.tmuxStreamerManager == nil {
@@ -1046,7 +1054,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 	// For managed sessions: parse handshake dimensions and force a TUI redraw via ±1 nudge
 	// so the initial capture-pane snapshot reflects a freshly-drawn terminal state.
-	if instance.IsManaged {
+	if snap.IsManaged {
 		var handshakeCaptureData sessionv1.TerminalData
 		if parseErr := proto.Unmarshal(stream.requestMsg, &handshakeCaptureData); parseErr == nil {
 			if paneReq := handshakeCaptureData.GetCurrentPaneRequest(); paneReq != nil &&
@@ -1074,7 +1082,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 	// For managed sessions that just had a forced redraw, capture fresh content directly.
 	// For external sessions, fall back to the streamer's cached snapshot.
 	var initialContent string
-	if instance.IsManaged {
+	if snap.IsManaged {
 		if freshContent, captureErr := instance.CapturePaneContentRaw(); captureErr == nil {
 			initialContent = freshContent
 		} else {
@@ -1224,8 +1232,8 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 
 				// Handle input - send to tmux via send-keys
 				if input := incomingData.GetInput(); input != nil {
-					// Check send permission
-					if !instance.Permissions.CanSendCommand {
+					// Check send permission (snap captured at stream start; Permissions is immutable).
+					if !snap.Permissions.CanSendCommand {
 						log.Warn("[streamViaTmuxCapture] send permission denied", "session", sessionID)
 						continue
 					}
@@ -1246,7 +1254,7 @@ func (h *ConnectRPCWebSocketHandler) streamViaTmuxCapturePane(stream *connectWeb
 					log.ForSession(sessionID).Debug("resize request", "cols", targetCols, "rows", targetRows)
 
 					// Use different resize methods based on session type
-					if instance.IsManaged {
+					if snap.IsManaged {
 						// Managed sessions: Use proper PTY resize method
 						// This handles ioctl, signal propagation, and tmux window resizing
 						if err := instance.ResizePTY(targetCols, targetRows); err != nil {

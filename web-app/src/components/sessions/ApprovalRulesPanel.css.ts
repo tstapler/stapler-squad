@@ -829,6 +829,112 @@ export const tabLabelFull = style({
   },
 });
 
+// ── Search bar ───────────────────────────────────────────────────────────────
+
+export const searchBar = style({
+  background: vars.color.inputBackground,
+  border: `1px solid ${vars.color.inputBorder}`,
+  borderRadius: 7,
+  padding: "7px 12px",
+  fontSize: 13,
+  color: vars.color.textPrimary,
+  width: "100%",
+  boxSizing: "border-box",
+  selectors: {
+    "&:focus": {
+      outline: "none",
+      borderColor: vars.color.primary,
+    },
+    "&::placeholder": {
+      color: vars.color.textMuted,
+    },
+  },
+});
+
+// ── Sortable column header ────────────────────────────────────────────────────
+
+export const thSortable = style({
+  cursor: "pointer",
+  userSelect: "none",
+  selectors: {
+    "&:hover": {
+      color: vars.color.textPrimary,
+    },
+  },
+});
+
+// ── Hit count badge ───────────────────────────────────────────────────────────
+
+export const hitBadge = style({
+  display: "inline-block",
+  padding: "2px 7px",
+  borderRadius: 4,
+  fontSize: 11,
+  fontWeight: 600,
+  background: vars.color.panelBgSecondary,
+  color: vars.color.textSecondary,
+  border: `1px solid ${vars.color.borderColor}`,
+  fontFamily: vars.font.mono,
+});
+
+export const hitBadgeActive = style({
+  background: vars.color.successBg,
+  color: vars.color.success,
+  borderColor: "transparent",
+});
+
+// ── Config file source badge ──────────────────────────────────────────────────
+
+export const configFileBadge = style({
+  display: "inline-block",
+  padding: "2px 8px",
+  borderRadius: 4,
+  fontSize: 11,
+  fontWeight: 500,
+  background: "rgba(59, 130, 246, 0.12)",
+  color: vars.color.primary,
+  border: "1px solid rgba(59, 130, 246, 0.3)",
+  whiteSpace: "nowrap",
+});
+
+// ── Export-to-config-file inline action button ────────────────────────────────
+
+export const exportConfigButton = style({
+  background: "none",
+  border: `1px solid ${vars.color.borderColor}`,
+  borderRadius: 4,
+  padding: "2px 7px",
+  fontSize: 11,
+  color: vars.color.textSecondary,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+  transition: "all 0.15s ease",
+  selectors: {
+    "&:hover:not(:disabled)": {
+      background: "rgba(59, 130, 246, 0.12)",
+      color: vars.color.primary,
+      borderColor: "rgba(59, 130, 246, 0.3)",
+    },
+    "&:disabled": {
+      opacity: 0.5,
+      cursor: "not-allowed",
+    },
+  },
+});
+
+// ── Config file path hint ─────────────────────────────────────────────────────
+
+export const configFileHint = style({
+  fontSize: 11,
+  color: vars.color.textMuted,
+  fontFamily: vars.font.mono,
+  padding: "6px 10px",
+  background: vars.color.panelBgSecondary,
+  border: `1px solid ${vars.color.borderSubtle}`,
+  borderRadius: 6,
+  marginTop: 4,
+});
+
 // ── Row count indicator below table ──────────────────────────────────────────
 
 export const rowCount = style({

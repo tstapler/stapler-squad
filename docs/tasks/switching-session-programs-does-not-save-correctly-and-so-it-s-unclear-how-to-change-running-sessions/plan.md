@@ -1,67 +1,84 @@
 # Plan: Switching Session Programs Does Not Save Correctly
 
+> **Superseded 2026-07-01.** This file replaces the earlier version of `plan.md` (2026-06-30), which
+> planned RC1–RC4 below as *upcoming* work. Commit `914138ec` ("fix(session): program switching now
+> saves correctly for all cases", 2026-06-29) already shipped that work to `main`. This revision
+> reconciles the plan against the current tree — verified line-by-line in
+> `research/architecture.md` and `research/pitfalls.md` — and re-scopes the backlog item to the
+> **residual gaps** that the original fix did not close.
+
 ## Executive Summary
 
-The primary bug is a single backend guard (`*req.Msg.Program != ""` in `session_service.go:1430`) that silently drops any request that sets a session's program to "System default" (empty string `""`), returning HTTP 200 with stale data and no error. A compound UX gap makes the issue worse: the only editable program field is buried in the "Info" tab of `SessionDetailView` with no overflow menu entry, making it nearly impossible for users to discover. The minimal fix is one backend condition removal; discoverability and UX polish are additive follow-on tasks.
-
-## Root Causes
-
-### RC1 — Backend guard silently drops "System default" saves (required fix)
-
-`server/services/session_service.go:1430`:
-```go
-// BEFORE (broken): silently no-ops when user selects "System default" (value="")
-if req.Msg.Program != nil && *req.Msg.Program != "" && instance.Program != *req.Msg.Program {
-
-// AFTER (fix): proto optional already distinguishes nil (not sent) from "" (explicitly cleared)
-if req.Msg.Program != nil && instance.Program != *req.Msg.Program {
-```
-
-`programs.ts` defines `{ label: "System default", value: "" }`. The frontend sends this correctly as an explicit empty string via the proto `optional string` field. The `!= ""` guard is wrong and discards valid requests.
-
-**Blocker caveat:** The ent schema has `field.String("program").NotEmpty()` — empty string may fail DB persistence. Resolve by storing the config-resolved default name instead of empty string on save.
-
-### RC2 — Stale React state after WatchSessions updates (secondary)
-
-`SessionDetailView.tsx` initializes `programValue` via `useState(session.program || "")` with no `useEffect` to re-sync when `session.program` changes. After a save or external update, local state drifts from server value.
-
-### RC3 — Discoverability gap (UX)
-
-The program edit UI exists only in the "Info" tab of `SessionDetailView`. No overflow menu entry, no session-list affordance, no hint in `ResumeSessionModal`. Users have no clear path to change a session's program.
-
-### RC4 — Persist-after-restart race (footgun)
-
-`Restart()` fires at line 1436 before `SaveInstances` at line 1533. If `instance.started == false` (fallback load path), `Restart()` returns `ErrCannotRestart` and early-returns — `SaveInstances` is never called. Program is neither restarted NOR saved to DB.
+The reported bug — program changes silently failing to save — is fixed on `main`: the backend guard
+that dropped "System default" saves is gone, empty string resolves to the config default before the
+`NotEmpty()` ent constraint, the save is ordered before the destructive restart, React state re-syncs
+from the server, and a "Change Program" menu item now exists in the session overflow menu. What
+remains is real but lower-severity: the shipped feature has **zero automated test coverage**, a
+**second undocumented code path** (`UpdateSessionProgram`, used by capacity-monitor auto-fallback) can
+drift from the RPC handler and race with it, and a few UX/data-integrity gaps (no restart confirmation,
+no "pending on resume" indicator, stale Claude conversation UUID on a claude→other→claude round trip)
+were scoped in the original plan but never implemented.
 
 ## Implementation Approach
 
-**Phase 1 — Backend core fix:** Remove `&& *req.Msg.Program != ""`. Resolve the `NotEmpty()` constraint (store resolved default rather than empty). Move `SaveInstances` before `Restart()` to fix RC4.
+**Phase 1 — Close the test gap (highest value, lowest risk).** Write the Go and Jest tests the
+original `validation.md` specified but that were never added. This is pure test-writing against
+already-correct behavior; low risk, immediately shrinks `docs/registry/coverage-gaps.json`.
 
-**Phase 2 — React state hardening:** Add `useEffect` syncing `programValue` ← `session.program` when `!isEditingProgram`.
+**Phase 2 — Consolidate the duplicate code path.** `UpdateSessionProgram`
+(`server/services/session_service.go:3957-3991`, called only from `capacity_monitor.go:308`) reimplements
+the `UpdateSession` RPC handler's program-switch logic with a weaker guard (no empty→default
+resolution) and a duplicated claude/antigravity substring heuristic. Either delete it if truly unused
+beyond the auto-fallback caller, or refactor both call sites onto one shared internal function so a
+future change to program-switch semantics can't land in only one of them.
 
-**Phase 3 — Discoverability:** Add "Change Program" entry to `SessionActionsOverflow.tsx` (reuse steer/checkpoint inline dialog pattern).
+**Phase 3 — Close the concurrency gap between the two paths.** No serialization exists between a
+user-triggered `UpdateSession` and an automatic capacity-monitor `UpdateSessionProgram` firing on the
+same session — both can read-decide-write independently and double-restart or double-port history.
+Phase 2's consolidation is a prerequisite; add a per-instance "program change in flight" guard
+(actor-routed, per `.claude/rules/go-double-checked-locking.md` and the `actor-field-guard` CI check).
 
-**Phase 4 — Safety UX:** Confirmation dialog before killing Active session. "Pending on resume" indicator for non-Active sessions.
+**Phase 4 — Data-integrity fix: clear stale Claude conversation linkage.** On a program switch that
+*leaves* the claude/antigravity family entirely (not just claude↔antigravity), clear
+`claudeSession.ConversationUUID` / `HistoryFilePath` via a new actor-routed setter, mirroring the
+existing `SetProgram` pattern. Without this, claude → aider → claude passes a stale `--resume <uuid>`.
 
-**Phase 5 — Tests:** Cover zero-tested `UpdateSession` program paths in Go + Jest.
+**Phase 5 — UX polish.** Add a proper two-step confirmation dialog before restarting an Active session
+(matching the existing `Restart`/`Delete`/`Autonomous` pattern in `SessionActionsOverflow.tsx`, instead
+of today's passive text hint), a "pending on next resume" badge for Paused/Stopped sessions whose
+program was just changed, and a re-sync guard on the overflow-menu program picker (it lacks the
+`useEffect` re-sync that `SessionDetailView.tsx` already has, so a stale dialog can silently clobber an
+auto-fallback change).
+
+**Phase 6 — Registry/CI hygiene.** Flip `docs/registry/features/backend/session/update.json` `tested`
+to `true` with real test IDs once Phase 1 lands; add a missing frontend registry entry + `// +feature:`
+marker for the "Change Program" overflow-menu feature; run `make registry-generate`.
 
 ## Task Breakdown
 
 | # | Task | Estimate | Category |
 |---|------|----------|----------|
-| 1 | Remove `&& *req.Msg.Program != ""` from `session_service.go:1430`; resolve empty-string via config default on save | 1h | backend |
-| 2 | Move `SaveInstances` call before `Restart()` in `UpdateSession` to fix RC4 ordering | 0.5h | backend |
-| 3 | Clear `claudeSession.ConversationUUID` when switching program away from claude family | 1h | backend |
-| 4 | Add `useEffect` to re-sync `programValue` from `session.program` when not editing in `SessionDetailView.tsx` | 0.5h | frontend |
-| 5 | Add "Change Program" item to `SessionActionsOverflow.tsx` with inline select dialog | 2h | frontend |
-| 6 | Confirmation dialog before killing Active session on program change | 1h | frontend |
-| 7 | "Pending on next resume" indicator for Stopped/Paused sessions after program change | 1h | frontend |
-| 8 | Go tests: `UpdateSession` program — Active (restart occurs), Stopped (save only), empty-string clear, restart error path | 2h | test |
-| 9 | Jest test: program inline select — save, cancel, stale-state re-sync from WatchSessions | 1h | test |
+| 1 | Go tests: `UpdateSession` program branch — active/restart, stopped/no-restart, empty→default resolution, no-op on unchanged value | 2h | test |
+| 2 | Jest tests: `SessionActionsOverflow` program picker — open pre-fills current value, save calls `onChangeProgram`, "System default" sends `""`, restart hint only on Active | 1.5h | test |
+| 3 | Consolidate `UpdateSessionProgram` and `UpdateSession`'s program block into one shared function; fix the missing empty→default guard in the capacity-monitor path | 2h | backend |
+| 4 | Add per-instance "program change in flight" guard to serialize manual vs. auto-fallback program switches | 2h | backend |
+| 5 | Add actor-routed setter to clear `claudeSession.ConversationUUID`/`HistoryFilePath` when switching out of the claude/antigravity family; wire into both program-switch paths | 1.5h | backend |
+| 6 | Replace passive "session will restart" text hint with a two-step confirmation dialog for Active-session program changes, matching `Restart`/`Delete` pattern | 1.5h | frontend |
+| 7 | Add re-sync `useEffect` to `SessionActionsOverflow`'s program picker (mirror `SessionDetailView`'s fix) so an open dialog reflects concurrent server-side changes | 0.5h | frontend |
+| 8 | "Pending on next resume" indicator on session card/row when a Paused/Stopped session's program was changed but not yet applied | 1h | frontend |
+| 9 | Playwright e2e spec: overflow menu → change program → save → session list reflects new program | 1.5h | test |
+| 10 | Frontend feature registry entry + `// +feature:` marker for "Change Program"; flip backend `session:update` registry entry to `tested: true` with new test IDs; `make registry-generate` | 0.5h | docs |
+| 11 | Replace magic `session.status === 3` literal with `SessionStatus.ACTIVE` in `SessionActionsOverflow.tsx` | 0.25h | frontend |
 
 ## Dependencies and Blockers
 
-- **`NotEmpty()` ent constraint** — must decide persistence strategy (store resolved default name) before RC1 fix lands
-- **Poller vs fallback path** — confirm test environment uses live poller so `started == true`; otherwise RC4 is not testable without mocking
-- **No proto changes needed** — `optional string program = 5` is already correct; `optional` wrapper already distinguishes nil from `""`
-- **No ORM schema changes needed if resolving empty to default** — `SetProgram(resolvedDefault)` works with existing `NotEmpty()` constraint
+- **Task 4 depends on Task 3** — can't add a shared in-flight guard until there's one code path to guard.
+- **Task 5 requires a new actor setter** in `session/instance_actor_setters.go` — `make ci`'s
+  `actor-field-guard` target will fail the build if the UUID/history-path fields are mutated directly
+  from `server/services/session_service.go` instead of through an actor-routed method.
+- **No proto or ent schema changes required** for any task in this plan — everything is implementable
+  within the existing `UpdateSessionRequest.program` field and `Instance` actor methods.
+- **Tasks 1–2 have no code dependencies** and can start immediately/in parallel with everything else;
+  recommended as the first PR since it's the lowest-risk, highest-registry-value work.
+- **Task 9 (e2e) requires the test server** running per `.claude/rules/e2e-test-conventions.md`
+  (`STAPLER_SQUAD_USE_CONTROL_MODE=false STAPLER_SQUAD_INSTANCE=e2e-local`).

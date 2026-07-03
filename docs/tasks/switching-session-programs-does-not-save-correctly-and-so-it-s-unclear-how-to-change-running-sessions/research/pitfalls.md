@@ -1,57 +1,95 @@
 # Pitfalls: Switching Session Programs
 
-## Current State Summary
+## Known related bugs/notes
 
-The backend (`UpdateSession` in `server/services/session_service.go:1429-1441`) already handles program changes correctly: it updates `instance.Program`, persists it via `SaveInstances`, and calls `instance.Restart(true)` when the session is `Active`. The bug is almost entirely a **UI gap** — there is no frontend surface that calls `updateSession` with a `program` field.
+- **The core backend bug is already fixed on `main`.** Commit `914138ec` ("fix(session): program switching now saves correctly for all cases", 2026-06-29) is an ancestor of current `HEAD` and already:
+  - removes the `&& *req.Msg.Program != ""` guard that silently dropped "System default" saves (`server/services/session_service.go:1474-1481`),
+  - resolves an empty program string to `config.LoadConfig().DefaultProgram` before persisting (satisfies the ent `NotEmpty()` constraint — `session/ent/schema/session.go:53-54`),
+  - moves `SaveInstances` before `Restart()` so a restart failure doesn't leave the DB out of sync (`session_service.go:1494-1503`),
+  - adds a `useEffect` in `SessionDetailView.tsx:179-181` to re-sync `programValue` from `session.program`,
+  - adds a "Change Program" entry + inline picker dialog to `SessionActionsOverflow.tsx` (lines ~613-620, ~750-800), wired from `SessionCard.tsx:841` and `SessionRow.tsx:387` via `sessionActions.update({ program })`.
 
----
+  Any fresh planning for this backlog item should treat the persistence bug as resolved and focus on **remaining gaps**, not re-implement RC1/RC2/RC4 from the pre-existing `plan.md` in this same directory (which predates and was superseded by 914138ec — that plan.md/validation.md pair is now stale and should be reconciled or archived before re-planning).
 
-## 1. tmux Interaction Risks
+- **Test debt survived the fix.** Despite `validation.md` in this directory prescribing ~15 Go/Jest/e2e tests for program-switching, **none of them exist**:
+  - `grep -n "TestUpdateSession_Program\|ProgramUpdate" server/services/session_service_test.go` → 0 matches.
+  - `web-app/src/components/sessions/__tests__/SessionActionsOverflow.test.tsx` has 0 references to "program".
+  - No `tests/e2e/session-program-change.spec.ts` (or similarly named spec) exists.
+  This is the most concrete, low-risk work item left on this backlog entry: the feature shipped untested.
 
-**Restart kills the live terminal.** `Restart(preserveOutput: true)` captures the pane content, kills the tmux session, then relaunches. This means any in-progress agent work is terminated immediately. For long-running agentic tasks, a program change with no warning dialog is destructive.
+- **A second, independent program-switch code path exists and can drift from the RPC handler.** `server/services/session_service.go:3957-3989` defines `UpdateSessionProgram(ctx, sessionID, newProgram)`, called only from `server/services/capacity_monitor.go:308` (rate-limit/capacity auto-fallback — note `gemini_limits_client.go` is also modified in the current working tree, so this auto-fallback path is under active development). It duplicates the history-porting + save + restart logic of the `UpdateSession` RPC handler but is **not kept in sync**:
+  - It does **not** resolve an empty `newProgram` to the config default before calling `SetProgram` — if `nextCLI` from the capacity monitor is ever empty, this path will attempt to persist `""` against the `NotEmpty()` ent constraint (the RPC path guards against this; this path does not).
+  - It duplicates the `strings.Contains(oldProgram, "claude"/"agy"/"antigravity")` history-porting heuristic (`session_service.go:3971-3976` vs. `1485-1490`) — a future fix to one heuristic (e.g., adding a new program family) is easy to apply to only one of the two copies.
+  - Any fix or test plan for "program switching" must cover **both** entry points, not just `UpdateSession`.
 
-**`buildLaunchCommand` bakes program-specific flags.** Flags like `--resume`, `--mcp-config`, `--append-system-prompt`, `--dangerously-skip-permissions` are only appended when `strings.Contains(program, "claude")`. Switching from `claude` to `aider` silently drops all Claude-only flags — correct behavior, but the reverse (switching *to* claude on a session whose `claudeSession.ConversationUUID` is set) will attempt `--resume`, which may fail if the history is stored in a path that no longer maps to this session.
+- No open or closed entries in `docs/bugs/` mention "program" (checked `docs/bugs/open/`, no `docs/bugs/closed/` directory exists yet). This backlog item has no corresponding bug-tracker file — only the `docs/tasks/<slug>/` planning artifacts checked into this branch.
 
-**`initTmuxSession` reuses an existing session object.** The `if i.pm().HasSession() { return }` guard in `initTmuxSession` means a program change on a non-started session (e.g. `Stopped` but never fully torn down) may reuse the old session object with the old program string embedded in it.
+## Project-rule constraints
 
----
+- **`.claude/rules/go-double-checked-locking.md` doesn't apply verbatim here, but its underlying concern does — see "Concurrency/state risks" below.** `Instance.Program` writes no longer use manual `RWMutex` read-lock/write-lock code; see the actor pattern note below.
+- **Actor-field-guard (IAC Epic 5, `Makefile:695-707`).** `session/instance_actor_setters.go` documents (lines 1-15) that `server/services/session_service.go`, `session/pr_status_poller.go`, `session/review_queue_poller.go`, `session/autonomous_driver.go`, and `daemon/daemon.go` must call **only** actor-routed setters (e.g. `instance.SetProgram(...)`) — never `inst.Program = value` directly. `make actor-field-guard` (part of `make ci`, `Makefile:686`) greps those files for direct field-write assignments and fails the build if found. Any fix that touches program-switching in those files must use `SetProgram`, not a direct assignment — both existing call sites (`session_service.go:1481` and `:3969`) already comply, but this is a hard gate for new code (e.g. clearing `claudeSession.ConversationUUID` on program switch, mentioned in the stale `plan.md` RC3, would need its own actor setter if one doesn't already exist).
+- **`ent-schema-generation.md` — `--feature sql/upsert` requirement.** If a fix to the `program` field's `NotEmpty()` constraint (e.g., relaxing it, or adding a new default-value mechanism) requires touching `session/ent/schema/session.go`, regeneration **must** use `go run -mod=mod entgo.io/ent/cmd/ent generate --feature sql/upsert ./session/ent/schema` (per `session/ent/generate.go`) — omitting the flag silently breaks `UpsertRule` and similar upsert methods elsewhere in the schema, unrelated to `program` but still a build-breaking regression if the wrong command is copy-pasted from memory.
+- **`feature-registry.md` — registry entries required.** `docs/registry/features/backend/session/update.json` already exists for `session:update` (the RPC that now handles program changes) but currently shows `"tested": false, "testIds": []` (verified by reading the file). Per the rule, any PR adding the missing tests must flip `tested: true` and populate `testIds`, then run `make registry-generate`. There is **no frontend registry entry** for the "Change Program" UI feature (no `docs/registry/features/frontend/*.json` references `SessionActionsOverflow` or "program", and `SessionActionsOverflow.tsx` has no `// +feature:` marker in its first 10 lines) — a new frontend feature file must be created per the "New UI feature" step in `.claude/rules/feature-registry.md`.
+- **`.claude/rules/session-creation-registry.md` (7 touchpoints) does not apply** — program switching is a mutation on an existing session (`UpdateSession`), not a new session-creation mode, so the 7-touchpoint registry is out of scope here. Don't conflate the two.
+- **`.claude/rules/feature-testing-registry.md` (OmnibarAction / DetectorRegistry) does not apply** — the "Change Program" action lives in `SessionActionsOverflow` (a per-session overflow menu), not the omnibar. Confirmed no `program`-related entries needed in `OmnibarAction` union or `DetectorRegistry`.
+- **`.claude/rules/css-architecture.md`.** The program picker dialog in `SessionActionsOverflow.tsx` (lines ~750-800) uses inline `style={{ ... }}` objects for layout (`width`, `padding`, `border`, etc.) rather than vanilla-extract `.css.ts`. This pre-dates the ADR-009 rule's enforcement scope (it reuses `confirmDialog`/`dialogContent` classes from an existing `.css.ts` file for structure) but any new dialog styling added during a fix should go into `.css.ts`, not further inline styles, especially given the rule's explicit ban on `style={{ flexDirection: ... }}`-style layout overrides.
 
-## 2. State Consistency Issues
+## Concurrency/state risks
 
-**Stopped/Paused/Hibernated sessions: program is saved but not applied.** The restart guard (`if instance.Status == session.Active`) means program changes on non-Active sessions are persisted to disk but the change does not take effect until the next manual resume/restart. Users will not know the change is "pending" vs "applied."
+- **Program mutation is actor-serialized, not RWMutex-guarded — this is the *replacement* for the double-checked-locking pattern, not an instance of it.** `session/instance_actor_setters.go:193-204`:
+  ```go
+  func setProgramLocked(s *instanceState, program string) {
+      s.inst.Program = program
+      s.inst.snapshot.Store(buildSnapshot(s.inst))
+  }
 
-**Race between persist and restart.** `instance.Program` is mutated in-memory at line 1431, then `Restart` is called at 1436, then `SaveInstances` is called at 1533. If `Restart` succeeds but `SaveInstances` fails, the running tmux process uses the new program but the stored state still shows the old program. On next load the session will revert.
+  func (i *Instance) SetProgram(program string) {
+      _ = i.sendSyncErr(func(s *instanceState) error {
+          setProgramLocked(s, program)
+          return nil
+      })
+  }
+  ```
+  Writes are routed through a single-writer actor goroutine (`sendSyncErr`), so there's no read-lock/write-lock race on the write path itself — this sidesteps the exact anti-pattern in `.claude/rules/go-double-checked-locking.md`.
 
-**`ErrCannotRestart` when `i.started == false`.** `Restart` returns `ErrCannotRestart` if the instance has never been started (e.g. a session in `Creating` or `Stopped` state that was never launched). The `UpdateSession` handler propagates this as a `CodeInternal` error, giving the user no actionable message.
+- **However, `UpdateSession` reads `instance.Program` directly, not through the actor or a snapshot.** `server/services/session_service.go:1475`: `oldProgram := instance.Program` — a raw field read outside the actor. The `actor-field-guard` Makefile target only greps for direct **writes** (`\.[A-Z][a-zA-Z0-9]+ = `), not reads, so this is not caught by CI. If a concurrent `SetProgram` call (e.g. from the capacity-monitor auto-fallback path, `capacity_monitor.go:308` → `UpdateSessionProgram`) is in flight on the actor goroutine at the same instant a user-triggered `UpdateSession` RPC reads `instance.Program` on a different goroutine, this is a data race in the strict sense (unsynchronized read vs. actor-synchronized write) that `go test -race` (part of `make pre-commit`, `Makefile:692`) could plausibly flag if a test ever exercises both paths concurrently — currently no such test exists, so the race is latent, not caught.
 
----
+- **Two independent "decide old vs. new, then write" sequences can interleave non-atomically.** Even setting aside the raw-read issue, the higher-level operation — read `instance.Program`, decide whether it changed, run history porting, call `SaveInstances`, call `Restart` — is not one atomic transaction in either `UpdateSession` (`1474-1505`) or `UpdateSessionProgram` (`3958-3989`). If a manual "Change Program" click (UI) and an automatic capacity-monitor fallback (`capacity_monitor.go:308`) fire within the same window, both will read the pre-change `Program`, both may decide "changed", and both will call `SetProgram`, `PortSessionHistory`, `SaveInstances`, and `Restart` independently — potentially double-restarting the tmux session or porting history twice with different `oldProgram` values depending on interleaving. There is no session-level "program change in progress" flag serializing these two call sites against each other.
 
-## 3. Test Gaps
+## Live-session/tmux risks
 
-There are **zero tests** for `UpdateSession` with a `program` field. All existing `TestUpdateSession_*` tests cover tags, title, status transitions, and conflict detection — none test:
-- Program change on an Active session (verifying restart occurs)
-- Program change on a Stopped session (verifying it saves without restart)
-- Program change to an empty string (the guard `*req.Msg.Program != ""` silently no-ops)
-- Program change when `Restart` returns an error
+- **`Restart(preserveOutput: true)` is destructive by design.** It captures pane content, kills the tmux session, then relaunches (referenced by both `UpdateSession:1499` and `UpdateSessionProgram:3983`). Any in-progress agent work in the pane is terminated immediately. Neither backend path nor the current frontend program-picker dialog has a hard confirmation step before this happens for `Active` sessions — the dialog (`SessionActionsOverflow.tsx` ~line 762) only shows a passive text hint (`{session.status === 3 /* ACTIVE */ && " The session will restart."}`) next to the Save button, with no second confirm step, unlike the sibling `Restart`/`Delete`/`Autonomous` actions in the same file which all use a dedicated `isXConfirmOpen` two-step dialog pattern (see `isRestartConfirmOpen`/`isDeleteConfirmOpen`/`isAutonomousConfirmOpen` state and `useFocusTrap` wiring). This is an inconsistency worth flagging: program-switch is the only destructive action in this menu that skips the two-step confirm pattern.
+- **Magic status-code literal.** `session.status === 3 /* ACTIVE */` (SessionActionsOverflow.tsx ~line 762) hardcodes the proto enum value instead of importing `SessionStatus.ACTIVE` (as `isRunning` does two lines earlier at `~line 98`: `session.status === SessionStatus.ACTIVE`). If the proto enum ever gets a new value inserted (unlikely given proto3 conventions, but the file itself notes "ACTIVE covers legacy RUNNING via allow_alias"), this literal silently stops matching while `isRunning` keeps working — a latent drift risk purely from inconsistent style within the same file.
+- **`buildLaunchCommand` embeds program-specific flags.** Claude-only flags (`--resume`, `--mcp-config`, `--append-system-prompt`, `--dangerously-skip-permissions`) are gated on `strings.Contains(program, "claude")`. Switching *to* claude on a session whose `claudeSession.ConversationUUID` is still set (not cleared by either program-switch path today) will attempt `--resume <uuid>`, which may reference history that `PortSessionHistory` already migrated or overwrote — behavior here depends on ordering between the UUID-based resume flag and the newer `PortSessionHistory` file-based porting (`session/history_transfer.go`), and is not covered by any existing test (`session/history_transfer_test.go` only tests the porting function in isolation, not its interaction with `--resume`).
+- **The claude/antigravity porting heuristic is a substring match, not an exact program-family match.** `strings.Contains(oldProgram, "claude")` / `strings.Contains(newProgram, "agy")` (both call sites, `session_service.go:1485-1486` and `:3971-3972`) will also match custom program strings that merely contain "claude" or "agy" as a substring (e.g. a user-defined alias like `claude-experimental` or a program string `aider --model agy-local`), triggering unintended history-porting attempts. `session/history_transfer.go:41` (`PortSessionHistory`) is the actual entry point invoked in both cases — worth checking whether it has its own validation before assuming the substring match is safe.
+- **`ErrCannotRestart` when `instance.started == false`.** Noted in the pre-existing `plan.md` (RC4/Edge Case 4) — if the poller is unavailable and `UpdateSession` falls back to `loadInstancesWithWiring()` (`session_service.go:1415-1420`), the loaded instance may not have `started = true`, and `Restart()` will return `ErrCannotRestart`. `UpdateSession` propagates this as `connect.CodeInternal` (`:1501`) with the raw Go error text — not a client-actionable message. `UpdateSessionProgram` (the capacity-monitor path) has the same issue at `:3983-3985`.
+- **Paused/worktree sessions.** Per the pre-existing pitfalls research (still valid, not superseded by 914138ec): `Restart` on a paused worktree session recreates the worktree and can clear the Claude conversation UUID as a side effect unrelated to the program change itself — a user changing only the `program` field on a paused session could unexpectedly lose Claude conversation continuity as a side effect of the restart path, not the program-switch logic itself.
 
----
+## CI/registry requirements
 
-## 4. UX Confusion Points
+- **E2E conventions (`.claude/rules/e2e-test-conventions.md`) — no spec exists yet.** Any new `tests/e2e/session-program-change.spec.ts` must: start with `// @feature session:update` (or equivalent feature id), avoid `waitForTimeout` in favor of `expect(locator).toHaveValue(...)`/`waitForSelector`, use `data-testid`/ARIA-role locators only — the current dialog already has good `aria-label`s (`Change program for session ${session.title}`, `Change program`) that a spec could target via `getByRole("dialog", { name: "Change program" })` — and extract any repeated navigation logic into a page helper under `tests/e2e/pages/` if one for session-overflow-menu interactions doesn't already exist.
+- **Feature registry (`.claude/rules/feature-registry.md`) gaps to close, not just create:**
+  - `docs/registry/features/backend/session/update.json` exists but is `"tested": false` — must be updated to `true` with real `testIds` once Go tests for the program-switch branch are added (both `UpdateSession` and `UpdateSessionProgram` should be covered since they're independent code paths — see "Known related bugs/notes").
+  - No frontend registry file references the "Change Program" feature or `SessionActionsOverflow` program picker — a new file (e.g. `docs/registry/features/frontend/session-change-program.json`) is required, plus a `// +feature: session-change-program` marker in `SessionActionsOverflow.tsx`'s first 10 lines per the marker convention.
+  - After adding files/markers, run `make registry-generate` and confirm `docs/registry/coverage-gaps.json` doesn't grow net-new gaps (per the rule's step 3) — given the current state (`tested: false` + no frontend entry), a fix here should *shrink* the gap count, which is worth calling out explicitly in the PR description as the rule requires justification only for *increases*.
+- **`make ci` will run `actor-field-guard`** (`Makefile:686`) — any new Instance field mutation added while fixing this (e.g. a hypothetical `ClearClaudeUUID()` setter to address the stale-UUID risk above) must be added to `session/instance_actor_setters.go` following the existing `setXLocked` + public-wrapper pattern, not as a direct field assignment in `session_service.go`, or CI will fail the build.
+- **`make quick-check` (build+test+lint) and `make ci` (full pipeline including `vet-architecture`, `test-race`, `registry-generate`) are the practical gates** — given the total absence of tests today, a minimal viable fix (even just filling the test gap with no behavior change) will still need to pass `test-race` under the concurrency risks noted above; if the interleaving risk between `UpdateSession` and `UpdateSessionProgram` is real, a concurrent stress test could be the first thing to actually surface it.
 
-**There is no UI to change a session's program.** `SessionWizard` (creation only), `ResumeSessionModal` (shows program read-only), `SessionDetailBar`, and `SessionPeekModal` have no editable program field. The wire is complete on the backend and in the RPC layer but no frontend component surfaces it.
+## Frontend state-sync risks
 
-**Program is read-only in `ResumeSessionModal`.** The resume flow shows the current program as context-only text. Users see it but cannot change it — and there is no hint that changing it is possible.
+- **`SessionDetailView.tsx` already has the resync fix (verified in place).** Lines 176-181:
+  ```tsx
+  const [isEditingProgram, setIsEditingProgram] = useState(false);
+  const [programValue, setProgramValue] = useState(session.program || "");
 
-**"System default" empty-string handling is a footgun.** If a user tries to "clear" the program to use the system default by sending an empty string, the guard `*req.Msg.Program != ""` silently ignores the request. The backend never exposes a way to reset to the empty/default value via `UpdateSession`.
+  React.useEffect(() => {
+    if (!isEditingProgram) setProgramValue(session.program || "");
+  }, [session.program, isEditingProgram]);
+  ```
+  This correctly guards against overwriting in-progress edits while still picking up server-pushed updates once the user isn't actively editing. This pattern should be the reference implementation for any other program-editing surface.
 
-**No confirmation dialog before restart.** Changing a program on an Active session immediately kills and restarts the tmux session. There is no frontend warning about work loss, and no acknowledgment in the UI that the session was restarted (only a log-level event on the backend).
+- **`SessionActionsOverflow.tsx`'s program picker does *not* have the equivalent resync guard.** `programPickerValue` is seeded once, at menu-open time: `setProgramPickerValue(session.program || ""); setIsProgramPickerOpen(true);` (line ~615). If the dialog stays open (user is deliberating) and `session.program` changes underneath it — e.g. the capacity-monitor auto-fallback (`capacity_monitor.go:308` → `UpdateSessionProgram`) fires while the dialog is open — the dialog silently keeps showing the stale value, and clicking "Save" will overwrite the auto-fallback's choice with the stale one, undoing an automatic rate-limit mitigation without the user realizing it. This is the same class of bug `SessionDetailView` already fixed, reintroduced in the overflow-menu implementation because it's a separate component with its own local state.
 
----
+- **`useSessionService.ts`'s `updateSession` writes the RPC response directly into the store** (`dispatch(upsertSession(response.session))`, `useSessionService.ts:304-306`) rather than waiting for the next `WatchSessions` stream event. This means the *initiating tab* sees a consistent, immediate update — good — but other open tabs/windows only learn about the change when the stream delivers it, and `useSessionService.ts:48` documents a "stream disconnect-and-reconnect (after reconciling...)" code path, implying the stream can drop and resync. During that reconciliation window, a second tab could show a stale `session.program` value for an unbounded period if the stream is down, with no visible "reconnecting" indicator surfaced to the program-picker UI specifically (general session-list staleness handling may exist elsewhere but wasn't confirmed to cover this dialog).
 
-## 5. Edge Cases
-
-**`bash`/terminal sessions:** Switching to `bash` sets `isTerminalSession` in the frontend (in `SessionWizard`), which hides AI-specific form fields. If a program is changed backend-only (via API), the frontend session list/detail will show `bash` but users will be confused about why AI features disappeared.
-
-**Claude session UUID after program switch.** When switching away from `claude`, the stored `claudeSession.ConversationUUID` is not cleared. If the user later switches back to `claude`, the restart will attempt `--resume <UUID>` — this may succeed or silently fail depending on whether the history file still exists.
-
-**Paused worktree sessions.** `Restart` for a paused session recreates the worktree and clears the UUID (lines 1205-1219). A program change on a paused session that triggers this path would thus also clear the Claude conversation history — a side-effect users would not expect from a "change program" action.
+- **No loading/error surfacing for the `UpdateSessionProgram` (capacity-monitor) path.** Because that path never goes through `useSessionService.ts`'s `updateSession` (it's a pure backend-to-backend call from `capacity_monitor.go`), any program change it makes only reaches the frontend via the `WatchSessions` stream and the explicit `s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"program"}))` at `session_service.go:3988`. If the event bus → stream → store pipeline has any latency or drop risk (not verified in this pass), a user could see the pre-auto-fallback program value client-side for a window after the backend has already switched and restarted the session — compounding the stale-dialog risk above if they open the "Change Program" menu during that window.

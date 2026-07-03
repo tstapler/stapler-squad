@@ -76,12 +76,12 @@ func (a *AgyAdapter) Import(ctx context.Context, inst *Instance) ([]CanonicalTur
 		}
 
 		if uuidStr != "" {
-			inst.stateMutex.Lock()
+			inst.claudeSessionMu.Lock()
 			if inst.claudeSession == nil {
 				inst.claudeSession = &ClaudeSessionData{}
 			}
 			inst.claudeSession.ConversationUUID = uuidStr
-			inst.stateMutex.Unlock()
+			inst.claudeSessionMu.Unlock()
 		}
 	}
 

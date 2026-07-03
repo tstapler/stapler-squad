@@ -52,7 +52,7 @@ func (d *AgyDetector) Patterns() dtypes.StatusPatterns {
 			},
 		},
 		InputRequired: []dtypes.StatusPattern{},
-		Error: []dtypes.StatusPattern{
+		Error:         []dtypes.StatusPattern{
 			// TODO: Add error patterns once real agy terminal output is captured.
 			// agy shares the Gemini jetski TUI — check what Gemini shows on API errors.
 			// Capture via: tmux capture-pane -p on a running agy session hitting a rate limit.

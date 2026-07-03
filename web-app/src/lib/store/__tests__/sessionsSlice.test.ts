@@ -84,6 +84,28 @@ describe("sessionsSlice", () => {
       expect(selectSessionById(state, "s1")!.title).toBe("Updated");
     });
 
+    it("skips upsert when updatedAt matches (prevents WatchSessions initial-snapshot render storm)", () => {
+      const store = makeStore();
+      const ts = { seconds: 1000n, nanos: 0 };
+      const base = create(SessionSchema, { id: "s1", title: "Original", updatedAt: ts });
+      store.dispatch(upsertSession(base));
+      const stateBefore = store.getState();
+      // Upsert with different title but same updatedAt — should be a no-op
+      const dup = create(SessionSchema, { id: "s1", title: "Changed", updatedAt: ts });
+      store.dispatch(upsertSession(dup));
+      expect(store.getState()).toBe(stateBefore); // same reference = no re-render
+      expect(selectSessionById(store.getState() as any, "s1")!.title).toBe("Original");
+    });
+
+    it("proceeds with upsert when updatedAt differs", () => {
+      const store = makeStore();
+      const s1 = create(SessionSchema, { id: "s1", title: "Old", updatedAt: { seconds: 1000n, nanos: 0 } });
+      store.dispatch(upsertSession(s1));
+      const s1updated = create(SessionSchema, { id: "s1", title: "New", updatedAt: { seconds: 1001n, nanos: 0 } });
+      store.dispatch(upsertSession(s1updated));
+      expect(selectSessionById(store.getState() as any, "s1")!.title).toBe("New");
+    });
+
     it("handles rapid successive upserts to the same id", () => {
       const store = makeStore();
       store.dispatch(upsertSession(makeSession("s1", "v1")));

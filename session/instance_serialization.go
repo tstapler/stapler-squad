@@ -20,78 +20,89 @@ import (
 
 // ToInstanceData converts an Instance to its serializable form
 func (i *Instance) ToInstanceData() InstanceData {
+	// Build a fresh snapshot under RLock so all field reads are consistent and
+	// race-free, capturing any direct field mutations made since the last mutator
+	// call. We use buildSnapshot rather than Snapshot() because callers of
+	// UpdateInstance may have set fields directly without going through a mutator
+	// that publishes to the atomic snapshot pointer.
+	// LaunchCommand is not in the snapshot (set once during Start) and is read directly.
+	// gitManager and claudeSession sub-objects have their own synchronisation.
+	i.mu.RLock()
+	snap := buildSnapshot(i)
+	i.mu.RUnlock()
+
 	data := InstanceData{
-		Title:                i.Title,
-		UUID:                 i.UUID,
-		Path:                 i.Path,
-		WorkingDir:           i.WorkingDir,
-		Branch:               i.Branch,
-		Status:               i.Status,
-		Height:               i.Height,
-		Width:                i.Width,
-		CreatedAt:            i.CreatedAt,
+		Title:                snap.Title,
+		UUID:                 snap.UUID,
+		Path:                 snap.Path,
+		WorkingDir:           snap.WorkingDir,
+		Branch:               snap.Branch,
+		Status:               snap.Status,
+		Height:               snap.Height,
+		Width:                snap.Width,
+		CreatedAt:            snap.CreatedAt,
 		UpdatedAt:            time.Now(),
-		Program:              i.Program,
-		AutoYes:              i.AutoYes,
-		Prompt:               i.Prompt,
-		InitialPrompt:        i.InitialPrompt,
-		Category:             i.Category,
-		IsExpanded:           i.IsExpanded,
-		Tags:                 i.Tags, // Include tags in serialization
-		SessionType:          i.SessionType,
-		TmuxPrefix:           i.TmuxPrefix,
-		LastTerminalUpdate:   i.LastTerminalUpdate,
-		LastMeaningfulOutput: i.LastMeaningfulOutput,
-		LastOutputSignature:  i.LastOutputSignature,
-		LastAddedToQueue:     i.LastAddedToQueue,
-		LastViewed:           i.LastViewed,
-		LastAcknowledged:     i.LastAcknowledged,
+		Program:              snap.Program,
+		AutoYes:              snap.AutoYes,
+		Prompt:               snap.Prompt,
+		InitialPrompt:        snap.InitialPrompt,
+		Category:             snap.Category,
+		IsExpanded:           snap.IsExpanded,
+		Tags:                 snap.Tags, // Include tags in serialization
+		SessionType:          snap.SessionType,
+		TmuxPrefix:           snap.TmuxPrefix,
+		LastTerminalUpdate:   snap.LastTerminalUpdate,
+		LastMeaningfulOutput: snap.LastMeaningfulOutput,
+		LastOutputSignature:  snap.LastOutputSignature,
+		LastAddedToQueue:     snap.LastAddedToQueue,
+		LastViewed:           snap.LastViewed,
+		LastAcknowledged:     snap.LastAcknowledged,
 		// Prompt detection and interaction tracking
-		LastPromptDetected:   i.LastPromptDetected,
-		LastPromptSignature:  i.LastPromptSignature,
-		LastUserResponse:     i.LastUserResponse,
-		ProcessingGraceUntil: i.ProcessingGraceUntil,
+		LastPromptDetected:   snap.LastPromptDetected,
+		LastPromptSignature:  snap.LastPromptSignature,
+		LastUserResponse:     snap.LastUserResponse,
+		ProcessingGraceUntil: snap.ProcessingGraceUntil,
 		// GitHub integration fields
-		GitHubPRNumber:  i.GitHubPRNumber,
-		GitHubPRURL:     i.GitHubPRURL,
-		GitHubOwner:     i.GitHubOwner,
-		GitHubRepo:      i.GitHubRepo,
-		GitHubSourceRef: i.GitHubSourceRef,
-		ClonedRepoPath:  i.ClonedRepoPath,
+		GitHubPRNumber:  snap.GitHub.GitHubPRNumber,
+		GitHubPRURL:     snap.GitHub.GitHubPRURL,
+		GitHubOwner:     snap.GitHub.GitHubOwner,
+		GitHubRepo:      snap.GitHub.GitHubRepo,
+		GitHubSourceRef: snap.GitHub.GitHubSourceRef,
+		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// GitHub integration fields
-		GitHubIsFork: i.GitHubIsFork,
+		GitHubIsFork: snap.GitHub.GitHubIsFork,
 		// PR status fields (populated by PRStatusPoller)
-		GitHubPRState:          i.GitHubPRState,
-		GitHubPRIsDraft:        i.GitHubPRIsDraft,
-		GitHubPRPriority:       i.GitHubPRPriority,
-		GitHubApprovedCount:    i.GitHubApprovedCount,
-		GitHubChangesReqCount:  i.GitHubChangesReqCount,
-		GitHubCheckConclusion:  i.GitHubCheckConclusion,
-		GitHubPRStatusTerminal: i.GitHubPRStatusTerminal,
-		LastPRStatusCheck:      i.LastPRStatusCheck,
+		GitHubPRState:          snap.GitHub.GitHubPRState,
+		GitHubPRIsDraft:        snap.GitHub.GitHubPRIsDraft,
+		GitHubPRPriority:       snap.GitHub.GitHubPRPriority,
+		GitHubApprovedCount:    snap.GitHub.GitHubApprovedCount,
+		GitHubChangesReqCount:  snap.GitHub.GitHubChangesReqCount,
+		GitHubCheckConclusion:  snap.GitHub.GitHubCheckConclusion,
+		GitHubPRStatusTerminal: snap.GitHub.GitHubPRStatusTerminal,
+		LastPRStatusCheck:      snap.GitHub.LastPRStatusCheck,
 		// Crew autonomy mode
-		AutonomousMode: i.AutonomousMode,
+		AutonomousMode: snap.Autonomous.AutonomousMode,
 		// Checkpoint metadata
-		Checkpoints:      i.Checkpoints,
-		ActiveCheckpoint: i.ActiveCheckpoint,
-		ForkedFromID:     i.ForkedFromID,
+		Checkpoints:      snap.Checkpoints,
+		ActiveCheckpoint: snap.ActiveCheckpoint,
+		ForkedFromID:     snap.ForkedFromID,
 		// History file linkage
-		HistoryFilePath: i.HistoryFilePath,
+		HistoryFilePath: snap.HistoryFilePath,
 		// One-shot mode
-		OneShot: i.OneShot,
+		OneShot: snap.OneShot,
 		// Hidden (system/background) flag
-		Hidden: i.Hidden,
+		Hidden: snap.Hidden,
 		// Project association
-		ProjectID: i.ProjectID,
-		// Full launch command for diagnostics
+		ProjectID: snap.ProjectID,
+		// Full launch command for diagnostics (not in snapshot — set once during Start)
 		LaunchCommand: i.LaunchCommand,
 		// MCP server URL for re-injection on restart
-		MCPServerURL: i.MCPServerURL,
+		MCPServerURL: snap.MCPServerURL,
 		// Pause reason — persisted so it survives restarts
-		PauseReason: i.PauseReason,
+		PauseReason: snap.PauseReason,
 		// Workflow linkage and archive state
-		WorkflowID: i.WorkflowID,
-		ArchivedAt: i.ArchivedAt,
+		WorkflowID: snap.WorkflowID,
+		ArchivedAt: snap.ArchivedAt,
 	}
 
 	// Only include worktree data if gitWorktree is initialized
@@ -99,7 +110,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 		data.Worktree = GitWorktreeData{
 			RepoPath:      i.gitManager.GetRepoPath(),
 			WorktreePath:  i.gitManager.GetWorktreePath(),
-			SessionName:   i.Title,
+			SessionName:   snap.Title,
 			BranchName:    i.gitManager.GetBranchName(),
 			BaseCommitSHA: i.gitManager.GetBaseCommitSHA(),
 		}
@@ -120,7 +131,7 @@ func (i *Instance) ToInstanceData() InstanceData {
 	}
 	// Always wire the squad session ID from Instance.UUID so the API response
 	// always carries both identifiers in the ClaudeSession sub-object.
-	data.ClaudeSession.SquadSessionID = i.UUID
+	data.ClaudeSession.SquadSessionID = snap.UUID
 
 	return data
 }
@@ -377,5 +388,6 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 		}
 	}
 
+	finishInstanceConstruction(instance)
 	return instance, nil
 }

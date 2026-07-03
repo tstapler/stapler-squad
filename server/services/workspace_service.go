@@ -1,10 +1,17 @@
 package services
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/server/adapters"
@@ -33,6 +40,15 @@ type LiveInstanceFinder interface {
 	FindLiveInstance(id string) *session.Instance
 }
 
+// branchCacheEntry holds a cached branch list for a repository path.
+// Moved from session_service.go together with ListBranches (ADR-001, Story 1.4).
+type branchCacheEntry struct {
+	branches []string
+	cachedAt time.Time
+}
+
+const branchCacheTTL = 5 * time.Minute
+
 // WorkspaceService handles all VCS/workspace RPC methods.
 //
 // These methods operate on session workspace state (git/jj status, branch
@@ -44,6 +60,11 @@ type WorkspaceService struct {
 	// inFlightSwitches tracks session IDs currently undergoing a workspace switch.
 	// Prevents concurrent SwitchWorkspace RPCs on the same session from corrupting state.
 	inFlightSwitches sync.Map
+	// branchCache caches git branch lists per repo path. ADR-002.
+	// Moved here from SessionService (Story 1.4 — ListBranches was the odd one out
+	// next to GetVCSStatus/GetWorkspaceInfo/ListWorkspaceTargets/SwitchWorkspace,
+	// which all already lived in WorkspaceService).
+	branchCache sync.Map // map[string]branchCacheEntry
 }
 
 // NewWorkspaceService creates a WorkspaceService with the given dependencies.
@@ -437,4 +458,122 @@ func fileChangeToProto(f vc.FileChange) *sessionv1.FileChange {
 		IsStaged: f.IsStaged,
 		OldPath:  f.OldPath,
 	}
+}
+
+// ListBranches returns the git branches for a given repository path.
+// Results are cached per repo path with a 5-minute TTL. ADR-002.
+// Moved from SessionService (Story 1.4 — was the odd one out next to the four
+// workspace methods that already delegated here).
+func (ws *WorkspaceService) ListBranches(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ListBranchesRequest],
+) (*connect.Response[sessionv1.ListBranchesResponse], error) {
+	repoPath := req.Msg.GetRepoPath()
+	if repoPath == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path is required"))
+	}
+
+	// Normalize and validate the path: must resolve within the user's home directory.
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repo_path: %w", err))
+	}
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cannot determine home directory: %w", err))
+	}
+	if !strings.HasPrefix(absPath, homeDir+string(filepath.Separator)) && absPath != homeDir {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path must be within the user home directory"))
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path does not exist: %w", err))
+	}
+
+	maxResults := int(req.Msg.GetMaxResults())
+	if maxResults <= 0 {
+		maxResults = 200
+	}
+	filter := req.Msg.GetFilter()
+
+	// Serve from cache if still fresh.
+	if entry, ok := ws.branchCache.Load(absPath); ok {
+		cached := entry.(branchCacheEntry)
+		if time.Since(cached.cachedAt) < branchCacheTTL {
+			branches := filterBranches(cached.branches, filter, maxResults)
+			return connect.NewResponse(&sessionv1.ListBranchesResponse{
+				Branches:   branches,
+				TotalCount: int32(len(branches)),
+				Truncated:  false,
+			}), nil
+		}
+	}
+
+	// Run git for-each-ref with a 2-second timeout.
+	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	refSpec := "refs/heads"
+	if req.Msg.GetIncludeRemote() {
+		refSpec = "refs/"
+	}
+	cmd := safeexec.CommandContext(cmdCtx, "git", "-C", absPath, "for-each-ref", refSpec, "--format=%(refname:short)")
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+
+	start := time.Now()
+	runErr := cmd.Run()
+	latencyMs := time.Since(start).Milliseconds()
+	log.Info("[ListBranches] branch list", "latency_ms", latencyMs, "repo", absPath)
+
+	truncated := false
+	if runErr != nil {
+		if cmdCtx.Err() == context.DeadlineExceeded {
+			// Timeout: return whatever partial output was collected.
+			truncated = true
+		} else {
+			// git failed (not a git repo, etc.): return empty list, not an error.
+			log.Warn("[ListBranches] git for-each-ref failed", "repo", absPath, "err", runErr)
+			return connect.NewResponse(&sessionv1.ListBranchesResponse{
+				Branches:   []string{},
+				TotalCount: 0,
+				Truncated:  false,
+			}), nil
+		}
+	}
+
+	var all []string
+	scanner := bufio.NewScanner(&out)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			all = append(all, line)
+		}
+	}
+
+	// Cache the full unfiltered list.
+	ws.branchCache.Store(absPath, branchCacheEntry{branches: all, cachedAt: time.Now()})
+
+	branches := filterBranches(all, filter, maxResults)
+	return connect.NewResponse(&sessionv1.ListBranchesResponse{
+		Branches:   branches,
+		TotalCount: int32(len(branches)),
+		Truncated:  truncated,
+	}), nil
+}
+
+// filterBranches applies a case-insensitive substring filter and caps results at maxResults.
+// Moved from session_service.go together with ListBranches (Story 1.4).
+func filterBranches(all []string, filter string, maxResults int) []string {
+	lowerFilter := strings.ToLower(filter)
+	var result []string
+	for _, b := range all {
+		if filter == "" || strings.Contains(strings.ToLower(b), lowerFilter) {
+			result = append(result, b)
+			if len(result) >= maxResults {
+				break
+			}
+		}
+	}
+	return result
 }

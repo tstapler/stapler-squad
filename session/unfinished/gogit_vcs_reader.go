@@ -118,12 +118,30 @@ func (g *GoGitVCSReader) pruneRepoCache() {
 	}
 }
 
+// ClearCache evicts ALL cached *git.Repository entries, allowing their
+// internal go-git object LRU caches (~96 MB per repo) to be garbage-collected.
+// Callers already holding a *cachedRepo reference (mid-scan) are unaffected —
+// their reference keeps the object alive until the operation finishes.
+// The next operation for an evicted repo re-opens it from disk (fast: only
+// the pack index is read, not all objects).
+func (g *GoGitVCSReader) ClearCache() {
+	g.repoCache.Range(func(k, _ any) bool {
+		g.repoCache.Delete(k)
+		atomic.AddInt64(&g.repoCacheSize, -1)
+		return true
+	})
+}
+
 // GoGitVCSReader implements VCSReader using the go-git library.
 // No subprocesses are spawned; all operations run in-process.
 // Prefer this in environments where spawning git subprocesses is undesirable
 // or where index.lock contention is a concern.
 //
 // All fields are zero-value safe — GoGitVCSReader{} is valid without a constructor.
+//
+// Memory note: each cached *git.Repository holds an internal object LRU cache
+// (~96 MB per repo by default). Call ClearCache() periodically (e.g. every
+// 5 minutes) to release these caches and bound total memory usage.
 type GoGitVCSReader struct {
 	// repoCache caches open go-git Repository handles keyed by absolute path.
 	// Values are *cachedRepo; LoadOrStore ensures only one entry per path wins.

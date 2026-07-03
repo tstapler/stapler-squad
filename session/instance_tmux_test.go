@@ -11,14 +11,14 @@ func TestIsClaude(t *testing.T) {
 	}{
 		{"claude", true},
 		{"/usr/local/bin/claude", true},
-		{"env -u SOME_VAR claude", true},  // env wrapper — second token matches
-		{"env claude --flag", true},        // env prefix
-		{"claude-squad", false},            // basename is "claude-squad", not "claude"
-		{"myclaudeapp", false},             // basename contains "claude" but is not "claude"
-		{"/claude/bin/aider", false},       // "claude" is a directory component, not the binary
+		{"env -u SOME_VAR claude", true}, // env wrapper — second token matches
+		{"env claude --flag", true},      // env prefix
+		{"claude-squad", false},          // basename is "claude-squad", not "claude"
+		{"myclaudeapp", false},           // basename contains "claude" but is not "claude"
+		{"/claude/bin/aider", false},     // "claude" is a directory component, not the binary
 		{"aider", false},
 		{"", false},
-		{"Claude", false},                  // case-sensitive: capital C does not match
+		{"Claude", false}, // case-sensitive: capital C does not match
 		{"CLAUDE", false},
 	}
 	for _, tc := range cases {

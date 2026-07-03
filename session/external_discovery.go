@@ -179,6 +179,8 @@ func (e *ExternalSessionDiscovery) handleNewSession(discovered *mux.DiscoveredSe
 		log.Info("attached to tmux session for unified streaming of external session", "tmux_session", discovered.Metadata.TmuxSession, "title", title)
 	}
 
+	finishInstanceConstruction(instance)
+
 	// Register the session
 	e.sessionsMu.Lock()
 	e.sessions[discovered.SocketPath] = instance

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/google/uuid"
@@ -15,6 +16,7 @@ import (
 	"github.com/tstapler/stapler-squad/server/workflows"
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/ent"
+	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 )
 
 // WorkflowSchedulerInterface is the interface WorkflowService uses to interact with the scheduler.
@@ -30,11 +32,24 @@ type WorkflowSchedulerInterface interface {
 type WorkflowService struct {
 	repo      session.WorkflowRepository
 	scheduler WorkflowSchedulerInterface
+	// storage is used by ArchiveWorkflowSessions and DeleteWorkflowFailedSessions to
+	// access the ent client for bulk updates. Wired at construction time.
+	storage session.InstanceStore
+	// poller is wired after construction via SetPoller, forwarded from SessionService.
+	poller *session.ReviewQueuePoller
 }
 
 // NewWorkflowService creates a new WorkflowService.
-func NewWorkflowService(repo session.WorkflowRepository, scheduler WorkflowSchedulerInterface) *WorkflowService {
-	return &WorkflowService{repo: repo, scheduler: scheduler}
+// storage is required for ArchiveWorkflowSessions / DeleteWorkflowFailedSessions; pass nil
+// to disable those RPCs (they will return CodeUnavailable).
+func NewWorkflowService(repo session.WorkflowRepository, scheduler WorkflowSchedulerInterface, storage session.InstanceStore) *WorkflowService {
+	return &WorkflowService{repo: repo, scheduler: scheduler, storage: storage}
+}
+
+// SetPoller wires the live-instance poller so ArchiveWorkflowSessions can update
+// in-memory instance state. Forwarded from SessionService.SetReviewQueuePoller.
+func (ws *WorkflowService) SetPoller(p *session.ReviewQueuePoller) {
+	ws.poller = p
 }
 
 // entWorkflowToProto converts an ent.Workflow to its proto representation.
@@ -323,5 +338,106 @@ func (s *WorkflowService) RunWorkflow(
 
 	return connect.NewResponse(&sessionv1.RunWorkflowResponse{
 		SessionId: sessionID,
+	}), nil
+}
+
+// +api: session:archive-workflow-sessions
+// ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
+// Active, Creating, and Paused sessions are silently skipped.
+// Extracted from SessionService per ADR-001.
+func (ws *WorkflowService) ArchiveWorkflowSessions(
+	ctx context.Context,
+	req *connect.Request[sessionv1.ArchiveWorkflowSessionsRequest],
+) (*connect.Response[sessionv1.ArchiveWorkflowSessionsResponse], error) {
+	if req.Msg.WorkflowId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("workflow_id is required"))
+	}
+
+	// Get the ent client via the concrete storage implementation.
+	concreteStorage, ok := ws.storage.(*session.Storage)
+	if !ok || concreteStorage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk archive requires ent-backed storage"))
+	}
+	entClient := concreteStorage.GetEntClient()
+	if entClient == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk archive requires ent client"))
+	}
+
+	// Query all non-active, non-archived sessions for this workflow.
+	// Status guard: use Go-layer DB values (Creating=0, Active=1, Paused=2), NOT proto wire values.
+	now := time.Now()
+	updated, err := entClient.Session.Update().
+		Where(
+			entsession.WorkflowID(req.Msg.WorkflowId),
+			entsession.ArchivedAtIsNil(),
+			entsession.StatusNotIn(int(session.Active), int(session.Creating), int(session.Paused)),
+		).
+		SetArchivedAt(now).
+		Save(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bulk archive workflow sessions: %w", err))
+	}
+
+	// Update in-memory instances for any that are still in the poller.
+	if ws.poller != nil {
+		for _, inst := range ws.poller.GetInstances() {
+			if inst.WorkflowID == req.Msg.WorkflowId && inst.ArchivedAt == nil {
+				if !inst.IsActive() && !inst.IsCreating() && !inst.IsPaused() {
+					inst.ArchivedAt = &now
+				}
+			}
+		}
+	}
+
+	log.Info("[WorkflowService] ArchiveWorkflowSessions completed",
+		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
+
+	return connect.NewResponse(&sessionv1.ArchiveWorkflowSessionsResponse{
+		ArchivedCount: int32(updated),
+	}), nil
+}
+
+// +api: session:delete-workflow-failed-sessions
+// DeleteWorkflowFailedSessions archives (soft-deletes) sessions that appear to have
+// failed — Stopped sessions with no meaningful terminal output for the given workflow.
+// Extracted from SessionService per ADR-001.
+func (ws *WorkflowService) DeleteWorkflowFailedSessions(
+	ctx context.Context,
+	req *connect.Request[sessionv1.DeleteWorkflowFailedSessionsRequest],
+) (*connect.Response[sessionv1.DeleteWorkflowFailedSessionsResponse], error) {
+	if req.Msg.WorkflowId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("workflow_id is required"))
+	}
+
+	concreteStorage, ok := ws.storage.(*session.Storage)
+	if !ok || concreteStorage == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk delete requires ent-backed storage"))
+	}
+	entClient := concreteStorage.GetEntClient()
+	if entClient == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk delete requires ent client"))
+	}
+
+	// "Failed" = Stopped sessions with no meaningful output.
+	// last_meaningful_output IS NULL indicates the session never produced useful work.
+	now := time.Now()
+	updated, err := entClient.Session.Update().
+		Where(
+			entsession.WorkflowID(req.Msg.WorkflowId),
+			entsession.StatusIn(int(session.Stopped)),
+			entsession.ArchivedAtIsNil(),
+			entsession.LastMeaningfulOutputIsNil(),
+		).
+		SetArchivedAt(now).
+		Save(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete workflow failed sessions: %w", err))
+	}
+
+	log.Info("[WorkflowService] DeleteWorkflowFailedSessions completed",
+		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
+
+	return connect.NewResponse(&sessionv1.DeleteWorkflowFailedSessionsResponse{
+		DeletedCount: int32(updated),
 	}), nil
 }

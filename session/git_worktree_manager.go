@@ -166,7 +166,7 @@ func (gm *GitWorktreeManager) OpenBranchURL() error {
 
 // ComputeDiffIfReady checks if the worktree path exists and computes a new diff.
 // Returns (stats, needsPause) where needsPause is true if the worktree directory is missing.
-// This method performs I/O and should be called WITHOUT holding Instance.stateMutex.
+// This method performs I/O and should be called WITHOUT holding Instance.mu.
 // Returns (nil, false) if no worktree is set.
 func (gm *GitWorktreeManager) ComputeDiffIfReady() (stats *git.DiffStats, needsPause bool) {
 	if gm.worktree == nil {

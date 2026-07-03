@@ -1,6 +1,9 @@
 package session
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // noCopy prevents ControllerManager from being copied after first use.
 // go vet -copylocks will flag any copy of a type containing noCopy.
@@ -21,37 +24,52 @@ func (*noCopy) Unlock() {}
 // session selection) that is tightly coupled to Instance business logic.
 // It remains a direct field on Instance for now.
 //
-// The controller field is accessed only while the owning Instance.stateMutex
-// is held; statusManager uses atomic.Pointer for lock-free concurrent access.
+// The controller field is protected by mu; statusManager uses atomic.Pointer
+// for lock-free concurrent access.
 // ControllerManager must not be copied after first use (enforced by noCopy).
 type ControllerManager struct {
 	_             noCopy
+	mu            sync.RWMutex
 	controller    *ClaudeController
 	statusManager atomic.Pointer[InstanceStatusManager]
 }
 
 // HasController reports whether a ClaudeController has been registered.
 func (cm *ControllerManager) HasController() bool {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
 	return cm.controller != nil
 }
 
 // GetController returns the current ClaudeController (may be nil).
 func (cm *ControllerManager) GetController() *ClaudeController {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
 	return cm.controller
 }
 
 // SetController replaces the controller. Callers are responsible for stopping
 // the old controller before calling this.
 func (cm *ControllerManager) SetController(c *ClaudeController) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 	cm.controller = c
 }
 
-// StopAndClearController stops the controller (if running) and clears the reference.
-func (cm *ControllerManager) StopAndClearController() {
+// stopAndClearLocked stops the controller (if running) and clears the reference.
+// Must be called with cm.mu.Lock() held.
+func (cm *ControllerManager) stopAndClearLocked() {
 	if cm.controller != nil {
 		cm.controller.Stop()
 		cm.controller = nil
 	}
+}
+
+// StopAndClearController stops the controller (if running) and clears the reference.
+func (cm *ControllerManager) StopAndClearController() {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.stopAndClearLocked()
 }
 
 // GetStatusManager returns the current InstanceStatusManager (may be nil).
@@ -67,7 +85,9 @@ func (cm *ControllerManager) SetStatusManager(m *InstanceStatusManager) {
 // RegisterController wires a new controller into the status manager and stores
 // it. Any existing controller is stopped first.
 func (cm *ControllerManager) RegisterController(title string, controller *ClaudeController) {
-	cm.StopAndClearController()
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+	cm.stopAndClearLocked()
 	if mgr := cm.statusManager.Load(); mgr != nil {
 		mgr.RegisterController(title, controller)
 	}
@@ -77,8 +97,10 @@ func (cm *ControllerManager) RegisterController(title string, controller *Claude
 // UnregisterController stops and clears the controller, and removes it from
 // the status manager.
 func (cm *ControllerManager) UnregisterController(title string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 	if mgr := cm.statusManager.Load(); mgr != nil {
 		mgr.UnregisterController(title)
 	}
-	cm.StopAndClearController()
+	cm.stopAndClearLocked()
 }

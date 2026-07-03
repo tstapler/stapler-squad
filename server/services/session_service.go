@@ -1,8 +1,6 @@
 package services
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -27,7 +25,6 @@ import (
 	"github.com/tstapler/stapler-squad/session"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/ent"
-	entsession "github.com/tstapler/stapler-squad/session/ent/session"
 	"github.com/tstapler/stapler-squad/session/headless"
 	"github.com/tstapler/stapler-squad/session/namegen"
 	"github.com/tstapler/stapler-squad/session/prompts"
@@ -104,6 +101,15 @@ type SessionService struct {
 	// projectSvc handles Project CRUD RPCs.
 	projectSvc *ProjectService
 
+	// checkpointSvc handles CreateCheckpoint/ListCheckpoints/ClearConversationState RPCs.
+	checkpointSvc *CheckpointService
+
+	// featureFlagSvc handles GetFeatureFlags/UpdateFeatureFlag RPCs.
+	featureFlagSvc *FeatureFlagService
+
+	// terminalSvc handles GetTerminalSnapshot/WriteToSession RPCs.
+	terminalSvc *TerminalService
+
 	// promptStore persists prompt history for the "initial prompt" dropdown.
 	promptStore *prompts.PromptStore
 
@@ -115,9 +121,6 @@ type SessionService struct {
 	// When non-empty, passed to new sessions via InstanceOptions.MCPServerURL.
 	mcpServerURL string
 
-	// branchCache caches git branch lists per repo path. ADR-002.
-	branchCache sync.Map // map[string]branchCacheEntry
-
 	// errorRegistry persists deduplicated RPC errors to SQLite.
 	// May be nil when wired without an ent-backed storage (e.g. in tests).
 	errorRegistry *ErrorRegistry
@@ -125,11 +128,6 @@ type SessionService struct {
 	// backlogLifecycleListener is wired to each newly created session so that
 	// backlog item state transitions fire when the session exits.
 	backlogLifecycleListener *session.BacklogLifecycleListener
-
-	// featureControllers maps feature flag names to their runtime controllers.
-	// Wired via SetFeatureController. May be nil for features that only need
-	// config-file persistence (no in-process component to toggle).
-	featureControllers map[string]FeatureController
 
 	// capacityMonitor tracks rate limits and triggers transitions.
 	capacityMonitor *CapacityMonitor
@@ -146,15 +144,8 @@ type SessionService struct {
 	// May be nil when the claude binary is not found at startup.
 	headlessPool *headless.Pool
 
-	// lifecycleCtx is the server's root context, cancelled by Shutdown().
-	// Autonomous driver goroutines are bound to this context so they exit with the server.
-	lifecycleCtx context.Context
-
-	// driverMu guards driverRegistry.
-	driverMu sync.RWMutex
-	// driverRegistry maps session title → running AutonomousDriver.
-	// Used to stop drivers on session delete/hibernate and prevent use-after-free.
-	driverRegistry map[string]*session.AutonomousDriver
+	// autonomousSvc manages the lifecycle of AutonomousDriver instances.
+	autonomousSvc *AutonomousOrchestrationService
 
 	// workflowSvc handles workflow CRUD and RunWorkflow RPC delegation.
 	// Injected after construction via SetWorkflowService to avoid bootstrapping cycle.
@@ -168,6 +159,10 @@ type SessionService struct {
 	// Populated on startup and refreshed every minute. Protected by workflowMetaMu.
 	workflowMetaCache map[string]workflowMeta
 	workflowMetaMu    sync.RWMutex
+
+	// registry is the live-handle map for all running sessions. Wired after construction
+	// via SetRegistry so that NewSessionService callers don't need to supply it at build time.
+	registry *session.Registry
 }
 
 // workflowMeta holds cached metadata about a workflow used at session-list time.
@@ -181,6 +176,37 @@ type workflowMeta struct {
 type ScrollbackSequencer interface {
 	CurrentSequence(sessionID string) uint64
 }
+
+// Dependency-injection audit (ADR-001, Story 1.3):
+//
+// All Set* wiring methods on SessionService inject Phase 2 or Phase 3 dependencies —
+// none can be moved to constructor injection. Rationale by group:
+//
+//   Phase 2 (from server/dependencies.go after NewSessionService returns):
+//     SetErrorRegistry      — built from storage.GetEntClient() after storage is opened
+//     SetAnalyticsClient    — same ent client, pre-existing connection path
+//     SetNotificationStore  — built from config dir (lazy path resolution)
+//     SetConfigService      — thin wrapper, wired for test-overridability
+//     SetMCPServerURL       — env-var / config value, not available inside package
+//     SetBacklogLifecycleListener — depends on headless.Pool built after this service
+//     SetHistoryLinker      — depends on storage + ent client both resolved
+//     SetHeadlessPool       — constructed by BuildDependencies, not NewSessionService
+//
+//   Phase 3 (via warren.Set in BuildDependencies, after all Phase 2 deps):
+//     SetReviewQueuePoller   — circular: poller takes SessionService as param
+//     SetStatusManager       — built after reviewQueuePoller is available
+//     SetExternalDiscovery   — built after headless pool
+//     SetScrollbackManager   — built after storage is opened + log dir resolved
+//     SetMemoryCacheReader   — optional, provided by HibernationSweeper
+//     SetReactiveQueueManager — built after reviewQueuePoller + statusManager
+//     SetLifecycleContext    — application-level ctx not available at pkg init
+//     SetFeatureController   — one call per named flag (backlog), after backlog ctrl built
+//     SetWorkflowService     — WorkflowService depends on SessionService (circular)
+//     SetWorkflowRepository  — same cycle; repo available after workflowSvc constructed
+//     SetTokenStoreReader    — built after storage open, wired late by warren
+//
+// Conclusion: the two-param constructor (storage, eventBus) is the correct boundary.
+// All other deps are external to this package or have construction-order constraints.
 
 // NewSessionService creates a new SessionService with the given storage and event bus.
 // NOTE: Instances are NOT loaded here to prevent double-loading and initialization timing issues.
@@ -307,6 +333,9 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 		slashCommandSvc:   NewSlashCommandService(),
 		defaultsSvc:       NewDefaultsService(),
 		projectSvc:        NewProjectService(concStorage),
+		checkpointSvc:     NewCheckpointService(storage, eventBus),
+		featureFlagSvc:    NewFeatureFlagService(),
+		terminalSvc:       NewTerminalService(),
 		promptStore:       newPromptStore(),
 		capacityMonitor:   capacityMonitor,
 	}
@@ -319,6 +348,20 @@ func NewSessionService(storage session.InstanceStore, eventBus *events.EventBus)
 	// Wire the live-instance provider so ListClaudeHistory can populate
 	// session_status on history entries without a separate storage call.
 	svc.searchSvc.SetInstanceProvider(svc.allInstances)
+	// Wire CheckpointService's instance-load fallback to this service's own
+	// loadInstancesWithWiring so ClearConversationState gets properly-wired instances.
+	svc.checkpointSvc.SetLoadInstancesFn(svc.loadInstancesWithWiring)
+
+	// Wire the autonomous orchestration service with a storage getter closure.
+	autonomousSvc := NewAutonomousOrchestrationService(nil, eventBus)
+	autonomousSvc.SetStorageGetter(func() *session.Storage {
+		if cs, ok := storage.(*session.Storage); ok {
+			return cs
+		}
+		return nil
+	})
+	svc.autonomousSvc = autonomousSvc
+
 	return svc
 }
 
@@ -346,17 +389,13 @@ func (s *SessionService) loadInstancesWithWiring() ([]*session.Instance, error) 
 		if s.statusManager != nil {
 			inst.SetStatusManager(s.statusManager)
 		}
-		s.wireRateLimitCallbacks(inst)
-		s.wireStatusChangeCallback(inst)
-		s.wireClaudeSessionIDCallback(inst)
-		s.wireAutoArchiveCallback(inst)
-		s.wireSessionExitedPublisher(inst)
+		s.wireCallbacks(inst)
 		// Backfill MCP server URL for sessions created before MCP integration was
 		// wired up. Without this, buildLaunchCommand omits --mcp-config entirely and
 		// the Claude process restarts without a session UUID or MCP connection.
 		// Only applied in-memory; the DB value is updated lazily via SaveInstances.
 		if inst.MCPServerURL == "" && s.mcpServerURL != "" {
-			inst.MCPServerURL = s.mcpServerURL
+			inst.SetMCPServerURL(s.mcpServerURL)
 		}
 	}
 
@@ -627,6 +666,31 @@ func (s *SessionService) SetMCPServerURL(url string) {
 	s.mcpServerURL = url
 }
 
+// SetRegistry wires the Registry into this service. Called during server startup after
+// the Registry is constructed in BuildServiceDeps.
+func (s *SessionService) SetRegistry(r *session.Registry) {
+	s.registry = r
+}
+
+// WireInstanceCallbacks is the onConstruct hook for Registry.Acquire. It wires all
+// per-session callbacks (review queue, status manager, rate limit, etc.) onto a freshly
+// constructed LiveInstance. Called exactly once per genuine construction in Acquire —
+// never on refcount++ hits, never on Register (CreateSession wires callbacks explicitly).
+func (s *SessionService) WireInstanceCallbacks(inst *session.LiveInstance) {
+	inst.SetReviewQueue(s.reviewQueueSvc.GetQueue())
+	if s.statusManager != nil {
+		inst.SetStatusManager(s.statusManager)
+	}
+	s.wireRateLimitCallbacks(inst.Instance)
+	s.wireStatusChangeCallback(inst.Instance)
+	s.wireClaudeSessionIDCallback(inst.Instance)
+	s.wireAutoArchiveCallback(inst.Instance)
+	s.wireSessionExitedPublisher(inst.Instance)
+	if inst.MCPServerURL == "" && s.mcpServerURL != "" {
+		inst.SetMCPServerURL(s.mcpServerURL)
+	}
+}
+
 // SetBacklogLifecycleListener wires the listener to all sessions created via
 // CreateDirectorySession so that backlog state transitions fire on session exit.
 func (s *SessionService) SetBacklogLifecycleListener(l *session.BacklogLifecycleListener) {
@@ -674,11 +738,7 @@ func (s *SessionService) CreateDirectorySession(ctx context.Context, title, path
 		}
 	}
 	session.StartSessionDriver(instance, path)
-	s.wireRateLimitCallbacks(instance)
-	s.wireStatusChangeCallback(instance)
-	s.wireClaudeSessionIDCallback(instance)
-	s.wireAutoArchiveCallback(instance)
-	s.wireSessionExitedPublisher(instance)
+	s.wireCallbacks(instance)
 	if err := s.storage.AddInstance(instance); err != nil {
 		_ = instance.Destroy()
 		return nil, fmt.Errorf("CreateDirectorySession save: %w", err)
@@ -702,114 +762,45 @@ func (s *SessionService) SetHistoryLinker(hl *session.HistoryLinker) {
 // SetHeadlessPool wires the headless LLM pool for use by RunOneShot and other AI features.
 func (s *SessionService) SetHeadlessPool(pool *headless.Pool) {
 	s.headlessPool = pool
+	s.autonomousSvc.SetPool(pool)
 }
 
 // SetLifecycleContext binds the server's root context to the service.
-// Autonomous driver goroutines are started with this context so they exit when the server shuts down.
 // Must be called once during server startup, before any sessions are created.
 func (s *SessionService) SetLifecycleContext(ctx context.Context) {
-	s.lifecycleCtx = ctx
 	if s.capacityMonitor != nil {
 		go s.capacityMonitor.Start(ctx)
 	}
+	s.autonomousSvc.SetLifecycleContext(ctx)
 }
 
-// driverCtx returns the lifecycle context, falling back to Background() if not set.
-func (s *SessionService) driverCtx() context.Context {
-	if s.lifecycleCtx != nil {
-		return s.lifecycleCtx
-	}
-	return context.Background()
-}
-
-// registerDriver records a running AutonomousDriver in the registry so it can be stopped later.
-func (s *SessionService) registerDriver(sessionTitle string, d *session.AutonomousDriver) {
-	s.driverMu.Lock()
-	if s.driverRegistry == nil {
-		s.driverRegistry = make(map[string]*session.AutonomousDriver)
-	}
-	s.driverRegistry[sessionTitle] = d
-	s.driverMu.Unlock()
-}
-
-// stopAndDeregisterDriver stops the driver for sessionTitle (if any) and removes it from the registry.
-func (s *SessionService) stopAndDeregisterDriver(sessionTitle string) {
-	s.driverMu.Lock()
-	d, ok := s.driverRegistry[sessionTitle]
-	if ok {
-		delete(s.driverRegistry, sessionTitle)
-	}
-	s.driverMu.Unlock()
-	if ok && d != nil {
-		d.Stop()
-	}
+// wireCallbacks wires all per-instance lifecycle callbacks on inst.
+// Consolidates the five wire* helpers that are always called together.
+func (s *SessionService) wireCallbacks(inst *session.Instance) {
+	s.wireRateLimitCallbacks(inst)
+	s.wireStatusChangeCallback(inst)
+	s.wireClaudeSessionIDCallback(inst)
+	s.wireAutoArchiveCallback(inst)
+	s.wireSessionExitedPublisher(inst)
 }
 
 // StopDriverForSession stops the AutonomousDriver registered under sessionTitle.
 // Used by MCP handlers as a belt-and-suspenders stop after task completion.
 // Satisfies mcp.ReviewCompletionSignaler.
 func (s *SessionService) StopDriverForSession(sessionTitle string) {
-	s.stopAndDeregisterDriver(sessionTitle)
-}
-
-// buildTurnCallback returns the TurnCallback wired for inst.
-// Shared by StartAutonomousDriverForInstance and StartAutonomousDriverWithTimeout
-// to prevent divergence over time.
-func (s *SessionService) buildTurnCallback(inst *session.Instance) session.TurnCallback {
-	return func(turn, maxTurns int, prompt string) {
-		if liveInst := s.FindLiveInstance(inst.Title); liveInst != nil {
-			liveInst.AutonomousTurn = int32(turn)
-			liveInst.AutonomousMaxTurns = int32(maxTurns)
-			s.eventBus.Publish(events.NewSessionUpdatedEvent(liveInst, []string{"autonomous_turn"}))
-		}
-		truncated := prompt
-		if len(truncated) > 120 {
-			truncated = truncated[:120] + "…"
-		}
-		s.eventBus.Publish(events.NewNotificationEvent(
-			inst.UUID, inst.Title, fmt.Sprintf("autonomous-turn-%s-%d", inst.UUID, turn),
-			int32(10), // NotificationType_INFO
-			int32(1),  // NotificationPriority_LOW
-			fmt.Sprintf("Autonomous turn %d/%d", turn, maxTurns),
-			fmt.Sprintf("%s: %s", inst.Title, truncated),
-			nil,
-		))
-	}
+	s.autonomousSvc.StopDriverForSession(sessionTitle)
 }
 
 // StartAutonomousDriverForInstance satisfies the AutonomousDriverStarter interface.
-// Starts an AutonomousDriver on inst if headlessPool is available.
+// Delegates to the autonomous orchestration service.
 func (s *SessionService) StartAutonomousDriverForInstance(inst *session.Instance) {
-	if s.headlessPool == nil {
-		log.Warn("[SessionService] StartAutonomousDriverForInstance: headlessPool is nil", "session", inst.Title)
-		return
-	}
-	driver := session.NewAutonomousDriver(inst, s.headlessPool, inst.Prompt, 0)
-	driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
-	driver.RegisterTurnCallback(s.buildTurnCallback(inst))
-	if err := driver.Start(s.driverCtx()); err != nil {
-		log.Warn("[SessionService] failed to start autonomous driver for backlog session", "session", inst.Title, "err", err)
-		return
-	}
-	s.registerDriver(inst.Title, driver)
+	s.autonomousSvc.StartAutonomousDriverForInstance(inst)
 }
 
 // StartAutonomousDriverWithTimeout is like StartAutonomousDriverForInstance but
-// uses a configurable startup timeout for sessions that need a longer warm-up
-// (e.g. triage sessions that spawn parallel subagents).
+// uses a configurable startup timeout. Delegates to the autonomous orchestration service.
 func (s *SessionService) StartAutonomousDriverWithTimeout(inst *session.Instance, startupTimeout time.Duration) {
-	if s.headlessPool == nil {
-		log.Warn("[SessionService] StartAutonomousDriverWithTimeout: headlessPool is nil", "session", inst.Title)
-		return
-	}
-	driver := session.NewAutonomousDriver(inst, s.headlessPool, inst.Prompt, 0, session.WithStartupTimeout(startupTimeout))
-	driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
-	driver.RegisterTurnCallback(s.buildTurnCallback(inst))
-	if err := driver.Start(s.driverCtx()); err != nil {
-		log.Warn("[SessionService] failed to start autonomous driver", "session", inst.Title, "err", err)
-		return
-	}
-	s.registerDriver(inst.Title, driver)
+	s.autonomousSvc.StartAutonomousDriverWithTimeout(inst, startupTimeout)
 }
 
 // Compile-time assertion: SessionService must implement AutonomousDriverStarter.
@@ -820,9 +811,15 @@ var _ AutonomousDriverStarter = (*SessionService)(nil)
 // Must be called during server startup before any session mutation RPCs are used.
 func (s *SessionService) SetReviewQueuePoller(poller *session.ReviewQueuePoller) {
 	s.reviewQueuePoller = poller
+	s.autonomousSvc.SetInstanceFinder(s.FindLiveInstance)
 	s.reviewQueueSvc.SetReviewQueuePoller(poller)
 	s.notificationSvc.SetReviewQueuePoller(poller)
 	s.utilitySvc.SetReviewQueuePoller(poller)
+	s.checkpointSvc.SetPoller(poller)
+	s.terminalSvc.SetPoller(poller)
+	if s.workflowSvc != nil {
+		s.workflowSvc.SetPoller(poller)
+	}
 }
 
 // SetMemoryCacheReader wires the HibernationSweeper so that ListSessions can
@@ -841,6 +838,8 @@ func (s *SessionService) SetStatusManager(mgr *session.InstanceStatusManager) {
 // SetExternalDiscovery sets the external session discovery for accessing mux-enabled sessions.
 func (s *SessionService) SetExternalDiscovery(discovery *session.ExternalSessionDiscovery) {
 	s.externalDiscovery = discovery
+	s.checkpointSvc.SetExternalDiscovery(discovery)
+	s.terminalSvc.SetExternalDiscovery(discovery)
 }
 
 // SetNotificationStore sets the notification history store for the notification history RPCs
@@ -861,13 +860,9 @@ func (s *SessionService) SetConfigService(svc *ConfigService) {
 }
 
 // SetFeatureController wires a runtime controller for the named feature flag.
-// When UpdateFeatureFlag is called for this name, the controller's Enable/Disable
-// methods are invoked in addition to persisting the flag to config.
+// Delegates to FeatureFlagService which owns the controller registry.
 func (s *SessionService) SetFeatureController(name string, c FeatureController) {
-	if s.featureControllers == nil {
-		s.featureControllers = make(map[string]FeatureController)
-	}
-	s.featureControllers[name] = c
+	s.featureFlagSvc.SetFeatureController(name, c)
 }
 
 // ListSessions returns all sessions with optional filtering.
@@ -1252,9 +1247,27 @@ func (s *SessionService) CreateSession(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("failed to create instance: %w", err))
 	}
 
+	// Register in the live-handle map BEFORE persisting to storage so there is never
+	// a window where the session is findable by storage.FindInstanceDataByID but has
+	// no live actor. ForceRelease (not the release closure) is used in the rollback
+	// path because a concurrent Acquire racing between Register and AddInstance failure
+	// could bump refcount to 2, making plain release() decrement 2→1 and leave a
+	// phantom entry alive.
+	if s.registry != nil {
+		live := session.NewLiveInstance(instance)
+		if _, regErr := s.registry.Register(live); regErr != nil {
+			live.Stop()
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to register instance: %w", regErr))
+		}
+		// Note: AddInstance failure rolls back via ForceRelease below.
+	}
+
 	// Save the instance to storage with Creating status immediately so the client
 	// can receive the session and show a spinner while initialization proceeds.
 	if err := s.storage.AddInstance(instance); err != nil {
+		if s.registry != nil {
+			s.registry.ForceRelease(instance.GetStableID())
+		}
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save instance: %w", err))
 	}
 
@@ -1277,27 +1290,23 @@ func (s *SessionService) CreateSession(
 	instanceTitle := instance.Title
 	instanceRootDir := instance.GetEffectiveRootDir()
 
-	// Snapshot the proto before spawning the goroutine to avoid a data race between
-	// the goroutine writing CreationProgress and the return statement reading instance.
+	// Pre-compute the Creating-state proto for the RPC response so the return
+	// statement below does not race with the goroutine's SetCreationProgress calls.
 	creatingProto := adapters.InstanceToProto(instance, s.workflowNames())
 
 	// Perform the actual initialization asynchronously so the RPC returns within milliseconds.
 	go func() {
 		// Wire callbacks before starting so rate-limit and status-change events fire.
-		s.wireRateLimitCallbacks(instance)
-		s.wireStatusChangeCallback(instance)
-		s.wireClaudeSessionIDCallback(instance)
-		s.wireAutoArchiveCallback(instance)
-		s.wireSessionExitedPublisher(instance)
+		s.wireCallbacks(instance)
 
-		instance.CreationProgress = "Starting session..."
+		instance.SetCreationProgress("Starting session...")
 		s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"creation_progress"}))
 
 		// Start the session (initializes tmux + git worktree).
 		if startErr := instance.Start(true); startErr != nil {
 			log.Error("[CreateSession] async start failed", "session", instanceTitle, "err", startErr)
 			// Transition to Stopped on failure.
-			instance.CreationProgress = fmt.Sprintf("Startup failed: %s", startErr.Error())
+			instance.SetCreationProgress(fmt.Sprintf("Startup failed: %s", startErr.Error()))
 			instance.ForceStatus(session.Stopped)
 			_ = s.storage.SaveInstances([]*session.Instance{instance})
 			s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"status", "creation_progress"}))
@@ -1305,7 +1314,7 @@ func (s *SessionService) CreateSession(
 		}
 
 		// Clear progress message now that we are Active.
-		instance.CreationProgress = ""
+		instance.SetCreationProgress("")
 
 		// Inject Claude Code HTTP hook config for remote approval from the web UI.
 		// Non-fatal: session is fully functional even without this config.
@@ -1336,11 +1345,11 @@ func (s *SessionService) CreateSession(
 
 		if instance.AutonomousMode && s.headlessPool != nil {
 			driver := session.NewAutonomousDriver(instance, s.headlessPool, instance.Prompt, 0)
-			driver.RegisterCompletionCallback(s.onAutonomousDriverComplete)
-			if driverErr := driver.Start(s.driverCtx()); driverErr != nil {
+			driver.RegisterCompletionCallback(s.autonomousSvc.onAutonomousDriverComplete)
+			if driverErr := driver.Start(s.autonomousSvc.driverCtx()); driverErr != nil {
 				log.Warn("[CreateSession] failed to start autonomous driver", "session", instanceTitle, "err", driverErr)
 			} else {
-				s.registerDriver(instanceTitle, driver)
+				s.autonomousSvc.registerDriver(instanceTitle, driver)
 			}
 		} else if instance.AutonomousMode {
 			log.Warn("[CreateSession] autonomous_mode requested but headlessPool is nil", "session", instanceTitle)
@@ -1436,13 +1445,13 @@ func (s *SessionService) UpdateSession(
 				return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("session with title '%s' already exists", *req.Msg.Title))
 			}
 		}
-		instance.Title = *req.Msg.Title
+		instance.SetTitleDirect(*req.Msg.Title)
 		updatedFields = append(updatedFields, "title")
 	}
 
 	// Handle category update
 	if req.Msg.Category != nil {
-		instance.Category = *req.Msg.Category
+		instance.SetCategory(*req.Msg.Category)
 		updatedFields = append(updatedFields, "category")
 	}
 
@@ -1469,7 +1478,7 @@ func (s *SessionService) UpdateSession(
 			newProgram = config.LoadConfig().DefaultProgram
 		}
 		if instance.Program != newProgram {
-			instance.Program = newProgram
+			instance.SetProgram(newProgram)
 			updatedFields = append(updatedFields, "program")
 
 			// Port history if switching between Claude and Antigravity
@@ -1497,7 +1506,7 @@ func (s *SessionService) UpdateSession(
 
 	// Handle working directory update
 	if req.Msg.WorkingDir != nil {
-		instance.WorkingDir = *req.Msg.WorkingDir
+		instance.SetWorkingDir(*req.Msg.WorkingDir)
 		updatedFields = append(updatedFields, "working_dir")
 	}
 
@@ -1521,12 +1530,11 @@ func (s *SessionService) UpdateSession(
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("autonomous mode requires a headless LLM to be configured"))
 		}
-		instance.AutonomousMode = *req.Msg.AutonomousMode
+		instance.SetAutonomousMode(*req.Msg.AutonomousMode, "")
 		if instance.AutonomousMode {
-			instance.AutonomousOutcome = ""
 			s.StartAutonomousDriverForInstance(instance)
 		} else {
-			s.stopAndDeregisterDriver(instance.Title)
+			s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
 		}
 		updatedFields = append(updatedFields, "autonomous_mode")
 	}
@@ -1564,9 +1572,9 @@ func (s *SessionService) UpdateSession(
 		if targetStatus == session.Paused && instance.Status != session.Paused {
 			// Set pause reason before transitioning — mirrors HibernateSession pattern.
 			if req.Msg.PauseReason == nil || *req.Msg.PauseReason == "" {
-				instance.PauseReason = session.PauseReasonManual
+				instance.SetPauseReason(session.PauseReasonManual)
 			} else {
-				instance.PauseReason = *req.Msg.PauseReason
+				instance.SetPauseReason(*req.Msg.PauseReason)
 			}
 			if err := instance.Pause(); err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to pause session: %w", err))
@@ -1574,7 +1582,7 @@ func (s *SessionService) UpdateSession(
 			updatedFields = append(updatedFields, "status")
 		} else if targetStatus != session.Paused && instance.Status == session.Paused {
 			// Clear pause reason on resume.
-			instance.PauseReason = ""
+			instance.SetPauseReason("")
 			// Resume from paused state
 			if err := instance.Resume(); err != nil {
 				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to resume session: %w", err))
@@ -1643,7 +1651,7 @@ func (s *SessionService) HibernateSession(
 
 	// Stop any running autonomous driver so it does not continue injecting prompts
 	// into a session whose process is about to be killed.
-	s.stopAndDeregisterDriver(instance.Title)
+	s.autonomousSvc.stopAndDeregisterDriver(instance.Title)
 
 	// Set reason before transitioning so the After hook can read it
 	reason := req.Msg.Reason
@@ -1751,7 +1759,7 @@ func (s *SessionService) DeleteSession(
 	// Stop any running autonomous driver before destroying resources.
 	// This prevents the driver goroutine from calling inst.Preview() or SendCommandImmediate
 	// on a freed/cleaned-up instance after the session is gone (use-after-delete hazard).
-	s.stopAndDeregisterDriver(sessionTitle)
+	s.autonomousSvc.stopAndDeregisterDriver(sessionTitle)
 
 	// Remove from all pollers BEFORE deleting from storage. This is atomic from the
 	// poller's perspective and closes the race window where external discovery could
@@ -2499,7 +2507,7 @@ func (s *SessionService) RenameSession(
 	instances[instanceIndex] = instance
 	if err := s.storage.SaveInstances(instances); err != nil {
 		// Try to rollback the rename
-		instance.Title = oldTitle
+		instance.SetTitleDirect(oldTitle)
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save renamed instance: %w", err))
 	}
 
@@ -2761,6 +2769,7 @@ func (s *SessionService) MergeDatabase(
 // SetScrollbackManager wires a scrollback sequence provider for checkpoint creation.
 func (s *SessionService) SetScrollbackManager(mgr ScrollbackSequencer) {
 	s.scrollbackMgr = mgr
+	s.checkpointSvc.SetScrollbackMgr(mgr)
 }
 
 // CreateCheckpoint captures the current state of a session as a named bookmark.
@@ -2768,35 +2777,7 @@ func (s *SessionService) CreateCheckpoint(
 	ctx context.Context,
 	req *connect.Request[sessionv1.CreateCheckpointRequest],
 ) (*connect.Response[sessionv1.CreateCheckpointResponse], error) {
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-	if req.Msg.Label == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("label is required"))
-	}
-
-	inst := s.findInstance(req.Msg.SessionId)
-	if inst == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
-	}
-
-	var scrollbackSeq uint64
-	if s.scrollbackMgr != nil {
-		scrollbackSeq = s.scrollbackMgr.CurrentSequence(inst.Title)
-	}
-
-	cp, err := inst.CreateCheckpoint(req.Msg.Label, scrollbackSeq)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
-	}
-
-	if err := s.storage.SaveInstances(s.allInstances()); err != nil {
-		log.Warn("CreateCheckpoint: failed to persist checkpoint", "session", inst.Title, "err", err)
-	}
-
-	return connect.NewResponse(&sessionv1.CreateCheckpointResponse{
-		Checkpoint: checkpointToProto(cp),
-	}), nil
+	return s.checkpointSvc.CreateCheckpoint(ctx, req)
 }
 
 // ListCheckpoints returns all checkpoints for the specified session.
@@ -2804,24 +2785,7 @@ func (s *SessionService) ListCheckpoints(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListCheckpointsRequest],
 ) (*connect.Response[sessionv1.ListCheckpointsResponse], error) {
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-
-	inst := s.findInstance(req.Msg.SessionId)
-	if inst == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
-	}
-
-	checkpoints := inst.GetCheckpoints()
-	protos := make([]*sessionv1.CheckpointProto, 0, len(checkpoints))
-	for i := range checkpoints {
-		protos = append(protos, checkpointToProto(&checkpoints[i]))
-	}
-
-	return connect.NewResponse(&sessionv1.ListCheckpointsResponse{
-		Checkpoints: protos,
-	}), nil
+	return s.checkpointSvc.ListCheckpoints(ctx, req)
 }
 
 // ForkSession creates a new independent session branched from a checkpoint on an existing session.
@@ -2897,40 +2861,7 @@ func (s *SessionService) ClearConversationState(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ClearConversationStateRequest],
 ) (*connect.Response[sessionv1.ClearConversationStateResponse], error) {
-	if req.Msg.Id == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
-	}
-
-	instance := s.FindLiveInstance(req.Msg.Id)
-	if instance == nil {
-		instances, err := s.loadInstancesWithWiring()
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to load instances: %w", err))
-		}
-		for _, inst := range instances {
-			if inst.MatchesID(req.Msg.Id) {
-				instance = inst
-				break
-			}
-		}
-	}
-	if instance == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.Id))
-	}
-
-	instance.ClearConversationState()
-
-	if err := s.storage.SaveInstances([]*session.Instance{instance}); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist cleared state: %w", err))
-	}
-
-	log.Info("cleared conversation state", "session", instance.Title)
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(instance, []string{"claude_session"}))
-
-	return connect.NewResponse(&sessionv1.ClearConversationStateResponse{
-		Success: true,
-		Message: fmt.Sprintf("Conversation state cleared for session '%s'", instance.Title),
-	}), nil
+	return s.checkpointSvc.ClearConversationState(ctx, req)
 }
 
 // ListPathCompletions returns filesystem entries matching the given path prefix.
@@ -2956,127 +2887,14 @@ func (s *SessionService) ListWorktrees(
 	return s.pathCompletionSvc.ListWorktrees(ctx, req)
 }
 
-// branchCacheEntry holds a cached branch list for a repository path.
-type branchCacheEntry struct {
-	branches []string
-	cachedAt time.Time
-}
-
-const branchCacheTTL = 5 * time.Minute
-
 // ListBranches returns the git branches for a given repository path.
 // Results are cached per repo path with a 5-minute TTL. ADR-002.
+// Delegates to WorkspaceService (Story 1.4).
 func (s *SessionService) ListBranches(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ListBranchesRequest],
 ) (*connect.Response[sessionv1.ListBranchesResponse], error) {
-	repoPath := req.Msg.GetRepoPath()
-	if repoPath == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path is required"))
-	}
-
-	// Normalize and validate the path: must resolve within the user's home directory.
-	absPath, err := filepath.Abs(repoPath)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repo_path: %w", err))
-	}
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("cannot determine home directory: %w", err))
-	}
-	if !strings.HasPrefix(absPath, homeDir+string(filepath.Separator)) && absPath != homeDir {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path must be within the user home directory"))
-	}
-	if _, err := os.Stat(absPath); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_path does not exist: %w", err))
-	}
-
-	maxResults := int(req.Msg.GetMaxResults())
-	if maxResults <= 0 {
-		maxResults = 200
-	}
-	filter := req.Msg.GetFilter()
-
-	// Serve from cache if still fresh.
-	if entry, ok := s.branchCache.Load(absPath); ok {
-		cached := entry.(branchCacheEntry)
-		if time.Since(cached.cachedAt) < branchCacheTTL {
-			branches := filterBranches(cached.branches, filter, maxResults)
-			return connect.NewResponse(&sessionv1.ListBranchesResponse{
-				Branches:   branches,
-				TotalCount: int32(len(branches)),
-				Truncated:  false,
-			}), nil
-		}
-	}
-
-	// Run git for-each-ref with a 2-second timeout.
-	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-
-	refSpec := "refs/heads"
-	if req.Msg.GetIncludeRemote() {
-		refSpec = "refs/"
-	}
-	cmd := safeexec.CommandContext(cmdCtx, "git", "-C", absPath, "for-each-ref", refSpec, "--format=%(refname:short)")
-
-	var out bytes.Buffer
-	cmd.Stdout = &out
-
-	start := time.Now()
-	runErr := cmd.Run()
-	latencyMs := time.Since(start).Milliseconds()
-	log.Info("[ListBranches] branch list", "latency_ms", latencyMs, "repo", absPath)
-
-	truncated := false
-	if runErr != nil {
-		if cmdCtx.Err() == context.DeadlineExceeded {
-			// Timeout: return whatever partial output was collected.
-			truncated = true
-		} else {
-			// git failed (not a git repo, etc.): return empty list, not an error.
-			log.Warn("[ListBranches] git for-each-ref failed", "repo", absPath, "err", runErr)
-			return connect.NewResponse(&sessionv1.ListBranchesResponse{
-				Branches:   []string{},
-				TotalCount: 0,
-				Truncated:  false,
-			}), nil
-		}
-	}
-
-	var all []string
-	scanner := bufio.NewScanner(&out)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" {
-			all = append(all, line)
-		}
-	}
-
-	// Cache the full unfiltered list.
-	s.branchCache.Store(absPath, branchCacheEntry{branches: all, cachedAt: time.Now()})
-
-	branches := filterBranches(all, filter, maxResults)
-	return connect.NewResponse(&sessionv1.ListBranchesResponse{
-		Branches:   branches,
-		TotalCount: int32(len(branches)),
-		Truncated:  truncated,
-	}), nil
-}
-
-// filterBranches applies a case-insensitive substring filter and caps results at maxResults.
-func filterBranches(all []string, filter string, maxResults int) []string {
-	lowerFilter := strings.ToLower(filter)
-	var result []string
-	for _, b := range all {
-		if filter == "" || strings.Contains(strings.ToLower(b), lowerFilter) {
-			result = append(result, b)
-			if len(result) >= maxResults {
-				break
-			}
-		}
-	}
-	return result
+	return s.workspaceSvc.ListBranches(ctx, req)
 }
 
 // findInstance finds an instance by title using the live in-memory poller.
@@ -3433,10 +3251,11 @@ func (s *SessionService) RunOneShot(
 	// Persist the PR URL (and number) back to the session record so the GitHub badge appears
 	// and the PRStatusPoller can use the direct-number path instead of branch-name discovery.
 	if prURL != "" {
-		inst.GitHubPRURL = prURL
+		prNumber := 0
 		if ref, parseErr := session.ParseGitHubURL(prURL); parseErr == nil && ref.PRNumber > 0 {
-			inst.GitHubPRNumber = ref.PRNumber
+			prNumber = ref.PRNumber
 		}
+		inst.SetGitHubPR(prURL, prNumber)
 		if err := s.storage.SaveInstances(s.allInstances()); err != nil {
 			log.Warn("RunOneShot: failed to persist PR URL", "session", inst.Title, "err", err)
 		} else {
@@ -3536,68 +3355,13 @@ func (s *SessionService) AssignSessionsToProject(
 	return s.projectSvc.AssignSessionsToProject(ctx, req)
 }
 
-// checkpointToProto converts a session.Checkpoint to a proto CheckpointProto.
-func checkpointToProto(cp *session.Checkpoint) *sessionv1.CheckpointProto {
-	if cp == nil {
-		return nil
-	}
-	return &sessionv1.CheckpointProto{
-		Id:             cp.ID,
-		SessionId:      cp.SessionID,
-		ParentId:       cp.ParentID,
-		Label:          cp.Label,
-		ScrollbackSeq:  cp.ScrollbackSeq,
-		ScrollbackPath: cp.ScrollbackPath,
-		ClaudeConvUuid: cp.ClaudeConvUUID,
-		GitCommitSha:   cp.GitCommitSHA,
-		Timestamp:      timestamppb.New(cp.Timestamp),
-	}
-}
-
 // GetTerminalSnapshot returns the last N lines of terminal output for a session.
 // Uses inst.Preview() for a read-only snapshot without requiring an active stream.
 func (s *SessionService) GetTerminalSnapshot(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetTerminalSnapshotRequest],
 ) (*connect.Response[sessionv1.GetTerminalSnapshotResponse], error) {
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-
-	// Find the live instance via the poller (avoids loadInstancesWithWiring side effects)
-	var inst *session.Instance
-	if s.reviewQueuePoller != nil {
-		inst = s.reviewQueuePoller.FindInstance(req.Msg.SessionId)
-	}
-	if inst == nil && s.externalDiscovery != nil {
-		inst = s.externalDiscovery.GetSession(req.Msg.SessionId)
-	}
-	if inst == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
-	}
-
-	content, err := inst.Preview()
-	if err != nil {
-		// Non-fatal: return empty snapshot rather than error
-		log.Warn("[GetTerminalSnapshot] preview failed", "session", req.Msg.SessionId, "err", err)
-		content = ""
-	}
-
-	// Trim to last N lines
-	lastN := int(req.Msg.LastNLines)
-	if lastN <= 0 {
-		lastN = 20
-	}
-	lines := strings.Split(content, "\n")
-	if len(lines) > lastN {
-		lines = lines[len(lines)-lastN:]
-	}
-	content = strings.Join(lines, "\n")
-
-	return connect.NewResponse(&sessionv1.GetTerminalSnapshotResponse{
-		Content: content,
-		IsEmpty: strings.TrimSpace(content) == "",
-	}), nil
+	return s.terminalSvc.GetTerminalSnapshot(ctx, req)
 }
 
 // +api: session:log-client-events
@@ -3607,45 +3371,7 @@ func (s *SessionService) WriteToSession(
 	ctx context.Context,
 	req *connect.Request[sessionv1.WriteToSessionRequest],
 ) (*connect.Response[sessionv1.WriteToSessionResponse], error) {
-	if req.Msg.SessionId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("session_id is required"))
-	}
-	if req.Msg.Input == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("input is required"))
-	}
-
-	var inst *session.Instance
-	if s.reviewQueuePoller != nil {
-		inst = s.reviewQueuePoller.FindInstance(req.Msg.SessionId)
-	}
-	if inst == nil && s.externalDiscovery != nil {
-		inst = s.externalDiscovery.GetSession(req.Msg.SessionId)
-	}
-	if inst == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
-	}
-
-	text := req.Msg.Input
-	if req.Msg.PressEnter {
-		text += "\n"
-	}
-
-	errCh := make(chan error, 1)
-	go func() { errCh <- inst.SendKeys(text) }()
-
-	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("send keys failed: %w", err))
-		}
-	case <-timeoutCtx.Done():
-		return nil, connect.NewError(connect.CodeDeadlineExceeded, fmt.Errorf("timed out writing to session PTY"))
-	}
-
-	return connect.NewResponse(&sessionv1.WriteToSessionResponse{Success: true}), nil
+	return s.terminalSvc.WriteToSession(ctx, req)
 }
 
 // LogClientEvents receives batched browser console log entries from the web UI.
@@ -3659,106 +3385,6 @@ func (s *SessionService) LogClientEvents(
 		logClientEntry(entry)
 	}
 	return connect.NewResponse(&sessionv1.LogClientEventsResponse{}), nil
-}
-
-// onAutonomousDriverComplete handles the outcome of an AutonomousDriver run.
-// Updates the linked backlog item status and fires a push notification.
-func (s *SessionService) onAutonomousDriverComplete(instanceName string, outcome session.AutonomousDriverOutcome) {
-	// Deregister the completed driver so it does not leak in the registry.
-	// The goroutine has already exited at this point; Stop() is a no-op but cleans the map.
-	s.stopAndDeregisterDriver(instanceName)
-
-	// Use Background() intentionally: we want this bookkeeping to complete even if the
-	// server is shutting down concurrently (the driver just finished; its result must persist).
-	ctx := context.Background()
-
-	// Resolve the session UUID from the instance name using the live poller.
-	inst := s.FindLiveInstance(instanceName)
-	if inst == nil {
-		log.Warn("[AutonomousDriver] onAutonomousDriverComplete: instance not found", "session", instanceName)
-		return
-	}
-	sessionUUID := inst.UUID
-
-	// Clear autonomous_mode flag and set outcome on the instance so the badge updates.
-	inst.AutonomousMode = false
-	inst.AutonomousTurn = 0
-	inst.AutonomousMaxTurns = 0
-	if outcome.Done {
-		inst.AutonomousOutcome = "done"
-	} else {
-		inst.AutonomousOutcome = "stuck"
-	}
-	s.eventBus.Publish(events.NewSessionUpdatedEvent(inst, []string{"autonomous_mode", "autonomous_outcome"}))
-
-	// Look up the backlog item linked to this session.
-	concreteStorage := s.GetStorage()
-	if concreteStorage != nil {
-		is, err := concreteStorage.GetItemSessionBySessionUUID(ctx, sessionUUID)
-		if err == nil && is != nil {
-			item, itemErr := is.Edges.BacklogItemOrErr()
-			if itemErr == nil && item != nil {
-				var toStatus session.BacklogStatus
-				var expectedStatus string
-				switch is.SessionRole {
-				case session.SessionRoleTriage:
-					if !outcome.Done {
-						// Triage was interrupted/stuck — notify operator but do not advance the item.
-						// The item stays at 'idea' so the operator can re-trigger triage.
-						s.eventBus.Publish(events.NewNotificationEvent(
-							item.ID.String(),
-							"Triage stuck",
-							fmt.Sprintf("stuck-triage-%s", item.ID),
-							int32(9), // NotificationType_FAILURE (warning)
-							int32(2), // NotificationPriority_MEDIUM
-							"Triage did not complete",
-							fmt.Sprintf("%s: autonomous triage session got stuck", item.Title),
-							nil,
-						))
-						log.Info("[AutonomousDriver] triage stuck, notified operator", "item", item.ID, "reason", outcome.Reason)
-						return
-					}
-					toStatus = session.BacklogStatusReady
-					expectedStatus = string(session.BacklogStatusIdea)
-				case session.SessionRoleWork:
-					toStatus = session.BacklogStatusReview
-					expectedStatus = string(session.BacklogStatusInProgress)
-				default:
-					// SessionRoleReview and unknown roles: no transition from AutonomousDriver.
-					// Review outcomes are managed by submit_review_verdict.
-					log.Info("[AutonomousDriver] skipping status transition for role", "role", is.SessionRole, "item", item.ID)
-					return
-				}
-				precondition := &session.BacklogItemPrecondition{ExpectedStatus: expectedStatus}
-				if _, transErr := concreteStorage.TransitionBacklogItemStatus(ctx, item.ID.String(), toStatus, precondition); transErr != nil {
-					log.Warn("[AutonomousDriver] failed to transition backlog item", "item", item.ID, "to", toStatus, "err", transErr)
-				} else {
-					log.Info("[AutonomousDriver] backlog item transitioned", "item", item.ID, "to", toStatus, "done", outcome.Done)
-				}
-			}
-		}
-	}
-
-	// Fire push notification via event bus.
-	var title, body string
-	notifType := int32(10) // NotificationType_INFO
-	if outcome.Done {
-		title = "Autonomous fix complete"
-		body = fmt.Sprintf("%s: %s", instanceName, outcome.Reason)
-		if outcome.PRUrl != "" {
-			body += " — " + outcome.PRUrl
-		}
-	} else {
-		title = "Autonomous fix stuck"
-		body = fmt.Sprintf("Session '%s' stopped after %d turns without completing. Open the session to review what was accomplished and give the next instruction.", instanceName, outcome.Turns)
-		notifType = int32(9) // NotificationType_FAILURE
-	}
-	s.eventBus.Publish(events.NewNotificationEvent(
-		sessionUUID, instanceName, fmt.Sprintf("autonomous-complete-%s", sessionUUID),
-		notifType,
-		int32(2), // NotificationPriority_MEDIUM
-		title, body, nil,
-	))
 }
 
 // wireAutoArchiveCallback registers a lifecycle listener that auto-archives a
@@ -3967,51 +3593,13 @@ func (s *SessionService) AcknowledgeError(
 	return connect.NewResponse(&sessionv1.AcknowledgeErrorResponse{}), nil
 }
 
-// knownFeatureFlags is the authoritative list of feature flags exposed via the RPC API.
-var knownFeatureFlags = []struct {
-	name        string
-	description string
-}{
-	{
-		name:        "backlog",
-		description: "Backlog management with external sync sources and AI-driven triage",
-	},
-	{
-		name:        "browser-passthrough",
-		description: "Browser passthrough: stream Chrome/Chromium via CDP in the Browser tab",
-	},
-	{
-		name:        "backlog:conversation-view",
-		description: "Show JSONL conversation messages in the session monitor (default: terminal scrollback view)",
-	},
-}
-
 // +api: feature-flags:list
 // GetFeatureFlags returns all known feature flags and their current state.
 func (s *SessionService) GetFeatureFlags(
 	ctx context.Context,
 	req *connect.Request[sessionv1.GetFeatureFlagsRequest],
 ) (*connect.Response[sessionv1.GetFeatureFlagsResponse], error) {
-	cfg := config.LoadConfig()
-
-	flags := make([]*sessionv1.FeatureFlag, 0, len(knownFeatureFlags))
-	for _, kf := range knownFeatureFlags {
-		enabled := false
-		if cfg.FeatureFlags != nil {
-			enabled = cfg.FeatureFlags[kf.name]
-		}
-		// If a controller is wired, its live state is the source of truth.
-		if ctrl, ok := s.featureControllers[kf.name]; ok {
-			enabled = ctrl.IsEnabled()
-		}
-		flags = append(flags, &sessionv1.FeatureFlag{
-			Name:        kf.name,
-			Enabled:     enabled,
-			Description: kf.description,
-		})
-	}
-
-	return connect.NewResponse(&sessionv1.GetFeatureFlagsResponse{Flags: flags}), nil
+	return s.featureFlagSvc.GetFeatureFlags(ctx, req)
 }
 
 // +api: feature-flags:update
@@ -4020,60 +3608,7 @@ func (s *SessionService) UpdateFeatureFlag(
 	ctx context.Context,
 	req *connect.Request[sessionv1.UpdateFeatureFlagRequest],
 ) (*connect.Response[sessionv1.UpdateFeatureFlagResponse], error) {
-	name := req.Msg.GetName()
-	enabled := req.Msg.GetEnabled()
-
-	// Validate that the flag name is known.
-	known := false
-	var description string
-	for _, kf := range knownFeatureFlags {
-		if kf.name == name {
-			known = true
-			description = kf.description
-			break
-		}
-	}
-	if !known {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("unknown feature flag %q: valid flags are %v", name, func() []string {
-				names := make([]string, 0, len(knownFeatureFlags))
-				for _, kf := range knownFeatureFlags {
-					names = append(names, kf.name)
-				}
-				return names
-			}()))
-	}
-
-	// Persist to config. SetFeatureFlag handles its own map initialisation and
-	// calls SaveConfig atomically, avoiding a separate LoadConfig→modify→SaveConfig
-	// sequence that would race under concurrent UpdateFeatureFlag calls.
-	cfg := config.LoadConfig()
-	if err := cfg.SetFeatureFlag(name, enabled); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
-	}
-
-	// Toggle the in-process controller if one is wired.
-	if ctrl, ok := s.featureControllers[name]; ok {
-		if enabled {
-			if err := ctrl.Enable(ctx); err != nil {
-				log.Warn("feature controller Enable failed", "feature", name, "err", err)
-			}
-		} else {
-			if err := ctrl.Disable(); err != nil {
-				log.Warn("feature controller Disable failed", "feature", name, "err", err)
-			}
-		}
-	}
-
-	log.Info("feature flag updated", "feature", name, "enabled", enabled)
-
-	return connect.NewResponse(&sessionv1.UpdateFeatureFlagResponse{
-		Flag: &sessionv1.FeatureFlag{
-			Name:        name,
-			Enabled:     enabled,
-			Description: description,
-		},
-	}), nil
+	return s.featureFlagSvc.UpdateFeatureFlag(ctx, req)
 }
 
 // SetWorkflowService injects the workflow sub-service using deferred setter injection.
@@ -4226,7 +3761,7 @@ func (s *SessionService) ArchiveSession(
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
 	now := time.Now()
-	inst.ArchivedAt = &now
+	inst.SetArchivedAt(&now)
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
@@ -4246,7 +3781,7 @@ func (s *SessionService) UnarchiveSession(
 	if inst == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("session not found: %s", req.Msg.SessionId))
 	}
-	inst.ArchivedAt = nil
+	inst.SetArchivedAt(nil)
 	if err := s.storage.SaveInstances([]*session.Instance{inst}); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to save session: %w", err))
 	}
@@ -4254,102 +3789,27 @@ func (s *SessionService) UnarchiveSession(
 }
 
 // +api: session:archive-workflow-sessions
-// ArchiveWorkflowSessions archives all non-active sessions for a given workflow.
-// Active, Creating, and Paused sessions are silently skipped.
+// ArchiveWorkflowSessions delegates to WorkflowService.
 func (s *SessionService) ArchiveWorkflowSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.ArchiveWorkflowSessionsRequest],
 ) (*connect.Response[sessionv1.ArchiveWorkflowSessionsResponse], error) {
-	if req.Msg.WorkflowId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("workflow_id is required"))
+	if s.workflowSvc == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
 	}
-
-	// Get the ent client via the concrete storage implementation.
-	concreteStorage, ok := s.storage.(*session.Storage)
-	if !ok || concreteStorage == nil {
-		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk archive requires ent-backed storage"))
-	}
-	entClient := concreteStorage.GetEntClient()
-	if entClient == nil {
-		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk archive requires ent client"))
-	}
-
-	// Query all non-active, non-archived sessions for this workflow.
-	// Status guard: use Go-layer DB values (Creating=0, Active=1, Paused=2), NOT proto wire values.
-	now := time.Now()
-	updated, err := entClient.Session.Update().
-		Where(
-			entsession.WorkflowID(req.Msg.WorkflowId),
-			entsession.ArchivedAtIsNil(),
-			entsession.StatusNotIn(int(session.Active), int(session.Creating), int(session.Paused)),
-		).
-		SetArchivedAt(now).
-		Save(ctx)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("bulk archive workflow sessions: %w", err))
-	}
-
-	// Update in-memory instances for any that are still in the poller.
-	if s.reviewQueuePoller != nil {
-		for _, inst := range s.reviewQueuePoller.GetInstances() {
-			if inst.WorkflowID == req.Msg.WorkflowId && inst.ArchivedAt == nil {
-				if !inst.IsActive() && !inst.IsCreating() && !inst.IsPaused() {
-					inst.ArchivedAt = &now
-				}
-			}
-		}
-	}
-
-	log.Info("[SessionService] ArchiveWorkflowSessions completed",
-		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
-
-	return connect.NewResponse(&sessionv1.ArchiveWorkflowSessionsResponse{
-		ArchivedCount: int32(updated),
-	}), nil
+	return s.workflowSvc.ArchiveWorkflowSessions(ctx, req)
 }
 
 // +api: session:delete-workflow-failed-sessions
-// DeleteWorkflowFailedSessions archives (soft-deletes) sessions that appear to have
-// failed — Stopped sessions with no meaningful terminal output for the given workflow.
+// DeleteWorkflowFailedSessions delegates to WorkflowService.
 func (s *SessionService) DeleteWorkflowFailedSessions(
 	ctx context.Context,
 	req *connect.Request[sessionv1.DeleteWorkflowFailedSessionsRequest],
 ) (*connect.Response[sessionv1.DeleteWorkflowFailedSessionsResponse], error) {
-	if req.Msg.WorkflowId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("workflow_id is required"))
+	if s.workflowSvc == nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("workflow service not available"))
 	}
-
-	concreteStorage, ok := s.storage.(*session.Storage)
-	if !ok || concreteStorage == nil {
-		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk delete requires ent-backed storage"))
-	}
-	entClient := concreteStorage.GetEntClient()
-	if entClient == nil {
-		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("bulk delete requires ent client"))
-	}
-
-	// "Failed" = Stopped sessions with no meaningful output.
-	// last_meaningful_output IS NULL indicates the session never produced useful work.
-	now := time.Now()
-	updated, err := entClient.Session.Update().
-		Where(
-			entsession.WorkflowID(req.Msg.WorkflowId),
-			entsession.StatusIn(int(session.Stopped)),
-			entsession.ArchivedAtIsNil(),
-			entsession.LastMeaningfulOutputIsNil(),
-		).
-		SetArchivedAt(now).
-		Save(ctx)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("delete workflow failed sessions: %w", err))
-	}
-
-	log.Info("[SessionService] DeleteWorkflowFailedSessions completed",
-		"workflow_id", req.Msg.WorkflowId, "archived_count", updated)
-
-	return connect.NewResponse(&sessionv1.DeleteWorkflowFailedSessionsResponse{
-		DeletedCount: int32(updated),
-	}), nil
+	return s.workflowSvc.DeleteWorkflowFailedSessions(ctx, req)
 }
 
 // maybeAutoArchive archives a workflow session that has just stopped.
@@ -4489,7 +3949,7 @@ func (s *SessionService) UpdateSessionProgram(ctx context.Context, sessionID str
 	}
 
 	oldProgram := inst.Program
-	inst.Program = newProgram
+	inst.SetProgram(newProgram)
 
 	if (strings.Contains(oldProgram, "claude") && (strings.Contains(newProgram, "agy") || strings.Contains(newProgram, "antigravity"))) ||
 		((strings.Contains(oldProgram, "agy") || strings.Contains(oldProgram, "antigravity")) && strings.Contains(newProgram, "claude")) {

@@ -138,22 +138,26 @@ func TestSwitchWorkspace_GuardAllowsExtractionWhenIDMissing(t *testing.T) {
 	assert.Nil(t, inst.claudeSession)
 }
 
-// TestSwitchWorkspace_DoesNotDeadlockOnStartCall is a regression test for a
-// reentrant-lock self-deadlock: SwitchWorkspace used to hold i.stateMutex.Lock()
-// across its entire body, including its calls to i.Start(false). Start() itself
-// acquires i.stateMutex.Lock() (instance.go, in the Active-status transition near
-// the end of start()). sync.RWMutex/deadlock.RWMutex is not reentrant, so calling
-// Start() while still holding the lock deadlocks the calling goroutine forever.
+// TestSwitchWorkspace_DoesNotDeadlockOnStartCall is a regression test ensuring
+// SwitchWorkspace does not deadlock when it needs to call Start() internally.
 //
-// This is a deadlock, not a data race — go test -race will NOT catch it. The test
-// instead runs SwitchWorkspace in a goroutine and asserts it returns within a
-// generous bound; pre-fix, this test would hang until the suite's own timeout.
+// Prior to Epic 4, SwitchWorkspace held i.stateMutex.Lock() across its entire body
+// including calls to i.Start(false), which also acquires i.stateMutex — a reentrant
+// deadlock on a non-reentrant mutex.
+//
+// After Epic 4, both SwitchWorkspace and Start route through the actor mailbox via
+// sendSyncErr, eliminating stateMutex from the hot path. The test is re-targeted to
+// use *LiveInstance so the actor goroutine is present and the test reflects real
+// production usage.
 //
 // The instance has no VCS in its temp directory, so VCS detection fails and
-// SwitchWorkspace takes the SessionTypeDirectory fallback path (instance_workspace.go,
-// "no vcs detected, falling back to simple directory change"), which is the first
-// of the three call sites that used to deadlock.
+// SwitchWorkspace takes the SessionTypeDirectory fallback path, exercising the
+// startLocked call inside switchWorkspaceLocked.
 func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test that starts a (mocked) tmux session")
+	}
+
 	instance, cleanup, err := NewTestInstance(t, "switch-workspace-deadlock-regression").
 		WithSessionType(SessionTypeDirectory).
 		Build()
@@ -161,6 +165,10 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 	if cleanup != nil {
 		defer func() { _ = cleanup() }()
 	}
+
+	// Wrap in LiveInstance so the actor goroutine is present (production-realistic).
+	li := NewLiveInstance(instance)
+	defer li.Stop()
 
 	// Simulate an already-running session so SwitchWorkspace's guard passes.
 	instance.started = true
@@ -172,7 +180,7 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 		// Result/error are not asserted: the temp dir has no VCS, so this may
 		// well return an error. The only thing this test verifies is that the
 		// call returns at all instead of deadlocking.
-		_, _ = instance.SwitchWorkspace(WorkspaceSwitchRequest{
+		_, _ = li.SwitchWorkspace(WorkspaceSwitchRequest{
 			Type:   SwitchTypeRevision,
 			Target: "some-branch",
 		})
@@ -180,9 +188,8 @@ func TestSwitchWorkspace_DoesNotDeadlockOnStartCall(t *testing.T) {
 
 	select {
 	case <-done:
-		// Returned without deadlocking - the fix holds.
+		// Returned without deadlocking - the actor-based fix holds.
 	case <-time.After(10 * time.Second):
-		t.Fatal("SwitchWorkspace did not return within 10s - likely reentrant " +
-			"stateMutex deadlock via Start() (see instance_workspace.go)")
+		t.Fatal("SwitchWorkspace did not return within 10s - actor deadlock in switchWorkspaceLocked (see instance_workspace.go)")
 	}
 }

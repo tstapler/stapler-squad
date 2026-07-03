@@ -996,11 +996,11 @@ func validateYAMLEntry(e yamlRuleEntry) (*sessionv1.ApprovalRuleProto, []string)
 	}
 	_ = ok
 
-	// Overbroad allow: decision=allow with no match criteria at all.
-	if e.Decision == "allow" && e.Tool == "" && e.ToolPattern == "" &&
+	// Overbroad rule: no match criteria at all (applies to any decision type).
+	if e.Tool == "" && e.ToolPattern == "" &&
 		e.CommandPattern == "" && e.FilePattern == "" &&
 		len(e.Programs) == 0 && len(e.Subcommands) == 0 {
-		errs = append(errs, "overbroad allow rule: at least one match criterion (tool, tool_pattern, command_pattern, file_pattern, programs, or subcommands) is required for decision=allow")
+		errs = append(errs, fmt.Sprintf("overbroad %s rule: at least one match criterion (tool, tool_pattern, command_pattern, file_pattern, programs, or subcommands) is required", e.Decision))
 	}
 
 	// Regex validation -- collect all invalid patterns, do not stop at first error.

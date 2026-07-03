@@ -17,57 +17,63 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 		return nil
 	}
 
+	// Take a single lock-free snapshot so all field reads below are consistent and
+	// race-free. Method calls (GetStableID, GetEffectiveStatus, etc.) have their own
+	// synchronisation and are left as-is. Fields absent from InstanceSnapshot
+	// (LaunchCommand, CreationProgress) remain as direct reads.
+	snap := inst.Snapshot()
+
 	protoSession := &sessionv1.Session{
 		Id:                 inst.GetStableID(),
-		Title:              inst.Title,
+		Title:              snap.Title,
 		Path:               inst.Workspace().EffectivePath,
 		WorkingDir:         inst.GetWorkingDirectory(),
-		Branch:             inst.Branch,
+		Branch:             snap.Branch,
 		Status:             statusToProto(inst.GetEffectiveStatus()),
-		Program:            inst.Program,
-		Height:             int32(inst.Height),
-		Width:              int32(inst.Width),
-		CreatedAt:          timestamppb.New(inst.CreatedAt),
-		UpdatedAt:          timestamppb.New(inst.UpdatedAt),
-		AutoYes:            inst.AutoYes,
-		AutonomousMode:     inst.AutonomousMode,
-		AutonomousTurn:     inst.AutonomousTurn,
-		AutonomousMaxTurns: inst.AutonomousMaxTurns,
-		AutonomousOutcome:  inst.AutonomousOutcome,
-		Prompt:             inst.Prompt,
-		InitialPrompt:      inst.InitialPrompt,
-		Category:           inst.Category,
-		IsExpanded:         inst.IsExpanded,
-		SessionType:        sessionTypeToProto(inst.SessionType),
-		TmuxPrefix:         inst.TmuxPrefix,
-		Tags:               inst.Tags, // Tag-based organization
+		Program:            snap.Program,
+		Height:             int32(snap.Height),
+		Width:              int32(snap.Width),
+		CreatedAt:          timestamppb.New(snap.CreatedAt),
+		UpdatedAt:          timestamppb.New(snap.UpdatedAt),
+		AutoYes:            snap.AutoYes,
+		AutonomousMode:     snap.Autonomous.AutonomousMode,
+		AutonomousTurn:     snap.Autonomous.AutonomousTurn,
+		AutonomousMaxTurns: snap.Autonomous.AutonomousMaxTurns,
+		AutonomousOutcome:  snap.Autonomous.AutonomousOutcome,
+		Prompt:             snap.Prompt,
+		InitialPrompt:      snap.InitialPrompt,
+		Category:           snap.Category,
+		IsExpanded:         snap.IsExpanded,
+		SessionType:        sessionTypeToProto(snap.SessionType),
+		TmuxPrefix:         snap.TmuxPrefix,
+		Tags:               snap.Tags, // Tag-based organization
 		// Terminal activity timestamps for staleness detection
-		LastTerminalUpdate:   timestamppb.New(inst.LastTerminalUpdate),
-		LastMeaningfulOutput: timestamppb.New(inst.LastMeaningfulOutput),
+		LastTerminalUpdate:   timestamppb.New(snap.LastTerminalUpdate),
+		LastMeaningfulOutput: timestamppb.New(snap.LastMeaningfulOutput),
 		// GitHub integration fields
-		GithubPrNumber:  int32(inst.GitHubPRNumber),
-		GithubPrUrl:     inst.GitHubPRURL,
-		GithubOwner:     inst.GitHubOwner,
-		GithubRepo:      inst.GitHubRepo,
-		GithubSourceRef: inst.GitHubSourceRef,
-		ClonedRepoPath:  inst.ClonedRepoPath,
+		GithubPrNumber:  int32(snap.GitHub.GitHubPRNumber),
+		GithubPrUrl:     snap.GitHub.GitHubPRURL,
+		GithubOwner:     snap.GitHub.GitHubOwner,
+		GithubRepo:      snap.GitHub.GitHubRepo,
+		GithubSourceRef: snap.GitHub.GitHubSourceRef,
+		ClonedRepoPath:  snap.GitHub.ClonedRepoPath,
 		// Instance type and external metadata
-		InstanceType:     instanceTypeToProto(inst.InstanceType),
-		ExternalMetadata: externalMetadataToProto(inst.ExternalMetadata),
+		InstanceType:     instanceTypeToProto(snap.InstanceType),
+		ExternalMetadata: externalMetadataToProto(snap.ExternalMetadata),
 		// PR status fields (populated by PRStatusPoller)
-		GithubPrState:         inst.GitHubPRState,
-		GithubPrIsDraft:       inst.GitHubPRIsDraft,
-		GithubPrPriority:      inst.GitHubPRPriority,
-		GithubApprovedCount:   int32(inst.GitHubApprovedCount),
-		GithubChangesReqCount: int32(inst.GitHubChangesReqCount),
-		GithubCheckConclusion: inst.GitHubCheckConclusion,
-		LastPrStatusCheck:     timestamppb.New(inst.LastPRStatusCheck),
+		GithubPrState:         snap.GitHub.GitHubPRState,
+		GithubPrIsDraft:       snap.GitHub.GitHubPRIsDraft,
+		GithubPrPriority:      snap.GitHub.GitHubPRPriority,
+		GithubApprovedCount:   int32(snap.GitHub.GitHubApprovedCount),
+		GithubChangesReqCount: int32(snap.GitHub.GitHubChangesReqCount),
+		GithubCheckConclusion: snap.GitHub.GitHubCheckConclusion,
+		LastPrStatusCheck:     timestamppb.New(snap.GitHub.LastPRStatusCheck),
 		LaunchCommand:         inst.LaunchCommand,
 	}
 
 	// Convert artifact data if available
-	if inst.Artifacts != nil {
-		a := inst.Artifacts
+	if snap.Artifacts != nil {
+		a := snap.Artifacts
 		protoSession.Artifacts = &sessionv1.SessionArtifacts{
 			PrUrls:        a.PRURLs,
 			CommitShas:    a.CommitSHAs,
@@ -107,7 +113,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	}
 
 	// History file linkage — path to the Claude JSONL conversation file.
-	protoSession.HistoryFilePath = inst.HistoryFilePath
+	protoSession.HistoryFilePath = snap.HistoryFilePath
 
 	// Creation progress message — only meaningful during Creating state.
 	if inst.IsCreating() {
@@ -126,7 +132,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	protoSession.RateLimitEnabled = inst.IsRateLimitEnabled()
 
 	// Pause reason — empty for sessions that have never been paused.
-	protoSession.PauseReason = inst.PauseReason
+	protoSession.PauseReason = snap.PauseReason
 
 	// VNC / browser-passthrough state.
 	if vncMgr := inst.VNCManager(); vncMgr != nil {
@@ -154,7 +160,7 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	// DetectedStatus / DetectedContext: typed detection fields (fields 68–69).
 	// Only meaningful for Active sessions; non-Active sessions leave these at their
 	// zero values (DETECTED_STATUS_UNSPECIFIED, empty string).
-	if inst.Status == session.Active {
+	if snap.Status == session.Active {
 		detectedStatus := inst.GetDetectedStatus()
 		if detectedStatus != detection.StatusUnknown {
 			protoSession.DetectedStatus = detection.DetectedStatusToProto(detectedStatus)
@@ -163,15 +169,15 @@ func InstanceToProto(inst *session.Instance, workflowNames map[string]string) *s
 	}
 
 	// Hidden flag — system/background sessions excluded from default list/review queue.
-	protoSession.Hidden = inst.Hidden
+	protoSession.Hidden = snap.Hidden
 
 	// Workflow linkage, name, and archive state.
-	protoSession.WorkflowId = inst.WorkflowID
-	if inst.WorkflowID != "" && workflowNames != nil {
-		protoSession.WorkflowName = workflowNames[inst.WorkflowID]
+	protoSession.WorkflowId = snap.WorkflowID
+	if snap.WorkflowID != "" && workflowNames != nil {
+		protoSession.WorkflowName = workflowNames[snap.WorkflowID]
 	}
-	if inst.ArchivedAt != nil {
-		protoSession.ArchivedAt = timestamppb.New(*inst.ArchivedAt)
+	if snap.ArchivedAt != nil {
+		protoSession.ArchivedAt = timestamppb.New(*snap.ArchivedAt)
 	}
 
 	// Session goal summary — populated when a goal has been set via set_session_goal MCP tool.
@@ -227,7 +233,7 @@ func mapCDPStatus(status cdp.CDPStatus) sessionv1.CDPStatus {
 // Returns SUB_STATUS_UNSPECIFIED for non-Active sessions or when no detection data is available.
 // Rate limit state takes precedence over ClaudeController-detected sub-status.
 func toProtoSubStatus(inst *session.Instance) sessionv1.SubStatus {
-	if inst.Status != session.Active {
+	if inst.Snapshot().Status != session.Active {
 		return sessionv1.SubStatus_SUB_STATUS_UNSPECIFIED
 	}
 	// Rate limit state takes precedence.

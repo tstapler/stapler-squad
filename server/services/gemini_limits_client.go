@@ -8,11 +8,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
 )
 
 type GeminiLimitsClient struct {
@@ -154,7 +155,7 @@ func (c *GeminiLimitsClient) resolveToken(ctx context.Context, cred Credential) 
 	}
 
 	// 2. Fall back to shelling out to gcloud.
-	cmd := exec.CommandContext(ctx, "gcloud", "auth", "print-access-token")
+	cmd := safeexec.CommandContext(ctx, "gcloud", "auth", "print-access-token")
 	out, err := cmd.Output()
 	if err == nil {
 		return strings.TrimSpace(string(out)), nil

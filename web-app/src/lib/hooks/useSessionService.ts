@@ -36,6 +36,12 @@ import {
   selectConnectionState,
   removeDetectedStatus,
 } from "@/lib/store/sessionsSlice";
+
+// ponytail: stable empty array so non-watching callers (e.g. useSessionActions
+// in each SessionCard) don't subscribe to the full sessions list. Without this,
+// 29 cards × N events/second = N*29 card re-renders/second saturating the JS thread.
+const EMPTY_SESSIONS: Session[] = [];
+const selectNoSessions = () => EMPTY_SESSIONS;
 import { removeItem as removeReviewQueueItem } from "@/lib/store/reviewQueueSlice";
 
 interface UseSessionServiceOptions {
@@ -146,7 +152,7 @@ export function useSessionService(
   const dispatch = useAppDispatch();
   const [systemMemoryPct, setSystemMemoryPct] = useState<number>(0);
   const [reconnectAttemptCount, setReconnectAttemptCount] = useState(0);
-  const sessions = useAppSelector(selectAllSessions);
+  const sessions = useAppSelector(autoWatch ? selectAllSessions : selectNoSessions);
   const loading = useAppSelector(selectSessionsLoading);
   const errorStr = useAppSelector(selectSessionsError);
 
@@ -1001,11 +1007,14 @@ export function useSessionService(
     };
   }, [enabled, autoWatch, watchSessions, stopWatching]);
 
-  // Initial load (gated on auth being ready)
+  // Initial load — only for the watching instance (autoWatch: true).
+  // Non-watching callers (useSessionActions, OmnibarContext, etc.) should read
+  // from Redux directly; firing listSessions() from every caller causes N × 5
+  // synchronous dispatches on mount that saturate the React render queue.
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !autoWatch) return;
     listSessions();
-  }, [enabled, listSessions]);
+  }, [enabled, autoWatch, listSessions]);
 
   // Convert error string back to Error object for backward compatibility
   const error = useMemo(() => (errorStr ? new Error(errorStr) : null), [errorStr]);

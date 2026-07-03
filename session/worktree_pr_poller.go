@@ -13,7 +13,8 @@ import (
 
 // WorktreeScanItem is the minimal worktree info the poller needs from the
 // unfinished-work scanner. Using a local struct avoids an import cycle:
-//   session → session/unfinished → pkg/events → session
+//
+//	session → session/unfinished → pkg/events → session
 //
 // The server layer bridges the two packages via WorktreeSource (adapter pattern).
 type WorktreeScanItem struct {

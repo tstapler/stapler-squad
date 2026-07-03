@@ -14,8 +14,8 @@ import (
 // ReviewState holds all timestamps and state related to the review queue and terminal activity
 // tracking for a session. It is embedded in Instance so all field accesses remain unchanged.
 //
-// Fields are protected by Instance.stateMutex; do not lock ReviewState independently.
-// Methods on ReviewState are intentionally non-locking — callers must hold stateMutex
+// Fields are protected by Instance.mu; do not lock ReviewState independently.
+// Methods on ReviewState are intentionally non-locking — callers must hold mu
 // if concurrent access is possible.
 //
 // Direct field access via Go embedding promotion (inst.LastMeaningfulOutput etc.) is used by:
@@ -27,8 +27,8 @@ import (
 //   - server/adapters/instance_adapter.go: reads LastTerminalUpdate, LastMeaningfulOutput
 //   - server/review_queue_manager.go: writes LastUserResponse directly
 //
-// All access is either within the session package (under stateMutex) or through
-// Instance methods that acquire stateMutex.
+// All access is either within the session package (under mu) or through
+// Instance methods that acquire mu.
 //
 // TODO: Migrate cross-package field accesses (server/) to accessor methods to enable
 // future encapsulation of ReviewState as a composed (non-embedded) field.
@@ -75,7 +75,7 @@ type ReviewState struct {
 	ProcessingGraceUntil time.Time
 
 	// lastMeaningfulOutputNs is a lock-free shadow of LastMeaningfulOutput stored as
-	// UnixNano. Written under stateMutex (write); read without any lock via atomic ops.
+	// UnixNano. Written under mu (write); read without any lock via atomic ops.
 	// Zero means "not yet recorded". Use SyncAtomicTimestamps() after construction.
 	lastMeaningfulOutputNs int64
 }
@@ -170,7 +170,7 @@ func (rs *ReviewState) UserRespondedAfterPrompt() bool {
 //   - shouldUpdateMeaningful: true when the content carries meaningful signal (not just banners).
 //   - sessionTitle: used only for structured debug logging.
 //
-// Caller must hold Instance.stateMutex.
+// Caller must hold Instance.mu.
 func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) {
 	now := time.Now()
 
@@ -214,7 +214,7 @@ func (rs *ReviewState) ComputePromptSignature(content string) string {
 
 // DetectAndTrackPrompt detects whether the current status represents a new user-facing prompt
 // and records it. Returns true only when a NEW prompt is detected (signature changed or first).
-// Caller must hold Instance.stateMutex when writing prompt fields.
+// Caller must hold Instance.mu when writing prompt fields.
 func (rs *ReviewState) DetectAndTrackPrompt(content string, statusInfo InstanceStatusInfo, sessionTitle string) bool {
 	isPromptState := statusInfo.ClaudeStatus == detection.StatusNeedsApproval ||
 		statusInfo.ClaudeStatus == detection.StatusInputRequired

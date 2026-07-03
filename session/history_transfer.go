@@ -141,7 +141,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		}
 
 		// Update Claude session data on the Instance
-		i.stateMutex.Lock()
+		i.claudeSessionMu.Lock()
 		if i.claudeSession == nil {
 			i.claudeSession = &ClaudeSessionData{}
 		}
@@ -153,7 +153,7 @@ func PortSessionHistory(ctx context.Context, oldProgram, newProgram string, i *I
 		}
 		i.claudeSession.Metadata["working_dir"] = workspace
 		cb := i.claudeSessionIDSavedCallback
-		i.stateMutex.Unlock()
+		i.claudeSessionMu.Unlock()
 
 		if cb != nil {
 			cb()

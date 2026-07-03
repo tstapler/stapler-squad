@@ -188,8 +188,8 @@ var methodToID = map[string]string{
 	"GetHookStatus": "hooks:status",
 	"InstallHooks":  "hooks:install",
 	// GitHub user RPCs
-	"ListUserPRs":       "github-user:list-prs",
-	"WatchUserPRs":      "github-user:watch-prs",
+	"ListUserPRs":        "github-user:list-prs",
+	"WatchUserPRs":       "github-user:watch-prs",
 	"GetGitHubAuthState": "github-user:get-auth-state",
 	// Provider limits RPCs
 	"GetProviderLimits": "session:get-provider-limits",

@@ -73,9 +73,9 @@ func TestTransitionTo_ConcurrentPause(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			// Use the public-facing mutex pattern matching Approve/Deny
-			inst.stateMutex.Lock()
+			inst.mu.Lock()
 			err := inst.transitionTo(context.Background(), Paused)
-			inst.stateMutex.Unlock()
+			inst.mu.Unlock()
 
 			if err == nil {
 				atomic.AddInt32(&successCount, 1)
@@ -101,11 +101,14 @@ func TestTransitionTo_ConcurrentApprove(t *testing.T) {
 	// Start from Paused — Paused→Active is valid.
 	// Launch goroutines all calling Approve() simultaneously.
 	// Exactly one should succeed; after that, Active→Active is invalid.
+	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
 		Title:   "test-concurrent-approve",
 		Status:  Paused,
 		started: true,
 	}
+	li := NewLiveInstance(inst)
+	defer li.Stop()
 
 	const numGoroutines = 10
 	var wg sync.WaitGroup
@@ -144,11 +147,14 @@ func TestTransitionTo_ConcurrentMixed(t *testing.T) {
 	//   1. No data race (validated by -race flag)
 	//   2. Final state is consistent (Active or Paused)
 	//   3. At least one operation succeeds
+	// Uses LiveInstance so the actor goroutine serializes concurrent commands.
 	inst := &Instance{
 		Title:   "test-concurrent-mixed",
 		Status:  Paused,
 		started: true,
 	}
+	li := NewLiveInstance(inst)
+	defer li.Stop()
 
 	const numGoroutines = 20
 	var wg sync.WaitGroup

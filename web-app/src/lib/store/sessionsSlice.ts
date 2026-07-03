@@ -42,6 +42,21 @@ const sessionsSlice = createSlice({
     upsertSession(state, action: PayloadAction<Session>) {
       // Don't resurrect a deleted session via an in-flight update event
       if (!state.deletedIds[action.payload.id]) {
+        // Skip no-op upserts: if updatedAt matches the existing record the data
+        // hasn't changed and we'd just cause a spurious re-render. This prevents
+        // the N-render storm from WatchSessions initial-snapshot events that
+        // duplicate sessions already loaded by the preceding listSessions() call.
+        const existing = state.entities[action.payload.id];
+        const incoming = action.payload;
+        if (
+          existing &&
+          existing.updatedAt !== undefined &&
+          incoming.updatedAt !== undefined &&
+          existing.updatedAt.seconds === incoming.updatedAt.seconds &&
+          existing.updatedAt.nanos === incoming.updatedAt.nanos
+        ) {
+          return;
+        }
         sessionsAdapter.upsertOne(state, action.payload);
         // Sync detectedStatusMap from the session's proto fields
         const session = action.payload;

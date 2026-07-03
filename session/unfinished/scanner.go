@@ -209,6 +209,23 @@ func (s *Scanner) Start(ctx context.Context) {
 	}
 	go s.coordinator(ctx)
 	go s.subscribeToSessionEvents(ctx)
+	if r, ok := s.reader.(*GoGitVCSReader); ok {
+		// ponytail: go-git caches ~96 MB of objects per repo indefinitely
+		// because the scanner keeps every repo "hot". Clear caches periodically
+		// so the GC can reclaim them.
+		go func() {
+			tick := time.NewTicker(5 * time.Minute)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-tick.C:
+					r.ClearCache()
+				}
+			}
+		}()
+	}
 }
 
 // coordinator goroutine: ticks every 30s and handles trigger signals.
