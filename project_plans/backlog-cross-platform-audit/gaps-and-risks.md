@@ -108,14 +108,34 @@ reachable via the `UpdateFeatureFlag` RPC/UI toggle) — flag this as the first 
 *different* machine where the failure mode might genuinely be flag-related, but it is not what
 was happening here.
 
-## 3. GitHub/external-source ingestion is a stub with no UI — backlog can't self-populate
+## 3. ~~GitHub/external-source ingestion is a stub with no UI~~ — FIXED (finished, not cut)
 
-`ItemSource` CRUD works via RPC, but `TriggerSync` and `GetSyncHistory` are literal
-`CodeUnimplemented` stubs, and there is **no UI anywhere** to create a source or trigger a
-sync. The user-journey trace calls this the single biggest journey-breaking gap: without a
-developer manually seeding an `ItemSource` via raw RPC, the backlog only ever contains
-manually-typed items. If the expectation is "GitHub issues/PRs flow into the backlog
-automatically," that path does not exist for a normal user today.
+**Decided to finish rather than cut** (see triage-order item #3 below for the investigation
+that led to this call). `ItemSource` CRUD already worked via RPC; `TriggerSync` and
+`GetSyncHistory` were literal `CodeUnimplemented` stubs, and there was no UI anywhere to create
+a source or trigger a sync.
+
+**Shipped in PR #138**:
+- `TriggerSync`/`GetSyncHistory` implemented for real — wired to the plugin registry and
+  encryption key provider so a manual sync decrypts tokens and dispatches to plugins
+  identically to the periodic `SyncLoop`.
+- A settings UI at `/settings/backlog-sources`: add a GitHub Issues/PRs source, enable/disable,
+  delete, trigger a manual sync, and view sync history — closing the "no UI anywhere" half of
+  this gap.
+- Full e2e coverage (`tests/e2e/backlog-sources-settings.spec.ts`), verified passing against the
+  isolated sandboxed test server.
+
+**Real bugs found and fixed along the way** (5-agent parallel code review, converged on
+independently by 3 of the 4 review dimensions): `GetBacklogItemByExternalID` matched purely on
+external ID with no source scoping — since GitHub issue/PR numbers are only unique *within*
+their repo, two sources would silently overwrite each other's items once numbers collided
+(e.g. both repo issue #1). Fixed by scoping the lookup to `source_id`, with a regression test
+(`TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID`) that reproduces the exact
+collision. Also fixed: `items_errored`/`error_message` were structurally dead fields (a fully
+failed sync left zero history rows), unbounded `ListSourceSyncEvents`, no per-source
+concurrency guard (a manual sync racing the periodic tick could double-create an item — closed
+with a per-source lock, verified under `-race`), and no transaction wrapping the cursor-advance
++ history-write pair.
 
 ## 4. Zero real end-to-end test coverage of the autonomous flow
 
@@ -185,8 +205,9 @@ intersects with headless/backlog execution.
 ## 8. Backend-complete, UI-orphaned capabilities
 
 `AttachSessionToItem` (retroactively link an existing session to a backlog item) is fully
-implemented end-to-end at the RPC layer with no UI caller. Combined with #3, roughly a third of
-the originally-planned capability surface is reachable only by someone scripting RPCs directly.
+implemented end-to-end at the RPC layer with no UI caller. (Previously listed alongside #3's
+GitHub sync as another instance of this pattern — #3 now has a UI, so `AttachSessionToItem` is
+the remaining example.)
 
 ## 9. Silent scope-narrowing, no ADR
 
@@ -208,8 +229,11 @@ but it means the plan docs overstate what was actually delivered — don't trust
    `TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent` in
    `server/services/backlog_service_test.go` covers create→triage→approve→spawn with the real
    production code path, faking only the LLM/subprocess boundary.
-3. Decide deliberately on #3 (GitHub sync): finish it or explicitly cut it and remove the
-   half-built RPC surface — right now it's neither shipped nor absent. **Remaining open item.**
+3. ~~Decide deliberately on #3 (GitHub sync): finish it or explicitly cut it~~ — **done, decided
+   to finish**: implemented `TriggerSync`/`GetSyncHistory`, wired the plugin registry + key
+   provider, built the `/settings/backlog-sources` UI, and added e2e coverage. Shipped in PR
+   #138, see #3 above for the full writeup (including the cross-source data-corruption bug
+   found and fixed during code review).
 4. ~~Harden #5 (triage JSON parsing)~~ — **done**: replaced the naive brace-scan with
    independent `json.Decoder` attempts per `{` in `session/backlog_triage.go` (a first
    balanced-brace-counter attempt was itself found buggy by code review and superseded — see
