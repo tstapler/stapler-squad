@@ -930,6 +930,40 @@ func TestTriggerSync_ReturnsUnimplementedWithoutPluginRegistry(t *testing.T) {
 	assert.Equal(t, connect.CodeUnimplemented, connErr.Code())
 }
 
+func TestTriggerSync_ReturnsFailedPreconditionWhenFeatureDisabled(t *testing.T) {
+	svc := newBacklogService(t)
+	registry := session.NewPluginRegistry()
+	registry.Register(&fakeSourcePlugin{})
+	svc.SetPluginRegistry(registry)
+	svc.SetSyncFeatureEnabledCheck(func() bool { return false })
+
+	_, err := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{SourceId: "any"}))
+	require.Error(t, err)
+	var connErr *connect.Error
+	require.ErrorAs(t, err, &connErr)
+	assert.Equal(t, connect.CodeFailedPrecondition, connErr.Code())
+}
+
+func TestTriggerSync_SucceedsWhenFeatureEnabledCheckReturnsTrue(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+	registry := session.NewPluginRegistry()
+	plugin := &fakeSourcePlugin{items: []session.ExternalItem{{ExternalID: "e1", Title: "Item"}}}
+	registry.Register(plugin)
+	svc.SetPluginRegistry(registry)
+	svc.SetSyncFeatureEnabledCheck(func() bool { return true })
+
+	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+		PluginID:    plugin.PluginID(),
+		DisplayName: "Fake Source",
+		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	_, syncErr := svc.TriggerSync(t.Context(), connect.NewRequest(&sessionv1.TriggerSyncRequest{SourceId: src.ID}))
+	require.NoError(t, syncErr)
+}
+
 func TestTriggerSync_ReturnsInvalidArgumentWhenSourceIDEmpty(t *testing.T) {
 	svc := newBacklogService(t)
 	svc.SetPluginRegistry(session.NewPluginRegistry())

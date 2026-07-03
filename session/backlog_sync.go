@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/tstapler/stapler-squad/log"
@@ -13,6 +14,21 @@ import (
 
 // defaultSyncInterval is the time between sync ticks.
 const defaultSyncInterval = 15 * time.Minute
+
+// syncSourceLocks serializes SyncOne calls per source ID across every
+// SyncLoop instance in the process — the long-lived periodic loop and any
+// short-lived loop constructed for a manual TriggerSync RPC both consult this
+// same map. Without it, a manual sync racing the periodic tick for the same
+// source could both miss the same not-yet-created item's external_id lookup
+// and both attempt to create it.
+var syncSourceLocks sync.Map // map[string]*sync.Mutex
+
+// lockForSource returns the mutex serializing syncs for a given source ID,
+// creating one on first use.
+func lockForSource(sourceID string) *sync.Mutex {
+	m, _ := syncSourceLocks.LoadOrStore(sourceID, &sync.Mutex{})
+	return m.(*sync.Mutex)
+}
 
 // SyncLoop drives periodic sync of all enabled ItemSources.
 type SyncLoop struct {
@@ -173,8 +189,14 @@ func (sl *SyncLoop) SyncByID(ctx context.Context, sourceID string) error {
 	return sl.SyncOne(ctx, entSrc)
 }
 
-// SyncOne fetches and upserts items for a single ItemSource.
+// SyncOne fetches and upserts items for a single ItemSource. Concurrent calls
+// for the same source (e.g. a manual TriggerSync racing the periodic tick)
+// are serialized via a per-source lock — see syncSourceLocks.
 func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
+	mu := lockForSource(source.ID.String())
+	mu.Lock()
+	defer mu.Unlock()
+
 	start := time.Now()
 
 	er, ok := sl.storage.repo.(*EntRepository)
@@ -268,15 +290,11 @@ func (sl *SyncLoop) SyncOne(ctx context.Context, source *ent.ItemSource) error {
 		updated++
 	}
 
-	// Update cursor and last_synced_at on the source.
+	// Advance the cursor and record the SourceSyncEvent atomically — see
+	// FinishSourceSync's doc comment for why these must not be separate writes.
 	now := time.Now()
-	if updateErr := er.UpdateItemSourceSync(ctx, source.ID.String(), newCursor, now); updateErr != nil {
-		log.ErrorLog.Printf("[SyncLoop] UpdateItemSourceSync(%s) error: %v", source.ID, updateErr)
-	}
-
-	// Record a SourceSyncEvent.
-	if syncEventErr := er.CreateSourceSyncEvent(ctx, source.ID.String(), newCursor, created, updated, skipped, errored, "", start, now); syncEventErr != nil {
-		log.ErrorLog.Printf("[SyncLoop] CreateSourceSyncEvent(%s) error: %v", source.ID, syncEventErr)
+	if finishErr := er.FinishSourceSync(ctx, source.ID.String(), newCursor, created, updated, skipped, errored, start, now); finishErr != nil {
+		log.ErrorLog.Printf("[SyncLoop] FinishSourceSync(%s) error: %v", source.ID, finishErr)
 	}
 
 	log.InfoLog.Printf("[SyncLoop] source=%s plugin=%s created=%d updated=%d skipped=%d errored=%d",

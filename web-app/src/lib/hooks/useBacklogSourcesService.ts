@@ -90,6 +90,7 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
     if (!clientRef.current) return [];
     try {
       const resp = await clientRef.current.listItemSources({});
+      setLastError(null);
       return (resp.sources ?? []).map(mapItemSource);
     } catch (err) {
       console.error("[useBacklogSourcesService] listItemSources:", err);
@@ -167,6 +168,7 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
     if (!clientRef.current) return [];
     try {
       const resp = await clientRef.current.getSyncHistory({ sourceId: id });
+      setLastError(null);
       return (resp.events ?? []).map(mapSyncEvent);
     } catch (err) {
       console.error("[useBacklogSourcesService] getSyncHistory:", err);

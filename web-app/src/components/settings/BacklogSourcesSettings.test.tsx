@@ -148,6 +148,24 @@ describe("BacklogSourcesSettings", () => {
     expect(await screen.findByText("token invalid")).toBeInTheDocument();
   });
 
+  it("clears a stale error banner once a later listItemSources call succeeds", async () => {
+    mockListItemSources.mockRejectedValueOnce(new Error("transient network error"));
+    mockListItemSources.mockResolvedValue({ sources: [sampleSource] });
+    render(<BacklogSourcesSettings />);
+
+    expect(await screen.findByText("transient network error")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Display name (e.g. My Repo Issues)"), {
+      target: { value: "Widgets Issues" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Owner (e.g. acme)"), { target: { value: "acme" } });
+    fireEvent.change(screen.getByPlaceholderText("Repo (e.g. widgets)"), { target: { value: "widgets" } });
+    fireEvent.change(screen.getByPlaceholderText("GitHub personal access token"), { target: { value: "tok123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Source" }));
+
+    await waitFor(() => expect(screen.queryByText("transient network error")).not.toBeInTheDocument());
+  });
+
   it("toggles enabled state via updateItemSource", async () => {
     render(<BacklogSourcesSettings />);
     await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());

@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -295,6 +296,51 @@ func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
 	eventsA, err := er.ListSourceSyncEvents(ctx, srcA.ID)
 	require.NoError(t, err)
 	require.Equal(t, 1, eventsA[0].ItemsCreated, "source B's sync must not count as an update to source A's item")
+}
+
+// Two concurrent syncs of the SAME source (e.g. a manual TriggerSync racing
+// the periodic tick) must not both miss the same not-yet-created item's
+// external_id lookup and both create it — the per-source lock in SyncOne
+// (syncSourceLocks) must serialize them.
+func TestSyncOne_ConcurrentSyncsOfSameSourceDoNotDuplicateItems(t *testing.T) {
+	plugin := &fakeSyncPlugin{
+		id:    "fake",
+		items: []ExternalItem{{ExternalID: "ext-1", Title: "Item", Priority: 3}},
+	}
+	storage, cleanup, sl, sourceID := newTestSyncSetup(t, plugin)
+	defer cleanup()
+
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+	entSrc, err := er.GetItemSourceByID(ctx, sourceID)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- sl.SyncOne(ctx, entSrc)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for e := range errs {
+		require.NoError(t, e)
+	}
+
+	require.Equal(t, 2, plugin.fetchCalled, "both goroutines should have run (sequentially, not concurrently)")
+
+	items, err := storage.ListBacklogItems(ctx, BacklogItemFilter{})
+	require.NoError(t, err)
+	matching := 0
+	for _, it := range items {
+		if it.ExternalID == "ext-1" {
+			matching++
+		}
+	}
+	require.Equal(t, 1, matching, "concurrent syncs of the same source must not create duplicate items")
 }
 
 func TestSyncByID_SyncsEvenWhenSourceDisabled(t *testing.T) {

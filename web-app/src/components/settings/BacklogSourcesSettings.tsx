@@ -122,7 +122,7 @@ export function BacklogSourcesSettings() {
             <span className={styles.empty}>No sources configured.</span>
           ) : (
             sources.map((source) => (
-              <div key={source.id} className={styles.listItem}>
+              <div key={source.id} className={styles.listItem} data-testid={`source-row-${source.id}`}>
                 <div className={styles.listItemHeader}>
                   <span className={styles.listItemName}>{source.displayName}</span>
                   <span className={styles.listItemMeta}>{source.pluginId}</span>

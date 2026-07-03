@@ -109,6 +109,13 @@ type BacklogService struct {
 	// the same way sessionCreator-dependent RPCs degrade when unwired.
 	pluginRegistry *session.PluginRegistry
 	syncKeyFunc    func() ([]byte, error)
+
+	// syncFeatureEnabled reports whether the backlog feature (and therefore its
+	// sync capability) is currently enabled. Optional: if nil, TriggerSync is
+	// never gated by feature state (matches the other ItemSource RPCs, which
+	// also don't self-gate). Wired to BacklogController.IsEnabled in production
+	// so a manually-triggered sync can't run while the feature is toggled off.
+	syncFeatureEnabled func() bool
 }
 
 // NewBacklogService creates a BacklogService with all optional dependencies.
@@ -158,6 +165,13 @@ func (s *BacklogService) SetPluginRegistry(registry *session.PluginRegistry) {
 // tokens; SyncByID degrades gracefully (see session.SyncLoop.decryptConfigToken).
 func (s *BacklogService) SetSyncKeyFunc(keyFunc func() ([]byte, error)) {
 	s.syncKeyFunc = keyFunc
+}
+
+// SetSyncFeatureEnabledCheck wires a callback TriggerSync uses to refuse
+// running while the backlog feature is disabled. Pass nil (the default) to
+// leave TriggerSync ungated.
+func (s *BacklogService) SetSyncFeatureEnabledCheck(check func() bool) {
+	s.syncFeatureEnabled = check
 }
 
 // Shutdown cancels the service's background context, unblocking any goroutines
@@ -1672,6 +1686,9 @@ func (s *BacklogService) TriggerSync(
 	}
 	if s.pluginRegistry == nil {
 		return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("sync not configured — no plugin registry wired"))
+	}
+	if s.syncFeatureEnabled != nil && !s.syncFeatureEnabled() {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("backlog sync is disabled"))
 	}
 	if req.Msg.SourceId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("source_id is required"))

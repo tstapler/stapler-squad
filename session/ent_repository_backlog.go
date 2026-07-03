@@ -437,23 +437,6 @@ func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, sourceID
 	return item, nil
 }
 
-// UpdateItemSourceSync updates the sync_cursor and last_synced_at on an ItemSource.
-func (r *EntRepository) UpdateItemSourceSync(ctx context.Context, id string, cursor string, syncedAt time.Time) error {
-	parsedID, err := uuid.Parse(id)
-	if err != nil {
-		return fmt.Errorf("invalid id %q: %w", id, err)
-	}
-	u := r.client.ItemSource.UpdateOneID(parsedID).SetLastSyncedAt(syncedAt)
-	if cursor != "" {
-		u.SetSyncCursor(cursor)
-	}
-	_, err = u.Save(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to update sync state for item source %s: %w", id, err)
-	}
-	return nil
-}
-
 // maxSourceSyncEventsHistory caps how many sync history rows a single
 // GetSyncHistory call returns, so a long-lived, frequently-synced source
 // doesn't grow into an unbounded response.
@@ -514,6 +497,55 @@ func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID stri
 	_, err = c.Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create source sync event for source %s: %w", sourceID, err)
+	}
+	return nil
+}
+
+// FinishSourceSync atomically advances an ItemSource's sync cursor/last_synced_at
+// and records the SourceSyncEvent for a successful sync run. Wrapping both
+// writes in one transaction prevents a crash between them from leaving the
+// cursor advanced with no corresponding history row — which would silently
+// hide the fact that a batch of items was processed (or dropped) in that run.
+func (r *EntRepository) FinishSourceSync(ctx context.Context, sourceID string, cursorAfter string, created, updated, skipped, errored int, startedAt, finishedAt time.Time) error {
+	parsedID, err := uuid.Parse(sourceID)
+	if err != nil {
+		return fmt.Errorf("invalid source id %q: %w", sourceID, err)
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	u := tx.ItemSource.UpdateOneID(parsedID).SetLastSyncedAt(finishedAt)
+	if cursorAfter != "" {
+		u.SetSyncCursor(cursorAfter)
+	}
+	if _, err := u.Save(ctx); err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("%w: item source %s", ErrNotFound, sourceID)
+		}
+		return fmt.Errorf("failed to update sync state for item source %s: %w", sourceID, err)
+	}
+
+	c := tx.SourceSyncEvent.Create().
+		SetItemsCreated(created).
+		SetItemsUpdated(updated).
+		SetItemsSkipped(skipped).
+		SetItemsErrored(errored).
+		SetStartedAt(startedAt).
+		SetFinishedAt(finishedAt).
+		SetSourceID(parsedID)
+	if cursorAfter != "" {
+		c.SetCursorAfter(cursorAfter)
+	}
+	if _, err := c.Save(ctx); err != nil {
+		return fmt.Errorf("failed to create source sync event for source %s: %w", sourceID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sync finish transaction: %w", err)
 	}
 	return nil
 }
