@@ -581,7 +581,12 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 		Title:     "attach-target",
 		UUID:      attachUUID,
 		Path:      repoPath,
-		Status:    session.Active,
+		// Paused (not Active) so LoadInstances doesn't attempt a real cold-restore
+		// tmux/claude process start — AttachSessionToItem only needs UUID+Path to
+		// match, not a live process, and a real restore attempt is slow/unreliable
+		// in CI (no claude binary, no real tmux server) even if it eventually
+		// succeeds locally.
+		Status:    session.Paused,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
