@@ -513,31 +513,44 @@ type InstanceOptions struct {
 	CLIFlags string
 }
 
+// ResolveSessionPath expands a leading "~" to the current user's home directory
+// and converts the result to an absolute path — the same resolution NewInstance
+// applies to InstanceOptions.Path. Callers that need to act on a session's
+// worktree path *before* calling NewInstance (e.g. writing files into it ahead of
+// spawn) must resolve through this function first, or they risk operating on a
+// different path than the one the spawned Instance actually uses.
+func ResolveSessionPath(path string) (string, error) {
+	expandedPath := path
+	if strings.HasPrefix(expandedPath, "~/") {
+		usr, err := user.Current()
+		if err != nil {
+			return "", fmt.Errorf("failed to expand home directory in path '%s': %w", path, err)
+		}
+		expandedPath = filepath.Join(usr.HomeDir, expandedPath[2:])
+	} else if expandedPath == "~" {
+		usr, err := user.Current()
+		if err != nil {
+			return "", fmt.Errorf("failed to expand home directory in path '%s': %w", path, err)
+		}
+		expandedPath = usr.HomeDir
+	}
+
+	absPath, err := filepath.Abs(expandedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path for '%s': %w", expandedPath, err)
+	}
+	return absPath, nil
+}
+
 func NewInstance(opts InstanceOptions) (*Instance, error) {
 	t := time.Now()
 
 	// DEFENSIVE: Expand tilde (~) in path before converting to absolute
 	// This prevents bugs where unexpanded tildes get concatenated with current directory
 	// Example: ~/foo becomes /current/dir/~/foo instead of /home/user/foo
-	expandedPath := opts.Path
-	if strings.HasPrefix(expandedPath, "~/") {
-		usr, err := user.Current()
-		if err != nil {
-			return nil, fmt.Errorf("failed to expand home directory in path '%s': %w", opts.Path, err)
-		}
-		expandedPath = filepath.Join(usr.HomeDir, expandedPath[2:])
-	} else if expandedPath == "~" {
-		usr, err := user.Current()
-		if err != nil {
-			return nil, fmt.Errorf("failed to expand home directory in path '%s': %w", opts.Path, err)
-		}
-		expandedPath = usr.HomeDir
-	}
-
-	// Convert to absolute path (after tilde expansion)
-	absPath, err := filepath.Abs(expandedPath)
+	absPath, err := ResolveSessionPath(opts.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path for '%s': %w", expandedPath, err)
+		return nil, err
 	}
 
 	// Default to directory session if not specified for backward compatibility

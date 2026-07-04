@@ -1100,7 +1100,17 @@ func (s *BacklogService) SpawnSessionFromItem(
 	// CreateDirectorySession (tmux launch), so these files must already be on disk by
 	// then or the agent can find them missing on its first turn. worktreeMu still guards
 	// concurrent spawns from interleaving writes to the same path.
-	worktreePath := item.RepoPath
+	//
+	// Resolve through session.ResolveSessionPath first — CreateDirectorySession's
+	// underlying NewInstance does the same tilde-expand + absolute-path resolution on
+	// item.RepoPath, so writing to the raw, unresolved string here could silently
+	// target a different path than the one the spawned Instance actually uses (e.g. a
+	// "~/repo" RepoPath would write files under a literal "~/repo" relative to the
+	// server's CWD instead of the user's real home directory).
+	worktreePath, pathErr := session.ResolveSessionPath(item.RepoPath)
+	if pathErr != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repo_path: %w", pathErr))
+	}
 	s.worktreeMu.Lock()
 	if err := session.EnsureDirectorySessionPath(worktreePath); err != nil {
 		s.worktreeMu.Unlock()
@@ -1117,7 +1127,9 @@ func (s *BacklogService) SpawnSessionFromItem(
 	s.worktreeMu.Unlock()
 
 	// 11. Spawn session first so we have the real UUID before creating the ItemSession record.
-	inst, err := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, prompt,
+	// Pass the same resolved worktreePath so CreateDirectorySession's own resolution is a
+	// no-op and both paths are guaranteed to agree.
+	inst, err := s.sessionCreator.CreateDirectorySession(ctx, title, worktreePath, prompt,
 		[]string{"backlog:work"}, false, false)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to spawn session: %w", err))
@@ -1187,7 +1199,16 @@ func (s *BacklogService) AttachSessionToItem(
 	// 3. Snapshot current AC.
 	acSnapshot := item.AcceptanceCriteria
 
-	// 4. Create ItemSession.
+	// 4. Load prior sessions BEFORE creating this attach's own ItemSession, so the
+	// "prior sessions" list passed to WriteBacklogContextFile never transiently includes
+	// the session being attached (mirrors SpawnSessionFromItem's ordering).
+	attachPriorSessions, priorErr := s.storage.ListItemSessions(ctx, item.ID)
+	if priorErr != nil {
+		log.WarningLog.Printf("[AttachSessionToItem] failed to load prior sessions for item %s: %v", item.ID, priorErr)
+		attachPriorSessions = nil
+	}
+
+	// 5. Create ItemSession.
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: req.Msg.SessionUuid,
@@ -1198,7 +1219,7 @@ func (s *BacklogService) AttachSessionToItem(
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
 	}
 
-	// 5. Write slash commands to session worktree if instance is reachable.
+	// 6. Write slash commands to session worktree if instance is reachable.
 	attachItemUUID, _ := uuid.Parse(item.ID)
 	entItem := &ent.BacklogItem{
 		ID:                 attachItemUUID,
@@ -1208,11 +1229,9 @@ func (s *BacklogService) AttachSessionToItem(
 		Priority:           item.Priority,
 		Status:             item.Status,
 		Notes:              item.Notes,
-	}
-	attachPriorSessions, priorErr := s.storage.ListItemSessions(ctx, item.ID)
-	if priorErr != nil {
-		log.WarningLog.Printf("[AttachSessionToItem] failed to load prior sessions for item %s: %v", item.ID, priorErr)
-		attachPriorSessions = nil
+		PlanArtifactsPath:  item.PlanArtifactsPath,
+		PlanApproved:       item.PlanApproved,
+		SkipPlanning:       item.SkipPlanning,
 	}
 
 	instances, loadErr := s.storage.LoadInstances()
@@ -1236,7 +1255,7 @@ func (s *BacklogService) AttachSessionToItem(
 		}
 	}
 
-	// 6. Transition item to in_progress (only if the state machine permits it).
+	// 7. Transition item to in_progress (only if the state machine permits it).
 	if session.CanTransitionBacklog(session.BacklogStatus(item.Status), session.BacklogStatusInProgress) {
 		if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
 			log.ErrorLog.Printf("[AttachSessionToItem] failed to transition item to in_progress: %v", transErr)

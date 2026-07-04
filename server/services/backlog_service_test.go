@@ -3,6 +3,9 @@ package services
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,10 +128,29 @@ type mockCreateCall struct {
 	prompt  string
 	tags    []string
 	oneShot bool
+	// contextFileExistedAtSpawn/slashCommandsExistedAtSpawn are captured at the
+	// moment CreateDirectorySession fires — i.e. the moment the real claude process
+	// would start executing. This is the regression guard for the write-before-spawn
+	// ordering fix: without it, the file writes could silently move back to *after*
+	// spawn (as they were before this PR) and no test would catch it, since checking
+	// file existence only after SpawnSessionFromItem returns can't distinguish
+	// "written before spawn" from "written after spawn but before the RPC returned."
+	contextFileExistedAtSpawn   bool
+	slashCommandsExistedAtSpawn bool
 }
 
 func (m *mockSessionCreator) CreateDirectorySession(_ context.Context, title, path, prompt string, tags []string, oneShot bool, _ bool) (*session.Instance, error) {
-	m.calls = append(m.calls, mockCreateCall{title: title, path: path, prompt: prompt, tags: tags, oneShot: oneShot})
+	_, contextErr := os.Stat(filepath.Join(path, ".backlog-context.md"))
+	_, slashErr := os.Stat(filepath.Join(path, ".claude", "commands", "backlog", "status.md"))
+	m.calls = append(m.calls, mockCreateCall{
+		title:                       title,
+		path:                        path,
+		prompt:                      prompt,
+		tags:                        tags,
+		oneShot:                     oneShot,
+		contextFileExistedAtSpawn:   contextErr == nil,
+		slashCommandsExistedAtSpawn: slashErr == nil,
+	})
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -497,10 +519,95 @@ func TestBacklogFullLifecycle_TriageApprovalSpawn_CarriesRealPromptContent(t *te
 	assert.NotContains(t, capturedPrompt, "Please proceed with the task described in your instructions",
 		"spawned session prompt must not be the generic AutonomousDriver fallback")
 
+	// 5a. The write-before-spawn ordering fix: slash commands and the context file
+	// must already exist on disk at the moment CreateDirectorySession fires (i.e.
+	// before the claude process would start), not written afterward.
+	assert.True(t, creator.calls[0].contextFileExistedAtSpawn,
+		".backlog-context.md must exist before the session is spawned, not written after")
+	assert.True(t, creator.calls[0].slashCommandsExistedAtSpawn,
+		"slash command files must exist before the session is spawned, not written after")
+
 	// 6. Item should have advanced to in_progress after spawn.
 	finalResp, err := svc.GetBacklogItem(t.Context(), connect.NewRequest(&sessionv1.GetBacklogItemRequest{ItemId: itemID}))
 	require.NoError(t, err)
 	assert.Equal(t, "in_progress", finalResp.Msg.Item.Status)
+}
+
+// ─── AttachSessionToItem ──────────────────────────────────────────────────────
+
+// TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions is a
+// regression test for two architecture-review findings: (1) AttachSessionToItem's
+// entItem previously omitted PlanArtifactsPath/PlanApproved/SkipPlanning, so the
+// plan-artifacts reminder now living inside BuildSessionInitialPrompt could never
+// render on the attach path even when the item had an approved plan; (2) prior
+// sessions must actually reach the written context file the same way they do for
+// SpawnSessionFromItem.
+func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+
+	repoPath := t.TempDir()
+	createResp, err := svc.CreateBacklogItem(t.Context(), connect.NewRequest(&sessionv1.CreateBacklogItemRequest{
+		Title:      "attach me",
+		RepoPath:   repoPath,
+		SkipTriage: true,
+	}))
+	require.NoError(t, err)
+	itemID := createResp.Msg.Item.Id
+
+	// Give the item an approved plan directly via storage (bypassing full triage),
+	// matching the pattern used elsewhere in this file for ApprovePlan tests.
+	artifactsPath := t.TempDir()
+	planApproved := true
+	_, err = storage.UpdateBacklogItem(t.Context(), itemID, session.BacklogItemUpdate{
+		PlanArtifactsPath: &artifactsPath,
+		PlanApproved:      &planApproved,
+	}, nil)
+	require.NoError(t, err)
+
+	// A prior, already-ended session for this item.
+	priorIS, err := storage.CreateItemSession(t.Context(), session.ItemSessionData{
+		ItemID:      itemID,
+		SessionUUID: "prior-session-uuid",
+		SessionRole: session.SessionRoleWork,
+	})
+	require.NoError(t, err)
+	require.NoError(t, storage.UpdateItemSessionEnded(t.Context(), priorIS.ID.String(), time.Now().Add(-time.Hour)))
+
+	// A live Instance at repoPath, discoverable by AttachSessionToItem's
+	// storage.LoadInstances() lookup.
+	const attachUUID = "attach-session-uuid"
+	require.NoError(t, storage.AddInstance(&session.Instance{
+		Title:     "attach-target",
+		UUID:      attachUUID,
+		Path:      repoPath,
+		Status:    session.Running,
+		Program:   "claude",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}))
+
+	_, err = svc.AttachSessionToItem(t.Context(), connect.NewRequest(&sessionv1.AttachSessionToItemRequest{
+		ItemId:      itemID,
+		SessionUuid: attachUUID,
+	}))
+	require.NoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(repoPath, ".backlog-context.md"))
+	require.NoError(t, err, "AttachSessionToItem must write .backlog-context.md to the instance's path")
+	content := string(data)
+
+	assert.Contains(t, content, artifactsPath+"/plan.md",
+		"attach-flow context file must include the plan-artifacts reminder when the item has an approved plan")
+	assert.Contains(t, content, "Prior Attempts",
+		"attach-flow context file must include prior session history")
+
+	// The just-created attach session itself must not appear as a second "prior
+	// attempt" entry — it has no EndedAt yet, so BuildSessionInitialPrompt's filter
+	// naturally excludes it, but count the rendered entries to guard against a
+	// future change that stops filtering on EndedAt.
+	assert.Equal(t, 1, strings.Count(content, "- Role:"),
+		"only the one real prior (ended) session should be rendered, not the just-created attach session")
 }
 
 // TestTriggerTriage_SlowLLMCallDoesNotExpireCleanupContext is a regression test

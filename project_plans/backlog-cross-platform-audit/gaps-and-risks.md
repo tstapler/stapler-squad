@@ -287,6 +287,20 @@ background goroutine); per-process lock scope (`sync.Map` in `session/backlog_sy
 guards in-process races — a real limitation, but accepted given this app's
 single-instance-per-user deployment model).
 
+## 11. Missing composite index on `SourceSyncEvent` (pre-existing, not urgent)
+
+Found while verifying #10's fix via PR #142's code review. `session/ent/schema/source_sync_event.go`'s
+`Indexes()` only declares a single-column FK index (`index.Edges("source")`) — there's no
+composite `(source, started_at)` index. `ListSourceSyncEvents` (`ent_repository_backlog.go`)
+does `Where(HasSourceWith(...)).Order(Desc(started_at)).Limit(cap+1)`; without a composite
+index, Postgres/SQLite can't satisfy the `ORDER BY` from the index alone and must sort all
+matching rows for that source before applying the limit. Pre-existing (the sort-then-limit cost
+already existed before PR #142's truncation-detection change; the `+1` on the limit doesn't
+meaningfully worsen it), and bounded by low realistic row counts today given
+`maxSourceSyncEventsHistory = 200` and typical sync cadence. Not a blocker for any shipped PR —
+worth a composite-index migration if a source's sync-event history ever grows into the
+thousands.
+
 ---
 
 ## Suggested triage order if/when this becomes a fix pass

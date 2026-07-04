@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect"
 	"github.com/stretchr/testify/assert"
@@ -192,4 +193,72 @@ func TestUpdateFeatureFlag_RollsBackDiskFlagWhenControllerFails(t *testing.T) {
 	}
 	require.NotNil(t, backlogFlag)
 	assert.False(t, backlogFlag.Enabled, "disk flag must be rolled back to its previous (disabled) value after the controller failed")
+}
+
+// blockingFeatureController lets a test control exactly when Enable's critical
+// section starts and ends, to deterministically prove mutual exclusion without
+// relying on timing/sleep-based flakiness.
+type blockingFeatureController struct {
+	entered chan struct{}
+	unblock chan struct{}
+	enabled bool
+}
+
+func (b *blockingFeatureController) Enable(_ context.Context) error {
+	close(b.entered)
+	<-b.unblock
+	b.enabled = true
+	return nil
+}
+
+func (b *blockingFeatureController) Disable() error {
+	b.enabled = false
+	return nil
+}
+
+func (b *blockingFeatureController) IsEnabled() bool { return b.enabled }
+
+// TestUpdateFeatureFlag_SerializesConcurrentTogglesOfSameFlag proves the new
+// updateMu lock actually excludes concurrent UpdateFeatureFlag calls for the same
+// flag — without it, a second call's read-modify-write of the disk config could
+// interleave with the first call's still-in-flight controller toggle and rollback,
+// reintroducing the disk/controller divergence the rollback fix is meant to close.
+func TestUpdateFeatureFlag_SerializesConcurrentTogglesOfSameFlag(t *testing.T) {
+	svc := newFeatureFlagService(t)
+
+	ctrl := &blockingFeatureController{
+		entered: make(chan struct{}),
+		unblock: make(chan struct{}),
+	}
+	svc.SetFeatureController("backlog", ctrl)
+
+	firstDone := make(chan struct{})
+	go func() {
+		_, _ = svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
+			Name: "backlog", Enabled: true,
+		}))
+		close(firstDone)
+	}()
+
+	<-ctrl.entered // first call's Enable() is now blocked mid-critical-section
+
+	secondDone := make(chan struct{})
+	go func() {
+		_, _ = svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
+			Name: "backlog", Enabled: false,
+		}))
+		close(secondDone)
+	}()
+
+	// The second call must be blocked on updateMu — it cannot complete while the
+	// first is still holding the lock inside its Enable() call.
+	select {
+	case <-secondDone:
+		t.Fatal("second UpdateFeatureFlag call completed while the first was still in its critical section — updateMu did not serialize")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(ctrl.unblock) // release the first call
+	<-firstDone
+	<-secondDone
 }

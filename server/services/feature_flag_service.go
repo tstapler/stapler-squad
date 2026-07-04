@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"connectrpc.com/connect"
 	"github.com/tstapler/stapler-squad/config"
@@ -38,6 +39,13 @@ type FeatureFlagService struct {
 	// Wired via SetFeatureController. May be nil for features that only need
 	// config-file persistence (no in-process component to toggle).
 	featureControllers map[string]FeatureController
+
+	// updateMu serializes UpdateFeatureFlag's read-toggle-rollback sequence so two
+	// concurrent toggles of the same flag can't race: without this, a slow caller's
+	// rollback (after its own controller failure) could stomp a faster caller's
+	// already-successful, already-persisted toggle, reintroducing disk/controller
+	// divergence via a different trigger than the one this rollback logic closes.
+	updateMu sync.Mutex
 }
 
 // NewFeatureFlagService creates a FeatureFlagService. Call SetFeatureController
@@ -114,6 +122,13 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 			}()))
 	}
 
+	// Serialize the whole persist-toggle-rollback sequence: without this, two concurrent
+	// UpdateFeatureFlag calls for the same name could interleave such that a slower
+	// caller's rollback (after its own controller failure) overwrites a faster caller's
+	// already-successful, already-persisted toggle.
+	f.updateMu.Lock()
+	defer f.updateMu.Unlock()
+
 	// Persist to config. SetFeatureFlag handles its own map initialisation and
 	// calls SaveConfig atomically, avoiding a separate LoadConfig→modify→SaveConfig
 	// sequence that would race under concurrent UpdateFeatureFlag calls.
@@ -142,6 +157,9 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 			if rollbackErr := cfg.SetFeatureFlag(name, previousEnabled); rollbackErr != nil {
 				log.Error("failed to roll back feature flag after controller error",
 					"feature", name, "err", rollbackErr)
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("failed to %s feature %q: %w (rollback also failed, disk state may be inconsistent: %v)",
+						verb, name, ctrlErr, rollbackErr))
 			}
 			return nil, connect.NewError(connect.CodeInternal,
 				fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))

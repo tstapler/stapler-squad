@@ -115,7 +115,6 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 	var eg errgroup.Group
 	eg.SetLimit(githubCILabelConcurrency)
 	for i, pr := range prs {
-		i, pr := i, pr
 		eg.Go(func() error {
 			labelsByIndex[i] = g.computeLabels(ctx, cfg, pr)
 			return nil
