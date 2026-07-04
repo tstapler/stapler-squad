@@ -107,7 +107,7 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 		Priority:           2,
 	}
 
-	if err := WriteBacklogContextFile(item, worktree); err != nil {
+	if err := WriteBacklogContextFile(item, nil, worktree); err != nil {
 		t.Fatalf("WriteBacklogContextFile returned error: %v", err)
 	}
 

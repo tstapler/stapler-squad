@@ -8,9 +8,16 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const githubPRsPerPage = 50
+
+// githubCILabelConcurrency bounds how many fetchCILabel calls run in parallel per Fetch,
+// so a large PR list doesn't blow the TriggerSync RPC timeout (each call is a serial
+// round-trip otherwise) while staying well under GitHub's secondary rate limits.
+const githubCILabelConcurrency = 5
 
 // githubPRPluginConfig holds the decoded config for the GitHub PRs plugin.
 type githubPRPluginConfig struct {
@@ -101,14 +108,28 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 		return nil, cursor, fmt.Errorf("github_prs: decode response: %w", err)
 	}
 
+	// Fetch each PR's CI-check labels concurrently (bounded) — serially, this loop's
+	// one-round-trip-per-PR CI check can exceed the TriggerSync RPC timeout on repos
+	// with many open PRs. labelsByIndex preserves PR order regardless of completion order.
+	labelsByIndex := make([][]string, len(prs))
+	var eg errgroup.Group
+	eg.SetLimit(githubCILabelConcurrency)
+	for i, pr := range prs {
+		i, pr := i, pr
+		eg.Go(func() error {
+			labelsByIndex[i] = g.computeLabels(ctx, cfg, pr)
+			return nil
+		})
+	}
+	_ = eg.Wait() // computeLabels is best-effort and never returns an error
+
 	items := make([]ExternalItem, 0, len(prs))
-	for _, pr := range prs {
-		labels := g.computeLabels(ctx, cfg, pr)
+	for i, pr := range prs {
 		items = append(items, ExternalItem{
 			ExternalID:  strconv.Itoa(pr.Number),
 			Title:       pr.Title,
 			Description: pr.Body,
-			Labels:      labels,
+			Labels:      labelsByIndex[i],
 			Priority:    3,
 			URL:         pr.HTMLURL,
 		})

@@ -67,14 +67,25 @@ func (i *Instance) setupFirstTimeWorktree() error {
 	default: // SessionTypeDirectory and unknown types → no worktree
 		log.Info("directory session, no git worktree", "session", i.Title, "path", i.Path)
 		if i.CreateIfMissing {
-			if _, err := os.Stat(i.Path); os.IsNotExist(err) {
-				if err := git.InitializeProjectDirectory(i.Path); err != nil {
-					return fmt.Errorf("failed to create directory for session: %w", err)
-				}
+			if err := EnsureDirectorySessionPath(i.Path); err != nil {
+				return fmt.Errorf("failed to create directory for session: %w", err)
 			}
 		}
 		i.gitManager.SetWorktree(nil)
 		i.Branch = ""
+	}
+	return nil
+}
+
+// EnsureDirectorySessionPath creates and git-inits path if it does not already exist —
+// the same directory-creation step SessionTypeDirectory takes when CreateIfMissing is set.
+// Callers that need path to exist before spawning a directory session (e.g. to write files
+// into the worktree ahead of the claude process starting) should call this first so the
+// spawn's own CreateIfMissing check finds the directory already present and correctly
+// git-initialized, rather than skipping git-init because the path merely exists.
+func EnsureDirectorySessionPath(path string) error {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return git.InitializeProjectDirectory(path)
 	}
 	return nil
 }

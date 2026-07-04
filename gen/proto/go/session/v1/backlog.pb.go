@@ -3046,8 +3046,11 @@ func (x *GetSyncHistoryRequest) GetSourceId() string {
 }
 
 type GetSyncHistoryResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Events        []*SourceSyncEvent     `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Events []*SourceSyncEvent     `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	// True when the history was capped (see maxSourceSyncEventsHistory server-side) and older
+	// events beyond this response exist but are not returned — no pagination API exists yet.
+	Truncated     bool `protobuf:"varint,2,opt,name=truncated,proto3" json:"truncated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3087,6 +3090,13 @@ func (x *GetSyncHistoryResponse) GetEvents() []*SourceSyncEvent {
 		return x.Events
 	}
 	return nil
+}
+
+func (x *GetSyncHistoryResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
 }
 
 type CancelTriageRequest struct {
@@ -3408,9 +3418,10 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\tsource_id\x18\x01 \x01(\tR\bsourceId\"\x1a\n" +
 	"\x18DeleteItemSourceResponse\"4\n" +
 	"\x15GetSyncHistoryRequest\x12\x1b\n" +
-	"\tsource_id\x18\x01 \x01(\tR\bsourceId\"M\n" +
+	"\tsource_id\x18\x01 \x01(\tR\bsourceId\"k\n" +
 	"\x16GetSyncHistoryResponse\x123\n" +
-	"\x06events\x18\x01 \x03(\v2\x1b.session.v1.SourceSyncEventR\x06events\".\n" +
+	"\x06events\x18\x01 \x03(\v2\x1b.session.v1.SourceSyncEventR\x06events\x12\x1c\n" +
+	"\ttruncated\x18\x02 \x01(\bR\ttruncated\".\n" +
 	"\x13CancelTriageRequest\x12\x17\n" +
 	"\aitem_id\x18\x01 \x01(\tR\x06itemId\"4\n" +
 	"\x14CancelTriageResponse\x12\x1c\n" +

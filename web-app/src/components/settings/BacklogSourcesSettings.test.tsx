@@ -166,6 +166,19 @@ describe("BacklogSourcesSettings", () => {
     await waitFor(() => expect(screen.queryByText("transient network error")).not.toBeInTheDocument());
   });
 
+  it("clears schema-driven field values when switching plugin type", async () => {
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText("Owner (e.g. acme)"), { target: { value: "acme" } });
+    fireEvent.change(screen.getByPlaceholderText("Repo (e.g. widgets)"), { target: { value: "widgets" } });
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "github_prs" } });
+
+    expect((screen.getByPlaceholderText("Owner (e.g. acme)") as HTMLInputElement).value).toBe("");
+    expect((screen.getByPlaceholderText("Repo (e.g. widgets)") as HTMLInputElement).value).toBe("");
+  });
+
   it("toggles enabled state via updateItemSource", async () => {
     render(<BacklogSourcesSettings />);
     await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
@@ -214,5 +227,29 @@ describe("BacklogSourcesSettings", () => {
       expect(mockGetSyncHistory).toHaveBeenCalledWith({ sourceId: "src-1" });
     });
     expect(await screen.findByText(/created 2, updated 1, skipped 0/)).toBeInTheDocument();
+  });
+
+  it("shows a truncation notice when sync history is capped", async () => {
+    mockGetSyncHistory.mockResolvedValue({
+      events: [
+        {
+          id: "ev-1",
+          startedAt: undefined,
+          finishedAt: undefined,
+          itemsCreated: 2,
+          itemsUpdated: 1,
+          itemsSkipped: 0,
+          itemsErrored: 0,
+          errorMessage: "",
+        },
+      ],
+      truncated: true,
+    });
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("Acme Issues")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: "View history" }));
+
+    expect(await screen.findByText(/Older sync history exists but is not shown/)).toBeInTheDocument();
   });
 });

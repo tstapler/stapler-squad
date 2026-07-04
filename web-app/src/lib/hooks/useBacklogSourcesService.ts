@@ -26,6 +26,11 @@ export interface SourceSyncEvent {
   errorMessage?: string;
 }
 
+export interface SyncHistoryResult {
+  events: SourceSyncEvent[];
+  truncated: boolean;
+}
+
 function tsToIso(ts?: { seconds: bigint }): string | undefined {
   return ts ? new Date(Number(ts.seconds) * 1000).toISOString() : undefined;
 }
@@ -67,7 +72,7 @@ interface UseBacklogSourcesServiceReturn {
   setItemSourceEnabled: (id: string, displayName: string, enabled: boolean) => Promise<ItemSource | null>;
   deleteItemSource: (id: string) => Promise<boolean>;
   triggerSync: (id: string) => Promise<boolean>;
-  getSyncHistory: (id: string) => Promise<SourceSyncEvent[]>;
+  getSyncHistory: (id: string) => Promise<SyncHistoryResult>;
   lastError: Error | null;
   clearError: () => void;
 }
@@ -164,16 +169,16 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
     }
   }, []);
 
-  const getSyncHistory = useCallback(async (id: string): Promise<SourceSyncEvent[]> => {
-    if (!clientRef.current) return [];
+  const getSyncHistory = useCallback(async (id: string): Promise<SyncHistoryResult> => {
+    if (!clientRef.current) return { events: [], truncated: false };
     try {
       const resp = await clientRef.current.getSyncHistory({ sourceId: id });
       setLastError(null);
-      return (resp.events ?? []).map(mapSyncEvent);
+      return { events: (resp.events ?? []).map(mapSyncEvent), truncated: resp.truncated };
     } catch (err) {
       console.error("[useBacklogSourcesService] getSyncHistory:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));
-      return [];
+      return { events: [], truncated: false };
     }
   }, []);
 

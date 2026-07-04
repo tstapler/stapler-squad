@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -142,6 +143,58 @@ func TestGitHubPRsPlugin_Fetch_ParsesPRsWithReviewRequestedAndCILabels(t *testin
 	require.Equal(t, "7", items[0].ExternalID)
 	require.Contains(t, items[0].Labels, "pr:review-requested")
 	require.Contains(t, items[0].Labels, "pr:ci-failing")
+}
+
+// TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels verifies that
+// Fetch's bounded-concurrency CI-label lookup (githubCILabelConcurrency workers)
+// still returns items in the original PR order with each PR's own labels correctly
+// matched, not swapped or dropped, despite fetching check-runs concurrently. Run
+// with -race to confirm the concurrent writes into labelsByIndex are race-free.
+func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.T) {
+	const prCount = 12
+	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/repos/acme/widgets/pulls":
+			var sb []byte
+			sb = append(sb, '[')
+			for i := 0; i < prCount; i++ {
+				if i > 0 {
+					sb = append(sb, ',')
+				}
+				sb = append(sb, []byte(`{"number":`+itoa(i)+`,"title":"pr `+itoa(i)+`","html_url":"https://x/`+itoa(i)+`","head":{"sha":"sha-`+itoa(i)+`"}}`)...)
+			}
+			sb = append(sb, ']')
+			w.Write(sb)
+		default:
+			// /repos/acme/widgets/commits/sha-N/check-runs — even N fails CI, odd N passes.
+			var n int
+			fmt.Sscanf(r.URL.Path, "/repos/acme/widgets/commits/sha-%d/check-runs", &n)
+			if n%2 == 0 {
+				w.Write([]byte(`{"check_runs":[{"conclusion":"failure"}]}`))
+			} else {
+				w.Write([]byte(`{"check_runs":[{"conclusion":"success"}]}`))
+			}
+		}
+	})
+
+	p := NewGitHubPRsPlugin()
+	cfg := PluginConfig{Raw: `{"owner":"acme","repo":"widgets","token":"tok"}`}
+	items, _, err := p.Fetch(context.Background(), cfg, "")
+	require.NoError(t, err)
+	require.Len(t, items, prCount)
+
+	for i, item := range items {
+		require.Equal(t, itoa(i), item.ExternalID, "PR order must be preserved despite concurrent CI fetch")
+		if i%2 == 0 {
+			require.Contains(t, item.Labels, "pr:ci-failing", "PR %d should be labeled ci-failing", i)
+		} else {
+			require.NotContains(t, item.Labels, "pr:ci-failing", "PR %d should not be labeled ci-failing", i)
+		}
+	}
+}
+
+func itoa(n int) string {
+	return fmt.Sprintf("%d", n)
 }
 
 func TestGitHubPRsPlugin_MapToBacklogItem_TruncatesLongFields(t *testing.T) {

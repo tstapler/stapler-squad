@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -91,10 +92,65 @@ func TestSyncOne_CreatesNewItemsFromPlugin(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "cursor-2", updatedSrc.SyncCursor)
 
-	events, err := er.ListSourceSyncEvents(ctx, sourceID)
+	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Equal(t, 2, events[0].ItemsCreated)
+}
+
+// TestListSourceSyncEvents_ReportsTruncatedWhenOverCap verifies that querying more
+// than maxSourceSyncEventsHistory rows returns truncated=true and caps the slice at
+// the limit, while a source at or under the cap reports truncated=false — so the
+// UI can show a "history not fully shown" indicator instead of silently hiding rows.
+func TestListSourceSyncEvents_ReportsTruncatedWhenOverCap(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	src, err := storage.CreateItemSource(ctx, ItemSourceData{
+		PluginID:    "fake_source",
+		DisplayName: "Chatty Source",
+		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	start := time.Now()
+	for i := 0; i < maxSourceSyncEventsHistory+1; i++ {
+		require.NoError(t, er.CreateSourceSyncEvent(ctx, src.ID, "", 1, 0, 0, 0, "", start, start))
+	}
+
+	events, truncated, err := er.ListSourceSyncEvents(ctx, src.ID)
+	require.NoError(t, err)
+	require.True(t, truncated, "expected truncated=true when more rows exist than the cap")
+	require.Len(t, events, maxSourceSyncEventsHistory)
+}
+
+// TestListSourceSyncEvents_NotTruncatedAtOrUnderCap guards against the off-by-one
+// edge case where a source with exactly maxSourceSyncEventsHistory rows would be
+// misreported as truncated.
+func TestListSourceSyncEvents_NotTruncatedAtOrUnderCap(t *testing.T) {
+	storage, cleanup := createTestStorage(t)
+	defer cleanup()
+	ctx := context.Background()
+	er := storage.repo.(*EntRepository)
+
+	src, err := storage.CreateItemSource(ctx, ItemSourceData{
+		PluginID:    "fake_source",
+		DisplayName: "Exactly At Cap",
+		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	start := time.Now()
+	for i := 0; i < maxSourceSyncEventsHistory; i++ {
+		require.NoError(t, er.CreateSourceSyncEvent(ctx, src.ID, "", 1, 0, 0, 0, "", start, start))
+	}
+
+	events, truncated, err := er.ListSourceSyncEvents(ctx, src.ID)
+	require.NoError(t, err)
+	require.False(t, truncated, "exactly at the cap must not be reported as truncated")
+	require.Len(t, events, maxSourceSyncEventsHistory)
 }
 
 func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
@@ -134,7 +190,7 @@ func TestSyncOne_LocalWinsSkipsUserModifiedFields(t *testing.T) {
 	require.Equal(t, "Local Title", refetched.Title, "user-modified title must not be overwritten")
 	require.Equal(t, 5, refetched.Priority, "priority was not user-modified, so remote wins")
 
-	events, err := er.ListSourceSyncEvents(ctx, sourceID)
+	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
 	require.NoError(t, err)
 	require.Equal(t, 1, events[0].ItemsUpdated)
 	require.Equal(t, 0, events[0].ItemsCreated)
@@ -178,7 +234,7 @@ func TestSyncOne_SkipsWhenAllFieldsAreUserModified(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, sl.SyncOne(ctx, entSrc))
 
-	events, err := er.ListSourceSyncEvents(ctx, sourceID)
+	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
 	require.NoError(t, err)
 	require.Equal(t, 1, events[0].ItemsSkipped)
 	require.Equal(t, 0, events[0].ItemsCreated)
@@ -252,7 +308,7 @@ func TestSyncOne_FetchErrorPropagates(t *testing.T) {
 
 	// A failed fetch must still leave a trace in sync history — otherwise the
 	// failure vanishes silently instead of surfacing in GetSyncHistory.
-	events, err := er.ListSourceSyncEvents(ctx, sourceID)
+	events, _, err := er.ListSourceSyncEvents(ctx, sourceID)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	require.Equal(t, 1, events[0].ItemsErrored)
@@ -293,7 +349,7 @@ func TestSyncOne_DoesNotCollideAcrossSourcesWithSameExternalID(t *testing.T) {
 
 	require.NotEqual(t, itemA.ID, itemB.ID, "sources with colliding external_id must produce distinct backlog items")
 
-	eventsA, err := er.ListSourceSyncEvents(ctx, srcA.ID)
+	eventsA, _, err := er.ListSourceSyncEvents(ctx, srcA.ID)
 	require.NoError(t, err)
 	require.Equal(t, 1, eventsA[0].ItemsCreated, "source B's sync must not count as an update to source A's item")
 }

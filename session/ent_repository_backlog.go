@@ -485,22 +485,28 @@ func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, sourceID
 // doesn't grow into an unbounded response.
 const maxSourceSyncEventsHistory = 200
 
-// ListSourceSyncEvents returns sync history events for an item source, most
-// recent first, capped at maxSourceSyncEventsHistory rows.
-func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID string) ([]*ent.SourceSyncEvent, error) {
+// ListSourceSyncEvents returns sync history events for an item source, most recent
+// first, capped at maxSourceSyncEventsHistory rows. truncated is true when older
+// events exist beyond the cap — callers should surface this to avoid silently
+// hiding history for sources with long or frequent sync runs.
+func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID string) (events []*ent.SourceSyncEvent, truncated bool, err error) {
 	parsedID, err := uuid.Parse(sourceID)
 	if err != nil {
-		return nil, fmt.Errorf("invalid source id %q: %w", sourceID, err)
+		return nil, false, fmt.Errorf("invalid source id %q: %w", sourceID, err)
 	}
-	events, err := r.client.SourceSyncEvent.Query().
+	// Fetch one extra row to distinguish "exactly at the cap" from "more exist beyond it".
+	events, err = r.client.SourceSyncEvent.Query().
 		Where(sourcesyncevent.HasSourceWith(itemsource.ID(parsedID))).
 		Order(ent.Desc(sourcesyncevent.FieldStartedAt)).
-		Limit(maxSourceSyncEventsHistory).
+		Limit(maxSourceSyncEventsHistory + 1).
 		All(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list sync events for source %s: %w", sourceID, err)
+		return nil, false, fmt.Errorf("failed to list sync events for source %s: %w", sourceID, err)
 	}
-	return events, nil
+	if len(events) > maxSourceSyncEventsHistory {
+		return events[:maxSourceSyncEventsHistory], true, nil
+	}
+	return events, false, nil
 }
 
 // CreateSourceSyncEvent records a completed (or failed) sync run for an

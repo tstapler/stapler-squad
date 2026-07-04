@@ -118,20 +118,33 @@ func (f *FeatureFlagService) UpdateFeatureFlag(
 	// calls SaveConfig atomically, avoiding a separate LoadConfig→modify→SaveConfig
 	// sequence that would race under concurrent UpdateFeatureFlag calls.
 	cfg := config.LoadConfig()
+	previousEnabled := cfg.GetFeatureFlag(name)
 	if err := cfg.SetFeatureFlag(name, enabled); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to persist feature flag: %w", err))
 	}
 
-	// Toggle the in-process controller if one is wired.
+	// Toggle the in-process controller if one is wired. If the controller fails to apply the
+	// new state, roll back the just-persisted disk flag so disk config and in-memory state can
+	// never diverge — a failed toggle must not leave the two disagreeing about whether the
+	// feature is on, since GetFeatureFlags/RPC-gating interceptors read from different sources.
 	if ctrl, ok := f.featureControllers[name]; ok {
+		var ctrlErr error
+		verb := "disable"
 		if enabled {
-			if err := ctrl.Enable(ctx); err != nil {
-				log.Warn("feature controller Enable failed", "feature", name, "err", err)
-			}
+			verb = "enable"
+			ctrlErr = ctrl.Enable(ctx)
 		} else {
-			if err := ctrl.Disable(); err != nil {
-				log.Warn("feature controller Disable failed", "feature", name, "err", err)
+			ctrlErr = ctrl.Disable()
+		}
+		if ctrlErr != nil {
+			log.Error("feature controller toggle failed, rolling back persisted flag",
+				"feature", name, "enabled", enabled, "err", ctrlErr)
+			if rollbackErr := cfg.SetFeatureFlag(name, previousEnabled); rollbackErr != nil {
+				log.Error("failed to roll back feature flag after controller error",
+					"feature", name, "err", rollbackErr)
 			}
+			return nil, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("failed to %s feature %q: %w", verb, name, ctrlErr))
 		}
 	}
 

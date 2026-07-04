@@ -1091,14 +1091,32 @@ func (s *BacklogService) SpawnSessionFromItem(
 		SkipPlanning:       item.SkipPlanning,
 	}
 	prompt := session.BuildTokenBudgetedPrompt(entItem, priorSessions)
-	if item.PlanArtifactsPath != "" {
-		prompt += fmt.Sprintf("\nYour plan is at `%s/plan.md`. Read plan.md and validation.md before writing code.\n", item.PlanArtifactsPath)
-	}
 
 	// 9. Generate session title.
 	title := "backlog:" + slugify(item.Title)
 
-	// 10. Spawn session first so we have the real UUID before creating the ItemSession record.
+	// 10. Ensure the worktree path exists and write slash commands + context file BEFORE
+	// spawning the session — the claude process starts executing synchronously inside
+	// CreateDirectorySession (tmux launch), so these files must already be on disk by
+	// then or the agent can find them missing on its first turn. worktreeMu still guards
+	// concurrent spawns from interleaving writes to the same path.
+	worktreePath := item.RepoPath
+	s.worktreeMu.Lock()
+	if err := session.EnsureDirectorySessionPath(worktreePath); err != nil {
+		s.worktreeMu.Unlock()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to prepare session directory: %w", err))
+	}
+	if wErr := session.WriteSlashCommands(entItem, worktreePath); wErr != nil {
+		s.worktreeMu.Unlock()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
+	}
+	if wErr := session.WriteBacklogContextFile(entItem, priorSessions, worktreePath); wErr != nil {
+		s.worktreeMu.Unlock()
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
+	}
+	s.worktreeMu.Unlock()
+
+	// 11. Spawn session first so we have the real UUID before creating the ItemSession record.
 	inst, err := s.sessionCreator.CreateDirectorySession(ctx, title, item.RepoPath, prompt,
 		[]string{"backlog:work"}, false, false)
 	if err != nil {
@@ -1109,7 +1127,7 @@ func (s *BacklogService) SpawnSessionFromItem(
 		s.autonomousStarter.StartAutonomousDriverForInstance(inst)
 	}
 
-	// 11. Create ItemSession with the real session UUID (avoids "<pending>" orphan records on failure).
+	// 12. Create ItemSession with the real session UUID (avoids "<pending>" orphan records on failure).
 	is, err := s.storage.CreateItemSession(ctx, session.ItemSessionData{
 		ItemID:      item.ID,
 		SessionUUID: inst.UUID,
@@ -1119,20 +1137,6 @@ func (s *BacklogService) SpawnSessionFromItem(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to create item session: %w", err))
 	}
-
-	// 12. Write slash commands and context file synchronously under a mutex so
-	// concurrent spawn calls cannot interleave writes to the same worktree path.
-	worktreePath := inst.Path
-	s.worktreeMu.Lock()
-	if wErr := session.WriteSlashCommands(entItem, worktreePath); wErr != nil {
-		s.worktreeMu.Unlock()
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
-	}
-	if wErr := session.WriteBacklogContextFile(entItem, worktreePath); wErr != nil {
-		s.worktreeMu.Unlock()
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
-	}
-	s.worktreeMu.Unlock()
 
 	// 13. Transition item to in_progress.
 	if _, transErr := s.storage.TransitionBacklogItemStatus(ctx, item.ID, session.BacklogStatusInProgress, nil); transErr != nil {
@@ -1205,6 +1209,12 @@ func (s *BacklogService) AttachSessionToItem(
 		Status:             item.Status,
 		Notes:              item.Notes,
 	}
+	attachPriorSessions, priorErr := s.storage.ListItemSessions(ctx, item.ID)
+	if priorErr != nil {
+		log.WarningLog.Printf("[AttachSessionToItem] failed to load prior sessions for item %s: %v", item.ID, priorErr)
+		attachPriorSessions = nil
+	}
+
 	instances, loadErr := s.storage.LoadInstances()
 	if loadErr == nil {
 		for _, inst := range instances {
@@ -1216,7 +1226,7 @@ func (s *BacklogService) AttachSessionToItem(
 					s.worktreeMu.Unlock()
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteSlashCommands: %w", wErr))
 				}
-				if wErr := session.WriteBacklogContextFile(entItem, worktreePath); wErr != nil {
+				if wErr := session.WriteBacklogContextFile(entItem, attachPriorSessions, worktreePath); wErr != nil {
 					s.worktreeMu.Unlock()
 					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("WriteBacklogContextFile: %w", wErr))
 				}
@@ -1799,7 +1809,7 @@ func (s *BacklogService) GetSyncHistory(
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid source_id %q: %w", req.Msg.SourceId, parseErr))
 	}
 
-	events, err := s.storage.ListSourceSyncEvents(ctx, req.Msg.SourceId)
+	events, truncated, err := s.storage.ListSourceSyncEvents(ctx, req.Msg.SourceId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("failed to list sync history: %w", err))
 	}
@@ -1809,5 +1819,5 @@ func (s *BacklogService) GetSyncHistory(
 		protoEvents = append(protoEvents, sourceSyncEventToProto(ev))
 	}
 
-	return connect.NewResponse(&sessionv1.GetSyncHistoryResponse{Events: protoEvents}), nil
+	return connect.NewResponse(&sessionv1.GetSyncHistoryResponse{Events: protoEvents, Truncated: truncated}), nil
 }

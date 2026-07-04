@@ -16,16 +16,24 @@ type fakeFeatureController struct {
 	enableCalled  bool
 	disableCalled bool
 	enabled       bool
+	failEnable    error
+	failDisable   error
 }
 
 func (f *fakeFeatureController) Enable(_ context.Context) error {
 	f.enableCalled = true
+	if f.failEnable != nil {
+		return f.failEnable
+	}
 	f.enabled = true
 	return nil
 }
 
 func (f *fakeFeatureController) Disable() error {
 	f.disableCalled = true
+	if f.failDisable != nil {
+		return f.failDisable
+	}
 	f.enabled = false
 	return nil
 }
@@ -148,4 +156,40 @@ func TestUpdateFeatureFlag_DisablesController(t *testing.T) {
 
 	assert.True(t, ctrl.disableCalled, "expected Disable to be called on the controller")
 	assert.False(t, ctrl.enableCalled, "expected Enable NOT to be called")
+}
+
+// TestUpdateFeatureFlag_RollsBackDiskFlagWhenControllerFails verifies that when the
+// wired controller's Enable fails, UpdateFeatureFlag returns an error AND rolls back
+// the just-persisted disk flag, so disk config and in-memory controller state can
+// never diverge (previously a controller failure was only logged and the RPC
+// reported success, leaving TriggerSync's disk-gated interceptor permanently out of
+// sync with the in-memory feature check).
+func TestUpdateFeatureFlag_RollsBackDiskFlagWhenControllerFails(t *testing.T) {
+	svc := newFeatureFlagService(t)
+
+	ctrl := &fakeFeatureController{failEnable: assert.AnError}
+	svc.SetFeatureController("backlog", ctrl)
+
+	_, err := svc.UpdateFeatureFlag(context.Background(), connect.NewRequest(&sessionv1.UpdateFeatureFlagRequest{
+		Name:    "backlog",
+		Enabled: true,
+	}))
+	require.Error(t, err)
+
+	var connectErr *connect.Error
+	require.ErrorAs(t, err, &connectErr)
+	assert.Equal(t, connect.CodeInternal, connectErr.Code())
+	assert.True(t, ctrl.enableCalled, "expected Enable to have been attempted")
+
+	resp, err := svc.GetFeatureFlags(context.Background(), connect.NewRequest(&sessionv1.GetFeatureFlagsRequest{}))
+	require.NoError(t, err)
+	var backlogFlag *sessionv1.FeatureFlag
+	for _, f := range resp.Msg.Flags {
+		if f.Name == "backlog" {
+			backlogFlag = f
+			break
+		}
+	}
+	require.NotNil(t, backlogFlag)
+	assert.False(t, backlogFlag.Enabled, "disk flag must be rolled back to its previous (disabled) value after the controller failed")
 }

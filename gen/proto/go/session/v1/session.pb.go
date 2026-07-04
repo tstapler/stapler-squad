@@ -290,7 +290,9 @@ type CreateSessionRequest struct {
 	Program string `protobuf:"bytes,5,opt,name=program,proto3" json:"program,omitempty"`
 	// Optional: Category for organization.
 	Category string `protobuf:"bytes,6,opt,name=category,proto3" json:"category,omitempty"`
-	// Optional: Initial prompt to pass on startup.
+	// Optional: prompt passed as a CLI argument at process-spawn time (fresh spawns / one-shot
+	// only). See initial_prompt for the tmux-typed alternative used for resume/attach flows —
+	// the two are independent and may both be set on the same request.
 	Prompt string `protobuf:"bytes,7,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	// Optional: Auto-approve prompts without user interaction.
 	AutoYes bool `protobuf:"varint,8,opt,name=auto_yes,json=autoYes,proto3" json:"auto_yes,omitempty"`
@@ -306,7 +308,9 @@ type CreateSessionRequest struct {
 	// Optional: Session type (directory, new_worktree, existing_worktree).
 	// If not specified, backend will infer from other fields (branch, existing_worktree).
 	SessionType SessionType `protobuf:"varint,13,opt,name=session_type,json=sessionType,proto3,enum=session.v1.SessionType" json:"session_type,omitempty"`
-	// Optional: Initial prompt to inject via CLAUDE.md (no size limit; shell-safe).
+	// Optional: prompt typed into the tmux pane as simulated keystrokes once the session reaches
+	// Ready state (no size limit; shell-safe) — used for resume/attach flows where a CLI arg can
+	// no longer be injected. See prompt (field 7) for the CLI-arg alternative.
 	InitialPrompt string `protobuf:"bytes,15,opt,name=initial_prompt,json=initialPrompt,proto3" json:"initial_prompt,omitempty"`
 	// Optional: Run claude in one-shot mode (-p flag); session exits after task completes.
 	OneShot bool `protobuf:"varint,16,opt,name=one_shot,json=oneShot,proto3" json:"one_shot,omitempty"`

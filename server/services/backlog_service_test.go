@@ -1238,4 +1238,30 @@ func TestGetSyncHistory_ReturnsEmptyForSourceWithNoSyncRuns(t *testing.T) {
 	resp, histErr := svc.GetSyncHistory(t.Context(), connect.NewRequest(&sessionv1.GetSyncHistoryRequest{SourceId: src.ID}))
 	require.NoError(t, histErr)
 	assert.Empty(t, resp.Msg.Events)
+	assert.False(t, resp.Msg.Truncated)
+}
+
+// TestGetSyncHistory_SetsTruncatedWhenHistoryExceedsCap verifies the RPC surfaces
+// the storage layer's truncation signal, so the settings UI can show a "history not
+// fully shown" indicator instead of silently capping at 200 with no explanation.
+func TestGetSyncHistory_SetsTruncatedWhenHistoryExceedsCap(t *testing.T) {
+	storage := createTestStorage(t)
+	svc := NewBacklogService(storage, nil, nil, nil)
+
+	src, err := storage.CreateItemSource(t.Context(), session.ItemSourceData{
+		PluginID:    "fake_source",
+		DisplayName: "Chatty Source",
+		Enabled:     true,
+	})
+	require.NoError(t, err)
+
+	start := time.Now()
+	for i := 0; i < 201; i++ {
+		require.NoError(t, storage.CreateSourceSyncEvent(t.Context(), src.ID, "", 1, 0, 0, 0, "", start, start))
+	}
+
+	resp, histErr := svc.GetSyncHistory(t.Context(), connect.NewRequest(&sessionv1.GetSyncHistoryRequest{SourceId: src.ID}))
+	require.NoError(t, histErr)
+	assert.Len(t, resp.Msg.Events, 200)
+	assert.True(t, resp.Msg.Truncated)
 }
