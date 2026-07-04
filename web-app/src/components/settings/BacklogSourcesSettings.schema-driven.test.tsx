@@ -42,11 +42,16 @@ jest.mock("./backlogSourceSchemas", () => ({
 }));
 
 const mockListItemSources = jest.fn();
+const mockCreateItemSource = jest.fn();
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockListItemSources.mockResolvedValue({ sources: [] });
-  (createClient as jest.Mock).mockReturnValue({ listItemSources: mockListItemSources });
+  mockCreateItemSource.mockResolvedValue({ source: null });
+  (createClient as jest.Mock).mockReturnValue({
+    listItemSources: mockListItemSources,
+    createItemSource: mockCreateItemSource,
+  });
   (createConnectTransport as jest.Mock).mockReturnValue({});
 });
 
@@ -70,5 +75,28 @@ describe("BacklogSourcesSettings (schema-driven form, mocked schemas)", () => {
     expect(screen.queryByPlaceholderText("Project Key (e.g. ABC)")).not.toBeInTheDocument();
     // plugin_b sets requiresToken: false — no token input should render.
     expect(screen.queryByPlaceholderText(/token/i)).not.toBeInTheDocument();
+  });
+
+  it("does not send a leftover token when submitting a plugin that does not require one", async () => {
+    render(<BacklogSourcesSettings />);
+    await waitFor(() => expect(screen.getByText("No sources configured.")).toBeInTheDocument());
+
+    // Type a token while on plugin_a (requiresToken: true)...
+    fireEvent.change(screen.getByPlaceholderText("Plugin A token"), { target: { value: "leaked-secret" } });
+
+    // ...then switch to plugin_b (requiresToken: false, no token field rendered).
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "plugin_b" } });
+    expect(screen.queryByPlaceholderText("Plugin A token")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("Display name (e.g. My Repo Issues)"), {
+      target: { value: "My Workspace" },
+    });
+    fireEvent.change(screen.getByPlaceholderText("Workspace Slug (e.g. my-team)"), { target: { value: "my-team" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add Source" }));
+
+    await waitFor(() => expect(mockCreateItemSource).toHaveBeenCalled());
+    expect(mockCreateItemSource).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "plugin_b", token: "" })
+    );
   });
 });

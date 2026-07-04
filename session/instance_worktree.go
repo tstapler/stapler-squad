@@ -84,10 +84,15 @@ func (i *Instance) setupFirstTimeWorktree() error {
 // spawn's own CreateIfMissing check finds the directory already present and correctly
 // git-initialized, rather than skipping git-init because the path merely exists.
 func EnsureDirectorySessionPath(path string) error {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	_, err := os.Stat(path)
+	switch {
+	case os.IsNotExist(err):
 		return git.InitializeProjectDirectory(path)
+	case err != nil:
+		return fmt.Errorf("failed to stat session path %q: %w", path, err)
+	default:
+		return nil
 	}
-	return nil
 }
 
 // resolveStartPath returns the effective start directory, applying WorkingDir on top of basePath.

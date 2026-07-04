@@ -174,7 +174,7 @@ export function useBacklogSourcesService(): UseBacklogSourcesServiceReturn {
     try {
       const resp = await clientRef.current.getSyncHistory({ sourceId: id });
       setLastError(null);
-      return { events: (resp.events ?? []).map(mapSyncEvent), truncated: resp.truncated };
+      return { events: (resp.events ?? []).map(mapSyncEvent), truncated: Boolean(resp.truncated) };
     } catch (err) {
       console.error("[useBacklogSourcesService] getSyncHistory:", err);
       setLastError(err instanceof Error ? err : new Error(String(err)));

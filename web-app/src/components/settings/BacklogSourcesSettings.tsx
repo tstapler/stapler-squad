@@ -38,6 +38,7 @@ export function BacklogSourcesSettings() {
   const handlePluginChange = (id: string) => {
     setPluginId(id);
     setFieldValues({});
+    setToken("");
   };
 
   const setField = (key: string, value: string) => {
@@ -72,7 +73,7 @@ export function BacklogSourcesSettings() {
       pluginId,
       displayName: displayName.trim(),
       configJson: JSON.stringify(config),
-      token: token.trim(),
+      token: schema.requiresToken ? token.trim() : "",
     });
     setSubmitting(false);
     if (created) {

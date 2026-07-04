@@ -44,6 +44,24 @@ func TestEnsureDirectorySessionPath_NoopWhenAlreadyExists(t *testing.T) {
 	require.NoError(t, gitErr)
 }
 
+// TestEnsureDirectorySessionPath_ReturnsErrorOnNonNotExistStatFailure verifies that
+// a stat failure other than "does not exist" (e.g. a path component that isn't a
+// directory, producing ENOTDIR) surfaces as an error instead of being silently
+// treated as "already exists, no-op" — a real path a plain os.IsNotExist check
+// would otherwise mask.
+func TestEnsureDirectorySessionPath_ReturnsErrorOnNonNotExistStatFailure(t *testing.T) {
+	base := t.TempDir()
+	fileAsParent := filepath.Join(base, "not-a-dir")
+	require.NoError(t, os.WriteFile(fileAsParent, []byte("x"), 0o644))
+
+	// fileAsParent is a file, so treating it as a directory component (target
+	// "underneath" it) fails stat with ENOTDIR, not IsNotExist.
+	target := filepath.Join(fileAsParent, "child")
+
+	err := EnsureDirectorySessionPath(target)
+	require.Error(t, err)
+}
+
 // TestEnsureDirectorySessionPath_NoopWhenPathIsAnExistingFile documents the actual
 // (pre-existing, unchanged-by-extraction) behavior: the function only acts when
 // os.Stat reports the path does not exist at all — an existing plain file is left
