@@ -1,5 +1,5 @@
-// +feature: settings-backlog-sources
 // analytics-exempt
+// +feature: settings-backlog-sources
 import type { Metadata } from "next";
 import { BacklogSourcesSettings } from "@/components/settings/BacklogSourcesSettings";
 import { PageViewTracker } from "@/components/analytics/PageViewTracker";

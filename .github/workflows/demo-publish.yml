@@ -5,11 +5,7 @@ name: Publish Demo GIFs
 # paths-ignore prevents this from re-triggering on its own [skip ci] commit.
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - 'docs/demos/**'
-      - '**.gif'
+  workflow_dispatch:
 
 jobs:
   publish-demos:
