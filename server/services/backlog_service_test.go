@@ -581,7 +581,7 @@ func TestAttachSessionToItem_WritesContextFileWithPlanArtifactsAndPriorSessions(
 		Title:     "attach-target",
 		UUID:      attachUUID,
 		Path:      repoPath,
-		Status:    session.Running,
+		Status:    session.Active,
 		Program:   "claude",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),

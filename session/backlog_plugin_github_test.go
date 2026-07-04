@@ -157,8 +157,8 @@ func TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels(t *testing.
 	const prCount = 12
 	var inFlight, maxInFlight int32
 	withGitHubTestServer(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/repos/acme/widgets/pulls":
+		switch r.URL.Path {
+		case "/repos/acme/widgets/pulls":
 			var sb []byte
 			sb = append(sb, '[')
 			for i := 0; i < prCount; i++ {
