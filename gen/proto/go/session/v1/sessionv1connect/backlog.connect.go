@@ -96,6 +96,15 @@ const (
 	// BacklogServiceGetSyncHistoryProcedure is the fully-qualified name of the BacklogService's
 	// GetSyncHistory RPC.
 	BacklogServiceGetSyncHistoryProcedure = "/session.v1.BacklogService/GetSyncHistory"
+	// BacklogServiceImportGitHubIssueProcedure is the fully-qualified name of the BacklogService's
+	// ImportGitHubIssue RPC.
+	BacklogServiceImportGitHubIssueProcedure = "/session.v1.BacklogService/ImportGitHubIssue"
+	// BacklogServiceSearchGitHubReposProcedure is the fully-qualified name of the BacklogService's
+	// SearchGitHubRepos RPC.
+	BacklogServiceSearchGitHubReposProcedure = "/session.v1.BacklogService/SearchGitHubRepos"
+	// BacklogServiceListGitHubIssuesProcedure is the fully-qualified name of the BacklogService's
+	// ListGitHubIssues RPC.
+	BacklogServiceListGitHubIssuesProcedure = "/session.v1.BacklogService/ListGitHubIssues"
 )
 
 // BacklogServiceClient is a client for the session.v1.BacklogService service.
@@ -142,6 +151,12 @@ type BacklogServiceClient interface {
 	DeleteItemSource(context.Context, *connect.Request[v1.DeleteItemSourceRequest]) (*connect.Response[v1.DeleteItemSourceResponse], error)
 	// GetSyncHistory returns the sync event history for an item source.
 	GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error)
+	// ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
+	ImportGitHubIssue(context.Context, *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error)
+	// SearchGitHubRepos returns GitHub repos accessible to the authenticated user.
+	SearchGitHubRepos(context.Context, *connect.Request[v1.SearchGitHubReposRequest]) (*connect.Response[v1.SearchGitHubReposResponse], error)
+	// ListGitHubIssues returns issues for a specific GitHub repo.
+	ListGitHubIssues(context.Context, *connect.Request[v1.ListGitHubIssuesRequest]) (*connect.Response[v1.ListGitHubIssuesResponse], error)
 }
 
 // NewBacklogServiceClient constructs a client for the session.v1.BacklogService service. By
@@ -281,6 +296,24 @@ func NewBacklogServiceClient(httpClient connect.HTTPClient, baseURL string, opts
 			connect.WithSchema(backlogServiceMethods.ByName("GetSyncHistory")),
 			connect.WithClientOptions(opts...),
 		),
+		importGitHubIssue: connect.NewClient[v1.ImportGitHubIssueRequest, v1.ImportGitHubIssueResponse](
+			httpClient,
+			baseURL+BacklogServiceImportGitHubIssueProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("ImportGitHubIssue")),
+			connect.WithClientOptions(opts...),
+		),
+		searchGitHubRepos: connect.NewClient[v1.SearchGitHubReposRequest, v1.SearchGitHubReposResponse](
+			httpClient,
+			baseURL+BacklogServiceSearchGitHubReposProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("SearchGitHubRepos")),
+			connect.WithClientOptions(opts...),
+		),
+		listGitHubIssues: connect.NewClient[v1.ListGitHubIssuesRequest, v1.ListGitHubIssuesResponse](
+			httpClient,
+			baseURL+BacklogServiceListGitHubIssuesProcedure,
+			connect.WithSchema(backlogServiceMethods.ByName("ListGitHubIssues")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -307,6 +340,9 @@ type backlogServiceClient struct {
 	updateItemSource            *connect.Client[v1.UpdateItemSourceRequest, v1.UpdateItemSourceResponse]
 	deleteItemSource            *connect.Client[v1.DeleteItemSourceRequest, v1.DeleteItemSourceResponse]
 	getSyncHistory              *connect.Client[v1.GetSyncHistoryRequest, v1.GetSyncHistoryResponse]
+	importGitHubIssue           *connect.Client[v1.ImportGitHubIssueRequest, v1.ImportGitHubIssueResponse]
+	searchGitHubRepos           *connect.Client[v1.SearchGitHubReposRequest, v1.SearchGitHubReposResponse]
+	listGitHubIssues            *connect.Client[v1.ListGitHubIssuesRequest, v1.ListGitHubIssuesResponse]
 }
 
 // CreateBacklogItem calls session.v1.BacklogService.CreateBacklogItem.
@@ -414,6 +450,21 @@ func (c *backlogServiceClient) GetSyncHistory(ctx context.Context, req *connect.
 	return c.getSyncHistory.CallUnary(ctx, req)
 }
 
+// ImportGitHubIssue calls session.v1.BacklogService.ImportGitHubIssue.
+func (c *backlogServiceClient) ImportGitHubIssue(ctx context.Context, req *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error) {
+	return c.importGitHubIssue.CallUnary(ctx, req)
+}
+
+// SearchGitHubRepos calls session.v1.BacklogService.SearchGitHubRepos.
+func (c *backlogServiceClient) SearchGitHubRepos(ctx context.Context, req *connect.Request[v1.SearchGitHubReposRequest]) (*connect.Response[v1.SearchGitHubReposResponse], error) {
+	return c.searchGitHubRepos.CallUnary(ctx, req)
+}
+
+// ListGitHubIssues calls session.v1.BacklogService.ListGitHubIssues.
+func (c *backlogServiceClient) ListGitHubIssues(ctx context.Context, req *connect.Request[v1.ListGitHubIssuesRequest]) (*connect.Response[v1.ListGitHubIssuesResponse], error) {
+	return c.listGitHubIssues.CallUnary(ctx, req)
+}
+
 // BacklogServiceHandler is an implementation of the session.v1.BacklogService service.
 type BacklogServiceHandler interface {
 	// CreateBacklogItem adds a new item to the backlog.
@@ -458,6 +509,12 @@ type BacklogServiceHandler interface {
 	DeleteItemSource(context.Context, *connect.Request[v1.DeleteItemSourceRequest]) (*connect.Response[v1.DeleteItemSourceResponse], error)
 	// GetSyncHistory returns the sync event history for an item source.
 	GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error)
+	// ImportGitHubIssue creates a backlog item pre-populated from a GitHub issue.
+	ImportGitHubIssue(context.Context, *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error)
+	// SearchGitHubRepos returns GitHub repos accessible to the authenticated user.
+	SearchGitHubRepos(context.Context, *connect.Request[v1.SearchGitHubReposRequest]) (*connect.Response[v1.SearchGitHubReposResponse], error)
+	// ListGitHubIssues returns issues for a specific GitHub repo.
+	ListGitHubIssues(context.Context, *connect.Request[v1.ListGitHubIssuesRequest]) (*connect.Response[v1.ListGitHubIssuesResponse], error)
 }
 
 // NewBacklogServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -593,6 +650,24 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 		connect.WithSchema(backlogServiceMethods.ByName("GetSyncHistory")),
 		connect.WithHandlerOptions(opts...),
 	)
+	backlogServiceImportGitHubIssueHandler := connect.NewUnaryHandler(
+		BacklogServiceImportGitHubIssueProcedure,
+		svc.ImportGitHubIssue,
+		connect.WithSchema(backlogServiceMethods.ByName("ImportGitHubIssue")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceSearchGitHubReposHandler := connect.NewUnaryHandler(
+		BacklogServiceSearchGitHubReposProcedure,
+		svc.SearchGitHubRepos,
+		connect.WithSchema(backlogServiceMethods.ByName("SearchGitHubRepos")),
+		connect.WithHandlerOptions(opts...),
+	)
+	backlogServiceListGitHubIssuesHandler := connect.NewUnaryHandler(
+		BacklogServiceListGitHubIssuesProcedure,
+		svc.ListGitHubIssues,
+		connect.WithSchema(backlogServiceMethods.ByName("ListGitHubIssues")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/session.v1.BacklogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case BacklogServiceCreateBacklogItemProcedure:
@@ -637,6 +712,12 @@ func NewBacklogServiceHandler(svc BacklogServiceHandler, opts ...connect.Handler
 			backlogServiceDeleteItemSourceHandler.ServeHTTP(w, r)
 		case BacklogServiceGetSyncHistoryProcedure:
 			backlogServiceGetSyncHistoryHandler.ServeHTTP(w, r)
+		case BacklogServiceImportGitHubIssueProcedure:
+			backlogServiceImportGitHubIssueHandler.ServeHTTP(w, r)
+		case BacklogServiceSearchGitHubReposProcedure:
+			backlogServiceSearchGitHubReposHandler.ServeHTTP(w, r)
+		case BacklogServiceListGitHubIssuesProcedure:
+			backlogServiceListGitHubIssuesHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -728,4 +809,16 @@ func (UnimplementedBacklogServiceHandler) DeleteItemSource(context.Context, *con
 
 func (UnimplementedBacklogServiceHandler) GetSyncHistory(context.Context, *connect.Request[v1.GetSyncHistoryRequest]) (*connect.Response[v1.GetSyncHistoryResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.GetSyncHistory is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) ImportGitHubIssue(context.Context, *connect.Request[v1.ImportGitHubIssueRequest]) (*connect.Response[v1.ImportGitHubIssueResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ImportGitHubIssue is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) SearchGitHubRepos(context.Context, *connect.Request[v1.SearchGitHubReposRequest]) (*connect.Response[v1.SearchGitHubReposResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.SearchGitHubRepos is not implemented"))
+}
+
+func (UnimplementedBacklogServiceHandler) ListGitHubIssues(context.Context, *connect.Request[v1.ListGitHubIssuesRequest]) (*connect.Response[v1.ListGitHubIssuesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("session.v1.BacklogService.ListGitHubIssues is not implemented"))
 }

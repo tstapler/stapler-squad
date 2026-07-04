@@ -119,10 +119,16 @@ type Instance struct {
 	UpdatedAt time.Time
 	// AutoYes is true if the instance should automatically press enter when prompted.
 	AutoYes bool
-	// Prompt is the initial prompt to pass to the instance on startup
+	// Prompt is passed as a CLI argument to the program at process-spawn time (buildClaudeCommand),
+	// so it only takes effect on a truly fresh spawn (claudeSessionID == "", no --resume) or OneShot.
+	// Use for content that must exist before the process's first turn, e.g. backlog task context.
+	// See InitialPrompt for the tmux-typed alternative — the two are independent and can both be
+	// set on the same instance (e.g. Omnibar sends attachments via Prompt, typed text via InitialPrompt).
 	Prompt string
-	// InitialPrompt is the prompt injected into the tmux pane once the session reaches Ready state.
-	// Replaces the static driverInitialPrompt when non-empty.
+	// InitialPrompt, unlike Prompt, is typed into the tmux pane as simulated keystrokes once the
+	// session reaches Ready state (session_driver.go) — the only delivery path that works for
+	// resuming/attaching to an already-running pane, where a CLI arg can't be injected after the
+	// fact. Replaces the static driverInitialPrompt when non-empty.
 	InitialPrompt string
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
@@ -431,10 +437,13 @@ type InstanceOptions struct {
 	Program string
 	// If AutoYes is true, automatically accept prompts
 	AutoYes bool
-	// Prompt is the initial prompt to pass to the instance on startup
+	// Prompt is passed as a CLI argument at process-spawn time — only takes effect on a fresh
+	// spawn or OneShot. See InitialPrompt for the tmux-typed alternative; the two are independent
+	// and may both be set (see Instance.Prompt/Instance.InitialPrompt for the full explanation).
 	Prompt string
 	// InitialPrompt, when non-empty, is typed into the tmux pane once the session reaches Ready state,
-	// replacing the static "Please proceed..." fallback.
+	// replacing the static "Please proceed..." fallback. Use for resume/attach flows where a CLI
+	// arg can no longer be injected.
 	InitialPrompt string
 	// ExistingWorktree is an optional path to an existing worktree to reuse
 	ExistingWorktree string
@@ -504,31 +513,44 @@ type InstanceOptions struct {
 	CLIFlags string
 }
 
+// ResolveSessionPath expands a leading "~" to the current user's home directory
+// and converts the result to an absolute path — the same resolution NewInstance
+// applies to InstanceOptions.Path. Callers that need to act on a session's
+// worktree path *before* calling NewInstance (e.g. writing files into it ahead of
+// spawn) must resolve through this function first, or they risk operating on a
+// different path than the one the spawned Instance actually uses.
+func ResolveSessionPath(path string) (string, error) {
+	expandedPath := path
+	if strings.HasPrefix(expandedPath, "~/") {
+		usr, err := user.Current()
+		if err != nil {
+			return "", fmt.Errorf("failed to expand home directory in path '%s': %w", path, err)
+		}
+		expandedPath = filepath.Join(usr.HomeDir, expandedPath[2:])
+	} else if expandedPath == "~" {
+		usr, err := user.Current()
+		if err != nil {
+			return "", fmt.Errorf("failed to expand home directory in path '%s': %w", path, err)
+		}
+		expandedPath = usr.HomeDir
+	}
+
+	absPath, err := filepath.Abs(expandedPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path for '%s': %w", expandedPath, err)
+	}
+	return absPath, nil
+}
+
 func NewInstance(opts InstanceOptions) (*Instance, error) {
 	t := time.Now()
 
 	// DEFENSIVE: Expand tilde (~) in path before converting to absolute
 	// This prevents bugs where unexpanded tildes get concatenated with current directory
 	// Example: ~/foo becomes /current/dir/~/foo instead of /home/user/foo
-	expandedPath := opts.Path
-	if strings.HasPrefix(expandedPath, "~/") {
-		usr, err := user.Current()
-		if err != nil {
-			return nil, fmt.Errorf("failed to expand home directory in path '%s': %w", opts.Path, err)
-		}
-		expandedPath = filepath.Join(usr.HomeDir, expandedPath[2:])
-	} else if expandedPath == "~" {
-		usr, err := user.Current()
-		if err != nil {
-			return nil, fmt.Errorf("failed to expand home directory in path '%s': %w", opts.Path, err)
-		}
-		expandedPath = usr.HomeDir
-	}
-
-	// Convert to absolute path (after tilde expansion)
-	absPath, err := filepath.Abs(expandedPath)
+	absPath, err := ResolveSessionPath(opts.Path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path for '%s': %w", expandedPath, err)
+		return nil, err
 	}
 
 	// Default to directory session if not specified for backward compatibility

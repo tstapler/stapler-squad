@@ -8,9 +8,16 @@ import (
 	"net/http"
 	"strconv"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const githubPRsPerPage = 50
+
+// githubCILabelConcurrency bounds how many fetchCILabel calls run in parallel per Fetch,
+// so a large PR list doesn't blow the TriggerSync RPC timeout (each call is a serial
+// round-trip otherwise) while staying well under GitHub's secondary rate limits.
+const githubCILabelConcurrency = 5
 
 // githubPRPluginConfig holds the decoded config for the GitHub PRs plugin.
 type githubPRPluginConfig struct {
@@ -70,7 +77,7 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 		return nil, cursor, fmt.Errorf("github_prs: owner and repo are required in config")
 	}
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubPRsPerPage)
+	url := githubAPIURL(fmt.Sprintf("repos/%s/%s/pulls?state=open&per_page=%d", cfg.Owner, cfg.Repo, githubPRsPerPage))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -101,14 +108,27 @@ func (g *GitHubPRsPlugin) Fetch(ctx context.Context, config PluginConfig, cursor
 		return nil, cursor, fmt.Errorf("github_prs: decode response: %w", err)
 	}
 
+	// Fetch each PR's CI-check labels concurrently (bounded) — serially, this loop's
+	// one-round-trip-per-PR CI check can exceed the TriggerSync RPC timeout on repos
+	// with many open PRs. labelsByIndex preserves PR order regardless of completion order.
+	labelsByIndex := make([][]string, len(prs))
+	var eg errgroup.Group
+	eg.SetLimit(githubCILabelConcurrency)
+	for i, pr := range prs {
+		eg.Go(func() error {
+			labelsByIndex[i] = g.computeLabels(ctx, cfg, pr)
+			return nil
+		})
+	}
+	_ = eg.Wait() // computeLabels is best-effort and never returns an error
+
 	items := make([]ExternalItem, 0, len(prs))
-	for _, pr := range prs {
-		labels := g.computeLabels(ctx, cfg, pr)
+	for i, pr := range prs {
 		items = append(items, ExternalItem{
 			ExternalID:  strconv.Itoa(pr.Number),
 			Title:       pr.Title,
 			Description: pr.Body,
-			Labels:      labels,
+			Labels:      labelsByIndex[i],
 			Priority:    3,
 			URL:         pr.HTMLURL,
 		})
@@ -138,7 +158,7 @@ func (g *GitHubPRsPlugin) computeLabels(ctx context.Context, cfg githubPRPluginC
 
 // fetchCILabel calls the check runs API and returns "pr:ci-failing" when any check has failed.
 func (g *GitHubPRsPlugin) fetchCILabel(ctx context.Context, cfg githubPRPluginConfig, sha string) string {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/commits/%s/check-runs?per_page=50", cfg.Owner, cfg.Repo, sha)
+	url := githubAPIURL(fmt.Sprintf("repos/%s/%s/commits/%s/check-runs?per_page=50", cfg.Owner, cfg.Repo, sha))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ""

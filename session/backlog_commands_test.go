@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tstapler/stapler-squad/session/ent"
@@ -107,7 +108,7 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 		Priority:           2,
 	}
 
-	if err := WriteBacklogContextFile(item, worktree); err != nil {
+	if err := WriteBacklogContextFile(item, nil, worktree); err != nil {
 		t.Fatalf("WriteBacklogContextFile returned error: %v", err)
 	}
 
@@ -130,6 +131,81 @@ func TestWriteBacklogContextFile_WritesFileWithExpectedContent(t *testing.T) {
 	}
 	if !strings.Contains(content, "MCP tools are unavailable") {
 		t.Errorf("expected fallback text in context file\nContent:\n%s", content)
+	}
+}
+
+// TestWriteBacklogContextFile_IncludesPlanArtifactsPath verifies that when the item
+// has an approved plan, the on-disk fallback file the agent re-reads after context
+// compaction includes the same "Your plan is at .../plan.md" reminder the live CLI
+// prompt gets — this is the exact consistency this PR's fix moved into
+// BuildSessionInitialPrompt so both channels render identically by construction.
+func TestWriteBacklogContextFile_IncludesPlanArtifactsPath(t *testing.T) {
+	worktree := t.TempDir()
+	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
+	item := &ent.BacklogItem{
+		ID:                 uuid.New(),
+		Title:              "My Backlog Item",
+		Description:        "A test description",
+		AcceptanceCriteria: ac,
+		Status:             "ready",
+		Priority:           2,
+		PlanArtifactsPath:  "/tmp/plans/my-item",
+	}
+
+	if err := WriteBacklogContextFile(item, nil, worktree); err != nil {
+		t.Fatalf("WriteBacklogContextFile returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(worktree, ".backlog-context.md"))
+	if err != nil {
+		t.Fatalf("failed to read .backlog-context.md: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "/tmp/plans/my-item/plan.md") {
+		t.Errorf("expected plan-artifacts reminder in context file\nContent:\n%s", content)
+	}
+}
+
+// TestWriteBacklogContextFile_IncludesPriorSessions verifies a real, non-nil
+// priorSessions slice is actually threaded through to the rendered content — the
+// prior signature-only update (always passing nil) never exercised this contract.
+func TestWriteBacklogContextFile_IncludesPriorSessions(t *testing.T) {
+	worktree := t.TempDir()
+	ac := `[{"index":0,"text":"Implement handler","status":"pending"}]`
+	item := &ent.BacklogItem{
+		ID:                 uuid.New(),
+		Title:              "My Backlog Item",
+		Description:        "A test description",
+		AcceptanceCriteria: ac,
+		Status:             "ready",
+		Priority:           2,
+	}
+	ended := time.Now().Add(-time.Hour)
+	priorSessions := []*ent.ItemSession{
+		{
+			SessionRole:           "work",
+			EndedAt:               &ended,
+			CommitCountSinceSpawn: 3,
+			LastCommitMessage:     "fix the thing",
+		},
+	}
+
+	if err := WriteBacklogContextFile(item, priorSessions, worktree); err != nil {
+		t.Fatalf("WriteBacklogContextFile returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(worktree, ".backlog-context.md"))
+	if err != nil {
+		t.Fatalf("failed to read .backlog-context.md: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "Prior Attempts") {
+		t.Errorf("expected 'Prior Attempts' section when priorSessions is non-nil\nContent:\n%s", content)
+	}
+	if !strings.Contains(content, "fix the thing") {
+		t.Errorf("expected prior session's last commit message in context file\nContent:\n%s", content)
 	}
 }
 

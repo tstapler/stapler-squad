@@ -116,6 +116,12 @@ func BuildSessionInitialPrompt(item *ent.BacklogItem, priorSessions []*ent.ItemS
 	}
 
 	sb.WriteString("--- END BACKLOG ITEM DATA ---\n\n")
+
+	if item.PlanArtifactsPath != "" {
+		fmt.Fprintf(&sb, "Your plan is at `%s/plan.md`. Read plan.md and validation.md before writing code.\n\n",
+			item.PlanArtifactsPath)
+	}
+
 	sb.WriteString(taskProtocolBlock)
 	sb.WriteString("\n")
 

@@ -198,7 +198,9 @@ export type CreateSessionRequest = Message<"session.v1.CreateSessionRequest"> & 
   category: string;
 
   /**
-   * Optional: Initial prompt to pass on startup.
+   * Optional: prompt passed as a CLI argument at process-spawn time (fresh spawns / one-shot
+   * only). See initial_prompt for the tmux-typed alternative used for resume/attach flows —
+   * the two are independent and may both be set on the same request.
    *
    * @generated from field: string prompt = 7;
    */
@@ -249,7 +251,9 @@ export type CreateSessionRequest = Message<"session.v1.CreateSessionRequest"> & 
   sessionType: SessionType;
 
   /**
-   * Optional: Initial prompt to inject via CLAUDE.md (no size limit; shell-safe).
+   * Optional: prompt typed into the tmux pane as simulated keystrokes once the session reaches
+   * Ready state (no size limit; shell-safe) — used for resume/attach flows where a CLI arg can
+   * no longer be injected. See prompt (field 7) for the CLI-arg alternative.
    *
    * @generated from field: string initial_prompt = 15;
    */

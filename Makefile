@@ -128,7 +128,7 @@ e2e-lighthouse: ## Run Lighthouse CI performance audit
 # Build targets
 build: stapler-squad ## Build the Go application
 
-stapler-squad: ensure-tools proto-gen server/web/dist lint $(GO_FILES) ## Build the Go binary
+stapler-squad: ensure-tools proto-gen server/web/dist $(GO_FILES) ## Build the Go binary
 	@echo "Building Go application..."
 ifeq ($(UNAME_S),Darwin)
 	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/Info.plist" \
@@ -557,7 +557,7 @@ vet-rpc-markers: registry-generate-backend ## Check that all RPC handlers have a
 		echo "✅ All RPC handlers have +api: markers."; \
 	fi
 
-lint: ensure-tools proto-gen server/web/dist lint-custom ## Run golangci-lint with comprehensive checks
+lint: ensure-tools proto-gen lint-custom ## Run golangci-lint with comprehensive checks
 	@GOBIN=$$(go env GOBIN); \
 	if [ -z "$$GOBIN" ]; then GOBIN=$$(go env GOPATH)/bin; fi; \
 	if ! which golangci-lint >/dev/null 2>&1; then \

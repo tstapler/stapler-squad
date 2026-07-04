@@ -93,8 +93,10 @@ func CleanupSlashCommands(worktreePath string) error {
 
 // WriteBacklogContextFile builds the full context prompt and writes it atomically
 // to .backlog-context.md in the worktree root. Appends a fallback instructions block.
-func WriteBacklogContextFile(item *ent.BacklogItem, worktreePath string) error {
-	prompt := BuildSessionInitialPrompt(item, nil)
+// priorSessions must match what was passed to the live CLI prompt (BuildTokenBudgetedPrompt)
+// so the on-disk fallback the agent re-reads after context compaction doesn't lose history.
+func WriteBacklogContextFile(item *ent.BacklogItem, priorSessions []*ent.ItemSession, worktreePath string) error {
+	prompt := BuildSessionInitialPrompt(item, priorSessions)
 
 	var sb strings.Builder
 	sb.WriteString(prompt)

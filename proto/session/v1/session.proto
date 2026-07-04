@@ -488,7 +488,9 @@ message CreateSessionRequest {
   // Optional: Category for organization.
   string category = 6;
 
-  // Optional: Initial prompt to pass on startup.
+  // Optional: prompt passed as a CLI argument at process-spawn time (fresh spawns / one-shot
+  // only). See initial_prompt for the tmux-typed alternative used for resume/attach flows —
+  // the two are independent and may both be set on the same request.
   string prompt = 7;
 
   // Optional: Auto-approve prompts without user interaction.
@@ -516,7 +518,9 @@ message CreateSessionRequest {
   reserved 14;
   reserved "one_off";
 
-  // Optional: Initial prompt to inject via CLAUDE.md (no size limit; shell-safe).
+  // Optional: prompt typed into the tmux pane as simulated keystrokes once the session reaches
+  // Ready state (no size limit; shell-safe) — used for resume/attach flows where a CLI arg can
+  // no longer be injected. See prompt (field 7) for the CLI-arg alternative.
   string initial_prompt = 15;
 
   // Optional: Run claude in one-shot mode (-p flag); session exits after task completes.

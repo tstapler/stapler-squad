@@ -195,6 +195,91 @@ dropped during implementation with no ADR or adversarial-review flag ever raised
 but it means the plan docs overstate what was actually delivered — don't trust `plan.md`
 "done" checkmarks without cross-checking code.
 
+## 10. ~~Architecture-review follow-ups (post-#3 deep pass)~~ — FIXED
+
+After #3 (GitHub sync) and #1 (execution driver) shipped/closed, a dedicated two-agent
+architecture review (not a diff review — a deliberate second look at design soundness) was run
+against both areas post-merge. Verdict on both: **sound design, no correctness bugs, several
+worth-fixing MAJOR items.** All 7 were fixed in one pass (below), verified with `go build`/`go
+vet`/`go test -race ./session/... ./server/...` (all green) and `npx tsc --noEmit` + full jest
+suite on the frontend (green aside from the pre-existing, unrelated `SessionCard`
+`AnalyticsContextProvider` failures already confirmed present on clean `main`).
+
+**Execution-phase prompt driver** (re-examining gap #1's territory):
+- `[MAJOR, docs]` ~~`Instance.Prompt` (CLI-arg delivery, fresh spawns only) and
+  `Instance.InitialPrompt` (tmux-typed delivery, for resume/attach) have near-identical
+  one-line doc comments with no cross-reference, and the proto comment doesn't match the actual
+  tmux-typed implementation.~~ **Fixed**: `session/instance.go` (`Instance` and
+  `InstanceOptions` structs) now has a linked, mechanism-explaining doc pair for both fields;
+  `proto/session/v1/session.proto` fields 7 (`prompt`) and 15 (`initial_prompt`) updated to
+  cross-reference each other and describe the real tmux-typed mechanism instead of the stale
+  "inject via CLAUDE.md" text.
+- `[MAJOR, ordering]` ~~`WriteSlashCommands`/`WriteBacklogContextFile` ran *after*
+  `CreateDirectorySession` had already spawned tmux and started `claude`, with no ordering
+  guarantee.~~ **Fixed**: `SpawnSessionFromItem` (`backlog_service.go`) now calls a new
+  `session.EnsureDirectorySessionPath` helper (extracted from the `SessionTypeDirectory`
+  git-init branch in `instance_worktree.go`, so the directory-creation semantics stay identical)
+  and writes both files *before* calling `CreateDirectorySession`, eliminating the race
+  entirely rather than relying on process-startup latency.
+- `[MAJOR, consistency]` ~~`WriteBacklogContextFile` always dropped prior-session history and
+  the plan-artifacts line the live CLI prompt includes.~~ **Fixed**: `WriteBacklogContextFile`
+  now takes `priorSessions` and threads it through; the plan-artifacts append moved into
+  `BuildSessionInitialPrompt` itself (`session/backlog_context.go`) so both the CLI prompt and
+  the on-disk fallback render identically by construction. `AttachSessionToItem` updated to load
+  and pass prior sessions too, for the same consistency.
+
+**Full backlog sync feature, end-to-end:**
+- `[MAJOR]` ~~Feature-flag divergence between disk config and the in-memory
+  `FeatureController`: `Enable`/`Disable` failures were only logged, never retried, so disk and
+  in-memory state could diverge permanently.~~ **Fixed**: `UpdateFeatureFlag`
+  (`feature_flag_service.go`) now rolls back the just-persisted disk flag if the controller
+  toggle fails, and returns `CodeInternal` to the caller instead of silently reporting success.
+  The startup path (`dependencies.go`) no longer unconditionally logs "backlog feature enabled"
+  regardless of whether `Enable` actually succeeded. New regression test
+  `TestUpdateFeatureFlag_RollsBackDiskFlagWhenControllerFails`.
+- `[MAJOR]` ~~`GitHubPRsPlugin.Fetch` called `fetchCILabel` per PR serially, risking the
+  2-minute `TriggerSync` budget on repos with many open PRs.~~ **Fixed**:
+  `backlog_plugin_github_prs.go` now fetches CI labels via a bounded `errgroup` (concurrency 5),
+  preserving PR order regardless of completion order. New regression test
+  `TestGitHubPRsPlugin_Fetch_ConcurrentCIFetchPreservesPerPRLabels`, verified under `-race`.
+- `[MAJOR]` ~~Backend plugin architecture was pluggable but `BacklogSourcesSettings.tsx`
+  hardcoded an owner/repo form regardless of `pluginId`.~~ **Fixed**: replaced the hardcoded
+  fields with a `PLUGIN_SCHEMAS` array (per-plugin field list + token requirement); the form now
+  renders fields generically from the schema and resets them on plugin switch. New test
+  `"clears schema-driven field values when switching plugin type"`.
+- `[MAJOR]` ~~`GetSyncHistory` truncated at 200 with no pagination and no truncation signal.~~
+  **Fixed**: `ListSourceSyncEvents` now over-fetches by one row to detect truncation and returns
+  a `truncated` bool (new proto field `GetSyncHistoryResponse.truncated`); the settings UI shows
+  an inline notice when history is capped. New tests
+  `TestListSourceSyncEvents_ReportsTruncatedWhenOverCap`,
+  `TestListSourceSyncEvents_NotTruncatedAtOrUnderCap` (guards the exactly-at-cap edge case),
+  `TestGetSyncHistory_SetsTruncatedWhenHistoryExceedsCap`, and a frontend test for the notice.
+  Full cursor-based pagination was not added — out of scope for this pass; flag again if history
+  depth becomes a real problem in practice.
+
+**Confirmed sound, no action needed** (reviewed and explicitly ruled out, don't re-litigate
+without new evidence): transaction/crash-recovery story for the sync loop (safe by design —
+cursor + per-source external-ID dedupe means a mid-loop crash just re-fetches and skips
+already-created items on the next run); `TriggerSync`'s timeout propagation (fully synchronous,
+`syncCtx` threaded through `Fetch` and every ent write — a timeout cancels cleanly, no orphaned
+background goroutine); per-process lock scope (`sync.Map` in `session/backlog_sync.go:24` only
+guards in-process races — a real limitation, but accepted given this app's
+single-instance-per-user deployment model).
+
+## 11. Missing composite index on `SourceSyncEvent` (pre-existing, not urgent)
+
+Found while verifying #10's fix via PR #142's code review. `session/ent/schema/source_sync_event.go`'s
+`Indexes()` only declares a single-column FK index (`index.Edges("source")`) — there's no
+composite `(source, started_at)` index. `ListSourceSyncEvents` (`ent_repository_backlog.go`)
+does `Where(HasSourceWith(...)).Order(Desc(started_at)).Limit(cap+1)`; without a composite
+index, Postgres/SQLite can't satisfy the `ORDER BY` from the index alone and must sort all
+matching rows for that source before applying the limit. Pre-existing (the sort-then-limit cost
+already existed before PR #142's truncation-detection change; the `+1` on the limit doesn't
+meaningfully worsen it), and bounded by low realistic row counts today given
+`maxSourceSyncEventsHistory = 200` and typical sync cadence. Not a blocker for any shipped PR —
+worth a composite-index migration if a source's sync-event history ever grows into the
+thousands.
+
 ---
 
 ## Suggested triage order if/when this becomes a fix pass
@@ -222,3 +307,7 @@ but it means the plan docs overstate what was actually delivered — don't trust
    that actually exercises a live tmux session + live `claude` process for the *execution* half
    (like the existing `harness`-tagged test, but extended past triage) — the one class of bug
    this audit's tests still structurally cannot see.
+8. ~~Fix the 7 architecture-review follow-ups (#10)~~ — **done**: doc cross-references, spawn
+   file-write ordering, prior-session/plan-artifacts consistency, feature-flag rollback on
+   controller failure, concurrent CI-label fetch, schema-driven source form, and a
+   `GetSyncHistory` truncation indicator. See #10 above for the full per-item writeup.

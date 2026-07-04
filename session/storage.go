@@ -733,6 +733,26 @@ func (s *Storage) DeleteItemSource(ctx context.Context, id string) error {
 	return s.repo.DeleteItemSource(ctx, id)
 }
 
+// ListSourceSyncEvents returns sync history events for an item source, most
+// recent first. Direct EntRepository delegation, like GetItemSession below.
+func (s *Storage) ListSourceSyncEvents(ctx context.Context, sourceID string) (events []*ent.SourceSyncEvent, truncated bool, err error) {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return nil, false, ErrNotFound
+	}
+	return er.ListSourceSyncEvents(ctx, sourceID)
+}
+
+// CreateSourceSyncEvent records a sync run for an item source. Direct EntRepository
+// delegation, like ListSourceSyncEvents above.
+func (s *Storage) CreateSourceSyncEvent(ctx context.Context, sourceID, cursorAfter string, created, updated, skipped, errored int, errMsg string, startedAt, finishedAt time.Time) error {
+	er, ok := s.repo.(*EntRepository)
+	if !ok {
+		return ErrNotFound
+	}
+	return er.CreateSourceSyncEvent(ctx, sourceID, cursorAfter, created, updated, skipped, errored, errMsg, startedAt, finishedAt)
+}
+
 // --- ItemSession (direct EntRepository delegation) ---
 
 // GetItemSession looks up an ItemSession by entity UUID (loads BacklogItem edge).

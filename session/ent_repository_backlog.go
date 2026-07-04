@@ -13,6 +13,7 @@ import (
 	"github.com/tstapler/stapler-squad/session/ent/itemsession"
 	"github.com/tstapler/stapler-squad/session/ent/itemsource"
 	"github.com/tstapler/stapler-squad/session/ent/reviewverdict"
+	"github.com/tstapler/stapler-squad/session/ent/sourcesyncevent"
 )
 
 // --- converters ---
@@ -458,10 +459,17 @@ func (r *EntRepository) GetItemSourceByID(ctx context.Context, id string) (*ent.
 	return src, nil
 }
 
-// GetBacklogItemByExternalID retrieves a BacklogItem by its external_id, or nil if not found.
-func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, externalID string) (*ent.BacklogItem, error) {
+// GetBacklogItemByExternalID retrieves a BacklogItem by its external_id, scoped
+// to sourceID. External IDs (e.g. GitHub issue/PR numbers) are only unique
+// within their source, not globally — two different repos can both have an
+// issue #1, so this must never match across sources.
+func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, sourceID, externalID string) (*ent.BacklogItem, error) {
+	parsedSourceID, err := uuid.Parse(sourceID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: invalid source id %q: %v", ErrNotFound, sourceID, err)
+	}
 	item, err := r.client.BacklogItem.Query().
-		Where(backlogitem.ExternalID(externalID)).
+		Where(backlogitem.ExternalID(externalID), backlogitem.HasSourceWith(itemsource.ID(parsedSourceID))).
 		Only(ctx)
 	if err != nil {
 		if ent.IsNotFound(err) {
@@ -472,25 +480,40 @@ func (r *EntRepository) GetBacklogItemByExternalID(ctx context.Context, external
 	return item, nil
 }
 
-// UpdateItemSourceSync updates the sync_cursor and last_synced_at on an ItemSource.
-func (r *EntRepository) UpdateItemSourceSync(ctx context.Context, id string, cursor string, syncedAt time.Time) error {
-	parsedID, err := uuid.Parse(id)
+// maxSourceSyncEventsHistory caps how many sync history rows a single
+// GetSyncHistory call returns, so a long-lived, frequently-synced source
+// doesn't grow into an unbounded response.
+const maxSourceSyncEventsHistory = 200
+
+// ListSourceSyncEvents returns sync history events for an item source, most recent
+// first, capped at maxSourceSyncEventsHistory rows. truncated is true when older
+// events exist beyond the cap — callers should surface this to avoid silently
+// hiding history for sources with long or frequent sync runs.
+func (r *EntRepository) ListSourceSyncEvents(ctx context.Context, sourceID string) (events []*ent.SourceSyncEvent, truncated bool, err error) {
+	parsedID, err := uuid.Parse(sourceID)
 	if err != nil {
-		return fmt.Errorf("invalid id %q: %w", id, err)
+		return nil, false, fmt.Errorf("invalid source id %q: %w", sourceID, err)
 	}
-	u := r.client.ItemSource.UpdateOneID(parsedID).SetLastSyncedAt(syncedAt)
-	if cursor != "" {
-		u.SetSyncCursor(cursor)
-	}
-	_, err = u.Save(ctx)
+	// Fetch one extra row to distinguish "exactly at the cap" from "more exist beyond it".
+	events, err = r.client.SourceSyncEvent.Query().
+		Where(sourcesyncevent.HasSourceWith(itemsource.ID(parsedID))).
+		Order(ent.Desc(sourcesyncevent.FieldStartedAt)).
+		Limit(maxSourceSyncEventsHistory + 1).
+		All(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to update sync state for item source %s: %w", id, err)
+		return nil, false, fmt.Errorf("failed to list sync events for source %s: %w", sourceID, err)
 	}
-	return nil
+	if len(events) > maxSourceSyncEventsHistory {
+		return events[:maxSourceSyncEventsHistory], true, nil
+	}
+	return events, false, nil
 }
 
-// CreateSourceSyncEvent records a completed sync run for an ItemSource.
-func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID string, cursorAfter string, created, updated, skipped int, finishedAt time.Time) error {
+// CreateSourceSyncEvent records a completed (or failed) sync run for an
+// ItemSource. errMsg should be non-empty only when the sync run failed
+// outright (e.g. the plugin's Fetch call errored); errored counts per-item
+// failures within an otherwise-successful fetch.
+func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID string, cursorAfter string, created, updated, skipped, errored int, errMsg string, startedAt, finishedAt time.Time) error {
 	parsedID, err := uuid.Parse(sourceID)
 	if err != nil {
 		return fmt.Errorf("invalid source id %q: %w", sourceID, err)
@@ -510,14 +533,68 @@ func (r *EntRepository) CreateSourceSyncEvent(ctx context.Context, sourceID stri
 		SetItemsCreated(created).
 		SetItemsUpdated(updated).
 		SetItemsSkipped(skipped).
+		SetItemsErrored(errored).
+		SetStartedAt(startedAt).
 		SetFinishedAt(finishedAt).
 		SetSourceID(parsedID)
+	if errMsg != "" {
+		c.SetErrorMessage(errMsg)
+	}
 	if cursorAfter != "" {
 		c.SetCursorAfter(cursorAfter)
 	}
 	_, err = c.Save(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to create source sync event for source %s: %w", sourceID, err)
+	}
+	return nil
+}
+
+// FinishSourceSync atomically advances an ItemSource's sync cursor/last_synced_at
+// and records the SourceSyncEvent for a successful sync run. Wrapping both
+// writes in one transaction prevents a crash between them from leaving the
+// cursor advanced with no corresponding history row — which would silently
+// hide the fact that a batch of items was processed (or dropped) in that run.
+func (r *EntRepository) FinishSourceSync(ctx context.Context, sourceID string, cursorAfter string, created, updated, skipped, errored int, startedAt, finishedAt time.Time) error {
+	parsedID, err := uuid.Parse(sourceID)
+	if err != nil {
+		return fmt.Errorf("invalid source id %q: %w", sourceID, err)
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	u := tx.ItemSource.UpdateOneID(parsedID).SetLastSyncedAt(finishedAt)
+	if cursorAfter != "" {
+		u.SetSyncCursor(cursorAfter)
+	}
+	if _, err := u.Save(ctx); err != nil {
+		if ent.IsNotFound(err) {
+			return fmt.Errorf("%w: item source %s", ErrNotFound, sourceID)
+		}
+		return fmt.Errorf("failed to update sync state for item source %s: %w", sourceID, err)
+	}
+
+	c := tx.SourceSyncEvent.Create().
+		SetItemsCreated(created).
+		SetItemsUpdated(updated).
+		SetItemsSkipped(skipped).
+		SetItemsErrored(errored).
+		SetStartedAt(startedAt).
+		SetFinishedAt(finishedAt).
+		SetSourceID(parsedID)
+	if cursorAfter != "" {
+		c.SetCursorAfter(cursorAfter)
+	}
+	if _, err := c.Save(ctx); err != nil {
+		return fmt.Errorf("failed to create source sync event for source %s: %w", sourceID, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit sync finish transaction: %w", err)
 	}
 	return nil
 }

@@ -320,6 +320,9 @@ message GetSyncHistoryRequest {
 
 message GetSyncHistoryResponse {
   repeated SourceSyncEvent events = 1;
+  // True when the history was capped (see maxSourceSyncEventsHistory server-side) and older
+  // events beyond this response exist but are not returned — no pagination API exists yet.
+  bool truncated = 2;
 }
 
 // BacklogService manages backlog items and their lifecycle through AI-assisted

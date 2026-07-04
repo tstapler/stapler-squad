@@ -801,9 +801,10 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	backlogCtrl := session.NewBacklogController(backlogLifecycleListener, storage, syncRegistry, keyFunc)
 	if cfg.GetFeatureFlag("backlog") {
 		if err := backlogCtrl.Enable(context.Background()); err != nil {
-			log.Warn("failed to enable backlog feature on startup", "err", err)
+			log.Error("failed to enable backlog feature on startup — disk config says enabled but the runtime controller is not; TriggerSync will reject calls until this is retried", "err", err)
+		} else {
+			log.Info("backlog feature enabled")
 		}
-		log.Info("backlog feature enabled")
 	} else {
 		log.Info("backlog feature disabled (toggle via Settings → Features)")
 	}
@@ -814,6 +815,13 @@ func BuildRuntimeDeps(_ tmux.TmuxServerReady, svc *ServiceDeps, cfg *config.Conf
 	if headlessPool != nil {
 		backlogSvc.SetHeadlessPool(headlessPool)
 	}
+	// Reuse the same registry/keyFunc backlogCtrl's periodic SyncLoop uses, so a
+	// manual TriggerSync call decrypts tokens and dispatches to plugins identically.
+	backlogSvc.SetPluginRegistry(syncRegistry)
+	backlogSvc.SetSyncKeyFunc(keyFunc)
+	// Refuse manual syncs while the backlog feature is toggled off, matching
+	// the periodic SyncLoop's behavior.
+	backlogSvc.SetSyncFeatureEnabledCheck(backlogCtrl.IsEnabled)
 	sessionService.SetBacklogLifecycleListener(backlogLifecycleListener)
 	sessionService.SetFeatureController("backlog", backlogCtrl)
 
