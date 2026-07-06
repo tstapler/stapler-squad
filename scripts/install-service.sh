@@ -31,6 +31,28 @@ log_success() { printf "${GREEN}✓${NC} %s\n" "$1"; }
 log_warning() { printf "${YELLOW}!${NC} %s\n" "$1"; }
 log_error()   { printf "${RED}✗${NC} %s\n" "$1" >&2; }
 
+# ── Log Rotation ──────────────────────────────────────────────────────────────
+# launchd/systemd just append() to StandardOutPath/StandardError forever — neither
+# rotates it. A crash-restart loop (e.g. ThrottleInterval-bounded respawns) can grow
+# service.log to millions of lines in minutes. Rotate on every install/restart so a
+# bad run doesn't silently fill the disk between installs.
+# Threshold: 20 MiB.
+LOG_ROTATE_MAX_BYTES=20971520
+
+rotate_log_if_large() {
+    log_file="$1"
+    [ -f "$log_file" ] || return 0
+
+    size=$(wc -c < "$log_file" 2>/dev/null | tr -d ' ')
+    [ -n "$size" ] || return 0
+
+    if [ "$size" -gt "$LOG_ROTATE_MAX_BYTES" ]; then
+        mv -f "$log_file" "$log_file.old"
+        : > "$log_file"
+        log_info "Rotated oversized log ($((size / 1048576)) MiB): $log_file -> $log_file.old"
+    fi
+}
+
 # ── OS Detection ──────────────────────────────────────────────────────────────
 detect_os() {
     case "$(uname -s)" in
@@ -91,6 +113,7 @@ install_linux() {
     log_info "Creating systemd user service..."
     mkdir -p "$service_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
 
     # Build a PATH that preserves the current shell's PATH first (so custom
     # tools, nvm/asdf shims, etc. resolve identically to an interactive shell)
@@ -214,6 +237,7 @@ install_macos() {
     log_info "Creating macOS LaunchAgent..."
     mkdir -p "$plist_dir"
     mkdir -p "$log_dir"
+    rotate_log_if_large "$log_dir/service.log"
 
     # Build a PATH that preserves the user's shell PATH first (so custom tools,
     # go/bin, nvm, rbenv, etc. take precedence), then appends both Homebrew
