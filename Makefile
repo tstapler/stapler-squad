@@ -131,7 +131,7 @@ build: stapler-squad ## Build the Go application
 stapler-squad: ensure-tools proto-gen server/web/dist $(GO_FILES) ## Build the Go binary
 	@echo "Building Go application..."
 ifeq ($(UNAME_S),Darwin)
-	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/Info.plist" \
+	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		go build -ldflags "$(LDFLAGS)" -o stapler-squad .
 	@# Verify Info.plist was actually embedded (catches silent CGO_ENABLED=0 failures)
 	@otool -s __TEXT __info_plist "$(CURDIR)/stapler-squad" | grep -q "Contents of" || \
@@ -268,7 +268,7 @@ build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build 
 
 build-embedded: build-tmux-embed ## Build stapler-squad with tmux bundled inside the binary
 ifeq ($(UNAME_S),Darwin)
-	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/Info.plist" \
+	CGO_LDFLAGS="-sectcreate __TEXT __info_plist $(CURDIR)/macos/Info.plist" \
 		go build -tags embed_tmux -ldflags "$(LDFLAGS)" -o stapler-squad .
 	@otool -s __TEXT __info_plist "$(CURDIR)/stapler-squad" | grep -q "Contents of" || \
 		(echo "ERROR: Info.plist was not embedded in embedded build." && exit 1)
