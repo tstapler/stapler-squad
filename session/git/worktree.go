@@ -7,6 +7,7 @@ import (
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
+	"golang.org/x/sync/singleflight"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,6 +45,10 @@ type GitWorktree struct {
 	isDirtyCacheMu   sync.RWMutex
 	isDirtyCache     bool
 	isDirtyCacheTime time.Time
+
+	// isDirtySF coalesces concurrent dirty-checks on the same worktree so only
+	// one in-process status check runs at a time.
+	isDirtySF singleflight.Group //nolint:exhaustruct
 }
 
 // NewGitWorktreeFromCommitSHA creates a new GitWorktree that will branch from the given

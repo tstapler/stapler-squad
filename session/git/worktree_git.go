@@ -6,7 +6,6 @@ import (
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"os/exec"
-	"strings"
 	"time"
 )
 
@@ -163,13 +162,22 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 	}
 	g.isDirtyCacheMu.RUnlock()
 
-	// Slow path: run the subprocess outside any lock so concurrent readers are not
-	// blocked for the full git-status wall time (~50–200 ms per worktree).
-	output, err := g.runGitCommand(g.worktreePath, "status", "--porcelain")
-	if err != nil {
-		return false, fmt.Errorf("failed to check worktree status: %w", err)
+	// Slow path: run git status --porcelain via subprocess, wrapped in singleflight
+	// so concurrent callers coalesce onto a single status check rather than each
+	// spawning their own git process.
+	type dirtyResult struct {
+		dirty bool
+		err   error
 	}
-	dirty := len(output) > 0
+	v, _, _ := g.isDirtySF.Do(g.worktreePath, func() (interface{}, error) {
+		out, subErr := g.runGitCommand(g.worktreePath, "status", "--porcelain")
+		return dirtyResult{len(out) > 0, subErr}, nil
+	})
+	res := v.(dirtyResult)
+	if res.err != nil {
+		return false, fmt.Errorf("failed to check worktree status: %w", res.err)
+	}
+	dirty := res.dirty
 
 	// Write lock only to store the result.  Return our own observation (`dirty`),
 	// not the cache slot: re-reading the slot after a lost write race could return
@@ -183,13 +191,14 @@ func (g *GitWorktree) IsDirtyWithHint(claudeActive bool) (bool, error) {
 	return dirty, nil
 }
 
-// IsBranchCheckedOut checks if the instance branch is currently checked out
+// IsBranchCheckedOut checks if the instance branch is currently checked out.
+// Uses go-git to read HEAD directly (no subprocess).
 func (g *GitWorktree) IsBranchCheckedOut() (bool, error) {
-	output, err := g.runGitCommand(g.repoPath, "branch", "--show-current")
+	current, err := getCurrentBranchName(g.repoPath)
 	if err != nil {
 		return false, fmt.Errorf("failed to get current branch: %w", err)
 	}
-	return strings.TrimSpace(string(output)) == g.branchName, nil
+	return current == g.branchName, nil
 }
 
 // OpenBranchURL opens the branch URL in the default browser

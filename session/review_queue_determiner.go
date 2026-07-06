@@ -283,9 +283,6 @@ func (d *DefaultStatusDeterminer) Determine(
 					inst.Title, reason.String())
 			}
 		}
-	} else if log.IsDebugEnabled() {
-		log.DebugLog.Printf("[ReviewQueue] Session '%s': NOT STALE - %s since last meaningful output (threshold: %s)",
-			inst.Title, detection.FormatDuration(timeSinceOutput), detection.FormatDuration(d.config.StalenessThreshold))
 	}
 
 	action := DetectionActionSkip
