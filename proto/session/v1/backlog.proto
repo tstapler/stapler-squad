@@ -438,6 +438,9 @@ message GitHubIssueEntry {
   string url = 4;
   repeated string labels = 5;
   string body = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  bool is_pr = 9;
 }
 
 message SearchGitHubReposRequest {

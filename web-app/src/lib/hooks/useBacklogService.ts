@@ -292,6 +292,9 @@ export interface GitHubIssue {
   state: string;
   url: string;
   labels: string[];
+  createdAt?: string;
+  updatedAt?: string;
+  isPR: boolean;
 }
 
 export class GitHubAuthError extends Error {
@@ -645,6 +648,9 @@ export function useBacklogService(): UseBacklogServiceReturn {
           state: i.state,
           url: i.url,
           labels: i.labels,
+          createdAt: i.createdAt ? new Date(Number(i.createdAt.seconds) * 1000).toISOString() : undefined,
+          updatedAt: i.updatedAt ? new Date(Number(i.updatedAt.seconds) * 1000).toISOString() : undefined,
+          isPR: i.isPr ?? false,
         }));
       } catch (err) {
         if (err instanceof Error && err.message.toLowerCase().includes("token")) {

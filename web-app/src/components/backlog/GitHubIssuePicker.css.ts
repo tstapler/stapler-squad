@@ -204,3 +204,67 @@ export const loadingText = style({
   fontSize: vars.fontSize.sm,
   fontStyle: "italic",
 });
+
+export const listItemSelected = style({
+  background: `${vars.color.hoverBackground} !important`,
+});
+
+export const historyDivider = style({
+  height: "1px",
+  background: vars.color.borderColor,
+  margin: `${vars.space[1]} 0`,
+  flexShrink: 0,
+});
+
+export const historyIcon = style({
+  fontSize: "11px",
+  flex: "0 0 auto",
+  opacity: 0.5,
+  lineHeight: 1,
+});
+
+export const matchHighlight = style({
+  fontWeight: 700,
+  background: "transparent",
+  color: vars.color.primary,
+  fontStyle: "normal",
+});
+
+export const prTypeBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: "9px",
+  fontWeight: 700,
+  letterSpacing: "0.02em",
+  padding: `1px ${vars.space[1]}`,
+  borderRadius: vars.radii.sm,
+  background: "var(--primary)",
+  color: "var(--primary-text)",
+  flex: "0 0 auto",
+  minWidth: "20px",
+  textTransform: "uppercase",
+});
+
+export const issueTypeBadge = style({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  fontSize: "11px",
+  fontWeight: 700,
+  padding: `1px ${vars.space[1]}`,
+  borderRadius: vars.radii.sm,
+  background: vars.color.hoverBackground,
+  color: vars.color.textMuted,
+  border: `1px solid ${vars.color.borderColor}`,
+  flex: "0 0 auto",
+  minWidth: "20px",
+});
+
+export const relativeDate = style({
+  fontSize: vars.fontSize.xs,
+  color: vars.color.textMuted,
+  flex: "0 0 auto",
+  marginLeft: "auto",
+  fontVariantNumeric: "tabular-nums",
+});
