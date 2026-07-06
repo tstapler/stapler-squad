@@ -155,22 +155,18 @@ func getCurrentBranchName(path string) (string, error) {
 	return ref.Target().Short(), nil
 }
 
-// getHeadCommitSHA returns the SHA of the HEAD commit for a git repository or worktree
+// getHeadCommitSHA returns the SHA of the HEAD commit for a git repository or worktree.
+// Uses go-git to read .git/HEAD directly (no subprocess).
 func getHeadCommitSHA(path string) (string, error) {
-	shaCtx, shaCancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer shaCancel()
-	cmd := safeexec.CommandContext(shaCtx, "git", "-C", path, "rev-parse", "HEAD")
-	output, err := cmd.Output()
+	repo, err := git.PlainOpenWithOptions(path, &git.PlainOpenOptions{DetectDotGit: true})
 	if err != nil {
-		return "", fmt.Errorf("failed to get HEAD commit SHA: %w", err)
+		return "", fmt.Errorf("failed to open git repo at %s: %w", path, err)
 	}
-
-	commitSHA := strings.TrimSpace(string(output))
-	if commitSHA == "" {
-		return "", fmt.Errorf("failed to get HEAD commit SHA: empty output")
+	ref, err := repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("failed to read HEAD at %s: %w", path, err)
 	}
-
-	return commitSHA, nil
+	return ref.Hash().String(), nil
 }
 
 // InitializeProjectDirectory creates a directory and initializes it as a git repository.
