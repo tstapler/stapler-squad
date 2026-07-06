@@ -3386,6 +3386,9 @@ type GitHubIssueEntry struct {
 	Url           string                 `protobuf:"bytes,4,opt,name=url,proto3" json:"url,omitempty"`
 	Labels        []string               `protobuf:"bytes,5,rep,name=labels,proto3" json:"labels,omitempty"`
 	Body          string                 `protobuf:"bytes,6,opt,name=body,proto3" json:"body,omitempty"`
+	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	IsPr          bool                   `protobuf:"varint,9,opt,name=is_pr,json=isPr,proto3" json:"is_pr,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3460,6 +3463,27 @@ func (x *GitHubIssueEntry) GetBody() string {
 		return x.Body
 	}
 	return ""
+}
+
+func (x *GitHubIssueEntry) GetCreatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.CreatedAt
+	}
+	return nil
+}
+
+func (x *GitHubIssueEntry) GetUpdatedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.UpdatedAt
+	}
+	return nil
+}
+
+func (x *GitHubIssueEntry) GetIsPr() bool {
+	if x != nil {
+		return x.IsPr
+	}
+	return false
 }
 
 type SearchGitHubReposRequest struct {
@@ -3930,14 +3954,19 @@ const file_session_v1_backlog_proto_rawDesc = "" +
 	"\bis_local\x18\x03 \x01(\bR\aisLocal\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x04 \x01(\tR\tlocalPath\x12 \n" +
-	"\vdescription\x18\x05 \x01(\tR\vdescription\"\x94\x01\n" +
+	"\vdescription\x18\x05 \x01(\tR\vdescription\"\x9f\x02\n" +
 	"\x10GitHubIssueEntry\x12\x16\n" +
 	"\x06number\x18\x01 \x01(\x05R\x06number\x12\x14\n" +
 	"\x05title\x18\x02 \x01(\tR\x05title\x12\x14\n" +
 	"\x05state\x18\x03 \x01(\tR\x05state\x12\x10\n" +
 	"\x03url\x18\x04 \x01(\tR\x03url\x12\x16\n" +
 	"\x06labels\x18\x05 \x03(\tR\x06labels\x12\x12\n" +
-	"\x04body\x18\x06 \x01(\tR\x04body\"F\n" +
+	"\x04body\x18\x06 \x01(\tR\x04body\x129\n" +
+	"\n" +
+	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12\x13\n" +
+	"\x05is_pr\x18\t \x01(\bR\x04isPr\"F\n" +
 	"\x18SearchGitHubReposRequest\x12\x14\n" +
 	"\x05query\x18\x01 \x01(\tR\x05query\x12\x14\n" +
 	"\x05limit\x18\x02 \x01(\x05R\x05limit\"N\n" +
@@ -4106,61 +4135,63 @@ var file_session_v1_backlog_proto_depIdxs = []int32{
 	9,  // 45: session.v1.UpdateItemSourceResponse.source:type_name -> session.v1.ItemSource
 	10, // 46: session.v1.GetSyncHistoryResponse.events:type_name -> session.v1.SourceSyncEvent
 	8,  // 47: session.v1.ImportGitHubIssueResponse.item:type_name -> session.v1.BacklogItem
-	55, // 48: session.v1.SearchGitHubReposResponse.repos:type_name -> session.v1.GitHubRepoEntry
-	56, // 49: session.v1.ListGitHubIssuesResponse.issues:type_name -> session.v1.GitHubIssueEntry
-	11, // 50: session.v1.BacklogService.CreateBacklogItem:input_type -> session.v1.CreateBacklogItemRequest
-	13, // 51: session.v1.BacklogService.GetBacklogItem:input_type -> session.v1.GetBacklogItemRequest
-	15, // 52: session.v1.BacklogService.ListBacklogItems:input_type -> session.v1.ListBacklogItemsRequest
-	17, // 53: session.v1.BacklogService.UpdateBacklogItem:input_type -> session.v1.UpdateBacklogItemRequest
-	19, // 54: session.v1.BacklogService.ArchiveBacklogItem:input_type -> session.v1.ArchiveBacklogItemRequest
-	21, // 55: session.v1.BacklogService.DeleteBacklogItem:input_type -> session.v1.DeleteBacklogItemRequest
-	23, // 56: session.v1.BacklogService.TransitionBacklogItemStatus:input_type -> session.v1.TransitionBacklogItemStatusRequest
-	25, // 57: session.v1.BacklogService.SpawnSessionFromItem:input_type -> session.v1.SpawnSessionFromItemRequest
-	27, // 58: session.v1.BacklogService.AttachSessionToItem:input_type -> session.v1.AttachSessionToItemRequest
-	29, // 59: session.v1.BacklogService.TriggerTriage:input_type -> session.v1.TriggerTriageRequest
-	53, // 60: session.v1.BacklogService.CancelTriage:input_type -> session.v1.CancelTriageRequest
-	31, // 61: session.v1.BacklogService.ApprovePlan:input_type -> session.v1.ApprovePlanRequest
-	33, // 62: session.v1.BacklogService.SuggestNextItem:input_type -> session.v1.SuggestNextItemRequest
-	35, // 63: session.v1.BacklogService.OverrideVerdict:input_type -> session.v1.OverrideVerdictRequest
-	37, // 64: session.v1.BacklogService.TriggerReReview:input_type -> session.v1.TriggerReReviewRequest
-	39, // 65: session.v1.BacklogService.TriggerSync:input_type -> session.v1.TriggerSyncRequest
-	41, // 66: session.v1.BacklogService.CreateItemSource:input_type -> session.v1.CreateItemSourceRequest
-	43, // 67: session.v1.BacklogService.ListItemSources:input_type -> session.v1.ListItemSourcesRequest
-	45, // 68: session.v1.BacklogService.UpdateItemSource:input_type -> session.v1.UpdateItemSourceRequest
-	47, // 69: session.v1.BacklogService.DeleteItemSource:input_type -> session.v1.DeleteItemSourceRequest
-	49, // 70: session.v1.BacklogService.GetSyncHistory:input_type -> session.v1.GetSyncHistoryRequest
-	51, // 71: session.v1.BacklogService.ImportGitHubIssue:input_type -> session.v1.ImportGitHubIssueRequest
-	57, // 72: session.v1.BacklogService.SearchGitHubRepos:input_type -> session.v1.SearchGitHubReposRequest
-	59, // 73: session.v1.BacklogService.ListGitHubIssues:input_type -> session.v1.ListGitHubIssuesRequest
-	12, // 74: session.v1.BacklogService.CreateBacklogItem:output_type -> session.v1.CreateBacklogItemResponse
-	14, // 75: session.v1.BacklogService.GetBacklogItem:output_type -> session.v1.GetBacklogItemResponse
-	16, // 76: session.v1.BacklogService.ListBacklogItems:output_type -> session.v1.ListBacklogItemsResponse
-	18, // 77: session.v1.BacklogService.UpdateBacklogItem:output_type -> session.v1.UpdateBacklogItemResponse
-	20, // 78: session.v1.BacklogService.ArchiveBacklogItem:output_type -> session.v1.ArchiveBacklogItemResponse
-	22, // 79: session.v1.BacklogService.DeleteBacklogItem:output_type -> session.v1.DeleteBacklogItemResponse
-	24, // 80: session.v1.BacklogService.TransitionBacklogItemStatus:output_type -> session.v1.TransitionBacklogItemStatusResponse
-	26, // 81: session.v1.BacklogService.SpawnSessionFromItem:output_type -> session.v1.SpawnSessionFromItemResponse
-	28, // 82: session.v1.BacklogService.AttachSessionToItem:output_type -> session.v1.AttachSessionToItemResponse
-	30, // 83: session.v1.BacklogService.TriggerTriage:output_type -> session.v1.TriggerTriageResponse
-	54, // 84: session.v1.BacklogService.CancelTriage:output_type -> session.v1.CancelTriageResponse
-	32, // 85: session.v1.BacklogService.ApprovePlan:output_type -> session.v1.ApprovePlanResponse
-	34, // 86: session.v1.BacklogService.SuggestNextItem:output_type -> session.v1.SuggestNextItemResponse
-	36, // 87: session.v1.BacklogService.OverrideVerdict:output_type -> session.v1.OverrideVerdictResponse
-	38, // 88: session.v1.BacklogService.TriggerReReview:output_type -> session.v1.TriggerReReviewResponse
-	40, // 89: session.v1.BacklogService.TriggerSync:output_type -> session.v1.TriggerSyncResponse
-	42, // 90: session.v1.BacklogService.CreateItemSource:output_type -> session.v1.CreateItemSourceResponse
-	44, // 91: session.v1.BacklogService.ListItemSources:output_type -> session.v1.ListItemSourcesResponse
-	46, // 92: session.v1.BacklogService.UpdateItemSource:output_type -> session.v1.UpdateItemSourceResponse
-	48, // 93: session.v1.BacklogService.DeleteItemSource:output_type -> session.v1.DeleteItemSourceResponse
-	50, // 94: session.v1.BacklogService.GetSyncHistory:output_type -> session.v1.GetSyncHistoryResponse
-	52, // 95: session.v1.BacklogService.ImportGitHubIssue:output_type -> session.v1.ImportGitHubIssueResponse
-	58, // 96: session.v1.BacklogService.SearchGitHubRepos:output_type -> session.v1.SearchGitHubReposResponse
-	60, // 97: session.v1.BacklogService.ListGitHubIssues:output_type -> session.v1.ListGitHubIssuesResponse
-	74, // [74:98] is the sub-list for method output_type
-	50, // [50:74] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	61, // 48: session.v1.GitHubIssueEntry.created_at:type_name -> google.protobuf.Timestamp
+	61, // 49: session.v1.GitHubIssueEntry.updated_at:type_name -> google.protobuf.Timestamp
+	55, // 50: session.v1.SearchGitHubReposResponse.repos:type_name -> session.v1.GitHubRepoEntry
+	56, // 51: session.v1.ListGitHubIssuesResponse.issues:type_name -> session.v1.GitHubIssueEntry
+	11, // 52: session.v1.BacklogService.CreateBacklogItem:input_type -> session.v1.CreateBacklogItemRequest
+	13, // 53: session.v1.BacklogService.GetBacklogItem:input_type -> session.v1.GetBacklogItemRequest
+	15, // 54: session.v1.BacklogService.ListBacklogItems:input_type -> session.v1.ListBacklogItemsRequest
+	17, // 55: session.v1.BacklogService.UpdateBacklogItem:input_type -> session.v1.UpdateBacklogItemRequest
+	19, // 56: session.v1.BacklogService.ArchiveBacklogItem:input_type -> session.v1.ArchiveBacklogItemRequest
+	21, // 57: session.v1.BacklogService.DeleteBacklogItem:input_type -> session.v1.DeleteBacklogItemRequest
+	23, // 58: session.v1.BacklogService.TransitionBacklogItemStatus:input_type -> session.v1.TransitionBacklogItemStatusRequest
+	25, // 59: session.v1.BacklogService.SpawnSessionFromItem:input_type -> session.v1.SpawnSessionFromItemRequest
+	27, // 60: session.v1.BacklogService.AttachSessionToItem:input_type -> session.v1.AttachSessionToItemRequest
+	29, // 61: session.v1.BacklogService.TriggerTriage:input_type -> session.v1.TriggerTriageRequest
+	53, // 62: session.v1.BacklogService.CancelTriage:input_type -> session.v1.CancelTriageRequest
+	31, // 63: session.v1.BacklogService.ApprovePlan:input_type -> session.v1.ApprovePlanRequest
+	33, // 64: session.v1.BacklogService.SuggestNextItem:input_type -> session.v1.SuggestNextItemRequest
+	35, // 65: session.v1.BacklogService.OverrideVerdict:input_type -> session.v1.OverrideVerdictRequest
+	37, // 66: session.v1.BacklogService.TriggerReReview:input_type -> session.v1.TriggerReReviewRequest
+	39, // 67: session.v1.BacklogService.TriggerSync:input_type -> session.v1.TriggerSyncRequest
+	41, // 68: session.v1.BacklogService.CreateItemSource:input_type -> session.v1.CreateItemSourceRequest
+	43, // 69: session.v1.BacklogService.ListItemSources:input_type -> session.v1.ListItemSourcesRequest
+	45, // 70: session.v1.BacklogService.UpdateItemSource:input_type -> session.v1.UpdateItemSourceRequest
+	47, // 71: session.v1.BacklogService.DeleteItemSource:input_type -> session.v1.DeleteItemSourceRequest
+	49, // 72: session.v1.BacklogService.GetSyncHistory:input_type -> session.v1.GetSyncHistoryRequest
+	51, // 73: session.v1.BacklogService.ImportGitHubIssue:input_type -> session.v1.ImportGitHubIssueRequest
+	57, // 74: session.v1.BacklogService.SearchGitHubRepos:input_type -> session.v1.SearchGitHubReposRequest
+	59, // 75: session.v1.BacklogService.ListGitHubIssues:input_type -> session.v1.ListGitHubIssuesRequest
+	12, // 76: session.v1.BacklogService.CreateBacklogItem:output_type -> session.v1.CreateBacklogItemResponse
+	14, // 77: session.v1.BacklogService.GetBacklogItem:output_type -> session.v1.GetBacklogItemResponse
+	16, // 78: session.v1.BacklogService.ListBacklogItems:output_type -> session.v1.ListBacklogItemsResponse
+	18, // 79: session.v1.BacklogService.UpdateBacklogItem:output_type -> session.v1.UpdateBacklogItemResponse
+	20, // 80: session.v1.BacklogService.ArchiveBacklogItem:output_type -> session.v1.ArchiveBacklogItemResponse
+	22, // 81: session.v1.BacklogService.DeleteBacklogItem:output_type -> session.v1.DeleteBacklogItemResponse
+	24, // 82: session.v1.BacklogService.TransitionBacklogItemStatus:output_type -> session.v1.TransitionBacklogItemStatusResponse
+	26, // 83: session.v1.BacklogService.SpawnSessionFromItem:output_type -> session.v1.SpawnSessionFromItemResponse
+	28, // 84: session.v1.BacklogService.AttachSessionToItem:output_type -> session.v1.AttachSessionToItemResponse
+	30, // 85: session.v1.BacklogService.TriggerTriage:output_type -> session.v1.TriggerTriageResponse
+	54, // 86: session.v1.BacklogService.CancelTriage:output_type -> session.v1.CancelTriageResponse
+	32, // 87: session.v1.BacklogService.ApprovePlan:output_type -> session.v1.ApprovePlanResponse
+	34, // 88: session.v1.BacklogService.SuggestNextItem:output_type -> session.v1.SuggestNextItemResponse
+	36, // 89: session.v1.BacklogService.OverrideVerdict:output_type -> session.v1.OverrideVerdictResponse
+	38, // 90: session.v1.BacklogService.TriggerReReview:output_type -> session.v1.TriggerReReviewResponse
+	40, // 91: session.v1.BacklogService.TriggerSync:output_type -> session.v1.TriggerSyncResponse
+	42, // 92: session.v1.BacklogService.CreateItemSource:output_type -> session.v1.CreateItemSourceResponse
+	44, // 93: session.v1.BacklogService.ListItemSources:output_type -> session.v1.ListItemSourcesResponse
+	46, // 94: session.v1.BacklogService.UpdateItemSource:output_type -> session.v1.UpdateItemSourceResponse
+	48, // 95: session.v1.BacklogService.DeleteItemSource:output_type -> session.v1.DeleteItemSourceResponse
+	50, // 96: session.v1.BacklogService.GetSyncHistory:output_type -> session.v1.GetSyncHistoryResponse
+	52, // 97: session.v1.BacklogService.ImportGitHubIssue:output_type -> session.v1.ImportGitHubIssueResponse
+	58, // 98: session.v1.BacklogService.SearchGitHubRepos:output_type -> session.v1.SearchGitHubReposResponse
+	60, // 99: session.v1.BacklogService.ListGitHubIssues:output_type -> session.v1.ListGitHubIssuesResponse
+	76, // [76:100] is the sub-list for method output_type
+	52, // [52:76] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_session_v1_backlog_proto_init() }
