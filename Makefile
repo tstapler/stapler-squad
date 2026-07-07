@@ -56,7 +56,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux vet-architecture vet-rpc-markers coverage-integration actor-field-guard
+.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard
 
 # Default target
 help: ## Show this help message
@@ -407,14 +407,14 @@ proto-clean: ## Clean generated protocol buffer code
 	rm -rf web/src/gen
 
 # Testing targets
-test: ensure-tools proto-gen ## Run all tests (skips slow integration tests; use test-integration for full suite)
-	go test -short ./...
+test: ensure-tools proto-gen $(BIN_TMUX) ## Run all tests (skips slow integration tests; use test-integration for full suite)
+	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short ./...
 
 test-verbose: ensure-tools proto-gen ## Run tests with verbose output
 	go test -short -v ./...
 
-test-coverage: ensure-tools proto-gen ## Run tests with coverage report (HTML)
-	go test -short -cover ./... -coverprofile=coverage.out
+test-coverage: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with coverage report (HTML)
+	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -short -cover ./... -coverprofile=coverage.out
 	go tool cover -html=coverage.out -o coverage.html
 	@echo "Coverage report generated: coverage.html"
 	@which open >/dev/null 2>&1 && open coverage.html || true
@@ -465,8 +465,8 @@ coverage-refactor: ensure-tools proto-gen ## Show coverage for the 4 files targe
 	@echo ""
 	@go tool cover -func=coverage.out | grep "^total"
 
-test-race: ensure-tools proto-gen ## Run tests with race detector enabled (skips slow integration tests)
-	go test -race -short ./...
+test-race: ensure-tools proto-gen $(BIN_TMUX) ## Run tests with race detector enabled (skips slow integration tests)
+	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race -short ./...
 
 test-integration: ensure-tools proto-gen ## Run integration tests (requires real tmux)
 	go test -race -tags integration ./...
@@ -513,6 +513,20 @@ test-ux-polish: ## Run tests registered in docs/registry/features/ (no server/tm
 
 test-with-pinned-tmux: ensure-tools proto-gen $(BIN_TMUX) ## Run tests using the pinned tmux binary (reproducible)
 	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -race ./...
+
+test-trace: ensure-tools proto-gen $(BIN_TMUX) ## Run session tests with execution trace (open trace with: go tool trace /tmp/ss-test-trace.out)
+	@echo "Running session tests with execution trace..."
+	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -v -trace /tmp/ss-test-trace.out -timeout 120s \
+		github.com/tstapler/stapler-squad/session/... 2>&1 | tee /tmp/ss-test-trace.log
+	@echo "Trace saved to /tmp/ss-test-trace.out — view with: go tool trace /tmp/ss-test-trace.out"
+
+test-profile: ensure-tools proto-gen $(BIN_TMUX) ## Run session tests with CPU+block profiling
+	@echo "Running session tests with profiling..."
+	TMUX_BIN=$(CURDIR)/$(BIN_TMUX) go test -v -cpuprofile /tmp/ss-test-cpu.prof \
+		-blockprofile /tmp/ss-test-block.prof -timeout 120s \
+		github.com/tstapler/stapler-squad/session/... 2>&1 | tee /tmp/ss-test-profile.log
+	@echo "CPU profile: go tool pprof /tmp/ss-test-cpu.prof"
+	@echo "Block profile: go tool pprof /tmp/ss-test-block.prof"
 
 # Performance benchmarks
 benchmark: ensure-tools proto-gen ## Run all benchmarks
@@ -692,10 +706,10 @@ dev-setup: install-tools ## Set up development environment
 	@echo "Development environment setup complete!"
 	@echo "Run 'make help' to see available commands"
 
-ci: build test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
+ci: build $(BIN_TMUX) test test-race vet lint lint-css-tokens test-integration fmt-check registry-generate actor-field-guard ## Full CI pipeline: proto→web→build→tests→lint→fmt→registry
 
 # Quick development workflows
-quick-check: build test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
+quick-check: build $(BIN_TMUX) test-coverage test-race lint lint-css-tokens registry-diff ## Quick development validation
 	@echo "✅ Quick validation complete"
 
 pre-commit: format vet test test-race lint vet-architecture ## Pre-commit validation
