@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.35.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.34.0...v1.35.0) (2026-07-07)
+
+
+### Features
+
+* **backlog:** enhance GitHub issue picker — PR support, timestamps, keyboard nav, history tier ([1e6e33e](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/1e6e33eea3b6db1cdc25feab74b3464a880b69c6))
+* **backlog:** GitHub issue picker — browse repos and issues to import ([4157558](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/4157558b1309879e570cb5a360288ca24fcaffde))
+* build pinned tmux, wire TMUX_BIN into all test targets, add goroutine-dump TestMain and test-trace targets ([0fd79cd](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/0fd79cdfb798567017d624ac222fa8526cb36bb6))
+* wire tmux.Binary() into all call sites so TMUX_BIN env var is respected ([d9b188d](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/d9b188d1ecf382b8d37fda9c85e876a030853053))
+
+
+### Bug Fixes
+
+* **lint:** add concurrency:1 to avoid golangci-lint v2.11.4 race on go1.26 deps ([3407f0c](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/3407f0c161e3132362be9f175118be02a692480a))
+* **lint:** analytics-exempt line order; chore(ci): make demo GIFs manual-only ([d275e54](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/d275e540c4935e6c06eba8257578eac8f3063c51))
+
+
+### Performance Improvements
+
+* drain responseCh non-blocking in waitForCommandOrDrain to reduce 6.6M block events ([6dc4552](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/6dc45527eeb7b0c3721397c02cb08547a08bafee))
+* **frontend:** virtualize session list card mode with react-virtuoso to eliminate 1845ms scroll task ([bad2867](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/bad2867a448e08754e1ceb534604af86858b523b))
+* singleflight coalescing for IsDirtyWithHint, go-git for IsBranchCheckedOut/getHeadCommitSHA; remove NOT STALE debug log ([f157fa8](https://github.com/TylerStaplerAtFanatics/stapler-squad/commit/f157fa8b09b329ced0ff41054b78fef9c5d3ed0a))
+
 ## [1.34.0](https://github.com/TylerStaplerAtFanatics/stapler-squad/compare/v1.33.1...v1.34.0) (2026-07-03)
 
 
