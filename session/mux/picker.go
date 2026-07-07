@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/tmux"
 	"golang.org/x/term"
 )
 
@@ -30,7 +31,7 @@ func ListStaplerSquadSessionsWithInfo() ([]SessionInfo, error) {
 	// Format: name|created|activity|path|windows|attached
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := safeexec.CommandContext(ctx, "tmux", "list-sessions", "-F",
+	cmd := safeexec.CommandContext(ctx, tmux.Binary(), "list-sessions", "-F",
 		"#{session_name}|#{session_created}|#{session_activity}|#{session_path}|#{session_windows}|#{session_attached}")
 	output, err := cmd.Output()
 	if err != nil {
