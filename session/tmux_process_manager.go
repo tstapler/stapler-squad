@@ -3,13 +3,19 @@ package session
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/log"
-	"github.com/tstapler/stapler-squad/session/tmux"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
+
+// capturePaneCacheTTL is the TTL for the CapturePaneContent result cache.
+// Avoids spawning a tmux subprocess on every poll tick.
+const capturePaneCacheTTL = time.Second
 
 // TmuxProcessManager owns the tmux session and preview-size tracking state that
 // were previously scattered as bare fields on Instance.
@@ -25,6 +31,14 @@ type TmuxProcessManager struct {
 	lastPreviewWidth   int
 	lastPreviewHeight  int
 	lastPTYWarningTime time.Time
+
+	// Capture-pane cache — avoids subprocess on every poll tick.
+	captureContent   string
+	captureContentAt time.Time
+
+	// panePID caches the foreground PID after first successful lookup (stable per pane).
+	panePIDCached atomic.Int32
+	panePIDSet    atomic.Bool
 }
 
 // HasSession reports whether a tmux session has been initialized.
@@ -47,6 +61,8 @@ func (tm *TmuxProcessManager) SetSession(s *tmux.TmuxSession) {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 	tm.session = s
+	tm.captureContentAt = time.Time{} // invalidate capture-pane cache
+	tm.panePIDSet.Store(false)        // invalidate PID cache
 }
 
 // GetTmuxSessionName returns the sanitized tmux session name for reconciliation.
@@ -146,14 +162,32 @@ func (tm *TmuxProcessManager) Attach() (chan struct{}, error) {
 }
 
 // CapturePaneContent returns the current visible pane content.
+// Results are cached for capturePaneCacheTTL to reduce subprocess/forkLock
+// contention when called per-session on every poll tick.
 func (tm *TmuxProcessManager) CapturePaneContent() (string, error) {
+	// Fast path: serve from cache if fresh.
 	tm.mu.RLock()
+	if time.Since(tm.captureContentAt) < capturePaneCacheTTL {
+		cached := tm.captureContent
+		tm.mu.RUnlock()
+		return cached, nil
+	}
 	s := tm.session
 	tm.mu.RUnlock()
+
 	if s == nil {
 		return "", fmt.Errorf("tmux session not initialized")
 	}
-	return s.CapturePaneContent()
+	content, err := s.CapturePaneContent()
+	if err != nil {
+		return "", err
+	}
+
+	tm.mu.Lock()
+	tm.captureContent = content
+	tm.captureContentAt = time.Now()
+	tm.mu.Unlock()
+	return content, nil
 }
 
 // CapturePaneContentRaw returns pane content with ANSI escape codes preserved.
@@ -362,14 +396,25 @@ func (tm *TmuxProcessManager) SendPromptWithEnter(prompt string) error {
 }
 
 // GetPanePID returns the PID of the foreground process in the pane.
+// The pane PID is stable for the lifetime of a tmux pane, so the result is
+// cached after the first successful lookup to avoid repeated subprocess calls.
 func (tm *TmuxProcessManager) GetPanePID() (int32, error) {
+	if tm.panePIDSet.Load() {
+		return tm.panePIDCached.Load(), nil
+	}
 	tm.mu.RLock()
 	s := tm.session
 	tm.mu.RUnlock()
 	if s == nil {
 		return 0, fmt.Errorf("tmux session not initialized")
 	}
-	return s.GetPanePID()
+	pid, err := s.GetPanePID()
+	if err != nil {
+		return 0, err
+	}
+	tm.panePIDCached.Store(pid)
+	tm.panePIDSet.Store(true)
+	return pid, nil
 }
 
 // SetOnExitCallback registers a callback that fires when the tmux session exits

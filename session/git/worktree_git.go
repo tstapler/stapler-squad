@@ -3,10 +3,11 @@ package git
 import (
 	"context"
 	"fmt"
-	"github.com/tstapler/stapler-squad/executor/safeexec"
-	"github.com/tstapler/stapler-squad/log"
 	"os/exec"
 	"time"
+
+	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/log"
 )
 
 // runGitCommand executes a git command and returns any error.
