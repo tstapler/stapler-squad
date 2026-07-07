@@ -42,7 +42,7 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	out, err := safeexec.CommandContext(ctx, "tmux", "list-sessions", "-F", "#{session_name}").Output()
+	out, err := safeexec.CommandContext(ctx, tmux.Binary(), "list-sessions", "-F", "#{session_name}").Output()
 	if err != nil {
 		// tmux not running or no sessions — nothing to sweep
 		return
@@ -66,7 +66,7 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 		}
 
 		// Try to match via STAPLER_SESSION_UUID from the tmux session environment.
-		envOut, envErr := safeexec.CommandContext(ctx, "tmux", "show-environment", "-t", sessionName, "STAPLER_SESSION_UUID").Output()
+		envOut, envErr := safeexec.CommandContext(ctx, tmux.Binary(), "show-environment", "-t", sessionName, "STAPLER_SESSION_UUID").Output()
 		if envErr == nil {
 			uuid := strings.TrimPrefix(strings.TrimSpace(string(envOut)), "STAPLER_SESSION_UUID=")
 			if _, known := knownUUIDs[uuid]; known {
@@ -79,7 +79,7 @@ func ReconcileOrphanedTmuxSessions(instances []*Instance) {
 		// No DB match by name or UUID — this is an orphan.
 		log.Info("orphan sweep: killing stale tmux session with no DB record", "session", sessionName)
 		killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if killErr := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", sessionName).Run(); killErr != nil {
+		if killErr := safeexec.CommandContext(killCtx, tmux.Binary(), "kill-session", "-t", sessionName).Run(); killErr != nil {
 			log.Warn("orphan sweep: failed to kill stale session", "session", sessionName, "err", killErr)
 		} else {
 			killed++

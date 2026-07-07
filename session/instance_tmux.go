@@ -213,7 +213,7 @@ func (i *Instance) KillExternalSession() error {
 	// Kill the tmux session
 	killCtx, killCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer killCancel()
-	cmd := safeexec.CommandContext(killCtx, "tmux", "kill-session", "-t", i.ExternalMetadata.TmuxSessionName)
+	cmd := safeexec.CommandContext(killCtx, tmux.Binary(), "kill-session", "-t", i.ExternalMetadata.TmuxSessionName)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("failed to kill tmux session '%s': %w", i.ExternalMetadata.TmuxSessionName, err)
 	}

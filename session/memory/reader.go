@@ -9,6 +9,7 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
+	"github.com/tstapler/stapler-squad/session/tmux"
 )
 
 // Reader reports system and per-session memory usage.
@@ -59,7 +60,7 @@ func (g *GopsutilReader) SessionRSSMB(tmuxSessionName string) (int64, error) {
 // panePIDs runs `tmux list-panes -t <name> -F '#{pane_pid}'` and returns the PIDs.
 func panePIDs(sessionName string) ([]int32, error) {
 	ctx := context.Background()
-	cmd := safeexec.CommandContext(ctx, "tmux", "list-panes", "-t", sessionName, "-F", "#{pane_pid}")
+	cmd := safeexec.CommandContext(ctx, tmux.Binary(), "list-panes", "-t", sessionName, "-F", "#{pane_pid}")
 	out, err := cmd.Output()
 	if err != nil {
 		return nil, err

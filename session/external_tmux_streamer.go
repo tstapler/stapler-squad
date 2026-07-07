@@ -186,7 +186,7 @@ func (s *ExternalTmuxStreamer) ConsumerCount() int {
 func (s *ExternalTmuxStreamer) startControlMode() bool {
 	// Use s.ctx so the process is killed when the streamer is stopped.
 	//nolint:norawexec long-running control-mode process; pipes set up before cmd.Start(), WaitDelay not applicable
-	cmd := exec.CommandContext(s.ctx, "tmux", "-C", "attach-session", "-t", s.tmuxSessionName, "-r")
+	cmd := exec.CommandContext(s.ctx, tmux.Binary(), "-C", "attach-session", "-t", s.tmuxSessionName, "-r")
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -429,7 +429,7 @@ func (s *ExternalTmuxStreamer) capturePane() (string, error) {
 	// Use -J to join wrapped lines
 	captureCtx, captureCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer captureCancel()
-	cmd := safeexec.CommandContext(captureCtx, "tmux", "capture-pane", "-p", "-e", "-J", "-t", s.tmuxSessionName)
+	cmd := safeexec.CommandContext(captureCtx, tmux.Binary(), "capture-pane", "-p", "-e", "-J", "-t", s.tmuxSessionName)
 	output, err := cmd.Output()
 	if err != nil {
 		return "", err
