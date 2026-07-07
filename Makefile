@@ -56,7 +56,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard
+.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules ensure-tmux-configure test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard
 
 # Default target
 help: ## Show this help message
@@ -252,6 +252,7 @@ build-tmux: ## Build pinned tmux 3.4 binary from third_party/tmux submodule
 	@echo "Building pinned tmux binary..."
 	@if command -v bazel >/dev/null 2>&1 && [ -f third_party/tmux/configure.ac ]; then \
 		echo "Using Bazel (artifacts cached)..."; \
+		$(MAKE) ensure-tmux-configure; \
 		bazel build //third_party/tmux:tmux && \
 		mkdir -p bin && \
 		cp "$$(bazel info bazel-bin)/third_party/tmux/tmux" $(BIN_TMUX) && \
@@ -259,6 +260,18 @@ build-tmux: ## Build pinned tmux 3.4 binary from third_party/tmux submodule
 		echo "✅ tmux built via Bazel at $(BIN_TMUX)"; \
 	else \
 		./scripts/build-tmux.sh; \
+	fi
+
+ensure-tmux-configure: ## Ensure third_party/tmux/configure exists (downloads from release tarball if missing)
+	@if [ ! -f third_party/tmux/configure ]; then \
+		echo "Downloading tmux configure from release tarball..."; \
+		TMPTAR=$$(mktemp /tmp/tmux-XXXXXX.tar.gz); \
+		curl -fsSL -o "$$TMPTAR" "https://github.com/tmux/tmux/releases/download/3.4/tmux-3.4.tar.gz" && \
+		tar xzf "$$TMPTAR" -C /tmp tmux-3.4/configure && \
+		cp /tmp/tmux-3.4/configure third_party/tmux/configure && \
+		chmod +x third_party/tmux/configure && \
+		rm -f "$$TMPTAR" && \
+		echo "✅ configure downloaded"; \
 	fi
 
 build-tmux-embed: build-tmux ## Copy built tmux into the embed dir for go build -tags embed_tmux

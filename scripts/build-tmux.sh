@@ -85,8 +85,25 @@ log "Building tmux from $SUBMODULE_DIR..."
 cd "$SUBMODULE_DIR"
 
 if [[ ! -f "./configure" ]]; then
-  log "Running autogen.sh..."
-  ./autogen.sh
+  # Prefer downloading configure from the release tarball — faster and avoids the
+  # macOS autotools hang (autogen.sh → 'automake --add-missing' triggers network
+  # fetches; libtoolize can block scanning the locate database for minutes).
+  TMUX_VERSION="3.4"
+  TARBALL_URL="https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
+  TMPTAR="$(mktemp /tmp/tmux-XXXXXX.tar.gz)"
+  log "Downloading configure from release tarball (${TARBALL_URL})..."
+  if curl -fsSL -o "$TMPTAR" "$TARBALL_URL" 2>/dev/null && \
+     tar xzf "$TMPTAR" -C /tmp "tmux-${TMUX_VERSION}/configure" 2>/dev/null; then
+    cp "/tmp/tmux-${TMUX_VERSION}/configure" ./configure
+    chmod +x ./configure
+    rm -f "$TMPTAR"
+    log "configure extracted from release tarball"
+  else
+    rm -f "$TMPTAR"
+    log "Tarball download failed; falling back to autoreconf -fi..."
+    # autoreconf -fi uses local system copies of missing files (avoids network hang).
+    ACLOCAL_PATH="/opt/homebrew/share/aclocal:/usr/share/aclocal" autoreconf -fi
+  fi
 fi
 
 if [[ ! -f "./Makefile" ]]; then
