@@ -61,7 +61,10 @@ func newEscapeParserForSession(sessionName string) *analytics.EscapeCodeParser {
 	cfg := loadAnalyticsConfig()
 	parser := analytics.NewEscapeCodeParser(analytics.GetGlobalStore(), sessionName)
 	writer := analytics.GetGlobalEscapeWriter()
-	if cfg.captureLevel != "off" {
+	// If the writer is a Noop (no analytics DB configured) or captureLevel is "off",
+	// skip all extraction work — there is nothing to write to.
+	_, isNoop := writer.(analytics.NoopEscapeEventWriter)
+	if cfg.captureLevel != "off" && !isNoop {
 		parser.SetEventWriter(writer, cfg.captureLevel, cfg.redactOSC, cfg.samplingRate)
 		parser.SetCorrelator(analytics.NewMangleCorrelator(mangleCorrelatorTTL, mangleCorrelatorMaxPending))
 	} else {
