@@ -8,7 +8,6 @@ import (
 	"github.com/tstapler/stapler-squad/log"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -605,6 +604,16 @@ func (t *TmuxSession) enqueueCMCommand(ctx context.Context, ch chan cmSendReq, a
 	}
 }
 
+// octalVal maps ASCII byte → its octal digit value (0–7); zero for non-octal bytes.
+// Inline table eliminates strconv.ParseUint call and error allocation on every %output event.
+var octalVal [256]byte
+
+func init() {
+	for c := byte('0'); c <= '7'; c++ {
+		octalVal[c] = c - '0'
+	}
+}
+
 // decodeControlModeOutput decodes tmux control mode output format.
 // Control mode replaces characters < ASCII 32 and backslash with octal escape sequences (\ooo).
 // For example: "hello\012world" represents "hello\nworld"
@@ -615,33 +624,17 @@ func (t *TmuxSession) decodeControlModeOutput(encoded string) []byte {
 	i := 0
 	for i < len(encoded) {
 		if encoded[i] == '\\' && i+3 < len(encoded) {
-			octal := encoded[i+1 : i+4]
-			if isOctalDigits(octal) {
-				value, err := strconv.ParseUint(octal, 8, 8)
-				if err == nil {
-					result = append(result, byte(value))
-					i += 4
-					continue
-				}
+			a, b, c := encoded[i+1], encoded[i+2], encoded[i+3]
+			if a >= '0' && a <= '7' && b >= '0' && b <= '7' && c >= '0' && c <= '7' {
+				result = append(result, octalVal[a]<<6|octalVal[b]<<3|octalVal[c])
+				i += 4
+				continue
 			}
 		}
 		result = append(result, encoded[i])
 		i++
 	}
 	return result
-}
-
-// isOctalDigits checks if a string contains exactly 3 octal digits (0-7).
-func isOctalDigits(s string) bool {
-	if len(s) != 3 {
-		return false
-	}
-	for _, c := range s {
-		if c < '0' || c > '7' {
-			return false
-		}
-	}
-	return true
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
