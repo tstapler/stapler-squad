@@ -3,12 +3,13 @@ package session
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"os"
 	"strings"
 	"sync/atomic"
 	"time"
+	"unsafe"
 
+	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/pkg/analytics"
 	"github.com/tstapler/stapler-squad/session/detection"
@@ -635,8 +636,8 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		return detection.StatusUnknown, "No terminal content"
 	}
 
+	h := murmur3.Sum64(raw)
 	tail := string(raw)
-	h := hashString(tail)
 
 	var hit bool
 	var cachedStatus detection.DetectedStatus
@@ -776,11 +777,12 @@ func tailContent(s string, n int) string {
 	return tail
 }
 
-// hashString returns a fast FNV-64a hash of s.
+// hashString returns a murmur3-64 hash of s without allocating a []byte copy.
 func hashString(s string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(s))
-	return h.Sum64()
+	if len(s) == 0 {
+		return murmur3.Sum64(nil)
+	}
+	return murmur3.Sum64(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 // GetRecentOutput returns recent output from the PTY buffer.
@@ -890,8 +892,8 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 	if pa != nil {
 		raw := pa.GetRecentOutput(statusDetectionTailBytes)
 		if len(raw) > 0 {
+			h := murmur3.Sum64(raw)
 			tail := string(raw)
-			h := hashString(tail)
 
 			var hit bool
 			cc.cache.Read(func(c cacheState) {
