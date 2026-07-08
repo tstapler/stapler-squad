@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/spaolacci/murmur3"
 )
@@ -19,9 +20,11 @@ type CircularBuffer struct {
 	head              int      // +checklocks:mu
 	tail              int      // +checklocks:mu
 	count             int      // +checklocks:mu
-	diskFile          *os.File // +checklocks:mu
-	wrapped           bool     // +checklocks:mu
-	totalBytesWritten int64    // +checklocks:mu
+	diskFile *os.File // +checklocks:mu
+	wrapped  bool     // +checklocks:mu
+
+	// totalBytesWritten is a monotonic counter updated atomically; no mu needed.
+	totalBytesWritten atomic.Int64
 }
 
 const (
@@ -57,7 +60,7 @@ func (cb *CircularBuffer) Write(data []byte) (int, error) {
 	}
 
 	originalLen := len(data)
-	cb.totalBytesWritten += int64(originalLen)
+	cb.totalBytesWritten.Add(int64(originalLen))
 
 	// If data is larger than buffer, only keep the last `size` bytes
 	// and completely replace buffer contents
@@ -281,9 +284,7 @@ func (cb *CircularBuffer) Close() error {
 
 // TotalBytesWritten returns the total bytes ever written to this buffer (monotonically increasing).
 func (cb *CircularBuffer) TotalBytesWritten() int64 {
-	cb.mu.RLock()
-	defer cb.mu.RUnlock()
-	return cb.totalBytesWritten
+	return cb.totalBytesWritten.Load()
 }
 
 // WriteTo implements io.WriterTo interface for efficient streaming.
