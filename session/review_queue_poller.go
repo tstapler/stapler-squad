@@ -657,7 +657,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// If the determiner saw a clean worktree, remove any stale UncommittedChanges entry.
 	if result.CleanWorktree {
 		if existing, exists := rqp.queue.Get(snap.Title); exists && existing.Reason == ReasonUncommittedChanges {
-			log.Info("changes committed, removing UncommittedChanges entry", "session", snap.Title)
+			log.Debug("changes committed, removing UncommittedChanges entry", "session", snap.Title)
 			rqp.queue.Remove(snap.Title)
 		}
 	}
@@ -705,7 +705,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				// Lower priority number = higher priority (Urgent=1 > High=2 > Medium=3 > Low=4)
 				isEscalation := priority < existingItem.Priority
 				if isEscalation {
-					log.Info("priority escalation, bypassing rate limit", "session", snap.Title, "from", existingItem.Priority.String(), "to", priority.String())
+					log.Debug("priority escalation, bypassing rate limit", "session", snap.Title, "from", existingItem.Priority.String(), "to", priority.String())
 				} else {
 					return
 				}
@@ -723,7 +723,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		return
 	}
 
-	log.Info("final decision", "session", snap.Title, "should_add", shouldAdd, "reason", reason.String(), "priority", priority.String(), "context", context)
+	log.Debug("final decision", "session", snap.Title, "should_add", shouldAdd, "reason", reason.String(), "priority", priority.String(), "context", context)
 
 	if shouldAdd {
 		// Check if item already exists and preserve DetectedAt if status hasn't changed
@@ -792,18 +792,18 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 				if a.Orphaned {
 					item.Metadata["orphaned"] = "true"
 				}
-				log.Info("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID)
+				log.Debug("enriched approval item with hook metadata", "session", snap.Title, "tool", a.ToolName, "approval_id", a.ApprovalID)
 			}
 		}
 
-		log.Info("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
+		log.Debug("adding to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 		rqp.queue.Add(item)
 
 		// Update spam prevention timestamp via actor command so the write is
 		// serialised with buildSnapshot and does not race.
 		now := time.Now()
 		inst.SetLastAddedToQueue(now)
-		log.Info("updated LastAddedToQueue timestamp", "session", snap.Title, "timestamp", now)
+		log.Debug("updated LastAddedToQueue timestamp", "session", snap.Title, "timestamp", now)
 
 		// CRITICAL: Persist LastAddedToQueue to database to prevent notification spam
 		// Without persistence, this timestamp resets on app restart or instance reload,
@@ -817,7 +817,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 		}
 
 		if !isUpdate {
-			log.Info("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
+			log.Debug("successfully added to queue", "session", snap.Title, "reason", reason.String(), "priority", priority.String(), "context", context)
 		}
 	}
 }
