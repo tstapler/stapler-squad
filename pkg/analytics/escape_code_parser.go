@@ -524,25 +524,53 @@ func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (ParsedEscapeCo
 
 	// ESC ( X, ESC ) X, ESC * X, ESC + X
 	rawBytes := data[offset : offset+3]
+	// pre-built constants for the common 12 combinations avoid a string concat per call.
 	var desc string
+	slot := data[offset+2] // charset selector byte
 	switch data[offset+1] {
 	case '(':
-		desc = "Designate G0 character set"
-	case ')':
-		desc = "Designate G1 character set"
-	case '*':
-		desc = "Designate G2 character set"
-	case '+':
-		desc = "Designate G3 character set"
-	}
-	if len(data) > offset+2 {
-		switch data[offset+2] {
+		switch slot {
 		case 'B':
-			desc += " (ASCII)"
+			desc = "Designate G0 character set (ASCII)"
 		case '0':
-			desc += " (DEC Special Graphics)"
+			desc = "Designate G0 character set (DEC Special Graphics)"
 		case 'A':
-			desc += " (UK)"
+			desc = "Designate G0 character set (UK)"
+		default:
+			desc = "Designate G0 character set"
+		}
+	case ')':
+		switch slot {
+		case 'B':
+			desc = "Designate G1 character set (ASCII)"
+		case '0':
+			desc = "Designate G1 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G1 character set (UK)"
+		default:
+			desc = "Designate G1 character set"
+		}
+	case '*':
+		switch slot {
+		case 'B':
+			desc = "Designate G2 character set (ASCII)"
+		case '0':
+			desc = "Designate G2 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G2 character set (UK)"
+		default:
+			desc = "Designate G2 character set"
+		}
+	case '+':
+		switch slot {
+		case 'B':
+			desc = "Designate G3 character set (ASCII)"
+		case '0':
+			desc = "Designate G3 character set (DEC Special Graphics)"
+		case 'A':
+			desc = "Designate G3 character set (UK)"
+		default:
+			desc = "Designate G3 character set"
 		}
 	}
 
