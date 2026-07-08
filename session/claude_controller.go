@@ -69,12 +69,6 @@ type controllerLifecycle struct {
 	cancel context.CancelFunc
 }
 
-// cacheState groups the status and idle tail-hash caches.
-// Protected by cache; updated by GetCurrentStatus, GetIdleState, and runStatusChangeLoop.
-type cacheState struct {
-	status statusCacheEntry
-	idle   idleCacheEntry
-}
 
 // ClaudeController provides a high-level API for controlling Claude instances.
 // It orchestrates all the underlying components (queue, executor, history, streams).
@@ -128,8 +122,11 @@ type ClaudeController struct {
 	// Written only by the single runStatusChangeLoop goroutine; atomic so no lock needed.
 	lastEmittedStatus atomic.Int64
 
-	// cache holds the tail-hash and result of the last status/idle detection run.
-	cache Locked[cacheState]
+	// statusCache and idleCache replace the former Locked[cacheState]:
+	// atomic.Pointer[T] gives lock-free reads on the ~100ms poll hot path.
+	// Writes allocate a small struct (~32/16 bytes) on cache miss (~10/s).
+	statusCache atomic.Pointer[statusCacheEntry]
+	idleCache   atomic.Pointer[idleCacheEntry]
 }
 
 // SetOnEOFCallback registers a function called when the PTY backing this controller
@@ -622,7 +619,7 @@ func (cc *ClaudeController) Unsubscribe(subscriberID string) error {
 //     immediately with zero allocations.
 //
 // This function holds no lifecycle lock — it reads ptyAccess and statusDetector
-// via atomic.Pointer, and the cache via Locked[cacheState]. It therefore never
+// via atomic.Pointer, and the status/idle caches via atomic.Pointer. It therefore never
 // blocks when Stop() is running its slow cleanup.
 func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string) {
 	pa := cc.ptyAccess.Load()
@@ -636,18 +633,8 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		return detection.StatusUnknown, "No terminal content"
 	}
 
-	var hit bool
-	var cachedStatus detection.DetectedStatus
-	var cachedDesc string
-	cc.cache.Read(func(c cacheState) {
-		if h == c.status.tailHash {
-			hit = true
-			cachedStatus = c.status.status
-			cachedDesc = c.status.desc
-		}
-	})
-	if hit {
-		return cachedStatus, cachedDesc
+	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h {
+		return sc.status, sc.desc
 	}
 
 	// Cache miss: copy bytes and process.
@@ -709,9 +696,7 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		)
 	}
 
-	cc.cache.Write(func(c *cacheState) {
-		c.status = statusCacheEntry{tailHash: h, status: status, desc: desc}
-	})
+	cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc})
 	return status, desc
 }
 
@@ -909,22 +894,15 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 	if pa != nil {
 		h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
 		if hasData {
-			var hit bool
-			cc.cache.Read(func(c cacheState) {
-				if h == c.idle.tailHash {
-					state = c.idle.state
-					hit = true
-				}
-			})
-			if !hit {
+			if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
+				state = ic.state
+			} else {
 				raw := pa.GetRecentOutput(statusDetectionTailBytes)
 				if len(raw) > 0 {
 					tail := string(raw)
 					filtered, _ := filterTmuxMetadata(tail)
 					state = id.DetectStateFromContent(filtered)
-					cc.cache.Write(func(c *cacheState) {
-						c.idle = idleCacheEntry{tailHash: h, state: state}
-					})
+					cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: state})
 				} else {
 					state = id.GetState()
 				}
@@ -989,22 +967,20 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
 	}
 
-	// Single cache read covers both status and idle entries.
+	// Two independent lock-free loads replace the former single RLock read.
 	var statusHit, idleHit bool
 	var cachedStatus detection.DetectedStatus
 	var cachedDesc string
 	var cachedIdleState detection.IdleState
-	cc.cache.Read(func(c cacheState) {
-		if h == c.status.tailHash {
-			statusHit = true
-			cachedStatus = c.status.status
-			cachedDesc = c.status.desc
-		}
-		if h == c.idle.tailHash {
-			idleHit = true
-			cachedIdleState = c.idle.state
-		}
-	})
+	if sc := cc.statusCache.Load(); sc != nil && sc.tailHash == h {
+		statusHit = true
+		cachedStatus = sc.status
+		cachedDesc = sc.desc
+	}
+	if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
+		idleHit = true
+		cachedIdleState = ic.state
+	}
 	if statusHit && idleHit {
 		return cachedStatus, cachedDesc, buildIdleInfo(cachedIdleState)
 	}
@@ -1058,14 +1034,12 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 		idleState = id.DetectStateFromContent(filtered)
 	}
 
-	cc.cache.Write(func(c *cacheState) {
-		if !statusHit {
-			c.status = statusCacheEntry{tailHash: h, status: status, desc: desc}
-		}
-		if !idleHit {
-			c.idle = idleCacheEntry{tailHash: h, state: idleState}
-		}
-	})
+	if !statusHit {
+		cc.statusCache.Store(&statusCacheEntry{tailHash: h, status: status, desc: desc})
+	}
+	if !idleHit {
+		cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: idleState})
+	}
 	return status, desc, buildIdleInfo(idleState)
 }
 
