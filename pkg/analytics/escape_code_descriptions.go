@@ -1,6 +1,7 @@
 package analytics
 
 import (
+	"strconv"
 	"strings"
 )
 
@@ -266,7 +267,7 @@ func DescribeSGR(params string) string {
 	if len(descriptions) <= 3 {
 		return strings.Join(descriptions, ", ")
 	}
-	return descriptions[0] + " + " + string(rune(len(descriptions)-1)) + " more"
+	return descriptions[0] + " + " + strconv.Itoa(len(descriptions)-1) + " more"
 }
 
 // Erase in Display descriptions
