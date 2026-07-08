@@ -253,6 +253,13 @@ func (id *IdleDetector) GetLastActivity() time.Time {
 	return id.lastActivity
 }
 
+// GetLastActivityNs returns the last activity time as Unix nanoseconds.
+// Lock-free — reads the atomic shadow of lastActivity.
+// Returns 0 when no activity has been recorded.
+func (id *IdleDetector) GetLastActivityNs() int64 {
+	return id.lastActivityNs.Load()
+}
+
 // GetIdleDuration returns how long the session has been idle.
 func (id *IdleDetector) GetIdleDuration() time.Duration {
 	id.mu.RLock()
@@ -360,6 +367,7 @@ func (id *IdleDetector) InitializeFromTimestamp(timestamp time.Time) {
 
 	// Restore the historical timestamp
 	id.lastActivity = timestamp
+	id.lastActivityNs.Store(timestamp.UnixNano())
 	log.Debug("restored lastActivity for idle detector", "session", id.sessionName, "timestamp", timestamp.Format(time.RFC3339), "age", FormatDuration(age))
 }
 

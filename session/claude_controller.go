@@ -932,7 +932,10 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 		state = id.GetState()
 	}
 
-	lastActivity := id.GetLastActivity()
+	var lastActivity time.Time
+	if ns := id.GetLastActivityNs(); ns != 0 {
+		lastActivity = time.Unix(0, ns)
+	}
 	return state, lastActivity
 }
 
@@ -962,9 +965,11 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 	pa := cc.ptyAccess.Load()
 
 	buildIdleInfo := func(state detection.IdleState) detection.IdleStateInfo {
-		lastActivity := time.Time{}
+		var lastActivity time.Time
 		if id != nil {
-			lastActivity = id.GetLastActivity()
+			if ns := id.GetLastActivityNs(); ns != 0 {
+				lastActivity = time.Unix(0, ns)
+			}
 		}
 		return detection.IdleStateInfo{
 			State:        state,
