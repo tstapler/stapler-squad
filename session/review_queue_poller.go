@@ -100,7 +100,7 @@ type ReviewQueuePoller struct {
 // content caching state. It is created by NewReviewQueuePoller and can be replaced
 // in tests with a fake implementation.
 type pollerContentProvider struct {
-	cacheMu              deadlock.Mutex
+	cacheMu              deadlock.RWMutex
 	lastSeenActivity     map[string]time.Time // per-session: last IdleDetector.lastActivity seen
 	lastSeenPaneActivity map[string]time.Time // per-session: last #{pane_last_activity} seen
 	cachedContent        map[string]string    // per-session: content from last Preview() call
@@ -524,21 +524,21 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 	if statusInfo.IsControllerActive {
 		lastActivity := statusInfo.IdleState.LastActivity
 		if !lastActivity.IsZero() {
-			p.cacheMu.Lock()
+			p.cacheMu.RLock()
 			lastSeen := p.lastSeenActivity[inst.Title]
 			cached := p.cachedContent[inst.Title]
-			p.cacheMu.Unlock()
+			p.cacheMu.RUnlock()
 
 			if lastActivity.Equal(lastSeen) {
 				return cached
 			}
 		}
 	} else {
-		p.cacheMu.Lock()
+		p.cacheMu.RLock()
 		cached := p.cachedContent[inst.Title]
 		lastSeenPane := p.lastSeenPaneActivity[inst.Title]
 		lastCall := p.lastPreviewTime[inst.Title]
-		p.cacheMu.Unlock()
+		p.cacheMu.RUnlock()
 
 		if paneActivity != nil {
 			// Primary: event-driven via #{pane_last_activity}.
@@ -556,9 +556,9 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 	content, err := inst.Preview()
 	if err != nil {
 		log.Debug("Preview() error", "session", inst.Title, "err", err)
-		p.cacheMu.Lock()
+		p.cacheMu.RLock()
 		cached := p.cachedContent[inst.Title]
-		p.cacheMu.Unlock()
+		p.cacheMu.RUnlock()
 		return cached
 	}
 
