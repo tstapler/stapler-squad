@@ -676,14 +676,11 @@ func Benchmark_ResponseStream_Broadcast(b *testing.B) {
 		rs.Subscribe(string(rune('a' + i)))
 	}
 
-	chunk := ResponseChunk{
-		Data:      []byte("benchmark data"),
-		Timestamp: time.Now(),
-	}
+	data := []byte("benchmark data")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		rs.broadcast(chunk)
+		rs.broadcast(data)
 	}
 }
 

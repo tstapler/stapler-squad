@@ -275,21 +275,16 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 			}
 
 			if n > 0 {
+				data := readBuf[:n] // direct slice — valid until next pty.Read call
+
 				// Update rolling pre-exit tail buffer (keeps last exitTailSize bytes).
 				rs.exitTailMu.Lock()
-				combined := append(rs.exitTail, readBuf[:n]...)
+				combined := append(rs.exitTail, data...)
 				if len(combined) > exitTailSize {
 					combined = combined[len(combined)-exitTailSize:]
 				}
 				rs.exitTail = combined
 				rs.exitTailMu.Unlock()
-
-				// Got some data, broadcast to subscribers
-				chunk := ResponseChunk{
-					Data:      make([]byte, n),
-					Timestamp: time.Now(),
-				}
-				copy(chunk.Data, readBuf[:n])
 
 				// Notify activity listener (e.g. IdleDetector.RecordActivity)
 				if rs.onOutput != nil {
@@ -303,26 +298,39 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 					sessionSeq = rs.ptyAccess.buffer.TotalBytesWritten()
 				}
 
-				// Parse escape codes for analytics (passthrough - doesn't modify data)
+				// Parse escape codes (synchronous, no reference retained after return)
 				if rs.escapeParser != nil {
-					rs.escapeParser.Parse(chunk.Data, sessionSeq)
+					rs.escapeParser.Parse(data, sessionSeq)
 				}
 
-				// Also write to circular buffer for history
+				// Write to circular buffer (copies data internally, no reference retained)
 				if rs.ptyAccess.buffer != nil {
-					rs.ptyAccess.buffer.Write(chunk.Data)
+					rs.ptyAccess.buffer.Write(data)
 				}
 
-				rs.broadcast(chunk)
+				// Broadcast to subscribers — only allocates a copy when subscribers exist.
+				rs.broadcast(data)
 			}
 		}
 	}
 }
 
-// broadcast sends a response chunk to all subscribers.
-func (rs *ResponseStream) broadcast(chunk ResponseChunk) {
+// broadcast sends data to all subscribers.
+// Allocation of the ResponseChunk and its Data copy is deferred until inside the lock
+// so we pay zero allocation cost when no subscribers are registered.
+func (rs *ResponseStream) broadcast(data []byte) {
 	rs.mu.RLock()
 	defer rs.mu.RUnlock()
+
+	if len(rs.subscribers) == 0 {
+		return
+	}
+
+	chunk := ResponseChunk{
+		Data:      make([]byte, len(data)),
+		Timestamp: time.Now(),
+	}
+	copy(chunk.Data, data)
 
 	for id, sub := range rs.subscribers {
 		select {
