@@ -757,12 +757,26 @@ func filterTmuxMetadata(content string) (string, int) {
 
 // lastNLines returns the last n lines of s as a slice.
 // If s has fewer than n lines, all lines are returned.
+// Scans backward to find the split point, avoiding allocation for the discarded prefix.
 func lastNLines(s string, n int) []string {
-	lines := strings.Split(s, "\n")
-	if len(lines) <= n {
-		return lines
+	if n <= 0 {
+		return nil
 	}
-	return lines[len(lines)-n:]
+	// Scan backward counting newlines; stop when we've found n of them.
+	count := 0
+	pos := len(s)
+	for pos > 0 {
+		pos--
+		if s[pos] == '\n' {
+			count++
+			if count == n {
+				// Split only the tail (avoids allocating headers for the discarded prefix).
+				return strings.Split(s[pos+1:], "\n")
+			}
+		}
+	}
+	// Fewer than n newlines in the whole string — return all lines.
+	return strings.Split(s, "\n")
 }
 
 // tailContent returns the last n bytes of s, snapped forward to the next
