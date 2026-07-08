@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	sessionv1 "github.com/tstapler/stapler-squad/gen/proto/go/session/v1"
 	"github.com/tstapler/stapler-squad/gen/proto/go/session/v1/sessionv1connect"
@@ -190,9 +191,8 @@ type ConnectRPCWebSocketHandler struct {
 	externalDiscovery   *session.ExternalSessionDiscovery
 	tmuxStreamerManager *session.ExternalTmuxStreamerManager
 
-	// Snapshot cache for cold-start terminal content
-	snapshotCache   map[string]sessionSnapshot
-	snapshotCacheMu sync.RWMutex
+	// ponytail: xsync.MapOf replaces map+RWMutex — markSnapshotDirty called per terminal frame
+	snapshotCache *xsync.MapOf[string, sessionSnapshot]
 }
 
 // NewConnectRPCWebSocketHandler creates a new ConnectRPC WebSocket handler
@@ -208,7 +208,7 @@ func NewConnectRPCWebSocketHandler(sessionService *SessionService, scrollbackMan
 		scrollbackManager:   scrollbackManager,
 		tmuxStreamerManager: tmuxStreamerManager,
 		streamingMode:       streamingMode,
-		snapshotCache:       make(map[string]sessionSnapshot),
+		snapshotCache:       xsync.NewMapOf[string, sessionSnapshot](),
 	}
 }
 
@@ -240,13 +240,15 @@ func waitForQuiescence(updates <-chan struct{}, timeout, quietFor time.Duration)
 }
 
 // markSnapshotDirty marks a session's snapshot as dirty so the next connect captures fresh content.
+// Called on every terminal frame; xsync.MapOf.Compute is lock-free on the read path.
 func (h *ConnectRPCWebSocketHandler) markSnapshotDirty(sessionID string) {
-	h.snapshotCacheMu.Lock()
-	defer h.snapshotCacheMu.Unlock()
-	if snap, ok := h.snapshotCache[sessionID]; ok {
+	h.snapshotCache.Compute(sessionID, func(snap sessionSnapshot, loaded bool) (sessionSnapshot, xsync.ComputeOp) {
+		if !loaded {
+			return snap, xsync.CancelOp
+		}
 		snap.dirty = true
-		h.snapshotCache[sessionID] = snap
-	}
+		return snap, xsync.UpdateOp
+	})
 }
 
 // getOrRefreshSnapshot returns a cached snapshot if clean, otherwise calls captureFn to refresh.
@@ -254,11 +256,7 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 	sessionID string,
 	captureFn func() (string, error),
 ) (string, error) {
-	h.snapshotCacheMu.RLock()
-	snap, ok := h.snapshotCache[sessionID]
-	h.snapshotCacheMu.RUnlock()
-
-	if ok && !snap.dirty {
+	if snap, ok := h.snapshotCache.Load(sessionID); ok && !snap.dirty {
 		log.Info("[SnapshotCache] serving cached snapshot", "session", sessionID, "bytes", len(snap.content), "age", time.Since(snap.capturedAt).Round(time.Millisecond))
 		return snap.content, nil
 	}
@@ -268,13 +266,11 @@ func (h *ConnectRPCWebSocketHandler) getOrRefreshSnapshot(
 		return "", err
 	}
 
-	h.snapshotCacheMu.Lock()
-	h.snapshotCache[sessionID] = sessionSnapshot{
+	h.snapshotCache.Store(sessionID, sessionSnapshot{
 		content:    content,
 		capturedAt: time.Now(),
 		dirty:      false,
-	}
-	h.snapshotCacheMu.Unlock()
+	})
 
 	log.Info("[SnapshotCache] refreshed snapshot", "session", sessionID, "bytes", len(content))
 	return content, nil

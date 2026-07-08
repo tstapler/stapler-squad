@@ -512,7 +512,7 @@ func TestMarkSnapshotDirtyOnUnknownSessionIsNoOp(t *testing.T) {
 	h.markSnapshotDirty("nonexistent-session")
 
 	// Should not create an entry
-	if _, ok := h.snapshotCache["nonexistent-session"]; ok {
+	if _, ok := h.snapshotCache.Load("nonexistent-session"); ok {
 		t.Error("markSnapshotDirty created a cache entry for an unknown session")
 	}
 }
@@ -531,7 +531,7 @@ func TestGetOrRefreshSnapshotPropagatesCaptureFnError(t *testing.T) {
 	if !strings.Contains(err.Error(), captureErr.Error()) {
 		t.Errorf("error %q does not contain %q", err.Error(), captureErr.Error())
 	}
-	if _, ok := h.snapshotCache["sess1"]; ok {
+	if _, ok := h.snapshotCache.Load("sess1"); ok {
 		t.Error("cache entry created despite captureFn error")
 	}
 }
