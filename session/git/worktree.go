@@ -24,7 +24,9 @@ func getWorktreeDirectory() (string, error) {
 }
 
 // IsDirtyCacheTTL is the duration for which a cached IsDirty result is considered fresh.
-const IsDirtyCacheTTL = 15 * time.Second
+// 30s keeps the review queue responsive while halving the subprocess rate vs 15s.
+// InvalidateDirtyCache() is called after commits/pushes so critical paths remain snappy.
+const IsDirtyCacheTTL = 30 * time.Second
 
 // GitWorktree manages git worktree operations for a session
 type GitWorktree struct {
