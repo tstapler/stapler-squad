@@ -338,8 +338,8 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCod
 
 		// Found an ESC, try to parse a complete sequence
 		code, consumed := p.parseSequenceAt(data, i)
-		if consumed > 0 && code != nil {
-			codes = append(codes, *code)
+		if consumed > 0 {
+			codes = append(codes, code)
 			i += consumed
 		} else {
 			// Not a valid sequence or incomplete, skip the ESC
@@ -350,16 +350,16 @@ func (p *EscapeCodeParser) extractEscapeSequences(data []byte) []ParsedEscapeCod
 	return codes
 }
 
-// parseSequenceAt attempts to parse an escape sequence starting at offset
-// Returns the parsed code and number of bytes consumed
-func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (*ParsedEscapeCode, int) {
+// parseSequenceAt attempts to parse an escape sequence starting at offset.
+// Returns (code, consumed); consumed == 0 means no sequence found.
+func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset >= len(data) || data[offset] != 0x1b {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Need at least 2 bytes for any escape sequence
 	if offset+1 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	secondByte := data[offset+1]
@@ -388,14 +388,14 @@ func (p *EscapeCodeParser) parseSequenceAt(data []byte, offset int) (*ParsedEsca
 		if secondByte >= 0x40 && secondByte <= 0x5F {
 			return p.parseSimpleEscape(data, offset)
 		}
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 }
 
 // parseCSI parses a CSI sequence: ESC [ params... final
-func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Find the terminator (letter A-Z or a-z)
@@ -430,7 +430,7 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode,
 			end++
 			rawBytes := data[offset:end]
 			category, description := p.categorizeCSI(rawBytes, isPrivate, hasParams)
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
 				Category:    category,
 				Description: description,
@@ -439,17 +439,17 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode,
 			}, end - offset
 		}
 		// Invalid character - not a valid CSI sequence
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// No terminator found - incomplete sequence
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseOSC parses an OSC sequence: ESC ] ... BEL or ESC ] ... ESC \
-func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Look for BEL (0x07) or ST (ESC \)
@@ -457,7 +457,7 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		// BEL terminator
 		if data[end] == 0x07 {
 			rawBytes := data[offset : end+1]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
@@ -468,7 +468,7 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		// ESC \ terminator (ST)
 		if data[end] == 0x1b && end+1 < len(data) && data[end+1] == '\\' {
 			rawBytes := data[offset : end+2]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
@@ -478,13 +478,13 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 		}
 	}
 
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseStringSequence parses DCS, PM, APC, SOS sequences ending with ST
-func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category EscapeCategory, baseDesc string) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category EscapeCategory, baseDesc string) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// Look for ST (ESC \) or single-byte ST (0x9C)
@@ -492,7 +492,7 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		// ESC \ terminator
 		if data[end] == 0x1b && end+1 < len(data) && data[end+1] == '\\' {
 			rawBytes := data[offset : end+2]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
 				Category:    category,
 				Description: baseDesc,
@@ -503,7 +503,7 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		// Single-byte ST (C1)
 		if data[end] == 0x9C {
 			rawBytes := data[offset : end+1]
-			return &ParsedEscapeCode{
+			return ParsedEscapeCode{
 				RawBytes:    rawBytes,
 				Category:    category,
 				Description: baseDesc,
@@ -513,13 +513,13 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 		}
 	}
 
-	return nil, 0
+	return ParsedEscapeCode{}, 0
 }
 
 // parseCharset parses character set designation sequences
-func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+2 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	// ESC ( X, ESC ) X, ESC * X, ESC + X
@@ -546,7 +546,7 @@ func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeC
 		}
 	}
 
-	return &ParsedEscapeCode{
+	return ParsedEscapeCode{
 		RawBytes:    rawBytes,
 		Category:    CategoryCharset,
 		Description: desc,
@@ -556,15 +556,15 @@ func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeC
 }
 
 // parseSimpleEscape parses simple 2-byte escape sequences
-func (p *EscapeCodeParser) parseSimpleEscape(data []byte, offset int) (*ParsedEscapeCode, int) {
+func (p *EscapeCodeParser) parseSimpleEscape(data []byte, offset int) (ParsedEscapeCode, int) {
 	if offset+1 >= len(data) {
-		return nil, 0
+		return ParsedEscapeCode{}, 0
 	}
 
 	rawBytes := data[offset : offset+2]
 	desc := DescribeSimpleEscape(data[offset+1])
 
-	return &ParsedEscapeCode{
+	return ParsedEscapeCode{
 		RawBytes:    rawBytes,
 		Category:    CategorySimple,
 		Description: desc,
