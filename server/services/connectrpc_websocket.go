@@ -36,6 +36,12 @@ var terminalDataPool = sync.Pool{
 // is safe to return to the pool immediately after the call.
 var envelopeBufPool = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
 
+// coalesceBufPool reuses coalesce buffers in the control-mode streaming loop.
+// data from updateChan shares a broadcast backing array; we must copy before appending.
+// marshalProtoEnvelope copies out of the coalesce buf before returning, so the buf
+// is safe to return to the pool immediately after sendData returns.
+var coalesceBufPool = sync.Pool{New: func() any { b := make([]byte, 0, 4096); return &b }}
+
 // marshalProtoEnvelope serializes msg into a pooled buffer pre-padded with a 5-byte
 // ConnectRPC envelope header, then writes it to stream in one call.
 // Eliminates the separate proto.Marshal alloc and protocol.CreateEnvelope alloc on each frame.
@@ -747,10 +753,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 				h.markSnapshotDirty(sessionID)
 
 				// Coalesce: drain any immediately available frames into a single write.
-				// Copy data into a fresh buffer — data is broadcast to all subscribers
-				// and shares a backing array; appending into it would corrupt other readers.
+				// data shares a broadcast backing array; copy into a pooled buf before appending.
 				// The batch cap of 32 bounds worst-case latency: at 10K fps that is ~3 ms.
-				buf := append([]byte(nil), data...)
+				// marshalProtoEnvelope copies the payload before returning, so buf is safe to
+				// return to coalesceBufPool after sendData.
+				cbp := coalesceBufPool.Get().(*[]byte)
+				buf := append((*cbp)[:0], data...)
 				const maxBatchFrames = 32
 				framesInBatch := 1
 			coalesce:
@@ -787,9 +795,12 @@ func (h *ConnectRPCWebSocketHandler) streamViaControlMode(stream *connectWebSock
 					escapeParser.ParseStage2(buf, instance.GetTotalBytesWritten()-int64(len(buf)))
 				}
 
-				if err := sendData(buf); err != nil {
-					log.Error("[streamViaControlMode] failed to send output", "err", err)
-					errChan <- fmt.Errorf("failed to send output: %w", err)
+				sendErr := sendData(buf)
+				*cbp = buf[:0]
+				coalesceBufPool.Put(cbp)
+				if sendErr != nil {
+					log.Error("[streamViaControlMode] failed to send output", "err", sendErr)
+					errChan <- fmt.Errorf("failed to send output: %w", sendErr)
 					return
 				}
 				// Signal quiescence detector: output is still flowing (resets the quiescence timer).
