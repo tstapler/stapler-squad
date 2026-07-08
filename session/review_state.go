@@ -1,8 +1,10 @@
 package session
 
 import (
-	"fmt"
+	"encoding/binary"
+	"encoding/hex"
 	"sync/atomic"
+	"unsafe"
 
 	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
@@ -100,10 +102,16 @@ func (rs *ReviewState) loadLastMeaningfulOutputNs() int64 {
 // computeContentSignature computes a MurmurHash3 64-bit hash of terminal content.
 // This signature is used to detect actual content changes vs app restarts with unchanged content.
 // MurmurHash3 is significantly faster than SHA256 and perfect for non-cryptographic checksums.
-// Returns a hex-encoded string representation of the hash (16 characters for 64-bit hash).
+// Returns a 16-character hex string. Uses unsafe.StringData to avoid a []byte copy.
 func computeContentSignature(content string) string {
-	hash := murmur3.Sum64([]byte(content))
-	return fmt.Sprintf("%016x", hash)
+	var b []byte
+	if len(content) > 0 {
+		b = unsafe.Slice(unsafe.StringData(content), len(content))
+	}
+	hash := murmur3.Sum64(b)
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], hash)
+	return hex.EncodeToString(buf[:])
 }
 
 // truncateString truncates s to maxLen characters. Used for log messages.
@@ -208,8 +216,14 @@ func (rs *ReviewState) ComputePromptSignature(content string) string {
 		startIdx = 0
 	}
 	promptContext := strings.Join(lines[startIdx:], "\n")
-	hash := murmur3.Sum64([]byte(promptContext))
-	return fmt.Sprintf("%016x", hash)
+	var b []byte
+	if len(promptContext) > 0 {
+		b = unsafe.Slice(unsafe.StringData(promptContext), len(promptContext))
+	}
+	hash := murmur3.Sum64(b)
+	var buf [8]byte
+	binary.BigEndian.PutUint64(buf[:], hash)
+	return hex.EncodeToString(buf[:])
 }
 
 // DetectAndTrackPrompt detects whether the current status represents a new user-facing prompt
