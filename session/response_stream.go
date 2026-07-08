@@ -36,7 +36,6 @@ type ResponseStream struct {
 	ptyAccess    *PTYAccess
 	subscribers  map[string]*Subscriber
 	mu           sync.RWMutex
-	exitTailMu   sync.Mutex // protects exitTail independently of subscriber state
 	ctx          context.Context
 	cancel       context.CancelFunc
 	wg           sync.WaitGroup
@@ -45,7 +44,6 @@ type ResponseStream struct {
 	escapeParser *analytics.EscapeCodeParser // For escape code analytics
 	onOutput     func()                      // Called on every PTY read with data (for event-driven activity tracking)
 	OnEOF        func()                      // Called when the PTY exits unexpectedly (program exit, not Stop())
-	exitTail     []byte                      // Rolling buffer of last exitTailSize bytes; logged on PTY EOF
 }
 
 // mangleCorrelatorTTL is how long a Stage 1 observation waits for its matching
@@ -280,15 +278,6 @@ func (rs *ResponseStream) streamLoop(ctx context.Context) {
 			if n > 0 {
 				data := readBuf[:n] // direct slice — valid until next pty.Read call
 
-				// Update rolling pre-exit tail buffer (keeps last exitTailSize bytes).
-				rs.exitTailMu.Lock()
-				combined := append(rs.exitTail, data...)
-				if len(combined) > exitTailSize {
-					combined = combined[len(combined)-exitTailSize:]
-				}
-				rs.exitTail = combined
-				rs.exitTailMu.Unlock()
-
 				// Notify activity listener (e.g. IdleDetector.RecordActivity)
 				if rs.onOutput != nil {
 					rs.onOutput()
@@ -494,15 +483,11 @@ func (rs *ResponseStream) GetTotalBytesWritten() int64 {
 	return rs.ptyAccess.buffer.TotalBytesWritten()
 }
 
-// GetExitTail returns a copy of the last bytes seen before the PTY exited.
-// Returns nil if the stream has not yet exited or no output was captured.
+// GetExitTail returns the last exitTailSize bytes from the circular buffer.
+// The circular buffer already holds this data; no separate rolling copy is needed.
 func (rs *ResponseStream) GetExitTail() []byte {
-	rs.exitTailMu.Lock()
-	defer rs.exitTailMu.Unlock()
-	if len(rs.exitTail) == 0 {
+	if rs.ptyAccess == nil {
 		return nil
 	}
-	out := make([]byte, len(rs.exitTail))
-	copy(out, rs.exitTail)
-	return out
+	return rs.ptyAccess.GetRecentOutput(exitTailSize)
 }
