@@ -15,12 +15,19 @@ import (
 )
 
 // knownBackgroundGoroutines lists process-wide goroutines started by the log
-// package and lumberjack at init/first-log time.  These are not actor leaks;
-// goleak must be told to ignore them so the actor-leak assertions stay tight.
+// package and lumberjack at init/first-log time, plus the signal-handler
+// goroutine started by TestMain that blocks on a signal channel for the
+// lifetime of the test binary.  These are not actor leaks; goleak must be
+// told to ignore them so the actor-leak assertions stay tight.
 var knownBackgroundGoroutines = []goleak.Option{
 	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.newAsyncWriter.func1"),
 	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/log.(*AsyncHandler).StartDrain.func1"),
 	goleak.IgnoreAnyFunction("gopkg.in/natefinch/lumberjack%2ev2.(*Logger).millRun"),
+	// TestMain spawns a signal-handler goroutine (integration_test.go) that
+	// blocks on <-sigCh for the entire test-binary lifetime.  It cannot be
+	// stopped without os.Exit, so we tell goleak to ignore it.
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func1"),
+	goleak.IgnoreTopFunction("github.com/tstapler/stapler-squad/session.TestMain.func2"),
 }
 
 // newActorTestInstance constructs a minimal *Instance suitable for actor tests.
