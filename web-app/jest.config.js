@@ -29,9 +29,12 @@ module.exports = {
           },
         ],
       },
-      transformIgnorePatterns: [
-        "/node_modules/(?!(@bufbuild|@connectrpc)/)",
-      ],
+      // react-markdown pulls in a deep tree of ESM-only unified/remark/rehype/
+      // mdast/hast transitive deps (new one surfaces every level down). Rather
+      // than hand-maintain an ever-growing allowlist of name prefixes against
+      // pnpm's ".pnpm/<pkg>@<version>/node_modules/<pkg>" store layout, just
+      // transform all of node_modules — ts-jest handles CJS and ESM alike.
+      transformIgnorePatterns: [],
     },
     {
       displayName: "eslint-plugin-analytics",

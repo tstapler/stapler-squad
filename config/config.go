@@ -416,6 +416,18 @@ func (c *Config) TriageArtifactDirOrDefault() (string, error) {
 	return filepath.Join(home, ".stapler-squad", "triage-artifacts"), nil
 }
 
+// BacklogAttachmentDirOrDefault returns the resolved backlog attachment directory.
+// Uploaded images referenced from backlog item descriptions are stored here,
+// durably (unlike the 24h temp paste dir) since they're linked from persisted
+// markdown text. Always defaults to "~/.stapler-squad/backlog-attachments".
+func (c *Config) BacklogAttachmentDirOrDefault() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("cannot expand home dir: %w", err)
+	}
+	return filepath.Join(home, ".stapler-squad", "backlog-attachments"), nil
+}
+
 // NewProjectBaseDirOrDefault returns the resolved new-project base directory.
 // If NewProjectBaseDir is empty, it defaults to "~/Projects" with ~ expanded.
 func (c *Config) NewProjectBaseDirOrDefault() (string, error) {

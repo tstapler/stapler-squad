@@ -90,3 +90,121 @@ describe("BacklogItemForm — cloning busy state", () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
   });
 });
+
+describe("BacklogItemForm — description write/preview", () => {
+  it("renders markdown in the preview tab and shows raw text in the write tab", () => {
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId("backlog-description-input"), {
+      target: { value: "**bold text**" },
+    });
+
+    fireEvent.click(screen.getByTestId("backlog-description-tab-preview"));
+    expect(screen.getByText("bold text").tagName).toBe("STRONG");
+
+    fireEvent.click(screen.getByTestId("backlog-description-tab-write"));
+    expect(screen.getByTestId("backlog-description-input")).toHaveValue("**bold text**");
+  });
+
+  it("renders a link with correct href in preview", () => {
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId("backlog-description-input"), {
+      target: { value: "see [logo](https://example.com/logo.png)" },
+    });
+    fireEvent.click(screen.getByTestId("backlog-description-tab-preview"));
+
+    const link = screen.getByRole("link", { name: "logo" });
+    expect(link).toHaveAttribute("href", "https://example.com/logo.png");
+  });
+
+  it("never executes injected script tags in preview", () => {
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    fireEvent.change(screen.getByTestId("backlog-description-input"), {
+      target: { value: "<script>window.__pwned = true;</script>" },
+    });
+    fireEvent.click(screen.getByTestId("backlog-description-tab-preview"));
+
+    expect(document.querySelector("script")).not.toBeInTheDocument();
+    expect((window as unknown as { __pwned?: boolean }).__pwned).toBeUndefined();
+  });
+});
+
+describe("BacklogItemForm — image attachment upload", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("uploads an image and inserts a markdown image reference", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ path: "/home/user/.stapler-squad/backlog-attachments/1-screenshot.png", filename: "1-screenshot.png" }),
+    });
+
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    const file = new File(["fake-bytes"], "screenshot.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId("backlog-description-input") as HTMLTextAreaElement).value
+      ).toContain("![1-screenshot.png]")
+    );
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/v1/upload-backlog-attachment"),
+      expect.objectContaining({ method: "POST" })
+    );
+  });
+
+  it("rejects a non-image file client-side without calling fetch", () => {
+    global.fetch = jest.fn();
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
+      target: { files: [file] },
+    });
+
+    expect(screen.getByTestId("backlog-attach-image-error")).toHaveTextContent(
+      "Only image files can be attached."
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized image client-side without calling fetch", () => {
+    global.fetch = jest.fn();
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    const bigFile = new File([new Uint8Array(11 * 1024 * 1024)], "big.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
+      target: { files: [bigFile] },
+    });
+
+    expect(screen.getByTestId("backlog-attach-image-error")).toHaveTextContent(
+      "Image is too large (max 10 MB)."
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("shows a server-side rejection message on a 415 response", async () => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 415 });
+    render(<BacklogItemForm onSubmit={jest.fn()} onCancel={jest.fn()} />);
+
+    const file = new File(["fake-bytes"], "photo.png", { type: "image/png" });
+    fireEvent.change(screen.getByTestId("backlog-attach-image-input"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("backlog-attach-image-error")).toHaveTextContent(
+        "Unsupported image type"
+      )
+    );
+  });
+});

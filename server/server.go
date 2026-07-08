@@ -577,6 +577,16 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 	srv.mux.Handle("/api/local/serve/", http.StripPrefix("/api/local/serve", http.HandlerFunc(localFileSvc.ServeLocalFile)))
 	log.Info("Registered local file browser at /api/local/files/list and /api/local/serve/")
 
+	// Register backlog attachment upload endpoint — durable image attachments
+	// for backlog item descriptions, served back via /api/local/serve/.
+	if backlogAttachmentDir, err := cfg.BacklogAttachmentDirOrDefault(); err != nil {
+		log.Error("[Server] cannot resolve backlog attachment dir", "err", err)
+	} else {
+		backlogAttachmentHandler := services.NewBacklogAttachmentUploadHandler(backlogAttachmentDir)
+		srv.mux.HandleFunc("POST /api/v1/upload-backlog-attachment", backlogAttachmentHandler.HandleUpload)
+		log.Info("Registered backlog attachment upload handler at POST /api/v1/upload-backlog-attachment", "dir", backlogAttachmentDir)
+	}
+
 	// Start hibernation sweeper (auto-hibernates idle sessions and prunes stale checkpoints).
 	if cfg.Hibernation.Enabled {
 		sweeper := session.NewHibernationSweeper(deps.Storage, cfg, memory.NewGopsutilReader())

@@ -2,6 +2,8 @@
 // +feature: backlog:item-detail
 
 import { useState, useEffect, useCallback } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { BacklogItem, AcCriterion, BacklogItemInput } from "@/lib/hooks/useBacklogService";
 import { useBacklogService } from "@/lib/hooks/useBacklogService";
 import { useSessionService } from "@/lib/hooks/useSessionService";
@@ -15,6 +17,7 @@ import { TriageLoadingIndicator } from "./TriageLoadingIndicator";
 import { TriageReviewPanel } from "./TriageReviewPanel";
 import { ReviewChangesModal } from "./ReviewChangesModal";
 import * as styles from "./BacklogItemDetail.css";
+import * as markdownStyles from "./markdownBody.css";
 
 interface BacklogItemDetailProps {
   itemId: string;
@@ -646,7 +649,9 @@ export function BacklogItemDetail({ itemId, onClose }: BacklogItemDetailProps) {
         <div className={styles.section}>
           <h3 className={styles.sectionTitle}>Description</h3>
           {item.description ? (
-            <p className={styles.description}>{item.description}</p>
+            <div className={markdownStyles.markdownBody} data-testid="backlog-description-rendered">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.description}</ReactMarkdown>
+            </div>
           ) : (
             <p className={styles.emptyText}>No description.</p>
           )}

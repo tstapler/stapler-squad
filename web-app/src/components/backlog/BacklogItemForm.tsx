@@ -1,11 +1,17 @@
 "use client";
 // +feature: backlog:item-form
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import type { BacklogItem, BacklogItemInput, AcCriterion, AcCriterionStatus } from "@/lib/hooks/useBacklogService";
 import { RepoPathInput } from "@/components/ui/RepoPathInput";
 import { isGitHubRef } from "@/lib/github/urlParser";
+import { getApiBaseUrl } from "@/lib/config";
 import * as styles from "./BacklogItemForm.css";
+import * as markdownStyles from "./markdownBody.css";
+
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB — matches server-side cap
 
 interface BacklogItemFormProps {
   initialValues?: Partial<BacklogItem>;
@@ -43,6 +49,11 @@ export function BacklogItemForm({
   );
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
+  const [descriptionTab, setDescriptionTab] = useState<"write" | "preview">("write");
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const descriptionRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const validate = useCallback((): FormErrors => {
     const errs: FormErrors = {};
@@ -109,6 +120,82 @@ export function BacklogItemForm({
     );
   }, []);
 
+  // Uploads a single image and inserts a markdown image reference at the cursor.
+  // ponytail: cursor position is captured once at upload start, so two uploads
+  // fired back-to-back can land at a stale offset relative to each other —
+  // acceptable for the rare double-paste case; revisit with an insertion-token
+  // queue if that turns out to matter in practice.
+  const uploadAttachment = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith("image/")) {
+        setAttachmentError("Only image files can be attached.");
+        return;
+      }
+      if (file.size > MAX_ATTACHMENT_BYTES) {
+        setAttachmentError("Image is too large (max 10 MB).");
+        return;
+      }
+      const el = descriptionRef.current;
+      const start = el?.selectionStart ?? description.length;
+      const end = el?.selectionEnd ?? description.length;
+      setAttachmentError(null);
+      setUploading(true);
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        const resp = await fetch(`${getApiBaseUrl()}/v1/upload-backlog-attachment`, {
+          method: "POST",
+          body: formData,
+        });
+        if (!resp.ok) {
+          const msg =
+            resp.status === 413
+              ? "Image is too large (max 10 MB)."
+              : resp.status === 415
+                ? "Unsupported image type — use PNG, JPEG, GIF, or WebP."
+                : "Upload failed.";
+          setAttachmentError(msg);
+          return;
+        }
+        const data = (await resp.json()) as { path: string; filename: string };
+        const url = encodeURI(`/api/local/serve${data.path}`);
+        const markdown = `![${data.filename}](${url})`;
+        setDescription((prev) => prev.slice(0, start) + markdown + prev.slice(end));
+        requestAnimationFrame(() => {
+          el?.focus();
+          const pos = start + markdown.length;
+          el?.setSelectionRange(pos, pos);
+        });
+      } catch {
+        setAttachmentError("Network error — upload failed.");
+      } finally {
+        setUploading(false);
+      }
+    },
+    [description.length]
+  );
+
+  const handleFileInputChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = "";
+      if (file) void uploadAttachment(file);
+    },
+    [uploadAttachment]
+  );
+
+  const handleDescriptionPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+      if (!item) return;
+      const file = item.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      void uploadAttachment(file);
+    },
+    [uploadAttachment]
+  );
+
   const busy = submitting || isLoading;
   const isCloningRepo = useMemo(() => isGitHubRef(repoPath), [repoPath]);
 
@@ -148,18 +235,80 @@ export function BacklogItemForm({
 
       {/* Description */}
       <div className={styles.fieldGroup}>
-        <label htmlFor="backlog-description" className={styles.label}>
-          Description
-        </label>
-        <textarea
-          id="backlog-description"
-          className={styles.textarea}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder="Provide more context (optional)"
-          disabled={busy}
-          data-testid="backlog-description-input"
-        />
+        <div className={styles.descriptionHeader}>
+          <label htmlFor="backlog-description" className={styles.label}>
+            Description
+          </label>
+          <div className={styles.descriptionToolbar} role="tablist" aria-label="Description mode">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={descriptionTab === "write"}
+              className={descriptionTab === "write" ? styles.descriptionTabActive : styles.descriptionTab}
+              onClick={() => setDescriptionTab("write")}
+              data-testid="backlog-description-tab-write"
+            >
+              Write
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={descriptionTab === "preview"}
+              className={descriptionTab === "preview" ? styles.descriptionTabActive : styles.descriptionTab}
+              onClick={() => setDescriptionTab("preview")}
+              data-testid="backlog-description-tab-preview"
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className={styles.attachButton}
+              onClick={() => fileInputRef.current?.click()}
+              disabled={busy || uploading}
+              data-testid="backlog-attach-image"
+            >
+              {uploading ? "Uploading…" : "📎 Attach image"}
+            </button>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className={styles.hiddenFileInput}
+              onChange={handleFileInputChange}
+              disabled={busy || uploading}
+              aria-label="Attach image"
+              data-testid="backlog-attach-image-input"
+            />
+          </div>
+        </div>
+        {descriptionTab === "write" ? (
+          <textarea
+            id="backlog-description"
+            ref={descriptionRef}
+            className={styles.textarea}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            onPaste={handleDescriptionPaste}
+            placeholder="Provide more context (optional). Supports markdown — paste or attach a screenshot."
+            disabled={busy}
+            data-testid="backlog-description-input"
+          />
+        ) : (
+          <div className={styles.previewBox} data-testid="backlog-description-preview">
+            {description.trim() ? (
+              <div className={markdownStyles.markdownBody}>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{description}</ReactMarkdown>
+              </div>
+            ) : (
+              <span className={styles.previewEmpty}>Nothing to preview yet.</span>
+            )}
+          </div>
+        )}
+        {attachmentError && (
+          <span className={styles.errorMessage} role="alert" data-testid="backlog-attach-image-error">
+            {attachmentError}
+          </span>
+        )}
       </div>
 
       {/* Repo path + Priority */}
