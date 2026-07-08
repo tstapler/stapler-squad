@@ -554,6 +554,15 @@ func (cc *ClaudeController) GetQueuedCommands() []*Command {
 	return nil
 }
 
+// GetQueuedCommandsCount returns the number of commands in the queue without
+// allocating a slice. Use this instead of len(GetQueuedCommands()) on hot paths.
+func (cc *ClaudeController) GetQueuedCommandsCount() int {
+	if q := cc.queue.Load(); q != nil {
+		return q.Len()
+	}
+	return 0
+}
+
 // GetCommandHistory returns recent command history.
 func (cc *ClaudeController) GetCommandHistory(limit int) []*HistoryEntry {
 	h := cc.history.Load()

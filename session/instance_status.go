@@ -86,14 +86,11 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 		info.ClaudeStatus = claudeStatus
 		info.StatusContext = statusContext
 
-		// Get queued commands count
-		commands := controller.GetQueuedCommands()
-		info.QueuedCommands = len(commands)
+		info.QueuedCommands = controller.GetQueuedCommandsCount()
 
-		// Get current command if any
 		currentCmd := controller.GetCurrentCommand()
 		if currentCmd != nil {
-			info.LastCommandStatus = fmt.Sprintf("Executing: %s", currentCmd.Text)
+			info.LastCommandStatus = "Executing: " + currentCmd.Text
 		}
 
 		// Get idle state information
