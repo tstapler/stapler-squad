@@ -56,7 +56,7 @@ endif
 		touch $(ASDF_STAMP); \
 	fi
 
-.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules ensure-tmux-configure test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard
+.PHONY: help build test benchmark install-tools lint lint-custom actor-lint analyze nil-safety security format fmt-check check-deps clean all proto-gen proto-lint proto-build web-build web-dev restart-web restart-web-profile qr demo-video demo-post-process demo-gif benchmark-baseline benchmark-compare benchmark-tier1 profile-goroutines profile-block profile-mutex profile-trace build-mux install-mux install-service rollback backup-binary uninstall-service setup-codesign _codesign-binary verify-codesign tcc-reset preview coverage-func coverage-gaps coverage-pkg coverage-refactor registry-generate-backend registry-generate-frontend registry-generate registry-diff e2e-report e2e-lighthouse build-tmux build-tmux-embed build-embedded clean-tmux init-submodules ensure-tmux-configure test-with-pinned-tmux test-trace test-profile vet-architecture vet-rpc-markers coverage-integration actor-field-guard checklocks
 
 # Default target
 help: ## Show this help message
@@ -557,6 +557,7 @@ install-tools: ensure-tools ## Install all development and analysis tools
 	go install github.com/jtbonhomme/go-nilcheck/cmd/nilcheck@latest
 	go install golang.org/x/tools/cmd/deadcode@latest
 	go install golang.org/x/perf/cmd/benchstat@latest
+	go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
 	@echo "All tools installed successfully!"
 
 # Code quality and analysis
@@ -689,8 +690,22 @@ deadcode: ensure-tools ## Find unreachable/dead code
 	@echo "💀 Finding dead code..."
 	deadcode -test ./...
 
+# Mutex discipline enforcement via gVisor checklocks
+# Uses go vet -vettool to enforce explicit +checklocks: field annotations.
+# -inferred=false: only report violations of explicit annotations, not suggestions.
+# -atomic=false: skip atomic-inside-lock checks (handled by race detector in tests).
+# Skips packages where deadlock.Mutex wrapping causes false-positive "return with
+# unexpected locks held" reports (./session top-level, ./server/...).
+# Install: go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest
+checklocks: ## Enforce +checklocks: mutex-discipline annotations (explicit violations only)
+	@if ! which checklocks >/dev/null 2>&1; then \
+		echo "Installing checklocks..."; \
+		go install gvisor.dev/gvisor/tools/checklocks/cmd/checklocks@latest; \
+	fi
+	checklocks -inferred=false -atomic=false ./session/git/... ./session/detection/... ./session/artifacts/... ./session/cdp/... ./session/scrollback/... ./session/mux/... ./executor/... ./log/... ./config/... ./pkg/...
+
 # Comprehensive analysis
-analyze: install-tools vet lint staticcheck nil-safety security deadcode ## Run all static analysis tools
+analyze: install-tools vet lint staticcheck nil-safety security deadcode checklocks ## Run all static analysis tools
 
 # Dependency management
 check-deps: ensure-tools ## Check for outdated dependencies

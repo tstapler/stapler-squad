@@ -51,8 +51,8 @@ type GitWorktree struct {
 
 	// isDirty cache fields — protected by isDirtyCacheMu.
 	isDirtyCacheMu   sync.RWMutex
-	isDirtyCache     bool
-	isDirtyCacheTime time.Time
+	isDirtyCache     bool      // +checklocks:isDirtyCacheMu
+	isDirtyCacheTime time.Time // +checklocks:isDirtyCacheMu
 
 	// isDirtySF coalesces concurrent dirty-checks on the same worktree so only
 	// one in-process status check runs at a time.

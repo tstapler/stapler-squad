@@ -13,15 +13,15 @@ import (
 // when the in-memory buffer fills up. This prevents memory overflow while maintaining
 // a history of PTY output for status detection and debugging.
 type CircularBuffer struct {
-	data              []byte
-	size              int
-	head              int // Write position
-	tail              int // Read position
-	count             int // Number of bytes in buffer
-	diskFile          *os.File
 	mu                sync.RWMutex
-	wrapped           bool  // True if head has wrapped around past tail
-	totalBytesWritten int64 // Monotonically increasing total bytes ever written
+	size              int      // immutable after construction; no lock needed
+	data              []byte   // +checklocks:mu
+	head              int      // +checklocks:mu
+	tail              int      // +checklocks:mu
+	count             int      // +checklocks:mu
+	diskFile          *os.File // +checklocks:mu
+	wrapped           bool     // +checklocks:mu
+	totalBytesWritten int64    // +checklocks:mu
 }
 
 const (

@@ -25,7 +25,7 @@ import "sync"
 //	})
 type Locked[T any] struct {
 	mu  sync.RWMutex
-	val T
+	val T // +checklocks:mu
 }
 
 // Read calls fn with a read-only copy of the value, holding the read lock for

@@ -15,14 +15,14 @@ type ScrollbackEntry struct {
 // CircularBuffer implements a thread-safe fixed-size circular buffer for terminal scrollback.
 // When the buffer is full, new entries overwrite the oldest entries.
 type CircularBuffer struct {
-	entries  []ScrollbackEntry
-	head     int    // Index of next write position
-	tail     int    // Index of oldest entry
-	size     int    // Current number of entries
-	maxSize  int    // Maximum capacity
-	sequence uint64 // Monotonically increasing sequence number
 	mutex    sync.RWMutex
-	dirty    bool // Indicates buffer has unsaved changes
+	maxSize  int               // immutable after construction; no lock needed
+	entries  []ScrollbackEntry // +checklocks:mutex
+	head     int               // +checklocks:mutex
+	tail     int               // +checklocks:mutex
+	size     int               // +checklocks:mutex
+	sequence uint64            // +checklocks:mutex
+	dirty    bool              // +checklocks:mutex
 }
 
 // NewCircularBuffer creates a new circular buffer with the specified maximum size.
