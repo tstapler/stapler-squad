@@ -5,7 +5,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
@@ -45,19 +45,17 @@ type BinaryDetector = dtypes.BinaryDetector
 
 // StatusDetector analyzes PTY output to determine the current status of a Claude instance.
 type StatusDetector struct {
-	patternSet   *PatternSet
-	patternSetMu sync.RWMutex
-	sink         DetectionEventSink
-	normalizer   PTYNormalizer
+	patternSet atomic.Pointer[PatternSet]
+	sink       DetectionEventSink
+	normalizer PTYNormalizer
 }
 
 // NewStatusDetector creates a new status detector with default patterns.
 func NewStatusDetector() *StatusDetector {
 	ps, _ := NewPatternSet(getDefaultPatterns())
-	return &StatusDetector{
-		patternSet: ps,
-		normalizer: PTYNormalizer{},
-	}
+	sd := &StatusDetector{normalizer: PTYNormalizer{}}
+	sd.patternSet.Store(ps)
+	return sd
 }
 
 // validatePatternFilePath rejects paths containing ".." to prevent path traversal.
@@ -87,11 +85,8 @@ func NewStatusDetectorFromFile(path string) (*StatusDetector, error) {
 	if err != nil {
 		return nil, err
 	}
-	sd := &StatusDetector{
-		patternSet: ps,
-		normalizer: PTYNormalizer{},
-	}
-
+	sd := &StatusDetector{normalizer: PTYNormalizer{}}
+	sd.patternSet.Store(ps)
 	return sd, nil
 }
 
@@ -114,9 +109,7 @@ func (sd *StatusDetector) LoadPatterns(path string) error {
 	if err != nil {
 		return err
 	}
-	sd.patternSetMu.Lock()
-	sd.patternSet = newSet
-	sd.patternSetMu.Unlock()
+	sd.patternSet.Store(newSet)
 	return nil
 }
 
@@ -250,9 +243,7 @@ const StatusDetectionTailBytes = 4096
 //
 // rawPTY must be the original PTY bytes before collapseCarriageReturns is applied.
 func (sd *StatusDetector) detectFromText(text string, rawPTY []byte) (DetectedStatus, string, string) {
-	sd.patternSetMu.RLock()
-	ps := sd.patternSet
-	sd.patternSetMu.RUnlock()
+	ps := sd.patternSet.Load()
 	return ps.MatchLines(text, rawPTY)
 }
 
@@ -681,7 +672,7 @@ func (sd *StatusDetector) ExportPatterns(path string) error {
 	if err := validatePatternFilePath(path); err != nil {
 		return err
 	}
-	p := sd.patternSet.Patterns()
+	p := sd.patternSet.Load().Patterns()
 	data, err := yaml.Marshal(&p)
 	if err != nil {
 		return fmt.Errorf("failed to marshal status patterns: %w", err)
@@ -696,7 +687,7 @@ func (sd *StatusDetector) ExportPatterns(path string) error {
 
 // GetPatternNames returns the names of all loaded patterns for a given status.
 func (sd *StatusDetector) GetPatternNames(status DetectedStatus) []string {
-	p := sd.patternSet.Patterns()
+	p := sd.patternSet.Load().Patterns()
 	var patterns []StatusPattern
 	switch status {
 	case StatusReady:
@@ -743,7 +734,9 @@ var builtBinaryDetectors = func() map[string]*StatusDetector {
 	for _, name := range reg.Names() {
 		bd, _ := reg.Lookup(name)
 		ps, _ := NewPatternSet(bd.Patterns()) // patterns are from code, always valid
-		m[name] = &StatusDetector{patternSet: ps}
+		bsd := &StatusDetector{}
+		bsd.patternSet.Store(ps)
+		m[name] = bsd
 	}
 	return m
 }()
