@@ -3,15 +3,16 @@ package git
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"time"
+
 	"github.com/tstapler/stapler-squad/config"
 	"github.com/tstapler/stapler-squad/executor"
 	"github.com/tstapler/stapler-squad/executor/safeexec"
 	"github.com/tstapler/stapler-squad/log"
 	"golang.org/x/sync/singleflight"
-	"path/filepath"
-	"strings"
-	"sync"
-	"time"
 )
 
 func getWorktreeDirectory() (string, error) {
@@ -34,6 +35,14 @@ const IsDirtyCacheTTL = 30 * time.Second
 // cuts subprocess calls by ~10x vs dirty-path TTL for quiescent sessions.
 const IsDirtyCleanCacheTTL = 5 * time.Minute
 
+// dirtyCacheState is the immutable snapshot stored in GitWorktree.isDirtyCache.
+// atomic.Value replaces the previous sync.RWMutex + two fields; readers do a
+// lock-free Load() on the hot per-tick path.
+type dirtyCacheState struct {
+	dirty bool
+	time  time.Time
+}
+
 // GitWorktree manages git worktree operations for a session
 type GitWorktree struct {
 	// Path to the repository
@@ -49,10 +58,8 @@ type GitWorktree struct {
 	// cmdExec is used to execute commands for this worktree.
 	cmdExec executor.Executor
 
-	// isDirty cache fields — protected by isDirtyCacheMu.
-	isDirtyCacheMu   sync.RWMutex
-	isDirtyCache     bool      // +checklocks:isDirtyCacheMu
-	isDirtyCacheTime time.Time // +checklocks:isDirtyCacheMu
+	// ponytail: atomic.Value replaces sync.RWMutex+bool+time — lock-free reads on the fast cache-hit path
+	isDirtyCache atomic.Value // stores dirtyCacheState; zero value = cache invalid
 
 	// isDirtySF coalesces concurrent dirty-checks on the same worktree so only
 	// one in-process status check runs at a time.
