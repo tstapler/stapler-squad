@@ -645,11 +645,11 @@ func isOctalDigits(s string) bool {
 }
 
 // broadcastControlModeUpdate sends terminal output to all subscribed WebSocket clients.
-// Uses a write lock (not RLock) to prevent send-on-closed-channel panics when
-// UnsubscribeFromControlModeUpdates closes a channel concurrently.
+// RLock is safe: UnsubscribeFromControlModeUpdates holds WLock when closing channels,
+// so RLock and WLock are mutually exclusive — no send-on-closed-channel is possible.
 func (t *TmuxSession) broadcastControlModeUpdate(data []byte) {
-	t.controlModeSubMu.Lock()
-	defer t.controlModeSubMu.Unlock()
+	t.controlModeSubMu.RLock()
+	defer t.controlModeSubMu.RUnlock()
 
 	for subscriberID, ch := range t.controlModeSubscribers {
 		select {
