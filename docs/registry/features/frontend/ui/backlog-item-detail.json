@@ -6,7 +6,8 @@
   "markerLine": 0,
   "tested": true,
   "testIds": [
-    "BacklogItemDetail — background refresh must not unmount the view"
+    "BacklogItemDetail — background refresh must not unmount the view",
+    "e2e:plan-gate-blocks-spawn-until-approved-or-skipped"
   ],
-  "lastModified": "2026-07-01T00:00:00Z"
+  "lastModified": "2026-07-08T18:58:31Z"
 }
