@@ -673,7 +673,7 @@ func (rqp *ReviewQueuePoller) checkSession(inst *Instance, paneActivity map[stri
 	// when an identical prompt reappears, so IsAcknowledgedAfterOutput() would be a false
 	// positive and silently suppress a live blocking prompt.
 	isActiveHighPriority := shouldAdd && priority <= PriorityHigh
-	if !isActiveHighPriority && inst.IsAcknowledgedAfterOutput() {
+	if !isActiveHighPriority && snap.IsAcknowledgedAfterOutput() {
 		rqp.queue.Remove(snap.Title)
 		return
 	}

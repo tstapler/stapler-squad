@@ -179,12 +179,15 @@ func (rs *ReviewState) UserRespondedAfterPrompt() bool {
 //   - sessionTitle: used only for structured debug logging.
 //
 // Caller must hold Instance.mu.
-func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) {
+// Returns true when any field was updated (caller should rebuild the snapshot).
+func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) bool {
 	now := time.Now()
+	changed := false
 
 	// Always update LastTerminalUpdate for any non-blank raw output.
 	if len(strings.TrimSpace(rawContent)) > 0 {
 		rs.LastTerminalUpdate = now
+		changed = true
 	}
 
 	if shouldUpdateMeaningful {
@@ -193,6 +196,7 @@ func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shou
 			rs.LastMeaningfulOutput = now
 			atomic.StoreInt64(&rs.lastMeaningfulOutputNs, now.UnixNano())
 			rs.LastOutputSignature = signature
+			changed = true
 			log.ForSession(sessionTitle).Debug("Updated LastMeaningfulOutput timestamp")
 		} else {
 			log.ForSession(sessionTitle).Debug("Skipped LastMeaningfulOutput update (content unchanged since last update)")
@@ -200,6 +204,7 @@ func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shou
 	} else {
 		log.ForSession(sessionTitle).Debug("NOT updating LastMeaningfulOutput - content classified as non-meaningful (banners only)")
 	}
+	return changed
 }
 
 // ComputePromptSignature computes a hash of the prompt content using the last 10 lines.
