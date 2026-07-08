@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,8 +32,8 @@ type EscapeCodeStats struct {
 
 // EscapeCodeStore provides thread-safe storage for escape code analytics
 type EscapeCodeStore struct {
+	enabled    atomic.Bool // fast path: checked without mu; true only if explicitly enabled
 	mu         sync.RWMutex
-	enabled    bool
 	entries    map[string]*EscapeCodeEntry // key: hex-encoded code
 	totalCount int64
 	maxEntries int // Limit to prevent unbounded growth
@@ -41,7 +42,6 @@ type EscapeCodeStore struct {
 // NewEscapeCodeStore creates a new store with default settings
 func NewEscapeCodeStore() *EscapeCodeStore {
 	return &EscapeCodeStore{
-		enabled:    false,
 		entries:    make(map[string]*EscapeCodeEntry),
 		maxEntries: 10000, // Reasonable limit
 	}
@@ -49,24 +49,22 @@ func NewEscapeCodeStore() *EscapeCodeStore {
 
 // SetEnabled enables or disables tracking
 func (s *EscapeCodeStore) SetEnabled(enabled bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.enabled = enabled
+	s.enabled.Store(enabled)
 }
 
 // IsEnabled returns whether tracking is enabled
 func (s *EscapeCodeStore) IsEnabled() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.enabled
+	return s.enabled.Load()
 }
 
 // Record adds or updates an escape code entry
 func (s *EscapeCodeStore) Record(sessionID string, rawBytes []byte, category EscapeCategory, description string) {
+	if !s.enabled.Load() { // fast path: no lock when store is disabled (default)
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if !s.enabled {
+	if !s.enabled.Load() { // double-check: enabled may have changed between Load and Lock
 		return
 	}
 
@@ -209,7 +207,7 @@ func (s *EscapeCodeStore) GetStats() EscapeCodeStats {
 	defer s.mu.RUnlock()
 
 	stats := EscapeCodeStats{
-		Enabled:        s.enabled,
+		Enabled:        s.enabled.Load(),
 		TotalCodes:     s.totalCount,
 		UniqueCodes:    len(s.entries),
 		CategoryCounts: make(map[EscapeCategory]int64),
@@ -270,7 +268,7 @@ func (s *EscapeCodeStore) Export() ([]byte, error) {
 		Entries    []EscapeCodeEntry `json:"entries"`
 		ExportedAt time.Time         `json:"exportedAt"`
 	}{
-		Enabled:    s.enabled,
+		Enabled:    s.enabled.Load(),
 		TotalCount: s.totalCount,
 		ExportedAt: time.Now(),
 	}
