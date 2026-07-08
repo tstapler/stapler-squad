@@ -119,32 +119,32 @@ func NewIdleDetectorWithDetector(sessionName string, ptyAccess PTYReader, config
 // DEPRECATED: Use DetectStateFromContent for more reliable detection.
 // This method uses the PTY circular buffer which may contain incomplete data.
 func (id *IdleDetector) DetectState() IdleState {
-	id.mu.Lock()
-	defer id.mu.Unlock()
+	// Phase 1: read config + PTY outside the write lock.
+	id.mu.RLock()
+	bufSize := id.config.BufferSize
+	id.mu.RUnlock()
 
-	// Get recent output for pattern matching
-	recentOutput := id.ptyAccess.GetRecentOutput(id.config.BufferSize)
+	recentOutput := id.ptyAccess.GetRecentOutput(bufSize)
 	if len(recentOutput) == 0 {
-		// No output yet, keep current state
-		return id.currentState
+		id.mu.RLock()
+		s := id.currentState
+		id.mu.RUnlock()
+		return s
 	}
 
-	// Detect status from patterns
+	// statusDetector.Detect is lock-free (atomic.Pointer inside).
 	status := id.statusDetector.Detect(recentOutput)
 
-	// Map detected status to idle state
+	// Phase 2: state update under write lock (mapStatusToIdleState writes lastActivity).
+	id.mu.Lock()
+	defer id.mu.Unlock()
 	newState := id.mapStatusToIdleState(status)
-
-	// Apply debouncing to prevent rapid state changes
-	// BUT: if current state is Unknown, always transition immediately
 	if newState != id.currentState {
 		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay {
 			id.currentState = newState
 			id.lastStateChange = id.timeNow()
 		}
-		// If debouncing, keep current state
 	}
-
 	return id.currentState
 }
 
@@ -152,34 +152,31 @@ func (id *IdleDetector) DetectState() IdleState {
 // This method should be preferred over DetectState() as it allows the caller to provide
 // reliable terminal content (e.g., from tmux capture-pane) instead of using the PTY circular buffer.
 func (id *IdleDetector) DetectStateFromContent(content string) IdleState {
-	id.mu.Lock()
-	defer id.mu.Unlock()
-
 	if content == "" {
-		// No content, keep current state
-		return id.currentState
+		id.mu.RLock()
+		s := id.currentState
+		id.mu.RUnlock()
+		return s
 	}
 
+	// Phase 1: expensive detection outside the lock.
+	// statusDetector is lock-free (atomic.Pointer); strings.Split is pure.
 	// Detect via line-based reverse scan: process from the most recent line
 	// backwards so a fresh idle prompt on the last line (e.g. "? for shortcuts")
 	// takes priority over a stale "esc to interrupt" from an earlier turn.
-	// collapseCarriageReturns + ANSI stripping are applied per-line inside DetectFromLines.
 	lines := strings.Split(content, "\n")
 	status := id.statusDetector.DetectFromLines(lines)
 
-	// Map detected status to idle state
+	// Phase 2: state update under write lock (mapStatusToIdleState writes lastActivity).
+	id.mu.Lock()
+	defer id.mu.Unlock()
 	newState := id.mapStatusToIdleState(status)
-
-	// Apply debouncing to prevent rapid state changes
-	// BUT: if current state is Unknown, always transition immediately
 	if newState != id.currentState {
 		if id.currentState == IdleStateUnknown || id.timeNow().Sub(id.lastStateChange) >= id.config.DebounceDelay {
 			id.currentState = newState
 			id.lastStateChange = id.timeNow()
 		}
-		// If debouncing, keep current state
 	}
-
 	return id.currentState
 }
 
