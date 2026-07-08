@@ -2,7 +2,6 @@ package tmux
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -358,15 +357,14 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		return
 	}
 
-	fields := strings.SplitN(line, " ", 3)
-	notificationType := fields[0]
+	// strings.Cut avoids the []string allocation of SplitN on the hot %output path.
+	notificationType, rest, _ := strings.Cut(line, " ")
 
 	switch notificationType {
 	case "%output":
 		// %output %PANE_ID DATA — broadcast even inside a command response block.
-		if len(fields) >= 3 {
-			paneID := fields[1]
-			encodedData := fields[2]
+		paneID, encodedData, hasData := strings.Cut(rest, " ")
+		if hasData {
 			data := t.decodeControlModeOutput(encodedData)
 			if len(data) > 0 {
 				t.broadcastControlModeUpdate(data)
@@ -412,8 +410,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		if t.inCmdResp {
 			// Error description lines appear between %begin and %error in the body buffer.
 			errMsg := strings.TrimSpace(t.cmdBodyBuf.String())
-			if errMsg == "" && len(fields) >= 2 {
-				errMsg = strings.Join(fields[1:], " ")
+			if errMsg == "" && rest != "" {
+				errMsg = rest
 			}
 			if t.curCmdCh != nil {
 				select {
@@ -425,8 +423,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 			t.inCmdResp = false
 			t.cmdBodyBuf.Reset()
 		} else {
-			if len(fields) >= 2 {
-				log.Error("control mode error", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
+			if rest != "" {
+				log.Error("control mode error", "session", t.sanitizedName, "detail", rest)
 			}
 		}
 
@@ -479,8 +477,8 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 
 	case "%session-closed":
-		if len(fields) >= 2 {
-			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", strings.Join(fields[1:], " "))
+		if rest != "" {
+			log.Info("control mode session-closed", "session", t.sanitizedName, "detail", rest)
 		}
 		if !t.intentionalStop.Load() {
 			t.onExitOnce.Do(func() {
@@ -491,8 +489,9 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		}
 
 	case "%session-changed":
-		if len(fields) >= 3 {
-			log.Info("control mode session-changed", "session", t.sanitizedName, "newSession", fields[2])
+		_, newSession, _ := strings.Cut(rest, " ")
+		if newSession != "" {
+			log.Info("control mode session-changed", "session", t.sanitizedName, "newSession", newSession)
 		}
 
 	default:
@@ -610,30 +609,26 @@ func (t *TmuxSession) enqueueCMCommand(ctx context.Context, ch chan cmSendReq, a
 // Control mode replaces characters < ASCII 32 and backslash with octal escape sequences (\ooo).
 // For example: "hello\012world" represents "hello\nworld"
 func (t *TmuxSession) decodeControlModeOutput(encoded string) []byte {
-	var result bytes.Buffer
-
+	// Pre-allocate at input length: decoded output is never longer than the encoded input
+	// (octal escapes encode 1 byte as 4 chars, so the decode is always ≤ len(encoded)).
+	result := make([]byte, 0, len(encoded))
 	i := 0
 	for i < len(encoded) {
 		if encoded[i] == '\\' && i+3 < len(encoded) {
-			// Check for octal escape sequence (\ooo)
 			octal := encoded[i+1 : i+4]
 			if isOctalDigits(octal) {
-				// Parse octal value
 				value, err := strconv.ParseUint(octal, 8, 8)
 				if err == nil {
-					result.WriteByte(byte(value))
-					i += 4 // Skip \ooo
+					result = append(result, byte(value))
+					i += 4
 					continue
 				}
 			}
 		}
-
-		// Regular character (not an octal escape)
-		result.WriteByte(encoded[i])
+		result = append(result, encoded[i])
 		i++
 	}
-
-	return result.Bytes()
+	return result
 }
 
 // isOctalDigits checks if a string contains exactly 3 octal digits (0-7).
