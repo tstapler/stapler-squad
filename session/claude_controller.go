@@ -127,6 +127,10 @@ type ClaudeController struct {
 	// Writes allocate a small struct (~32/16 bytes) on cache miss (~10/s).
 	statusCache atomic.Pointer[statusCacheEntry]
 	idleCache   atomic.Pointer[idleCacheEntry]
+
+	// started shadows lifecycle.ctx != nil for lock-free IsStarted / running checks.
+	// Set true inside Start()'s write lock; cleared at the start of Stop().
+	started atomic.Bool
 }
 
 // SetOnEOFCallback registers a function called when the PTY backing this controller
@@ -357,6 +361,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 		return startErr
 	}
 
+	cc.started.Store(true)
 	log.Info("claude controller started", "session", cc.sessionName)
 	return nil
 }
@@ -369,6 +374,7 @@ func (cc *ClaudeController) Start(ctx context.Context) error {
 // GetCurrentStatus, GetRecentOutput, Subscribe, etc. are never blocked.
 func (cc *ClaudeController) Stop() error {
 	// Phase 1: grab the cancel function and mark as stopped (brief write lock).
+	cc.started.Store(false)
 	var cancelFn context.CancelFunc
 	cc.lifecycle.Write(func(l *controllerLifecycle) {
 		if l.cancel == nil {
@@ -435,11 +441,7 @@ func (cc *ClaudeController) Stop() error {
 
 // SendCommand sends a command to the Claude instance (queued execution).
 func (cc *ClaudeController) SendCommand(text string, priority int) (string, error) {
-	var running bool
-	cc.lifecycle.Read(func(l controllerLifecycle) {
-		running = l.ctx != nil
-	})
-	if !running {
+	if !cc.started.Load() {
 		return "", fmt.Errorf("controller not started")
 	}
 
@@ -467,11 +469,7 @@ func (cc *ClaudeController) SendCommand(text string, priority int) (string, erro
 
 // SendCommandImmediate sends a command for immediate execution (bypasses queue).
 func (cc *ClaudeController) SendCommandImmediate(text string) (*ExecutionResult, error) {
-	var running bool
-	cc.lifecycle.Read(func(l controllerLifecycle) {
-		running = l.ctx != nil
-	})
-	if !running {
+	if !cc.started.Load() {
 		return nil, fmt.Errorf("controller not started")
 	}
 
@@ -704,6 +702,12 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 // This prevents false positive status detections from metadata like session names
 // appearing in window titles, status bars, or shell prompts.
 func filterTmuxMetadata(content string) (string, int) {
+	// Fast path: if no line starts with '[' (tmux status bar marker), skip the rebuild.
+	// Covers the common case where terminal output has no tmux metadata lines.
+	if len(content) == 0 || (content[0] != '[' && !strings.Contains(content, "\n[")) {
+		return content, 0
+	}
+
 	var sb strings.Builder
 	sb.Grow(len(content))
 	removedCount := 0
@@ -809,11 +813,7 @@ func (cc *ClaudeController) GetRecentOutput(bytes int) []byte {
 
 // IsStarted returns whether the controller is currently started.
 func (cc *ClaudeController) IsStarted() bool {
-	var started bool
-	cc.lifecycle.Read(func(l controllerLifecycle) {
-		started = l.ctx != nil
-	})
-	return started
+	return cc.started.Load()
 }
 
 // GetSessionName returns the session name for this controller.
