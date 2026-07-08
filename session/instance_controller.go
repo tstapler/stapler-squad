@@ -35,7 +35,7 @@ func (i *Instance) StartController() error {
 	}
 
 	// Don't recreate if already exists
-	if i.controllerManager.controller != nil {
+	if i.controllerManager.HasController() {
 		i.mu.Unlock()
 		log.Debug("controller already exists for instance", "session", i.Title)
 		return nil
@@ -93,7 +93,7 @@ func (i *Instance) StartController() error {
 	defer i.mu.Unlock()
 
 	// Double-check controller hasn't been set by another goroutine (defensive)
-	if i.controllerManager.controller != nil {
+	if i.controllerManager.HasController() {
 		log.Debug("controller already exists for instance (race detected)", "session", i.Title)
 		return nil
 	}
