@@ -39,7 +39,6 @@ const (
 // ParsedEscapeCode represents a single parsed escape sequence
 type ParsedEscapeCode struct {
 	RawBytes    []byte         // Original bytes
-	HexEncoded  string         // Hex representation for display
 	Category    EscapeCategory // Type of sequence
 	Description string         // Human-readable description
 	StartOffset int            // Position in original data
@@ -433,7 +432,6 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (*ParsedEscapeCode,
 			category, description := p.categorizeCSI(rawBytes, isPrivate, hasParams)
 			return &ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: description,
 				StartOffset: offset,
@@ -461,7 +459,6 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 			rawBytes := data[offset : end+1]
 			return &ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
 				StartOffset: offset,
@@ -473,7 +470,6 @@ func (p *EscapeCodeParser) parseOSC(data []byte, offset int) (*ParsedEscapeCode,
 			rawBytes := data[offset : end+2]
 			return &ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    CategoryOSC,
 				Description: p.describeOSC(rawBytes),
 				StartOffset: offset,
@@ -498,7 +494,6 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 			rawBytes := data[offset : end+2]
 			return &ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: baseDesc,
 				StartOffset: offset,
@@ -510,7 +505,6 @@ func (p *EscapeCodeParser) parseStringSequence(data []byte, offset int, category
 			rawBytes := data[offset : end+1]
 			return &ParsedEscapeCode{
 				RawBytes:    rawBytes,
-				HexEncoded:  hex.EncodeToString(rawBytes),
 				Category:    category,
 				Description: baseDesc,
 				StartOffset: offset,
@@ -554,7 +548,6 @@ func (p *EscapeCodeParser) parseCharset(data []byte, offset int) (*ParsedEscapeC
 
 	return &ParsedEscapeCode{
 		RawBytes:    rawBytes,
-		HexEncoded:  hex.EncodeToString(rawBytes),
 		Category:    CategoryCharset,
 		Description: desc,
 		StartOffset: offset,
@@ -573,7 +566,6 @@ func (p *EscapeCodeParser) parseSimpleEscape(data []byte, offset int) (*ParsedEs
 
 	return &ParsedEscapeCode{
 		RawBytes:    rawBytes,
-		HexEncoded:  hex.EncodeToString(rawBytes),
 		Category:    CategorySimple,
 		Description: desc,
 		StartOffset: offset,
