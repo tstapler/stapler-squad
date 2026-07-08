@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/tstapler/stapler-squad/log"
 	"github.com/tstapler/stapler-squad/session/detection"
 	"github.com/tstapler/stapler-squad/session/tmux"
@@ -96,36 +97,34 @@ type ReviewQueuePoller struct {
 	tickCount atomic.Int64
 }
 
+// contentCacheEntry bundles all per-session cache fields into one value so
+// reads and writes can be done with a single lock-free map operation.
+type contentCacheEntry struct {
+	cachedContent        string
+	lastSeenActivity     time.Time // last IdleDetector.lastActivity seen (controller path)
+	lastSeenPaneActivity time.Time // last #{pane_last_activity} seen (no-controller path)
+	lastPreviewTime      time.Time // fallback TTL timestamp (no-controller path)
+}
+
 // pollerContentProvider is the default ContentProvider implementation that owns all
 // content caching state. It is created by NewReviewQueuePoller and can be replaced
 // in tests with a fake implementation.
 type pollerContentProvider struct {
-	cacheMu              deadlock.RWMutex
-	lastSeenActivity     map[string]time.Time // per-session: last IdleDetector.lastActivity seen
-	lastSeenPaneActivity map[string]time.Time // per-session: last #{pane_last_activity} seen
-	cachedContent        map[string]string    // per-session: content from last Preview() call
-	lastPreviewTime      map[string]time.Time // per-session: fallback TTL timestamp
+	// ponytail: xsync.MapOf replaces 4 map[string]* + RWMutex — lock-free reads across sessions
+	cache *xsync.MapOf[string, contentCacheEntry]
 }
 
 // NewPollerContentProvider creates a new pollerContentProvider.
 // It is exported so server/dependencies.go can pass it to NewStartupScanner.
 func NewPollerContentProvider() ContentProvider {
 	return &pollerContentProvider{
-		lastSeenActivity:     make(map[string]time.Time),
-		lastSeenPaneActivity: make(map[string]time.Time),
-		cachedContent:        make(map[string]string),
-		lastPreviewTime:      make(map[string]time.Time),
+		cache: xsync.NewMapOf[string, contentCacheEntry](),
 	}
 }
 
 // EvictInstance removes all cache entries for the given session title.
 func (p *pollerContentProvider) EvictInstance(title string) {
-	p.cacheMu.Lock()
-	delete(p.lastSeenActivity, title)
-	delete(p.lastSeenPaneActivity, title)
-	delete(p.cachedContent, title)
-	delete(p.lastPreviewTime, title)
-	p.cacheMu.Unlock()
+	p.cache.Delete(title)
 }
 
 // NewReviewQueuePoller creates a new poller for automatically managing the review queue.
@@ -521,45 +520,31 @@ const previewCacheTTL = 30 * time.Second
 // On error, the last cached content is returned so callers see empty string only
 // on the very first poll for a session.
 func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceStatusInfo, paneActivity map[string]time.Time) string {
+	// Lock-free read: load the single bundled entry for this session.
+	entry, _ := p.cache.Load(inst.Title)
+
 	if statusInfo.IsControllerActive {
 		lastActivity := statusInfo.IdleState.LastActivity
-		if !lastActivity.IsZero() {
-			p.cacheMu.RLock()
-			lastSeen := p.lastSeenActivity[inst.Title]
-			cached := p.cachedContent[inst.Title]
-			p.cacheMu.RUnlock()
-
-			if lastActivity.Equal(lastSeen) {
-				return cached
-			}
+		if !lastActivity.IsZero() && lastActivity.Equal(entry.lastSeenActivity) {
+			return entry.cachedContent
 		}
 	} else {
-		p.cacheMu.RLock()
-		cached := p.cachedContent[inst.Title]
-		lastSeenPane := p.lastSeenPaneActivity[inst.Title]
-		lastCall := p.lastPreviewTime[inst.Title]
-		p.cacheMu.RUnlock()
-
 		if paneActivity != nil {
-			// Primary: event-driven via #{pane_last_activity}.
 			tmuxName := inst.GetTmuxSessionName()
 			if currentActivity, ok := paneActivity[tmuxName]; ok {
-				if !currentActivity.IsZero() && currentActivity.Equal(lastSeenPane) {
-					return cached
+				if !currentActivity.IsZero() && currentActivity.Equal(entry.lastSeenPaneActivity) {
+					return entry.cachedContent
 				}
 			}
-		} else if !lastCall.IsZero() && time.Since(lastCall) < previewCacheTTL {
-			return cached
+		} else if !entry.lastPreviewTime.IsZero() && time.Since(entry.lastPreviewTime) < previewCacheTTL {
+			return entry.cachedContent
 		}
 	}
 
 	content, err := inst.Preview()
 	if err != nil {
 		log.Debug("Preview() error", "session", inst.Title, "err", err)
-		p.cacheMu.RLock()
-		cached := p.cachedContent[inst.Title]
-		p.cacheMu.RUnlock()
-		return cached
+		return entry.cachedContent
 	}
 
 	// Update LastMeaningfulOutput when new terminal content is detected.
@@ -573,20 +558,29 @@ func (p *pollerContentProvider) GetContent(inst *Instance, statusInfo InstanceSt
 		inst.UpdateTerminalTimestamps(content, false)
 	}
 
-	p.cacheMu.Lock()
-	p.cachedContent[inst.Title] = content
-	if statusInfo.IsControllerActive && !statusInfo.IdleState.LastActivity.IsZero() {
-		p.lastSeenActivity[inst.Title] = statusInfo.IdleState.LastActivity
-	} else {
-		if paneActivity != nil {
-			tmuxName := inst.GetTmuxSessionName()
-			if currentActivity, ok := paneActivity[tmuxName]; ok && !currentActivity.IsZero() {
-				p.lastSeenPaneActivity[inst.Title] = currentActivity
-			}
+	// Atomic write: Compute replaces the entry under a per-key shard lock (no I/O inside).
+	newActivity := statusInfo.IdleState.LastActivity
+	isController := statusInfo.IsControllerActive
+	var newPaneActivity time.Time
+	if !isController && paneActivity != nil {
+		tmuxName := inst.GetTmuxSessionName()
+		if t, ok := paneActivity[tmuxName]; ok && !t.IsZero() {
+			newPaneActivity = t
 		}
-		p.lastPreviewTime[inst.Title] = time.Now()
 	}
-	p.cacheMu.Unlock()
+	now := time.Now()
+	p.cache.Compute(inst.Title, func(e contentCacheEntry, _ bool) (contentCacheEntry, xsync.ComputeOp) {
+		e.cachedContent = content
+		if isController && !newActivity.IsZero() {
+			e.lastSeenActivity = newActivity
+		} else {
+			if !newPaneActivity.IsZero() {
+				e.lastSeenPaneActivity = newPaneActivity
+			}
+			e.lastPreviewTime = now
+		}
+		return e, xsync.UpdateOp
+	})
 
 	return content
 }
@@ -878,10 +872,12 @@ func (rqp *ReviewQueuePoller) FindInstance(sessionID string) *Instance {
 // custom ContentProvider implementations ignore the call.
 func (rqp *ReviewQueuePoller) injectCachedContent(title, content string) {
 	if p, ok := rqp.contentProvider.(*pollerContentProvider); ok {
-		p.cacheMu.Lock()
-		p.cachedContent[title] = content
-		p.lastPreviewTime[title] = time.Now()
-		p.cacheMu.Unlock()
+		now := time.Now()
+		p.cache.Compute(title, func(e contentCacheEntry, _ bool) (contentCacheEntry, xsync.ComputeOp) {
+			e.cachedContent = content
+			e.lastPreviewTime = now
+			return e, xsync.UpdateOp
+		})
 	}
 }
 
