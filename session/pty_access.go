@@ -100,6 +100,17 @@ func (p *PTYAccess) GetRecentOutput(n int) []byte {
 	return p.buffer.GetRecent(n)
 }
 
+// GetRecentHash returns the murmur3-64 hash of the last n bytes without copying.
+// Returns (0, false) when no data is available.
+func (p *PTYAccess) GetRecentHash(n int) (uint64, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if p.buffer == nil {
+		return 0, false
+	}
+	return p.buffer.GetRecentHash(n)
+}
+
 // UpdatePTY updates the underlying PTY file descriptor.
 // This is used when the PTY needs to be refreshed (e.g., after detach/reattach).
 func (p *PTYAccess) UpdatePTY(pty *os.File) error {

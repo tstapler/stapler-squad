@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"sync"
+
+	"github.com/spaolacci/murmur3"
 )
 
 // CircularBuffer is a thread-safe circular buffer with automatic disk fallback
@@ -125,6 +127,34 @@ func (cb *CircularBuffer) GetRecent(n int) []byte {
 	}
 
 	return result
+}
+
+// GetRecentHash returns the murmur3-64 hash of the last n bytes without allocating a copy.
+// Returns (0, false) when the buffer has no data.
+// In the common case (contiguous tail segment), this is allocation-free.
+// Only the rare wrapped case allocates via murmur3.New64().
+func (cb *CircularBuffer) GetRecentHash(n int) (uint64, bool) {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	if n <= 0 || cb.count == 0 {
+		return 0, false
+	}
+	if n > cb.count {
+		n = cb.count
+	}
+
+	startPos := (cb.head - n + cb.size) % cb.size
+	firstHalf := cb.size - startPos
+	if firstHalf >= n {
+		// ponytail: contiguous path — zero alloc
+		return murmur3.Sum64(cb.data[startPos : startPos+n]), true
+	}
+	// Wrapped: stream over two segments (allocates hasher, ~0.04% of calls for 4KB reads on 10MB buffer).
+	h := murmur3.New64()
+	h.Write(cb.data[startPos:]) //nolint:errcheck
+	h.Write(cb.data[:n-firstHalf]) //nolint:errcheck
+	return h.Sum64(), true
 }
 
 // GetAll returns all data currently in the buffer.

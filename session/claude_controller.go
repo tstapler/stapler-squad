@@ -630,14 +630,11 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		return detection.StatusUnknown, "PTY not initialized"
 	}
 
-	// Read only the tail bytes needed for detection — avoids copying the full 10MB buffer.
-	raw := pa.GetRecentOutput(statusDetectionTailBytes)
-	if len(raw) == 0 {
+	// Fast path: hash the tail bytes in-place (no copy) for cache check.
+	h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
+	if !hasData {
 		return detection.StatusUnknown, "No terminal content"
 	}
-
-	h := murmur3.Sum64(raw)
-	tail := string(raw)
 
 	var hit bool
 	var cachedStatus detection.DetectedStatus
@@ -653,6 +650,12 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		return cachedStatus, cachedDesc
 	}
 
+	// Cache miss: copy bytes and process.
+	raw := pa.GetRecentOutput(statusDetectionTailBytes)
+	if len(raw) == 0 {
+		return detection.StatusUnknown, "No terminal content"
+	}
+	tail := string(raw)
 	filtered, _ := filterTmuxMetadata(tail)
 
 	// Line-based reverse scan: process from the most recent line backwards.
@@ -890,11 +893,8 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 
 	var state detection.IdleState
 	if pa != nil {
-		raw := pa.GetRecentOutput(statusDetectionTailBytes)
-		if len(raw) > 0 {
-			h := murmur3.Sum64(raw)
-			tail := string(raw)
-
+		h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
+		if hasData {
 			var hit bool
 			cc.cache.Read(func(c cacheState) {
 				if h == c.idle.tailHash {
@@ -903,11 +903,17 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 				}
 			})
 			if !hit {
-				filtered, _ := filterTmuxMetadata(tail)
-				state = id.DetectStateFromContent(filtered)
-				cc.cache.Write(func(c *cacheState) {
-					c.idle = idleCacheEntry{tailHash: h, state: state}
-				})
+				raw := pa.GetRecentOutput(statusDetectionTailBytes)
+				if len(raw) > 0 {
+					tail := string(raw)
+					filtered, _ := filterTmuxMetadata(tail)
+					state = id.DetectStateFromContent(filtered)
+					cc.cache.Write(func(c *cacheState) {
+						c.idle = idleCacheEntry{tailHash: h, state: state}
+					})
+				} else {
+					state = id.GetState()
+				}
 			}
 		} else {
 			state = id.GetState()
