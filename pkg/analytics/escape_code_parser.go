@@ -163,7 +163,7 @@ func (p *EscapeCodeParser) IsEnabled() bool {
 func (p *EscapeCodeParser) Parse(data []byte, sessionSeq int64) []byte {
 	p.chunkSeqNum++
 
-	if !p.enabled || p.store == nil || len(data) == 0 {
+	if !p.enabled || p.store == nil || len(data) == 0 || p.captureLevel == "off" {
 		return data
 	}
 
