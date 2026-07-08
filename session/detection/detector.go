@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"gopkg.in/yaml.v3"
@@ -215,6 +216,10 @@ func hasScreenOverwrite(raw []byte) bool {
 // keeping only the final write. "foo\rbar" → "bar"; "\r\n" (Windows newline)
 // is treated as a newline boundary and preserved.
 func collapseCarriageReturns(s string) string {
+	// Fast path: no \r means nothing to collapse — skip Split+Join entirely.
+	if !strings.ContainsRune(s, '\r') {
+		return s
+	}
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {
 		// A trailing \r on a line segment is from a \r\n Windows newline; preserve it
@@ -283,6 +288,20 @@ func (sd *StatusDetector) Detect(output []byte) DetectedStatus {
 func (sd *StatusDetector) DetectWithContext(output []byte) (DetectedStatus, string) {
 	text := sd.normalizer.Normalize(string(output))
 	status, patternName, context := sd.detectFromText(text, output)
+	sd.appendDetectionEvent(status, patternName, text)
+	return status, context
+}
+
+// detectWithContextFromString is the string-accepting variant of DetectWithContext.
+// Avoids the string→[]byte→string round-trip in detectFromLines by aliasing the
+// string data via unsafe.Slice for the rawPTY argument (read-only use in hasScreenOverwrite).
+func (sd *StatusDetector) detectWithContextFromString(line string) (DetectedStatus, string) {
+	text := sd.normalizer.Normalize(line)
+	var rawPTY []byte
+	if len(line) > 0 {
+		rawPTY = unsafe.Slice(unsafe.StringData(line), len(line))
+	}
+	status, patternName, context := sd.detectFromText(text, rawPTY)
 	sd.appendDetectionEvent(status, patternName, text)
 	return status, context
 }
@@ -763,7 +782,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 				if strings.TrimSpace(segs[j]) == "" {
 					continue
 				}
-				s, desc := sd.DetectWithContext([]byte(segs[j]))
+				s, desc := sd.detectWithContextFromString(segs[j])
 				if s == StatusUnknown {
 					continue
 				}
@@ -790,7 +809,7 @@ func (sd *StatusDetector) detectFromLines(lines []string) (DetectedStatus, strin
 			continue // all segments of this CR line handled above
 		}
 
-		s, desc := sd.DetectWithContext([]byte(lines[i]))
+		s, desc := sd.detectWithContextFromString(lines[i])
 		if s == StatusUnknown {
 			continue
 		}
