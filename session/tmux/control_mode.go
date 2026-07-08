@@ -2,6 +2,7 @@ package tmux
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -248,8 +249,15 @@ func (t *TmuxSession) readControlModeOutput() {
 		case <-doneCh:
 			return
 		default:
-			line := scanner.Text()
-			t.processControlModeLine(line)
+			// %output is the hot case (every terminal frame). Handle it in-place using
+			// scanner.Bytes() — no string allocation — falling back to scanner.Text() for
+			// all other (infrequent) events, which may pass sub-strings to async loggers.
+			b := scanner.Bytes()
+			if hasOutputPrefix(b) {
+				t.handleOutputBytes(b)
+			} else {
+				t.processControlModeLine(scanner.Text())
+			}
 		}
 	}
 
@@ -356,20 +364,13 @@ func (t *TmuxSession) processControlModeLine(line string) {
 		return
 	}
 
-	// strings.Cut avoids the []string allocation of SplitN on the hot %output path.
 	notificationType, rest, _ := strings.Cut(line, " ")
 
 	switch notificationType {
 	case "%output":
-		// %output %PANE_ID DATA — broadcast even inside a command response block.
-		paneID, encodedData, hasData := strings.Cut(rest, " ")
-		if hasData {
-			data := t.decodeControlModeOutput(encodedData)
-			if len(data) > 0 {
-				t.broadcastControlModeUpdate(data)
-				log.Debug("control mode output", "session", t.sanitizedName, "pane", paneID, "bytes", len(data))
-			}
-		}
+		// Hot path is handled by handleOutputBytes in the scanner loop (no string alloc).
+		// This case is kept as fallback for tests and any caller that uses processControlModeLine directly.
+		t.handleOutputBytes([]byte(line))
 
 	case "%begin":
 		// Start of a command response. If we're already in a response (unexpected
@@ -614,10 +615,39 @@ func init() {
 	}
 }
 
+// outputLinePrefix is the literal prefix of every tmux control mode %output notification.
+var outputLinePrefix = []byte("%output ")
+
+// hasOutputPrefix reports whether b starts with "%output ".
+func hasOutputPrefix(b []byte) bool {
+	return bytes.HasPrefix(b, outputLinePrefix)
+}
+
+// handleOutputBytes processes a %output line from scanner.Bytes() without allocating a string.
+// Format: %output %PANE_ID DATA
+func (t *TmuxSession) handleOutputBytes(b []byte) {
+	// Skip "%output " prefix (8 bytes).
+	rest := b[8:]
+	// Find the space separating pane ID from encoded data.
+	spaceIdx := bytes.IndexByte(rest, ' ')
+	if spaceIdx < 0 {
+		return
+	}
+	encodedData := rest[spaceIdx+1:]
+	if len(encodedData) == 0 {
+		return
+	}
+	data := t.decodeControlModeOutput(encodedData)
+	if len(data) > 0 {
+		t.broadcastControlModeUpdate(data)
+		log.Debug("control mode output", "session", t.sanitizedName, "bytes", len(data))
+	}
+}
+
 // decodeControlModeOutput decodes tmux control mode output format.
 // Control mode replaces characters < ASCII 32 and backslash with octal escape sequences (\ooo).
 // For example: "hello\012world" represents "hello\nworld"
-func (t *TmuxSession) decodeControlModeOutput(encoded string) []byte {
+func (t *TmuxSession) decodeControlModeOutput(encoded []byte) []byte {
 	// Pre-allocate at input length: decoded output is never longer than the encoded input
 	// (octal escapes encode 1 byte as 4 chars, so the decode is always ≤ len(encoded)).
 	result := make([]byte, 0, len(encoded))
