@@ -931,23 +931,128 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 // GetIdleStateInfo returns comprehensive idle state information.
 func (cc *ClaudeController) GetIdleStateInfo() detection.IdleStateInfo {
 	state, lastActivity := cc.GetIdleState()
-
-	id := cc.idleDetector.Load()
-	if id == nil {
+	if cc.idleDetector.Load() == nil {
 		return detection.IdleStateInfo{
 			State:        detection.IdleStateUnknown,
 			SessionName:  cc.sessionName,
 			LastActivity: time.Now(),
 		}
 	}
-
 	return detection.IdleStateInfo{
-		State:           state,
-		LastActivity:    lastActivity,
-		IdleDuration:    time.Since(lastActivity),
-		LastStateChange: id.GetStateInfo().LastStateChange,
-		SessionName:     cc.sessionName,
+		State:        state,
+		LastActivity: lastActivity,
+		IdleDuration: time.Since(lastActivity),
+		SessionName:  cc.sessionName,
 	}
+}
+
+// GetStatusAndIdleInfo returns both the detected status and idle state info in one call.
+// Saves one GetRecentHash (murmur3 over 4KB) and one cache.Read on every poll tick
+// compared to calling GetCurrentStatus + GetIdleStateInfo separately.
+func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, string, detection.IdleStateInfo) {
+	id := cc.idleDetector.Load()
+	pa := cc.ptyAccess.Load()
+
+	buildIdleInfo := func(state detection.IdleState) detection.IdleStateInfo {
+		lastActivity := time.Time{}
+		if id != nil {
+			lastActivity = id.GetLastActivity()
+		}
+		return detection.IdleStateInfo{
+			State:        state,
+			LastActivity: lastActivity,
+			IdleDuration: time.Since(lastActivity),
+			SessionName:  cc.sessionName,
+		}
+	}
+
+	if pa == nil {
+		return detection.StatusUnknown, "PTY not initialized", buildIdleInfo(detection.IdleStateUnknown)
+	}
+
+	h, hasData := pa.GetRecentHash(statusDetectionTailBytes)
+	if !hasData {
+		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
+	}
+
+	// Single cache read covers both status and idle entries.
+	var statusHit, idleHit bool
+	var cachedStatus detection.DetectedStatus
+	var cachedDesc string
+	var cachedIdleState detection.IdleState
+	cc.cache.Read(func(c cacheState) {
+		if h == c.status.tailHash {
+			statusHit = true
+			cachedStatus = c.status.status
+			cachedDesc = c.status.desc
+		}
+		if h == c.idle.tailHash {
+			idleHit = true
+			cachedIdleState = c.idle.state
+		}
+	})
+	if statusHit && idleHit {
+		return cachedStatus, cachedDesc, buildIdleInfo(cachedIdleState)
+	}
+
+	// Cache miss: copy tail once, run whichever detections are needed.
+	raw := pa.GetRecentOutput(statusDetectionTailBytes)
+	if len(raw) == 0 {
+		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
+	}
+	tail := string(raw)
+	filtered, _ := filterTmuxMetadata(tail)
+
+	var status detection.DetectedStatus
+	var desc string
+	var idleState detection.IdleState
+
+	if statusHit {
+		status, desc = cachedStatus, cachedDesc
+	} else {
+		lines := lastNLines(filtered, statusDetectionLinesWindow)
+		if sd := cc.statusDetector.Load(); sd != nil {
+			status, desc = sd.DetectWithContextFromLines(lines)
+			if status == detection.StatusUnknown && len(filtered) == 0 && detection.HasClaudeSpinnerActivity(tail) {
+				status = detection.StatusExecuting
+				desc = "spinner_verb: active spinner in filtered-to-empty tail"
+			}
+			if status == detection.StatusUnknown && len(lines) <= 1 && detection.HasClaudeSpinnerActivity(tail) {
+				status = detection.StatusExecuting
+				desc = "spinner_verb: active spinner in single-line tail"
+			}
+		}
+		if status == detection.StatusReady || status == detection.StatusIdle || status == detection.StatusUnknown {
+			snippet := tail
+			if len(snippet) > 512 {
+				snippet = snippet[len(snippet)-512:]
+			}
+			log.Debug("GetStatusAndIdleInfo: non-active result",
+				"session", cc.sessionName,
+				"status", status,
+				"desc", desc,
+				"tail_len", len(tail),
+				"filtered_len", len(filtered),
+				"tail_snippet", fmt.Sprintf("%q", snippet),
+			)
+		}
+	}
+
+	if idleHit {
+		idleState = cachedIdleState
+	} else if id != nil {
+		idleState = id.DetectStateFromContent(filtered)
+	}
+
+	cc.cache.Write(func(c *cacheState) {
+		if !statusHit {
+			c.status = statusCacheEntry{tailHash: h, status: status, desc: desc}
+		}
+		if !idleHit {
+			c.idle = idleCacheEntry{tailHash: h, state: idleState}
+		}
+	})
+	return status, desc, buildIdleInfo(idleState)
 }
 
 // GetIdleDuration returns how long the session has been idle.

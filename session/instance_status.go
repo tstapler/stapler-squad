@@ -81,10 +81,11 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 	}
 
 	if info.IsControllerActive {
-		// Get Claude status with context (includes error details, matched patterns, etc.)
-		claudeStatus, statusContext := controller.GetCurrentStatus()
+		// Combined call: one hash + one cache read covers both status and idle state.
+		claudeStatus, statusContext, idleInfo := controller.GetStatusAndIdleInfo()
 		info.ClaudeStatus = claudeStatus
 		info.StatusContext = statusContext
+		info.IdleState = idleInfo
 
 		info.QueuedCommands = controller.GetQueuedCommandsCount()
 
@@ -92,9 +93,6 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 		if currentCmd != nil {
 			info.LastCommandStatus = "Executing: " + currentCmd.Text
 		}
-
-		// Get idle state information
-		info.IdleState = controller.GetIdleStateInfo()
 	}
 
 	return info
