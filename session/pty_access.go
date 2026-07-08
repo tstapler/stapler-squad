@@ -77,34 +77,24 @@ func (p *PTYAccess) GetFile() (*os.File, bool) {
 // This provides access to historical PTY output without blocking.
 // Returns a copy of the buffer contents to prevent concurrent modification issues.
 func (p *PTYAccess) GetBuffer() []byte {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
 	if p.buffer == nil {
 		return nil
 	}
-
 	return p.buffer.GetAll()
 }
 
 // GetRecentOutput returns the last n bytes from the circular buffer.
 // This is useful for status detection and response streaming.
 func (p *PTYAccess) GetRecentOutput(n int) []byte {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
 	if p.buffer == nil {
 		return nil
 	}
-
 	return p.buffer.GetRecent(n)
 }
 
 // GetRecentHash returns the murmur3-64 hash of the last n bytes without copying.
 // Returns (0, false) when no data is available.
 func (p *PTYAccess) GetRecentHash(n int) (uint64, bool) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
 	if p.buffer == nil {
 		return 0, false
 	}
