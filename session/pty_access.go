@@ -92,6 +92,15 @@ func (p *PTYAccess) GetRecentOutput(n int) []byte {
 	return p.buffer.GetRecent(n)
 }
 
+// GetRecentOutputInto copies the last n bytes into dst and returns the number of bytes written.
+// dst must have length >= n. Prefer over GetRecentOutput when the caller can provide a pooled buffer.
+func (p *PTYAccess) GetRecentOutputInto(dst []byte, n int) int {
+	if p.buffer == nil {
+		return 0
+	}
+	return p.buffer.GetRecentInto(dst, n)
+}
+
 // GetRecentHash returns the murmur3-64 hash of the last n bytes without copying.
 // Returns (0, false) when no data is available.
 func (p *PTYAccess) GetRecentHash(n int) (uint64, bool) {

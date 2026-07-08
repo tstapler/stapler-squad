@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -61,6 +62,15 @@ const statusDetectionTailBytes = detection.StatusDetectionTailBytes
 // an "esc to interrupt" from a previous turn — from overriding a fresh idle
 // prompt on the last line.
 const statusDetectionLinesWindow = 15
+
+// tailBufPool recycles 4KB byte slices used for PTY tail reads on status-cache misses,
+// eliminating one make([]byte, 4096) allocation per miss.
+var tailBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, statusDetectionTailBytes)
+		return &b
+	},
+}
 
 // controllerLifecycle holds the running context for the controller.
 // Protected by lifecycle; write-locked only during Start/Stop transitions.
@@ -635,12 +645,15 @@ func (cc *ClaudeController) GetCurrentStatus() (detection.DetectedStatus, string
 		return sc.status, sc.desc
 	}
 
-	// Cache miss: copy bytes and process.
-	raw := pa.GetRecentOutput(statusDetectionTailBytes)
-	if len(raw) == 0 {
+	// Cache miss: read tail into pooled buffer; convert to string before returning the buffer.
+	bufp := tailBufPool.Get().(*[]byte)
+	n := pa.GetRecentOutputInto(*bufp, statusDetectionTailBytes)
+	if n == 0 {
+		tailBufPool.Put(bufp)
 		return detection.StatusUnknown, "No terminal content"
 	}
-	tail := string(raw)
+	tail := string((*bufp)[:n])
+	tailBufPool.Put(bufp)
 	filtered, _ := filterTmuxMetadata(tail)
 
 	// Line-based reverse scan: process from the most recent line backwards.
@@ -897,13 +910,16 @@ func (cc *ClaudeController) GetIdleState() (detection.IdleState, time.Time) {
 			if ic := cc.idleCache.Load(); ic != nil && ic.tailHash == h {
 				state = ic.state
 			} else {
-				raw := pa.GetRecentOutput(statusDetectionTailBytes)
-				if len(raw) > 0 {
-					tail := string(raw)
+				bufp := tailBufPool.Get().(*[]byte)
+				n := pa.GetRecentOutputInto(*bufp, statusDetectionTailBytes)
+				if n > 0 {
+					tail := string((*bufp)[:n])
+					tailBufPool.Put(bufp)
 					filtered, _ := filterTmuxMetadata(tail)
 					state = id.DetectStateFromContent(filtered)
 					cc.idleCache.Store(&idleCacheEntry{tailHash: h, state: state})
 				} else {
+					tailBufPool.Put(bufp)
 					state = id.GetState()
 				}
 			}
@@ -985,12 +1001,15 @@ func (cc *ClaudeController) GetStatusAndIdleInfo() (detection.DetectedStatus, st
 		return cachedStatus, cachedDesc, buildIdleInfo(cachedIdleState)
 	}
 
-	// Cache miss: copy tail once, run whichever detections are needed.
-	raw := pa.GetRecentOutput(statusDetectionTailBytes)
-	if len(raw) == 0 {
+	// Cache miss: read tail into pooled buffer; convert to string before returning the buffer.
+	bufp := tailBufPool.Get().(*[]byte)
+	n := pa.GetRecentOutputInto(*bufp, statusDetectionTailBytes)
+	if n == 0 {
+		tailBufPool.Put(bufp)
 		return detection.StatusUnknown, "No terminal content", buildIdleInfo(detection.IdleStateUnknown)
 	}
-	tail := string(raw)
+	tail := string((*bufp)[:n])
+	tailBufPool.Put(bufp)
 	filtered, _ := filterTmuxMetadata(tail)
 
 	var status detection.DetectedStatus

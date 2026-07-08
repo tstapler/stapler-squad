@@ -132,6 +132,34 @@ func (cb *CircularBuffer) GetRecent(n int) []byte {
 	return result
 }
 
+// GetRecentInto copies the last n bytes into dst and returns the number of bytes written.
+// dst must have length >= n. Returns 0 when the buffer is empty.
+// Prefer over GetRecent when the caller can provide a pooled buffer.
+func (cb *CircularBuffer) GetRecentInto(dst []byte, n int) int {
+	cb.mu.RLock()
+	defer cb.mu.RUnlock()
+
+	if n <= 0 || cb.count == 0 {
+		return 0
+	}
+	if n > cb.count {
+		n = cb.count
+	}
+	if n > len(dst) {
+		n = len(dst)
+	}
+
+	startPos := (cb.head - n + cb.size) % cb.size
+	firstHalf := cb.size - startPos
+	if firstHalf >= n {
+		copy(dst[:n], cb.data[startPos:startPos+n])
+	} else {
+		copy(dst[:firstHalf], cb.data[startPos:])
+		copy(dst[firstHalf:n], cb.data[:n-firstHalf])
+	}
+	return n
+}
+
 // GetRecentHash returns the murmur3-64 hash of the last n bytes without allocating a copy.
 // Returns (0, false) when the buffer has no data.
 // In the common case (contiguous tail segment), this is allocation-free.
