@@ -199,11 +199,10 @@ func HasClaudeSpinnerActivity(tail string) bool {
 // or an ANSI cursor-up escape sequence.
 // Must be called on the raw output before collapseCarriageReturns() discards this information.
 func hasScreenOverwrite(raw []byte) bool {
-	s := string(raw)
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\r' {
+	for i, b := range raw {
+		if b == '\r' {
 			// \r\n is a Windows newline — not a screen overwrite
-			if i+1 < len(s) && s[i+1] == '\n' {
+			if i+1 < len(raw) && raw[i+1] == '\n' {
 				continue
 			}
 			return true
