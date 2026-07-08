@@ -216,7 +216,7 @@ func hasScreenOverwrite(raw []byte) bool {
 // is treated as a newline boundary and preserved.
 func collapseCarriageReturns(s string) string {
 	// Fast path: no \r means nothing to collapse — skip Split+Join entirely.
-	if !strings.ContainsRune(s, '\r') {
+	if strings.IndexByte(s, '\r') < 0 {
 		return s
 	}
 	lines := strings.Split(s, "\n")
@@ -227,7 +227,7 @@ func collapseCarriageReturns(s string) string {
 		if trailingCR {
 			line = line[:len(line)-1]
 		}
-		if strings.ContainsRune(line, '\r') {
+		if strings.IndexByte(line, '\r') >= 0 {
 			segments := strings.Split(line, "\r")
 			line = segments[len(segments)-1]
 		}
