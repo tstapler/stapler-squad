@@ -130,7 +130,7 @@ type TmuxSession struct {
 	controlModeStdin       io.WriteCloser         // stdin pipe for control mode commands
 	controlModeDone        chan struct{}          // Signal channel for control mode termination
 	controlModeSubscribers map[string]chan []byte // WebSocket clients subscribed to control mode updates
-	controlModeSubMu       deadlock.RWMutex       // Protects controlModeSubscribers, controlModeExited, pendingCmds, and controlModeRefCount
+	controlModeSubMu       sync.RWMutex           // Protects controlModeSubscribers, controlModeExited, pendingCmds, and controlModeRefCount
 	controlModeExited      bool                   // True after readControlModeOutput exits; new subscribers get pre-closed channel
 	controlModeStartMu     sync.Mutex             // Serializes Start/Stop so only one process starts at a time
 	controlModeRefCount    int                    // Number of active Start/Stop pairs; protected by controlModeSubMu

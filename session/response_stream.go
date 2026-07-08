@@ -1,7 +1,5 @@
 package session
 
-import "github.com/linkdata/deadlock"
-
 import (
 	"context"
 	"fmt"
@@ -37,7 +35,7 @@ type ResponseStream struct {
 	sessionName  string
 	ptyAccess    *PTYAccess
 	subscribers  map[string]*Subscriber
-	mu           deadlock.RWMutex
+	mu           sync.RWMutex
 	exitTailMu   sync.Mutex // protects exitTail independently of subscriber state
 	ctx          context.Context
 	cancel       context.CancelFunc
