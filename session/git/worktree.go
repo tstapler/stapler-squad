@@ -23,10 +23,16 @@ func getWorktreeDirectory() (string, error) {
 	return filepath.Join(configDir, "worktrees"), nil
 }
 
-// IsDirtyCacheTTL is the duration for which a cached IsDirty result is considered fresh.
-// 30s keeps the review queue responsive while halving the subprocess rate vs 15s.
+// IsDirtyCacheTTL is the duration for which a dirty (has changes) result is considered fresh.
+// 30s keeps the review queue responsive when uncommitted changes are present.
 // InvalidateDirtyCache() is called after commits/pushes so critical paths remain snappy.
 const IsDirtyCacheTTL = 30 * time.Second
+
+// IsDirtyCleanCacheTTL is the TTL when the worktree is known to be clean.
+// Clean worktrees won't change unless Claude commits or a user modifies files;
+// InvalidateDirtyCache() is called on those code paths, so 5 min is safe and
+// cuts subprocess calls by ~10x vs dirty-path TTL for quiescent sessions.
+const IsDirtyCleanCacheTTL = 5 * time.Minute
 
 // GitWorktree manages git worktree operations for a session
 type GitWorktree struct {

@@ -542,6 +542,8 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 
 	// Update Claude session if present
 	if data.ClaudeSession.ConversationUUID != "" {
+		var claudeSessionID int // set by either the create or update branch below
+
 		existingClaude, err := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 		if err != nil {
 			if ent.IsNotFound(err) {
@@ -567,10 +569,11 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 					claudeCreate.SetPreferredSessionName(data.ClaudeSession.Settings.PreferredSessionName)
 				}
 
-				_, err := claudeCreate.Save(ctx)
+				newClaude, err := claudeCreate.Save(ctx)
 				if err != nil {
 					return fmt.Errorf("failed to create claude session: %w", err)
 				}
+				claudeSessionID = newClaude.ID
 			} else {
 				return fmt.Errorf("failed to query claude session: %w", err)
 			}
@@ -604,13 +607,14 @@ func (r *EntRepository) Update(ctx context.Context, data InstanceData) error {
 			if _, err := tx.ClaudeMetadata.Delete().Where(claudemetadata.HasClaudeSessionWith(claudesession.ID(existingClaude.ID))).Exec(ctx); err != nil {
 				return fmt.Errorf("failed to clear claude metadata: %w", err)
 			}
+			claudeSessionID = existingClaude.ID
 		}
 
-		// Add metadata entries
+		// Add metadata entries using the already-known Claude session ID.
+		// (pre-fix: this loop re-queried the same ClaudeSession row N times)
 		for key, value := range data.ClaudeSession.Metadata {
-			claudeSess, _ := tx.ClaudeSession.Query().Where(claudesession.HasSessionWith(session.ID(sess.ID))).Only(ctx)
 			if _, err := tx.ClaudeMetadata.Create().
-				SetClaudeSessionID(claudeSess.ID).
+				SetClaudeSessionID(claudeSessionID).
 				SetKey(key).
 				SetValue(value).
 				Save(ctx); err != nil {

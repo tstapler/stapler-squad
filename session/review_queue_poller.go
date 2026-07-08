@@ -332,7 +332,7 @@ func (rqp *ReviewQueuePoller) pollLoop() {
 			rqp.consecutiveErrors = 0
 
 			// Adaptive interval: back off when queue is empty and activity channel is wired.
-			if actCh != nil && len(rqp.queue.List()) == 0 {
+			if actCh != nil && rqp.queue.Count() == 0 {
 				interval = slowInterval
 			} else {
 				interval = fastInterval

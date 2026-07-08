@@ -40,9 +40,9 @@ func (gm *GitWorktreeManager) SetWorktree(wt *git.GitWorktree) {
 }
 
 // PrimeDirtyCacheJitter staggers the dirty-cache TTL by setting the cache
-// timestamp to a random point in [now-15s, now). Call this when adding a
-// session to the poller so sessions added in a burst don't all run git-status
-// subprocesses simultaneously when their caches expire.
+// timestamp to a random point in [now-IsDirtyCacheTTL, now). Call this when
+// adding a session to the poller so sessions added in a burst don't all run
+// git-status subprocesses simultaneously when their caches expire.
 func (gm *GitWorktreeManager) PrimeDirtyCacheJitter() {
 	if gm.worktree == nil {
 		return
