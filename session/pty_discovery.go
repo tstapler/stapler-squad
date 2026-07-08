@@ -4,6 +4,7 @@ import "github.com/linkdata/deadlock"
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"os/exec"
@@ -132,17 +133,27 @@ func batchPaneActivity(socket string) map[string]time.Time {
 	if err != nil {
 		return nil
 	}
+	// Parse bytes directly: no string(output) copy, no strings.Split allocation.
 	result := make(map[string]time.Time)
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		parts := strings.Fields(line)
-		if len(parts) != 2 {
+	rem := output
+	for len(rem) > 0 {
+		var line []byte
+		if idx := bytes.IndexByte(rem, '\n'); idx >= 0 {
+			line = bytes.TrimSpace(rem[:idx])
+			rem = rem[idx+1:]
+		} else {
+			line = bytes.TrimSpace(rem)
+			rem = rem[:0]
+		}
+		spaceIdx := bytes.IndexByte(line, ' ')
+		if spaceIdx <= 0 || spaceIdx >= len(line)-1 {
 			continue
 		}
-		sessionName := parts[0]
+		sessionName := string(line[:spaceIdx])
 		if _, exists := result[sessionName]; exists {
 			continue // keep first pane per session
 		}
-		ts, err := strconv.ParseInt(parts[1], 10, 64)
+		ts, err := strconv.ParseInt(string(line[spaceIdx+1:]), 10, 64)
 		if err != nil {
 			continue
 		}
