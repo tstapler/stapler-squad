@@ -262,7 +262,12 @@ func (r *TmuxServerRegistry) startControlMode() (*exec.Cmd, *bufio.Scanner, io.W
 		// Ensure the sentinel session exists so attach-session doesn't exit immediately.
 		// "new-session -d -s <name>" is idempotent: if the session already exists tmux
 		// exits with a non-zero code which we intentionally ignore.
-		createArgs := []string{"new-session", "-d", "-s", keepaliveName}
+		//
+		// Routed through prependSocket like the attach-session call below: r.serverSocket == ""
+		// here means "this registry didn't request an explicitly isolated socket," but the
+		// actual command must still resolve through ResolveSocket so a `go test` binary never
+		// issues an unscoped call straight at the real shared default socket.
+		createArgs := prependSocket(r.serverSocket, []string{"new-session", "-d", "-s", keepaliveName})
 		keepaliveCtx, keepaliveCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer keepaliveCancel()
 		keepaliveCmd := safeexec.CommandContext(keepaliveCtx, Binary(), createArgs...)

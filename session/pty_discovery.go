@@ -28,6 +28,7 @@ type paneEntry struct {
 // Returns a map keyed by session name; only the first pane per session is kept.
 // socket is the tmux server socket name (empty = default server).
 func batchPTYInfo(socket string) map[string]paneEntry {
+	socket = tmux.ResolveSocket(socket)
 	args := []string{"list-panes", "-a", "-F", "#{session_name} #{pane_tty} #{pane_pid}"}
 	if socket != "" {
 		args = append([]string{"-L", socket}, args...)
@@ -122,6 +123,7 @@ func parseProcessState(state string) PTYStatus {
 // a session has produced new output since the last capture, without spawning capture-pane.
 // Returns nil when tmux is unavailable.
 func batchPaneActivity(socket string) map[string]time.Time {
+	socket = tmux.ResolveSocket(socket)
 	args := []string{"list-panes", "-a", "-F", "#{session_name} #{pane_last_activity}"}
 	if socket != "" {
 		args = append([]string{"-L", socket}, args...)
@@ -570,7 +572,11 @@ func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]pan
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		cmd := safeexec.CommandContext(ctx, tmux.Binary(), "list-sessions", "-F", "#{session_name}")
+		args := []string{"list-sessions", "-F", "#{session_name}"}
+		if s := tmux.ResolveSocket(""); s != "" {
+			args = append([]string{"-L", s}, args...)
+		}
+		cmd := safeexec.CommandContext(ctx, tmux.Binary(), args...)
 		output, err := cmd.Output()
 		if err != nil {
 			return connections
@@ -655,6 +661,7 @@ func (pd *PTYDiscovery) discoverOrphanedPTYsWithCache(paneInfoMap map[string]pan
 // paneInfoMap is a pre-fetched batch result for socket (nil = fetch individually as fallback).
 // managedPIDs is the set of PIDs already tracked; used to skip duplicates.
 func (pd *PTYDiscovery) discoverExternalClaude(socket string, paneInfoMap map[string]paneEntry, managedPIDs map[int]bool) []*PTYConnection {
+	socket = tmux.ResolveSocket(socket)
 	connections := make([]*PTYConnection, 0)
 
 	// Collect session names via the registry (no exec) when possible.

@@ -297,14 +297,56 @@ func checkServerNotRunning(serverSocket string) bool {
 	return err != nil && serverNotRunning(out)
 }
 
-// prependSocket prepends "-L <socket>" to args when socket is non-empty.
-// This lets package-level tmux functions target an isolated server socket
-// (used in tests) without modifying the args slice in place.
+// testSocketOnce lazily computes the per-process isolated socket name for test
+// binaries, computed once and reused for the lifetime of the process so that all
+// isolated tmux calls within one `go test` binary land on the same server.
+var testSocketOnce = sync.OnceValue(func() string {
+	return fmt.Sprintf("test-isolated-%d", os.Getpid())
+})
+
+// ResolveSocket is the single choke point between "the socket a caller asked for"
+// and "the socket a tmux command actually targets." An explicit non-empty socket
+// always passes through unchanged (real per-worktree/per-test isolation, or a
+// caller intentionally targeting a specific server, is always honored). An empty
+// socket -- historically "the real shared default socket" everywhere in this
+// package, including in code that enumerates or kills ALL sessions on it
+// (ReconcileOrphanedTmuxSessions, batchPaneActivity, health checks) -- resolves to
+// a per-process isolated socket inside a `go test` binary instead.
+//
+// Before this existed, "empty string" meant the real default socket unconditionally,
+// so ANY test that ended up calling a tmux-touching code path (not just tests that
+// intentionally exercise tmux) could enumerate and kill every real session on a
+// developer's machine, including sessions from an entirely separate, currently
+// running production stapler-squad process. That happened repeatedly in production
+// incidents traced to nothing more than a `go test ./server/...` run elsewhere on
+// the same machine. Every function below that builds a tmux invocation from a raw
+// socket string must resolve it through here first -- there is intentionally no
+// second, competing way to decide "which socket does this command target."
+//
+// This is deliberately NOT gated behind an explicit opt-in flag on the destructive
+// functions themselves (the previous fix for this class of bug): a flag can be
+// forgotten at any new call site. Resolving centrally, once, at the boundary where a
+// caller-supplied socket turns into a real tmux invocation means every existing and
+// future caller is isolated automatically, with no per-call-site action required.
+func ResolveSocket(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if config.IsTestMode() {
+		return testSocketOnce()
+	}
+	return ""
+}
+
+// prependSocket prepends "-L <socket>" to args after resolving socket through
+// ResolveSocket. This lets package-level tmux functions target an isolated server
+// socket (used in tests) without modifying the args slice in place.
 func prependSocket(socket string, args []string) []string {
-	if socket == "" {
+	resolved := ResolveSocket(socket)
+	if resolved == "" {
 		return args
 	}
-	return append([]string{"-L", socket}, args...)
+	return append([]string{"-L", resolved}, args...)
 }
 
 // TmuxServerReady is a zero-size proof token returned by EnsureServerRunning.
@@ -538,6 +580,11 @@ func WithRegistry(r SessionExistenceChecker) TmuxSessionOption {
 
 // newTmuxSessionWithSocket creates a TmuxSession with both prefix and server socket isolation
 func newTmuxSessionWithSocket(name string, program string, ptyFactory PtyFactory, cmdExec executor.Executor, prefix string, serverSocket string, opts ...TmuxSessionOption) *TmuxSession {
+	// Resolve once, here, at construction -- not per-command. Every TmuxSession's
+	// serverSocket is isolated automatically inside a test binary regardless of what
+	// the caller passed (see ResolveSocket), so no session-creation call site anywhere
+	// needs to remember to ask for isolation.
+	serverSocket = ResolveSocket(serverSocket)
 	s := &TmuxSession{
 		sanitizedName:    toStaplerSquadTmuxNameWithPrefix(name, prefix),
 		program:          program,

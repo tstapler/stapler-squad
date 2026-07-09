@@ -439,8 +439,13 @@ func TestDoesSessionExist_LockReleasedBeforeRecovery(t *testing.T) {
 	}
 }
 
-// TestPrependSocket verifies that prependSocket returns args unmodified when the socket
-// is empty and prepends "-L <socket>" when the socket is non-empty.
+// TestPrependSocket verifies that prependSocket prepends "-L <socket>" for an
+// explicit socket, and — since this runs inside a `go test` binary — also
+// prepends the per-process isolated socket even when called with an empty
+// socket, via ResolveSocket. This is the regression guard for the incident
+// where an unguarded raw tmux call with no socket argument enumerated and
+// killed sessions on another, currently-running stapler-squad process's
+// shared default socket. See ResolveSocket's doc comment for the incident.
 func TestPrependSocket(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -449,10 +454,10 @@ func TestPrependSocket(t *testing.T) {
 		expected []string
 	}{
 		{
-			name:     "empty socket returns args unchanged",
+			name:     "empty socket resolves to the isolated test socket, not the shared default",
 			socket:   "",
 			args:     []string{"list-sessions"},
-			expected: []string{"list-sessions"},
+			expected: []string{"-L", testSocketOnce(), "list-sessions"},
 		},
 		{
 			name:     "non-empty socket prepends -L flag",
@@ -468,6 +473,30 @@ func TestPrependSocket(t *testing.T) {
 			require.Equal(t, tc.expected, result)
 		})
 	}
+}
+
+// TestResolveSocket verifies the canonical socket-resolution choke point:
+// an explicit socket always passes through unchanged (production callers
+// that already isolate explicitly must not be double-prefixed), while an
+// empty socket resolves to a stable, non-empty per-process value whenever
+// running inside a `go test` binary — it must never resolve to "" and fall
+// through to the real shared default socket.
+func TestResolveSocket(t *testing.T) {
+	t.Run("explicit socket passes through unchanged", func(t *testing.T) {
+		require.Equal(t, "explicit-socket", ResolveSocket("explicit-socket"))
+	})
+
+	t.Run("empty socket resolves to a non-empty isolated value in test mode", func(t *testing.T) {
+		resolved := ResolveSocket("")
+		require.NotEmpty(t, resolved, "empty socket must never resolve to the shared default inside a test binary")
+		require.Contains(t, resolved, "test-isolated-")
+	})
+
+	t.Run("repeated empty-socket calls return the same isolated value", func(t *testing.T) {
+		first := ResolveSocket("")
+		second := ResolveSocket("")
+		require.Equal(t, first, second, "ResolveSocket must be stable across calls within the same process")
+	})
 }
 
 // TestSetServerRecoveryCallback verifies that the callback registered via

@@ -39,7 +39,8 @@ func WriteSessionUserOptions(sessionName, socketPath, cwd, command string, pid i
 	}
 	for _, opt := range opts {
 		setCtx, setCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		cmd := safeexec.CommandContext(setCtx, tmux.Binary(), "set-option", "-t", sessionName, opt.key, opt.value)
+		args := prependIsolatedSocket([]string{"set-option", "-t", sessionName, opt.key, opt.value})
+		cmd := safeexec.CommandContext(setCtx, tmux.Binary(), args...)
 		out, runErr := cmd.CombinedOutput()
 		setCancel()
 		if runErr != nil {
@@ -72,7 +73,8 @@ func ScanByUserOptions() ([]*DiscoveredSession, error) {
 
 	scanCtx, scanCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer scanCancel()
-	cmd := safeexec.CommandContext(scanCtx, tmux.Binary(), "list-sessions", "-F", format)
+	args := prependIsolatedSocket([]string{"list-sessions", "-F", format})
+	cmd := safeexec.CommandContext(scanCtx, tmux.Binary(), args...)
 	out, err := cmd.Output()
 	if err != nil {
 		// tmux exits non-zero when the server is not running or there are no

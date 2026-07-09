@@ -830,7 +830,8 @@ func RunAttach(tmuxSession string) (int, error) {
 func ListStaplerSquadSessions() ([]string, error) {
 	listCtx, listCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer listCancel()
-	cmd := safeexec.CommandContext(listCtx, tmux.Binary(), "list-sessions", "-F", "#{session_name}")
+	args := prependIsolatedSocket([]string{"list-sessions", "-F", "#{session_name}"})
+	cmd := safeexec.CommandContext(listCtx, tmux.Binary(), args...)
 	output, err := cmd.Output()
 	if err != nil {
 		// tmux returns error if no sessions exist
