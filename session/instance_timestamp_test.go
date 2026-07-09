@@ -174,7 +174,16 @@ func TestInstance_PreviewUpdatesTimestamps(t *testing.T) {
 	}
 }
 
-// TestInstance_TimestampConcurrency verifies thread-safe timestamp updates
+// TestInstance_TimestampConcurrency verifies thread-safe timestamp updates.
+//
+// UpdateTerminalTimestamps is actor-routed (via send()): concurrent calls are
+// only serialized when the instance has a live actor goroutine draining its
+// mailbox. Without one, send() falls back to running synchronously on the
+// calling goroutine with no locking at all (see actor.go's doc comment) — a
+// deliberate no-op fallback for single-goroutine construction/test paths, not
+// a thread-safety guarantee for concurrent callers. Wrap in a LiveInstance so
+// this test actually exercises the actor's serialization, matching how every
+// production instance is wired (session.Registry.Register/Acquire).
 func TestInstance_TimestampConcurrency(t *testing.T) {
 	opts := InstanceOptions{
 		Title:   "test-concurrent",
@@ -185,6 +194,8 @@ func TestInstance_TimestampConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create instance: %v", err)
 	}
+	li := NewLiveInstance(instance)
+	defer li.Stop()
 
 	mockTmux := tmux.NewTmuxSession("testconcurrent", "claude")
 	instance.SetTmuxSession(mockTmux)

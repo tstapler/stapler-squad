@@ -16,7 +16,7 @@ func makeAcknowledgedInstance(title string) *Instance {
 		Title:  title,
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	inst.LastMeaningfulOutput = time.Now().Add(-10 * time.Minute)
 	inst.LastAcknowledged = time.Now().Add(-5 * time.Minute) // acked AFTER output
 	return inst
@@ -307,7 +307,7 @@ func newTestPollerInstance(title, uuid string) *Instance {
 		Status:  Paused,
 		Program: "claude",
 	}
-	inst.started = true
+	inst.started.Store(true)
 	return inst
 }
 
@@ -591,7 +591,7 @@ func TestReviewQueuePoller_ControllerSession_NotStarted_WithApproval_AddsToQueue
 		UUID:   "uuid-ctrl",
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 
 	// Wire a controller that is NOT started (ctx == nil → IsStarted() = false).
 	// GetController() returns non-nil, but IsControllerActive will be false so the
@@ -635,7 +635,7 @@ func TestReviewQueuePoller_ControllerSession_Started_NeedsApproval_AddsToQueue(t
 		UUID:   "uuid-active",
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	ctrl.sessionName = inst.Title
 
 	// Mark the controller as started by setting a non-nil context.
@@ -722,7 +722,7 @@ func makeStaleInstance(rqp *ReviewQueuePoller, title string) *Instance {
 		Title:  title,
 		Status: Running,
 	}
-	inst.started = true
+	inst.started.Store(true)
 	// CreatedAt well in the past → GetTimeSinceLastMeaningfulOutput() > StalenessThreshold
 	inst.CreatedAt = time.Now().Add(-10 * time.Minute)
 	inst.UpdatedAt = inst.CreatedAt

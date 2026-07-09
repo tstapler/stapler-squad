@@ -110,7 +110,8 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	i := s.inst
 	result := &WorkspaceSwitchResult{}
 
-	if !i.started {
+	// Validate session state
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot switch workspace for session that has not been started")
 	}
 	if i.Status == Paused {
@@ -158,7 +159,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 			if err := killSessionLocked(s); err != nil {
 				return nil, fmt.Errorf("failed to stop session: %w", err)
 			}
-			i.started = false
+			i.started.Store(false)
 
 			log.Info("restarting session in new directory", "path", repoPath)
 			i.snapshot.Store(buildSnapshot(i))
@@ -190,7 +191,7 @@ func switchWorkspaceLocked(s *instanceState, req WorkspaceSwitchRequest) (*Works
 	if err := killSessionLocked(s); err != nil {
 		return nil, fmt.Errorf("failed to stop session: %w", err)
 	}
-	i.started = false
+	i.started.Store(false)
 
 	var switchErr error
 	switch req.Type {

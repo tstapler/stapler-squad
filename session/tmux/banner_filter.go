@@ -3,6 +3,8 @@ package tmux
 import (
 	"regexp"
 	"strings"
+
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 )
 
 // Compiled once at init; shared across all BannerFilter instances.
@@ -34,9 +36,6 @@ var (
 		// bold + reverse video
 		regexp.MustCompile(`\x1b\[1m\x1b\[7m`),
 	}
-
-	// stripANSIRe matches ANSI escape sequences for stripping.
-	stripANSIRe = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 )
 
 // BannerFilter detects and filters tmux status line banners from terminal output
@@ -85,10 +84,7 @@ func (bf *BannerFilter) IsBanner(line string) bool {
 
 // stripANSICodes removes ANSI escape sequences from a string
 func stripANSICodes(s string) string {
-	if !strings.ContainsRune(s, '\x1b') {
-		return s
-	}
-	return stripANSIRe.ReplaceAllString(s, "")
+	return ansi.StripCSI(s)
 }
 
 // FilterBanners removes tmux status banners from a slice of lines

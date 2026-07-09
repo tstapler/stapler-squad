@@ -115,13 +115,10 @@ function makeStreamMock(overrides: Record<string, unknown> = {}) {
     connect: jest.fn(),
     disconnect: jest.fn(),
     sendInput: jest.fn(),
-    sendInputWithEcho: jest.fn().mockReturnValue(BigInt(0)),
     resize: jest.fn(),
     scrollbackLoaded: false,
     requestScrollback: jest.fn(),
     sendFlowControl: jest.fn(),
-    getIsApplyingState: jest.fn().mockReturnValue(false),
-    sspNegotiated: false,
     startRecording: jest.fn(),
     stopRecording: jest.fn(),
     output: "",
@@ -284,7 +281,7 @@ describe("TerminalOutput — enter-detection (T-UNIT-TS-011 through T-UNIT-TS-01
   });
 
   it("T-UNIT-TS-016: handleTerminalData_should_callSendInput_When_dataReceived", async () => {
-    const streamMock = makeStreamMock({ sspNegotiated: false });
+    const streamMock = makeStreamMock();
     (useTerminalStream as jest.Mock).mockReturnValue(streamMock);
 
     renderTerminal("session-a");

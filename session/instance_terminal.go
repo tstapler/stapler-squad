@@ -48,7 +48,7 @@ func (i *Instance) MatchesID(id string) bool {
 // SetTitle sets the title of the instance. Returns an error if the instance has started.
 // We can't change the title once it's been used for a tmux session etc.
 func (i *Instance) SetTitle(title string) error {
-	if i.started {
+	if i.started.Load() {
 		return fmt.Errorf("cannot change title of a started instance")
 	}
 	i.Title = title
@@ -102,10 +102,24 @@ func (i *Instance) combineErrors(errs []error) error {
 	return fmt.Errorf("%s", errMsg)
 }
 
+// previewBlocked reports whether preview capture should be skipped for this instance -
+// either because it hasn't started yet, or because its lifecycle status makes a live
+// terminal capture meaningless (Paused/Stopped/Hibernated).
+//
+// Reads Status via Snapshot(), not a bare field read: actor commands
+// (transitionToLocked et al.) write i.Status directly while running inside
+// the actor's own serialization, not under i.mu, so an unguarded read here
+// doesn't synchronize with that write at all (see GetStatus's doc comment).
+// Preview() and PreviewFullHistory() share this check so the two can't drift.
+func (i *Instance) previewBlocked() bool {
+	status := i.Snapshot().Status
+	return !i.started.Load() || status == Paused || status == Stopped || status == Hibernated
+}
+
 // Preview returns the current visible terminal content.
 // Prefers the in-memory PTY buffer from ClaudeController; falls back to capture-pane.
 func (i *Instance) Preview() (string, error) {
-	if !i.started || i.Status == Paused || i.Status == Stopped || i.Status == Hibernated {
+	if i.previewBlocked() {
 		return "", nil
 	}
 
@@ -128,7 +142,7 @@ func (i *Instance) Preview() (string, error) {
 
 // PreviewFullHistory captures the entire tmux pane output including full scrollback history.
 func (i *Instance) PreviewFullHistory() (string, error) {
-	if !i.started || i.Status == Paused || i.Status == Stopped || i.Status == Hibernated {
+	if i.previewBlocked() {
 		return "", nil
 	}
 
@@ -149,7 +163,7 @@ func (i *Instance) PreviewFullHistory() (string, error) {
 // Called during graceful shutdown so cold restore can restart in the right directory.
 // No-op if the session is not started, paused, or the tmux session is dead.
 func (i *Instance) CaptureCurrentState() error {
-	if !i.started || i.Paused() {
+	if !i.started.Load() || i.Paused() {
 		return nil
 	}
 	if !i.pm().IsAlive() {

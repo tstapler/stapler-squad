@@ -40,7 +40,7 @@ func (i *Instance) CreateCheckpoint(label string, scrollbackSeq uint64) (*Checkp
 // old "before stateMutex" comment in the public method).
 func createCheckpointLocked(s *instanceState, label string, scrollbackSeq uint64) (*Checkpoint, error) {
 	i := s.inst
-	if !i.started {
+	if !i.started.Load() {
 		return nil, fmt.Errorf("cannot create checkpoint on unstarted instance '%s'", i.Title)
 	}
 

@@ -16,9 +16,13 @@ import (
 // ReviewState holds all timestamps and state related to the review queue and terminal activity
 // tracking for a session. It is embedded in Instance so all field accesses remain unchanged.
 //
-// Fields are protected by Instance.mu; do not lock ReviewState independently.
-// Methods on ReviewState are intentionally non-locking — callers must hold mu
-// if concurrent access is possible.
+// Fields are NOT protected by Instance.mu. Mutation is serialized through the actor's
+// send()/sendSyncErr() closures instead (see UpdateTerminalTimestamps in
+// instance_approval.go, which routes through i.send() rather than i.mu.Lock()) - the
+// same "no locking, serialize via the actor's own command queue" discipline used by
+// transitionToLocked et al. Methods on ReviewState are intentionally non-locking -
+// callers must be running inside an actor command closure (or otherwise be the sole
+// writer) if concurrent access is possible.
 //
 // Direct field access via Go embedding promotion (inst.LastMeaningfulOutput etc.) is used by:
 //   - session/review_queue_poller.go: reads LastMeaningfulOutput, LastAcknowledged,
@@ -29,8 +33,8 @@ import (
 //   - server/adapters/instance_adapter.go: reads LastTerminalUpdate, LastMeaningfulOutput
 //   - server/review_queue_manager.go: writes LastUserResponse directly
 //
-// All access is either within the session package (under mu) or through
-// Instance methods that acquire mu.
+// All access is either within the session package (via the actor's serialized
+// closures) or through Instance methods that route through i.send()/sendSyncErr().
 //
 // TODO: Migrate cross-package field accesses (server/) to accessor methods to enable
 // future encapsulation of ReviewState as a composed (non-embedded) field.
@@ -178,7 +182,9 @@ func (rs *ReviewState) UserRespondedAfterPrompt() bool {
 //   - shouldUpdateMeaningful: true when the content carries meaningful signal (not just banners).
 //   - sessionTitle: used only for structured debug logging.
 //
-// Caller must hold Instance.mu.
+// Caller must be running inside the actor's serialized command closure (via i.send()/
+// sendSyncErr()), not holding Instance.mu - see UpdateTerminalTimestamps in
+// instance_approval.go, the sole caller.
 // Returns true when any field was updated (caller should rebuild the snapshot).
 func (rs *ReviewState) UpdateTimestamps(rawContent, filteredContent string, shouldUpdateMeaningful bool, sessionTitle string) bool {
 	now := time.Now()

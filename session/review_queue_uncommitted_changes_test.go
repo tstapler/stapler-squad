@@ -70,11 +70,11 @@ func TestReviewQueue_UncommittedChangesDetection(t *testing.T) {
 		Branch:      branchName,
 		Status:      Running,
 		gitManager:  GitWorktreeManager{worktree: worktree},
-		started:     true,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: ReviewState{LastMeaningfulOutput: now},
 	}
+	instance.started.Store(true)
 
 	// Create review queue infrastructure
 	queue := NewReviewQueue()
@@ -231,11 +231,11 @@ func TestReviewQueue_UncommittedChanges_NoWorktree(t *testing.T) {
 		Branch:      "",
 		Status:      Running,
 		gitManager:  GitWorktreeManager{worktree: nil}, // No worktree
-		started:     true,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: ReviewState{LastMeaningfulOutput: now},
 	}
+	instance.started.Store(true)
 
 	// Create review queue infrastructure
 	queue := NewReviewQueue()
@@ -314,11 +314,11 @@ func TestReviewQueue_UncommittedChanges_Integration(t *testing.T) {
 		Branch:      branchName,
 		Status:      Running,
 		gitManager:  GitWorktreeManager{worktree: worktree},
-		started:     true,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 		ReviewState: ReviewState{LastMeaningfulOutput: now},
 	}
+	instance.started.Store(true)
 
 	// Create review queue with poller
 	queue := NewReviewQueue()

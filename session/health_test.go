@@ -88,10 +88,10 @@ func TestHealthCheckerDebounce(t *testing.T) {
 	// Create a minimal instance that appears started but has no tmux session.
 	// TmuxAlive() returns false because tmuxManager.HasSession() is false.
 	inst := &Instance{
-		Title:   "debounce-test",
-		started: true,
-		Status:  Running,
+		Title:  "debounce-test",
+		Status: Running,
 	}
+	inst.started.Store(true)
 
 	// First call: count=1, below threshold (2), no recovery attempted.
 	result1 := checker.checkSingleSession(inst)
@@ -145,8 +145,10 @@ func TestSessionHealthChecker_CheckInstances_DownSocketOnlySkipsItsOwnInstances(
 	checker.tmuxSocket = querier
 	querier.setDown("custom", true) // "" (default) stays up
 
-	instHealthy := &Instance{Title: "healthy-default-socket", started: true, Status: Running, TmuxServerSocket: ""}
-	instDown := &Instance{Title: "down-custom-socket", started: true, Status: Running, TmuxServerSocket: "custom"}
+	instHealthy := &Instance{Title: "healthy-default-socket", Status: Running, TmuxServerSocket: ""}
+	instHealthy.started.Store(true)
+	instDown := &Instance{Title: "down-custom-socket", Status: Running, TmuxServerSocket: "custom"}
+	instDown.started.Store(true)
 
 	results := checker.checkInstances([]*Instance{instHealthy, instDown})
 
@@ -173,8 +175,10 @@ func TestSessionHealthChecker_CheckInstances_HealthySocketInstancesAllChecked(t 
 	checker.tmuxSocket = querier
 	// Neither socket is marked down -- both should be checked.
 
-	instDefault := &Instance{Title: "default-socket", started: true, Status: Running, TmuxServerSocket: ""}
-	instCustom := &Instance{Title: "custom-socket", started: true, Status: Running, TmuxServerSocket: "custom"}
+	instDefault := &Instance{Title: "default-socket", Status: Running, TmuxServerSocket: ""}
+	instDefault.started.Store(true)
+	instCustom := &Instance{Title: "custom-socket", Status: Running, TmuxServerSocket: "custom"}
+	instCustom.started.Store(true)
 
 	results := checker.checkInstances([]*Instance{instDefault, instCustom})
 

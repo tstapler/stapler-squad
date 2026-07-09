@@ -152,6 +152,21 @@ var methodToID = map[string]string{
 	"UpdateItemSource":            "backlog:update-source",
 	"DeleteItemSource":            "backlog:delete-source",
 	"GetSyncHistory":              "backlog:get-sync-history",
+	// GitHub issue import RPCs (BacklogService) - mapped to the method name
+	// itself, not a kebab-case backlog:* id: origin/main already has
+	// committed registry files under docs/registry/features/backend/{method
+	// name}.json (id: "SearchGitHubRepos" etc.), produced by ScanProto's own
+	// fallback (id = method) from before these existed in methodToID at all.
+	// A kebab-case id here would relocate those files to a new path/id on
+	// every PR that touches methodToID, which register-generate's own git
+	// diff (and the "Check new RPCs have tests" CI gate, which diffs
+	// registry files against origin/main) would then flag as a brand new,
+	// untested RPC - even though SearchGitHubRepos/ListGitHubIssues already
+	// have real tests committed upstream (server/services/backlog_github_rpc_test.go).
+	// Matching the existing fallback id keeps the generated file identical.
+	"SearchGitHubRepos": "SearchGitHubRepos",
+	"ListGitHubIssues":  "ListGitHubIssues",
+	"ImportGitHubIssue": "ImportGitHubIssue",
 	// Session lifecycle RPCs
 	"ArchiveSession":          "session:archive",
 	"UnarchiveSession":        "session:unarchive",

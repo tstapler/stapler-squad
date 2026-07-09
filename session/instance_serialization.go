@@ -19,17 +19,28 @@ import (
 )
 
 // ToInstanceData converts an Instance to its serializable form
+//
+// Builds a fresh snapshot via sendSyncErr rather than reading the cached
+// Snapshot(): callers like Storage.UpdateInstance/SaveInstancesSync routinely
+// mutate exported fields (Tags, Category, ...) directly and expect the very
+// next ToInstanceData() call to reflect that — Snapshot()'s cache only
+// refreshes when an actor command republishes it, so those direct-mutation
+// callers would see stale data (caught by TestStorage_UpdateInstance /
+// TestStorage_SaveInstancesSync). Routing the build through sendSyncErr gets
+// a fresh buildSnapshot(s.inst) (current field values, actor-mutation or not)
+// while still serializing against concurrent actor commands: with a live
+// actor this blocks until the mailbox delivers it, matching every other
+// actor command's ordering; with no live actor (tests, pre-NewLiveInstance)
+// it runs synchronously on the calling goroutine, same as before.
+// Do not call from within a sendSyncErr/send/sendCtx closure — see actor.go.
+// LaunchCommand is not in the snapshot (set once during Start) and is read directly.
+// gitManager and claudeSession sub-objects have their own synchronisation.
 func (i *Instance) ToInstanceData() InstanceData {
-	// Build a fresh snapshot under RLock so all field reads are consistent and
-	// race-free, capturing any direct field mutations made since the last mutator
-	// call. We use buildSnapshot rather than Snapshot() because callers of
-	// UpdateInstance may have set fields directly without going through a mutator
-	// that publishes to the atomic snapshot pointer.
-	// LaunchCommand is not in the snapshot (set once during Start) and is read directly.
-	// gitManager and claudeSession sub-objects have their own synchronisation.
-	i.mu.RLock()
-	snap := buildSnapshot(i)
-	i.mu.RUnlock()
+	var snap *InstanceSnapshot
+	_ = i.sendSyncErr(func(s *instanceState) error {
+		snap = buildSnapshot(s.inst)
+		return nil
+	})
 
 	data := InstanceData{
 		Title:                snap.Title,
@@ -321,7 +332,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 	}
 
 	if instance.Paused() {
-		instance.started = true
+		instance.started.Store(true)
 		tmuxPrefix := instance.TmuxPrefix
 		if tmuxPrefix == "" {
 			tmuxPrefix = "staplersquad_"
@@ -359,10 +370,10 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 			if err := instance.Start(false); err != nil {
 				log.Warn("recovery start failed, keeping stopped", "session", instance.Title, "err", err)
 				instance.loadStatus(Stopped)
-				instance.started = true
+				instance.started.Store(true)
 			}
 		} else {
-			instance.started = true
+			instance.started.Store(true)
 		}
 	} else if instance.Status == Hibernated {
 		// Wire the tmux session object (for IsAlive checks at resume time)
@@ -381,7 +392,7 @@ func FromInstanceData(data InstanceData) (*Instance, error) {
 					instance.Title, instance.Program, tmuxPrefix))
 			}
 		}
-		instance.started = true
+		instance.started.Store(true)
 	} else {
 		if err := instance.Start(false); err != nil {
 			return nil, err

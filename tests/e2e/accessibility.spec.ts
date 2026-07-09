@@ -21,9 +21,12 @@ test.describe('Accessibility (WCAG 2.1 AA)', () => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto(BASE_URL, { waitUntil: 'load' });
 
-    // Wait for network to settle so the app is fully rendered before scanning.
-    // This prevents mid-render browser crashes when axe fires under SwiftShader.
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    // Wait for a known main-page element instead of networkidle: this app
+    // polls continuously (session list, terminal streams), so network
+    // activity may never go quiet for the 500ms networkidle requires -
+    // matching this repo's e2e convention of avoiding wait conditions that
+    // depend on network settling (see alias.spec.ts's identical selector).
+    await page.waitForSelector('input[aria-label="Search sessions"]', { timeout: 30_000 });
 
     // Run axe analysis
     const results = await new AxeBuilder({ page })
@@ -49,7 +52,8 @@ test.describe('Accessibility (WCAG 2.1 AA)', () => {
   test('IT-5.1: Secondary routes are accessible', async ({ page }) => {
     // Navigate to review queue page
     await page.goto(`${BASE_URL}/review-queue`, { waitUntil: 'load' });
-    await page.waitForLoadState('networkidle', { timeout: 30_000 });
+    // See the main-page test above for why this doesn't use networkidle.
+    await page.waitForSelector('[data-testid="review-queue"]', { timeout: 30_000 });
 
     const results = await new AxeBuilder({ page })
       .exclude('pre, [class*="terminal"], [class*="Terminal"]')

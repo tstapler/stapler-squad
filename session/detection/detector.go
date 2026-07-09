@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 	"github.com/tstapler/stapler-squad/session/detection/dtypes"
 	"gopkg.in/yaml.v3"
 )
@@ -122,7 +123,10 @@ func (sd *StatusDetector) LoadPatterns(path string) error {
 // Modern Claude Code emits \x1b(B (G0 ASCII designator) between each styled character.
 // Without rule 3 these remain after stripping and break word-boundary pattern matches
 // (e.g. "t\x1b(Bh\x1b(Bi\x1b(Bn\x1b(Bk\x1b(Bi\x1b(Bn\x1b(Bg" never matches "thinking").
-var ansiStripRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][A-Za-z0-9]`)
+// The CSI branch's final-byte class comes from pkg/ansi.CSIFinalByteClass
+// (0x40-0x7E per ECMA-48, not just letters) — see that package for why a
+// letter-only class is wrong.
+var ansiStripRegex = regexp.MustCompile(`\x1b\[[0-9;]*` + ansi.CSIFinalByteClass + `|\x1b\][^\x07]*\x07|\x1b[()][A-Za-z0-9]`)
 
 // cursorForwardRegex matches CSI cursor-right sequences (\x1b[C or \x1b[nC).
 // Modern Claude Code uses these instead of literal spaces between words in its status

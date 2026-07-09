@@ -1961,10 +1961,16 @@ func (s *SessionService) WatchSessions(
 	}
 }
 
-// StreamTerminal provides bidirectional streaming for terminal I/O with delta compression.
+// StreamTerminal provides bidirectional streaming for terminal I/O.
 // Implements bidirectional streaming where:
 // - Client sends: terminal input and resize events
-// - Server sends: terminal deltas (compressed output) or raw output (fallback)
+// - Server sends: raw terminal output
+//
+// NOTE: browser clients never reach this method directly — the WebSocket
+// handler (connectrpc_websocket.go) intercepts StreamTerminal calls made
+// over its custom websocket transport before they reach here. This handler
+// exists to satisfy the ConnectRPC service interface and could be used by
+// non-browser gRPC/Connect clients.
 func (s *SessionService) StreamTerminal(
 	ctx context.Context,
 	stream *connect.BidiStream[sessionv1.TerminalData, sessionv1.TerminalData],
@@ -2026,6 +2032,21 @@ func (s *SessionService) StreamTerminal(
 		return connect.NewError(connect.CodeInternal, fmt.Errorf("failed to get PTY reader: %w", err))
 	}
 
+	// Duplicate the PTY fd for this goroutine's exclusive use. ptyFile is
+	// shared with the instance's own internal consumers (response stream,
+	// command executor), so calling SetReadDeadline directly on it would
+	// mutate poll.FD state those other readers depend on. A dup'd fd gets
+	// its own independent *os.File/poll.FD — closing or setting a deadline
+	// on readFile has no effect on ptyFile or its other readers, since the
+	// underlying open file description is only released once every fd
+	// referencing it is closed. dupPTYFile is platform-specific
+	// (dup_fd_unix.go / dup_fd_windows.go) since syscall.Dup isn't available
+	// on Windows.
+	readFile, err := dupPTYFile(ptyFile)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err)
+	}
+
 	// Create context for managing goroutines
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -2033,9 +2054,12 @@ func (s *SessionService) StreamTerminal(
 	// Channel for errors from goroutines
 	errCh := make(chan error, 2)
 
-	// Initialize terminal state for MOSH-style state synchronization (default 80x25)
-	// Will be resized when client sends first resize message
-	terminalState := session.NewTerminalState(25, 80)
+	// wg tracks both goroutines below so the handler never returns (letting
+	// Connect close the underlying stream) while either might still be
+	// calling stream.Send/stream.Receive — doing so races with Connect's own
+	// end-of-stream write. See BUG-025 follow-up: caught by -race under a
+	// real PTY-backed StreamTerminal test.
+	var wg sync.WaitGroup
 
 	// Flow control state for backpressure management
 	// Reference: https://xtermjs.org/docs/guides/flowcontrol/
@@ -2043,7 +2067,10 @@ func (s *SessionService) StreamTerminal(
 	var ptyPaused bool            // Current PTY pause state
 
 	// Goroutine 1: Read from PTY and send deltas to client (terminal output)
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
+		defer readFile.Close() // our own dup'd fd; does not affect ptyFile or its other readers
 		defer func() {
 			if r := recover(); r != nil {
 				errCh <- fmt.Errorf("panic in output goroutine: %v", r)
@@ -2074,44 +2101,46 @@ func (s *SessionService) StreamTerminal(
 					log.Info("[FlowControl] PTY reading PAUSED", "session", initialMsg.SessionId)
 				}
 			default:
-
-				n, readErr := ptyFile.Read(buf)
+				// A short deadline on our own dup'd fd (see readFile above)
+				// bounds how long Read can block, so this goroutine notices
+				// streamCtx cancellation promptly instead of potentially
+				// blocking until the next real PTY output — which could
+				// arrive well after the handler has returned and Connect has
+				// closed the stream. Safe to set here because readFile is
+				// exclusively ours; it does not touch ptyFile's poll.FD.
+				_ = readFile.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+				n, readErr := readFile.Read(buf)
 				if n > 0 {
 					// Update terminal activity timestamps with the output content
 					// This ensures LastMeaningfulOutput reflects web UI viewing activity
 					instance.UpdateTerminalTimestamps(string(buf[:n]), true)
 
-					// Process PTY output through terminal state
-					if processErr := terminalState.ProcessOutput(buf[:n]); processErr != nil {
-						log.Warn("failed to process terminal output", "err", processErr)
-						// Fallback to raw output on parse errors
-						outputMsg := &sessionv1.TerminalData{
-							SessionId: initialMsg.SessionId,
-							Data: &sessionv1.TerminalData_Output{
-								Output: &sessionv1.TerminalOutput{
-									Data: buf[:n],
-								},
-							},
-						}
-						if sendErr := stream.Send(outputMsg); sendErr != nil {
-							errCh <- fmt.Errorf("failed to send output: %w", sendErr)
-							return
-						}
-						continue
+					select {
+					case <-streamCtx.Done():
+						return
+					default:
 					}
 
-					// Generate complete terminal state (MOSH-style)
-					stateMsg := terminalState.GenerateState()
-					stateMsg.SessionId = initialMsg.SessionId
-
-					// Send state to client
-					if sendErr := stream.Send(stateMsg); sendErr != nil {
-						errCh <- fmt.Errorf("failed to send state: %w", sendErr)
+					outputMsg := &sessionv1.TerminalData{
+						SessionId: initialMsg.SessionId,
+						Data: &sessionv1.TerminalData_Output{
+							Output: &sessionv1.TerminalOutput{
+								Data: buf[:n],
+							},
+						},
+					}
+					if sendErr := stream.Send(outputMsg); sendErr != nil {
+						errCh <- fmt.Errorf("failed to send output: %w", sendErr)
 						return
 					}
 				}
 
 				if readErr != nil {
+					if netErr, ok := readErr.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+						// Expected: the deadline above elapsed with no data.
+						// Loop back around to re-check streamCtx/pauseCh.
+						continue
+					}
 					// EOF or other read error
 					if readErr.Error() != "EOF" {
 						errCh <- fmt.Errorf("PTY read error: %w", readErr)
@@ -2123,7 +2152,9 @@ func (s *SessionService) StreamTerminal(
 	}()
 
 	// Goroutine 2: Receive from client and forward to PTY (terminal input + resize)
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				errCh <- fmt.Errorf("panic in input goroutine: %v", r)
@@ -2190,7 +2221,7 @@ func (s *SessionService) StreamTerminal(
 					))
 
 				case *sessionv1.TerminalData_Resize:
-					// Handle terminal resize - update both PTY and terminal state
+					// Handle terminal resize
 					cols := int(data.Resize.Cols)
 					rows := int(data.Resize.Rows)
 
@@ -2208,9 +2239,7 @@ func (s *SessionService) StreamTerminal(
 						_ = stream.Send(errorMsg) // Best effort
 						// Don't return on resize errors, they're not fatal
 					} else {
-						// Also resize terminal state to match
-						terminalState.Resize(rows, cols)
-						log.Info("resized terminal state", "cols", cols, "rows", rows, "session", msg.SessionId)
+						log.Info("resized terminal", "cols", cols, "rows", rows, "session", msg.SessionId)
 					}
 
 				case *sessionv1.TerminalData_FlowControl:
@@ -2252,14 +2281,53 @@ func (s *SessionService) StreamTerminal(
 		}
 	}()
 
-	// Wait for either context cancellation or error
+	// Wait for either context cancellation or error, then wait (bounded) for
+	// both goroutines to actually stop before returning. Returning early lets
+	// Connect close the underlying HTTP/2 stream; if either goroutine is
+	// still mid-Send/Receive when that happens, the concurrent writes to the
+	// same connection race. Goroutine 1 is now reliably bounded (its dup'd
+	// fd's 250ms read deadline means it notices streamCtx.Done() promptly
+	// regardless of PTY activity), so in practice this resolves almost
+	// immediately. The timeout remains as a safety net for goroutine 2's
+	// stream.Receive(), which could still block if it's mid-read on a client
+	// connection that outlives streamCtx without actually disconnecting
+	// (e.g. the error came from goroutine 1, not a real client hangup).
+	const shutdownWaitTimeout = 2 * time.Second
 	select {
 	case <-streamCtx.Done():
 		log.Info("StreamTerminal: context done", "session", initialMsg.SessionId)
+		if !waitWithTimeout(&wg, shutdownWaitTimeout) {
+			log.Warn("StreamTerminal: goroutines did not exit within timeout after context done", "session", initialMsg.SessionId)
+		}
 		return nil // Clean shutdown
 	case err := <-errCh:
 		log.Error("StreamTerminal error", "session", initialMsg.SessionId, "err", err)
+		cancel() // streamCtx.Done() wasn't otherwise closed on this path; signal both goroutines to stop.
+		if !waitWithTimeout(&wg, shutdownWaitTimeout) {
+			log.Warn("StreamTerminal: goroutines did not exit within timeout after error", "session", initialMsg.SessionId)
+		}
 		return connect.NewError(connect.CodeInternal, err)
+	}
+}
+
+// waitWithTimeout waits for wg to complete, returning true if it did so
+// within timeout and false if the timeout elapsed first. On timeout, this
+// bookkeeping goroutine itself is harmlessly leaked (it will eventually
+// complete and close the now-unread done channel) — but the caller's own
+// tracked goroutines may still be running and may still touch shared state
+// (e.g. a stream) after this function returns false. Callers on the false
+// path must treat that as a real, logged condition, not a no-op.
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }
 

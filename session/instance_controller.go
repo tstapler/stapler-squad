@@ -28,7 +28,7 @@ func (i *Instance) StartController() error {
 	}
 
 	// Don't create controller if instance isn't started
-	if !i.started {
+	if !i.started.Load() {
 		i.mu.Unlock()
 		log.Debug("instance not started yet, skipping controller", "session", i.Title)
 		return nil

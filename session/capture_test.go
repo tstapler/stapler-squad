@@ -22,7 +22,8 @@ func TestCaptureCurrentState_NotStarted_IsNoOp(t *testing.T) {
 // TestCaptureCurrentState_Paused_IsNoOp verifies that CaptureCurrentState
 // returns nil without modifying WorkingDir when the instance is paused.
 func TestCaptureCurrentState_Paused_IsNoOp(t *testing.T) {
-	inst := &Instance{Title: "test-session", started: true}
+	inst := &Instance{Title: "test-session"}
+	inst.started.Store(true)
 	inst.Status = Paused
 
 	err := inst.CaptureCurrentState()
@@ -35,7 +36,8 @@ func TestCaptureCurrentState_Paused_IsNoOp(t *testing.T) {
 // returns nil when the underlying tmux session does not exist (nil TmuxSession).
 // processManager nil (uninitialized Instance) → IsAlive() returns false via nil guard.
 func TestCaptureCurrentState_TmuxSessionDead_IsNoOp(t *testing.T) {
-	inst := &Instance{Title: "test-session", started: true}
+	inst := &Instance{Title: "test-session"}
+	inst.started.Store(true)
 	// processManager is nil (zero-value interface) → CaptureCurrentState nil guard returns nil.
 
 	err := inst.CaptureCurrentState()

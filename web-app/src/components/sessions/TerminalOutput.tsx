@@ -293,8 +293,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     setMouseMode(prev => prev === 'none' ? 'any' : 'none');
   }, []);
 
-  // Streaming mode selection
-  const [streamingMode, setStreamingMode] = useState<"raw" | "raw-compressed" | "state" | "hybrid">("raw");
 
   // Recording state
   const [isRecording, setIsRecording] = useState(false);
@@ -431,13 +429,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     console.error(`Terminal stream error (${isExternal ? 'external' : 'managed'}):`, err);
     setConnectionAttempts((prev) => prev + 1);
   }, [isExternal]);
-  const handleEchoAck = useCallback((_echoNum: bigint, latencyMs: number) => {
-    if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-      console.log('[PredictiveEcho] Echo acknowledged:', { latencyMs });
-    }
-  }, []);
-
-  const { isConnected, error, sendInput, sendInputWithEcho, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, getIsApplyingState, sspNegotiated, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect } = useTerminalStream({
+  const { isConnected, error, sendInput, resize, connect, disconnect, scrollbackLoaded, requestScrollback, sendFlowControl, startRecording, stopRecording, terminalState, isHardFailed, handleManualReconnect: handleHookReconnect } = useTerminalStream({
     baseUrl,
     sessionId: effectiveSessionId,
     shellId,
@@ -450,10 +442,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
     onOutput: handleOutput,
     initialCols: lastResizeRef.current?.cols,
     initialRows: lastResizeRef.current?.rows,
-    streamingMode: streamingMode,
     isExternal: isExternal,
-    enablePredictiveEcho: true,
-    onEchoAck: handleEchoAck,
   });
 
   // Sync terminalState into a ref so handleOutput can read it without recreating the callback.
@@ -536,14 +525,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
 
   // Handle terminal data input
   const handleTerminalData = useCallback((data: string) => {
-    if (sspNegotiated && sendInputWithEcho) {
-      const echoNum = sendInputWithEcho(data);
-      if (typeof window !== "undefined" && localStorage.getItem("debug-terminal") === "true") {
-        console.log('[PredictiveEcho] Sent input with echo:', { data, echoNum: echoNum.toString() });
-      }
-    } else {
-      sendInput(data);
-    }
+    sendInput(data);
 
     // Optimistic clear on Enter only — reduces false-positive flicker
     if (data === "\r") {
@@ -558,7 +540,7 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
         refreshTimerRef.current = setTimeout(() => void refreshApprovals(), 300);
       }
     }
-  }, [sendInput, sendInputWithEcho, sspNegotiated, clearForSession, sessionId, refreshApprovals, pendingCount]);
+  }, [sendInput, clearForSession, sessionId, refreshApprovals, pendingCount]);
 
   // Send a key sequence, applying any active sticky modifier (CTRL or ALT) first.
   // Modifier sequences follow xterm's parameter convention:
@@ -1568,23 +1550,6 @@ export function TerminalOutput({ sessionId, baseUrl, isExternal = false, tmuxSes
                     >
                       {isRecording ? '⏹️ Stop Rec' : '⏺️ Record'}
                     </button>
-                    <select
-                      value={streamingMode}
-                      onChange={(e) => {
-                        track({ name: "toolbar_button_click", category: "user_action", sessionId, component: "TerminalOutput", labels: { button: "raw-mode", state: e.target.value } });
-                        setStreamingMode(e.target.value as "raw" | "raw-compressed" | "state" | "hybrid");
-                      }}
-                      className={`${styles.toolbarButton} ${styles.devOnly}`}
-                      title="Terminal streaming mode - choose how terminal output is delivered"
-                      aria-label="Select terminal streaming mode"
-                      disabled={!isConnected}
-                      style={{ minWidth: '140px' }}
-                    >
-                      <option value="raw">🚀 Raw</option>
-                      <option value="raw-compressed">📦 Raw+LZMA</option>
-                      <option value="state">🔄 State Sync</option>
-                      <option value="hybrid">🔬 Hybrid</option>
-                    </select>
                     {/* Handedness shortcut — toggles left/right-handed mobile layout */}
                     <button
                       className={`${styles.toolbarButton} ${styles.devOnly}`}

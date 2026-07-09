@@ -108,10 +108,10 @@ func TestInstanceRestart(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create instance with test state
 			inst := &Instance{
-				Title:   "test-session",
-				started: tt.started,
-				Status:  tt.status,
+				Title:  "test-session",
+				Status: tt.status,
 			}
+			inst.started.Store(tt.started)
 
 			// Attempt restart
 			err := inst.Restart(tt.preserveOutput)

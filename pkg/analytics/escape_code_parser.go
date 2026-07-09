@@ -13,6 +13,7 @@ import (
 
 	"github.com/spaolacci/murmur3"
 	"github.com/tstapler/stapler-squad/log"
+	"github.com/tstapler/stapler-squad/pkg/ansi"
 )
 
 // EscapeCategory represents the type of escape sequence
@@ -426,7 +427,7 @@ func (p *EscapeCodeParser) parseCSI(data []byte, offset int) (ParsedEscapeCode, 
 		// Terminator: final byte per ECMA-48 (0x40-0x7E), not just letters —
 		// e.g. '@' (Insert Character) and '~' (used by many real xterm
 		// sequences) are valid CSI final bytes outside the A-Z/a-z range.
-		if b >= 0x40 && b <= 0x7E {
+		if ansi.IsCSIFinalByte(b) {
 			end++
 			rawBytes := data[offset:end]
 			category, description := p.categorizeCSI(rawBytes, isPrivate, hasParams)

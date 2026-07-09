@@ -105,7 +105,7 @@ func (i *Instance) ResumeFromHibernation(ctx context.Context) error {
 // dispatches the re-launch work to a goroutine so the actor is not blocked.
 func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 	i := s.inst
-	i.started = false
+	i.started.Store(false)
 	go func() {
 		if err := i.Start(false); err != nil {
 			log.Error("hibernation resume: failed to start session",
@@ -140,13 +140,10 @@ func resumeFromHibernationLocked(s *instanceState, _ context.Context) {
 // by state_machine.go transitionDefs After hooks — kept for StartWithCleanup path).
 // Must NOT hold stateMutex.
 func (i *Instance) resumeFromHibernation(ctx context.Context) {
-	// Re-launch via the cold-restore path.
-	// Guard the started=false write with stateMutex: buildSnapshot() reads started
-	// while holding the lock, and this goroutine runs concurrently with the parent's
-	// lock release — the write must be serialized.
-	i.mu.Lock()
-	i.started = false
-	i.mu.Unlock()
+	// Re-launch via the cold-restore path. started is atomic.Bool (BUG-025
+	// follow-up) so this write is race-free without needing mu — it's also
+	// excluded from InstanceSnapshot, so no buildSnapshot() call is needed here.
+	i.started.Store(false)
 	if err := i.Start(false); err != nil {
 		log.Error("hibernation resume: failed to start session",
 			"session", i.Title, "err", err.Error())

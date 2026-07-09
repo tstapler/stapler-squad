@@ -20,7 +20,6 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/klauspost/compress v1.18.0
 	github.com/linkdata/deadlock v0.5.5
-	github.com/mattn/go-runewidth v0.0.16
 	github.com/mattn/go-sqlite3 v1.14.40
 	github.com/puzpuzpuz/xsync/v4 v4.5.0
 	github.com/robfig/cron/v3 v3.0.1
@@ -29,15 +28,16 @@ require (
 	github.com/spaolacci/murmur3 v1.1.0
 	github.com/spf13/cobra v1.10.1
 	github.com/stretchr/testify v1.11.1
-	github.com/ulikunitz/xz v0.5.15
 	github.com/xeipuuv/gojsonschema v1.2.0
+	github.com/zalando/go-keyring v0.2.8
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0
-	go.opentelemetry.io/otel v1.43.0
+	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.39.0
-	go.opentelemetry.io/otel/sdk v1.43.0
-	go.opentelemetry.io/otel/trace v1.43.0
+	go.opentelemetry.io/otel/sdk v1.44.0
+	go.opentelemetry.io/otel/trace v1.44.0
+	go.uber.org/goleak v1.3.0
 	golang.org/x/net v0.52.0
-	golang.org/x/sys v0.43.0
+	golang.org/x/sys v0.45.0
 	golang.org/x/term v0.42.0
 	golang.org/x/time v0.15.0
 	google.golang.org/protobuf v1.36.11
@@ -51,9 +51,6 @@ require (
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/petermattis/goid v0.0.0-20250813065127-a731cc31b4fe // indirect
-	github.com/zalando/go-keyring v0.2.8 // indirect
-	go.uber.org/goleak v1.3.0 // indirect
-	gvisor.dev/gvisor v0.0.0-20260708184533-3ca8cd96a7a4 // indirect
 )
 
 require (
@@ -146,7 +143,6 @@ require (
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/quic-go/qpack v0.5.1 // indirect
 	github.com/quic-go/quic-go v0.54.0 // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/cors v1.11.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/segmentio/asm v1.2.0 // indirect
@@ -175,7 +171,7 @@ require (
 	go.lsp.dev/uri v0.3.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.39.0 // indirect
-	go.opentelemetry.io/otel/metric v1.43.0 // indirect
+	go.opentelemetry.io/otel/metric v1.44.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.9.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect

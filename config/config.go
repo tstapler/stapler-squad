@@ -200,9 +200,6 @@ type Config struct {
 	PerformBackgroundHealthChecks bool `json:"perform_background_health_checks"`
 	// KeyCategories defines custom category mappings for key bindings in help system
 	KeyCategories map[string]string `json:"key_categories"`
-	// TerminalStreamingMode controls how terminal output is streamed to the client
-	// Options: "raw" (direct PTY streaming), "state" (MOSH-style state sync), "hybrid" (both)
-	TerminalStreamingMode string `json:"terminal_streaming_mode"`
 	// VCSPreference controls which version control system to prefer when both are available
 	// Options: "auto" (prefer JJ if available), "jj" (always use JJ), "git" (always use Git)
 	VCSPreference string `json:"vcs_preference"`
@@ -323,8 +320,7 @@ func defaultConfigWithExecutor(exec CommandExecutor) *Config {
 	cfg.TmuxSessionPrefix = "staplersquad_"  // Default prefix for backward compatibility
 	cfg.PerformBackgroundHealthChecks = true // Enabled by default for automated session maintenance
 	cfg.KeyCategories = getDefaultKeyCategories()
-	cfg.TerminalStreamingMode = "raw" // Default to raw streaming (simpler, more reliable)
-	cfg.VCSPreference = "auto"        // Default to auto-detection (prefer JJ if available)
+	cfg.VCSPreference = "auto" // Default to auto-detection (prefer JJ if available)
 	cfg.AvailablePrograms = availablePrograms
 	cfg.Hibernation = HibernationConfig{
 		Enabled:                   true,

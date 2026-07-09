@@ -6,8 +6,6 @@
  * terminal write pipeline that was previously scattered across TerminalOutput.tsx.
  *
  * Lifecycle: Create an instance in a ref, call methods from effects, call cleanup() on unmount.
- *
- * Follows the same pattern as StateApplicator, EscapeSequenceParser, and EchoOverlay.
  */
 
 import { EscapeSequenceParser } from './EscapeSequenceParser';

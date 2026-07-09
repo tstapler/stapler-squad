@@ -52,7 +52,7 @@ func TestStorage_UUID_PersistedThroughAddAndLoad(t *testing.T) {
 	}
 	// Paused sets started=true internally, which is required for SaveInstances.
 	// We use the same fast-path that FromInstanceData takes.
-	inst.started = true
+	inst.started.Store(true)
 
 	require.NoError(t, storage.AddInstance(inst))
 
@@ -79,7 +79,7 @@ func TestStorage_UUID_StableAcrossMultipleLoads(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started = true
+	inst.started.Store(true)
 	require.NoError(t, storage.AddInstance(inst))
 
 	first, err := storage.LoadInstances()
@@ -113,7 +113,7 @@ func TestStorage_UUID_MigrationAssignsAndPersists(t *testing.T) {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started = true
+	inst.started.Store(true)
 	require.NoError(t, storage.AddInstance(inst))
 
 	// First load: migration assigns a new UUID.
@@ -150,7 +150,7 @@ func TestReviewQueuePoller_FindInstanceByUUID(t *testing.T) {
 		Status:  Paused,
 		Program: "claude",
 	}
-	inst.started = true
+	inst.started.Store(true)
 	poller.SetInstances([]*Instance{inst})
 
 	found := poller.FindInstance("test-uuid-lookup")
@@ -172,7 +172,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 		Status:  Paused,
 		Program: "claude",
 	}
-	existing.started = true
+	existing.started.Store(true)
 	poller.SetInstances([]*Instance{existing})
 
 	newcomer := &Instance{
@@ -181,7 +181,7 @@ func TestReviewQueuePoller_AddInstanceByUUID(t *testing.T) {
 		Status:  Paused,
 		Program: "claude",
 	}
-	newcomer.started = true
+	newcomer.started.Store(true)
 	poller.AddInstance(newcomer)
 
 	// Both sessions must be findable.
@@ -341,7 +341,7 @@ func newTestInstance(title string) *Instance {
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
-	inst.started = true
+	inst.started.Store(true)
 	return inst
 }
 

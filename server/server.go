@@ -307,7 +307,7 @@ func wireDepsIntoServer(srv *Server, deps *ServerDependencies, serverCtx context
 
 	// Register ConnectRPC WebSocket handler (must come before unary handler)
 	wsHandler := services.NewConnectRPCWebSocketHandler(
-		deps.SessionService, deps.ScrollbackManager, deps.TmuxStreamerManager, "raw-compressed",
+		deps.SessionService, deps.ScrollbackManager, deps.TmuxStreamerManager,
 	)
 	wsPath := "/api" + sessionv1connect.SessionServiceStreamTerminalProcedure
 	srv.mux.HandleFunc(wsPath, wsHandler.HandleWebSocket)

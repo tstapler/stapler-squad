@@ -57,6 +57,7 @@ tests/e2e/allure-results/
 tests/e2e/allure-report/
 tests/e2e/playwright-report/
 tests/e2e/test-results/
+tests/e2e/node_modules/
 
 # Scratch benchmark output files (not the committed baselines in benchmarks/go/)
 bench-current.txt

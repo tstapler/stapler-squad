@@ -317,7 +317,13 @@ type Instance struct {
 
 	// The below fields are initialized upon calling Start().
 
-	started bool
+	// started is read and written from many call sites across this package
+	// (tmux lifecycle, hibernation, worktree/workspace teardown, serialization
+	// restore) that don't all go through stateMutex — atomic.Bool makes every
+	// access race-free without auditing each site's lock discipline. See
+	// BUG-025 follow-up: a stateMutex-guarded bool caught a real -race failure
+	// at exactly two of these ~30+ access sites; the rest were equally unsafe.
+	started atomic.Bool
 	// processManager abstracts the terminal process lifecycle and I/O.
 	// Initialized to a TmuxBackend by default; future backends implement the ProcessManager interface.
 	pmMu           sync.Mutex
@@ -737,7 +743,7 @@ func NewInstanceWithCleanup(opts InstanceOptions) (*Instance, tmux.CleanupFunc, 
 	}
 
 	cleanup := tmux.CleanupFunc(func() error {
-		if instance.started {
+		if instance.started.Load() {
 			return instance.Destroy()
 		}
 		return nil
@@ -937,7 +943,7 @@ func startLocked(actorState *instanceState, firstTimeSetup bool) error {
 			return setupErr
 		}
 	}
-	i.started = true
+	i.started.Store(true)
 	i.snapshot.Store(buildSnapshot(i))
 	i.fireLifecycleEvent(EventStarted, "")
 
@@ -1150,8 +1156,10 @@ func (i *Instance) start(firstTimeSetup bool, setupCleanup bool, cleanup *tmux.C
 		}
 	}
 	// started must be set while still holding mu so readers via Snapshot() observe
-	// a consistent Started+Status pair.
-	i.started = true
+	// a consistent Started+Status pair. started itself is atomic.Bool (BUG-025
+	// follow-up) so Started() stays race-free even for callers that don't go
+	// through Snapshot().
+	i.started.Store(true)
 	i.snapshot.Store(buildSnapshot(i))
 	i.mu.Unlock()
 	i.fireLifecycleEvent(EventStarted, "")
@@ -1184,7 +1192,7 @@ func (i *Instance) Kill() error {
 
 // Destroy completely destroys the instance - both tmux session and worktree
 func (i *Instance) Destroy() error {
-	if !i.started {
+	if !i.started.Load() {
 		// If instance was never started, just return success
 		return nil
 	}
@@ -1221,7 +1229,7 @@ func (i *Instance) Pause() error {
 // pauseLocked is the actor-safe body of Pause().
 func pauseLocked(s *instanceState) error {
 	i := s.inst
-	if !i.started {
+	if !i.started.Load() {
 		return fmt.Errorf("cannot pause instance that has not been started")
 	}
 	if i.Status == Paused {
@@ -1288,7 +1296,7 @@ func pauseLocked(s *instanceState) error {
 
 // Resume recreates the worktree and restarts the tmux session
 func (i *Instance) Resume() error {
-	if !i.started {
+	if !i.started.Load() {
 		return fmt.Errorf("cannot resume instance that has not been started")
 	}
 	// Status is actor-managed; use Snapshot() to avoid racing with concurrent actor writes.
@@ -1410,7 +1418,7 @@ func (i *Instance) Resume() error {
 // If preserveOutput is true, captures terminal output before killing the session.
 // For Claude sessions, uses --resume flag with the stored session ID.
 func (i *Instance) Restart(preserveOutput bool) error {
-	if !i.started {
+	if !i.started.Load() {
 		return ErrCannotRestart
 	}
 
@@ -1527,7 +1535,7 @@ func (i *Instance) Restart(preserveOutput bool) error {
 			log.Warn("restart: failed to transition from paused to active", "session", i.Title, "err", err)
 			i.setStatus(Active)
 		}
-		i.started = true
+		i.started.Store(true)
 	}
 	i.UpdatedAt = time.Now()
 	i.snapshot.Store(buildSnapshot(i))

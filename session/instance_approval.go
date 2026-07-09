@@ -47,8 +47,16 @@ func (i *Instance) GetStatusManager() *InstanceStatusManager {
 
 // UpdateTerminalTimestamps is a coordinator method that bridges ProcessManager (I/O)
 // with ReviewState (timestamp recording). It:
-//  1. Calls processManager.FilterBanners/HasMeaningfulContent (no lock needed, read-only ops)
-//  2. Acquires stateMutex
+//  1. Calls processManager.FilterBanners/HasMeaningfulContent (I/O-ish, done before
+//     touching the actor — same "no I/O inside the command" discipline as the other
+//     *Locked helpers)
+//  2. Routes the actual field mutation through the actor's send() — this is called
+//     from the PTY-read hot path (server/services/session_service.go's StreamTerminal),
+//     exactly the "callback that must not block the caller" case send() exists for
+//     (see actor.go's doc comment). Routing through the actor instead of i.mu means
+//     this mutation is serialized against every other actor command (transitionToLocked
+//     et al.), which don't take i.mu either — caught by -race via a concurrent
+//     StreamTerminal + StartController flow.
 //  3. Delegates to ReviewState.UpdateTimestamps
 //
 // This method intentionally stays on Instance because it coordinates two sub-managers.
@@ -71,31 +79,39 @@ func (i *Instance) UpdateTerminalTimestamps(content string, forceUpdate bool) {
 		}
 	}
 
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	if i.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, i.Title) {
-		i.snapshot.Store(buildSnapshot(i))
-	}
+	i.send(func(s *instanceState) {
+		// send() only auto-republishes the snapshot when a live actor is running
+		// (runActor's loop, after every command); in the actor-less fallback path
+		// (li == nil — e.g. plain-struct-literal tests) nothing else does this, so
+		// the mutation above would never become visible via Snapshot(). Publish
+		// explicitly here, matching transitionToLocked's own discipline — but only
+		// when UpdateTimestamps actually changed something, so a terminal frame
+		// with no meaningful content doesn't force a snapshot rebuild.
+		if s.inst.UpdateTimestamps(content, filteredContent, shouldUpdateMeaningful, s.inst.Title) {
+			s.inst.snapshot.Store(buildSnapshot(s.inst))
+		}
+	})
 }
 
 // GetTimeSinceLastMeaningfulOutput returns how long ago meaningful output was recorded.
 // Fast path: reads the atomic shadow (no lock) once initialised via SyncAtomicTimestamps
-// or UpdateTimestamps. Fallback: acquires stateMutex.RLock when the atomic is zero
-// (before first write, or in tests that set LastMeaningfulOutput directly).
+// or UpdateTimestamps. Fallback: Snapshot() when the atomic is zero (before first
+// write, or in tests that set LastMeaningfulOutput directly) — not a fresh
+// i.mu-guarded read, since i.mu doesn't synchronize with actor commands' direct
+// field writes (see GetStatus's doc comment).
 func (i *Instance) GetTimeSinceLastMeaningfulOutput() time.Duration {
 	ns := i.loadLastMeaningfulOutputNs()
 	if ns != 0 {
 		return time.Since(time.Unix(0, ns))
 	}
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	return i.TimeSinceLastMeaningfulOutput(i.CreatedAt)
+	snap := i.Snapshot()
+	return snap.TimeSinceLastMeaningfulOutput(snap.CreatedAt)
 }
 
 // GetTimeSinceLastTerminalUpdate delegates to ReviewState.TimeSinceLastTerminalUpdate.
 // Falls back to time since creation if no terminal output has been recorded.
+// Reads via Snapshot(), not i.mu.RLock() — see GetTimeSinceLastMeaningfulOutput.
 func (i *Instance) GetTimeSinceLastTerminalUpdate() time.Duration {
-	i.mu.RLock()
-	defer i.mu.RUnlock()
-	return i.TimeSinceLastTerminalUpdate(i.CreatedAt)
+	snap := i.Snapshot()
+	return snap.TimeSinceLastTerminalUpdate(snap.CreatedAt)
 }

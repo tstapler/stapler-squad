@@ -64,7 +64,10 @@ func (ism *InstanceStatusManager) GetStatus(instance *Instance) InstanceStatusIn
 	controller, exists := ism.controllers.Load(instance.Title)
 
 	info := InstanceStatusInfo{
-		BasicStatus:        instance.Status,
+		// Snapshot(), not instance.Status directly — an unguarded read of instance.Status
+		// doesn't synchronize with actor commands' direct field writes (see
+		// Instance.GetStatus's doc comment).
+		BasicStatus:        instance.Snapshot().Status,
 		IsControllerActive: exists && controller != nil && controller.IsStarted(),
 	}
 
